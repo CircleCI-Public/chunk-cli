@@ -18,7 +18,7 @@ func finishedRun(t *testing.T) (root string, rec Record) {
 	t.Helper()
 	ctx := context.Background()
 	root = newProject(t)
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1")
+	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
 	assert.NilError(t, err)
 	writeFile(t, wt.Path, "main.go", "package main\n\nfunc main() {}\n")
 	writeFile(t, wt.Path, "flag.go", "package main\n")
@@ -148,4 +148,5 @@ func TestRecordRoundTrip(t *testing.T) {
 func TestParseRunID(t *testing.T) {
 	assert.Equal(t, ParseRunID("20261006-171526"), "20261006-171526")
 	assert.Equal(t, ParseRunID(" chunk/factory/20261006-171526\n"), "20261006-171526")
+	assert.Equal(t, ParseRunID(" chunk/factory/add-a-status-command/20261006-171526\n"), "20261006-171526")
 }

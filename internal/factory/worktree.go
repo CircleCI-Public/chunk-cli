@@ -13,6 +13,9 @@ import (
 // branchPrefix is where factory branches live.
 const branchPrefix = "chunk/factory/"
 
+// maxBranchSlugLen keeps branch names short enough to read in listings.
+const maxBranchSlugLen = 48
+
 // Worktree is a run's local checkout: a git worktree of the developer's
 // repository on a branch of its own. The implementer's work is pulled into it
 // each round, so the developer's own checkout is never touched and they can
@@ -37,11 +40,11 @@ func commitEnv() []string {
 }
 
 // CreateWorktree checks out a new worktree of the repository at root into path,
-// on the branch chunk/factory/<runID>. It starts from the developer's files as
-// they are now: uncommitted work, untracked files included, is committed on
-// the branch first, so it is the baseline and not part of the change under
-// review.
-func CreateWorktree(ctx context.Context, root, path, runID string) (Worktree, error) {
+// on a branch named chunk/factory/<prompt slug>/<runID>. It starts from the
+// developer's files as they are now: uncommitted work, untracked files included,
+// is committed on the branch first, so it is the baseline and not part of the
+// change under review.
+func CreateWorktree(ctx context.Context, root, path, runID, prompt string) (Worktree, error) {
 	git := gitexec.Runner{Dir: root}
 	headOut, err := git.Output(ctx, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
@@ -67,11 +70,38 @@ func CreateWorktree(ctx context.Context, root, path, runID string) (Worktree, er
 		start = strings.TrimSpace(string(out))
 	}
 
-	w := Worktree{Path: path, Branch: branchPrefix + runID, Baseline: start, Head: head}
+	w := Worktree{Path: path, Branch: branchName(prompt, runID), Baseline: start, Head: head}
 	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "-b", w.Branch, path, start); err != nil {
 		return Worktree{}, fmt.Errorf("create worktree: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return w, nil
+}
+
+func branchName(prompt, runID string) string {
+	return branchPrefix + branchSlug(prompt) + "/" + runID
+}
+
+// branchSlug makes the request recognizable in branch listings while the run
+// ID remains the stable identifier used for records, logs, and continuation.
+func branchSlug(prompt string) string {
+	subject, _, _ := strings.Cut(strings.TrimSpace(prompt), "\n")
+	words := strings.FieldsFunc(strings.ToLower(subject), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	if len(words) == 0 {
+		return "change"
+	}
+
+	// Stop at the last whole word that fits; only a single word too long to
+	// fit on its own is cut.
+	slug := words[0][:min(len(words[0]), maxBranchSlugLen)]
+	for _, w := range words[1:] {
+		if len(slug)+1+len(w) > maxBranchSlugLen {
+			break
+		}
+		slug += "-" + w
+	}
+	return slug
 }
 
 // Remove deletes the worktree and its branch, for a run that ended before the

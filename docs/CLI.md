@@ -156,7 +156,7 @@ chunk
 ├── factory                         # Build and manage factory runs
 │   └── build [prompt|-]            # Implement a prompt on a sidecar, then review and validate it until it passes
 │       --max-attempts <n>          # Maximum rounds of review and validation (default: 3)
-│       --continue <run id|branch>  # Pick up the work of an earlier run; the prompt becomes optional guidance
+│       --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
 │       --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
 │       --reviews <dir>             # Directory of review prompts (default: .chunk/reviews)
 │       --no-validate               # Skip the project's validation commands
@@ -327,9 +327,11 @@ chunk
   of a particular request. As it follows the run it prints the sidecars being
   prepared and each round's findings, with the end of any failed validation
   command's output.
-  When the run ends it prints the work committed on `chunk/factory/<run id>`,
-  how to keep it, how long the run took and what the implementer cost, and
-  exits non-zero unless every check passed. `--log` has the run keep a
+  Factory branches are named `chunk/factory/<description>/<run id>`. The
+  description is a short slug made from the prompt's first line, while the
+  final segment remains the stable run ID. When the run ends it prints that
+  branch, how to keep it, how long the run took and what the implementer cost,
+  and exits non-zero unless every check passed. `--log` has the run keep a
   plain-text log in `~/.chunk/factory/run-<start time>.log`, and
   `--log-file <path>` keeps it in a file of your choosing instead (it implies
   `--log`), with the full context the display leaves

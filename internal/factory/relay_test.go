@@ -93,7 +93,7 @@ func TestRelayCarriesWorkspaceToEveryReviewer(t *testing.T) {
 	writeFile(t, root, "main.go", "package main\n")
 	gitrepo.AddFile(t, root, ".")
 	gitOutput(t, root, "commit", "-m", "base")
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1")
+	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
 	assert.NilError(t, err)
 	r := newRelay(t, wt.Path)
 
