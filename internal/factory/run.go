@@ -151,7 +151,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}
 	var wt Worktree
 	if cont == nil {
-		wt, err = CreateWorktree(ctx, opts.Root, filepath.Join(dataDir, "factory", rep.RunID), rep.RunID)
+		wt, err = CreateWorktree(ctx, opts.Root, filepath.Join(dataDir, "factory", rep.RunID), rep.RunID, opts.Prompt)
 		if err != nil {
 			return rep, fmt.Errorf("create the run's worktree: %w", err)
 		}

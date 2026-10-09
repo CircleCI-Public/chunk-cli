@@ -156,7 +156,7 @@ func newSidecarsFixture(t *testing.T, wrap func(review.Execer) review.Execer) (*
 	t.Helper()
 	ctx := context.Background()
 	root := setupRepo(t)
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1")
+	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
 	assert.NilError(t, err)
 
 	// Every pool member starts from the worktree, as the pool's sync leaves

@@ -30,10 +30,10 @@ func TestCreateWorktreeStartsFromTheDevelopersFiles(t *testing.T) {
 	before := gitOutput(t, root, "status", "--porcelain")
 	branch := gitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD")
 
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1")
+	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "Add a --verbose flag")
 	assert.NilError(t, err)
 
-	assert.Equal(t, wt.Branch, "chunk/factory/run-1")
+	assert.Equal(t, wt.Branch, "chunk/factory/add-a-verbose-flag/run-1")
 	assert.Equal(t, gitOutput(t, wt.Path, "rev-parse", "HEAD"), wt.Baseline)
 	assert.Equal(t, wt.Head, gitOutput(t, root, "rev-parse", "HEAD"))
 	assert.Assert(t, wt.Baseline != wt.Head, "uncommitted work was not committed as the baseline")
@@ -54,7 +54,7 @@ func TestCreateWorktreeFromACleanTreeStartsAtHEAD(t *testing.T) {
 	gitrepo.AddFile(t, root, "main.go")
 	gitOutput(t, root, "commit", "-m", "base")
 
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1")
+	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
 	assert.NilError(t, err)
 	assert.Equal(t, wt.Baseline, gitOutput(t, root, "rev-parse", "HEAD"))
 	assert.Equal(t, wt.Head, wt.Baseline)
@@ -63,7 +63,7 @@ func TestCreateWorktreeFromACleanTreeStartsAtHEAD(t *testing.T) {
 func TestWorktreeCommitKeepsTheWorktree(t *testing.T) {
 	ctx := context.Background()
 	root := newProject(t)
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1")
+	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
 	assert.NilError(t, err)
 
 	commit, err := wt.Commit(ctx, "nothing")
@@ -89,7 +89,7 @@ func TestWorktreeCommitKeepsTheWorktree(t *testing.T) {
 func TestWorktreeRemove(t *testing.T) {
 	ctx := context.Background()
 	root := newProject(t)
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1")
+	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
 	assert.NilError(t, err)
 
 	assert.NilError(t, wt.Remove(ctx, root))
@@ -106,4 +106,21 @@ func TestCommitMessageDoesNotRepeatTheSubject(t *testing.T) {
 		"add a flag\n\nso users can opt out\n\nWritten by chunk factory run run-1 (passed after 1 round(s)).\n")
 	assert.Equal(t, CommitMessage("add a flag\r\n\r\n    go test ./...\r\n", "run-1", Outcome{}),
 		"add a flag\n\n    go test ./...\n\nWritten by chunk factory run run-1.\n")
+}
+
+func TestBranchSlug(t *testing.T) {
+	for _, tc := range []struct {
+		prompt string
+		want   string
+	}{
+		{prompt: "Add a factory status command", want: "add-a-factory-status-command"},
+		{prompt: "# Fix --continue lookup\n\nMore detail", want: "fix-continue-lookup"},
+		{prompt: "  Spaces, punctuation & CAPS!  ", want: "spaces-punctuation-caps"},
+		{prompt: "!!!", want: "change"},
+		{prompt: "Make this deliberately long branch name stop at a readable boundary eventually", want: "make-this-deliberately-long-branch-name-stop-at"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			assert.Equal(t, branchSlug(tc.prompt), tc.want)
+		})
+	}
 }

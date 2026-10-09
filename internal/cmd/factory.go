@@ -53,11 +53,11 @@ The run happens on the local chunk daemon, as a session: watch it in
 'chunk watch'. Ctrl-C stops the run, and what the implementer did so far is
 still committed.
 
-The run works in a git worktree of its own, on the branch
-chunk/factory/<run id>, starting from your files as they are, uncommitted
-changes included. Your checkout is never touched. The implementer's work is
-synced into the worktree each round and committed there when the run ends;
-the worktree is kept so you can look at it or carry on in it.
+The run works in a git worktree of its own, on a branch named from the prompt:
+chunk/factory/<description>/<run id>. It starts from your files as they are,
+uncommitted changes included. Your checkout is never touched. The implementer's
+work is synced into the worktree each round and committed there when the run
+ends; the worktree is kept so you can look at it or carry on in it.
 
 With no prompt argument, the prompt is read from redirected stdin. A - prompt
 selects stdin explicitly: chunk factory build < prompt.md or chunk factory build - < prompt.md.
@@ -65,9 +65,9 @@ A prompt argument with a file on stdin is refused rather than drop the file.
 
 --continue RUN picks up the work a finished run left on its branch, such as
 one whose checks still failed when its attempts ran out. RUN is the run's ID
-or its branch, chunk/factory/<run id>. The run works in the same worktree and
-adds a commit to the same branch, and its reviewers see the whole change. A
-prompt is optional and adds to the original request: with one, the
+or its branch, chunk/factory/<description>/<run id>. The run works in the same
+worktree and adds a commit to the same branch, and its reviewers see the whole
+change. A prompt is optional and adds to the original request: with one, the
 implementer starts on it; without one, the work is checked first and the
 implementer is sent what failed, in a round that does not count toward
 --max-attempts.
@@ -188,7 +188,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	}
 
 	cmd.Flags().IntVar(&attempts, "max-attempts", 3, "maximum rounds of review and validation")
-	cmd.Flags().StringVar(&continueRun, "continue", "", "pick up the work of an earlier run, by its ID or branch")
+	cmd.Flags().StringVar(&continueRun, "continue", "", "pick up an earlier run by its ID (the branch's final segment) or full branch")
 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
 	cmd.Flags().BoolVar(&noValidate, "no-validate", false, "skip the project's validation commands")
@@ -306,7 +306,7 @@ func checkFactoryContinue(root, run string) error {
 	case errors.Is(err, factory.ErrNoRecord):
 		return newUserError(fmt.Sprintf("No factory run %s to continue in this project.", factory.ParseRunID(run))).
 			withCode("command.invalid_args").
-			withSuggestion("Pass the run ID from the end of the run's output, or its branch: chunk/factory/<run id>.").
+			withSuggestion("Pass the run ID from the end of the run's output, or its branch: chunk/factory/<description>/<run id>.").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}

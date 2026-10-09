@@ -27,7 +27,7 @@ import (
 func fakeFactoryConfig(t *testing.T, result factory.Result) server.ReviewConfig {
 	cfg := fakeSessionConfig()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
-		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1")
+		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1", opts.Prompt)
 		if err != nil {
 			return factory.Report{}, fmt.Errorf("create the run's worktree: %w", err)
 		}
@@ -104,7 +104,7 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 		"implementer finished",
 		"added the flag",
 		"test passed",
-		"Committed 1 file changed, 1 insertion(+) to chunk/factory/run-1",
+		"Committed 1 file changed, 1 insertion(+) to chunk/factory/add-a-verbose-flag/run-1",
 		// The project's uncommitted config is the run's baseline.
 		"Apply it with: git diff --binary",
 		"review bugs: no findings worth changing",
@@ -199,7 +199,7 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 	started := make(chan struct{})
 	cfg := fakeSessionConfig()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
-		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1")
+		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1", opts.Prompt)
 		if err != nil {
 			return factory.Report{}, fmt.Errorf("create the run's worktree: %w", err)
 		}
@@ -228,7 +228,7 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "The factory run was cancelled.")
-	for _, want := range []string{"Stopping", "Committed 1 file changed, 1 insertion(+) to chunk/factory/run-1"} {
+	for _, want := range []string{"Stopping", "Committed 1 file changed, 1 insertion(+) to chunk/factory/add-a-verbose-flag/run-1"} {
 		assert.Assert(t, bytes.Contains([]byte(stderr), []byte(want)), "missing %q in:\n%s", want, stderr)
 	}
 }
@@ -305,7 +305,7 @@ func writeFactoryRecord(t *testing.T, project, runID string) {
 	t.Helper()
 	dataDir, err := config.ProjectDataDir(project)
 	assert.NilError(t, err)
-	rec := factory.Record{RunID: runID, Prompt: "add a --verbose flag", Branch: "chunk/factory/" + runID, Result: factory.ResultExhausted, Rounds: 3}
+	rec := factory.Record{RunID: runID, Prompt: "add a --verbose flag", Branch: "chunk/factory/add-a-verbose-flag/" + runID, Result: factory.ResultExhausted, Rounds: 3}
 	b, err := json.Marshal(rec)
 	assert.NilError(t, err)
 	assert.NilError(t, os.MkdirAll(filepath.Join(dataDir, "factory"), 0o700))
@@ -322,7 +322,7 @@ func TestFactoryContinueReachesTheRun(t *testing.T) {
 		wantAttempts int
 	}{
 		{name: "by ID, without guidance", args: []string{"--continue", "run-0"}, wantAttempts: 4},
-		{name: "by branch, with guidance", args: []string{"--continue", "chunk/factory/run-0", "you may update the test"},
+		{name: "by branch, with guidance", args: []string{"--continue", "chunk/factory/add-a-verbose-flag/run-0", "you may update the test"},
 			wantGuidance: "you may update the test", wantAttempts: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -362,6 +362,6 @@ func TestFactoryContinueRefusesAnUnknownRun(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "No factory run nope to continue in this project.")
-	assert.Equal(t, ue.Suggestion(), "Pass the run ID from the end of the run's output, or its branch: chunk/factory/<run id>.")
+	assert.Equal(t, ue.Suggestion(), "Pass the run ID from the end of the run's output, or its branch: chunk/factory/<description>/<run id>.")
 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
 }

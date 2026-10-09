@@ -97,7 +97,7 @@ func TestCommitWorkCommitsAfterACancelAndAFailedPull(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	root := newProject(t)
 	ctx := context.Background()
-	wt, err := CreateWorktree(ctx, root, t.TempDir()+"/wt", "run-1")
+	wt, err := CreateWorktree(ctx, root, t.TempDir()+"/wt", "run-1", "add a flag")
 	assert.NilError(t, err)
 	writeFile(t, wt.Path, "flag.go", "package main\n")
 

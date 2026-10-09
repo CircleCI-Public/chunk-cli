@@ -36,8 +36,14 @@ type Record struct {
 }
 
 // ParseRunID accepts a run's ID or its branch, as chunk factory prints both.
+// Factory branch names end in the stable run ID; older branches contain only
+// that ID after branchPrefix.
 func ParseRunID(s string) string {
-	return strings.TrimPrefix(strings.TrimSpace(s), branchPrefix)
+	run := strings.TrimPrefix(strings.TrimSpace(s), branchPrefix)
+	if i := strings.LastIndexByte(run, '/'); i >= 0 {
+		return run[i+1:]
+	}
+	return run
 }
 
 func recordPath(dataDir, runID string) string {
