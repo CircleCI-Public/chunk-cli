@@ -69,7 +69,7 @@ or its branch, chunk/factory/<description>/<run id>. The run works in the same
 worktree and adds a commit to the same branch, and its reviewers see the whole
 change. A prompt is optional and adds to the original request: with one, the
 implementer starts on it; without one, the work is checked first and the
-implementer is sent what failed, in a round that does not count toward
+implementer is sent what failed, in a round that counts toward
 --max-attempts.
 
 With --log, the run keeps a plain-text log in

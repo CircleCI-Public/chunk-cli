@@ -35,7 +35,7 @@ type RunOptions struct {
 	// starting from the developer's files.
 	Continue *Continuation
 	// Attempts is the most rounds to check. A continued run that checks the
-	// work first adds a round for that; see Continuation.Rounds.
+	// work first counts that round as one of them.
 	Attempts int
 	// Reviewers is how many reviewer sidecars to run; see ReviewerCount.
 	Reviewers int
@@ -126,7 +126,6 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	request := opts.Prompt
 	if cont != nil {
 		opts.Prompt, request = cont.prompt(), cont.request()
-		opts.Attempts = cont.Rounds(opts.Attempts)
 	}
 	if opts.Verbose && opts.Log == "" {
 		opts.Log = LogDefault

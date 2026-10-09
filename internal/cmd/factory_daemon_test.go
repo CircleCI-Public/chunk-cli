@@ -321,7 +321,7 @@ func TestFactoryContinueReachesTheRun(t *testing.T) {
 		wantGuidance string
 		wantAttempts int
 	}{
-		{name: "by ID, without guidance", args: []string{"--continue", "run-0"}, wantAttempts: 4},
+		{name: "by ID, without guidance", args: []string{"--continue", "run-0"}, wantAttempts: 3},
 		{name: "by branch, with guidance", args: []string{"--continue", "chunk/factory/add-a-verbose-flag/run-0", "you may update the test"},
 			wantGuidance: "you may update the test", wantAttempts: 3},
 	} {
