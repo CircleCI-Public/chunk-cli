@@ -99,27 +99,6 @@ func newWatchCmd() *cobra.Command {
 	// --all is now the default; keep the flag so existing invocations keep working.
 	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects (default)")
 	_ = cmd.Flags().MarkDeprecated("all", "watching all known projects is now the default; use --focus to watch only the current directory")
-	// The daemon used to run as `chunk watch _daemon`. A dashboard opened before
-	// an upgrade still relaunches it that way, against the new binary, so the old
-	// spelling stays as a hidden alias.
-	cmd.AddCommand(newLegacyDaemonCmd())
-	return cmd
-}
-
-// newLegacyDaemonCmd is `chunk watch _daemon`, which starts a daemon only when
-// none is answering. A dashboard opened before the daemon moved to
-// ~/.chunk/daemon/ polls the old socket, never finds the new daemon, and
-// relaunches through here on every poll; starting a daemon each time would take
-// the socket from the one already serving.
-func newLegacyDaemonCmd() *cobra.Command {
-	cmd := newDaemonCmd()
-	run := cmd.RunE
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		if chunkd.IsDaemonRunning() {
-			return nil
-		}
-		return run(cmd, args)
-	}
 	return cmd
 }
 

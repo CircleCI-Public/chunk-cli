@@ -315,21 +315,19 @@ it, because a repo that never caches is otherwise silent about why. See
 
 The daemon is split in two. `internal/chunkd` is its API: the types that go over
 the wire, the HTTP client, the socket and pid paths, and starting the process.
-It depends on nothing heavier than `eventlog`. `internal/chunkd/server` is the
-daemon itself and imports `chunkd` for the types it serves. Clients — `chunk
-watch`, `chunk factory`, hooks, `chunk validate` — import `chunkd` only, so they
-depend on the daemon's API and never on the factory loop, the review runner or
-the sidecar pool behind it. Only `cmd/daemon.go`, which runs the daemon,
-imports `server` (and tests that start a real one).
+Its internal dependencies are `eventlog`, `iostream` and `version`.
+`internal/chunkd/server` is the daemon itself and imports `chunkd` for the types
+it serves. Clients — `chunk watch`, `chunk factory`, hooks, `chunk validate` —
+import `chunkd` only, so they depend on the daemon's API and never on the factory
+loop, the review runner or the sidecar pool behind it. Only `cmd/daemon.go`,
+which runs the daemon, imports `server` (and tests that start a real one).
 
 Starting the daemon belongs to `chunkd` too. It is this binary re-executed as
 the hidden `chunk _daemon` (`chunkd.DaemonSubcommand`, which `cmd` registers
 under that name); callers only say when they need one, with `EnsureRunning` at
 startup, which also replaces a daemon from another build. A dashboard that
 keeps polling opts into `FetchSnapshotRelaunching`, which starts a daemon again
-if it has gone away but never replaces one that answers. `chunk watch _daemon`,
-the old spelling, stays as a hidden alias for dashboards opened before an
-upgrade; it starts a daemon only when none is answering.
+if it has gone away but never replaces one that answers.
 
 The split is in the imports, not yet everywhere at runtime:
 
@@ -352,12 +350,6 @@ The daemon backs `chunk watch` and runs `chunk factory`. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte
 offset, and serves snapshots as JSON over a Unix socket at
 `~/.chunk/daemon/daemon.sock` (`CHUNK_DAEMON_DIR` overrides the directory).
-
-It used to be the watch daemon, in `~/.chunk/watchd/` and configured by
-`CHUNK_WATCHD_*` variables. The old variable names are still read when the new
-ones are not set, with a deprecation warning on every command. `EnsureRunning`
-stops a daemon still answering on the old `watchd.sock`, since nothing else
-would find it, and leaves the old directory in place.
 
 | Variable | Default | Purpose |
 |---|---|---|

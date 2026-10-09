@@ -39,43 +39,9 @@ const (
 	EnvTCPToken   = "CHUNK_DAEMON_TCP_TOKEN" //nolint:gosec // the variable's name, not a credential
 )
 
-// legacyEnv is the name each variable had when the daemon was the watch
-// daemon. The old name is still read when the new one is not set, so a shell or
-// SSH tunnel set up before the rename keeps working; DeprecatedEnv names the
-// ones in use so the CLI can say so.
-var legacyEnv = map[string]string{ //nolint:gosec // variable names, not credentials
-	EnvDir:        "CHUNK_WATCHD_DIR",
-	EnvTCPAddr:    "CHUNK_WATCHD_TCP_ADDR",
-	EnvRemoteAddr: "CHUNK_WATCHD_REMOTE_ADDR",
-	EnvTCPToken:   "CHUNK_WATCHD_TCP_TOKEN",
-}
-
-// getenv reads name, falling back to its old name when name is not set at all.
-// Setting the new name, even to empty, is what turns the old one off.
-func getenv(name string) string {
-	if v, ok := os.LookupEnv(name); ok {
-		return v
-	}
-	return os.Getenv(legacyEnv[name])
-}
-
-// DeprecatedEnv returns a warning for each old variable name that is being read
-// because its new name is not set, in a stable order.
-func DeprecatedEnv() []string {
-	var warnings []string
-	for _, name := range []string{EnvDir, EnvTCPAddr, EnvRemoteAddr, EnvTCPToken} {
-		old := legacyEnv[name]
-		if _, ok := os.LookupEnv(name); ok || os.Getenv(old) == "" {
-			continue
-		}
-		warnings = append(warnings, fmt.Sprintf("%s is deprecated and will stop working in a future release; set %s instead", old, name))
-	}
-	return warnings
-}
-
 // daemonDir is where the daemon keeps its socket, pid file and log.
 func daemonDir() (string, error) {
-	if override := getenv(EnvDir); override != "" {
+	if override := os.Getenv(EnvDir); override != "" {
 		return override, nil
 	}
 	home, err := os.UserHomeDir()
@@ -126,37 +92,22 @@ func LogPath() (string, error) {
 	return filepath.Join(d, "daemon.log"), nil
 }
 
-// legacyPaths returns the pid file and socket a daemon from before the rename
-// would be using: watchd.pid and watchd.sock, in the directory the variables
-// name or else in ~/.chunk/watchd/.
-func legacyPaths() (pidPath, sockPath string, err error) {
-	dir := getenv(EnvDir)
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", "", fmt.Errorf("home dir: %w", err)
-		}
-		dir = filepath.Join(home, ".chunk", "watchd")
-	}
-	return filepath.Join(dir, "watchd.pid"), filepath.Join(dir, "watchd.sock"), nil
-}
-
 // TCPListenAddr returns the TCP address the daemon should bind, read from
 // CHUNK_DAEMON_TCP_ADDR (e.g. "0.0.0.0:7777"). Empty means TCP is disabled.
 func TCPListenAddr() string {
-	return getenv(EnvTCPAddr)
+	return os.Getenv(EnvTCPAddr)
 }
 
 // TCPRemoteAddr returns the address of a remote daemon to connect to, read
 // from CHUNK_DAEMON_REMOTE_ADDR (e.g. "sandbox-host:7777"). Empty means
 // clients use the local Unix socket.
 func TCPRemoteAddr() string {
-	return getenv(EnvRemoteAddr)
+	return os.Getenv(EnvRemoteAddr)
 }
 
 // TCPToken returns the bearer token required for TCP connections, read from
 // CHUNK_DAEMON_TCP_TOKEN. When set, the daemon requires this token on every
 // TCP request and clients include it in every request header.
 func TCPToken() string {
-	return getenv(EnvTCPToken)
+	return os.Getenv(EnvTCPToken)
 }

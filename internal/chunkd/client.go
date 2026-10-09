@@ -561,7 +561,6 @@ func EnsureRunning() error {
 	if TCPRemoteAddr() != "" {
 		return nil
 	}
-	stopLegacyDaemon()
 	pidPath, err := PIDPath()
 	if err != nil {
 		return err
@@ -588,28 +587,6 @@ func EnsureRunning() error {
 		}
 	}
 	return launch()
-}
-
-// stopLegacyDaemon stops a daemon from before the rename, which serves from
-// watchd.sock and so would go on running beside the one EnsureRunning starts,
-// polling the same projects. Like replacing a daemon from another build it is
-// a startup decision, so EnsureLaunched does not make it. Best-effort: failing
-// to stop it costs a duplicate daemon, not this command.
-func stopLegacyDaemon() {
-	pidPath, sockPath, err := legacyPaths()
-	if err != nil {
-		return
-	}
-	running, pid, err := IsRunning(pidPath)
-	if err != nil || !running {
-		return
-	}
-	// Only stop something that answers on the old socket: a stale pid file may
-	// name a process that has nothing to do with chunk.
-	if reachable, _ := ping(sockPath); !reachable {
-		return
-	}
-	_ = stopDaemon(pid, sockPath)
 }
 
 // EnsureLaunched starts the daemon when nothing is answering and otherwise

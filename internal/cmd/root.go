@@ -15,7 +15,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
@@ -50,9 +49,6 @@ func NewRootCmd(version string) *cobra.Command {
 			}
 			if err := setupTelemetry(cmd, version); err != nil {
 				return err
-			}
-			for _, msg := range chunkd.DeprecatedEnv() {
-				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), ui.ErrWarning(msg))
 			}
 			startUpdateCheck(cmd)
 			return maybeAutoLaunchDaemon(cmd)
