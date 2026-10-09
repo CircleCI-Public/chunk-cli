@@ -1000,6 +1000,36 @@ func TestValidateEndpointPassesHookCodexToTheRunner(t *testing.T) {
 	}
 }
 
+// The hook event decides whether a failing run may give up, which a commit gate
+// must never do, so a daemon that knows the field has to hand it on.
+func TestValidateEndpointPassesHookEventToTheRunner(t *testing.T) {
+	for name, tc := range map[string]struct {
+		event string
+		want  []string
+	}{
+		"commit gate": {event: "PreToolUse", want: []string{"validate", "--hook-event", "PreToolUse"}},
+		"no event":    {want: []string{"validate"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newTestDaemon()
+			t.Cleanup(d.tasks.stopAll)
+
+			var ran []string
+			d.runner = func(_ context.Context, _ string, _ string, args []string, _ []string, _ io.Writer, _ io.Writer) int {
+				ran = args
+				return 0
+			}
+
+			body, err := json.Marshal(chunkd.ValidateRequest{Args: []string{"validate"}, ProjectRoot: "/repo", HookEvent: tc.event})
+			assert.NilError(t, err)
+			rec := serve(d, httptest.NewRequest(http.MethodPost, "/validate", bytes.NewReader(body)))
+
+			assert.Equal(t, rec.Code, http.StatusOK)
+			assert.DeepEqual(t, ran, tc.want)
+		})
+	}
+}
+
 // Output under the cap is the whole of what the run printed, unmarked. A
 // marker on a short result would be a lie about what was dropped.
 func TestTailOutputKeepsShortOutputWhole(t *testing.T) {

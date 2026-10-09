@@ -7,6 +7,27 @@
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "chunk conflicts --hook",
+            "timeout": 5,
+            "statusMessage": "Running chunk conflicts before commit"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate",
+            "timeout": 600,
+            "statusMessage": "Running chunk validate before commit"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
