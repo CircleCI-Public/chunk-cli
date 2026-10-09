@@ -297,11 +297,11 @@ func runMutation(ctx context.Context, repoPath string, patch []byte, testCmd str
 
 func execOnSidecar(ctx context.Context, entry *sidecar.PoolEntry, script string) (int, string, error) {
 	buf := newTailBuffer(maxOutputBytes)
-	result, err := entry.Client.Exec(ctx, entry.ID, "sh", []string{"-c", script}, nil, func(_ string, data []byte) {
+	code, err := entry.Backend.Exec(ctx, entry.ID, script, nil, func(_ string, data []byte) {
 		_, _ = buf.Write(data)
-	})
+	}, nil)
 	if err != nil {
 		return 0, buf.String(), err
 	}
-	return result.ExitCode, buf.String(), nil
+	return code, buf.String(), nil
 }

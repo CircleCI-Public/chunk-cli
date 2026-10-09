@@ -223,7 +223,7 @@ func TestAssemblePool_CreatesAndSyncsAll(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 
@@ -248,7 +248,7 @@ func TestPoolIDs_ReflectsClonedMembersOnceAcquirable(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 
@@ -269,7 +269,7 @@ func TestAssemblePool_CreateFailure_ReturnsError(t *testing.T) {
 	env := setupPoolTest(t)
 	env.cci.CreateStatusCode = 500
 
-	_, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	_, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, countPoolDeletes(env.cci), 0)
@@ -280,7 +280,7 @@ func TestAssemblePool_AllCloneCreatesFail(t *testing.T) {
 	t.Chdir(env.workDir)
 	env.cci.CreateErrorAfter = 1
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	_, err = pool.Acquire(context.Background())
@@ -293,7 +293,7 @@ func TestAssemblePool_PartialCloneFailureKeepsSuccessfulClone(t *testing.T) {
 	t.Chdir(env.workDir)
 	env.cci.CreateErrorAfter = 2
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entry, err := pool.Acquire(context.Background())
@@ -324,7 +324,7 @@ func TestAssemblePool_CloneIsAvailableBeforeAllCreatesFinish(t *testing.T) {
 		}
 	})
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	t.Cleanup(func() { pool.Close(context.Background()) })
@@ -348,7 +348,7 @@ func TestPoolCloseKeepsClonesThatFinishWhileWaiting(t *testing.T) {
 	blocked := make(chan struct{})
 	env.cci.CreateWait = map[int]<-chan struct{}{2: blocked, 3: blocked}
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -375,7 +375,7 @@ func TestPoolCloseCancelsCreatesWhenContextEnds(t *testing.T) {
 	env.cci.CreateWait = map[int]<-chan struct{}{2: blocked, 3: blocked}
 	t.Cleanup(func() { close(blocked) })
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -397,7 +397,7 @@ func TestPoolDestroyWaitsForCloneCreationBeforeReturning(t *testing.T) {
 	env.cci.CreateWait = map[int]<-chan struct{}{3: blocked}
 	t.Cleanup(func() { close(blocked) })
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -419,7 +419,7 @@ func TestPoolDestroyKeepsUndeletedSidecarsInState(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
 
-	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 1, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	env.cci.DeleteStatusCode = 500
@@ -437,7 +437,7 @@ func TestAssemblePool_SyncFailure_CleansUp(t *testing.T) {
 	t.Chdir(env.workDir)
 	env.cci.AddKeyStatusCode = 500
 
-	_, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	_, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, countPoolDeletes(env.cci), 1)
@@ -449,7 +449,7 @@ func TestAssemblePool_StaleExisting_ReplacedAutomatically(t *testing.T) {
 	t.Chdir(env.workDir)
 	env.cci.StaleIDs = map[string]bool{"stale-sb-1": true, "stale-sb-2": true}
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"stale-sb-1", "stale-sb-2"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entries := drainPoolEntries(context.Background(), t, pool, 2)
@@ -471,7 +471,7 @@ func TestAssemblePool_OutdatedExisting_ReplacedAutomatically(t *testing.T) {
 		Workspace:  "/workspace/my-repo",
 	}))
 
-	pool, err := assemblePool(ctx, env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(ctx, NewCircleCIBackend(env.cl, "org-1"), 1, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"outdated-sb-1"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entry, err := pool.Acquire(ctx)
@@ -516,7 +516,7 @@ func TestAssemblePool_SidecarGoneDuringSync_ReplacedAutomatically(t *testing.T) 
 		Name:       "development",
 	}))
 
-	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 1, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"existing-sb-1"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entry, err := pool.Acquire(context.Background())
@@ -538,7 +538,7 @@ func TestAssemblePool_OrdinaryExistingSyncFailureDoesNotReplace(t *testing.T) {
 	t.Chdir(env.workDir)
 	env.cci.AddKeyStatusCode = 500
 
-	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 1, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"existing-sb-1"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	_, err = pool.Acquire(context.Background())
@@ -552,7 +552,7 @@ func TestAssemblePool_ReuseExisting_OnlyCreatesGap(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"existing-sb-1"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	assert.Equal(t, len(pool.ids), 2)
@@ -564,7 +564,7 @@ func TestAssemblePool_FreshExistingSkipsStaleProbe(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
 
-	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 1, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"fresh-sb-1"}, map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entry, err := pool.Acquire(context.Background())
@@ -579,7 +579,7 @@ func TestAssemblePool_FreshExistingRetriesProvisioningLag(t *testing.T) {
 	t.Chdir(env.workDir)
 	env.cci.NotFoundBeforeAddKey = map[string]int{"fresh-sb-1": 1}
 
-	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "snapshot-1",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 1, "validate", "org-1", "snapshot-1",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"fresh-sb-1"}, map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	t.Cleanup(func() { pool.Close(context.Background()) })
@@ -666,7 +666,7 @@ func TestPool_Replace(t *testing.T) {
 	t.Chdir(env.workDir)
 
 	pool := &Pool{
-		client:     env.cl,
+		backend:    NewCircleCIBackend(env.cl, "org-1"),
 		orgID:      "org-1",
 		image:      "ubuntu:22.04",
 		name:       "validate",
@@ -676,7 +676,7 @@ func TestPool_Replace(t *testing.T) {
 		updates:    make(chan struct{}, 1),
 		checkedOut: 1,
 	}
-	dead := &PoolEntry{ID: "dead-sb-1", RepoPath: DefaultWorkspace("my-repo"), Client: env.cl}
+	dead := &PoolEntry{ID: "dead-sb-1", RepoPath: DefaultWorkspace("my-repo"), Backend: NewCircleCIBackend(env.cl, "org-1")}
 	pool.entries = []*PoolEntry{dead}
 	pool.ids = []string{dead.ID}
 
@@ -685,7 +685,7 @@ func TestPool_Replace(t *testing.T) {
 	entry, err := pool.Acquire(context.Background())
 	assert.NilError(t, err)
 	assert.Assert(t, entry.ID != dead.ID)
-	assert.Assert(t, entry.Client != nil)
+	assert.Assert(t, entry.Backend != nil)
 	assert.Equal(t, countPoolDeletes(env.cci), 1)
 	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 1)
 }
@@ -715,7 +715,7 @@ func TestPool_100Sidecars_NoGoroutineLeak(t *testing.T) {
 	ctx := context.Background()
 	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
 
-	pool, err := assemblePool(ctx, env.cl, n, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(ctx, NewCircleCIBackend(env.cl, "org-1"), n, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, noopStatus)
 	assert.NilError(t, err)
 	entries := drainPoolEntries(ctx, t, pool, n)
@@ -726,7 +726,7 @@ func TestPool_100Sidecars_NoGoroutineLeak(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	baseline := runtime.NumGoroutine()
 
-	pool2, err := assemblePool(ctx, env.cl, n, "validate", "org-1", "ubuntu:22.04",
+	pool2, err := assemblePool(ctx, NewCircleCIBackend(env.cl, "org-1"), n, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, pool.ids, nil, noopStatus)
 	assert.NilError(t, err)
 	assert.Equal(t, len(pool2.ids), n)
@@ -754,7 +754,7 @@ func TestPoolWaitSyncedReportsBeforeReturning(t *testing.T) {
 		defer mu.Unlock()
 		msgs = append(msgs, msg)
 	}
-	pool, err := assemblePool(context.Background(), env.cl, 2, "review", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "review", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"existing-sb-1", "existing-sb-2"}, nil, status)
 	assert.NilError(t, err)
 
@@ -787,7 +787,7 @@ func TestPoolWaitSyncedReportsPartialFailure(t *testing.T) {
 	t.Chdir(env.workDir)
 	env.cci.CreateErrorAfter = 2
 
-	pool, err := assemblePool(context.Background(), env.cl, 2, "review", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), NewCircleCIBackend(env.cl, "org-1"), 2, "review", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	t.Cleanup(func() { pool.Close(context.Background()) })

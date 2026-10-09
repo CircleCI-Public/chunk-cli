@@ -46,7 +46,7 @@ func newRelay(t *testing.T, dir string) *Relay {
 	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
 	assert.NilError(t, err)
 
-	return NewRelay(client, dir, func(iostream.Level, string) {})
+	return NewRelay(sidecar.NewCircleCIBackend(client, ""), dir, func(iostream.Level, string) {})
 }
 
 // localRepo returns an empty git repo to pull into, standing in for the run's

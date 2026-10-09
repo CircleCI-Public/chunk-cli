@@ -143,18 +143,7 @@ type Execer func(ctx context.Context, entry *sidecar.PoolEntry, script string, e
 // stream are kept apart so onSubmitted sees the command ID: the caller needs it
 // before the command ends, not after.
 func ClientExec(ctx context.Context, entry *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
-	commandID, err := entry.Client.SubmitExec(ctx, entry.ID, "sh", []string{"-c", script}, env)
-	if err != nil {
-		return 0, fmt.Errorf("submit: %w", err)
-	}
-	if onSubmitted != nil {
-		onSubmitted(commandID)
-	}
-	res, err := entry.Client.StreamOutput(ctx, commandID, "", onOutput)
-	if err != nil {
-		return 0, fmt.Errorf("stream output: %w", err)
-	}
-	return res.ExitCode, nil
+	return entry.Backend.Exec(ctx, entry.ID, script, env, onOutput, onSubmitted)
 }
 
 // RunPass runs every prompt once, each on a sidecar checked out with acquire

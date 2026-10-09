@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -27,22 +26,22 @@ const relayConcurrency = 8
 // ones included: the worktree keeps its own, and the implementer's git config
 // and hooks never reach this machine, where git will run on the files.
 type Relay struct {
-	client *circleci.Client
-	dir    string
-	status iostream.StatusFunc
+	backend sidecar.Backend
+	dir     string
+	status  iostream.StatusFunc
 }
 
 // NewRelay relays through dir, the run's worktree.
-func NewRelay(client *circleci.Client, dir string, status iostream.StatusFunc) *Relay {
+func NewRelay(backend sidecar.Backend, dir string, status iostream.StatusFunc) *Relay {
 	if status == nil {
 		status = func(iostream.Level, string) {}
 	}
-	return &Relay{client: client, dir: dir, status: status}
+	return &Relay{backend: backend, dir: dir, status: status}
 }
 
 // Pull mirrors the workspace at repoPath on sidecarID into the worktree.
 func (r *Relay) Pull(ctx context.Context, sidecarID, repoPath string) error {
-	if err := sidecar.RsyncPull(ctx, r.client, sidecarID, repoPath, r.dir, r.status); err != nil {
+	if err := r.backend.Pull(ctx, sidecarID, repoPath, r.dir, r.status); err != nil {
 		return fmt.Errorf("pull from %s: %w", sidecarID, err)
 	}
 	return nil
@@ -66,7 +65,9 @@ func (r *Relay) Push(ctx context.Context, entries []*sidecar.PoolEntry) error {
 			status := func(level iostream.Level, msg string) {
 				r.status(level, fmt.Sprintf("%s: %s", id, msg))
 			}
-			if err := sidecar.RsyncSyncEphemeral(ctx, r.client, id, repoPath, r.dir, status); err != nil {
+			// An ephemeral push: no active-sidecar file, no retry (retry=false),
+			// which is what RsyncSyncEphemeral did before the backend split.
+			if err := r.backend.Sync(ctx, id, repoPath, r.dir, false, status); err != nil {
 				errs[i] = fmt.Errorf("push to %s: %w", id, err)
 			}
 		}(i, e.ID, e.RepoPath)

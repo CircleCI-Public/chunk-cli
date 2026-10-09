@@ -43,7 +43,7 @@ func TestPooledValidateRegistersSubmittedCommand(t *testing.T) {
 	var recordedID string
 	result := runPooledValidateCommand(
 		context.Background(),
-		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
+		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Backend: sidecar.NewCircleCIBackend(client, "")},
 		config.Command{Name: "test", Run: "true"},
 		"", snapshotDir, projectRoot, nil,
 		func(id string) { recordedID = id },
@@ -77,7 +77,7 @@ func TestPooledValidateClearsCommandIDWhenSubmissionFails(t *testing.T) {
 	commandID := "stale-command"
 	result := runPooledValidateCommand(
 		context.Background(),
-		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
+		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Backend: sidecar.NewCircleCIBackend(client, "")},
 		config.Command{Name: "test", Run: "true"},
 		"", t.TempDir(), t.TempDir(), nil,
 		func(id string) { commandID = id },
@@ -108,7 +108,7 @@ func TestPooledValidateReportsFailureBeforeTheCommandRuns(t *testing.T) {
 	var messages []string
 	result := runPooledValidateCommand(
 		context.Background(),
-		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
+		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Backend: sidecar.NewCircleCIBackend(client, "")},
 		config.Command{Name: "test", Run: "true"},
 		"", t.TempDir(), t.TempDir(), nil, nil,
 		func(level iostream.Level, msg string) {
@@ -134,7 +134,7 @@ func TestPooledValidateReportsMissingWorkspace(t *testing.T) {
 	assert.NilError(t, err)
 	result := runPooledValidateCommand(
 		context.Background(),
-		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
+		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Backend: sidecar.NewCircleCIBackend(client, "")},
 		config.Command{Name: "test", Run: "true"},
 		"", t.TempDir(), t.TempDir(), nil, nil,
 		func(iostream.Level, string) {},

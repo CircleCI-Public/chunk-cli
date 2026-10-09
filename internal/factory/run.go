@@ -248,7 +248,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Acquire:   pool.Acquire,
 		Release:   pool.Release,
 		Reviewers: Members(impl, pool.IDs()),
-		Relay:     NewRelay(opts.Client, wt.Path, status),
+		Relay:     NewRelay(sidecar.NewCircleCIBackend(opts.Client, opts.OrgID), wt.Path, status),
 		Request:   request,
 		Prompts:   opts.Prompts,
 		Review: review.Options{

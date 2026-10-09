@@ -20,7 +20,7 @@ import (
 type PoolEntry struct {
 	ID       string
 	RepoPath string
-	Client   *circleci.Client
+	Backend  Backend
 }
 
 // poolSync syncs the local tree to one pool member. It is a variable so pool
@@ -33,7 +33,7 @@ type Pool struct {
 	updates  chan struct{}
 	ids      []string
 	entries  []*PoolEntry
-	client   *circleci.Client
+	backend  Backend
 	workDir  string
 	stateDir string
 	orgID    string
@@ -119,6 +119,9 @@ func NewPool(
 	if opts.Size < 1 {
 		return nil, errors.New("pool size must be positive")
 	}
+	// The pool runs its sidecars through a Backend. Phase 1 derives the CircleCI
+	// backend from the client; a later phase selects Docker here instead.
+	be := NewCircleCIBackend(client, opts.OrgID)
 	stateDir := opts.StateDir
 	if stateDir == "" {
 		stateDir = opts.WorkDir
@@ -150,7 +153,7 @@ func NewPool(
 		if len(opts.ExistingIDs) == 0 {
 			surplus := existingIDs[opts.Size:]
 			status(iostream.LevelInfo, fmt.Sprintf("deleting %d surplus pool sidecar(s)...", len(surplus)))
-			for _, id := range deleteSidecarsConcurrently(context.WithoutCancel(ctx), client, surplus) {
+			for _, id := range deleteSidecarsConcurrently(context.WithoutCancel(ctx), be, surplus) {
 				status(iostream.LevelWarn, fmt.Sprintf("could not delete surplus sidecar %s", id))
 			}
 		}
@@ -161,12 +164,12 @@ func NewPool(
 	for _, id := range opts.FreshIDs {
 		freshIDs[id] = true
 	}
-	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, stateDir, existingIDs, freshIDs, status)
+	return assemblePool(ctx, be, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, stateDir, existingIDs, freshIDs, status)
 }
 
 func assemblePool(
 	ctx context.Context,
-	client *circleci.Client,
+	be Backend,
 	n int,
 	name, orgID, image, repoPath, workDir, stateDir string,
 	existingIDs []string,
@@ -184,7 +187,7 @@ func assemblePool(
 		swg.Add(1)
 		go func(i int, id string) {
 			defer swg.Done()
-			staleFlags[i] = IsDefinitelyStale(ctx, client, id)
+			staleFlags[i] = be.IsStale(ctx, id)
 		}(i, id)
 	}
 	swg.Wait()
@@ -205,7 +208,7 @@ func assemblePool(
 			go func(id string) {
 				defer delWg.Done()
 				status(iostream.LevelInfo, fmt.Sprintf("sidecar %s is stale, creating replacement...", id))
-				_ = client.DeleteSidecar(cleanCtx, id)
+				_ = be.Delete(cleanCtx, id)
 			}(id)
 		}
 		delWg.Wait()
@@ -216,27 +219,27 @@ func assemblePool(
 	var cloneSnapshotID, cloneSeedID string
 	if newCount > 0 {
 		seedIdx := len(aliveExisting)
-		seed, err := Create(ctx, client, orgID, fmt.Sprintf("%s-%d", name, seedIdx), image)
+		seed, err := be.Create(ctx, fmt.Sprintf("%s-%d", name, seedIdx), image)
 		if err != nil {
 			return nil, fmt.Errorf("create sidecar %d: %w", seedIdx, err)
 		}
 		status(iostream.LevelInfo, fmt.Sprintf("created sidecar %d (%s)", seedIdx, seed.ID))
 
-		if err := poolSync(ctx, client, seed.ID, true, repoPath, workDir, status); err != nil {
-			_ = client.DeleteSidecar(cleanCtx, seed.ID)
+		if err := be.Sync(ctx, seed.ID, repoPath, workDir, true, status); err != nil {
+			_ = be.Delete(cleanCtx, seed.ID)
 			return nil, fmt.Errorf("pool seed sync: %w", err)
 		}
 
 		if newCount == 1 {
 			goodNew = append(goodNew, seed.ID)
 		} else {
-			snap, err := client.CreateSnapshot(ctx, seed.ID, fmt.Sprintf("%s-seed-%d", name, time.Now().UTC().UnixNano()))
+			snapID, err := be.Snapshot(ctx, seed.ID, fmt.Sprintf("%s-seed-%d", name, time.Now().UTC().UnixNano()))
 			if err != nil {
-				_ = client.DeleteSidecar(cleanCtx, seed.ID)
+				_ = be.Delete(cleanCtx, seed.ID)
 				return nil, fmt.Errorf("pool snapshot: %w", err)
 			}
-			status(iostream.LevelInfo, fmt.Sprintf("created seed snapshot %s", snap.ID))
-			cloneSnapshotID = snap.ID
+			status(iostream.LevelInfo, fmt.Sprintf("created seed snapshot %s", snapID))
+			cloneSnapshotID = snapID
 			cloneSeedID = seed.ID
 		}
 	}
@@ -246,7 +249,7 @@ func assemblePool(
 	}
 	if cloneSnapshotID == "" && len(goodNew) > 0 && len(staleIDs) > 0 {
 		if err := replaceActiveSidecars(context.WithoutCancel(ctx), map[string]string{staleIDs[0]: goodNew[0]}); err != nil {
-			deleteSidecars(client, goodNew)
+			deleteSidecars(be, goodNew)
 			return nil, fmt.Errorf("update active pool after replacement: %w", err)
 		}
 		staleIDs = staleIDs[1:]
@@ -262,7 +265,7 @@ func assemblePool(
 
 	entries := make([]*PoolEntry, len(allIDs))
 	for i, id := range allIDs {
-		entries[i] = &PoolEntry{ID: id, RepoPath: repoPath, Client: client}
+		entries[i] = &PoolEntry{ID: id, RepoPath: repoPath, Backend: be}
 	}
 
 	free := make(chan *PoolEntry, n)
@@ -274,7 +277,7 @@ func assemblePool(
 		updates:        make(chan struct{}, 1),
 		ids:            allIDs,
 		entries:        entries,
-		client:         client,
+		backend:        be,
 		workDir:        workDir,
 		stateDir:       stateDir,
 		orgID:          orgID,
@@ -286,9 +289,9 @@ func assemblePool(
 	}
 
 	if err := pool.persistState(); err != nil {
-		deleteSidecars(client, goodNew)
+		deleteSidecars(be, goodNew)
 		if cloneSeedID != "" {
-			_ = client.DeleteSidecar(cleanCtx, cloneSeedID)
+			_ = be.Delete(cleanCtx, cloneSeedID)
 		}
 		return nil, fmt.Errorf("pool state: %w", err)
 	}
@@ -302,10 +305,10 @@ func assemblePool(
 	return pool, nil
 }
 
-func deleteSidecars(client *circleci.Client, ids []string) {
+func deleteSidecars(be Backend, ids []string) {
 	ctx := context.Background()
 	for _, id := range ids {
-		_ = client.DeleteSidecar(ctx, id)
+		_ = be.Delete(ctx, id)
 	}
 }
 
@@ -313,25 +316,25 @@ func deleteSidecars(client *circleci.Client, ids []string) {
 // replacement available to future Acquire calls.
 func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.StatusFunc) error {
 	cleanupCtx := context.WithoutCancel(ctx)
-	_ = p.client.DeleteSidecar(cleanupCtx, dead.ID)
+	_ = p.backend.Delete(cleanupCtx, dead.ID)
 
-	sc, err := Create(ctx, p.client, p.orgID, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
+	sc, err := p.backend.Create(ctx, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
 	if err != nil {
 		err = fmt.Errorf("replace: create sidecar: %w", err)
 		p.retire(dead, err)
 		return err
 	}
 
-	if err := poolSync(ctx, p.client, sc.ID, true, dead.RepoPath, p.workDir, status); err != nil {
-		_ = p.client.DeleteSidecar(cleanupCtx, sc.ID)
+	if err := p.backend.Sync(ctx, sc.ID, dead.RepoPath, p.workDir, true, status); err != nil {
+		_ = p.backend.Delete(cleanupCtx, sc.ID)
 		err = fmt.Errorf("replace: sync sidecar: %w", err)
 		p.retire(dead, err)
 		return err
 	}
 
-	replacement := &PoolEntry{ID: sc.ID, RepoPath: dead.RepoPath, Client: p.client}
+	replacement := &PoolEntry{ID: sc.ID, RepoPath: dead.RepoPath, Backend: p.backend}
 	if err := replaceActiveSidecars(context.WithoutCancel(ctx), map[string]string{dead.ID: replacement.ID}); err != nil {
-		_ = p.client.DeleteSidecar(context.Background(), replacement.ID)
+		_ = p.backend.Delete(context.Background(), replacement.ID)
 		err = fmt.Errorf("replace: update active state: %w", err)
 		p.retire(dead, err)
 		return err
@@ -341,7 +344,7 @@ func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.Sta
 	index := slices.IndexFunc(p.entries, func(entry *PoolEntry) bool { return entry.ID == dead.ID })
 	if index < 0 {
 		p.mu.Unlock()
-		_ = p.client.DeleteSidecar(context.Background(), replacement.ID)
+		_ = p.backend.Delete(context.Background(), replacement.ID)
 		err = fmt.Errorf("replace: sidecar %s is not a pool member", dead.ID)
 		p.retire(dead, err)
 		return err
@@ -404,7 +407,7 @@ func (p *Pool) startCloneCreation(
 	for i := range count {
 		go func(i int) {
 			index := baseIndex + i
-			sc, err := Create(createCtx, p.client, p.orgID, fmt.Sprintf("%s-%d", p.name, index), snapshotID)
+			sc, err := p.backend.Create(createCtx, fmt.Sprintf("%s-%d", p.name, index), snapshotID)
 			if err != nil {
 				results <- cloneResult{err: fmt.Errorf("create sidecar %d from snapshot: %w", index, err)}
 				return
@@ -417,7 +420,7 @@ func (p *Pool) startCloneCreation(
 	go func() {
 		defer close(done)
 		defer cancel()
-		defer func() { _ = p.client.DeleteSidecar(cleanupCtx, seedID) }()
+		defer func() { _ = p.backend.Delete(cleanupCtx, seedID) }()
 		replacementIndex := 0
 		for range count {
 			result := <-results
@@ -430,7 +433,7 @@ func (p *Pool) startCloneCreation(
 			if replacementIndex < len(staleIDs) {
 				staleID := staleIDs[replacementIndex]
 				if err := replaceActiveSidecars(context.WithoutCancel(ctx), map[string]string{staleID: result.id}); err != nil {
-					_ = p.client.DeleteSidecar(cleanupCtx, result.id)
+					_ = p.backend.Delete(cleanupCtx, result.id)
 					err = fmt.Errorf("replace active sidecar %s: %w", staleID, err)
 					status(iostream.LevelWarn, err.Error())
 					p.finishCreate(nil, err, status)
@@ -440,7 +443,7 @@ func (p *Pool) startCloneCreation(
 				status(iostream.LevelInfo, fmt.Sprintf("replacement sidecar: %s", result.id))
 			}
 
-			p.finishCreate(&PoolEntry{ID: result.id, RepoPath: p.repoPath, Client: p.client}, nil, status)
+			p.finishCreate(&PoolEntry{ID: result.id, RepoPath: p.repoPath, Backend: p.backend}, nil, status)
 		}
 
 		for _, staleID := range staleIDs[replacementIndex:] {
@@ -468,7 +471,7 @@ func (p *Pool) finishCreate(entry *PoolEntry, err error, status iostream.StatusF
 	p.mu.Unlock()
 
 	if entry != nil && closed {
-		_ = p.client.DeleteSidecar(context.Background(), entry.ID)
+		_ = p.backend.Delete(context.Background(), entry.ID)
 	} else if entry != nil {
 		if err := p.persistState(); err != nil {
 			status(iostream.LevelWarn, fmt.Sprintf("could not save pool state: %v", err))
@@ -548,7 +551,7 @@ func (p *Pool) Release(entry *PoolEntry) {
 	}
 	p.mu.Unlock()
 	if closed {
-		_ = p.client.DeleteSidecar(context.Background(), entry.ID)
+		_ = p.backend.Delete(context.Background(), entry.ID)
 	}
 	p.notifyUpdate()
 }
@@ -585,7 +588,7 @@ func (p *Pool) Destroy(ctx context.Context) error {
 	p.mu.Lock()
 	ids := slices.Clone(p.ids)
 	p.mu.Unlock()
-	failed := deleteSidecarsConcurrently(ctx, p.client, ids)
+	failed := deleteSidecarsConcurrently(ctx, p.backend, ids)
 	p.notifyUpdate()
 	if len(failed) == 0 {
 		clearPoolState(p.stateDir, p.name)
@@ -645,7 +648,7 @@ func (p *Pool) waitForBackground(ctx context.Context) bool {
 	return true
 }
 
-func deleteSidecarsConcurrently(ctx context.Context, client *circleci.Client, ids []string) []string {
+func deleteSidecarsConcurrently(ctx context.Context, be Backend, ids []string) []string {
 	var mu sync.Mutex
 	var failed []string
 	sem := make(chan struct{}, syncFanOutConcurrency)
@@ -656,7 +659,7 @@ func deleteSidecarsConcurrently(ctx context.Context, client *circleci.Client, id
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if err := client.DeleteSidecar(ctx, id); err != nil && !circleci.SidecarGone(err) {
+			if err := be.Delete(ctx, id); err != nil && !circleci.SidecarGone(err) {
 				mu.Lock()
 				failed = append(failed, id)
 				mu.Unlock()
@@ -691,7 +694,7 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, fre
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			err := poolSync(ctx, p.client, id, freshIDs[id], entry.RepoPath, p.workDir, status)
+			err := p.backend.Sync(ctx, id, entry.RepoPath, p.workDir, freshIDs[id], status)
 			if isStaleSyncError(err) {
 				stale := entry
 				entry, err = p.replaceStaleEntry(ctx, stale, status)
@@ -704,7 +707,7 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, fre
 					}
 					p.mu.Unlock()
 					if index < 0 {
-						_ = p.client.DeleteSidecar(context.WithoutCancel(ctx), entry.ID)
+						_ = p.backend.Delete(context.WithoutCancel(ctx), entry.ID)
 						entry, err = stale, fmt.Errorf("replace stale sidecar: %s is not a pool member", stale.ID)
 					}
 				}
@@ -735,19 +738,19 @@ func isStaleSyncError(err error) bool {
 
 func (p *Pool) replaceStaleEntry(ctx context.Context, stale *PoolEntry, status iostream.StatusFunc) (*PoolEntry, error) {
 	status(iostream.LevelInfo, fmt.Sprintf("sidecar %s became stale during sync, creating replacement...", stale.ID))
-	_ = p.client.DeleteSidecar(context.Background(), stale.ID)
+	_ = p.backend.Delete(context.Background(), stale.ID)
 
-	sc, err := Create(ctx, p.client, p.orgID, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
+	sc, err := p.backend.Create(ctx, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
 	if err != nil {
 		return stale, fmt.Errorf("replace stale sidecar: create: %w", err)
 	}
-	replacement := &PoolEntry{ID: sc.ID, RepoPath: stale.RepoPath, Client: p.client}
-	if err := poolSync(ctx, p.client, replacement.ID, true, stale.RepoPath, p.workDir, status); err != nil {
-		_ = p.client.DeleteSidecar(context.Background(), replacement.ID)
+	replacement := &PoolEntry{ID: sc.ID, RepoPath: stale.RepoPath, Backend: p.backend}
+	if err := p.backend.Sync(ctx, replacement.ID, stale.RepoPath, p.workDir, true, status); err != nil {
+		_ = p.backend.Delete(context.Background(), replacement.ID)
 		return stale, fmt.Errorf("replace stale sidecar: sync: %w", err)
 	}
 	if err := replaceActiveSidecars(context.WithoutCancel(ctx), map[string]string{stale.ID: replacement.ID}); err != nil {
-		_ = p.client.DeleteSidecar(context.Background(), replacement.ID)
+		_ = p.backend.Delete(context.Background(), replacement.ID)
 		return stale, fmt.Errorf("replace stale sidecar: update active state: %w", err)
 	}
 	status(iostream.LevelInfo, fmt.Sprintf("replacement sidecar: %s", replacement.ID))
@@ -767,7 +770,7 @@ func (p *Pool) finishSync(entry *PoolEntry, err error) {
 	}
 	p.mu.Unlock()
 	if err == nil && closed {
-		_ = p.client.DeleteSidecar(context.Background(), entry.ID)
+		_ = p.backend.Delete(context.Background(), entry.ID)
 	}
 	p.notifyUpdate()
 }

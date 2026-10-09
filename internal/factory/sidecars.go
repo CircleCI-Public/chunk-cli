@@ -51,7 +51,7 @@ func Members(impl *sidecar.PoolEntry, ids []string) []*sidecar.PoolEntry {
 	var out []*sidecar.PoolEntry
 	for _, id := range ids {
 		if id != impl.ID {
-			out = append(out, &sidecar.PoolEntry{ID: id, RepoPath: impl.RepoPath, Client: impl.Client})
+			out = append(out, &sidecar.PoolEntry{ID: id, RepoPath: impl.RepoPath, Backend: impl.Backend})
 		}
 	}
 	return out

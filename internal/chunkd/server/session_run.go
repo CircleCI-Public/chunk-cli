@@ -188,13 +188,13 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 	submit := d.rcfg.Submit
 	if submit == nil {
 		submit = func(ctx context.Context, pe *sidecar.PoolEntry, script string, env map[string]string) (string, error) {
-			return pe.Client.SubmitExec(ctx, pe.ID, "sh", []string{"-c", script}, env)
+			return d.client.SubmitExec(ctx, pe.ID, "sh", []string{"-c", script}, env)
 		}
 	}
 	stream := d.rcfg.Stream
 	if stream == nil {
 		stream = func(ctx context.Context, pe *sidecar.PoolEntry, commandID string, onOutput circleci.OutputFn) (int, error) {
-			resp, err := pe.Client.StreamOutput(ctx, commandID, "", onOutput)
+			resp, err := d.client.StreamOutput(ctx, commandID, "", onOutput)
 			if err != nil {
 				return 0, err
 			}
@@ -218,7 +218,7 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 				Op:          "review",
 				Name:        name,
 				SubmittedAt: time.Now(),
-			}, streamFor(pe.Client))
+			}, streamFor(d.client))
 		}
 		code, err := stream(ctx, pe, commandID, onOutput)
 		if err != nil {
