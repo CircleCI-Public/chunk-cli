@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
@@ -174,15 +175,15 @@ A prompts directory named "results" must be passed as ./results, since
 			if jsonOut || ui.RequireStdoutTTY() != nil {
 				statusFn(iostream.LevelStep, fmt.Sprintf("Running %d review(s)...", len(prompts)))
 				opts.StatusFn = statusFn
-				results, passErr = review.RunPass(ctx, pool.Acquire, pool.Release, review.ClientExec, prompts, opts)
+				results, passErr = review.RunPass(ctx, pool.Acquire, pool.Release, sidecar.ClientExec, prompts, opts)
 			} else {
 				results, passErr = runReviewTUI(ctx, pool, prompts, size, opts)
 			}
 			activity.finish(passErr)
-			if errors.Is(passErr, review.ErrClaudeMissing) {
+			if errors.Is(passErr, claudecode.ErrMissing) {
 				return agentNotInstalled("the review sidecars", passErr)
 			}
-			if errors.Is(passErr, review.ErrCredentialRejected) {
+			if errors.Is(passErr, claudecode.ErrCredentialRejected) {
 				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, passErr)
 			}
 			if jsonOut {
@@ -301,7 +302,7 @@ func runReviewTUI(ctx context.Context, pool *sidecar.Pool, prompts []review.Prom
 	doneCh := make(chan passResult, 1)
 
 	go func() {
-		r, err := review.RunPass(ctx, pool.Acquire, pool.Release, review.ClientExec, prompts, opts)
+		r, err := review.RunPass(ctx, pool.Acquire, pool.Release, sidecar.ClientExec, prompts, opts)
 		doneCh <- passResult{r, err}
 		prog.Send(reviewprogress.DoneMsg{Err: err})
 	}()
@@ -378,14 +379,14 @@ func countFailedReviews(results []review.Result) int {
 // reviewCredential picks the credential reviews authenticate with, preferring
 // an API key so nothing changes for anyone who already has one. The source is
 // returned so a rejected credential can be cleared from wherever it came from.
-func reviewCredential(rc config.ResolvedConfig) (review.Credential, string, error) {
+func reviewCredential(rc config.ResolvedConfig) (claudecode.Credential, string, error) {
 	switch {
 	case rc.AnthropicAPIKey != "":
-		return review.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: rc.AnthropicAPIKey}, rc.AnthropicAPIKeySource, nil
+		return claudecode.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: rc.AnthropicAPIKey}, rc.AnthropicAPIKeySource, nil
 	case rc.ClaudeOAuthToken != "":
-		return review.Credential{EnvVar: config.EnvClaudeOAuthToken, Value: rc.ClaudeOAuthToken}, rc.ClaudeOAuthTokenSource, nil
+		return claudecode.Credential{EnvVar: config.EnvClaudeOAuthToken, Value: rc.ClaudeOAuthToken}, rc.ClaudeOAuthTokenSource, nil
 	}
-	return review.Credential{}, "", &userError{
+	return claudecode.Credential{}, "", &userError{
 		msg:        "No Claude credential found; reviews run Claude on each sidecar.",
 		suggestion: "Run 'chunk auth set anthropic-oauth' to use your Claude subscription, or 'chunk auth set anthropic' for an API key.",
 		errMsg:     "no claude credential found",
@@ -397,7 +398,7 @@ func reviewCredential(rc config.ResolvedConfig) (review.Credential, string, erro
 // when it was one we stored in the keychain. A credential from the environment
 // is the user's to fix, so it is only named, and a key in the config file is
 // pointed at rather than rewritten.
-func credentialRejected(cred review.Credential, source, baseURL string, err error) error {
+func credentialRejected(cred claudecode.Credential, source, baseURL string, err error) error {
 	if strings.HasPrefix(source, "Environment") {
 		return &userError{
 			msg:        fmt.Sprintf("Anthropic rejected the credential in %s.", cred.EnvVar),

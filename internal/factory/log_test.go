@@ -10,6 +10,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -43,8 +44,8 @@ func TestLogRecordsWhatTheDisplayLeavesOut(t *testing.T) {
 
 	opts.Status(iostream.LevelStep, "Preparing sidecars...")
 	opts.OnEvent(Event{Kind: EventImplementing, Round: 2, Prompt: "Fix these:\n- lint"})
-	opts.OnActivity(Activity{Tool: "Edit", Detail: "main.go"})
-	opts.OnActivity(Activity{Detail: "Fixing the lint\nfailure."})
+	opts.OnActivity(claudecode.Activity{Tool: "Edit", Detail: "main.go"})
+	opts.OnActivity(claudecode.Activity{Detail: "Fixing the lint\nfailure."})
 	opts.OnEvent(Event{Kind: EventImplemented, Round: 2, Turn: Turn{Summary: "Fixed it.", Duration: 3 * time.Second, CostUSD: 0.5}})
 	opts.OnCheck(Check{Name: "lint", Kind: KindValidate, Status: StatusFailed, SidecarID: "impl", ExitCode: 1, Output: "main.go:3: unused"})
 	opts.OnCheck(Check{Name: "test", Kind: KindValidate, Status: StatusPassed, SidecarID: "impl", Output: "ok pkg"})

@@ -14,7 +14,7 @@ import (
 // `git diff HEAD` there, and on every reviewer it is relayed to, is exactly
 // the work under review.
 type workspace struct {
-	exec     review.Execer
+	exec     sidecar.Execer
 	entry    *sidecar.PoolEntry
 	baseline string
 }

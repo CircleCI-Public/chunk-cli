@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/promptrows"
 )
@@ -61,12 +62,12 @@ func TestDoneMsgQuits(t *testing.T) {
 func TestDoneMsgWithErrorSettlesUnfinishedRows(t *testing.T) {
 	m := send(New(basePrompts(), 1, func() {}),
 		ProgressMsg(review.ProgressEvent{Prompt: "api-design", SidecarID: "sb-abc123", State: review.StateRunning}),
-		DoneMsg{Err: review.ErrClaudeMissing},
+		DoneMsg{Err: claudecode.ErrMissing},
 	)
 
 	for _, r := range m.rows {
 		assert.Equal(t, r.State, promptrows.Failed, "row %s", r.Name)
-		assert.Equal(t, r.Err, review.ErrClaudeMissing.Error())
+		assert.Equal(t, r.Err, claudecode.ErrMissing.Error())
 	}
 	assert.Assert(t, !strings.Contains(m.render(), "running"))
 }

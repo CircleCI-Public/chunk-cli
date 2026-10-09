@@ -14,14 +14,14 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 // localExec runs scripts with sh on this machine, as a sidecar would, with
 // HOME pointed at home so a fake claude can be installed where the scripts
 // look for it.
-func localExec(home string) review.Execer {
+func localExec(home string) sidecar.Execer {
 	return func(ctx context.Context, _ *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, _ func(string)) (int, error) {
 		cmd := exec.CommandContext(ctx, "sh", "-c", script)
 		cmd.Env = append(os.Environ(), "HOME="+home)
@@ -73,16 +73,16 @@ const streamOK = `printf '%s\n' '{"type":"system","subtype":"init","session_id":
  '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}' \
  '{"type":"result","subtype":"success","is_error":false,"result":"Added --verbose.","total_cost_usd":0.42}'`
 
-func newImplementer(t *testing.T, claudeBody string) (*Implementer, string, *[]Activity) {
+func newImplementer(t *testing.T, claudeBody string) (*Implementer, string, *[]claudecode.Activity) {
 	t.Helper()
 	home := t.TempDir()
 	installFakeClaude(t, home, claudeBody)
-	var acts []Activity
+	var acts []claudecode.Activity
 	im := &Implementer{
 		Exec:       localExec(home),
 		Entry:      &sidecar.PoolEntry{ID: "impl", RepoPath: t.TempDir()},
-		Credential: review.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
-		OnActivity: func(a Activity) { acts = append(acts, a) },
+		Credential: claudecode.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
+		OnActivity: func(a claudecode.Activity) { acts = append(acts, a) },
 	}
 	return im, home, &acts
 }
@@ -94,7 +94,7 @@ func TestImplementerRunsAndReportsActivity(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, turn.Summary, "Added --verbose.")
 	assert.Equal(t, turn.CostUSD, 0.42)
-	assert.DeepEqual(t, *acts, []Activity{
+	assert.DeepEqual(t, *acts, []claudecode.Activity{
 		{Detail: "Adding the flag."},
 		{Tool: "Edit", Detail: "main.go"},
 		{Tool: "Bash", Detail: "go test ./..."},
@@ -152,12 +152,12 @@ func TestImplementerFailures(t *testing.T) {
 		{
 			name: "credential rejected",
 			body: `echo '{"type":"result","is_error":true,"result":"Failed to authenticate. API Error: 401"}'; exit 1`,
-			is:   review.ErrCredentialRejected,
+			is:   claudecode.ErrCredentialRejected,
 		},
 		{
 			name: "credential rejected on stderr",
 			body: `echo '{"type":"result","is_error":true,"result":"Something went wrong"}'; echo 'Failed to authenticate. API Error: 401' >&2; exit 1`,
-			is:   review.ErrCredentialRejected,
+			is:   claudecode.ErrCredentialRejected,
 		},
 		{
 			name: "error result without text",
@@ -193,29 +193,5 @@ func TestImplementerReportsMissingClaude(t *testing.T) {
 	im := &Implementer{Exec: localExec(home), Entry: &sidecar.PoolEntry{RepoPath: t.TempDir()}}
 	t.Setenv("PATH", "/usr/bin:/bin")
 	_, err := im.Run(context.Background(), "p")
-	assert.Assert(t, errors.Is(err, review.ErrClaudeMissing), "got %v", err)
-}
-
-// TestStreamParserReassemblesSplitLines covers output arriving in chunks that
-// cut lines anywhere, as the exec stream delivers it.
-func TestStreamParserReassemblesSplitLines(t *testing.T) {
-	var acts []Activity
-	p := &streamParser{onActivity: func(a Activity) { acts = append(acts, a) }}
-	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.go"}}]}}` + "\n" +
-		`{"type":"result","result":"ok"}`
-	for i := 0; i < len(stream); i += 7 {
-		p.write([]byte(stream[i:min(i+7, len(stream))]))
-	}
-	p.flush()
-	assert.DeepEqual(t, acts, []Activity{{Tool: "Read", Detail: "a.go"}})
-	assert.Assert(t, p.sawResult)
-	assert.Equal(t, p.result.Result, "ok")
-}
-
-func TestStreamParserDropsOversizedLines(t *testing.T) {
-	p := &streamParser{}
-	p.write([]byte(`{"type":"user","x":"` + strings.Repeat("a", maxLineBytes) + `"}` + "\n"))
-	p.write([]byte(`{"type":"result","result":"ok"}` + "\n"))
-	assert.Assert(t, p.sawResult)
-	assert.Assert(t, len(p.buf) < maxLineBytes)
+	assert.Assert(t, errors.Is(err, claudecode.ErrMissing), "got %v", err)
 }

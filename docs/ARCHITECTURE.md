@@ -26,6 +26,7 @@ chunk-cli/
     ├── anthropic/             # Anthropic Messages API client
     ├── buildprompt/           # Three-step pipeline: discover → analyze → generate
     ├── circleci/              # CircleCI REST API client
+    ├── claudecode/            # Runs claude -p on a sidecar and explains how the run ended
     ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
     ├── filecache/             # Generic JSON-on-disk cache (FileCache[T])
     ├── github/                # GitHub GraphQL client (reviews, repos)
@@ -195,8 +196,8 @@ in `config.Resolve` and makes clients testable.
 | Variable | Used by | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | anthropic, config, validate | Anthropic authentication |
-| `ANTHROPIC_BASE_URL` | anthropic, review, validate | API endpoint override |
-| `CLAUDE_CODE_OAUTH_TOKEN` | config, review | Claude subscription authentication for reviews |
+| `ANTHROPIC_BASE_URL` | anthropic, claudecode, validate | API endpoint override |
+| `CLAUDE_CODE_OAUTH_TOKEN` | config, claudecode | Claude subscription authentication for Claude Code runs |
 | `GITHUB_TOKEN` | github | GitHub authentication |
 | `GITHUB_API_URL` | github, upgrade | GitHub API endpoint override (also used by the update check) |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |

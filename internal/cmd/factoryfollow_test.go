@@ -14,16 +14,16 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
 // fakeSessionConfig is a daemon setup with a Claude credential and nothing
 // else. Tests set RunFactory, so no sandbox is booted and no API is called.
 func fakeSessionConfig() server.ReviewConfig {
 	return server.ReviewConfig{
-		Credential: review.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: "sk-test"},
+		Credential: claudecode.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: "sk-test"},
 	}
 }
 

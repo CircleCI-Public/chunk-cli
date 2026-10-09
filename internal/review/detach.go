@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -123,7 +124,7 @@ func DetachScript(s DetachSpec) string {
 // DetachEnv is the environment the primary's review runs with: the credentials
 // its own chunk needs to create the reviewer sidecars and to run Claude on them.
 func DetachEnv(circleCIToken string, opts Options) map[string]string {
-	env := Env(opts.Credential, opts.BaseURL)
+	env := claudecode.Env(opts.Credential, opts.BaseURL)
 	env[config.EnvCircleCIToken] = circleCIToken
 	return env
 }

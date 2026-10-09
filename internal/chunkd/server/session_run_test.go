@@ -17,9 +17,9 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -34,7 +34,7 @@ type fakeBackend struct {
 
 func (f *fakeBackend) config() ReviewConfig {
 	return ReviewConfig{
-		Credential: review.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: testSecret},
+		Credential: claudecode.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: testSecret},
 		Submit: func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string) (string, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
@@ -140,7 +140,7 @@ func TestFactoryRefusesRequestsItCannotStart(t *testing.T) {
 	}
 
 	// Without a credential no session starts, and the reason is the daemon's own.
-	d.rcfg.Credential = review.Credential{}
+	d.rcfg.Credential = claudecode.Credential{}
 	d.rcfg.AuthError = "no Claude credential — run: chunk auth set anthropic-oauth"
 	_, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x"})
 	var ae *apiError
