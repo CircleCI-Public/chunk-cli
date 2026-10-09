@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -61,9 +63,9 @@ type Turn struct {
 // Implementer runs Claude Code on a sidecar to write code. Every turn resumes
 // the same session, so feedback arrives with the context of the work so far.
 type Implementer struct {
-	Exec         review.Execer
+	Exec         harness.Execer
 	Entry        *sidecar.PoolEntry
-	Credential   review.Credential
+	Credential   claudecode.Credential
 	BaseURL      string
 	Model        string
 	Timeout      time.Duration
@@ -89,7 +91,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	start := time.Now()
 	s := &streamParser{onActivity: im.OnActivity}
 	var stderr bytes.Buffer
-	env := review.Env(im.Credential, im.BaseURL)
+	env := claudecode.Env(im.Credential, im.BaseURL)
 	// The sidecar is a sandbox, which is what lets claude skip permission
 	// prompts there even when the image runs it as root.
 	env["IS_SANDBOX"] = "1"
@@ -119,7 +121,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	// explain stands in for stderr, so stderr goes in with the result for the
 	// credential check: a 401 there must not hide behind a result that says
 	// something else.
-	switch err := review.ClaudeRunError(ctx, timeout, code, err, s.result.Result+"\n"+stderr.String(), explain); {
+	switch err := claudecode.RunError(ctx, timeout, code, err, s.result.Result+"\n"+stderr.String(), explain); {
 	case err != nil:
 		return turn, fmt.Errorf("implementer: %w", err)
 	case s.result.IsError:
@@ -146,7 +148,7 @@ func (im *Implementer) script(prompt string) string {
 	if im.Model != "" {
 		args = append(args, "--model", im.Model)
 	}
-	return review.ClaudeScript(im.Entry.RepoPath, prompt, args)
+	return claudecode.Script(im.Entry.RepoPath, prompt, args)
 }
 
 // streamEvent is the part of one stream-json line the implementer reads.

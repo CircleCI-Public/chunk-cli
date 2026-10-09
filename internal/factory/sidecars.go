@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -61,7 +62,7 @@ func Members(impl *sidecar.PoolEntry, ids []string) []*sidecar.PoolEntry {
 // code on the member it holds for the whole run, which also runs validation,
 // and each review runs on another member the implementer's tree is relayed to.
 type Sidecars struct {
-	Exec        review.Execer
+	Exec        harness.Execer
 	Implementer *Implementer
 	// Acquire and Release hand out reviewer sidecars: the pool's own, with the
 	// implementer's member already checked out.

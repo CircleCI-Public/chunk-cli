@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -65,7 +66,7 @@ func LoadChecks(dir string, optional bool, cfg *config.ProjectConfig, noValidate
 // runValidation runs each command in turn in the implementer's workspace, where
 // the code under review already is, and returns one check per command. They
 // run one after another because they share one checkout and one machine.
-func runValidation(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntry, cmds []config.Command, onDone func(Check)) []Check {
+func runValidation(ctx context.Context, exec harness.Execer, entry *sidecar.PoolEntry, cmds []config.Command, onDone func(Check)) []Check {
 	checks := make([]Check, 0, len(cmds))
 	for _, c := range cmds {
 		check := runCommand(ctx, exec, entry, c)
@@ -77,7 +78,7 @@ func runValidation(ctx context.Context, exec review.Execer, entry *sidecar.PoolE
 	return checks
 }
 
-func runCommand(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntry, c config.Command) Check {
+func runCommand(ctx context.Context, exec harness.Execer, entry *sidecar.PoolEntry, c config.Command) Check {
 	timeout := defaultCommandTimeout
 	if c.Timeout > 0 {
 		timeout = time.Duration(c.Timeout) * time.Second

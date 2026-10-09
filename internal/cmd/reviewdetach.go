@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -52,7 +53,7 @@ type detachFlags struct {
 	destroyPool bool
 	chunkBinary string
 	rc          config.ResolvedConfig
-	cred        review.Credential
+	cred        claudecode.Credential
 	parallelism int
 	model       string
 	timeout     time.Duration

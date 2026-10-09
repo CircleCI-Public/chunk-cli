@@ -33,6 +33,8 @@ chunk-cli/
     ├── gitremote/             # Git remote URL parsing for org/repo detection
     ├── gitutil/               # Git utility helpers, working-tree fingerprints
     ├── hashutil/              # Collision-free digests of string parts (cache keys)
+    ├── harness/               # Running coding agents: where their commands run (Execer)
+    │   └── claudecode/        # Claude Code harness: claude -p on a sidecar, how a run ended
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
     ├── sidecar/               # CircleCI sidecar operations
@@ -195,8 +197,8 @@ in `config.Resolve` and makes clients testable.
 | Variable | Used by | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | anthropic, config, validate | Anthropic authentication |
-| `ANTHROPIC_BASE_URL` | anthropic, review, validate | API endpoint override |
-| `CLAUDE_CODE_OAUTH_TOKEN` | config, review | Claude subscription authentication for reviews |
+| `ANTHROPIC_BASE_URL` | anthropic, claudecode, validate | API endpoint override |
+| `CLAUDE_CODE_OAUTH_TOKEN` | config, claudecode | Claude subscription authentication for Claude Code runs |
 | `GITHUB_TOKEN` | github | GitHub authentication |
 | `GITHUB_API_URL` | github, upgrade | GitHub API endpoint override (also used by the update check) |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |

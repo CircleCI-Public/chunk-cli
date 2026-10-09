@@ -9,8 +9,8 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
 const reviewBaseURL = "https://api.anthropic.com"
@@ -25,7 +25,7 @@ func storeBothClaudeCredentials(t *testing.T) {
 func TestCredentialRejectedRemovesOnlyTheRejectedKey(t *testing.T) {
 	storeBothClaudeCredentials(t)
 
-	err := credentialRejected(review.Credential{EnvVar: config.EnvAnthropicAPIKey}, keyring.SourceKeychain, reviewBaseURL, review.ErrCredentialRejected)
+	err := credentialRejected(claudecode.Credential{EnvVar: config.EnvAnthropicAPIKey}, keyring.SourceKeychain, reviewBaseURL, claudecode.ErrCredentialRejected)
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Equal(t, ue.msg, "Anthropic rejected the stored credential, so it has been removed.")
@@ -40,7 +40,7 @@ func TestCredentialRejectedRemovesOnlyTheRejectedKey(t *testing.T) {
 func TestCredentialRejectedRemovesOnlyTheRejectedToken(t *testing.T) {
 	storeBothClaudeCredentials(t)
 
-	err := credentialRejected(review.Credential{EnvVar: config.EnvClaudeOAuthToken}, keyring.SourceKeychain, reviewBaseURL, review.ErrCredentialRejected)
+	err := credentialRejected(claudecode.Credential{EnvVar: config.EnvClaudeOAuthToken}, keyring.SourceKeychain, reviewBaseURL, claudecode.ErrCredentialRejected)
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Assert(t, strings.Contains(ue.suggestion, "anthropic-oauth"), "suggestion: %s", ue.suggestion)
@@ -55,7 +55,7 @@ func TestCredentialRejectedRemovesOnlyTheRejectedToken(t *testing.T) {
 func TestCredentialRejectedFromEnvironmentKeepsTheKeychain(t *testing.T) {
 	storeBothClaudeCredentials(t)
 
-	err := credentialRejected(review.Credential{EnvVar: config.EnvAnthropicAPIKey}, "Environment variable", reviewBaseURL, review.ErrCredentialRejected)
+	err := credentialRejected(claudecode.Credential{EnvVar: config.EnvAnthropicAPIKey}, "Environment variable", reviewBaseURL, claudecode.ErrCredentialRejected)
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Equal(t, ue.msg, "Anthropic rejected the credential in "+config.EnvAnthropicAPIKey+".")
@@ -67,7 +67,7 @@ func TestCredentialRejectedFromEnvironmentKeepsTheKeychain(t *testing.T) {
 // A key stored with --insecure-storage is not in the environment, so telling
 // the user to unset an env var would leave them stuck.
 func TestCredentialRejectedFromConfigFileNamesTheFile(t *testing.T) {
-	err := credentialRejected(review.Credential{EnvVar: config.EnvAnthropicAPIKey}, "Config file (/home/u/.config/chunk/config.json)", reviewBaseURL, review.ErrCredentialRejected)
+	err := credentialRejected(claudecode.Credential{EnvVar: config.EnvAnthropicAPIKey}, "Config file (/home/u/.config/chunk/config.json)", reviewBaseURL, claudecode.ErrCredentialRejected)
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Equal(t, ue.msg, "Anthropic rejected the API key in config file (/home/u/.config/chunk/config.json).")

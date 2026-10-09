@@ -14,14 +14,15 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 // localExec runs scripts with sh on this machine, as a sidecar would, with
 // HOME pointed at home so a fake claude can be installed where the scripts
 // look for it.
-func localExec(home string) review.Execer {
+func localExec(home string) harness.Execer {
 	return func(ctx context.Context, _ *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, _ func(string)) (int, error) {
 		cmd := exec.CommandContext(ctx, "sh", "-c", script)
 		cmd.Env = append(os.Environ(), "HOME="+home)
@@ -81,7 +82,7 @@ func newImplementer(t *testing.T, claudeBody string) (*Implementer, string, *[]A
 	im := &Implementer{
 		Exec:       localExec(home),
 		Entry:      &sidecar.PoolEntry{ID: "impl", RepoPath: t.TempDir()},
-		Credential: review.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
+		Credential: claudecode.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
 		OnActivity: func(a Activity) { acts = append(acts, a) },
 	}
 	return im, home, &acts
@@ -152,12 +153,12 @@ func TestImplementerFailures(t *testing.T) {
 		{
 			name: "credential rejected",
 			body: `echo '{"type":"result","is_error":true,"result":"Failed to authenticate. API Error: 401"}'; exit 1`,
-			is:   review.ErrCredentialRejected,
+			is:   claudecode.ErrCredentialRejected,
 		},
 		{
 			name: "credential rejected on stderr",
 			body: `echo '{"type":"result","is_error":true,"result":"Something went wrong"}'; echo 'Failed to authenticate. API Error: 401' >&2; exit 1`,
-			is:   review.ErrCredentialRejected,
+			is:   claudecode.ErrCredentialRejected,
 		},
 		{
 			name: "error result without text",
@@ -193,7 +194,7 @@ func TestImplementerReportsMissingClaude(t *testing.T) {
 	im := &Implementer{Exec: localExec(home), Entry: &sidecar.PoolEntry{RepoPath: t.TempDir()}}
 	t.Setenv("PATH", "/usr/bin:/bin")
 	_, err := im.Run(context.Background(), "p")
-	assert.Assert(t, errors.Is(err, review.ErrClaudeMissing), "got %v", err)
+	assert.Assert(t, errors.Is(err, claudecode.ErrMissing), "got %v", err)
 }
 
 // TestStreamParserReassemblesSplitLines covers output arriving in chunks that

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -14,12 +15,12 @@ import (
 // claude. It fails on a non-zero exit, carrying the tail of stderr, and on
 // stdout larger than limit bytes, which is never truncated: a cut diff or
 // object name is worse than none.
-func RunScript(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, script string, limit int) (string, error) {
+func RunScript(ctx context.Context, exec harness.Execer, entry *sidecar.PoolEntry, script string, limit int) (string, error) {
 	var stdout, stderr strings.Builder
 	tooBig := false
 	code, err := exec(ctx, entry, script, nil, func(stream string, data []byte) {
 		if stream == circleci.StreamStderr {
-			if stderr.Len() < maxOutputBytes {
+			if stderr.Len() < maxStderrBytes {
 				stderr.Write(data)
 			}
 			return

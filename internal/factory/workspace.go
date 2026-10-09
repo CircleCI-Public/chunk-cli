@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/harness"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -14,7 +15,7 @@ import (
 // `git diff HEAD` there, and on every reviewer it is relayed to, is exactly
 // the work under review.
 type workspace struct {
-	exec     review.Execer
+	exec     harness.Execer
 	entry    *sidecar.PoolEntry
 	baseline string
 }

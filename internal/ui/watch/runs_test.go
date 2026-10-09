@@ -19,7 +19,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -336,7 +336,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	root := config.CanonicalProjectRoot(project)
 
 	cfg := server.ReviewConfig{
-		Credential: review.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: "sk-test"},
+		Credential: claudecode.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: "sk-test"},
 		// A run that never finishes on its own.
 		RunFactory: func(ctx context.Context, _ factory.RunOptions) (factory.Report, error) {
 			<-ctx.Done()

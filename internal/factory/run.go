@@ -9,6 +9,8 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness"
+	"github.com/CircleCI-Public/chunk-cli/internal/harness/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -48,15 +50,15 @@ type RunOptions struct {
 	// KeepSidecars leaves the sidecars running when the run ends.
 	KeepSidecars bool
 
-	Credential              review.Credential
+	Credential              claudecode.Credential
 	BaseURL                 string
 	Model                   string
 	ImplementerInstructions string
 	ImplementTimeout        time.Duration
 	ReviewTimeout           time.Duration
 
-	// Exec runs commands on the sidecars; review.ClientExec when nil.
-	Exec review.Execer
+	// Exec runs commands on the sidecars; harness.ClientExec when nil.
+	Exec harness.Execer
 
 	// Log is where to keep a plain-text log of the run, with its full context
 	// whatever a display of it filters out: a path, LogDefault for
@@ -236,7 +238,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 
 	exec := opts.Exec
 	if exec == nil {
-		exec = review.ClientExec
+		exec = harness.ClientExec
 	}
 	steps := &Sidecars{
 		Exec: exec,
