@@ -131,7 +131,7 @@ func TestRunPassWithoutOnSubmittedPassesNilHook(t *testing.T) {
 
 	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec, []Prompt{{Name: "a", Body: "x"}}, Options{})
 	assert.NilError(t, err)
-	assert.Assert(t, !gotHook, "an sidecar.Execer must be able to skip submission reporting when nobody asked for it")
+	assert.Assert(t, !gotHook, "a sidecar.Execer must be able to skip submission reporting when nobody asked for it")
 }
 
 func TestRunPassClaudeMissingStopsPass(t *testing.T) {
