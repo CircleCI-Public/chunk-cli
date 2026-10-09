@@ -170,9 +170,9 @@ func TestReviewActivityFilesUnderTheGitRoot(t *testing.T) {
 // Reviews run concurrently, so every recorder shares one log and its mutex.
 func TestReviewActivityRecordsConcurrentReviews(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-	// submitted registers with the watch daemon; without this the registrations
+	// submitted registers with the chunk daemon; without this the registrations
 	// would reach whichever one the developer running the tests has open.
-	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+	t.Setenv("CHUNK_DAEMON_DIR", t.TempDir())
 	root := t.TempDir()
 
 	activity := newReviewActivity(context.Background(), root)

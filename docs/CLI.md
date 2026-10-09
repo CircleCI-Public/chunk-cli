@@ -84,7 +84,7 @@ chunk
 │   --project <path>                # Override project directory
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
-│   --async                         # Run in the background via the watch daemon; results are read later
+│   --async                         # Run in the background via the chunk daemon; results are read later
 │   │
 │   ├── results                     # Print results of finished background runs, then forget them
 │   │   --project <path>            # Override project directory
@@ -295,11 +295,11 @@ chunk
   history only** — uncommitted work in the tree is invisible to it. A detached
   HEAD, a repo with no recorded default branch, and a branch that is itself the
   merge target all produce "no answer" rather than a clean bill of health.
-- **`watch` can show a remote daemon.** With `CHUNK_WATCHD_REMOTE_ADDR` and
-  `CHUNK_WATCHD_TCP_TOKEN` set, `watch` reads the daemon at that TCP address instead
+- **`watch` can show a remote daemon.** With `CHUNK_DAEMON_REMOTE_ADDR` and
+  `CHUNK_DAEMON_TCP_TOKEN` set, `watch` reads the daemon at that TCP address instead
   of the local socket, and never starts a local daemon. The header names the
   daemon (`local` or `remote host:port`) and turns red with `unreachable` when the
-  last poll failed; a rejected token says so and names `CHUNK_WATCHD_TCP_TOKEN`.
+  last poll failed; a rejected token says so and names `CHUNK_DAEMON_TCP_TOKEN`.
   The local machine's working directory and project registry describe different
   repos than the daemon's, so they are not used: the default is every project the
   daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
@@ -316,7 +316,7 @@ chunk
   keeps going and `chunk watch` still shows it. It uses the daemon's
   Claude and CircleCI credentials, resolved when the daemon started, and the
   project's configured org and image unless `--org-id` or `--image` say
-  otherwise. It is refused when `CHUNK_WATCHD_REMOTE_ADDR` is set, since a run
+  otherwise. It is refused when `CHUNK_DAEMON_REMOTE_ADDR` is set, since a run
   works from this machine's files. The project needs a git remote named
   `origin` (the sidecars clone from it); `factory` fails up front without one.
   A project has one active run at a time. Runs are kept in memory: a daemon
@@ -398,7 +398,7 @@ chunk
     and shows a one-line hint in the footer; the daemon never prompts.
 - **`chunk sidecar logs <command-id>`** is the non-TUI door onto the same output,
   for scripts and for agents with no terminal. Command IDs appear in the `watch`
-  dashboard. It reads the watch daemon's buffer when the daemon has the command
+  dashboard. It reads the chunk daemon's buffer when the daemon has the command
   and falls back to streaming from the API when it does not, so it works either
   way. `-f`/`--follow` keeps printing until the command exits.
   - Output goes to stdout and nothing else does, so it can be piped. A non-zero
@@ -499,7 +499,7 @@ chunk
 - `chunk auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.
 - `chunk hook disable` creates a `.chunk/hooks-disabled` sentinel file inspected by the `chunk validate` Stop hook; `hook enable` removes it. Stop-hook validation is also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
-- **Hook runs may be validated in the background.** When the watch daemon is
+- **Hook runs may be validated in the background.** When the chunk daemon is
   running, a Stop-hook `chunk validate` offers the daemon the choice of running
   the checks after the hook has exited. The daemon takes the offer for a change
   under 500 lines, or one confined to docs and text files, and holds the caller
@@ -520,7 +520,7 @@ chunk
   repos whose state cannot be hashed never cache. Entries expire after 7 days.
   See [HOOKS.md](HOOKS.md#result-caching).
 - **`validate --async` and `validate results` are two halves of one flow.**
-  `--async` hands the run to the watch daemon and returns immediately; `results`
+  `--async` hands the run to the chunk daemon and returns immediately; `results`
   reads what finished and prints it to stdout. Nothing installs a hook to call
   `results` yet: a background run is something you ask for explicitly, so
   reading its answer back is too. Wiring it into a hook waits for the change

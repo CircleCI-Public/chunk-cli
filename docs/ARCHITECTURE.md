@@ -48,7 +48,7 @@ chunk-cli/
     ├── ui/                    # Colors, formatting, spinner
     ├── upgrade/               # CLI self-upgrade
     ├── validate/              # Validation command logic
-    └── watchd/                # The daemon's API: wire types, client, paths, lifecycle
+    └── chunkd/                # The daemon's API: wire types, client, paths, lifecycle
         └── server/            # The daemon itself: poll loop, stores, handlers, factory runs
 ```
 
@@ -311,49 +311,64 @@ refused as a key, since a config-only key would stay stable across code changes;
 it, because a repo that never caches is otherwise silent about why. See
 **[docs/HOOKS.md](HOOKS.md#result-caching)** for the user-facing behaviour.
 
-## Watch Daemon (`internal/watchd/`, `internal/watchd/server/`)
+## Chunk Daemon (`internal/chunkd/`, `internal/chunkd/server/`)
 
-The daemon is split in two. `internal/watchd` is its API: the types that go over
+The daemon is split in two. `internal/chunkd` is its API: the types that go over
 the wire, the HTTP client, the socket and pid paths, and starting the process.
-It depends on nothing heavier than `eventlog`. `internal/watchd/server` is the
-daemon itself and imports `watchd` for the types it serves. Clients — `chunk
-watch`, `chunk factory`, hooks, `chunk validate` — import `watchd` only, so they
-depend on the daemon's API and never on the factory loop, the review runner or
-the sidecar pool behind it. Only `cmd/daemon.go`, which runs the daemon,
-imports `server` (and tests that start a real one).
+Its internal dependencies are `eventlog`, `iostream` and `version`.
+`internal/chunkd/server` is the daemon itself and imports `chunkd` for the types
+it serves. Clients — `chunk watch`, `chunk factory`, hooks, `chunk validate` —
+import `chunkd` only, so they depend on the daemon's API and never on the factory
+loop, the review runner or the sidecar pool behind it. Only `cmd/daemon.go`,
+which runs the daemon, imports `server` (and tests that start a real one).
 
-Starting the daemon belongs to `watchd` too. It is this binary re-executed as
-the hidden `chunk _daemon` (`watchd.DaemonSubcommand`, which `cmd` registers
+Starting the daemon belongs to `chunkd` too. It is this binary re-executed as
+the hidden `chunk _daemon` (`chunkd.DaemonSubcommand`, which `cmd` registers
 under that name); callers only say when they need one, with `EnsureRunning` at
 startup, which also replaces a daemon from another build. A dashboard that
 keeps polling opts into `FetchSnapshotRelaunching`, which starts a daemon again
-if it has gone away but never replaces one that answers. `chunk watch _daemon`,
-the old spelling, stays as a hidden alias for dashboards opened before an
-upgrade.
+if it has gone away but never replaces one that answers.
 
-The daemon backs `chunk watch`. It polls every registered project every 5 s,
-tailing each project's `events.jsonl` by byte offset, and serves snapshots as
-JSON over a Unix socket at `~/.chunk/watchd/watchd.sock`
-(`CHUNK_WATCHD_DIR` overrides the directory).
+The split is in the imports, not yet everywhere at runtime:
+
+- **Validation still runs through the CLI.** `/validate` takes the caller's
+  command line (`ValidateRequest.Args`) and answers with the output a terminal
+  would have shown. The daemon runs it by executing the cobra command tree
+  in-process, through the `ValidateRunner` that `cmd/daemon.go` passes in, so
+  the code doing the work lives in `cmd/validate.go`.
+- **Projects are registered by writing a file, not by asking the daemon.**
+  `chunk watch`, `chunk validate` and `chunk review` write the breadcrumbs
+  `AllProjectRoots` reads, and the daemon finds projects by scanning them.
+- **The snapshot is the dashboard's view.** It carries each project's raw
+  `eventlog.Event`s, and `chunk watch` works out from them what happened.
+- **`chunk factory` reads the daemon's files to check a request.** With
+  `--continue`, `checkFactoryContinue` loads the earlier run's record from the
+  project's data directory before asking the daemon, which loads it again.
+  This only works while the two share a filesystem.
+
+The daemon backs `chunk watch` and runs `chunk factory`. It polls every
+registered project every 5 s, tailing each project's `events.jsonl` by byte
+offset, and serves snapshots as JSON over a Unix socket at
+`~/.chunk/daemon/daemon.sock` (`CHUNK_DAEMON_DIR` overrides the directory).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CHUNK_WATCHD_DIR` | `~/.chunk/watchd/` | Override the directory for the socket, pid file and log. The socket path (`<dir>/watchd.sock`) must fit the OS limit (104 bytes on macOS, 108 on Linux); a longer one is refused up front with this variable named as the fix |
-| `CHUNK_WATCHD_TCP_ADDR` | _(disabled)_ | Bind a TCP listener on this address in addition to the Unix socket (e.g. `127.0.0.1:7777`); requires `CHUNK_WATCHD_TCP_TOKEN` |
-| `CHUNK_WATCHD_REMOTE_ADDR` | _(local socket)_ | Connect to a remote daemon at this TCP address instead of the local socket (e.g. `127.0.0.1:7777` via an SSH tunnel) |
-| `CHUNK_WATCHD_TCP_TOKEN` | _(required when TCP is enabled)_ | Bearer token required on every TCP request; set the same value on the daemon and all clients. TCP traffic is not encrypted — use an SSH tunnel (`ssh -L`) when the daemon is not on loopback. |
+| `CHUNK_DAEMON_DIR` | `~/.chunk/daemon/` | Override the directory for the socket, pid file and log. The socket path (`<dir>/daemon.sock`) must fit the OS limit (104 bytes on macOS, 108 on Linux); a longer one is refused up front with this variable named as the fix |
+| `CHUNK_DAEMON_TCP_ADDR` | _(disabled)_ | Bind a TCP listener on this address in addition to the Unix socket (e.g. `127.0.0.1:7777`); requires `CHUNK_DAEMON_TCP_TOKEN` |
+| `CHUNK_DAEMON_REMOTE_ADDR` | _(local socket)_ | Connect to a remote daemon at this TCP address instead of the local socket (e.g. `127.0.0.1:7777` via an SSH tunnel) |
+| `CHUNK_DAEMON_TCP_TOKEN` | _(required when TCP is enabled)_ | Bearer token required on every TCP request; set the same value on the daemon and all clients. TCP traffic is not encrypted — use an SSH tunnel (`ssh -L`) when the daemon is not on loopback. |
 
 ### Remote viewing
 
 `chunk watch` is a pure client of `/snapshot` and `/output`; it opens no local
 state, so it works unchanged against a daemon reached over TCP. What differs:
 
-- `EnsureRunning` / `EnsureLaunched` are no-ops when `CHUNK_WATCHD_REMOTE_ADDR`
+- `EnsureRunning` / `EnsureLaunched` are no-ops when `CHUNK_DAEMON_REMOTE_ADDR`
   is set. A remote daemon is managed where it runs.
 - Project filters are matched on the daemon's host. `snapshot` accepts a root by
   its own spelling or its symlink-resolved one, because a remote viewer can only
   type a path as it knows it and that need not be the daemon's key.
-- A 401 surfaces as `watchd.ErrUnauthorized` and an unreachable address is
+- A 401 surfaces as `chunkd.ErrUnauthorized` and an unreachable address is
   reported with the address in the message (`requestError`), so the header
   (`Connection.Label`) and footer say which daemon failed and why.
 
@@ -381,7 +396,7 @@ Design constraints worth preserving:
 
 - **The daemon has no working directory worth trusting.** The socket is
   user-global, so one daemon serves every repo on the machine. `launchDaemon`
-  runs it in the watchd state directory (`EnsureDir`) rather than the checkout
+  runs it in the daemon's state directory (`EnsureDir`) rather than the checkout
   that launched it, so a removed worktree cannot break later commands at
   `getcwd` — but that cwd is no project's root. Anything the daemon runs on a
   caller's behalf must therefore be told which project it is for:
@@ -647,11 +662,11 @@ Consequences worth knowing:
 
 ## Data Flow: merge conflict advisories
 
-The `watchd` daemon answers "does this branch still merge cleanly?" out of band,
+The `chunkd` daemon answers "does this branch still merge cleanly?" out of band,
 so the hook that reports it never computes anything:
 
 ```
-watchd daemon (one process, all projects)
+chunkd daemon (one process, all projects)
   pollLoop            every 5s   → sidecar state, event log, git HEAD
   checkConflictsLoop  every 60s  → per project:
                                    gitutil.FetchRemoteBranch  (every 3 min)
@@ -661,7 +676,7 @@ watchd daemon (one process, all projects)
 
 chunk conflicts --hook
   → GET /conflicts?root=…  (Unix socket)
-  → watchd.ConflictNotice  → hookSpecificOutput.additionalContext on stdout
+  → chunkd.ConflictNotice  → hookSpecificOutput.additionalContext on stdout
 ```
 
 Three properties the layering exists to hold:

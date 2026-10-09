@@ -12,11 +12,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
 // fakeSessionConfig is a daemon setup with a Claude credential and nothing
@@ -33,7 +33,7 @@ func startSessionDaemon(t *testing.T, cfg server.ReviewConfig) {
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("CHUNK_DAEMON_DIR", dir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -48,7 +48,7 @@ func startSessionDaemon(t *testing.T, cfg server.ReviewConfig) {
 	})
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if watchd.IsDaemonRunning() {
+		if chunkd.IsDaemonRunning() {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -100,7 +100,7 @@ func TestFactoryWithoutAnOriginRemoteFailsBeforeAnySandboxWork(t *testing.T) {
 // refused.
 func TestFactoryRefusesARemoteDaemon(t *testing.T) {
 	factoryProject(t)
-	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:1")
+	t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", "127.0.0.1:1")
 	_, _, err := runFactoryCmd(t, "add a --verbose flag")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
@@ -109,7 +109,7 @@ func TestFactoryRefusesARemoteDaemon(t *testing.T) {
 
 // reportedLines follows a session through snapshots and returns what was
 // said, one string per line.
-func reportedLines(snapshots ...watchd.SessionDetail) []string {
+func reportedLines(snapshots ...chunkd.SessionDetail) []string {
 	var lines []string
 	rep := newSessionReporter(func(_ iostream.Level, msg string) { lines = append(lines, msg) })
 	for _, d := range snapshots {
@@ -119,21 +119,21 @@ func reportedLines(snapshots ...watchd.SessionDetail) []string {
 }
 
 func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
-	bug := watchd.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
+	bug := chunkd.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
 	output := strings.Repeat("ok\n", 30) + "--- FAIL: TestFlag"
-	checking := watchd.SessionDetail{Session: watchd.Session{
-		Factory: &watchd.FactoryRun{Attempts: 3},
-		Rounds: []watchd.Round{{
+	checking := chunkd.SessionDetail{Session: chunkd.Session{
+		Factory: &chunkd.FactoryRun{Attempts: 3},
+		Rounds: []chunkd.Round{{
 			Number:  1,
-			State:   watchd.RoundChecking,
-			Reviews: []watchd.ReviewPrompt{{Name: "bugs", State: watchd.PromptDone, DurationMS: 12000}},
-			Checks:  []watchd.RoundCheck{{Name: "test", Status: "failed", DurationMS: 3000, Output: output}},
+			State:   chunkd.RoundChecking,
+			Reviews: []chunkd.ReviewPrompt{{Name: "bugs", State: chunkd.PromptDone, DurationMS: 12000}},
+			Checks:  []chunkd.RoundCheck{{Name: "test", Status: "failed", DurationMS: 3000, Output: output}},
 		}},
 	}}
 	done := checking
-	done.Rounds = []watchd.Round{checking.Rounds[0]}
-	done.Rounds[0].State, done.Rounds[0].Note = watchd.RoundDone, "0 of 2 checks passed"
-	done.Details = []watchd.RoundDetail{{Number: 1, Results: []watchd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []watchd.Finding{bug}}}}}
+	done.Rounds = []chunkd.Round{checking.Rounds[0]}
+	done.Rounds[0].State, done.Rounds[0].Note = chunkd.RoundDone, "0 of 2 checks passed"
+	done.Details = []chunkd.RoundDetail{{Number: 1, Results: []chunkd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []chunkd.Finding{bug}}}}}
 
 	// The round is seen done twice; its findings are said once.
 	lines := reportedLines(checking, done, done)

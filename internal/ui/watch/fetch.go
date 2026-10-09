@@ -3,8 +3,8 @@ package watch
 import (
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // loadFromDaemon is the default Model.loadFn.
@@ -16,7 +16,7 @@ func loadFromDaemon(m Model) tea.Msg {
 	return msg
 }
 
-// fetchFromDaemon fetches a snapshot from the watch daemon and converts it to
+// fetchFromDaemon fetches a snapshot from the chunk daemon and converts it to
 // a dataMsg for the model.
 func fetchFromDaemon(m Model) (dataMsg, error) {
 	var roots []string
@@ -26,9 +26,9 @@ func fetchFromDaemon(m Model) (dataMsg, error) {
 			roots[i] = p.ProjectRoot
 		}
 	}
-	fetch := watchd.FetchSnapshot
+	fetch := chunkd.FetchSnapshot
 	if m.relaunch {
-		fetch = watchd.FetchSnapshotRelaunching
+		fetch = chunkd.FetchSnapshotRelaunching
 	}
 	snap, err := fetch(roots)
 	if err != nil {
@@ -37,18 +37,18 @@ func fetchFromDaemon(m Model) (dataMsg, error) {
 	return convertSnapshot(snap, m), nil
 }
 
-// convertSnapshot maps a watchd.Snapshot to the dataMsg the model expects.
+// convertSnapshot maps a chunkd.Snapshot to the dataMsg the model expects.
 // The daemon has already annotated sidecars with activity and dropped the ones
 // the API no longer lists; this function handles TUI-side concerns: ordering
 // and filtering. Only sidecars get rows — a validate run that happened locally
 // has no sidecar to show.
-func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
+func convertSnapshot(snap chunkd.Snapshot, m Model) dataMsg {
 	n := len(snap.Projects)
 	projects := make([]ProjectEntry, 0, n)
 	branches := make([]string, 0, n)
 	headRefs := make([]string, 0, n)
 	allEventsByProject := make([][]eventlog.Event, 0, n)
-	allCommandsByProject := make([][]watchd.CommandState, 0, n)
+	allCommandsByProject := make([][]chunkd.CommandState, 0, n)
 	var allSidecars []sidecarInfo
 
 	for i, p := range snap.Projects {
@@ -100,7 +100,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 // commandRunning reports whether the daemon is still streaming a command on
 // sidecarID. Unlike the event log, which can only say a run went quiet without
 // finishing, this is known to be in flight.
-func commandRunning(commands []watchd.CommandState, sidecarID string) bool {
+func commandRunning(commands []chunkd.CommandState, sidecarID string) bool {
 	for _, c := range commands {
 		if c.SidecarID == sidecarID && c.Running {
 			return true

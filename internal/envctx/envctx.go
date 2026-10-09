@@ -1,5 +1,5 @@
 // Package envctx carries an environment variable slice in a context so
-// in-process callers (like the watch daemon) can override the process env
+// in-process callers (like the chunk daemon) can override the process env
 // without calling os.Setenv.
 package envctx
 

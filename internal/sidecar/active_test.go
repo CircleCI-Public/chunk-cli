@@ -475,7 +475,7 @@ func TestRemoveActiveSidecar_ClearsWhenLastMemberRemoved(t *testing.T) {
 
 // One project must not read as two. ProjectDataDir keys a data directory by the
 // resolved path, so a symlinked spelling of a root and a real one share it — but
-// the watch daemon keys projects by the breadcrumb string, and the writers
+// the chunk daemon keys projects by the breadcrumb string, and the writers
 // disagree about the spelling: a validate run passes the working directory it
 // was given, chunk watch passes git's top-level. Left as written, the two
 // spellings listed one log as two projects, which the dashboard drew as

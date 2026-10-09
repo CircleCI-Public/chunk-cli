@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
@@ -22,7 +23,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func randomSidecarName() string {
@@ -409,7 +409,7 @@ or via the repeatable --args flag. Positional arguments are appended after any
 			// it is not a repo, and an empty one simply groups under no project.
 			projectRoot, _ := os.Getwd()
 			resp, err := submitAndStream(cmd.Context(), client, sidecarID,
-				&watchd.CommandReg{
+				&chunkd.CommandReg{
 					SidecarID:   sidecarID,
 					ProjectRoot: projectRoot,
 					Op:          string(eventlog.OpExec),

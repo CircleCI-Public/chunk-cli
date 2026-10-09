@@ -10,14 +10,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/promptrows"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // sessionInfo is one pre-PR session with the project it belongs to.
 type sessionInfo struct {
-	s          watchd.Session
+	s          chunkd.Session
 	label      string
 	projectIdx int // index into Model.projects, for finding the session's commands
 }
@@ -46,7 +46,7 @@ type sessionActionMsg struct {
 
 func cancelSessionCmd(id string) tea.Cmd {
 	return func() tea.Msg {
-		if err := watchd.CancelSession(id); err != nil {
+		if err := chunkd.CancelSession(id); err != nil {
 			return sessionActionMsg{err: err}
 		}
 		return sessionActionMsg{note: "cancel requested"}
@@ -55,7 +55,7 @@ func cancelSessionCmd(id string) tea.Cmd {
 
 // collectSessions flattens every project's sessions, live ones first and the rest
 // newest first.
-func collectSessions(projects []watchd.ProjectSnapshot) []sessionInfo {
+func collectSessions(projects []chunkd.ProjectSnapshot) []sessionInfo {
 	var out []sessionInfo
 	for i, p := range projects {
 		label := p.RepoName
@@ -79,7 +79,7 @@ func collectSessions(projects []watchd.ProjectSnapshot) []sessionInfo {
 // anySessionLive reports whether a session is running (the spinner runs for it).
 func anySessionLive(sessions []sessionInfo) bool {
 	for _, s := range sessions {
-		if s.s.State == watchd.SessionRunning {
+		if s.s.State == chunkd.SessionRunning {
 			return true
 		}
 	}
@@ -188,7 +188,7 @@ func (m Model) openReviewOutput() (tea.Model, tea.Cmd) {
 		p.note = "no output yet for " + rv.Name
 		return m, nil
 	}
-	return m.openOutput(rv.CommandID, fmt.Sprintf("round %d review: %s", sel.s.Rounds[p.round].Number, rv.Name), rv.State == watchd.PromptRunning)
+	return m.openOutput(rv.CommandID, fmt.Sprintf("round %d review: %s", sel.s.Rounds[p.round].Number, rv.Name), rv.State == chunkd.PromptRunning)
 }
 
 // openOutput opens the output pane for a buffered command.
@@ -214,8 +214,8 @@ func (m Model) withSessionAction(msg sessionActionMsg) Model {
 // ---- rendering --------------------------------------------------------------
 
 // stageLabels name a session's stages for display.
-var stageLabels = map[watchd.StageID]string{
-	watchd.StageFactoryLoop: "Factory loop",
+var stageLabels = map[chunkd.StageID]string{
+	chunkd.StageFactoryLoop: "Factory loop",
 }
 
 // sessionTag is the header's note of a session in flight, so one started
@@ -223,48 +223,48 @@ var stageLabels = map[watchd.StageID]string{
 func (m Model) sessionTag(st watchStyles) string {
 	for _, s := range m.sessions {
 		switch s.s.State {
-		case watchd.SessionRunning:
+		case chunkd.SessionRunning:
 			return st.running(spinFrames[m.spinIdx%len(spinFrames)]+" session running") + "  "
-		case watchd.SessionDone, watchd.SessionFailed, watchd.SessionCancelled:
+		case chunkd.SessionDone, chunkd.SessionFailed, chunkd.SessionCancelled:
 			// Ended sessions are not worth the header.
 		}
 	}
 	return ""
 }
 
-func (m Model) sessionStateIcon(st watchStyles, s watchd.SessionState) string {
+func (m Model) sessionStateIcon(st watchStyles, s chunkd.SessionState) string {
 	switch s {
-	case watchd.SessionRunning:
+	case chunkd.SessionRunning:
 		return st.running(spinFrames[m.spinIdx%len(spinFrames)])
-	case watchd.SessionDone:
+	case chunkd.SessionDone:
 		return st.success(ui.IconOK)
-	case watchd.SessionFailed:
+	case chunkd.SessionFailed:
 		return st.err(ui.IconFail)
-	case watchd.SessionCancelled:
+	case chunkd.SessionCancelled:
 		return st.warning(ui.IconWarn)
 	}
 	return st.muted("?")
 }
 
-func (m Model) stageIcon(st watchStyles, s watchd.StageState) string {
+func (m Model) stageIcon(st watchStyles, s chunkd.StageState) string {
 	switch s {
-	case watchd.StageRunning:
+	case chunkd.StageRunning:
 		return st.running(spinFrames[m.spinIdx%len(spinFrames)])
-	case watchd.StageDone:
+	case chunkd.StageDone:
 		return st.success(ui.IconOK)
-	case watchd.StageFailed:
+	case chunkd.StageFailed:
 		return st.err(ui.IconFail)
 	}
 	return st.vdim("·")
 }
 
-func stageText(st watchStyles, s watchd.Stage) string {
+func stageText(st watchStyles, s chunkd.Stage) string {
 	switch s.State {
-	case watchd.StageFailed:
+	case chunkd.StageFailed:
 		return st.err(truncate(strings.Join(strings.Fields(s.Note), " "), 90))
-	case watchd.StageRunning:
+	case chunkd.StageRunning:
 		return st.muted("running")
-	case watchd.StageDone:
+	case chunkd.StageDone:
 		if s.Note != "" {
 			return st.muted("done · " + s.Note)
 		}
@@ -273,7 +273,7 @@ func stageText(st watchStyles, s watchd.Stage) string {
 	return ""
 }
 
-func sessionElapsed(s watchd.Session) time.Duration {
+func sessionElapsed(s chunkd.Session) time.Duration {
 	if s.EndedAt != nil {
 		return s.EndedAt.Sub(s.StartedAt)
 	}
@@ -292,7 +292,7 @@ func sessionTitle(info sessionInfo) string {
 }
 
 // reviewRows converts a round's reviews for the shared row renderer.
-func reviewRows(round watchd.Round) []promptrows.Row {
+func reviewRows(round chunkd.Round) []promptrows.Row {
 	rows := make([]promptrows.Row, 0, len(round.Reviews))
 	for _, p := range round.Reviews {
 		rows = append(rows, promptrows.Row{
@@ -308,30 +308,30 @@ func reviewRows(round watchd.Round) []promptrows.Row {
 
 // rowState is a review's state as the row renderer shows it. An unknown value
 // reads as queued: it comes from a daemon that may be newer than this client.
-func rowState(s watchd.PromptRunState) promptrows.State {
+func rowState(s chunkd.PromptRunState) promptrows.State {
 	switch s {
-	case watchd.PromptRunning:
+	case chunkd.PromptRunning:
 		return promptrows.Running
-	case watchd.PromptDone:
+	case chunkd.PromptDone:
 		return promptrows.Done
-	case watchd.PromptFailed:
+	case chunkd.PromptFailed:
 		return promptrows.Failed
-	case watchd.PromptQueued:
+	case chunkd.PromptQueued:
 	}
 	return promptrows.Queued
 }
 
-func roundStateText(st watchStyles, r watchd.Round) string {
+func roundStateText(st watchStyles, r chunkd.Round) string {
 	switch r.State {
-	case watchd.RoundStarted:
+	case chunkd.RoundStarted:
 		return st.running("starting")
-	case watchd.RoundImplementing:
+	case chunkd.RoundImplementing:
 		return st.running("implementing")
-	case watchd.RoundChecking:
+	case chunkd.RoundChecking:
 		return st.running("reviewing and validating")
-	case watchd.RoundDone:
+	case chunkd.RoundDone:
 		return st.muted("done")
-	case watchd.RoundFailed:
+	case chunkd.RoundFailed:
 		return st.err("failed")
 	}
 	return string(r.State)
@@ -339,10 +339,10 @@ func roundStateText(st watchStyles, r watchd.Round) string {
 
 // renderRound draws one round: its header and its reviews with the shared row
 // renderer.
-func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, reviewSel int) []string {
+func (m Model) renderRound(st watchStyles, r chunkd.Round, selected bool, reviewSel int) []string {
 	rst := promptrows.NewStyles(m.hasDarkBG)
 	head := fmt.Sprintf("    Round %d  %s", r.Number, roundStateText(st, r))
-	if r.Findings > 0 || r.State == watchd.RoundDone {
+	if r.Findings > 0 || r.State == chunkd.RoundDone {
 		head += st.dim(fmt.Sprintf("  ·  %d finding%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
 	}
 	lines := []string{head}
@@ -383,7 +383,7 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
 
 	for _, stage := range s.Stages {
 		lines = append(lines, fmt.Sprintf("   %s %-18s %s", m.stageIcon(st, stage.State), stageLabels[stage.ID], stageText(st, stage)))
-		if stage.ID != watchd.StageFactoryLoop {
+		if stage.ID != chunkd.StageFactoryLoop {
 			continue
 		}
 		for i, r := range s.Rounds {

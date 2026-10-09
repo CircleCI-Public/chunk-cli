@@ -13,6 +13,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
@@ -21,7 +22,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 const (
@@ -135,9 +135,9 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 	if err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, insecureStorage); err != nil {
 		return nil, err
 	}
-	// The watch daemon resolves its client once at startup, so one running from
+	// The chunk daemon resolves its client once at startup, so one running from
 	// before this login cannot see the new token.
-	watchd.StopForCredentialChange()
+	chunkd.StopForCredentialChange()
 	if userID != uuid.Nil {
 		// Intentionally overwrites any previously saved user ID — account
 		// switching should reflect the newly authenticated user.

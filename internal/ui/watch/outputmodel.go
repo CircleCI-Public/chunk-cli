@@ -9,8 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // clip cuts a line to at most width display columns, measuring with lipgloss so
@@ -43,14 +43,14 @@ func clip(s string, width int) string {
 // invocation other than the selected one would have matched against the wrong
 // sidecar and returned a confidently wrong command. Both callers pass the row
 // the group came from, and now they cannot do otherwise.
-func (m Model) commandForInvocation(sc sidecarInfo, g invocationGroup) *watchd.CommandState {
+func (m Model) commandForInvocation(sc sidecarInfo, g invocationGroup) *chunkd.CommandState {
 	if len(g.events) == 0 || sc.projectIdx >= len(m.commands) {
 		return nil
 	}
 	start := g.events[0].Ts
 	end := invocEndTime(g)
 
-	var best *watchd.CommandState
+	var best *chunkd.CommandState
 	for i := range m.commands[sc.projectIdx] {
 		cs := &m.commands[sc.projectIdx][i]
 		if cs.SidecarID != sc.id {
@@ -157,7 +157,7 @@ func (m Model) withOutputChunk(msg outputMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !msg.chunk.Found {
-		m.output.err = fmt.Errorf("the watch daemon has no output for this command")
+		m.output.err = fmt.Errorf("the chunk daemon has no output for this command")
 		// Evicted buffers do not come back, so the tail has nothing left to wait
 		// for. Leaving running set would keep the chain polling for a command the
 		// daemon has already forgotten.

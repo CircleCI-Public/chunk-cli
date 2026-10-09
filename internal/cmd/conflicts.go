@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newConflictsCmd() *cobra.Command {
@@ -21,7 +21,7 @@ func newConflictsCmd() *cobra.Command {
 		Short: "Report whether this branch still merges cleanly into its merge target",
 		Long: `Report whether this branch still merges cleanly into its merge target.
 
-The answer comes from the watch daemon, which previews the merge in the
+The answer comes from the chunk daemon, which previews the merge in the
 background against the default branch it last fetched. Nothing is computed here,
 so this returns immediately and never touches the working tree.
 
@@ -56,7 +56,7 @@ func runConflicts(cmd *cobra.Command, projectDir string, hookMode, jsonOut bool)
 		return nil
 	}
 
-	report, err := watchd.FetchConflicts(root)
+	report, err := chunkd.FetchConflicts(root)
 	if err != nil {
 		reportConflictLookupError(streams, root, err, hookMode, jsonOut)
 		return nil
@@ -68,11 +68,11 @@ func runConflicts(cmd *cobra.Command, projectDir string, hookMode, jsonOut bool)
 	}
 
 	if !hookMode {
-		streams.Printf("%s", watchd.ConflictStatus(report))
+		streams.Printf("%s", chunkd.ConflictStatus(report))
 		return nil
 	}
 
-	notice := watchd.ConflictNotice(report)
+	notice := chunkd.ConflictNotice(report)
 	if notice == "" {
 		// Nothing to advise. No output at all, so a hook firing on every commit
 		// in a project that merges cleanly adds nothing to the transcript.
@@ -113,31 +113,31 @@ func reportConflictLookupError(streams iostream.Streams, root string, err error,
 		// Known stays false, and the reason goes in Unavailable — the field that
 		// already carries "there is no answer, and here is why" for a detached
 		// HEAD or an unfetched target. A missing daemon is one more of those.
-		encodeConflictReport(streams, watchd.ConflictReport{
+		encodeConflictReport(streams, chunkd.ConflictReport{
 			Root:     root,
 			Known:    false,
-			Conflict: &watchd.ConflictState{Unavailable: err.Error()},
+			Conflict: &chunkd.ConflictState{Unavailable: err.Error()},
 		})
 		return
 	}
-	if errors.Is(err, watchd.ErrDaemonTimeout) {
+	if errors.Is(err, chunkd.ErrDaemonTimeout) {
 		// Deliberately not the "run chunk watch" advice below: the daemon is
 		// already running, and telling someone to start it sends them to fix
 		// something that is not broken.
-		streams.Printf("%s", "The watch daemon did not answer in time, so there is no conflict information.\n"+
+		streams.Printf("%s", "The chunk daemon did not answer in time, so there is no conflict information.\n"+
 			"It is running but busy — try again in a moment.\n")
 		return
 	}
-	if errors.Is(err, watchd.ErrDaemonPermission) {
+	if errors.Is(err, chunkd.ErrDaemonPermission) {
 		// Also not the "run chunk watch" advice: the socket exists, so this is
 		// not an absent daemon but one this user cannot open. A second daemon
 		// would find the same socket in its way and leave it just as unreadable.
-		streams.Printf("%s", "The watch daemon socket cannot be opened, so there is no conflict information.\n"+
+		streams.Printf("%s", "The chunk daemon socket cannot be opened, so there is no conflict information.\n"+
 			"It likely belongs to a daemon running as another user: "+err.Error()+"\n")
 		return
 	}
-	if errors.Is(err, watchd.ErrDaemonUnreachable) {
-		streams.Printf("%s", "No watch daemon is running, so there is no conflict information.\n"+
+	if errors.Is(err, chunkd.ErrDaemonUnreachable) {
+		streams.Printf("%s", "No chunk daemon is running, so there is no conflict information.\n"+
 			"Run `chunk watch` to start it.\n")
 		return
 	}
@@ -147,7 +147,7 @@ func reportConflictLookupError(streams iostream.Streams, root string, err error,
 // encodeConflictReport writes a report as --json output. Both the answer and
 // the no-answer path go through here: one encoder is what keeps them the same
 // shape, indentation included.
-func encodeConflictReport(streams iostream.Streams, report watchd.ConflictReport) {
+func encodeConflictReport(streams iostream.Streams, report chunkd.ConflictReport) {
 	enc := json.NewEncoder(streams.Out)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(report)

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
@@ -13,7 +14,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // reviewActivity files a review pass in the project event log. Readers match
@@ -102,7 +102,7 @@ func (a *reviewActivity) submitted(entry *sidecar.PoolEntry, prompt, commandID s
 	if a == nil {
 		return
 	}
-	watchd.RegisterCommand(watchd.CommandReg{
+	chunkd.RegisterCommand(chunkd.CommandReg{
 		CommandID:   commandID,
 		SidecarID:   entry.ID,
 		ProjectRoot: a.projectRoot,

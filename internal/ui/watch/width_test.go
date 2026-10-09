@@ -7,7 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
 
 // TestDashboardNeverExceedsItsWidth pins the other half of the fixed-size layout.
@@ -16,7 +16,7 @@ import (
 // does. The output affordance and its footer hint are the widest things the right
 // pane grew, so narrow terminals are where they show up first.
 func TestDashboardNeverExceedsItsWidth(t *testing.T) {
-	cmds := []watchd.CommandState{{
+	cmds := []chunkd.CommandState{{
 		CommandID:   "cmd-1",
 		SidecarID:   "sc-1",
 		SubmittedAt: time.Now().Add(-time.Minute).Add(time.Second),

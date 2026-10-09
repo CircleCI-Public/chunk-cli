@@ -15,11 +15,11 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newFactoryCmd() *cobra.Command {
@@ -36,7 +36,7 @@ review its work with each prompt in the reviews directory, each on its own
 sidecar, and run the project's validation commands, feeding failures back to
 the implementer until every check passes or attempts run out.
 
-The run happens on the local watch daemon, as a session: watch it in
+The run happens on the local chunk daemon, as a session: watch it in
 'chunk watch'. Ctrl-C stops the run, and what the implementer did so far is
 still committed.
 
@@ -137,10 +137,10 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			// starts after whatever the file holds before the run is started.
 			logFrom := logSize(logArg)
 
-			if err := watchd.EnsureRunning(); err != nil {
-				return &userError{msg: "Could not start the watch daemon.", err: err}
+			if err := chunkd.EnsureRunning(); err != nil {
+				return &userError{msg: "Could not start the chunk daemon.", err: err}
 			}
-			id, err := watchd.StartFactory(watchd.FactoryRequest{
+			id, err := chunkd.StartFactory(chunkd.FactoryRequest{
 				ProjectRoot:             root,
 				Prompt:                  prompt,
 				Continue:                continueRun,
@@ -161,7 +161,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return sessionError(err)
 			}
-			streams.ErrPrintf("Factory run %s started on the watch daemon. Ctrl-C stops it.\n", id)
+			streams.ErrPrintf("Factory run %s started on the chunk daemon. Ctrl-C stops it.\n", id)
 			if logArg != "" {
 				streams.ErrPrintf("Logging to %s\n", logArg)
 			}
@@ -327,7 +327,7 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 
 // printFactoryWork summarizes the work committed on the run's branch and says
 // how to keep it. The daemon worked out the summary as the run ended.
-func printFactoryWork(f *watchd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
+func printFactoryWork(f *chunkd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
 	if f.StatError != "" {
 		status(iostream.LevelWarn, fmt.Sprintf("could not summarize the work on %s: %s", f.Branch, f.StatError))
 		streams.ErrPrintf("  Worktree: %s\n", f.Worktree)
@@ -346,7 +346,7 @@ func printFactoryWork(f *watchd.FactoryRun, status iostream.StatusFunc, streams 
 // their uncommitted work committed as the baseline, a merge would collide with
 // that same work still uncommitted in their checkout, so they apply the run's
 // own changes on top of it instead.
-func keepWorkHint(f *watchd.FactoryRun) string {
+func keepWorkHint(f *chunkd.FactoryRun) string {
 	if f.Baseline == f.Head {
 		return "Merge it with: git merge " + f.Branch
 	}
@@ -482,7 +482,7 @@ func factoryLogPath(path string, on bool, now time.Time) (string, error) {
 
 // finishFactory prints where a factory run ended up and maps anything short of
 // every check passing to an error.
-func finishFactory(streams iostream.Streams, detail watchd.SessionDetail, jsonOut bool) error {
+func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOut bool) error {
 	status := newStatusFunc(streams)
 	f := detail.Factory
 	if jsonOut {
@@ -497,18 +497,18 @@ func finishFactory(streams iostream.Streams, detail watchd.SessionDetail, jsonOu
 	}
 	printFactoryTotals(detail, status)
 	switch detail.State {
-	case watchd.SessionCancelled:
+	case chunkd.SessionCancelled:
 		return newUserError("The factory run was cancelled.").withoutDetail()
-	case watchd.SessionFailed:
+	case chunkd.SessionFailed:
 		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
-	case watchd.SessionRunning, watchd.SessionDone:
+	case chunkd.SessionRunning, chunkd.SessionDone:
 	}
 	return reportOutcome(status, f.Result, f.Rounds)
 }
 
 // printFactoryTotals says how long the run took and what the implementer's
 // turns cost. What the reviews cost is not reported to chunk.
-func printFactoryTotals(detail watchd.SessionDetail, status iostream.StatusFunc) {
+func printFactoryTotals(detail chunkd.SessionDetail, status iostream.StatusFunc) {
 	ended := time.Now()
 	if detail.EndedAt != nil {
 		ended = *detail.EndedAt
@@ -516,7 +516,7 @@ func printFactoryTotals(detail watchd.SessionDetail, status iostream.StatusFunc)
 	var cost float64
 	turns := 0
 	for _, r := range detail.Rounds {
-		if impl := r.Implement; impl != nil && impl.State != watchd.ImplementRunning {
+		if impl := r.Implement; impl != nil && impl.State != chunkd.ImplementRunning {
 			cost += impl.CostUSD
 			turns++
 		}
@@ -527,7 +527,7 @@ func printFactoryTotals(detail watchd.SessionDetail, status iostream.StatusFunc)
 // printFactoryLeftovers says what a run left behind: its committed work, or
 // where its uncommitted work still is. Sidecars kept running were said in the
 // run's progress.
-func printFactoryLeftovers(f *watchd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
+func printFactoryLeftovers(f *chunkd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
 	switch {
 	case f.Committed:
 		printFactoryWork(f, status, streams)
@@ -540,7 +540,7 @@ func printFactoryLeftovers(f *watchd.FactoryRun, status iostream.StatusFunc, str
 // printFactoryContinueHint says how to carry on a run whose committed work
 // still fails its checks. The branch names the run whose record a continued
 // run reads, the first in a chain of them.
-func printFactoryContinueHint(f *watchd.FactoryRun, status iostream.StatusFunc) {
+func printFactoryContinueHint(f *chunkd.FactoryRun, status iostream.StatusFunc) {
 	failing := f.Result == string(factory.ResultExhausted) || f.Result == string(factory.ResultStuck)
 	if !failing || !f.Committed || f.Branch == "" {
 		return
@@ -552,14 +552,14 @@ func printFactoryContinueHint(f *watchd.FactoryRun, status iostream.StatusFunc) 
 // check passed. How each round's checks came out was said as it was checked.
 func reportOutcome(status iostream.StatusFunc, result string, rounds int) error {
 	switch result {
-	case watchd.ResultPassed:
+	case chunkd.ResultPassed:
 		status(iostream.LevelDone, fmt.Sprintf("All checks passed after %d round(s).", rounds))
 		return nil
-	case watchd.ResultNoChange:
+	case chunkd.ResultNoChange:
 		return &userError{msg: "The implementer made no changes.", hideDetail: true, errMsg: "no changes"}
-	case watchd.ResultStuck:
+	case chunkd.ResultStuck:
 		return &userError{msg: fmt.Sprintf("The implementer stopped changing the code after round %d, with checks still failing.", rounds), hideDetail: true, errMsg: "stuck"}
-	case watchd.ResultExhausted:
+	case chunkd.ResultExhausted:
 	}
 	return &userError{msg: fmt.Sprintf("Checks still failed after %d round(s).", rounds), hideDetail: true, errMsg: "attempts exhausted"}
 }

@@ -37,7 +37,7 @@ func TestFactoryWithoutAPromptExitsBadArgs(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stderr, "The prompt on stdin is empty."), "stderr: %s", result.Stderr)
 }
 
-// Everything below returns before the watch daemon is started, so these are
+// Everything below returns before the chunk daemon is started, so these are
 // the paths a first run most often lands on, with nothing running.
 func TestFactoryOutsideAGitRepoExitsBadArgs(t *testing.T) {
 	env := testenv.NewTestEnv(t)

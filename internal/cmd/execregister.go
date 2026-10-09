@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // submitAndStream submits a command to a sidecar, registers it with the watch
@@ -30,7 +30,7 @@ import (
 // either way, where the registration is not.
 func submitAndStream(
 	ctx context.Context, client *circleci.Client, sidecarID string,
-	reg *watchd.CommandReg, command string, args []string,
+	reg *chunkd.CommandReg, command string, args []string,
 	onOutput circleci.OutputFn,
 ) (*circleci.ExecResponse, error) {
 	// Both phases are wrapped so a failure says which one it was. They fail for
@@ -47,7 +47,7 @@ func submitAndStream(
 		if reg.SubmittedAt.IsZero() {
 			reg.SubmittedAt = time.Now()
 		}
-		watchd.RegisterCommand(*reg)
+		chunkd.RegisterCommand(*reg)
 	}
 	resp, err := client.StreamOutput(ctx, commandID, "", onOutput)
 	if err != nil {

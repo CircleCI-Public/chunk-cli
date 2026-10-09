@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // sessionPollInterval is how often `chunk factory` asks the daemon how its
@@ -30,12 +30,12 @@ const maxSessionPollFailures = 5
 // daemon. A factory run works from files on this machine, so it belongs to the
 // local daemon; a remote daemon would be working on a different checkout.
 func requireLocalDaemon() error {
-	if watchd.CurrentConnection().Remote == "" {
+	if chunkd.CurrentConnection().Remote == "" {
 		return nil
 	}
-	return newUserError("chunk factory runs on the local watch daemon, but CHUNK_WATCHD_REMOTE_ADDR is set.").
+	return newUserError("chunk factory runs on the local chunk daemon, but CHUNK_DAEMON_REMOTE_ADDR is set.").
 		withCode("command.invalid_args").
-		withSuggestion("Unset CHUNK_WATCHD_REMOTE_ADDR to use this command.").
+		withSuggestion("Unset CHUNK_DAEMON_REMOTE_ADDR to use this command.").
 		withExitCode(ExitBadArgs).
 		withoutDetail()
 }
@@ -71,10 +71,10 @@ func sessionProjectRoot(ctx context.Context) (string, error) {
 
 // sessionError renders a failure talking to the session API.
 func sessionError(err error) error {
-	var refused *watchd.SessionRefused
+	var refused *chunkd.SessionRefused
 	switch {
-	case errors.Is(err, watchd.ErrDaemonUnavailable):
-		return newUserError("The watch daemon is not reachable.").
+	case errors.Is(err, chunkd.ErrDaemonUnavailable):
+		return newUserError("The chunk daemon is not reachable.").
 			withSuggestion("Start it with 'chunk watch'.").
 			wrap(err)
 	case errors.As(err, &refused):
@@ -87,12 +87,12 @@ func sessionError(err error) error {
 		}
 		return e
 	}
-	return fmt.Errorf("talk to the watch daemon: %w", err)
+	return fmt.Errorf("talk to the chunk daemon: %w", err)
 }
 
 // printLostFactoryWork says where a factory run was working when its session
 // can no longer be followed. The daemon still commits the work as it stops.
-func printLostFactoryWork(streams iostream.Streams, f *watchd.FactoryRun) {
+func printLostFactoryWork(streams iostream.Streams, f *chunkd.FactoryRun) {
 	if f == nil {
 		return
 	}
@@ -109,10 +109,10 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 	defer ticker.Stop()
 	// lastFactory is where a factory run's work was last seen, so it can still
 	// be pointed to if the daemon goes away: its record goes with it.
-	var lastFactory *watchd.FactoryRun
+	var lastFactory *chunkd.FactoryRun
 	for {
-		detail, err := watchd.FetchSession(id)
-		var refused *watchd.SessionRefused
+		detail, err := chunkd.FetchSession(id)
+		var refused *chunkd.SessionRefused
 		switch {
 		case errors.As(err, &refused):
 			printLostFactoryWork(streams, lastFactory)
@@ -120,7 +120,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 		case err != nil:
 			if failures++; failures >= maxSessionPollFailures {
 				printLostFactoryWork(streams, lastFactory)
-				return newUserError("Lost contact with the watch daemon.").
+				return newUserError("Lost contact with the chunk daemon.").
 					withSuggestion(fmt.Sprintf("Run %s may still be running on the daemon. Follow it in 'chunk watch' (press r).", id)).
 					wrap(err)
 			}
@@ -136,7 +136,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 		}
 		select {
 		case <-ctx.Done():
-			if err := watchd.CancelSession(id); err != nil {
+			if err := chunkd.CancelSession(id); err != nil {
 				return sessionError(err)
 			}
 			streams.ErrPrintf("Stopping %s...\n", id)
@@ -148,7 +148,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 	}
 }
 
-func roundNote(r watchd.Round) string {
+func roundNote(r chunkd.Round) string {
 	if r.Note == "" {
 		return ""
 	}
@@ -158,11 +158,11 @@ func roundNote(r watchd.Round) string {
 // sessionReporter turns successive snapshots of a session into status lines.
 type sessionReporter struct {
 	status  iostream.StatusFunc
-	rounds  map[int]watchd.RoundState
-	reviews map[string]watchd.PromptRunState
+	rounds  map[int]chunkd.RoundState
+	reviews map[string]chunkd.PromptRunState
 	// implement and checks are what has been said of a factory round's
 	// implementer turn and how many of its validation commands.
-	implement map[int]watchd.RoundImplement
+	implement map[int]chunkd.RoundImplement
 	checks    map[int]int
 	// progress counts the lines of the factory run's progress already said.
 	progress int
@@ -173,15 +173,15 @@ type sessionReporter struct {
 func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
 	return &sessionReporter{
 		status:    status,
-		rounds:    map[int]watchd.RoundState{},
-		reviews:   map[string]watchd.PromptRunState{},
-		implement: map[int]watchd.RoundImplement{},
+		rounds:    map[int]chunkd.RoundState{},
+		reviews:   map[string]chunkd.PromptRunState{},
+		implement: map[int]chunkd.RoundImplement{},
 		checks:    map[int]int{},
 		checked:   map[int]bool{},
 	}
 }
 
-func (r *sessionReporter) report(d watchd.SessionDetail) {
+func (r *sessionReporter) report(d chunkd.SessionDetail) {
 	s := d.Session
 	// A factory run's progress comes first: most of it is the setup before
 	// any round, which a snapshot caught up on all at once would otherwise
@@ -216,19 +216,19 @@ func (r *sessionReporter) report(d watchd.SessionDetail) {
 			}
 			r.reviews[key] = p.State
 			switch p.State {
-			case watchd.PromptRunning:
+			case chunkd.PromptRunning:
 				r.status(iostream.LevelInfo, fmt.Sprintf("reviewing %s on %s", p.Name, p.SidecarID))
-			case watchd.PromptDone:
+			case chunkd.PromptDone:
 				r.status(iostream.LevelDone, fmt.Sprintf("%s reviewed in %s", p.Name, msDuration(p.DurationMS)))
-			case watchd.PromptFailed:
+			case chunkd.PromptFailed:
 				r.status(iostream.LevelWarn, fmt.Sprintf("%s: %s", p.Name, p.Error))
-			case watchd.PromptQueued:
+			case chunkd.PromptQueued:
 				// Nothing to say yet.
 			}
 		}
 		// A factory round's findings are recorded as it is checked, which is
 		// when it is done.
-		if round.State == watchd.RoundDone && !r.checked[i] {
+		if round.State == chunkd.RoundDone && !r.checked[i] {
 			r.checked[i] = true
 			r.reportFindings(roundResults(d, round.Number))
 		}
@@ -237,21 +237,21 @@ func (r *sessionReporter) report(d watchd.SessionDetail) {
 
 // reportImplement says how a factory round's implementer turn went, once it
 // has gone somewhere new.
-func (r *sessionReporter) reportImplement(i int, impl watchd.RoundImplement) {
+func (r *sessionReporter) reportImplement(i int, impl chunkd.RoundImplement) {
 	prev := r.implement[i]
 	r.implement[i] = impl
 	if impl.State != prev.State {
 		switch impl.State {
-		case watchd.ImplementApplied:
+		case chunkd.ImplementApplied:
 			r.status(iostream.LevelDone, fmt.Sprintf("implementer finished in %s ($%.2f)", msDuration(impl.DurationMS), impl.CostUSD))
 			if impl.Summary != "" {
 				r.status(iostream.LevelInfo, oneLineSummary(impl.Summary))
 			}
-		case watchd.ImplementEmpty:
+		case chunkd.ImplementEmpty:
 			r.status(iostream.LevelWarn, "no changes")
-		case watchd.ImplementFailed:
+		case chunkd.ImplementFailed:
 			r.status(iostream.LevelWarn, "implementer failed: "+impl.Error)
-		case watchd.ImplementRunning:
+		case chunkd.ImplementRunning:
 			// The round's own state line says so.
 		}
 	}
@@ -261,7 +261,7 @@ func (r *sessionReporter) reportImplement(i int, impl watchd.RoundImplement) {
 }
 
 // roundResults is the review results of the round numbered n.
-func roundResults(d watchd.SessionDetail, n int) []watchd.ReviewResult {
+func roundResults(d chunkd.SessionDetail, n int) []chunkd.ReviewResult {
 	for _, rd := range d.Details {
 		if rd.Number == n {
 			return rd.Results
@@ -272,14 +272,14 @@ func roundResults(d watchd.SessionDetail, n int) []watchd.ReviewResult {
 
 // reportFindings says what each of a factory round's reviews found: what the
 // implementer is asked to fix next, or what is left when the run ends.
-func (r *sessionReporter) reportFindings(results []watchd.ReviewResult) {
+func (r *sessionReporter) reportFindings(results []chunkd.ReviewResult) {
 	for _, res := range results {
 		switch res.Status {
-		case watchd.CheckPassed:
+		case chunkd.CheckPassed:
 			r.status(iostream.LevelDone, fmt.Sprintf("review %s: no findings worth changing", res.Prompt))
-		case watchd.CheckFailed:
+		case chunkd.CheckFailed:
 			r.status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)", res.Prompt, len(res.Findings)))
-		case watchd.CheckErrored:
+		case chunkd.CheckErrored:
 			r.status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", res.Prompt, res.Error))
 			continue
 		}
@@ -294,11 +294,11 @@ func (r *sessionReporter) reportFindings(results []watchd.ReviewResult) {
 const failedOutputLines = 20
 
 // reportCheck says how a factory round's validation command came out.
-func (r *sessionReporter) reportCheck(c watchd.RoundCheck) {
+func (r *sessionReporter) reportCheck(c chunkd.RoundCheck) {
 	switch c.Status {
-	case watchd.CheckPassed:
+	case chunkd.CheckPassed:
 		r.status(iostream.LevelDone, fmt.Sprintf("  %s passed in %s", c.Name, msDuration(c.DurationMS)))
-	case watchd.CheckFailed:
+	case chunkd.CheckFailed:
 		r.status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, msDuration(c.DurationMS)))
 		if c.Output == "" {
 			return
@@ -307,7 +307,7 @@ func (r *sessionReporter) reportCheck(c watchd.RoundCheck) {
 		for _, l := range lines[max(len(lines)-failedOutputLines, 0):] {
 			r.status(iostream.LevelInfo, "    "+l)
 		}
-	case watchd.CheckErrored:
+	case chunkd.CheckErrored:
 		r.status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
 	}
 }

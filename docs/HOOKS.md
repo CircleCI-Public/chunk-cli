@@ -34,7 +34,7 @@ nothing to report and the hook stays silent.
 ## Background Validation
 
 A Stop hook that runs the full check suite is the right thing for a risky
-change and an expensive interruption for a typo. When the watch daemon is
+change and an expensive interruption for a typo. When the chunk daemon is
 running, the Stop hook offers it the choice: run the checks now, while the hook
 waits, or take them into the background and answer on the next turn.
 

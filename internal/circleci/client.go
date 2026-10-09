@@ -243,7 +243,7 @@ type execSubmitAttrs struct {
 //
 // Splitting submission from streaming is what makes a command observable while
 // it runs: the ID is the handle to its output stream, and a caller that wants to
-// hand that handle to something else — a log tailer, the watch daemon — needs it
+// hand that handle to something else — a log tailer, the chunk daemon — needs it
 // before the command finishes, not after.
 func (c *Client) SubmitExec(
 	ctx context.Context, sidecarID, command string, args []string, env map[string]string,

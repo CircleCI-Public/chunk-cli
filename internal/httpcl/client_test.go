@@ -380,7 +380,7 @@ func TestRetries504Exhausted(t *testing.T) {
 
 // A 401 is the only signal that a long-lived client's token has gone stale.
 // Reloading and retrying is what lets a process that outlives a login — the
-// watch daemon holds one client for its whole life — pick the new token up.
+// chunk daemon holds one client for its whole life — pick the new token up.
 func TestReloadToken_RetriesOnceWithTheNewToken(t *testing.T) {
 	var seen []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
