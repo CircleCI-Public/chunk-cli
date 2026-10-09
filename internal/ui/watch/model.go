@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -146,8 +147,8 @@ type dataMsg struct {
 	headRefs []string
 	commands [][]chunkd.CommandState
 	authErr  string
-	// sessions are the daemon's pre-PR sessions, and reviewAuthErr its reason for
-	// being unable to start one.
+	// sessions are the daemon's runs, and reviewAuthErr its reason for being
+	// unable to start one.
 	sessions      []sessionInfo
 	reviewAuthErr string
 }
@@ -218,11 +219,21 @@ type Model struct {
 	// whether the last poll reached it.
 	conn chunkd.Connection
 
-	// sessions are the daemon's pre-PR sessions across projects, and sessionView
-	// the open session view, nil when the dashboard is showing sidecars.
+	// sessions are the runs the left pane lists, across projects, and
+	// runSidecars the sidecars of each factory run among them, by run ID. Those
+	// sidecars are shown with their run rather than as rows of their own.
 	sessions      []sessionInfo
-	sessionView   *sessionPane
+	runSidecars   map[string][]sidecarInfo
 	reviewAuthErr string
+
+	// selRun is the ID of the selected run, "" when a sidecar is selected
+	// instead. runItem is the selected row inside the run's pane; runConfirm is the
+	// run an 'x' has been pressed for once, and runNote what the last action on
+	// a run said.
+	selRun     string
+	runItem    int
+	runConfirm string
+	runNote    string
 	// spinning is true while a spinner tick chain is in flight, so a poll that
 	// finds something running after a quiet spell can start one without doubling
 	// up on a chain that never stopped.
@@ -276,57 +287,63 @@ func (m Model) Init() tea.Cmd {
 
 // updateDashboardKey handles keys for the two-pane dashboard, when no output
 // pane is open. Split out of Update so neither grows past the complexity limit.
+//
+// Quitting only detaches: runs belong to the daemon and carry on without the
+// dashboard. Stopping one takes the deliberate two-press cancel.
 func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.Code {
-	case 'q', tea.KeyEscape:
+	k := m.keys()
+	run := m.selectedRun()
+	right := m.focusedPane == paneRight
+	// A pending cancel is withdrawn by any key but the one that confirms it.
+	wasConfirm := m.runConfirm
+	m.runConfirm = ""
+	switch {
+	case key.Matches(msg, k.Quit, k.ForceQuit):
 		return m, tea.Quit
-	case 'r':
-		return m.openSessions(), nil
-	case tea.KeyRight, 'l':
+	case key.Matches(msg, k.Back):
+		if right {
+			m.focusedPane = paneLeft
+			return m, nil
+		}
+		return m, tea.Quit
+	case key.Matches(msg, k.Cancel):
+		return m.requestRunCancel(run, wasConfirm)
+	case key.Matches(msg, k.Right):
 		m.focusedPane = paneRight
-	case tea.KeyLeft, 'h':
+	case key.Matches(msg, k.Left):
 		m.focusedPane = paneLeft
-	case 's', tea.KeyDown:
-		if m.focusedPane == paneLeft {
-			if m.selectedIdx < len(m.sidecars)-1 {
-				m.selectedIdx++
-			}
-			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-			m.rightSelectedIdx = 0
-			m = m.adjustLeftScroll()
-		} else {
-			m.rightSelectedIdx++
+	case key.Matches(msg, k.Down):
+		m = m.moveSelection(run, 1)
+	case key.Matches(msg, k.Up):
+		m = m.moveSelection(run, -1)
+	case key.Matches(msg, k.Open):
+		if run != nil {
+			return m.openRunItem(run, runItems(run.s))
 		}
-	case 'w', tea.KeyUp:
-		if m.focusedPane == paneLeft {
-			if m.selectedIdx > 0 {
-				m.selectedIdx--
-			}
-			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-			m.rightSelectedIdx = 0
-			m = m.adjustLeftScroll()
-		} else if m.rightSelectedIdx > 0 {
-			m.rightSelectedIdx--
+		// Enter opens output when the invocation has any; otherwise it falls
+		// back to expand/collapse, so the key never feels dead.
+		if opened, cmd := m.openSelectedOutput(); opened != nil {
+			return *opened, cmd
 		}
-	case tea.KeyEnter:
-		if m.focusedPane == paneRight {
-			// Enter opens output when the invocation has any; otherwise it falls
-			// back to expand/collapse, so the key never feels dead.
-			if opened, cmd := m.openSelectedOutput(); opened != nil {
-				return *opened, cmd
-			}
-			m = m.toggleSelectedInvoc()
-		}
-	case tea.KeySpace:
-		if m.focusedPane == paneRight {
-			m = m.toggleSelectedInvoc()
-		}
-	case 'c':
-		if msg.Mod == tea.ModCtrl {
-			return m, tea.Quit
-		}
+		m = m.toggleSelectedInvoc()
+	case key.Matches(msg, k.Toggle):
+		m = m.toggleSelectedInvoc()
 	}
 	return m, nil
+}
+
+// moveSelection moves whatever the focused pane selects: the left pane's run
+// or sidecar, the selected run's row, or the selected sidecar's invocation.
+func (m Model) moveSelection(run *sessionInfo, delta int) Model {
+	switch {
+	case m.focusedPane == paneLeft:
+		return m.moveLeftSelection(delta)
+	case run != nil:
+		m.runItem = min(max(m.runItem+delta, 0), max(len(runItems(run.s))-1, 0))
+	default:
+		m.rightSelectedIdx = max(m.rightSelectedIdx+delta, 0)
+	}
+	return m
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -338,6 +355,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.output != nil {
+			m.output.wrap(m.width - 1)
+		}
 		m = m.adjustLeftScroll()
 		return m, nil
 
@@ -347,9 +367,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// once. Esc closes it rather than quitting the dashboard.
 		if m.output != nil {
 			return m.updateOutputKey(msg)
-		}
-		if m.sessionView != nil {
-			return m.updateSessionKey(msg)
 		}
 		return m.updateDashboardKey(msg)
 
@@ -400,17 +417,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.headRefs = msg.headRefs
 		m.commands = msg.commands
 		m.authErr = msg.authErr
-		m.sessions = msg.sessions
+		m.sessions = visibleRuns(msg.sessions, time.Now())
+		m.sidecars, m.runSidecars = splitRunSidecars(m.sidecars, m.sessions)
 		m.reviewAuthErr = msg.reviewAuthErr
-		if m.sessionView != nil {
-			m.sessionView.sel = min(m.sessionView.sel, max(len(m.sessions)-1, 0))
+		m = m.reselectRun()
+		if run := m.selectedRun(); run != nil {
+			m.runItem = min(m.runItem, max(len(runItems(run.s))-1, 0))
 		}
 		// Sidecars are re-sorted by recency each poll, so track the selection
 		// by id. An unknown id (first poll, or the sidecar aged out) falls back
 		// to index 0, the most recently active sidecar.
 		m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
 		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-		m.hasSpinner = anyRunning(m.sidecars) || anySessionLive(m.sessions)
+		m.hasSpinner = anyRunning(msg.sidecars) || anySessionLive(m.sessions)
 		m = m.adjustLeftScroll()
 		next := tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 		if m.hasSpinner && !m.spinning {
@@ -461,9 +480,6 @@ func (m Model) render() string {
 	if m.output != nil {
 		return m.renderHeader(st) + m.renderSeparator(st) + m.renderOutputPane(st)
 	}
-	if m.sessionView != nil {
-		return m.renderSessionView(st)
-	}
 	return m.renderHeader(st) +
 		m.renderSeparator(st) +
 		m.renderBody(st) +
@@ -489,13 +505,18 @@ func (m Model) renderHeader(st watchStyles) string {
 	}
 
 	clock := time.Now().Format("15:04:05")
+	if r := len(m.sessions); r > 0 {
+		count = fmt.Sprintf("%d run%s · %s", r, plural(r), count)
+	}
 	title := st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
-	right := m.sessionTag(st) + m.connectionTag(st) + "  " + st.vdim(clock)
+	right := m.runTag(st) + m.connectionTag(st) + "  " + st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
-	return title + strings.Repeat(" ", gap) + right + "\n"
+	// Clipped like every other line: one that wraps costs a row the fixed-height
+	// layout never budgeted for.
+	return clip(title+strings.Repeat(" ", gap)+right, m.width) + "\n"
 }
 
 // connectionTag says which daemon the dashboard is showing and whether it is
@@ -525,6 +546,10 @@ func (m Model) contentHeight() int {
 	if m.daemonErr != nil {
 		h--
 	}
+	// So does a run's confirmation or note.
+	if m.runLine() != "" {
+		h--
+	}
 	if h < 1 {
 		h = 1
 	}
@@ -534,8 +559,13 @@ func (m Model) contentHeight() int {
 func (m Model) renderBody(st watchStyles) string {
 	contentHeight := m.contentHeight()
 
-	leftLines := m.renderSidecarPane(st, contentHeight)
-	rightLines := m.renderActivityPane(st, contentHeight)
+	leftLines := m.renderLeftPane(st, contentHeight)
+	var rightLines []string
+	if run := m.selectedRun(); run != nil {
+		rightLines = m.renderRunPane(st, *run, contentHeight)
+	} else {
+		rightLines = m.renderActivityPane(st, contentHeight)
+	}
 
 	var b strings.Builder
 	for i := 0; i < contentHeight; i++ {
@@ -583,6 +613,36 @@ func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
 	}
 }
 
+// renderLeftPane is the runs, when there are any, above the sidecars.
+func (m Model) renderLeftPane(st watchStyles, maxLines int) []string {
+	runs := m.renderRunList(st)
+	if len(runs) >= maxLines {
+		if m.selRun == "" {
+			return m.renderSidecarPane(st, maxLines)
+		}
+		return runListWindow(runs, maxLines, m.runIndex())
+	}
+	return append(runs, m.renderSidecarPane(st, maxLines-len(runs))...)
+}
+
+// runListWindow keeps the selected run visible when the complete run list is
+// taller than the pane. Each run occupies two lines after the two-line header.
+func runListWindow(lines []string, maxLines, selected int) []string {
+	if maxLines <= 0 {
+		return nil
+	}
+	if maxLines <= 2 || selected < 0 {
+		return lines[:min(maxLines, len(lines))]
+	}
+	room := maxLines - 2
+	visibleRuns := max(room/2, 1)
+	firstRun := min(max(selected-visibleRuns+1, 0), selected)
+	firstLine := 2 + firstRun*2
+	lastLine := min(firstLine+room, len(lines)-1) // leave out the trailing blank
+	out := append([]string(nil), lines[:2]...)
+	return append(out, lines[firstLine:lastLine]...)
+}
+
 func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 	lines, _ := m.layoutSidecarPane(st, maxLines)
 	return lines
@@ -597,13 +657,17 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 	lines = make([]string, 0, maxLines)
 	add := func(s string) { lines = append(lines, s) }
 
-	if m.focusedPane == paneLeft {
+	if m.focusedPane == paneLeft && m.selRun == "" {
 		add(st.emphasis("sidecars"))
 	} else {
 		add(st.vdim("sidecars"))
 	}
 	add("")
 
+	if len(m.sidecars) == 0 && len(m.sessions) > 0 {
+		add(st.muted("no other sidecars"))
+		return lines, 0
+	}
 	if len(m.sidecars) == 0 {
 		add(st.muted("no sidecars"))
 		add("")
@@ -674,7 +738,7 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 		}
 		lastGroup, haveGroup = group, true
 
-		selected := i == m.selectedIdx
+		selected := i == m.selectedIdx && m.selRun == ""
 		nameLine := truncate(m.rowLabel(sc, multi, dirLabel), leftPaneWidth-3)
 
 		if selected {
@@ -921,7 +985,7 @@ func (m Model) toggleSelectedInvoc() Model {
 // The right pane content starts at terminal column leftPaneWidth+4 and terminal row 4
 // (2 rows for header+separator, 2 rows for the activity pane title+blank).
 func (m Model) withMouseClick(x, y int) Model {
-	if x <= leftPaneWidth+2 {
+	if x <= leftPaneWidth+2 || m.selRun != "" {
 		return m // click is in left pane or on divider
 	}
 	contentLine := y - 4 // 2 header rows + 2 activity title/blank rows
@@ -1167,37 +1231,13 @@ func iconAndMsg(st watchStyles, e eventlog.Event) (string, string) {
 }
 
 func (m Model) renderFooter(st watchStyles) string {
-	var keys []struct{ key, action string }
-	if m.focusedPane == paneLeft {
-		keys = []struct{ key, action string }{
-			{"↑/↓ w/s", "select"},
-			{"→", "runs"},
-			{"r", "sessions"},
-			{"q", "quit"},
-		}
-	} else {
-		keys = []struct{ key, action string }{
-			{"↑/↓ w/s", "navigate"},
-			{"Enter", "output"},
-			{"Space", "toggle"},
-			{"←", "sidecars"},
-			{"r", "sessions"},
-			{"q", "quit"},
-		}
-	}
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, st.vdim(k.key)+" "+st.dim(k.action))
-	}
-	sep := "  " + st.vdim("·") + "  "
-	bar := strings.Join(parts, sep)
-	// Drop hints from the end until the bar fits. The same fixed-height reasoning
-	// as the notice below: a wrapped footer costs a line the layout did not budget
-	// for, which is worse than a hint the reader can find by pressing the key.
-	for len(parts) > 1 && lipgloss.Width(bar) > m.width-2 {
-		parts = parts[:len(parts)-1]
-		bar = strings.Join(parts, sep)
-	}
+	// The help view drops hints from the end until the bar fits. The same
+	// fixed-height reasoning as the notice below: a wrapped footer costs a line
+	// the layout did not budget for, which is worse than a hint the reader can
+	// find by pressing the key.
+	bar := newHelp(st, m.width-2).View(m.keys())
+	// help adds a hint that overflows when there is no room left for its
+	// ellipsis, so the clip below is still needed.
 	bar = clip(bar, m.width-2)
 
 	// Right-align one notice, dropping it entirely when it does not fit: padding
@@ -1218,10 +1258,29 @@ func (m Model) renderFooter(st watchStyles) string {
 	}
 
 	footer := st.vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
+	switch {
+	case m.runConfirm != "" && m.runLine() != "":
+		footer += "  " + st.warning(clip(m.runLine(), m.width-2)) + "\n"
+	case m.runLine() != "":
+		footer += "  " + st.muted(clip(m.runLine(), m.width-2)) + "\n"
+	}
 	if m.daemonErr != nil {
 		footer += "  " + st.err("daemon unavailable: "+m.daemonErr.Error()) + "\n"
 	}
 	return footer
+}
+
+// runLine is the footer's extra line for the selected run: the cancel
+// confirmation, or what the last action on it said. "" when there is none.
+func (m Model) runLine() string {
+	run := m.selectedRun()
+	switch {
+	case run == nil:
+		return ""
+	case m.runConfirm == run.s.ID:
+		return "press x again to cancel this run — q only detaches"
+	}
+	return m.runNote
 }
 
 // loadData delegates all disk and subprocess I/O to loadFn.
@@ -1534,7 +1593,15 @@ func (m Model) adjustLeftScroll() Model {
 // sidecarPaneEnd is the index of the first sidecar the left pane has no room
 // for at the current offset and height.
 func (m Model) sidecarPaneEnd() int {
-	_, end := m.layoutSidecarPane(m.styles(), m.contentHeight())
+	height := m.contentHeight()
+	runs := len(m.renderRunList(m.styles()))
+	room := height
+	if runs < height {
+		room -= runs
+	} else if m.selRun != "" {
+		room = 0
+	}
+	_, end := m.layoutSidecarPane(m.styles(), room)
 	return end
 }
 

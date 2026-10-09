@@ -359,14 +359,24 @@ chunk
   what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The
   session's record names the run it continues as `continues_run_id`.
-- **`watch` shows the daemon's factory runs live.** The header notes a run in
-  progress, and `r` opens the session view: the factory loop with each round
-  (its reviews, drawn by the same renderer as `chunk review`, the findings and
-  how many are worth changing, and how the round's checks went). `Enter` opens
-  a review's live log, `Tab` picks the round,
-  `↑/↓` the run. **`q` only detaches**: the run belongs to the daemon and
-  carries on. The one key that stops it is `x`, and it needs a second `x` on
-  the same run to confirm.
+- **`watch` is organized around runs.** Factory runs are listed at the top of
+  the left pane, live ones first, then up to five that ended in the last day;
+  sidecars are listed below them, and `↑/↓` moves through both as one list. The
+  first poll selects the newest run. A selected run's pane shows where it stands
+  and where its work is (prompt, worktree, branch, log), then each round: the
+  implementer's turn (duration, cost, diff stat), each validation command, and
+  each review with its findings, followed by the run's latest progress and its
+  sidecars. A factory review is a check: it passes unless it found something
+  worth changing (high or medium severity), so its row shows ✓ with any lesser
+  findings noted, or ✗ with how many are worth changing. A factory run's own
+  sidecars are shown there rather than as rows of their own. `→` moves into
+  the pane, `↑/↓` picks a row and `Enter` opens it: a review's live log, a
+  failed check's output, or the implementer's summary. The summary and a
+  check's output are word-wrapped to the screen; a log keeps one line per line
+  of output. The footer only lists keys that do something for what is
+  selected, so `x` is gone once a run has ended. **`q` only detaches**: the run
+  belongs to the daemon and carries on. The one key that stops it is `x`, and it
+  needs a second `x` on the same run to confirm.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

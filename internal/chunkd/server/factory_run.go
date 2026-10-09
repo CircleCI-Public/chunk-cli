@@ -285,7 +285,8 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 			all = append(all, f)
 		}
 		if i := e.reviewIndexLocked(ridx, c.Name); i >= 0 {
-			e.s.Rounds[ridx].Reviews[i].Findings = len(res.Findings)
+			p := &e.s.Rounds[ridx].Reviews[i]
+			p.Findings, p.Worth, p.Status = len(res.Findings), len(worthChanging(c.Findings)), string(c.Status)
 		}
 		rd.Results = append(rd.Results, res)
 	}

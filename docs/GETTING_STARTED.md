@@ -286,6 +286,8 @@ chunk watch
 
 The dashboard refreshes every 5 seconds. The left pane lists the sidecars that actually exist, grouped by project: the daemon checks each one against the CircleCI API and drops any that have expired or been deleted, as long as the sidecar's state recorded which org it belongs to. State written before the org was recorded can't rule a sidecar out, so those sidecars stay listed until they age out. Each row shows what the sidecar is doing — running a command, or idle along with how its last run ended — and its last activity time. A sidecar the API hasn't confirmed yet (for example, when you're not authenticated) is shown as `unconfirmed`. The right pane shows the activity log — sync, validate, exec, and setup events — for the selected sidecar.
 
+When the daemon has `chunk factory` runs, they are listed above the sidecars, and selecting one shows it in the right pane: each round's implementer turn, validation commands and reviews, the run's progress, its sidecars, and once it ends, the branch and worktree its work is on. Press `→` to move into the run, `Enter` to open a row's output, and `x` twice to cancel the run. `q` only closes the dashboard; the run carries on.
+
 ```
 chunk watch  1 sidecar  main@a3f9e12                      15:04:32
 ──────────────────────────────────────────────────────────────────

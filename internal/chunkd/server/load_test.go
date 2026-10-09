@@ -92,10 +92,12 @@ func TestLoadSidecars_readsPoolState(t *testing.T) {
 	assert.NilError(t, os.Mkdir(chunkDir, 0o755))
 	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["id1","id2"]}`)
 
-	result := loadSidecars(dataDir, root, "")
+	result, pools := loadSidecarsAndPools(dataDir, root, "")
 	assert.Equal(t, len(result), 2)
 	assert.Equal(t, result[0].Name, "validate-1")
 	assert.Equal(t, result[1].Name, "validate-2")
+	assert.Equal(t, pools["id1"], "validate")
+	assert.Equal(t, pools["id2"], "validate")
 }
 
 func TestLoadSidecars_readsPoolOrg(t *testing.T) {
@@ -121,7 +123,7 @@ func TestLoadSidecars_deduplicatesActiveAndPoolState(t *testing.T) {
 	newer := time.Now().Add(time.Hour)
 	assert.NilError(t, os.Chtimes(filepath.Join(chunkDir, "validate-pool.json"), newer, newer))
 
-	result := loadSidecars(dataDir, root, "")
+	result, pools := loadSidecarsAndPools(dataDir, root, "")
 	assert.Equal(t, len(result), 3)
 	byID := make(map[string]chunkd.SidecarState, len(result))
 	for _, state := range result {
@@ -130,6 +132,7 @@ func TestLoadSidecars_deduplicatesActiveAndPoolState(t *testing.T) {
 	assert.Equal(t, byID["id2"].Name, "active-2")
 	assert.Equal(t, byID["id2"].SessionID, "session-1")
 	assert.Equal(t, byID["id2"].Workspace, "/active/workspace")
+	assert.Equal(t, pools["id2"], "validate")
 	assert.Equal(t, byID["id3"].Name, "validate-2")
 	assert.Equal(t, byID["id3"].Workspace, "/pool/workspace")
 }

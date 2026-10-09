@@ -165,6 +165,10 @@ type FactoryRun struct {
 	// Attempts is the most rounds the run checks.
 	Attempts int    `json:"attempts,omitempty"`
 	RunID    string `json:"run_id,omitempty"`
+	// SidecarIDs are the live or retained members of this run's pool. The
+	// daemon derives ownership from its pool state so clients do not have to
+	// reconstruct it from sidecar names.
+	SidecarIDs []string `json:"sidecar_ids,omitempty"`
 	// Worktree is where the work is, on Branch. Baseline is the commit the
 	// branch starts from and Head the user's HEAD when the run started; they
 	// differ when the user's uncommitted work was committed as the baseline.
@@ -230,8 +234,14 @@ type ReviewPrompt struct {
 	CommandID  string `json:"command_id,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	Error      string `json:"error,omitempty"`
-	// Findings counts the structured findings parsed from this review's output.
+	// Findings counts the structured findings parsed from this review's output,
+	// and Worth the ones worth changing (severity high or medium).
 	Findings int `json:"findings,omitempty"`
+	Worth    int `json:"worth,omitempty"`
+	// Status is how the review came out as a check, one of the Check values:
+	// passed unless it found something worth changing, failed if it did,
+	// errored if it could not run. Empty until it is known.
+	Status string `json:"status,omitempty"`
 }
 
 // PromptRunState is where one review of a round stands. The values are
