@@ -69,13 +69,13 @@ func factoryProject(t *testing.T) string {
 	return project
 }
 
-func runFactoryCmd(t *testing.T, args ...string) (string, string, error) {
+func runFactoryBuildCmd(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
-	return runFactoryCmdCtx(t.Context(), args...)
+	return runFactoryBuildCmdCtx(t.Context(), args...)
 }
 
-func runFactoryCmdCtx(ctx context.Context, args ...string) (string, string, error) {
-	cmd := newFactoryCmd()
+func runFactoryBuildCmdCtx(ctx context.Context, args ...string) (string, string, error) {
+	cmd := newFactoryBuildCmd()
 	var out, errOut bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
@@ -92,7 +92,7 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 	project := factoryProject(t)
 	startSessionDaemon(t, fakeFactoryConfig(t, factory.ResultPassed))
 
-	_, stderr, err := runFactoryCmd(t, "add a --verbose flag")
+	_, stderr, err := runFactoryBuildCmd(t, "add a --verbose flag")
 	assert.NilError(t, err, stderr)
 
 	for _, want := range []string{
@@ -147,7 +147,7 @@ func TestFactoryLogFlagsReachTheDaemon(t *testing.T) {
 			}
 			startSessionDaemon(t, cfg)
 
-			_, stderr, err := runFactoryCmd(t, append(tc.args, "add a flag")...)
+			_, stderr, err := runFactoryBuildCmd(t, append(tc.args, "add a flag")...)
 			assert.NilError(t, err, stderr)
 			got := <-started
 			assert.Equal(t, got.Verbose, tc.wantVerbose)
@@ -167,12 +167,12 @@ func TestFactoryWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	factoryProject(t)
 	startSessionDaemon(t, fakeFactoryConfig(t, factory.ResultExhausted))
 
-	_, stderr, err := runFactoryCmd(t, "--attempts", "1", "add a --verbose flag")
+	_, stderr, err := runFactoryBuildCmd(t, "--max-attempts", "1", "add a --verbose flag")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
 	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("[high] flag.go:1 unused")), stderr)
-	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("Keep working on it with: chunk factory --continue run-1")), stderr)
+	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("Keep working on it with: chunk factory build --continue run-1")), stderr)
 }
 
 // --json prints the run's record, and the exit code still says whether its
@@ -181,7 +181,7 @@ func TestFactoryJSONWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	factoryProject(t)
 	startSessionDaemon(t, fakeFactoryConfig(t, factory.ResultExhausted))
 
-	stdout, stderr, err := runFactoryCmd(t, "--json", "--attempts", "1", "add a --verbose flag")
+	stdout, stderr, err := runFactoryBuildCmd(t, "--json", "--max-attempts", "1", "add a --verbose flag")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
@@ -223,7 +223,7 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 		<-started
 		interrupt()
 	}()
-	_, stderr, err := runFactoryCmdCtx(ctx, "add a --verbose flag")
+	_, stderr, err := runFactoryBuildCmdCtx(ctx, "add a --verbose flag")
 
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
@@ -238,7 +238,7 @@ func TestFactoryRefusesReviewsOutsideTheProject(t *testing.T) {
 	outside := t.TempDir()
 	assert.NilError(t, os.WriteFile(filepath.Join(outside, "bugs.md"), []byte("find bugs"), 0o644))
 
-	_, _, err := runFactoryCmd(t, "--reviews", outside, "add a --verbose flag")
+	_, _, err := runFactoryBuildCmd(t, "--reviews", outside, "add a --verbose flag")
 	assert.ErrorContains(t, err, "--reviews must be a directory inside the project.")
 }
 
@@ -257,7 +257,7 @@ func TestFactoryRequiresAPrompt(t *testing.T) {
 		{args: []string{"   "}, want: "Pass the prompt as one argument or on stdin."},
 		{args: []string{"add a --verbose flag", "and tests"}, want: "Pass the prompt as one argument or on stdin."},
 	} {
-		_, _, err := runFactoryCmd(t, tc.args...)
+		_, _, err := runFactoryBuildCmd(t, tc.args...)
 		var ue *userError
 		assert.Assert(t, errors.As(err, &ue), "args %q: got %v", tc.args, err)
 		assert.Equal(t, ue.UserMessage(), tc.want, "args %q", tc.args)
@@ -279,7 +279,7 @@ func TestFactoryRefusesLogFlagMisuse(t *testing.T) {
 		{args: []string{"--log-file", "", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
 		{args: []string{"--log-file=", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
 	} {
-		_, _, err := runFactoryCmd(t, tc.args...)
+		_, _, err := runFactoryBuildCmd(t, tc.args...)
 		var ue *userError
 		assert.Assert(t, errors.As(err, &ue), "args %q: got %v", tc.args, err)
 		assert.Equal(t, ue.UserMessage(), tc.wantMsg, "args %q", tc.args)
@@ -288,14 +288,14 @@ func TestFactoryRefusesLogFlagMisuse(t *testing.T) {
 	}
 }
 
-// A run of no rounds would check nothing, so --attempts is refused here
+// A run of no rounds would check nothing, so --max-attempts is refused here
 // rather than on the daemon.
-func TestFactoryRejectsAttemptsBelowOne(t *testing.T) {
+func TestFactoryRejectsMaxAttemptsBelowOne(t *testing.T) {
 	factoryProject(t)
-	_, _, err := runFactoryCmd(t, "--attempts", "0", "add a --verbose flag")
+	_, _, err := runFactoryBuildCmd(t, "--max-attempts", "0", "add a --verbose flag")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
-	assert.Equal(t, ue.UserMessage(), "--attempts must be at least 1.")
+	assert.Equal(t, ue.UserMessage(), "--max-attempts must be at least 1.")
 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
 }
 
@@ -337,7 +337,7 @@ func TestFactoryContinueReachesTheRun(t *testing.T) {
 			}
 			startSessionDaemon(t, cfg)
 
-			stdout, stderr, err := runFactoryCmd(t, append(tc.args, "--json")...)
+			stdout, stderr, err := runFactoryBuildCmd(t, append(tc.args, "--json")...)
 			assert.NilError(t, err, stderr)
 
 			opts := <-got
@@ -358,7 +358,7 @@ func TestFactoryContinueReachesTheRun(t *testing.T) {
 func TestFactoryContinueRefusesAnUnknownRun(t *testing.T) {
 	factoryProject(t)
 
-	_, _, err := runFactoryCmd(t, "--continue", "nope")
+	_, _, err := runFactoryBuildCmd(t, "--continue", "nope")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "No factory run nope to continue in this project.")

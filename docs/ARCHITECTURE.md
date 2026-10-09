@@ -317,7 +317,7 @@ The daemon is split in two. `internal/chunkd` is its API: the types that go over
 the wire, the HTTP client, the socket and pid paths, and starting the process.
 Its internal dependencies are `eventlog`, `iostream` and `version`.
 `internal/chunkd/server` is the daemon itself and imports `chunkd` for the types
-it serves. Clients — `chunk watch`, `chunk factory`, hooks, `chunk validate` —
+it serves. Clients — `chunk watch`, `chunk factory build`, hooks, `chunk validate` —
 import `chunkd` only, so they depend on the daemon's API and never on the factory
 loop, the review runner or the sidecar pool behind it. Only `cmd/daemon.go`,
 which runs the daemon, imports `server` (and tests that start a real one).
@@ -341,12 +341,12 @@ The split is in the imports, not yet everywhere at runtime:
   `AllProjectRoots` reads, and the daemon finds projects by scanning them.
 - **The snapshot is the dashboard's view.** It carries each project's raw
   `eventlog.Event`s, and `chunk watch` works out from them what happened.
-- **`chunk factory` reads the daemon's files to check a request.** With
+- **`chunk factory build` reads the daemon's files to check a request.** With
   `--continue`, `checkFactoryContinue` loads the earlier run's record from the
   project's data directory before asking the daemon, which loads it again.
   This only works while the two share a filesystem.
 
-The daemon backs `chunk watch` and runs `chunk factory`. It polls every
+The daemon backs `chunk watch` and runs `chunk factory build`. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte
 offset, and serves snapshots as JSON over a Unix socket at
 `~/.chunk/daemon/daemon.sock` (`CHUNK_DAEMON_DIR` overrides the directory).
@@ -433,7 +433,7 @@ A session is the daemon's record of one factory run for a project: an
 implementer works in a worktree of its own, and reviews and validation commands
 check the work until it passes.
 The daemon is the **local** one (Unix socket); a run works from files on this
-machine. `chunk factory` starts and follows one, and `chunk watch` shows it
+machine. `chunk factory build` starts and follows one, and `chunk watch` shows it
 live.
 
 ```
@@ -489,7 +489,7 @@ went.
 - **Prompts come from the project** (`.chunk/reviews`): `reviews_dir` must be
   relative and may not leave the project.
 - **Detach is not cancel.** A viewer disconnecting changes nothing; the session
-  belongs to the daemon. `chunk factory` cancels its run on Ctrl-C; the
+  belongs to the daemon. `chunk factory build` cancels its run on Ctrl-C; the
   dashboard cancels on a confirmed `x x`.
 - **In memory only.** Like async validate tasks, a daemon restart loses the
   session record (the last 10 per project are kept while it runs). A factory
@@ -631,10 +631,10 @@ GET  /validate/collect?root=<path>                 → {tasks}
 ## Sidecar Sync Strategy (`internal/sidecar/`)
 
 **Everything syncs with rsync.** `RsyncSync` / `RsyncSyncEphemeral` back
-`chunk sidecar sync`, variants and the `chunk factory` relay from implementer to
+`chunk sidecar sync`, variants and the `chunk factory build` relay from implementer to
 reviewers; `rsyncPoolSidecar` backs the sidecar pool (seed, fan-out, stale
 replacement, dead-sidecar replacement), and so pooled `chunk validate`,
-`chunk review` and the `chunk factory` initial sync. All of them funnel into
+`chunk review` and the `chunk factory build` initial sync. All of them funnel into
 `rsyncTo`.
 
 The git-bundle strategy and the checkout/patch strategy are gone. #539 removed

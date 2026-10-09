@@ -88,7 +88,7 @@ func TestFactoryWithoutAnOriginRemoteFailsBeforeAnySandboxWork(t *testing.T) {
 	out, err := c.CombinedOutput()
 	assert.NilError(t, err, string(out))
 
-	_, _, err = runFactoryCmd(t, "add a --verbose flag")
+	_, _, err = runFactoryBuildCmd(t, "add a --verbose flag")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Assert(t, strings.Contains(ue.UserMessage(), "origin"))
@@ -101,7 +101,7 @@ func TestFactoryWithoutAnOriginRemoteFailsBeforeAnySandboxWork(t *testing.T) {
 func TestFactoryRefusesARemoteDaemon(t *testing.T) {
 	factoryProject(t)
 	t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", "127.0.0.1:1")
-	_, _, err := runFactoryCmd(t, "add a --verbose flag")
+	_, _, err := runFactoryBuildCmd(t, "add a --verbose flag")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.exitCode, ExitBadArgs)

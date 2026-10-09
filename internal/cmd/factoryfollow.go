@@ -17,12 +17,12 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-// sessionPollInterval is how often `chunk factory` asks the daemon how its
+// sessionPollInterval is how often `chunk factory build` asks the daemon how its
 // run is going.
 const sessionPollInterval = time.Second
 
 // maxSessionPollFailures is how many polls in a row may fail before
-// `chunk factory` gives up following its run. The run is on the daemon and
+// `chunk factory build` gives up following its run. The run is on the daemon and
 // keeps going either way.
 const maxSessionPollFailures = 5
 
@@ -33,7 +33,7 @@ func requireLocalDaemon() error {
 	if chunkd.CurrentConnection().Remote == "" {
 		return nil
 	}
-	return newUserError("chunk factory runs on the local chunk daemon, but CHUNK_DAEMON_REMOTE_ADDR is set.").
+	return newUserError("chunk factory build runs on the local chunk daemon, but CHUNK_DAEMON_REMOTE_ADDR is set.").
 		withCode("command.invalid_args").
 		withSuggestion("Unset CHUNK_DAEMON_REMOTE_ADDR to use this command.").
 		withExitCode(ExitBadArgs).

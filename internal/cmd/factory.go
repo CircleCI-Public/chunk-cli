@@ -23,13 +23,26 @@ import (
 )
 
 func newFactoryCmd() *cobra.Command {
+	// Build flags belong after the subcommand. Whitelisting unknown flags here
+	// can consume the following prompt as a flag value and make a legacy
+	// invocation print help with exit code 0 instead of reporting the mistake.
+	cmd := &cobra.Command{
+		Use:   "factory",
+		Short: "Build and manage factory runs",
+		RunE:  groupRunE,
+	}
+	cmd.AddCommand(newFactoryBuildCmd())
+	return cmd
+}
+
+func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, jsonOut, logOn, verbose bool
 	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun string
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "factory [prompt|-]",
+		Use:   "build [prompt|-]",
 		Short: "Implement a prompt on a sidecar, then review and validate it until it passes",
 		Long: `Send a prompt to an implementer agent running on a sidecar, then loop:
 review its work with each prompt in the reviews directory, each on its own
@@ -47,7 +60,7 @@ synced into the worktree each round and committed there when the run ends;
 the worktree is kept so you can look at it or carry on in it.
 
 With no prompt argument, the prompt is read from redirected stdin. A - prompt
-selects stdin explicitly: chunk factory < prompt.md or chunk factory - < prompt.md.
+selects stdin explicitly: chunk factory build < prompt.md or chunk factory build - < prompt.md.
 A prompt argument with a file on stdin is refused rather than drop the file.
 
 --continue RUN picks up the work a finished run left on its branch, such as
@@ -57,7 +70,7 @@ adds a commit to the same branch, and its reviewers see the whole change. A
 prompt is optional and adds to the original request: with one, the
 implementer starts on it; without one, the work is checked first and the
 implementer is sent what failed, in a round that does not count toward
---attempts.
+--max-attempts.
 
 With --log, the run keeps a plain-text log in
 ~/.chunk/factory/run-<start time>.log, with its full context whatever the
@@ -74,7 +87,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			}
 			return newUserError("Pass the prompt as one argument or on stdin.").
 				withCode("command.invalid_args").
-				withSuggestion(`Quote it: chunk factory "add a --verbose flag", or send a file on stdin: chunk factory < prompt.md`).
+				withSuggestion(`Quote it: chunk factory build "add a --verbose flag", or send a file on stdin: chunk factory build < prompt.md`).
 				withExitCode(ExitBadArgs).
 				withoutDetail()
 		},
@@ -99,7 +112,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 					withoutDetail()
 			}
 			if attempts < 1 {
-				return newUserError("--attempts must be at least 1.").
+				return newUserError("--max-attempts must be at least 1.").
 					withCode("command.invalid_args").
 					withExitCode(ExitBadArgs).
 					withoutDetail()
@@ -174,7 +187,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 		},
 	}
 
-	cmd.Flags().IntVar(&attempts, "attempts", 3, "most rounds of review and validation")
+	cmd.Flags().IntVar(&attempts, "max-attempts", 3, "maximum rounds of review and validation")
 	cmd.Flags().StringVar(&continueRun, "continue", "", "pick up the work of an earlier run, by its ID or branch")
 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
@@ -278,7 +291,7 @@ func promptTwiceError(arg string, bareLog bool) error {
 func missingFactoryPromptError() error {
 	return newUserError("Pass the prompt as an argument or on stdin.").
 		withCode("command.invalid_args").
-		withSuggestion(`chunk factory "add a --verbose flag", or chunk factory < prompt.md`).
+		withSuggestion(`chunk factory build "add a --verbose flag", or chunk factory build < prompt.md`).
 		withExitCode(ExitBadArgs).
 		withoutDetail()
 }
@@ -545,7 +558,7 @@ func printFactoryContinueHint(f *chunkd.FactoryRun, status iostream.StatusFunc) 
 	if !failing || !f.Committed || f.Branch == "" {
 		return
 	}
-	status(iostream.LevelInfo, fmt.Sprintf(`Keep working on it with: chunk factory --continue %s ["what to do differently"]`, factory.ParseRunID(f.Branch)))
+	status(iostream.LevelInfo, fmt.Sprintf(`Keep working on it with: chunk factory build --continue %s ["what to do differently"]`, factory.ParseRunID(f.Branch)))
 }
 
 // reportOutcome says why the loop stopped and returns an error unless every
