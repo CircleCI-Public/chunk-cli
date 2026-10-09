@@ -153,22 +153,23 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
-├── factory [prompt|-]              # Implement a prompt on a sidecar, then review and validate it until it passes
-│   --attempts <n>                  # Most rounds of review and validation (default: 3)
-│   --continue <run id|branch>      # Pick up the work of an earlier run; the prompt becomes optional guidance
-│   --reviewers <n>                 # Reviewer sidecars (0: one per review prompt)
-│   --reviews <dir>                 # Directory of review prompts (default: .chunk/reviews)
-│   --no-validate                   # Skip the project's validation commands
-│   --keep-sidecars                 # Leave the sidecars running when the run ends
-│   --org-id <id>                   # Organization ID
-│   --image <id>                    # Snapshot image ID (default: validation.sidecarImage)
-│   --model <name>                  # Claude model (default: Claude Code's default)
-│   --implement-timeout <duration>  # Max time for each implementer turn
-│   --review-timeout <duration>     # Max time for each review
-│   --log                           # Keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log
-│   --log-file <path>               # Keep the log in this file instead (implies --log)
-│   --verbose                       # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
-│   --json                          # Output as JSON
+├── factory                         # Build and manage factory runs
+│   └── build [prompt|-]            # Implement a prompt on a sidecar, then review and validate it until it passes
+│       --max-attempts <n>          # Maximum rounds of review and validation (default: 3)
+│       --continue <run id|branch>  # Pick up the work of an earlier run; the prompt becomes optional guidance
+│       --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
+│       --reviews <dir>             # Directory of review prompts (default: .chunk/reviews)
+│       --no-validate               # Skip the project's validation commands
+│       --keep-sidecars             # Leave the sidecars running when the run ends
+│       --org-id <id>               # Organization ID
+│       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
+│       --model <name>              # Claude model (default: Claude Code's default)
+│       --implement-timeout <duration> # Max time for each implementer turn
+│       --review-timeout <duration> # Max time for each review
+│       --log                       # Keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log
+│       --log-file <path>           # Keep the log in this file instead (implies --log)
+│       --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
+│       --json                      # Output as JSON
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
@@ -304,21 +305,21 @@ chunk
   repos than the daemon's, so they are not used: the default is every project the
   daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
   host**, sent as typed. `--focus` with no path is an error in this mode.
-- **`factory` runs on the local daemon, in the background.** `chunk factory "<prompt>"` (or
-  `chunk factory < prompt.md`; `chunk factory - < prompt.md` is the explicit
+- **`factory build` runs on the local daemon, in the background.** `chunk factory build "<prompt>"` (or
+  `chunk factory build < prompt.md`; `chunk factory build - < prompt.md` is the explicit
   form; a prompt argument with a non-empty file on stdin is refused, so a
   stray word such as `--log run.log < prompt.md` cannot drop the file) checks
   the project's review prompts and validation commands, starts the daemon if
   needed, and starts a factory session, which the daemon starts tracking the
   project for if it has not seen it before; it follows the run
   until it ends. Ctrl-C stops the run and waits for it to commit the work done
-  so far; the run belongs to the daemon, so if `chunk factory` loses contact it
+  so far; the run belongs to the daemon, so if `chunk factory build` loses contact it
   keeps going and `chunk watch` still shows it. It uses the daemon's
   Claude and CircleCI credentials, resolved when the daemon started, and the
   project's configured org and image unless `--org-id` or `--image` say
   otherwise. It is refused when `CHUNK_DAEMON_REMOTE_ADDR` is set, since a run
   works from this machine's files. The project needs a git remote named
-  `origin` (the sidecars clone from it); `factory` fails up front without one.
+  `origin` (the sidecars clone from it); `factory build` fails up front without one.
   A project has one active run at a time. Runs are kept in memory: a daemon
   restart loses the record, but not the work committed on the run's branch. `--reviews` must name a directory inside the project. Every reviewer is
   given the original factory prompt as the requested-change specification, so
@@ -341,9 +342,9 @@ chunk
   terminal as the run writes it, and implies `--log`.
   `--implementer-instructions` appends run-specific guidance to the implementer's
   fixed safety prompt, which is useful for controlled harness experiments.
-- **`factory --continue` picks up a finished run's work.** A run whose checks
+- **`factory build --continue` picks up a finished run's work.** A run whose checks
   still fail when it ends (exhausted or stuck) prints
-  `chunk factory --continue <run id>`. The continued run reopens the earlier
+  `chunk factory build --continue <run id>`. The continued run reopens the earlier
   run's worktree (adding it back from its branch if it was removed, and first
   committing any edits made in it by hand), adds a commit to the same branch,
   and measures the work from the same baseline, so reviewers see the whole
@@ -354,7 +355,7 @@ chunk
   request, for the implementer and the reviewers alike. With one, the
   implementer starts on it; without one, the run checks the work as it is
   first and sends the implementer what failed, and that round does not count
-  toward `--attempts`. Each run keeps a record (its request, worktree, branch
+  toward `--max-attempts`. Each run keeps a record (its request, worktree, branch
   and baseline) in the project's data directory beside its worktree, which is
   what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The

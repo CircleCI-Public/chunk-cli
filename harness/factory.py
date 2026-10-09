@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adaptively evaluate `chunk factory` against a pinned repository baseline."""
+"""Adaptively evaluate `chunk factory build` against a pinned repository baseline."""
 
 import argparse
 import contextlib
@@ -91,7 +91,7 @@ def install_reviews(project: Path, pass_dir: Path, review_paths: list[str]) -> l
 def run_factory(binary: Path, prompt: str, pass_dir: Path, project: Path, profile: dict) -> int:
     # Popen is intentionally kept alive while stderr is streamed to two destinations.
     # pylint: disable=consider-using-with
-    command = [str(binary), "factory", "--attempts", str(profile["attempts"]), "--json", "--verbose",
+    command = [str(binary), "factory", "build", "--max-attempts", str(profile["attempts"]), "--json", "--verbose",
                "--log-file", str(pass_dir / 'factory.log'), "--reviews", ".chunk/factory-eval-reviews",
                "--implementer-instructions", profile.get("implementer_instructions", "")]
     for key, flag in (("reviewers", "--reviewers"), ("model", "--model"),

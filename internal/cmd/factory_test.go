@@ -103,7 +103,7 @@ func TestFactoryPromptRefusesAnArgumentAndARedirectedFile(t *testing.T) {
 }
 
 func TestFactoryArgs(t *testing.T) {
-	cmd := newFactoryCmd()
+	cmd := newFactoryBuildCmd()
 	assert.NilError(t, cmd.Args(cmd, nil))
 	assert.NilError(t, cmd.Args(cmd, []string{"add a flag"}))
 	assert.NilError(t, cmd.Args(cmd, []string{"-"}))
@@ -162,7 +162,7 @@ func TestFactoryLogFileTakesTheNextWord(t *testing.T) {
 		{"--log-file", "run.log", "add a flag"},
 		{"--log-file=run.log", "add a flag"},
 	} {
-		cmd := newFactoryCmd()
+		cmd := newFactoryBuildCmd()
 		assert.NilError(t, cmd.ParseFlags(args), "args %q", args)
 		assert.Equal(t, cmd.Flags().Lookup("log-file").Value.String(), "run.log", "args %q", args)
 		assert.DeepEqual(t, cmd.Flags().Args(), []string{"add a flag"})
