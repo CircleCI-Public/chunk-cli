@@ -220,3 +220,58 @@ func TestParseResultFailsOnProse(t *testing.T) {
 
 	assert.ErrorContains(t, err, "read claude's result")
 }
+
+func TestRunWithOnActivityStreamsWhatClaudeDoes(t *testing.T) {
+	result := `{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":1.5,"structured_output":{"a":1}}`
+	f := &fakeExec{stdout: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"AGENTS.md"}}]}}` + "\n" +
+		result + "\n" + `{"type":"system","subtype":"session_state_changed"}` + "\n"}
+	var acts []Activity
+
+	turn, err := Run(context.Background(), f.exec, entry, "hi", Options{
+		Schema:     `{"type":"object"}`,
+		OnActivity: func(a Activity) { acts = append(acts, a) },
+	})
+
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(f.script, "'claude' '-p' '--output-format' 'stream-json' '--verbose'"), f.script)
+	assert.Assert(t, strings.Contains(f.script, "'--json-schema'"), "the schema still applies: %s", f.script)
+	assert.DeepEqual(t, acts, []Activity{{Tool: "Read", Detail: "AGENTS.md"}})
+	assert.Equal(t, turn.Output, result, "the result event reads like --output-format json's result")
+	assert.Equal(t, turn.CostUSD, 1.5)
+	parsed, err := ParseResult(turn.Output)
+	assert.NilError(t, err)
+	assert.Equal(t, string(parsed.StructuredOutput), `{"a":1}`)
+}
+
+func TestRunWithOnActivityWithoutASchemaReturnsTheAnswer(t *testing.T) {
+	f := &fakeExec{stdout: `{"type":"result","is_error":false,"result":"  the answer  "}` + "\n"}
+
+	turn, err := Run(context.Background(), f.exec, entry, "hi", Options{OnActivity: func(Activity) {}})
+
+	assert.NilError(t, err)
+	assert.Equal(t, turn.Output, "the answer")
+}
+
+func TestRunWithOnActivityExplainsHowItFailed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		exec fakeExec
+		is   error
+		want string
+	}{
+		"rejected credential": {
+			exec: fakeExec{code: 1, stdout: `{"type":"result","is_error":true,"result":"Failed to authenticate. API Error: 401"}` + "\n"},
+			is:   ErrCredentialRejected,
+		},
+		"no result":    {exec: fakeExec{stdout: `{"type":"system"}` + "\n"}, want: "claude ended without a result"},
+		"error result": {exec: fakeExec{stdout: `{"type":"result","is_error":true,"result":"gave up"}` + "\n"}, want: "claude: gave up"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Run(context.Background(), tc.exec.exec, entry, "hi", Options{OnActivity: func(Activity) {}})
+			if tc.is != nil {
+				assert.Assert(t, errors.Is(err, tc.is), "got %v", err)
+				return
+			}
+			assert.ErrorContains(t, err, tc.want)
+		})
+	}
+}

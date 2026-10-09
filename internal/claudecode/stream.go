@@ -14,9 +14,15 @@ type Activity struct {
 	Detail string
 }
 
+// structuredOutputTool is the tool Claude Code answers through when a schema
+// is given. It is how the answer arrives, not something claude did.
+const structuredOutputTool = "StructuredOutput"
+
 // maxLineBytes caps one buffered stream-json line. A tool result echoing a
 // large file can be long; a line past this is dropped rather than buffered.
-const maxLineBytes = 1 << 20
+// It is as large as a structured result may be, since the result event that
+// carries one is a single line.
+const maxLineBytes = maxStructuredOutputBytes
 
 // streamEvent is the part of one stream-json line a run reads.
 type streamEvent struct {
@@ -41,6 +47,9 @@ type StreamResult struct {
 	// Result is claude's final text.
 	Result  string
 	CostUSD float64
+	// Raw is the whole event, the same shape as --output-format json's
+	// result, so ParseResult reads it.
+	Raw string
 }
 
 // Stream reads claude's --output-format stream-json output as it arrives,
@@ -109,19 +118,19 @@ func (s *Stream) line(b []byte) {
 	}
 	switch e.Type {
 	case "result":
-		s.result = StreamResult{IsError: e.IsError, Result: e.Result, CostUSD: e.TotalCostUSD}
+		s.result = StreamResult{IsError: e.IsError, Result: e.Result, CostUSD: e.TotalCostUSD, Raw: string(b)}
 		s.sawResult = true
 	case "assistant":
 		if s.onActivity == nil {
 			return
 		}
 		for _, c := range e.Message.Content {
-			switch c.Type {
-			case "text":
+			switch {
+			case c.Type == "text":
 				if t := strings.TrimSpace(c.Text); t != "" {
 					s.onActivity(Activity{Detail: t})
 				}
-			case "tool_use":
+			case c.Type == "tool_use" && c.Name != structuredOutputTool:
 				s.onActivity(Activity{Tool: c.Name, Detail: toolDetail(c.Input)})
 			}
 		}

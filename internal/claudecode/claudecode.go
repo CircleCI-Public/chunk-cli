@@ -66,6 +66,10 @@ type Options struct {
 	// OnSubmitted is called with the remote command ID as soon as the exec is
 	// accepted and before its output is streamed.
 	OnSubmitted func(commandID string)
+	// OnActivity, when set, runs claude with --output-format stream-json and
+	// is called with each tool call and piece of text as claude makes it, so a
+	// long run can show what it is doing. Turn.Output is the same either way.
+	OnActivity func(Activity)
 }
 
 // Turn is the outcome of one run. Output is kept when the run fails, so a
@@ -75,6 +79,10 @@ type Turn struct {
 	// Options.Schema is set.
 	Output   string
 	Duration time.Duration
+	// CostUSD is what the run cost, as claude reported it. It is known only
+	// when Options.OnActivity is set, since only the streamed result is read
+	// for it.
+	CostUSD float64
 }
 
 // Run runs claude -p once in the entry's repository with prompt on stdin and
@@ -85,6 +93,9 @@ func Run(ctx context.Context, exec sidecar.Execer, entry *sidecar.PoolEntry, pro
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
 		defer cancel()
+	}
+	if opts.OnActivity != nil {
+		return runStreaming(ctx, start, exec, entry, prompt, opts)
 	}
 
 	// Stdout is the answer. Stderr is kept only to explain a failure, so
@@ -121,6 +132,44 @@ func Run(ctx context.Context, exec sidecar.Execer, entry *sidecar.PoolEntry, pro
 	return turn, nil
 }
 
+// runStreaming is Run with --output-format stream-json: stdout is read event by
+// event, activity is reported as it arrives, and only the result event is kept.
+func runStreaming(ctx context.Context, start time.Time, exec sidecar.Execer, entry *sidecar.PoolEntry, prompt string, opts Options) (Turn, error) {
+	stream := NewStream(opts.OnActivity)
+	var stderr strings.Builder
+	onOutput := func(name string, data []byte) {
+		if name != circleci.StreamStderr {
+			stream.Write(data)
+			return
+		}
+		room := max(maxOutputBytes-stderr.Len(), 0)
+		stderr.Write(data[:min(len(data), room)])
+	}
+	code, err := exec(ctx, entry, script(entry.RepoPath, prompt, opts), Env(opts.Credential, opts.BaseURL), onOutput, opts.OnSubmitted)
+	stream.Flush()
+	res, ok := stream.Result()
+	turn := Turn{Duration: time.Since(start), CostUSD: res.CostUSD}
+	// With a schema, Output is the result event, which ParseResult reads just
+	// as it reads --output-format json's result.
+	if opts.Schema != "" {
+		turn.Output = strings.TrimSpace(res.Raw)
+	} else {
+		turn.Output = strings.TrimSpace(res.Result)
+	}
+	// claude says why a run failed in its result, which lands on stdout; the
+	// credential check reads it with stderr.
+	if err := RunError(ctx, opts.Timeout, code, err, res.Result+"\n"+stderr.String(), stderr.String()); err != nil {
+		return turn, err
+	}
+	switch {
+	case !ok:
+		return turn, fmt.Errorf("claude ended without a result, or one over %d bytes", maxLineBytes)
+	case res.IsError && opts.Schema == "":
+		return turn, fmt.Errorf("claude: %s", tail(strings.TrimSpace(res.Result), stderrTail))
+	}
+	return turn, nil
+}
+
 // script builds the shell script for one run.
 func script(repoPath, prompt string, opts Options) string {
 	format := "text"
@@ -128,6 +177,10 @@ func script(repoPath, prompt string, opts Options) string {
 		format = "json"
 	}
 	args := []string{"claude", "-p", "--output-format", format}
+	if opts.OnActivity != nil {
+		// stream-json needs --verbose to print anything in -p mode.
+		args = []string{"claude", "-p", "--output-format", "stream-json", "--verbose"}
+	}
 	if len(opts.Tools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(opts.Tools, ","))
 	}
