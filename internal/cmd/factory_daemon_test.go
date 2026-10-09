@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -19,6 +21,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // fakeFactoryConfig is a daemon whose factory runs do one round without
@@ -353,6 +356,78 @@ func TestFactoryContinueReachesTheRun(t *testing.T) {
 			assert.Equal(t, detail.Factory.Attempts, tc.wantAttempts)
 		})
 	}
+}
+
+// stubPromptContinueGuidance replaces the --continue question for the duration
+// of a test, and counts how often it is asked.
+func stubPromptContinueGuidance(t *testing.T, answer string, answerErr error) *int {
+	t.Helper()
+	orig := promptContinueGuidance
+	asked := 0
+	promptContinueGuidance = func(io.Reader) (string, error) {
+		asked++
+		return answer, answerErr
+	}
+	t.Cleanup(func() { promptContinueGuidance = orig })
+	return &asked
+}
+
+// A continue given no prompt asks for one: what is typed is the guidance, and
+// Enter leaves the run to check first.
+func TestFactoryContinueAsksWhatToDoDifferently(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		args         []string
+		answer       string
+		wantAsked    int
+		wantGuidance string
+	}{
+		{name: "typed", args: []string{"--continue", "run-0"}, answer: "  you may update the test\n",
+			wantAsked: 1, wantGuidance: "you may update the test"},
+		{name: "enter", args: []string{"--continue", "run-0"}, wantAsked: 1},
+		{name: "prompt given", args: []string{"--continue", "run-0", "add docs"}, answer: "unused",
+			wantGuidance: "add docs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := factoryProject(t)
+			writeFactoryRecord(t, project, "run-0")
+			asked := stubPromptContinueGuidance(t, tc.answer, nil)
+			cfg := fakeFactoryConfig(t, factory.ResultPassed)
+			got := make(chan factory.RunOptions, 1)
+			run := cfg.RunFactory
+			cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+				got <- opts
+				return run(ctx, opts)
+			}
+			startSessionDaemon(t, cfg)
+
+			_, stderr, err := runFactoryBuildCmd(t, append(tc.args, "--json")...)
+			assert.NilError(t, err, stderr)
+
+			opts := <-got
+			assert.Equal(t, *asked, tc.wantAsked)
+			assert.Equal(t, opts.Continue.Guidance, tc.wantGuidance)
+		})
+	}
+}
+
+func TestFactoryContinueCancelledAtTheQuestionStartsNothing(t *testing.T) {
+	project := factoryProject(t)
+	writeFactoryRecord(t, project, "run-0")
+	stubPromptContinueGuidance(t, "", ui.ErrCancelled)
+	cfg := fakeFactoryConfig(t, factory.ResultPassed)
+	var started atomic.Bool
+	cfg.RunFactory = func(context.Context, factory.RunOptions) (factory.Report, error) {
+		started.Store(true)
+		return factory.Report{}, nil
+	}
+	startSessionDaemon(t, cfg)
+
+	_, _, err := runFactoryBuildCmd(t, "--continue", "run-0", "--json")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), "No factory run started.")
+	assert.Assert(t, !started.Load(), "a run started after the question was cancelled")
 }
 
 func TestFactoryContinueRefusesAnUnknownRun(t *testing.T) {
