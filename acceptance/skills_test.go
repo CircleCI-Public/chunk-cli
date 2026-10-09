@@ -129,13 +129,15 @@ func TestSkillsInstallCodexPath(t *testing.T) {
 	}
 }
 
-func TestSkillsInstallBothAgents(t *testing.T) {
+func TestSkillsInstallAllAgents(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	claudeDir := filepath.Join(env.HomeDir, ".claude")
 	codexDir := filepath.Join(env.HomeDir, ".agents")
+	opencodeDir := filepath.Join(env.HomeDir, ".config", "opencode")
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 	assert.NilError(t, os.MkdirAll(codexDir, 0o755))
+	assert.NilError(t, os.MkdirAll(opencodeDir, 0o755))
 
 	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -145,18 +147,63 @@ func TestSkillsInstallBothAgents(t *testing.T) {
 		"expected per-agent output for claude, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "codex:"),
 		"expected per-agent output for codex, got: %s", combined)
-	// Neither should be skipped.
+	assert.Assert(t, strings.Contains(combined, "opencode:"),
+		"expected per-agent output for opencode, got: %s", combined)
+	// None should be skipped.
 	assert.Assert(t, !strings.Contains(combined, "skipped"),
 		"expected no skipped agents, got: %s", combined)
 
-	// Verify files exist under both agent dirs.
-	for _, dir := range []string{claudeDir, codexDir} {
+	// Verify files exist under all agent dirs.
+	for _, dir := range []string{claudeDir, codexDir, opencodeDir} {
 		for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
 			skillFile := filepath.Join(dir, "skills", name, "SKILL.md")
 			_, err := os.Stat(skillFile)
 			assert.NilError(t, err, "expected skill %s under %s", name, dir)
 		}
 	}
+}
+
+func TestSkillsInstallOpencodePath(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	// Only create .config/opencode, not .claude or .agents.
+	opencodeDir := filepath.Join(env.HomeDir, ".config", "opencode")
+	assert.NilError(t, os.MkdirAll(opencodeDir, 0o755))
+
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "opencode:"),
+		"expected per-agent output for opencode, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "claude: skipped"),
+		"expected claude skipped, got: %s", combined)
+
+	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+		skillFile := filepath.Join(opencodeDir, "skills", name, "SKILL.md")
+		info, err := os.Stat(skillFile)
+		assert.NilError(t, err, "expected skill %s to exist under .config/opencode", name)
+		assert.Assert(t, info.Size() > 0, "expected skill %s to be non-empty", name)
+	}
+}
+
+func TestSkillsInstallProjectScopeOpencodePath(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	result := binary.RunCLI(t, []string{"skill", "install", "--project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	// Project scope must use .opencode/skills, not .config/opencode/skills.
+	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+		skillFile := filepath.Join(projectDir, ".opencode", "skills", name, "SKILL.md")
+		info, err := os.Stat(skillFile)
+		assert.NilError(t, err, "expected skill %s under .opencode", name)
+		assert.Assert(t, info.Size() > 0, "expected skill %s to be non-empty", name)
+	}
+
+	_, err := os.Stat(filepath.Join(projectDir, ".config"))
+	assert.Assert(t, os.IsNotExist(err), "project scope should not create .config/opencode")
 }
 
 func TestSkillsInstallOutdatedUpdate(t *testing.T) {
@@ -194,7 +241,7 @@ func TestSkillsInstallOutdatedUpdate(t *testing.T) {
 func TestSkillsInstallNoAgentDirs(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	// Don't create .claude or .agents.
+	// Don't create .claude, .agents, or .config/opencode.
 	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
@@ -203,6 +250,8 @@ func TestSkillsInstallNoAgentDirs(t *testing.T) {
 		"expected claude skipped, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "codex: skipped"),
 		"expected codex skipped, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "opencode: skipped"),
+		"expected opencode skipped, got: %s", combined)
 }
 
 func TestSkillsInstallHomeNotSet(t *testing.T) {

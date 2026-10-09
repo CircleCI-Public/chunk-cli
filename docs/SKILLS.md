@@ -13,11 +13,13 @@ chunk skill list        # show installation status per agent
 
 Skills are installed into the configuration directories of whichever agents are present on your machine:
 
-| Agent | Install path |
-|---|---|
-| Claude Code (CLI / desktop) | `~/.claude/skills/` |
-| Cursor | `~/.cursor/skills/` |
-| Codex | `~/.codex/skills/` |
+| Agent | Install path (user scope) | Install path (project scope) |
+|---|---|---|
+| Claude Code (CLI / desktop) | `~/.claude/skills/` | `.claude/skills/` |
+| Codex | `~/.agents/skills/` | `.agents/skills/` |
+| opencode | `~/.config/opencode/skills/` | `.opencode/skills/` |
+
+Project scope (the default) creates the directories as needed; user scope (`--user`) only installs into agents whose config directory already exists.
 
 `chunk skill list` shows the status for each skill on each agent:
 

@@ -21,16 +21,20 @@ var skillNames = func() []string {
 	return names
 }()
 
-func TestInstallBothAgents(t *testing.T) {
+// agentConfigDirs is the user-scope config dir of every supported agent, so
+// tests that want "all agents present" stay in sync with the registry.
+var agentConfigDirs = []string{".claude", ".agents", filepath.Join(".config", "opencode")}
+
+func TestInstallAllAgents(t *testing.T) {
 	home := t.TempDir()
 
-	// Create both agent config dirs.
-	for _, dir := range []string{".claude", ".agents"} {
+	// Create all agent config dirs.
+	for _, dir := range agentConfigDirs {
 		assert.NilError(t, os.MkdirAll(filepath.Join(home, dir), 0o755))
 	}
 
 	results := skills.Install(skills.ScopeUser, home)
-	assert.Equal(t, len(results), 2)
+	assert.Equal(t, len(results), len(agentConfigDirs))
 
 	for _, r := range results {
 		assert.Assert(t, !r.Skipped, "agent %s should not be skipped", r.Agent)
@@ -40,7 +44,7 @@ func TestInstallBothAgents(t *testing.T) {
 	}
 
 	// Verify files exist.
-	for _, dir := range []string{".claude", ".agents"} {
+	for _, dir := range agentConfigDirs {
 		for _, name := range skillNames {
 			path := filepath.Join(home, dir, "skills", name, "SKILL.md")
 			info, err := os.Stat(path)
@@ -53,19 +57,21 @@ func TestInstallBothAgents(t *testing.T) {
 func TestInstallSkipsAgentWithoutConfigDir(t *testing.T) {
 	home := t.TempDir()
 
-	// Only create .claude, not .agents.
+	// Only create .claude, not .agents or .config/opencode.
 	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 
 	results := skills.Install(skills.ScopeUser, home)
-	assert.Equal(t, len(results), 2)
+	assert.Equal(t, len(results), len(agentConfigDirs))
 
-	var claude, codex skills.AgentInstallResult
+	var claude, codex, opencode skills.AgentInstallResult
 	for _, r := range results {
 		switch r.Agent {
 		case "claude":
 			claude = r
 		case "codex":
 			codex = r
+		case "opencode":
+			opencode = r
 		}
 	}
 
@@ -73,10 +79,67 @@ func TestInstallSkipsAgentWithoutConfigDir(t *testing.T) {
 	assert.Equal(t, len(claude.Installed), len(skillNames))
 	assert.Assert(t, codex.Skipped, "codex should be skipped when .agents dir missing")
 	assert.Equal(t, len(codex.Installed), 0)
+	assert.Assert(t, opencode.Skipped, "opencode should be skipped when .config/opencode dir missing")
+	assert.Equal(t, len(opencode.Installed), 0)
 
-	// Verify .agents skills dir was not created.
+	// Verify the absent agents' skills dirs were not created.
 	_, err := os.Stat(filepath.Join(home, ".agents", "skills"))
 	assert.Assert(t, os.IsNotExist(err), "should not create .agents/skills when .agents missing")
+	_, err = os.Stat(filepath.Join(home, ".config", "opencode", "skills"))
+	assert.Assert(t, os.IsNotExist(err), "should not create .config/opencode/skills when .config/opencode missing")
+}
+
+func TestInstallOpencodeUserScopePath(t *testing.T) {
+	home := t.TempDir()
+
+	// Only opencode's user-level config dir exists.
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	assert.NilError(t, os.MkdirAll(opencodeDir, 0o755))
+
+	results := skills.Install(skills.ScopeUser, home)
+	assert.Equal(t, len(results), len(agentConfigDirs))
+
+	var opencode skills.AgentInstallResult
+	for _, r := range results {
+		if r.Agent == "opencode" {
+			opencode = r
+			continue
+		}
+		assert.Assert(t, r.Skipped, "agent %s should be skipped", r.Agent)
+	}
+
+	assert.Assert(t, !opencode.Skipped)
+	assert.Equal(t, len(opencode.Installed), len(skillNames))
+
+	for _, name := range skillNames {
+		path := filepath.Join(opencodeDir, "skills", name, "SKILL.md")
+		info, err := os.Stat(path)
+		assert.NilError(t, err, "expected %s to exist", path)
+		assert.Assert(t, info.Size() > 0, "expected %s to be non-empty", path)
+	}
+}
+
+func TestInstallOpencodeProjectScopePath(t *testing.T) {
+	projectDir := t.TempDir()
+
+	results := skills.Install(skills.ScopeProject, projectDir)
+
+	var opencode skills.AgentInstallResult
+	for _, r := range results {
+		if r.Agent == "opencode" {
+			opencode = r
+		}
+	}
+
+	assert.Assert(t, !opencode.Skipped)
+	assert.Equal(t, len(opencode.Installed), len(skillNames))
+
+	for _, name := range skillNames {
+		path := filepath.Join(projectDir, ".opencode", "skills", name, "SKILL.md")
+		info, err := os.Stat(path)
+		assert.NilError(t, err, "expected %s to exist for project scope", path)
+		assert.Assert(t, info.Size() > 0, "expected %s to be non-empty", path)
+	}
 }
 
 func TestInstallIdempotent(t *testing.T) {
@@ -112,23 +175,25 @@ func TestInstallDetectsOutdated(t *testing.T) {
 
 func TestInstallContentMatchesEmbedded(t *testing.T) {
 	home := t.TempDir()
-	for _, dir := range []string{".claude", ".agents"} {
+	for _, dir := range agentConfigDirs {
 		assert.NilError(t, os.MkdirAll(filepath.Join(home, dir), 0o755))
 	}
 
 	skills.Install(skills.ScopeUser, home)
 
 	for _, name := range skillNames {
-		claudePath := filepath.Join(home, ".claude", "skills", name, "SKILL.md")
-		codexPath := filepath.Join(home, ".agents", "skills", name, "SKILL.md")
-
-		claudeData, err := os.ReadFile(claudePath)
-		assert.NilError(t, err)
-		codexData, err := os.ReadFile(codexPath)
-		assert.NilError(t, err)
-
-		assert.Equal(t, string(claudeData), string(codexData),
-			"content mismatch for skill %s between .claude and .agents", name)
+		var reference []byte
+		for _, dir := range agentConfigDirs {
+			path := filepath.Join(home, dir, "skills", name, "SKILL.md")
+			data, err := os.ReadFile(path)
+			assert.NilError(t, err)
+			if reference == nil {
+				reference = data
+				continue
+			}
+			assert.Equal(t, string(reference), string(data),
+				"content mismatch for skill %s between %s and %s", name, agentConfigDirs[0], dir)
+		}
 	}
 }
 
@@ -137,7 +202,7 @@ func TestInstallProjectScope(t *testing.T) {
 
 	// Project scope does not require pre-existing agent dirs.
 	results := skills.Install(skills.ScopeProject, projectDir)
-	assert.Equal(t, len(results), 2)
+	assert.Equal(t, len(results), len(agentConfigDirs))
 
 	for _, r := range results {
 		assert.Assert(t, !r.Skipped, "agent %s should not be skipped for project scope", r.Agent)
@@ -146,7 +211,7 @@ func TestInstallProjectScope(t *testing.T) {
 	}
 
 	// Verify files exist under project-relative dirs.
-	for _, dir := range []string{".claude", ".agents"} {
+	for _, dir := range []string{".claude", ".agents", ".opencode"} {
 		for _, name := range skillNames {
 			path := filepath.Join(projectDir, dir, "skills", name, "SKILL.md")
 			info, err := os.Stat(path)
@@ -172,7 +237,7 @@ func TestStatusNotInstalled(t *testing.T) {
 	home := t.TempDir()
 
 	statuses := skills.Status(skills.ScopeUser, home)
-	assert.Equal(t, len(statuses), 2)
+	assert.Equal(t, len(statuses), len(agentConfigDirs))
 
 	for _, agent := range statuses {
 		assert.Assert(t, !agent.Available, "agent %s should not be available", agent.Agent)
@@ -253,7 +318,7 @@ func TestStatusAgentNotAvailable(t *testing.T) {
 		if agent.Agent == "claude" {
 			assert.Assert(t, agent.Available)
 		} else {
-			assert.Assert(t, !agent.Available, "codex should not be available")
+			assert.Assert(t, !agent.Available, "agent %s should not be available", agent.Agent)
 			for _, s := range agent.Skills {
 				assert.Equal(t, s.State, skills.StateMissing)
 			}
@@ -266,7 +331,7 @@ func TestStatusProjectScopeAlwaysAvailable(t *testing.T) {
 
 	// No dirs created — project scope agents should still be "available".
 	statuses := skills.Status(skills.ScopeProject, projectDir)
-	assert.Equal(t, len(statuses), 2)
+	assert.Equal(t, len(statuses), len(agentConfigDirs))
 	for _, agent := range statuses {
 		assert.Assert(t, agent.Available, "agent %s should be available for project scope", agent.Agent)
 		for _, s := range agent.Skills {
