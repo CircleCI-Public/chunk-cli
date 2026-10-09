@@ -169,6 +169,14 @@ chunk
 │   --log-file <path>               # Keep the log in this file instead (implies --log)
 │   --verbose                       # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │   --json                          # Output as JSON
+│   │
+│   └── bootstrap                   # Write a first set of review prompts for this project
+│       --output <dir>              # Directory to write them to (default: .chunk/reviews)
+│       --org-id <id>               # Organization ID
+│       --image <id>                # Sidecar image with Claude Code (default: cimg-base:2026.09-claude)
+│       --model <name>              # Claude model (default: Claude Code's default)
+│       --timeout <duration>        # Max time for writing the prompts (default: 30m)
+│       --json                      # Output as JSON
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
@@ -359,6 +367,23 @@ chunk
   what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The
   session's record names the run it continues as `continues_run_id`.
+- **`factory bootstrap` writes a project's first review prompts.** It runs
+  Claude Code once, read-only, on a sidecar of its own (pool
+  `factory-bootstrap`, destroyed when it ends). The sidecar runs the system image
+  `cimg-base:2026.09-claude`, not the project's `validation.sidecarImage`:
+  bootstrap needs Claude Code rather than the project's toolchain, and a project
+  image may not have it. `--image` overrides it. Claude Code reads what the project
+  says about itself: AGENTS.md, CLAUDE.md, docs, CI and linter configuration,
+  and the code and tests. When `chunk build-prompt` has written the team's
+  standards to `.chunk/context/review-prompt.md`, they are included too. The
+  project's validation commands are named in the request so the reviews leave
+  to them what they already enforce. The answer comes back against a JSON
+  schema; prompts with a name that is not lowercase words joined by hyphens, a
+  repeated name, an empty or oversized body, or past the sixth are left out and
+  counted. It never overwrites: a target directory that already has `.md` or
+  `.txt` prompts is refused before any sidecar starts, and each file is created
+  exclusively. `--output` writes elsewhere. `factory` with nothing to check
+  points at it.
 - **`watch` is organized around runs.** Factory runs are listed at the top of
   the left pane, live ones first, then up to five that ended in the last day;
   sidecars are listed below them, and `↑/↓` moves through both as one list. The

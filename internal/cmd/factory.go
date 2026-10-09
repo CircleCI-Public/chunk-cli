@@ -191,6 +191,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
 	cmd.SetFlagErrorFunc(factoryFlagError)
+	cmd.AddCommand(newFactoryBootstrapCmd())
 	return cmd
 }
 
@@ -315,7 +316,7 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 	case errors.Is(err, factory.ErrNothingToCheck):
 		return nil, nil, &userError{
 			msg:        "Nothing to check the implementer's work with.",
-			suggestion: fmt.Sprintf("Add review prompts to %s, or validation commands with 'chunk init'.", review.DefaultDir),
+			suggestion: fmt.Sprintf("Run 'chunk factory bootstrap' to write review prompts to %s, or add validation commands with 'chunk init'.", review.DefaultDir),
 			hideDetail: true,
 			blocked:    true,
 		}
