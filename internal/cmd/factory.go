@@ -293,7 +293,7 @@ func checkFactoryContinue(root, run string) error {
 	case errors.Is(err, factory.ErrNoRecord):
 		return newUserError(fmt.Sprintf("No factory run %s to continue in this project.", factory.ParseRunID(run))).
 			withCode("command.invalid_args").
-			withSuggestion("Pass the run ID from the end of the run's output, or its branch: chunk/factory/<run id>. Runs made before chunk could continue them have no record and cannot be continued.").
+			withSuggestion("Pass the run ID from the end of the run's output, or its branch: chunk/factory/<run id>.").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}
