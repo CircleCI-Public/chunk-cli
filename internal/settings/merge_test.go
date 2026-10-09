@@ -822,6 +822,45 @@ func TestMergeCodexMalformedGenerated(t *testing.T) {
 }
 
 // Hooks written by an older chunk init carry one commit gate entry per command.
+// Re-running init replaces them all with the single bare entry, and keeps the
+// user's own entries in the group.
+func TestMergeCollapsesPerCommandCommitGate(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"PreToolUse": [{"matcher": "Bash", "hooks": [
+				{"type": "command", "if": "Bash(git commit*)", "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate format", "timeout": 30},
+				{"type": "command", "command": "audit-bash", "timeout": 5},
+				{"type": "command", "if": "Bash(git commit*)", "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint", "timeout": 60},
+				{"type": "command", "if": "Bash(git commit*)", "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test", "timeout": 300}
+			]}]
+		}
+	}`)
+	generated, err := Build([]config.Command{
+		{Name: "format", Run: "task fmt", Timeout: 30},
+		{Name: "lint", Run: "task lint", Timeout: 60},
+		{Name: "test", Run: "task test", Timeout: 300},
+	})
+	assert.NilError(t, err)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	groups := hooks["PreToolUse"].([]interface{})
+	assert.Equal(t, len(groups), 1)
+
+	var commands []string
+	for _, e := range groups[0].(map[string]interface{})["hooks"].([]interface{}) {
+		commands = append(commands, e.(map[string]interface{})["command"].(string))
+	}
+	assert.DeepEqual(t, commands, []string{ConflictsCommand, commitCommand, "audit-bash"})
+}
+
+// Hooks written by an older chunk init carry one commit gate entry per command.
 // Re-running init replaces them all with the single sequential entry, and keeps
 // the user's own entries in the group.
 func TestMergeCodexCollapsesPerCommandCommitGate(t *testing.T) {

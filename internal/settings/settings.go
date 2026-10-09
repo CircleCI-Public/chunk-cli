@@ -2,7 +2,6 @@ package settings
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
@@ -13,6 +12,11 @@ import (
 // commit proceeds either way.
 const conflictsTimeout = 5
 
+// maxHookTimeout is Claude Code's maximum hook timeout, and the cap every
+// generated timeout is held under. Codex has no documented maximum; it shares
+// the cap so the two files agree on how long a gate may hold a commit.
+const maxHookTimeout = 600
+
 // Spinner text the agent shows while each hook runs. It is fixed when init
 // writes the file, so it names the command being run and nothing decided at
 // run time: whether the Stop hook hits the cache, skips a clean tree, or goes to
@@ -22,11 +26,16 @@ const (
 	conflictsStatusMessage = "Running chunk conflicts before commit"
 )
 
-// commitStatusMessage is the spinner text for the commit gate entry that runs
-// the named command. It says why the commit is waiting.
-func commitStatusMessage(name string) string {
-	return fmt.Sprintf("Running chunk validate %s before commit", name)
-}
+// commitStatusMessage is the spinner text for the commit gate. It says why the
+// commit is waiting.
+const commitStatusMessage = "Running chunk validate before commit"
+
+// commitCommand is the commit gate: every configured command, run in sequence.
+// One entry rather than one per command because the validate cache keys on the
+// command name, so only a bare run shares a key with the Stop hook's. A commit
+// of a tree the Stop hook already passed is then a cache hit instead of a
+// second full run of everything.
+const commitCommand = "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate"
 
 // hookEntry is one hook command within a hook group.
 type hookEntry struct {
@@ -59,32 +68,36 @@ type codexHooksJSON struct {
 
 // Build generates .claude/settings.json content from commands.
 // It creates:
-//   - A PreToolUse hook matching "Bash(git commit*)" that runs each command before commits.
+//   - A PreToolUse group on the Bash tool holding the advisory conflict notice
+//     and the commit gate, both restricted to git commit by their "if".
 //   - A Stop hook that runs "chunk validate" after every session.
 func Build(commands []config.Command) ([]byte, error) {
-	hooks := make([]hookEntry, 0, len(commands)+1)
-	// The advisory notice goes first, so the agent has it before any gate can
-	// stop the commit. Its timeout is short because it only reads an answer the
-	// daemon computed earlier — it never previews a merge itself.
-	hooks = append(hooks, hookEntry{
-		Type:          "command",
-		If:            CommitIfFilter,
-		Command:       ConflictsCommand,
-		Timeout:       conflictsTimeout,
-		StatusMessage: conflictsStatusMessage,
-	})
+	commitTimeout := 0
 	for _, cmd := range commands {
 		timeout := cmd.Timeout
 		if timeout == 0 {
 			timeout = 60
 		}
-		hooks = append(hooks, hookEntry{
+		commitTimeout += timeout
+	}
+	hooks := []hookEntry{
+		// The advisory notice goes first, so the agent has it before the gate can
+		// stop the commit. Its timeout is short because it only reads an answer the
+		// daemon computed earlier — it never previews a merge itself.
+		{
 			Type:          "command",
 			If:            CommitIfFilter,
-			Command:       fmt.Sprintf("cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate %s", cmd.Name),
-			Timeout:       timeout,
-			StatusMessage: commitStatusMessage(cmd.Name),
-		})
+			Command:       ConflictsCommand,
+			Timeout:       conflictsTimeout,
+			StatusMessage: conflictsStatusMessage,
+		},
+		{
+			Type:          "command",
+			If:            CommitIfFilter,
+			Command:       commitCommand,
+			Timeout:       min(commitTimeout, maxHookTimeout),
+			StatusMessage: commitStatusMessage,
+		},
 	}
 
 	s := settingsJSON{
@@ -100,9 +113,7 @@ func Build(commands []config.Command) ([]byte, error) {
 	// a settings file whose Stop hook runs `chunk validate` with no commands to
 	// run. An unconfigured project gets no hooks at all, advisory included.
 	if len(commands) > 0 {
-		// Compute a Stop hook timeout that covers all commands running sequentially,
-		// capped at 600s to avoid exceeding Claude Code's maximum hook timeout.
-		const maxStopTimeout = 600
+		// Compute a Stop hook timeout that covers all commands running sequentially.
 		stopTimeout := 30 // base buffer
 		for _, cmd := range commands {
 			t := cmd.Timeout
@@ -111,9 +122,7 @@ func Build(commands []config.Command) ([]byte, error) {
 			}
 			stopTimeout += t
 		}
-		if stopTimeout > maxStopTimeout {
-			stopTimeout = maxStopTimeout
-		}
+		stopTimeout = min(stopTimeout, maxHookTimeout)
 
 		s.Hooks = map[string][]hookGroup{
 			"PreToolUse": {
@@ -167,7 +176,6 @@ const codexCommitCommand = "chunk validate"
 // which may be a subdirectory of the project; chunk validate finds the project
 // from there when it runs as a hook.
 func BuildCodex(commands []config.Command) ([]byte, error) {
-	const maxTimeout = 600
 	s := codexHooksJSON{}
 	if len(commands) == 0 {
 		return json.MarshalIndent(s, "", "  ")
@@ -181,8 +189,8 @@ func BuildCodex(commands []config.Command) ([]byte, error) {
 		}
 		commitTimeout += timeout
 	}
-	commitTimeout = min(commitTimeout, maxTimeout)
-	stopTimeout := min(30+commitTimeout, maxTimeout)
+	commitTimeout = min(commitTimeout, maxHookTimeout)
+	stopTimeout := min(30+commitTimeout, maxHookTimeout)
 
 	s.Hooks = map[string][]hookGroup{
 		"PreToolUse": {

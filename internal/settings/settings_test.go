@@ -2,7 +2,6 @@ package settings
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -10,28 +9,26 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
-// entryFor returns the generated hook entry for the named config command.
-// Looked up rather than indexed because the commit group also holds chunk's
-// advisory conflict notice, and a positional assertion would break every time
-// that list gains an entry — which says nothing about the timeout under test.
+// commitGate returns the generated commit gate entry. Looked up by command
+// rather than indexed because the group also holds chunk's advisory conflict
+// notice, and a positional assertion would break every time that list gains an
+// entry — which says nothing about the timeout under test.
 //
-// The needle is "chunk validate <name>" and not the command's Run text: hook
-// entries invoke chunk validate so they route through the daemon, so the raw
-// command never appears in settings.json.
-func entryFor(t *testing.T, entries []interface{}, name string) map[string]interface{} {
+// The needle is the chunk validate invocation and not the command's Run text:
+// hook entries invoke chunk validate so they route through the daemon, so the
+// raw command never appears in settings.json.
+func commitGate(t *testing.T, entries []interface{}) map[string]interface{} {
 	t.Helper()
-	want := "chunk validate " + name
 	for _, e := range entries {
 		entry, ok := e.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		cmd, _ := entry["command"].(string)
-		if strings.Contains(cmd, want) {
+		if cmd, _ := entry["command"].(string); cmd == commitCommand {
 			return entry
 		}
 	}
-	t.Fatalf("no hook entry running %q in %d entries", want, len(entries))
+	t.Fatalf("no commit gate entry running %q in %d entries", commitCommand, len(entries))
 	return nil
 }
 
@@ -54,7 +51,7 @@ func TestBuildHookTimeoutDefaultsToSixty(t *testing.T) {
 	group := preToolUse[0].(map[string]interface{})
 	assert.Equal(t, group["matcher"], "Bash", "group matcher must be tool name only")
 	entries := group["hooks"].([]interface{})
-	entry := entryFor(t, entries, "test")
+	entry := commitGate(t, entries)
 	assert.Equal(t, entry["if"], CommitIfFilter, "entry must carry if filter for git commit")
 
 	timeout, _ := entry["timeout"].(float64)
@@ -80,7 +77,7 @@ func TestBuildHookMatcherIsToolName(t *testing.T) {
 	assert.Equal(t, group["matcher"], CommitMatcher)
 
 	entries := group["hooks"].([]interface{})
-	entry := entryFor(t, entries, "test")
+	entry := commitGate(t, entries)
 	assert.Equal(t, entry["if"], CommitIfFilter)
 }
 
@@ -98,10 +95,48 @@ func TestBuildHookTimeoutRespectsExplicitValue(t *testing.T) {
 	preToolUse := hooks["PreToolUse"].([]interface{})
 	group := preToolUse[0].(map[string]interface{})
 	entries := group["hooks"].([]interface{})
-	entry := entryFor(t, entries, "lint")
+	entry := commitGate(t, entries)
 
 	timeout, _ := entry["timeout"].(float64)
 	assert.Assert(t, timeout == 120, "expected explicit timeout of 120, got: %v", timeout)
+}
+
+// The validate cache keys on the command name, so one entry per command never
+// shares a key with the Stop hook's full run and a commit revalidates a tree
+// Stop just passed. One bare entry runs the commands in sequence and hits the
+// cache instead.
+func TestBuildCommitGateIsOneSequentialEntry(t *testing.T) {
+	cmds := []config.Command{
+		{Name: "format", Run: "task fmt", Timeout: 30, Role: config.RoleAutofix},
+		{Name: "lint", Run: "task lint", Timeout: 60},
+		{Name: "test", Run: "task test", Timeout: 300},
+	}
+	data, err := Build(cmds)
+	assert.NilError(t, err)
+
+	var s settingsJSON
+	assert.NilError(t, json.Unmarshal(data, &s))
+	groups := s.Hooks["PreToolUse"]
+	assert.Equal(t, len(groups), 1)
+
+	entries := groups[0].Hooks
+	assert.Equal(t, len(entries), 2, "the conflicts notice and one commit gate")
+	assert.Equal(t, entries[1].Command, commitCommand)
+	assert.Equal(t, entries[1].If, CommitIfFilter)
+	assert.Equal(t, entries[1].Timeout, 390, "timeout must cover every command in turn")
+}
+
+func TestBuildCommitTimeoutIsCapped(t *testing.T) {
+	cmds := []config.Command{
+		{Name: "lint", Run: "task lint", Timeout: 400},
+		{Name: "test", Run: "task test", Timeout: 400},
+	}
+	data, err := Build(cmds)
+	assert.NilError(t, err)
+
+	var s settingsJSON
+	assert.NilError(t, json.Unmarshal(data, &s))
+	assert.Equal(t, s.Hooks["PreToolUse"][0].Hooks[1].Timeout, maxHookTimeout)
 }
 
 func TestBuildCodexNoMetadata(t *testing.T) {
@@ -266,9 +301,8 @@ func TestBuildSetsStatusMessages(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, statusMessages(t, data), map[string]string{
 		ConflictsCommand: "Running chunk conflicts before commit",
-		"cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint": "Running chunk validate lint before commit",
-		"cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test": "Running chunk validate test before commit",
-		StopCommand: "Running chunk validate",
+		commitCommand:    "Running chunk validate before commit",
+		StopCommand:      "Running chunk validate",
 	})
 
 	data, err = BuildCodex(cmds)
