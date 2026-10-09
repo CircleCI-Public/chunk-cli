@@ -94,6 +94,29 @@ func (h *hookContext) skipsCommitGate() bool {
 	return h != nil && h.event == hookEventPreToolUse && h.toolCommand != "" && !gitutil.IsCommitCommand(h.toolCommand)
 }
 
+// isCommitGate reports whether this is a PreToolUse run, the hook that holds
+// back a commit. A commit gate never gives up after repeated failures the way
+// the Stop hook does: giving up exits 0, and on PreToolUse exit 0 lets the
+// commit through unvalidated, which is the one outcome the gate exists to
+// prevent. Stop gives up so a failure the agent cannot fix does not re-signal
+// it forever; a blocked commit ends the tool call, not the turn, so there is no
+// loop to break.
+//
+// A payload with no hook_event_name keeps the old behaviour and may give up. It
+// is what an older Claude Code or an older daemon sends, and for a Stop hook
+// that never gave up the failure would re-signal the agent without end.
+func (h *hookContext) isCommitGate() bool {
+	return h != nil && h.event == hookEventPreToolUse
+}
+
+// hookEvent returns the hook_event_name of hook, or "" when not a hook run.
+func hookEvent(hook *hookContext) string {
+	if hook == nil {
+		return ""
+	}
+	return hook.event
+}
+
 // hookResponse is the JSON hook response written to stdout.
 //
 // Deliberately absent from Stop hook usage: hookSpecificOutput.additionalContext.
@@ -307,6 +330,7 @@ type validateOpts struct {
 	hookSessionID  string // hook session ID forwarded from client to daemon subprocess
 	stopHookActive bool   // stop_hook_active forwarded from client to daemon subprocess
 	hookCodex      bool   // Codex payload detection forwarded from client to daemon subprocess
+	hookEvent      string // hook_event_name forwarded from client to daemon subprocess
 }
 
 func newValidateCmd() *cobra.Command {
@@ -357,6 +381,8 @@ func newValidateCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("stop-hook-active")
 	cmd.Flags().BoolVar(&opts.hookCodex, "hook-codex", false, "")
 	_ = cmd.Flags().MarkHidden("hook-codex")
+	cmd.Flags().StringVar(&opts.hookEvent, "hook-event", "", "")
+	_ = cmd.Flags().MarkHidden("hook-event")
 
 	cmd.AddCommand(newValidateVariantsCmd())
 	cmd.AddCommand(newValidateResultsCmd())
@@ -375,7 +401,9 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 		return ctx, streams, false, nil
 	}
 	ctx = session.WithID(ctx, hook.sessionID)
-	if !hook.stopHookActive {
+	// The counter is the Stop hook's. A commit gate never gives up, so it
+	// neither counts toward it nor clears it.
+	if !hook.stopHookActive && !hook.isCommitGate() {
 		validate.ResetAttempts(hook.sessionID)
 	}
 	// Route stdout to stderr so all output appears in the Stop
@@ -481,7 +509,7 @@ func resolveHookRun(hook *hookContext, opts *validateOpts, workDir string) (*hoo
 		workDir = hookProjectRoot(workDir)
 	}
 	if opts.hookSessionID != "" && hook == nil {
-		hook = &hookContext{sessionID: opts.hookSessionID, stopHookActive: opts.stopHookActive, codex: opts.hookCodex}
+		hook = &hookContext{sessionID: opts.hookSessionID, stopHookActive: opts.stopHookActive, codex: opts.hookCodex, event: opts.hookEvent}
 	}
 	return hook, workDir
 }
@@ -1052,6 +1080,8 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 	level := iostream.LevelDone
 	message := fmt.Sprintf("%s  %s", summary, elapsed)
 	switch {
+	case execErr != nil && hook.isCommitGate():
+		level = iostream.LevelError
 	case execErr != nil && hook != nil:
 		attempt := validate.ReadAttempts(hook.sessionID) + 1
 		level = iostream.LevelError
@@ -1073,6 +1103,12 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 	}
 	if hook == nil {
 		return execErr
+	}
+	if hook.isCommitGate() {
+		if execErr != nil {
+			return validate.NewHookExitError(2)
+		}
+		return writeHookOutcome(cmd.OutOrStdout(), hook, passMessage)
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {
@@ -1119,6 +1155,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, i
 		OrgID:        orgID,
 		AllowAsync:   mayRunInBackground(hook),
 		HookCodex:    hook != nil && hook.codex,
+		HookEvent:    hookEvent(hook),
 		SidecarImage: image,
 	}
 	// Forward local credentials only over the Unix socket (isolated to the local

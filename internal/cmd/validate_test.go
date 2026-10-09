@@ -709,6 +709,64 @@ func TestValidateHookFailureIsNotCached(t *testing.T) {
 	assert.Equal(t, runs(), 2, "the commands must run again after a failure")
 }
 
+// commitGatePayload is a Claude Code PreToolUse payload for a git commit.
+const commitGatePayload = `{"session_id":"test-session-001","hook_event_name":"PreToolUse","tool_input":{"command":"git commit -m x"}}`
+
+// runCommitGate fires the commit gate against dir, with the hook context read
+// from stdin as Claude Code sends it, or from the flags a daemon subprocess is
+// given when forwarded is true.
+func runCommitGate(t *testing.T, dir string, forwarded bool) error {
+	t.Helper()
+	root := newTestRootCmd()
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	args := []string{"validate", "--local", "--project", dir}
+	if forwarded {
+		args = append(args, "--hook-session-id", "test-session-001", "--hook-event", "PreToolUse")
+	} else {
+		root.SetIn(strings.NewReader(commitGatePayload))
+	}
+	root.SetArgs(args)
+	return root.Execute()
+}
+
+// The Stop hook gives up after stopHookMaxAttempts failures by exiting 0. On a
+// commit gate exit 0 lets the commit through, so a gate that gave up would wave
+// through exactly the commit that kept failing. It has to block every time.
+func TestValidateCommitGateNeverGivesUp(t *testing.T) {
+	for name, forwarded := range map[string]bool{"payload": false, "forwarded": true} {
+		t.Run(name, func(t *testing.T) {
+			isolateConfig(t)
+			dir := hookProject(t, "exit 1")
+
+			for i := range validate.DefaultMaxAttempts + 2 {
+				err := runCommitGate(t, dir, forwarded)
+				var ec interface{ ExitCode() int }
+				assert.Assert(t, errors.As(err, &ec), "run %d: expected a blocking exit, got %v", i+1, err)
+				assert.Equal(t, ec.ExitCode(), 2, "run %d", i+1)
+			}
+		})
+	}
+}
+
+// The failure counter is the Stop hook's. A commit gate running in the same
+// session must neither add to it, bringing the Stop hook's give-up forward, nor
+// clear it, letting the Stop hook re-signal past its limit.
+func TestValidateCommitGateLeavesStopAttemptsAlone(t *testing.T) {
+	const sessionID = "test-session-001"
+	for name, code := range map[string]int{"failing": 1, "passing": 0} {
+		t.Run(name, func(t *testing.T) {
+			isolateConfig(t)
+			dir := hookProject(t, fmt.Sprintf("exit %d", code))
+			assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
+
+			_ = runCommitGate(t, dir, false)
+
+			assert.Equal(t, validate.ReadAttempts(sessionID), 1)
+		})
+	}
+}
+
 // TestValidateHookCacheMissAfterEdit is the other half of the contract: a hit is
 // only correct while the tree is untouched, so an edit between runs has to reach
 // the key and put the commands back on.

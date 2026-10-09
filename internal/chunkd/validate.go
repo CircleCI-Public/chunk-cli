@@ -45,6 +45,13 @@ type ValidateRequest struct {
 	// nothing. A daemon that predates this field ignores it instead, and the run
 	// goes ahead, just without Codex's quieter output.
 	HookCodex bool `json:"hook_codex,omitempty"`
+	// HookEvent is the hook payload's hook_event_name, which the daemon passes
+	// on to the run as --hook-event. A commit gate never gives up on repeated
+	// failures the way a Stop hook does, and the run can only tell them apart
+	// by this. A field for the same reason as HookCodex: a daemon that predates
+	// it ignores it, and the run falls back to treating the hook as it always
+	// has.
+	HookEvent string `json:"hook_event,omitempty"`
 	// WorkDir is the caller's working directory, which the daemon passes to the
 	// subprocess as --project so it can load .chunk/config.json from the right
 	// location. It equals ProjectRoot for callers whose working directory is the

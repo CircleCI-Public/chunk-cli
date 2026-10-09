@@ -34,10 +34,14 @@ type ValidateRunner func(ctx context.Context, projectRoot, workDir string, args 
 // validateRunArgs is the command line the run is given: the caller's args, plus
 // whatever the request carries as fields that the run takes as flags.
 func validateRunArgs(req chunkd.ValidateRequest) []string {
-	if !req.HookCodex {
-		return req.Args
+	args := req.Args
+	if req.HookCodex {
+		args = append(append([]string(nil), args...), "--hook-codex")
 	}
-	return append(append([]string(nil), req.Args...), "--hook-codex")
+	if req.HookEvent != "" {
+		args = append(append([]string(nil), args...), "--hook-event", req.HookEvent)
+	}
+	return args
 }
 
 // handleAsyncValidate starts a validate run in the background and returns its

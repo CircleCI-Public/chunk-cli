@@ -9,25 +9,21 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash(git commit*)",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && task fmt",
-            "timeout": 30,
-            "statusMessage": "Running task fmt before commit"
+            "if": "Bash(git commit*)",
+            "command": "chunk conflicts --hook",
+            "timeout": 5,
+            "statusMessage": "Running chunk conflicts before commit"
           },
           {
             "type": "command",
-            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint",
-            "timeout": 60,
-            "statusMessage": "Running chunk validate lint before commit"
-          },
-          {
-            "type": "command",
-            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test",
-            "timeout": 300,
-            "statusMessage": "Running chunk validate test before commit"
+            "if": "Bash(git commit*)",
+            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate",
+            "timeout": 600,
+            "statusMessage": "Running chunk validate before commit"
           }
         ]
       }

@@ -391,6 +391,9 @@ Commands are defined in the project config:
 agent when validation keeps failing for the same uncommitted changes. After that
 many consecutive failures the hook exits 0 (ending the session) instead of
 non-zero (which would ask Claude to try again). Defaults to 3 if unset.
+It applies to the Stop hook only: the commit gate on PreToolUse blocks every
+failing commit, since giving up there would let the commit through, and its
+runs neither count toward nor reset the Stop hook's attempts.
 
 `asyncValidate` decides whether hook runs may be validated in the background:
 `auto` (the default) applies the rules above, `never` keeps every run blocking,
