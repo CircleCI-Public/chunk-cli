@@ -33,9 +33,18 @@ const (
 // display metadata; pool state supplements it with managed members that are
 // not present there.
 func loadSidecars(dataDir, root, snapshotName string) []chunkd.SidecarState {
+	states, _ := loadSidecarsAndPools(dataDir, root, snapshotName)
+	return states
+}
+
+// loadSidecarsAndPools also returns each sidecar's persisted pool name. Pool
+// ownership is server bookkeeping: callers receive the run's concrete sidecar
+// IDs in the snapshot, not the naming convention used to discover them.
+func loadSidecarsAndPools(dataDir, root, snapshotName string) ([]chunkd.SidecarState, map[string]string) {
 	projectName := filepath.Base(root)
 	repoName := projectRepoName(root)
 	idx := map[string]int{}
+	pools := map[string]string{}
 	var result []chunkd.SidecarState
 	appendState := func(id, name, sessionID, workspace, orgID string, mtime time.Time) {
 		if id == "" {
@@ -103,6 +112,7 @@ func loadSidecars(dataDir, root, snapshotName string) []chunkd.SidecarState {
 		}
 		name := strings.TrimSuffix(filepath.Base(path), "-pool.json")
 		for i, id := range pool.SidecarIDs {
+			pools[id] = name
 			if at, exists := idx[id]; exists {
 				if result[at].Workspace == "" {
 					result[at].Workspace = pool.RepoPath
@@ -112,7 +122,7 @@ func loadSidecars(dataDir, root, snapshotName string) []chunkd.SidecarState {
 			appendState(id, sidecarName(name, i, len(pool.SidecarIDs)), "", pool.RepoPath, pool.OrgID, mtime)
 		}
 	}
-	return result
+	return result, pools
 }
 
 func sidecarName(name string, index, total int) string {

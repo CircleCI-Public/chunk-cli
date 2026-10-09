@@ -165,6 +165,10 @@ type FactoryRun struct {
 	// Attempts is the most rounds the run checks.
 	Attempts int    `json:"attempts,omitempty"`
 	RunID    string `json:"run_id,omitempty"`
+	// SidecarIDs are the live or retained members of this run's pool. The
+	// daemon derives ownership from its pool state so clients do not have to
+	// reconstruct it from sidecar names.
+	SidecarIDs []string `json:"sidecar_ids,omitempty"`
 	// Worktree is where the work is, on Branch. Baseline is the commit the
 	// branch starts from and Head the user's HEAD when the run started; they
 	// differ when the user's uncommitted work was committed as the baseline.

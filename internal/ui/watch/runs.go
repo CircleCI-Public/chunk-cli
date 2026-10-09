@@ -4,14 +4,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -29,6 +27,7 @@ type sessionInfo struct {
 
 // sessionActionMsg reports the outcome of a cancel request.
 type sessionActionMsg struct {
+	id   string
 	note string
 	err  error
 }
@@ -36,9 +35,9 @@ type sessionActionMsg struct {
 func cancelSessionCmd(id string) tea.Cmd {
 	return func() tea.Msg {
 		if err := chunkd.CancelSession(id); err != nil {
-			return sessionActionMsg{err: err}
+			return sessionActionMsg{id: id, err: err}
 		}
-		return sessionActionMsg{note: "cancel requested"}
+		return sessionActionMsg{id: id, note: "cancel requested"}
 	}
 }
 
@@ -85,36 +84,27 @@ func visibleRuns(all []sessionInfo, now time.Time) []sessionInfo {
 	return out
 }
 
-// splitRunSidecars takes the sidecars of the listed factory runs out of the
-// sidecar list, keyed by run. A run's pool is saved as factory-<run id>, so
-// its sidecars are named after it; shown as rows of their own they would read
-// as loose sidecars nobody owns.
+// splitRunSidecars takes the sidecars the daemon assigned to listed factory
+// runs out of the sidecar list. Shown as rows of their own they would read as
+// loose sidecars nobody owns.
 func splitRunSidecars(sidecars []sidecarInfo, runs []sessionInfo) (rest []sidecarInfo, byRun map[string][]sidecarInfo) {
-	pools := map[string]string{}
+	owners := map[string]string{}
 	for _, r := range runs {
-		if f := r.s.Factory; f != nil && f.RunID != "" {
-			pools[factory.PoolName(f.RunID)] = r.s.ID
+		if f := r.s.Factory; f != nil {
+			for _, id := range f.SidecarIDs {
+				owners[id] = r.s.ID
+			}
 		}
 	}
 	byRun = map[string][]sidecarInfo{}
 	for _, sc := range sidecars {
-		if id, ok := pools[poolOf(sc.name)]; ok {
+		if id, ok := owners[sc.id]; ok {
 			byRun[id] = append(byRun[id], sc)
 			continue
 		}
 		rest = append(rest, sc)
 	}
 	return rest, byRun
-}
-
-// poolOf strips the member suffix a multi-sidecar pool adds to each name.
-func poolOf(name string) string {
-	if i := strings.LastIndexByte(name, '-'); i > 0 {
-		if _, err := strconv.Atoi(name[i+1:]); err == nil {
-			return name[:i]
-		}
-	}
-	return name
 }
 
 // anySessionLive reports whether a run is running (the spinner runs for it).
@@ -223,6 +213,10 @@ func (m Model) requestRunCancel(run *sessionInfo, wasConfirm string) (tea.Model,
 
 // withSessionAction folds a cancel result into the run pane's note.
 func (m Model) withSessionAction(msg sessionActionMsg) Model {
+	run := m.selectedRun()
+	if run == nil || run.s.ID != msg.id {
+		return m
+	}
 	if msg.err != nil {
 		m.runNote = msg.err.Error()
 		return m

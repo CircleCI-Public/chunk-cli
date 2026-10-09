@@ -101,9 +101,10 @@ func TestVisibleRunsKeepsLiveOnesAndCapsRecentEndedOnes(t *testing.T) {
 
 func TestSplitRunSidecarsAttachesAFactoryRunsPoolToTheRun(t *testing.T) {
 	run := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	run.s.Factory.SidecarIDs = []string{"1", "2", "3"}
 	sidecars := []sidecarInfo{
-		{id: "1", name: "factory-abc-1"},
-		{id: "2", name: "factory-abc-12"},
+		{id: "1", name: "anything"},
+		{id: "2", name: "factory-abc-rebuilt-123"},
 		{id: "3", name: "factory-abc"},
 		{id: "4", name: "factory-other-1"},
 		{id: "5", name: "my-sidecar"},
@@ -111,6 +112,18 @@ func TestSplitRunSidecarsAttachesAFactoryRunsPoolToTheRun(t *testing.T) {
 	rest, byRun := splitRunSidecars(sidecars, []sessionInfo{run})
 	assert.Equal(t, len(byRun["abc"]), 3)
 	assert.Equal(t, len(rest), 2, "a pool of a run that is not listed keeps its rows: it may still be running")
+}
+
+func TestSplitRunSidecarsDoesNotMixRunsWithTheSameFactoryID(t *testing.T) {
+	a := factoryRun("same", chunkd.SessionRunning, time.Now())
+	b := factoryRun("same", chunkd.SessionRunning, time.Now())
+	a.s.ID, a.s.Factory.SidecarIDs = "session-a", []string{"sidecar-a"}
+	b.s.ID, b.s.Factory.SidecarIDs = "session-b", []string{"sidecar-b"}
+
+	rest, byRun := splitRunSidecars([]sidecarInfo{{id: "sidecar-a"}, {id: "sidecar-b"}}, []sessionInfo{a, b})
+	assert.Equal(t, len(rest), 0)
+	assert.Equal(t, byRun["session-a"][0].id, "sidecar-a")
+	assert.Equal(t, byRun["session-b"][0].id, "sidecar-b")
 }
 
 // The factory run's pane shows the work a round did, each check and review,
@@ -198,6 +211,27 @@ func TestSelectionMovesFromRunsToSidecarsAndBack(t *testing.T) {
 	assert.Equal(t, m.selRun, "a", "up stops at the first run")
 }
 
+func TestShortDashboardKeepsItsSelectionVisible(t *testing.T) {
+	var runs []sessionInfo
+	for i := range maxRuns {
+		run := factoryRun(fmt.Sprintf("run-%d", i), chunkd.SessionRunning, time.Now())
+		run.s.Factory.Prompt = fmt.Sprintf("run %d", i)
+		runs = append(runs, run)
+	}
+	m := sessModel(runs...)
+	m.height = 8
+	m.selRun = runs[len(runs)-1].s.ID
+	out := m.render()
+	assert.Assert(t, strings.Count(out, "\n") <= m.height, out)
+	assert.Assert(t, strings.Contains(out, runTitle(runs[len(runs)-1].s)), "selected run is not visible:\n%s", out)
+
+	m.selRun = ""
+	m.sidecars = []sidecarInfo{{id: "selected", name: "selected", repoName: "repo", verified: true}}
+	m.selectedID = "selected"
+	out = m.render()
+	assert.Assert(t, strings.Contains(out, "selected"), "selected sidecar is not visible:\n%s", out)
+}
+
 func TestRunItemsOpenTheirOutput(t *testing.T) {
 	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
 	r.s.Rounds = []chunkd.Round{{
@@ -255,6 +289,20 @@ func TestRunKeysQuitDetachesCancelNeedsConfirmation(t *testing.T) {
 	m, _ = press(m, tea.KeyRight)
 	m, cmd = press(m, tea.KeyEscape)
 	assert.Assert(t, m.focusedPane == paneLeft && cmd == nil)
+}
+
+func TestCancelResultOnlyUpdatesTheRunItCameFrom(t *testing.T) {
+	m := sessModel(
+		liveSession("run-1", chunkd.SessionRunning, time.Now()),
+		liveSession("run-2", chunkd.SessionRunning, time.Now().Add(-time.Minute)),
+	).reselectRun()
+	m, _ = press(m, tea.KeyDown)
+	assert.Equal(t, m.selRun, "run-2")
+
+	m = m.withSessionAction(sessionActionMsg{id: "run-1", note: "cancel requested"})
+	assert.Equal(t, m.runNote, "")
+	m = m.withSessionAction(sessionActionMsg{id: "run-2", note: "cancel requested"})
+	assert.Equal(t, m.runNote, "cancel requested")
 }
 
 // Against a real daemon: the dashboard sees a run started elsewhere, quitting

@@ -52,6 +52,7 @@ func cloneSession(s chunkd.Session) chunkd.Session {
 	}
 	if s.Factory != nil {
 		f := *s.Factory
+		f.SidecarIDs = slices.Clone(s.Factory.SidecarIDs)
 		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
 		f.Progress = cloneFeed(s.Factory.Progress)
 		out.Factory = &f

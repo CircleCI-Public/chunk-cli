@@ -616,7 +616,31 @@ func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
 // renderLeftPane is the runs, when there are any, above the sidecars.
 func (m Model) renderLeftPane(st watchStyles, maxLines int) []string {
 	runs := m.renderRunList(st)
+	if len(runs) >= maxLines {
+		if m.selRun == "" {
+			return m.renderSidecarPane(st, maxLines)
+		}
+		return runListWindow(runs, maxLines, m.runIndex())
+	}
 	return append(runs, m.renderSidecarPane(st, maxLines-len(runs))...)
+}
+
+// runListWindow keeps the selected run visible when the complete run list is
+// taller than the pane. Each run occupies two lines after the two-line header.
+func runListWindow(lines []string, maxLines, selected int) []string {
+	if maxLines <= 0 {
+		return nil
+	}
+	if maxLines <= 2 || selected < 0 {
+		return lines[:min(maxLines, len(lines))]
+	}
+	room := maxLines - 2
+	visibleRuns := max(room/2, 1)
+	firstRun := min(max(selected-visibleRuns+1, 0), selected)
+	firstLine := 2 + firstRun*2
+	lastLine := min(firstLine+room, len(lines)-1) // leave out the trailing blank
+	out := append([]string(nil), lines[:2]...)
+	return append(out, lines[firstLine:lastLine]...)
 }
 
 func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
@@ -1569,7 +1593,15 @@ func (m Model) adjustLeftScroll() Model {
 // sidecarPaneEnd is the index of the first sidecar the left pane has no room
 // for at the current offset and height.
 func (m Model) sidecarPaneEnd() int {
-	_, end := m.layoutSidecarPane(m.styles(), m.contentHeight()-len(m.renderRunList(m.styles())))
+	height := m.contentHeight()
+	runs := len(m.renderRunList(m.styles()))
+	room := height
+	if runs < height {
+		room -= runs
+	} else if m.selRun != "" {
+		room = 0
+	}
+	_, end := m.layoutSidecarPane(m.styles(), room)
 	return end
 }
 

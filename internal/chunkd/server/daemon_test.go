@@ -12,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -41,6 +42,27 @@ func newTestDaemon() *daemon {
 	}
 	d.tasks.onFinish = d.risk.record
 	return d
+}
+
+func TestSnapshotAssignsPoolSidecarsToTheirFactoryRun(t *testing.T) {
+	d := newTestDaemon()
+	entry, _, busy := d.sessions.add(chunkd.Session{
+		ProjectRoot: "/repo",
+		Factory:     &chunkd.FactoryRun{RunID: "20261009-010000"},
+	})
+	assert.Equal(t, busy, "")
+
+	got := d.withSessions("/repo", chunkd.ProjectSnapshot{
+		Root: "/repo",
+		Sidecars: []chunkd.SidecarState{
+			{ID: "owned"},
+			{ID: "other"},
+		},
+	}, map[string]string{"owned": factory.PoolName("20261009-010000"), "other": "validate"})
+
+	assert.Equal(t, len(got.Sessions), 1)
+	assert.Equal(t, got.Sessions[0].ID, entry.snapshot().ID)
+	assert.DeepEqual(t, got.Sessions[0].Factory.SidecarIDs, []string{"owned"})
 }
 
 // TestDaemonRoundTrip starts the daemon in-process, waits for it to accept

@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -34,6 +35,9 @@ type projectState struct {
 	offset    int64
 	events    []eventlog.Event
 	snap      chunkd.ProjectSnapshot
+	// sidecarPools maps sidecar ID to the persisted pool that owns it. It stays
+	// server-side; snapshots attach the IDs directly to their factory run.
+	sidecarPools map[string]string
 
 	// conflict and lastFetch are written by the conflict loop and read by the
 	// poll loop when it builds snap, so unlike the fields above — which only
@@ -380,7 +384,7 @@ func (d *daemon) updateProject(ps *projectState) {
 		ps.offset = newOff
 	}
 
-	sidecars := loadSidecars(ps.dataDir, ps.root, snapName)
+	sidecars, sidecarPools := loadSidecarsAndPools(ps.dataDir, ps.root, snapName)
 	inferredOrg := fillMissingOrg(sidecars, ps.root)
 	// Same background context as the PR fetch below: the list must survive this
 	// poll returning.
@@ -411,6 +415,7 @@ func (d *daemon) updateProject(ps *projectState) {
 	// writes it from another goroutine on its own schedule.
 	snap.Conflict = ps.conflict
 	ps.snap = snap
+	ps.sidecarPools = sidecarPools
 	d.mu.Unlock()
 }
 
@@ -438,7 +443,7 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 	if len(roots) == 0 {
 		projects := make([]chunkd.ProjectSnapshot, 0, len(d.projects))
 		for _, ps := range d.projects {
-			projects = append(projects, d.withSessions(ps.root, ps.snap))
+			projects = append(projects, d.withSessions(ps.root, ps.snap, ps.sidecarPools))
 		}
 		// Map iteration is random; sort by root so project rows stay stable
 		// between polls when watchAll mode requests all projects.
@@ -454,7 +459,7 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 				continue
 			}
 			seen[ps.root] = true
-			ordered = append(ordered, d.withSessions(ps.root, ps.snap))
+			ordered = append(ordered, d.withSessions(ps.root, ps.snap, ps.sidecarPools))
 			break
 		}
 	}
@@ -467,11 +472,30 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 //
 // root is passed in because a project adopted a moment ago has no snapshot yet,
 // and so no Root of its own to look sessions up by.
-func (d *daemon) withSessions(root string, p chunkd.ProjectSnapshot) chunkd.ProjectSnapshot {
+func (d *daemon) withSessions(root string, p chunkd.ProjectSnapshot, sidecarPools map[string]string) chunkd.ProjectSnapshot {
 	if p.Root == "" {
 		p.Root = root
 	}
 	p.Sessions = d.sessions.forProject(root)
+	byPool := make(map[string]int, len(p.Sessions))
+	for i := range p.Sessions {
+		f := p.Sessions[i].Factory
+		if f == nil || f.RunID == "" {
+			continue
+		}
+		// Sessions are newest first. If two very short runs started in the same
+		// second and therefore share a run ID, the remaining pool belongs to the
+		// newest one.
+		name := factory.PoolName(f.RunID)
+		if _, exists := byPool[name]; !exists {
+			byPool[name] = i
+		}
+	}
+	for _, sc := range p.Sidecars {
+		if i, ok := byPool[sidecarPools[sc.ID]]; ok {
+			p.Sessions[i].Factory.SidecarIDs = append(p.Sessions[i].Factory.SidecarIDs, sc.ID)
+		}
+	}
 	return p
 }
 
