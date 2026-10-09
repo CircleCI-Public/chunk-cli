@@ -217,17 +217,17 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		return rep, fmt.Errorf("create the run's sidecars: %w", err)
 	}
 	defer func() { rep.KeptSidecars = closePool(ctx, pool, opts.KeepSidecars, status) }()
-	if err := pool.WaitSynced(ctx); err != nil {
-		return rep, fmt.Errorf("get the run's sidecars ready: %w", err)
-	}
+	// The run's pool is new, so NewPool has synced the worktree to its first
+	// member before returning, and the rest are cloned from a snapshot of it
+	// rather than synced: the worktree can have the work back now.
 	if showingBaseline {
 		showingBaseline = false
 		if err := wt.restoreWork(ctx); err != nil {
 			return rep, err
 		}
 	}
-	// The implementer holds its member for the whole run; reviews are handed
-	// the rest.
+	// The implementer holds the first member ready for the whole run, and
+	// starts without waiting for the rest; reviews are handed those.
 	impl, err := pool.Acquire(ctx)
 	if err != nil {
 		return rep, fmt.Errorf("check out the implementer's sidecar: %w", err)
@@ -244,12 +244,17 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions,
 			OnActivity: opts.OnActivity,
 		},
-		Acquire:   pool.Acquire,
-		Release:   pool.Release,
-		Reviewers: Members(impl, pool.IDs()),
-		Relay:     NewRelay(opts.Client, wt.Path, status),
-		Request:   request,
-		Prompts:   opts.Prompts,
+		Acquire: pool.Acquire,
+		Release: pool.Release,
+		WaitReviewers: func(ctx context.Context) ([]*sidecar.PoolEntry, error) {
+			if err := pool.WaitSynced(ctx); err != nil {
+				return nil, err
+			}
+			return Members(impl, pool.IDs()), nil
+		},
+		Relay:   NewRelay(opts.Client, wt.Path, status),
+		Request: request,
+		Prompts: opts.Prompts,
 		Review: review.Options{
 			Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
 			StructuredFindings: true,

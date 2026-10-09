@@ -63,10 +63,18 @@ type Sidecars struct {
 	Implementer *Implementer
 	// Acquire and Release hand out reviewer sidecars: the pool's own, with the
 	// implementer's member already checked out.
-	Acquire   func(context.Context) (*sidecar.PoolEntry, error)
-	Release   func(*sidecar.PoolEntry)
+	Acquire func(context.Context) (*sidecar.PoolEntry, error)
+	Release func(*sidecar.PoolEntry)
+	// Reviewers are the members the implementer's tree is relayed to. When
+	// WaitReviewers is set, it supplies them instead, once the first round's
+	// checks need them.
 	Reviewers []*sidecar.PoolEntry
-	Relay     *Relay
+	// WaitReviewers waits for the rest of the pool and returns its members
+	// other than the implementer. The implementer starts as soon as its own
+	// member is ready; nothing needs the reviewers until there is work to
+	// check, and by then they have usually been ready a while.
+	WaitReviewers func(context.Context) ([]*sidecar.PoolEntry, error)
+	Relay         *Relay
 	// Request is the original change the implementer was asked to make. It is
 	// included in every review, including rounds where the implementer is sent
 	// only feedback from the preceding checks.
@@ -86,27 +94,48 @@ type Sidecars struct {
 	ws workspace
 	// history is what each review found in earlier rounds, by prompt name.
 	history map[string][]priorRound
+	// reviewersReady reports that the reviewers have their baseline commits.
+	reviewersReady bool
 	// fingerprint is the implementer's change as last collected, which is
 	// what each round's reviews are of.
 	fingerprint string
 }
 
 // Prepare commits the tree the pool synced to every member, the worktree's, as
-// the baseline the implementer's work is measured against. Reviewers get one
-// too: they are sent the implementer's files but never its .git, so `git diff
-// HEAD` on a reviewer needs a commit of the same tree to diff against.
+// the baseline the implementer's work is measured against. Reviewers get
+// theirs before the first review; see prepareReviewers.
 func (s *Sidecars) Prepare(ctx context.Context) error {
 	s.ws = workspace{exec: s.Exec, entry: s.Implementer.Entry}
-	if err := s.ws.commitBaseline(ctx); err != nil {
-		return err
+	return s.ws.commitBaseline(ctx)
+}
+
+// prepareReviewers waits for the reviewers, if the pool is still getting them
+// ready, and commits the baseline on each: they are sent the implementer's
+// files but never its .git, so `git diff HEAD` on a reviewer needs a commit of
+// the same tree to diff against. It does this once.
+func (s *Sidecars) prepareReviewers(ctx context.Context) error {
+	if s.reviewersReady {
+		return nil
 	}
-	return s.onReviewers(func(e *sidecar.PoolEntry) error {
+	if s.WaitReviewers != nil {
+		reviewers, err := s.WaitReviewers(ctx)
+		if err != nil {
+			return fmt.Errorf("get the reviewer sidecars ready: %w", err)
+		}
+		s.Reviewers = reviewers
+	}
+	err := s.onReviewers(func(e *sidecar.PoolEntry) error {
 		rw := workspace{exec: s.Exec, entry: e}
 		if err := rw.commitBaseline(ctx); err != nil {
 			return fmt.Errorf("%s: %w", e.ID, err)
 		}
 		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("set up the reviewers' workspaces: %w", err)
+	}
+	s.reviewersReady = true
+	return nil
 }
 
 // Implement runs one implementer turn.
@@ -145,6 +174,9 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 		return nil, err
 	}
 	if len(s.Prompts) > 0 {
+		if err := s.prepareReviewers(ctx); err != nil {
+			return nil, err
+		}
 		// A review that timed out stops being streamed but keeps running on
 		// its sidecar, and would read the tree as it is replaced. Best-effort:
 		// a sidecar that cannot be reached fails the push that follows anyway.
