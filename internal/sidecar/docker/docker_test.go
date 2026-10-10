@@ -104,7 +104,11 @@ func TestSyncSnapshotCloneAndPull(t *testing.T) {
 	write(t, filepath.Join(srcTree, ".gitignore"), "ignored.txt\n")
 	write(t, filepath.Join(srcTree, "ignored.txt"), "do not sync\n")
 
-	seed, err := b.Create(ctx, "chunk-test-seed", "", repoPath)
+	// The seed runs an explicit image while the provider's default is bogus:
+	// a clone must run the seed's image (recorded in the snapshot), and would
+	// fail to pull the default if it fell back to it.
+	b.baseImage = "chunk-test/does-not-exist:never"
+	seed, err := b.Create(ctx, "chunk-test-seed", testImage, repoPath)
 	assert.NilError(t, err)
 	defer func() { _ = b.Delete(ctx, seed.ID) }()
 
@@ -132,6 +136,8 @@ func TestSyncSnapshotCloneAndPull(t *testing.T) {
 	snap, err := b.Snapshot(ctx, seed.ID, "chunk-test-snap")
 	assert.NilError(t, err)
 	assert.Assert(t, strings.HasPrefix(snap, snapshotScheme))
+	snapDir := strings.TrimPrefix(snap, snapshotScheme)
+	assert.Equal(t, strings.TrimSpace(readFile(t, filepath.Join(snapDir, snapshotImageFile))), testImage)
 
 	clone, err := b.Create(ctx, "chunk-test-clone", snap, repoPath)
 	assert.NilError(t, err)
@@ -144,6 +150,21 @@ func TestSyncSnapshotCloneAndPull(t *testing.T) {
 	assert.NilError(t, b.Pull(ctx, seed.ID, repoPath, dest, noStatus))
 	assert.Equal(t, readFile(t, filepath.Join(dest, "main.go")), "package main\n")
 	assert.Assert(t, !exists(filepath.Join(dest, ".git")), "pull must not bring back .git")
+}
+
+// TestCreateSameNameTwice mirrors the pool, which names the seed and the first
+// clone from its snapshot alike: both must come up, with their own workspaces.
+func TestCreateSameNameTwice(t *testing.T) {
+	b := newLiveBackend(t)
+	ctx := context.Background()
+	first, err := b.Create(ctx, "chunk-test-dup", "", repoPath)
+	assert.NilError(t, err)
+	defer func() { _ = b.Delete(ctx, first.ID) }()
+	second, err := b.Create(ctx, "chunk-test-dup", "", repoPath)
+	assert.NilError(t, err)
+	defer func() { _ = b.Delete(ctx, second.ID) }()
+	assert.Assert(t, first.ID != second.ID)
+	assert.Assert(t, first.HostDir != second.HostDir, "each member needs its own workspace dir")
 }
 
 func TestDeleteRemovesWorkspace(t *testing.T) {

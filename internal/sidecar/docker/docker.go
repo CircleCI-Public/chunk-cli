@@ -10,6 +10,8 @@ package docker
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -42,6 +45,17 @@ const snapshotScheme = "chunkfs:"
 // user's own and reaped.
 const label = "com.circleci.chunk.factory"
 
+// labelName carries the name the pool gave a member, since the container's
+// own name has a uniqueness suffix appended.
+const labelName = "com.circleci.chunk.name"
+
+// inspectAttempts bounds image lookups that fail for a reason other than the
+// image being absent; inspectBackoff is the base delay between them, growing
+// linearly. A variable so tests need not wait.
+const inspectAttempts = 5
+
+var inspectBackoff = time.Second
+
 // Provider runs sidecars as local Docker containers with bind-mounted workspaces.
 type Provider struct {
 	cli       client.APIClient
@@ -49,9 +63,23 @@ type Provider struct {
 	// workRoot is where per-member workspace directories and snapshots live.
 	workRoot string
 
-	mu     sync.Mutex
-	mounts map[string]string // container ID -> host workspace dir
+	mu      sync.Mutex
+	members map[string]member // by container ID
 }
+
+// member is a container the provider created: its bind-mounted workspace on
+// the host, and the image it runs. A snapshot of a member records that image so
+// clones restored from it run the same image, not the provider's default.
+type member struct {
+	hostDir string
+	image   string
+}
+
+// Layout of a snapshot directory: the workspace copy, and the image it ran on.
+const (
+	snapshotWorkspaceDir = "workspace"
+	snapshotImageFile    = "image"
+)
 
 var _ sidecar.Backend = (*Provider)(nil)
 
@@ -62,7 +90,7 @@ func New() (*Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("docker: connect to daemon: %w", err)
 	}
-	b := &Provider{cli: cli, baseImage: defaultBaseImage, mounts: map[string]string{}}
+	b := &Provider{cli: cli, baseImage: defaultBaseImage, members: map[string]member{}}
 	if img := os.Getenv("CHUNK_DOCKER_IMAGE"); img != "" {
 		b.baseImage = img
 	}
@@ -80,7 +108,7 @@ func New() (*Provider, error) {
 
 // NewWithClient builds a Provider around an existing Docker client, for tests.
 func NewWithClient(cli client.APIClient, baseImage, workRoot string) *Provider {
-	return &Provider{cli: cli, baseImage: baseImage, workRoot: workRoot, mounts: map[string]string{}}
+	return &Provider{cli: cli, baseImage: baseImage, workRoot: workRoot, members: map[string]member{}}
 }
 
 // Close releases the Docker client's resources.
@@ -91,17 +119,22 @@ func (b *Provider) Close() error {
 	return nil
 }
 
-func (b *Provider) putMount(id, hostDir string) {
+func (b *Provider) remember(id string, m member) {
 	b.mu.Lock()
-	b.mounts[id] = hostDir
+	b.members[id] = m
 	b.mu.Unlock()
 }
 
-func (b *Provider) hostDir(id string) (string, bool) {
+func (b *Provider) member(id string) (member, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	d, ok := b.mounts[id]
-	return d, ok
+	m, ok := b.members[id]
+	return m, ok
+}
+
+func (b *Provider) hostDir(id string) (string, bool) {
+	m, ok := b.member(id)
+	return m.hostDir, ok
 }
 
 // Create provisions a container whose workspace at repoPath is a bind-mounted
@@ -112,7 +145,16 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 	if repoPath == "" {
 		return sidecar.Instance{}, errors.New("docker: create needs a repoPath")
 	}
-	hostDir := filepath.Join(b.workRoot, name)
+	// The pool may reuse a name: it names the seed and the first clone made from
+	// its snapshot alike, which CircleCI allows and Docker does not. A suffix
+	// keeps container names and workspace directories unique per Create; the
+	// pool's own name is kept as a label.
+	suffix, err := randomSuffix()
+	if err != nil {
+		return sidecar.Instance{}, fmt.Errorf("docker: name container: %w", err)
+	}
+	containerName := name + "-" + suffix
+	hostDir := filepath.Join(b.workRoot, containerName)
 	if err := os.MkdirAll(hostDir, 0o777); err != nil {
 		return sidecar.Instance{}, fmt.Errorf("docker: create workspace dir: %w", err)
 	}
@@ -120,9 +162,17 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 	containerImage := b.baseImage
 	switch {
 	case strings.HasPrefix(image, snapshotScheme):
-		// Clone: restore the snapshot's workspace into this member's host dir.
+		// Clone: run the image the snapshot's seed ran, and restore the
+		// snapshot's workspace into this member's host dir.
 		snapDir := strings.TrimPrefix(image, snapshotScheme)
-		if err := copyTree(ctx, snapDir, hostDir); err != nil {
+		recorded, err := os.ReadFile(filepath.Join(snapDir, snapshotImageFile))
+		if err != nil {
+			_ = os.RemoveAll(hostDir)
+			return sidecar.Instance{}, fmt.Errorf("docker: read snapshot image: %w", err)
+		}
+		containerImage = strings.TrimSpace(string(recorded))
+		if err := copyTree(ctx, filepath.Join(snapDir, snapshotWorkspaceDir), hostDir); err != nil {
+			_ = os.RemoveAll(hostDir)
 			return sidecar.Instance{}, fmt.Errorf("docker: restore snapshot: %w", err)
 		}
 	case image != "":
@@ -138,10 +188,10 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 		Image:      containerImage,
 		Cmd:        []string{"sleep", "infinity"},
 		WorkingDir: repoPath,
-		Labels:     map[string]string{label: "1"},
+		Labels:     map[string]string{label: "1", labelName: name},
 	}, &container.HostConfig{
 		Binds: []string{hostDir + ":" + repoPath},
-	}, nil, nil, name)
+	}, nil, nil, containerName)
 	if err != nil {
 		_ = os.RemoveAll(hostDir)
 		return sidecar.Instance{}, fmt.Errorf("docker: create container: %w", err)
@@ -152,18 +202,40 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 		return sidecar.Instance{}, fmt.Errorf("docker: start container: %w", err)
 	}
 
-	b.putMount(created.ID, hostDir)
+	b.remember(created.ID, member{hostDir: hostDir, image: containerImage})
 	return sidecar.Instance{ID: created.ID, HostDir: hostDir, RepoPath: repoPath}, nil
 }
 
-// ensureImage pulls ref if it is not already present locally.
+// ensureImage makes sure ref is on the Docker host, pulling it only when the
+// host definitively has no such image. Any other lookup error is retried
+// briefly, then reported as itself: Docker Desktop can fail the first request
+// after a Resource Saver pause while its VM wakes, and turning that into a pull
+// would bury it under a misleading registry error for a locally built image.
 func (b *Provider) ensureImage(ctx context.Context, ref string) error {
-	if _, err := b.cli.ImageInspect(ctx, ref); err == nil {
+	var err error
+	for attempt := 1; attempt <= inspectAttempts; attempt++ {
+		_, err = b.cli.ImageInspect(ctx, ref)
+		if err == nil || cerrdefs.IsNotFound(err) || attempt == inspectAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt) * inspectBackoff):
+		}
+	}
+	switch {
+	case err == nil:
 		return nil
+	case !cerrdefs.IsNotFound(err):
+		// Not "no such image": pulling would only bury the real error under a
+		// registry failure for an image that may exist only locally.
+		return fmt.Errorf("docker: look up image %s: %w", ref, err)
 	}
 	rc, err := b.cli.ImagePull(ctx, ref, image.PullOptions{})
 	if err != nil {
-		return fmt.Errorf("docker: pull image %s: %w", ref, err)
+		return fmt.Errorf("docker: image %s is not on this Docker host and could not be pulled; "+
+			"if it is a local image, build it first (docker build -t %s -f Dockerfile.local .): %w", ref, ref, err)
 	}
 	defer func() { _ = rc.Close() }()
 	// Draining the stream is what waits for the pull to finish.
@@ -183,27 +255,31 @@ func (b *Provider) Delete(ctx context.Context, id string) error {
 	if dir, ok := b.hostDir(id); ok {
 		_ = os.RemoveAll(dir)
 		b.mu.Lock()
-		delete(b.mounts, id)
+		delete(b.members, id)
 		b.mu.Unlock()
 	}
 	return nil
 }
 
-// Snapshot copies the member's workspace aside and returns a chunkfs ref to it.
-// It is independent of the seed container's lifecycle, so a later Delete of the
-// seed does not disturb clones restoring from it.
+// Snapshot copies the member's workspace aside, records the image it runs, and
+// returns a chunkfs ref to the result. It is independent of the seed
+// container's lifecycle, so a later Delete of the seed does not disturb clones
+// restoring from it.
 func (b *Provider) Snapshot(ctx context.Context, id, name string) (string, error) {
-	src, ok := b.hostDir(id)
+	m, ok := b.member(id)
 	if !ok {
 		return "", fmt.Errorf("docker: snapshot: unknown container %s", id)
 	}
 	snapDir := filepath.Join(b.workRoot, "snapshots", name)
-	if err := os.MkdirAll(filepath.Dir(snapDir), 0o777); err != nil {
+	if err := os.MkdirAll(snapDir, 0o777); err != nil {
 		return "", fmt.Errorf("docker: snapshot dir: %w", err)
 	}
 	// The snapshot keeps .git so clones carry the baseline commit and history.
-	if err := copyTree(ctx, src, snapDir); err != nil {
+	if err := copyTree(ctx, m.hostDir, filepath.Join(snapDir, snapshotWorkspaceDir)); err != nil {
 		return "", fmt.Errorf("docker: snapshot copy: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(snapDir, snapshotImageFile), []byte(m.image+"\n"), 0o644); err != nil {
+		return "", fmt.Errorf("docker: snapshot image: %w", err)
 	}
 	return snapshotScheme + snapDir, nil
 }
@@ -339,4 +415,13 @@ func (w streamWriter) Write(p []byte) (int, error) {
 		w.fn(w.stream, append([]byte(nil), p...))
 	}
 	return len(p), nil
+}
+
+// randomSuffix returns a short random hex string for unique container names.
+func randomSuffix() (string, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
 }
