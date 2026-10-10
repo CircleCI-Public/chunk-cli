@@ -12,10 +12,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
-// reviewScope tells each reviewer how the run's request and its reusable review
+// reviewHead tells each reviewer how the run's request and its reusable review
 // prompt relate. The original request remains the specification in every round;
 // later implementer prompts contain only feedback from the preceding checks.
-const reviewScope = `Review the implementation against the original requested change below. Treat the requested change as the specification and the review instructions as the lens for evaluating it. Do not implement changes yourself.
+const reviewHead = `Review the implementation against the original requested change below. Treat the requested change as the specification and the review instructions as the lens for evaluating it. Do not implement changes yourself.
 
 ## Requested change
 
@@ -24,11 +24,9 @@ const reviewScope = `Review the implementation against the original requested ch
 ## Change under review
 
 The change under review is the uncommitted work in this repository: run ` +
-	"`git diff HEAD`" + ` to see it, including new files. Committed history is the baseline and is not under review.
+	"`git diff HEAD`" + ` to see it, including new files. Committed history is the baseline and is not under review.`
 
-## Review instructions
-
-%s`
+const reviewTail = "## Review instructions\n\n%s"
 
 // PoolName names a run's sidecar pool. Each run has a pool of its own, rather
 // than one per project reused as `chunk review` does: every member is synced
@@ -86,6 +84,8 @@ type Sidecars struct {
 	OnReviewerTree func(ReviewerTree)
 
 	ws workspace
+	// history is what each review found in earlier rounds, by prompt name.
+	history map[string][]priorRound
 	// fingerprint is the implementer's change as last collected, which is
 	// what each round's reviews are of.
 	fingerprint string
@@ -111,7 +111,22 @@ func (s *Sidecars) Prepare(ctx context.Context) error {
 
 // Implement runs one implementer turn.
 func (s *Sidecars) Implement(ctx context.Context, prompt string) (Turn, error) {
-	return s.Implementer.Run(ctx, prompt)
+	turn, err := s.Implementer.Run(ctx, prompt)
+	if err != nil {
+		return turn, err
+	}
+	s.answer(turn.Summary)
+	return turn, nil
+}
+
+// answer records the implementer's summary as the reply to every review's latest
+// findings, since one turn answers all the feedback of the round just checked.
+func (s *Sidecars) answer(reply string) {
+	for name, rounds := range s.history {
+		if n := len(rounds); n > 0 && rounds[n-1].Reply == "" {
+			s.history[name][n-1].Reply = strings.TrimSpace(reply)
+		}
+	}
 }
 
 // Collect describes the implementer's work so far.
@@ -158,7 +173,7 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results, reviewErr = review.RunPass(ctx, s.Acquire, s.Release, s.Exec, s.scopedPrompts(), s.Review)
+			results, reviewErr = review.RunPass(ctx, s.Acquire, s.Release, s.Exec, scopePrompts(s.Request, s.Prompts, s.history), s.Review)
 		}()
 	}
 	wg.Add(1)
@@ -173,7 +188,9 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 
 	checks := make([]Check, 0, len(results)+len(validation))
 	for _, r := range results {
-		checks = append(checks, FromReview(r))
+		c := FromReview(r)
+		checks = append(checks, c)
+		s.remember(round, c)
 	}
 	return append(checks, validation...), nil
 }
@@ -251,16 +268,39 @@ func (s *Sidecars) reviewerTrees(ctx context.Context, round int) {
 	}
 }
 
-func (s *Sidecars) scopedPrompts() []review.Prompt {
-	return scopePrompts(s.Request, s.Prompts)
+// remember keeps what a review found this round for the reviews of later ones.
+// A review that could not run has nothing to remember.
+func (s *Sidecars) remember(round int, c Check) {
+	if c.Kind != KindReview || c.Status == StatusErrored {
+		return
+	}
+	if s.history == nil {
+		s.history = map[string][]priorRound{}
+	}
+	var worth []review.Finding
+	for _, f := range c.Findings {
+		if f.WorthChanging() {
+			worth = append(worth, f)
+		}
+	}
+	s.history[c.Name] = append(s.history[c.Name], priorRound{Round: round, Findings: worth})
 }
 
 // scopePrompts is prompts as each reviewer is sent them, with the stable
-// request being checked and the location of the change under review.
-func scopePrompts(request string, prompts []review.Prompt) []review.Prompt {
+// request being checked, the location of the change under review, the severity
+// rubric, and what that reviewer reported in earlier rounds.
+func scopePrompts(request string, prompts []review.Prompt, history map[string][]priorRound) []review.Prompt {
 	out := make([]review.Prompt, len(prompts))
 	for i, p := range prompts {
-		out[i] = review.Prompt{Name: p.Name, Body: fmt.Sprintf(reviewScope, request, p.Body)}
+		var b strings.Builder
+		fmt.Fprintf(&b, reviewHead, request)
+		b.WriteString("\n\n")
+		b.WriteString(severityScope + "\n\n")
+		if h := historyScope(history[p.Name]); h != "" {
+			b.WriteString(h + "\n")
+		}
+		fmt.Fprintf(&b, reviewTail, p.Body)
+		out[i] = review.Prompt{Name: p.Name, Body: b.String()}
 	}
 	return out
 }

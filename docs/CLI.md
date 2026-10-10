@@ -324,7 +324,14 @@ chunk
   restart loses the record, but not the work committed on the run's branch. `--reviews` must name a directory inside the project. Every reviewer is
   given the original factory prompt as the requested-change specification, so
   the files in that directory can be reusable review lenses rather than copies
-  of a particular request. As it follows the run it prints the sidecars being
+  of a particular request. Every reviewer is also given a severity rubric: only
+  a problem it can demonstrate (it breaks the requested behavior or existing
+  behavior, degrades run time, loses data or is a security problem) may be high
+  or medium and so send the implementer back; style remarks, tests that could
+  be more thorough and other suggestions are low and never block. From the
+  second round, each reviewer is shown its own earlier blocking findings and the
+  implementer's reply to them, so it checks whether they were fixed rather than
+  raising them again or contradicting itself. As it follows the run it prints the sidecars being
   prepared and each round's findings, with the end of any failed validation
   command's output.
   Factory branches are named `chunk/factory/<description>/<run id>`. The
