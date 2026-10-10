@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -94,7 +94,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	// prompts there even when the image runs it as root.
 	env["IS_SANDBOX"] = "1"
 	code, err := im.Exec(ctx, im.Entry, im.script(prompt), env, func(stream string, data []byte) {
-		if stream == circleci.StreamStderr {
+		if stream == iostream.StreamStderr {
 			if stderr.Len() < outputTail {
 				stderr.Write(data)
 			}

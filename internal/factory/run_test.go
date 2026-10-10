@@ -107,7 +107,7 @@ func TestCommitWorkCommitsAfterACancelAndAFailedPull(t *testing.T) {
 	assert.NilError(t, err)
 	steps := &Sidecars{
 		Implementer: &Implementer{Entry: &sidecar.PoolEntry{ID: "no-such-sidecar", RepoPath: "/workspace"}},
-		Relay:       NewRelay(client, wt.Path, nil),
+		Relay:       NewRelay(sidecar.NewCircleCIBackend(client, ""), wt.Path, nil),
 	}
 	var warnings []string
 	status := func(level iostream.Level, msg string) {

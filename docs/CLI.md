@@ -12,8 +12,11 @@ chunk
 │   ├── signup                      # Sign up for a new CircleCI account via browser
 │   │   --no-browser                # Print the signup URL instead of opening a browser
 │   ├── set <provider>               # Store credential (circleci | anthropic | anthropic-oauth | github)
+│   ├── refresh [provider]          # Re-mint the Claude subscription token (claude | anthropic-oauth; default claude) and restart a running daemon
 │   ├── status                      # Check authentication status (CircleCI, Anthropic, GitHub)
 │   └── remove <provider>           # Remove stored credential (circleci | anthropic | anthropic-oauth | github)
+│
+├── refresh [provider]              # Same as `auth refresh`
 │
 ├── org                             # Manage CircleCI organizations
 │   └── create <name>               # Create a new standalone CircleCI organization
@@ -41,6 +44,7 @@ chunk
 │   --skip-validate                 # Skip validate command detection
 │   --skip-completions              # Skip shell completion installation
 │   --skip-skills                   # Skip agent skill installation
+│   --skip-auth                     # Skip the Claude login check
 │   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (default: true; pass =false to generate)
 │   --project-dir <path>            # Project directory (defaults to cwd)
 │
@@ -198,6 +202,8 @@ chunk
 - `auth signup` fails with a user-friendly error if a CircleCI token is already stored; run `chunk auth remove circleci` first to clear it. Existing accounts should use `chunk auth login`.
 - After a successful `auth signup`, chunk checks whether the new account belongs to any organization. If it belongs to none, chunk prompts for a name and creates a standalone org, so the first sidecar command does not fail on having none. Without a terminal it prints a warning pointing at `chunk org create <name>` instead; the signup itself still succeeds.
 - Commands that resolve an org (sidecar, validate, init, mutate, prune) offer the same org creation prompt when the account has no organizations. Without a terminal, or with `CI` set, sidecar, validate, mutate and prune fail with a suggestion to run `chunk org create <name>` or pass `--org-id`; `init` prints a warning and finishes without writing an org ID.
+- `init` ends with a Claude credential step: it reports the credential in use, or (interactively) offers to run `claude setup-token` and store the token in the keychain. Without a terminal, with `CI` set, or with `--insecure-storage` it only prints a hint. It also runs when `.chunk/config.json` already exists. A failed or declined login is never fatal. The token is never written to `.chunk/config.json`.
+- `auth refresh` / `refresh` always replace the stored token without a confirmation, warn when `CLAUDE_CODE_OAUTH_TOKEN` or an API key overrides it, and restart a running chunk daemon. `auth set anthropic-oauth` and `auth remove anthropic-oauth` restart it too.
 - `org create` is hidden from the default help output. It requires CircleCI authentication and creates a standalone org (not tied to a VCS provider), printing the org name, ID, and slug on success.
 - `build-prompt` auto-detects org and repos from the git remote when flags
   are omitted. If `--org` is provided explicitly, `--repos` is required.
@@ -324,7 +330,14 @@ chunk
   restart loses the record, but not the work committed on the run's branch. `--reviews` must name a directory inside the project. Every reviewer is
   given the original factory prompt as the requested-change specification, so
   the files in that directory can be reusable review lenses rather than copies
-  of a particular request. As it follows the run it prints the sidecars being
+  of a particular request. Every reviewer is also given a severity rubric: only
+  a problem it can demonstrate (it breaks the requested behavior or existing
+  behavior, degrades run time, loses data or is a security problem) may be high
+  or medium and so send the implementer back; style remarks, tests that could
+  be more thorough and other suggestions are low and never block. From the
+  second round, each reviewer is shown its own earlier blocking findings and the
+  implementer's reply to them, so it checks whether they were fixed rather than
+  raising them again or contradicting itself. As it follows the run it prints the sidecars being
   prepared and each round's findings, with the end of any failed validation
   command's output.
   Factory branches are named `chunk/factory/<description>/<run id>`. The
@@ -356,8 +369,10 @@ chunk
   original request and where the work is. A prompt is optional and adds to the
   request, for the implementer and the reviewers alike. With one, the
   implementer starts on it; without one, the run checks the work as it is
-  first and sends the implementer what failed, and that round does not count
-  toward `--max-attempts`. Each run keeps a record (its request, worktree, branch
+  first and sends the implementer what failed, and that round counts toward
+  `--max-attempts`. Given no prompt in a terminal, it asks what to do
+  differently first; Enter skips that and checks first. Without a terminal it
+  does not ask. Each run keeps a record (its request, worktree, branch
   and baseline) in the project's data directory beside its worktree, which is
   what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The

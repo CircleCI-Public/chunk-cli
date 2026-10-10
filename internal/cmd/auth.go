@@ -11,7 +11,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/claudeauth"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
@@ -40,6 +39,7 @@ func newAuthCmd() *cobra.Command {
 	cmd.AddCommand(newAuthSignupCmd())
 	cmd.AddCommand(newAuthSetCmd())
 	cmd.AddCommand(newAuthStatusCmd())
+	cmd.AddCommand(newAuthRefreshCmd())
 	cmd.AddCommand(newAuthRemoveCmd())
 	return cmd
 }
@@ -335,41 +335,9 @@ func authSetAnthropicOAuth(ctx context.Context, io iostream.Streams, baseURL str
 		}
 	}
 
-	token, err := claudeauth.SetupToken(ctx, io, ui.PromptHidden)
-	switch {
-	case errors.Is(err, claudeauth.ErrNotInstalled):
-		return &userError{
-			msg:        "Claude Code is not installed locally, so a token cannot be minted.",
-			suggestion: "Install it from https://claude.com/claude-code, or set " + config.EnvClaudeOAuthToken + " instead.",
-			exitCode:   ExitAuthError,
-			err:        err,
-		}
-	case errors.Is(err, ui.ErrNoTTY):
-		return newUserError("Cannot mint a Claude token without an interactive terminal.").
-			withCode("auth.claude_token_required").
-			withSuggestion("Run 'claude setup-token' yourself and set " + config.EnvClaudeOAuthToken + ".").
-			withExitCode(ExitAuthError).
-			wrap(err)
-	case errors.Is(err, ui.ErrCancelled):
-		return nil
-	case err != nil:
-		return &userError{msg: "Could not mint a Claude token.", err: err}
-	}
-
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return &userError{
-			msg:        msgEmptyToken,
-			suggestion: "Run 'claude setup-token' and check it prints a token.",
-			errMsg:     "empty claude token",
-		}
-	}
-
-	// Not validated before storing, unlike the API key: the count-tokens probe
-	// authprompt uses sends x-api-key, which a bearer token is not. A review
-	// that Anthropic refuses clears the token and says so.
-	if err := authprompt.SaveClaudeOAuthToken(token, baseURL); err != nil {
-		return &userError{msg: msgCouldNotSaveCredentials, err: err}
+	saved, _, err := mintAndStoreClaudeToken(ctx, io, baseURL)
+	if err != nil || !saved {
+		return err
 	}
 
 	io.Println("")
@@ -408,6 +376,7 @@ func authRemoveAnthropicOAuth(io iostream.Streams, baseURL string, envSet, force
 	if err := keyring.Delete(keyring.ServiceAnthropicOAuth(baseURL)); err != nil {
 		return &userError{msg: "Could not remove the stored Claude token.", err: err}
 	}
+	stopDaemonForCredentialChange()
 
 	io.Println(ui.Success("Claude subscription token removed successfully."))
 	if envSet {

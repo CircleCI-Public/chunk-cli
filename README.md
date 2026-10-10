@@ -34,7 +34,7 @@ Initialize your project for hook automation and validation:
 
 ```bash
 # Detect test commands, configure hooks, set up .claude/settings.json
-chunk init
+chunk init   # also offers to log in to Claude; run `chunk refresh` to log in again
 
 # Run configured validations
 chunk validate              # all commands
@@ -141,6 +141,7 @@ chunk sidecar use|current|forget           Manage active sidecar
 chunk sidecar setup                        Detect env and install deps
 chunk sidecar snapshot create|get|list     Manage sidecar snapshots
 chunk init                                 Initialize project configuration
+chunk refresh [claude]                     Re-login to Claude and restart the daemon
 chunk validate [name]                      Run quality checks
 chunk hook disable|enable|status           Manage hook execution
 chunk skill install|list                   Manage AI agent skills

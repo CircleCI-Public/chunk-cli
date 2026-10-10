@@ -362,30 +362,30 @@ func stopDaemon(pid int, sockPath string) error {
 // Best-effort and silent, like RegisterCommand. Failing to stop the daemon must
 // not fail a login that has otherwise succeeded, and the cost of not stopping it
 // is the buffered output of a daemon that was not streaming anything anyway.
-func StopForCredentialChange() {
+func StopForCredentialChange() bool {
 	// A remote daemon is managed externally; we have no way to restart it, and
 	// the local pid file / socket are unrelated to it.
 	if TCPRemoteAddr() != "" {
-		return
+		return false
 	}
 	pidPath, err := PIDPath()
 	if err != nil {
-		return
+		return false
 	}
 	sockPath, err := SocketPath()
 	if err != nil {
-		return
+		return false
 	}
 	running, pid, err := IsRunning(pidPath)
 	if err != nil || !running {
-		return
+		return false
 	}
 	// Only stop something that is actually answering: a stale pid file is the
 	// launcher's problem to clean up, not ours.
 	if reachable, _ := ping(sockPath); !reachable {
-		return
+		return false
 	}
-	_ = stopDaemon(pid, sockPath)
+	return stopDaemon(pid, sockPath) == nil
 }
 
 // IsDaemonRunning reports whether the chunk daemon is reachable. Use

@@ -448,7 +448,7 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 		// Map iteration is random; sort by root so project rows stay stable
 		// between polls when watchAll mode requests all projects.
 		sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-		return chunkd.Snapshot{Projects: projects, AuthError: d.authError, ReviewAuthError: d.factoryAuthError()}
+		return chunkd.Snapshot{Projects: projects, AuthError: d.authError, ReviewAuthError: d.factoryAuthError("")}
 	}
 
 	ordered := make([]chunkd.ProjectSnapshot, 0, len(roots))
@@ -463,7 +463,7 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 			break
 		}
 	}
-	return chunkd.Snapshot{Projects: ordered, AuthError: d.authError, ReviewAuthError: d.factoryAuthError()}
+	return chunkd.Snapshot{Projects: ordered, AuthError: d.authError, ReviewAuthError: d.factoryAuthError("")}
 }
 
 // withSessions attaches the project's sessions to a snapshot. It is done when a

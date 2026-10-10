@@ -35,7 +35,7 @@ type RunOptions struct {
 	// starting from the developer's files.
 	Continue *Continuation
 	// Attempts is the most rounds to check. A continued run that checks the
-	// work first adds a round for that; see Continuation.Rounds.
+	// work first counts that round as one of them.
 	Attempts int
 	// Reviewers is how many reviewer sidecars to run; see ReviewerCount.
 	Reviewers int
@@ -45,6 +45,10 @@ type RunOptions struct {
 	Client *circleci.Client
 	OrgID  string
 	Image  string
+	// Backend provisions and drives the run's sidecars. When nil, the run uses
+	// the CircleCI backend built from Client and OrgID. Set it to run the loop
+	// on a different provider, such as local Docker.
+	Backend sidecar.Backend
 	// KeepSidecars leaves the sidecars running when the run ends.
 	KeepSidecars bool
 
@@ -102,6 +106,15 @@ type Report struct {
 	Log string
 }
 
+// backend is the backend that drives the run's pool and relay: the caller's
+// choice (such as Docker), else the CircleCI backend built from the client.
+func (o *RunOptions) backend() sidecar.Backend {
+	if o.Backend != nil {
+		return o.Backend
+	}
+	return sidecar.NewCircleCIBackend(o.Client, o.OrgID)
+}
+
 // ReviewerCount is how many reviewer sidecars a run with prompts needs when
 // asked for requested: one per prompt unless fewer are asked for, and none
 // without prompts.
@@ -126,7 +139,6 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	request := opts.Prompt
 	if cont != nil {
 		opts.Prompt, request = cont.prompt(), cont.request()
-		opts.Attempts = cont.Rounds(opts.Attempts)
 	}
 	if opts.Verbose && opts.Log == "" {
 		opts.Log = LogDefault
@@ -204,11 +216,14 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}
 
 	status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", opts.Reviewers))
+	// One backend drives both the pool and the relay.
+	backend := opts.backend()
 	pool, err := sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{
-		Size:  PoolSize(opts.Reviewers),
-		Name:  PoolName(rep.RunID),
-		OrgID: opts.OrgID,
-		Image: opts.Image,
+		Size:    PoolSize(opts.Reviewers),
+		Name:    PoolName(rep.RunID),
+		OrgID:   opts.OrgID,
+		Image:   opts.Image,
+		Backend: backend,
 		// The sidecars start from the worktree, and its state stays in the
 		// project, where the dashboard finds it.
 		WorkDir:  wt.Path,
@@ -248,7 +263,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Acquire:   pool.Acquire,
 		Release:   pool.Release,
 		Reviewers: Members(impl, pool.IDs()),
-		Relay:     NewRelay(opts.Client, wt.Path, status),
+		Relay:     NewRelay(backend, wt.Path, status),
 		Request:   request,
 		Prompts:   opts.Prompts,
 		Review: review.Options{

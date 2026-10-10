@@ -184,7 +184,7 @@ func mutationTestEntry(t *testing.T, response *fakes.ExecResponse) *sidecar.Pool
 	t.Cleanup(server.Close)
 	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: server.URL})
 	assert.NilError(t, err)
-	return &sidecar.PoolEntry{ID: "sidecar-1", RepoPath: "/workspace/project", Client: client}
+	return &sidecar.PoolEntry{ID: "sidecar-1", RepoPath: "/workspace/project", Backend: sidecar.NewCircleCIBackend(client, "")}
 }
 
 func TestRunMutationMarksWorkerUnusableWhenCleanupFails(t *testing.T) {

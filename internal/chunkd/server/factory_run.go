@@ -11,23 +11,30 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar/docker"
 )
 
 // DefaultAttempts is how many rounds a factory session checks at most when the
 // request does not say.
 const DefaultAttempts = 3
 
-// factoryAuthError explains why factory sessions cannot run, or "" when they
-// can.
-func (d *daemon) factoryAuthError() string {
+// factoryAuthError explains why a factory session on the given backend cannot
+// run, or "" when it can. Every backend needs the Claude credential; only the
+// CircleCI backend needs a CircleCI client.
+func (d *daemon) factoryAuthError(backend string) string {
 	if d.rcfg.Credential.Value == "" {
 		if d.rcfg.AuthError != "" {
 			return d.rcfg.AuthError
 		}
 		return "no Claude credential configured for the chunk daemon — factory runs unavailable"
+	}
+	if backend == chunkd.BackendDocker {
+		return ""
 	}
 	if d.rcfg.RunFactory == nil && d.client == nil {
 		return "not authenticated to CircleCI — factory runs unavailable (run: chunk auth login)"
@@ -35,10 +42,56 @@ func (d *daemon) factoryAuthError() string {
 	return ""
 }
 
+// factoryTarget is the org and image a factory request's sidecars use: the
+// request's own, filled in from the project config. The Docker backend needs no
+// CircleCI org, and an empty image is fine for it: it has its own default.
+func factoryTarget(root string, cfg *config.ProjectConfig, req chunkd.FactoryRequest) (orgID, image string, err error) {
+	orgID, image = req.OrgID, req.Image
+	if req.Backend == chunkd.BackendDocker {
+		if image == "" && cfg.Validation != nil {
+			image = cfg.Validation.SidecarImage
+		}
+		return orgID, image, nil
+	}
+	if orgID != "" && image != "" {
+		return orgID, image, nil
+	}
+	cfgOrg, cfgImage, err := poolTarget(root, cfg)
+	if err != nil && orgID == "" {
+		return "", "", err
+	}
+	if orgID == "" {
+		orgID = cfgOrg
+	}
+	if image == "" {
+		image = cfgImage
+	}
+	return orgID, image, nil
+}
+
+// factoryBackend builds the backend a factory request names. Nil means the run
+// uses the CircleCI backend it derives from the daemon's client. It is built
+// when the request arrives so a daemon that cannot reach the Docker socket
+// fails the request rather than the background run.
+func factoryBackend(name string) (sidecar.Backend, error) {
+	if name != chunkd.BackendDocker {
+		return nil, nil
+	}
+	b, err := docker.New()
+	if err != nil {
+		return nil, fmt.Errorf("docker backend unavailable: %w", err)
+	}
+	return b, nil
+}
+
 // startFactory validates a request, records a factory session and starts it in
 // the background. It returns as soon as the session is accepted.
 func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error) {
-	if msg := d.factoryAuthError(); msg != "" {
+	if req.Backend != "" && req.Backend != chunkd.BackendCircleCI && req.Backend != chunkd.BackendDocker {
+		return chunkd.Session{}, apiErr(http.StatusBadRequest, "unknown backend %q (want %s or %s)",
+			req.Backend, chunkd.BackendCircleCI, chunkd.BackendDocker)
+	}
+	if msg := d.factoryAuthError(req.Backend); msg != "" {
 		return chunkd.Session{}, apiErr(http.StatusServiceUnavailable, "%s", msg)
 	}
 	prompt := strings.TrimSpace(req.Prompt)
@@ -77,18 +130,13 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
 	}
-	orgID, image := req.OrgID, req.Image
-	if orgID == "" || image == "" {
-		cfgOrg, cfgImage, err := poolTarget(ps.root, cfg)
-		if err != nil && orgID == "" {
-			return chunkd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
-		}
-		if orgID == "" {
-			orgID = cfgOrg
-		}
-		if image == "" {
-			image = cfgImage
-		}
+	orgID, image, err := factoryTarget(ps.root, cfg, req)
+	if err != nil {
+		return chunkd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
+	}
+	backend, err := factoryBackend(req.Backend)
+	if err != nil {
+		return chunkd.Session{}, apiErr(http.StatusServiceUnavailable, "%v", err)
 	}
 	// The daemon's working directory is not the caller's, so a relative path
 	// would put the log somewhere the caller did not mean.
@@ -100,9 +148,6 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		attempts = DefaultAttempts
 	}
 	record.Attempts = attempts
-	if cont != nil {
-		record.Attempts = cont.Rounds(attempts)
-	}
 
 	entry, ctx, busy := d.sessions.add(chunkd.Session{
 		ProjectRoot: ps.root,
@@ -124,6 +169,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		Client:                  d.client,
 		OrgID:                   orgID,
 		Image:                   image,
+		Backend:                 backend,
 		KeepSidecars:            req.KeepSidecars,
 		Credential:              d.rcfg.Credential,
 		BaseURL:                 d.rcfg.BaseURL,
@@ -150,7 +196,15 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 		log.Printf("chunkd: factory (%s): %s", root, msg)
 		rec.progress(level, msg)
 	}
-	opts.Exec = d.execerFor(root, rec.attribute)
+	// execerFor wires each command into the dashboard's live output pane via the
+	// CircleCI client. The Docker backend runs commands itself, so it uses the
+	// backend's own Exec (review.ClientExec); its live output pane lands in a
+	// later phase.
+	if opts.Backend == nil {
+		opts.Exec = d.execerFor(root, rec.attribute)
+	} else {
+		opts.Exec = review.ClientExec
+	}
 	opts.OnStart = rec.started
 	opts.OnEvent = rec.event
 	opts.OnReviewProgress = rec.reviewProgress

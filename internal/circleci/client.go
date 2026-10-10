@@ -11,6 +11,7 @@ import (
 	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sse"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
@@ -202,15 +203,18 @@ func (c *Client) AddSSHKey(ctx context.Context, sidecarID, publicKey string) (*A
 	return &AddSSHKeyResponse{URL: attrs.URL}, nil
 }
 
-// Stream names, matching the wire event names.
+// Stream names, matching the wire event names. The canonical definitions live
+// in package iostream; these aliases keep the circleci API's signatures
+// readable. New code should use the iostream names directly.
 const (
-	StreamStdout = "stdout"
-	StreamStderr = "stderr"
+	StreamStdout = iostream.StreamStdout
+	StreamStderr = iostream.StreamStderr
 )
 
-// OutputFn receives a run of raw output bytes from one stream, exactly as the
-// remote command wrote them. data is only valid for the duration of the call.
-type OutputFn func(stream string, data []byte)
+// OutputFn is an alias for iostream.OutputFn. It once lived here; it moved to
+// the neutral iostream package so backends that are not CircleCI need not
+// import this package for it.
+type OutputFn = iostream.OutputFn
 
 // maxOutputFrame caps a single SSE frame. The API batches output at 64KiB, which
 // base64-encodes to ~87KiB, so this is generous.

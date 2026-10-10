@@ -8,6 +8,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 // submitAndStream submits a command to a sidecar, registers it with the watch
@@ -31,7 +32,7 @@ import (
 func submitAndStream(
 	ctx context.Context, client *circleci.Client, sidecarID string,
 	reg *chunkd.CommandReg, command string, args []string,
-	onOutput circleci.OutputFn,
+	onOutput iostream.OutputFn,
 ) (*circleci.ExecResponse, error) {
 	// Both phases are wrapped so a failure says which one it was. They fail for
 	// different reasons and are worth telling apart: a rejected submission means

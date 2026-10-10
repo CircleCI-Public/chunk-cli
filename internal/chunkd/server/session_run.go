@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -23,7 +23,7 @@ type SubmitFunc func(ctx context.Context, entry *sidecar.PoolEntry, script strin
 
 // StreamFunc reads a submitted command's output to its end and returns its
 // exit code.
-type StreamFunc func(ctx context.Context, entry *sidecar.PoolEntry, commandID string, onOutput circleci.OutputFn) (int, error)
+type StreamFunc func(ctx context.Context, entry *sidecar.PoolEntry, commandID string, onOutput iostream.OutputFn) (int, error)
 
 // ReviewConfig is everything the daemon needs to run factory sessions. The
 // credential is resolved once by the caller at daemon start; it is only ever
@@ -188,20 +188,20 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 	submit := d.rcfg.Submit
 	if submit == nil {
 		submit = func(ctx context.Context, pe *sidecar.PoolEntry, script string, env map[string]string) (string, error) {
-			return pe.Client.SubmitExec(ctx, pe.ID, "sh", []string{"-c", script}, env)
+			return d.client.SubmitExec(ctx, pe.ID, "sh", []string{"-c", script}, env)
 		}
 	}
 	stream := d.rcfg.Stream
 	if stream == nil {
-		stream = func(ctx context.Context, pe *sidecar.PoolEntry, commandID string, onOutput circleci.OutputFn) (int, error) {
-			resp, err := pe.Client.StreamOutput(ctx, commandID, "", onOutput)
+		stream = func(ctx context.Context, _ *sidecar.PoolEntry, commandID string, onOutput iostream.OutputFn) (int, error) {
+			resp, err := d.client.StreamOutput(ctx, commandID, "", onOutput)
 			if err != nil {
 				return 0, err
 			}
 			return resp.ExitCode, nil
 		}
 	}
-	return func(ctx context.Context, pe *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
+	return func(ctx context.Context, pe *sidecar.PoolEntry, script string, env map[string]string, onOutput iostream.OutputFn, onSubmitted func(string)) (int, error) {
 		commandID, err := submit(ctx, pe, script, env)
 		if err != nil {
 			return 0, fmt.Errorf("submit: %w", err)
@@ -218,7 +218,7 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 				Op:          "review",
 				Name:        name,
 				SubmittedAt: time.Now(),
-			}, streamFor(pe.Client))
+			}, streamFor(d.client))
 		}
 		code, err := stream(ctx, pe, commandID, onOutput)
 		if err != nil {
@@ -293,7 +293,7 @@ func friendlyReviewError(err error) string {
 	case errors.Is(err, review.ErrClaudeMissing):
 		return "Claude Code is not installed on the sandboxes — install it in the sandbox image and set validation.sidecarImage"
 	case errors.Is(err, review.ErrCredentialRejected):
-		return "Anthropic rejected the chunk daemon's Claude credential — replace it and restart the daemon"
+		return "Anthropic rejected the chunk daemon's Claude credential — run: chunk auth refresh"
 	}
 	return err.Error()
 }

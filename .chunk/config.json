@@ -1,45 +1,37 @@
 {
   "commands": [
     {
+      "name": "install",
+      "run": "task mod-download"
+    },
+    {
       "name": "test",
-      "run": "task test",
+      "run": "task ci:test",
       "role": "gate",
-      "timeout": 300,
-      "remote": true
-    },
-    {
-      "name": "acceptance-test",
-      "run": "task acceptance-test",
-      "role": "gate",
-      "timeout": 300,
-      "remote": true
-    },
-    {
-      "name": "test-changed",
-      "run": "task test -- {{CHANGED_PACKAGES}}",
       "timeout": 300
     },
     {
       "name": "lint",
-      "run": "task lint",
+      "run": "task ci:lint",
       "role": "gate",
-      "timeout": 60
+      "timeout": 300
     },
     {
       "name": "format",
       "run": "task fmt",
       "role": "autofix",
-      "local": true,
-      "timeout": 30
+      "timeout": 30,
+      "local": true
     }
   ],
   "vcs": {
-    "org": "CircleCI-Public",
+    "org": "web3technologies",
     "repo": "chunk-cli"
   },
   "validation": {
     "sidecarImage": "4c46e935-5727-461b-9c73-d6806ecbdf36"
   },
+  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
   "environment": {
     "stack": "go",
     "setup": [
@@ -58,6 +50,5 @@
     ],
     "image": "cimg/go",
     "image_version": "1.26.2"
-  },
-  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c"
+  }
 }

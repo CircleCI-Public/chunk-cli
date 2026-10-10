@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1
+#
+# Local sandbox image for `chunk factory --backend docker`.
+#
+# This is the environment a factory *sidecar* runs in — the box the AI agent
+# edits code on and where your tests run. Build it once, then point the factory
+# at it:
+#
+#     docker build -t chunk-sandbox:local -f Dockerfile.local .
+#     chunk factory build --backend docker --image chunk-sandbox:local "your task"
+#
+# It carries what the loop needs (git, coreutils, procps, the Claude Code CLI)
+# plus chunk-cli's own toolchain so the project's validation commands run in the
+# sidecar: Go (matching go.mod), Task, and uv/python for the harness lint step.
+# `task test`/`lint`/`fmt` fetch gotestsum, golangci-lint and gosimports via
+# `go tool`, so those need no separate install.
+#
+# The repo is NOT copied in at build time — the Docker backend bind-mounts a
+# fresh copy of your working tree into the container at run time. So this image
+# only needs tools, never your source. (No rsync/ssh here: the file transport
+# is host-side.)
+
+FROM debian:bookworm-slim
+
+ENV HOME=/root \
+    DEBIAN_FRONTEND=noninteractive \
+    GOTOOLCHAIN=auto \
+    CGO_ENABLED=1 \
+    PATH=/root/.local/bin:/usr/local/go/bin:/root/go/bin:/usr/local/bin:/usr/bin:/bin
+
+# Base tools: the loop's own scripts (git, sha256sum/base64 from coreutils,
+# pkill from procps), curl/ca-certificates for installers, python3 for the
+# harness lint step, and gcc + libc6-dev because `task test` runs with -race,
+# which needs cgo.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git \
+      coreutils \
+      procps \
+      ca-certificates \
+      curl \
+      bash \
+      python3 \
+      gcc \
+      libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Go — matches go.mod's version, architecture-detected so the image builds on
+# both amd64 and arm64 (Apple Silicon) Docker.
+ARG GO_VERSION=1.26.1
+RUN arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) goarch=amd64 ;; \
+      arm64) goarch=arm64 ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${goarch}.tar.gz" | tar -C /usr/local -xz \
+ && go version
+
+# Task (task test/lint/fmt runner) and uv (runs the harness's pylint step).
+RUN sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin \
+ && task --version \
+ && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+ && uv --version
+
+# -- Extra project toolchain -------------------------------------------------
+# chunk-cli needs only Go + Task + uv (above). For other repos, add their test
+# dependencies here (node, rust, system libs, …).
+# ---------------------------------------------------------------------------
+
+# Claude Code CLI. The native installer drops `claude` in $HOME/.local/bin,
+# which is exactly where the factory's scripts look (they prepend it to PATH).
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+    && test -x /root/.local/bin/claude
+
+# The factory keeps the container alive and execs commands into it.
+CMD ["sleep", "infinity"]

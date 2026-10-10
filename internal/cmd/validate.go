@@ -1561,8 +1561,9 @@ func runPooledValidateCommand(
 		// command before starting so its terminal event cannot inherit one.
 		setCommandID("")
 	}
+	client, _ := sidecar.CircleCIClientOf(entry.Backend)
 	target := sidecar.Target{
-		Client:      entry.Client,
+		Client:      client,
 		SidecarID:   entry.ID,
 		Workdir:     entry.RepoPath,
 		OnSubmitted: onValidateCommandSubmitted(entry.ID, projectRoot, command.Name, setCommandID),

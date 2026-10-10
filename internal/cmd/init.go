@@ -568,7 +568,7 @@ func detectVCS(ctx context.Context, workDir string, streams iostream.Streams, cf
 }
 
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID bool
+	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth bool
 	var projectDir string
 
 	cmd := &cobra.Command{
@@ -616,6 +616,9 @@ hook config files.`,
 					// Still ensure pool state is gitignored for projects
 					// initialized before this pattern existed.
 					updateInitGitignore(workDir, streams)
+					// Credentials are per user, so ensure the login anyway.
+					earlyRC, _ := config.Resolve("", "", insecureStorage)
+					claudeAuthStep(ctx, streams, earlyRC, insecureStorage, skipAuth, ui.Confirm)
 					return nil
 				}
 			}
@@ -711,6 +714,11 @@ hook config files.`,
 				installSkillsStep(workDir, streams)
 			}
 
+			// Step 8: Claude credential. Re-resolve: earlier steps may not have
+			// changed it, but this keeps the report accurate.
+			authRC, _ := config.Resolve("", "", insecureStorage)
+			claudeAuthStep(ctx, streams, authRC, insecureStorage, skipAuth, ui.Confirm)
+
 			streams.ErrPrintln(ui.Success("Project initialized"))
 			printInitSummary(cfg.Commands, streams)
 			return nil
@@ -725,6 +733,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	cmd.Flags().BoolVar(&skipTestSuites, "skip-test-suites", true, "Skip CircleCI test-suites.yml generation (default: skip; pass =false to use built-in Go/pytest templates)")
 	cmd.Flags().BoolVar(&skipOrgID, "skip-org-id", false, "Skip CircleCI org ID detection")
+	cmd.Flags().BoolVar(&skipAuth, "skip-auth", false, "Skip the Claude login check")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 
 	return cmd
