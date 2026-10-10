@@ -100,9 +100,6 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		attempts = DefaultAttempts
 	}
 	record.Attempts = attempts
-	if cont != nil {
-		record.Attempts = cont.Rounds(attempts)
-	}
 
 	entry, ctx, busy := d.sessions.add(chunkd.Session{
 		ProjectRoot: ps.root,

@@ -108,7 +108,6 @@ func TestContinuationWithoutGuidanceChecksFirst(t *testing.T) {
 	c := &Continuation{From: Record{RunID: "run-1", Prompt: "add a flag\n\nwith tests"}}
 
 	assert.Assert(t, c.checkFirst())
-	assert.Equal(t, c.Rounds(3), 4, "the round that checks first does not use up an attempt")
 	assert.Equal(t, c.request(), "add a flag\n\nwith tests")
 	assert.Assert(t, strings.Contains(c.prompt(), "It was asked:\n\nadd a flag\n\nwith tests"))
 	assert.Assert(t, strings.Contains(c.prompt(), "`git diff HEAD` shows it"))
@@ -121,7 +120,6 @@ func TestContinuationWithGuidanceImplementsFirst(t *testing.T) {
 	c := &Continuation{From: Record{RunID: "run-1", Prompt: "add a flag"}, Guidance: "you may update the test"}
 
 	assert.Assert(t, !c.checkFirst())
-	assert.Equal(t, c.Rounds(3), 3)
 	assert.Equal(t, c.request(), "add a flag\n\nFollow-up from the developer:\n\nyou may update the test")
 	assert.Assert(t, strings.HasSuffix(c.prompt(), "The developer adds:\n\nyou may update the test"))
 	assert.Equal(t, c.commitMessage("run-2", Outcome{Result: ResultExhausted, Rounds: 3}),

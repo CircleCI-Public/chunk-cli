@@ -356,8 +356,10 @@ chunk
   original request and where the work is. A prompt is optional and adds to the
   request, for the implementer and the reviewers alike. With one, the
   implementer starts on it; without one, the run checks the work as it is
-  first and sends the implementer what failed, and that round does not count
-  toward `--max-attempts`. Each run keeps a record (its request, worktree, branch
+  first and sends the implementer what failed, and that round counts toward
+  `--max-attempts`. Given no prompt in a terminal, it asks what to do
+  differently first; Enter skips that and checks first. Without a terminal it
+  does not ask. Each run keeps a record (its request, worktree, branch
   and baseline) in the project's data directory beside its worktree, which is
   what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The

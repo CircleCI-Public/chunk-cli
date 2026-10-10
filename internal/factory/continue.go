@@ -30,16 +30,6 @@ func (c *Continuation) checkFirst() bool {
 	return strings.TrimSpace(c.Guidance) == ""
 }
 
-// Rounds is the most rounds a continued run checks when attempts were asked
-// for. Checking first takes a round of its own, so the developer still gets
-// the implementer turns they asked for.
-func (c *Continuation) Rounds(attempts int) int {
-	if c.checkFirst() {
-		return attempts + 1
-	}
-	return attempts
-}
-
 // prompt is the continued run's first implementer prompt. The implementer is
 // a new session that did not write the work, so it is told what was asked and
 // where the work is.
