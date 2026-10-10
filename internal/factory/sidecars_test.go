@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -319,4 +320,38 @@ func TestCheckReportsAReviewerWithOtherCode(t *testing.T) {
 	assert.Assert(t, !trees[1].Matches(), "a reviewer with other code matched: %+v", trees[1])
 	assert.NilError(t, trees[1].Err)
 	assert.Assert(t, trees[1].Fingerprint != "")
+}
+
+// TestCheckWaitsForReviewers guards starting the implementer before the rest
+// of the pool is ready: the reviewers are fetched and given their baseline
+// once, at the first check, and a pool that could not get them ready fails
+// the check.
+func TestCheckWaitsForReviewers(t *testing.T) {
+	ctx := context.Background()
+	s, impl, reviewers, _ := newSidecarsFixture(t, nil)
+	s.Reviewers = nil
+	waits := 0
+	s.WaitReviewers = func(context.Context) ([]*sidecar.PoolEntry, error) {
+		waits++
+		return reviewers, nil
+	}
+
+	writeFile(t, impl.RepoPath, "main.go", "package main\n\n// v1\n")
+	for round := 1; round <= 2; round++ {
+		_, err := s.Collect(ctx)
+		assert.NilError(t, err)
+		_, err = s.Check(ctx, round)
+		assert.NilError(t, err)
+	}
+	assert.Equal(t, waits, 1)
+	for _, rev := range reviewers {
+		assert.Equal(t, gitOutput(t, rev.RepoPath, "diff", "HEAD", "--name-only"), "main.go", rev.ID)
+	}
+
+	failed, _, _, _ := newSidecarsFixture(t, nil)
+	failed.WaitReviewers = func(context.Context) ([]*sidecar.PoolEntry, error) {
+		return nil, errors.New("clone failed")
+	}
+	_, err := failed.Check(ctx, 1)
+	assert.ErrorContains(t, err, "get the reviewer sidecars ready: clone failed")
 }
