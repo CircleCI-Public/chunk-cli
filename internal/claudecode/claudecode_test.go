@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -186,7 +187,10 @@ func TestRunStructuredResultOverTheCapFailsWithAClearError(t *testing.T) {
 
 	_, err := Run(context.Background(), exec, entry, "hi", Options{Schema: `{}`})
 
-	assert.ErrorContains(t, err, "is over")
+	// The whole message, not a substring: the cap has to be what is reported.
+	// Truncated JSON parses as a syntax error too, and that error says nothing
+	// about why the output stopped.
+	assert.Error(t, err, fmt.Sprintf("claude's result is over %d bytes", maxStructuredOutputBytes))
 }
 
 func TestParseResult(t *testing.T) {
