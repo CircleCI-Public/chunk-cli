@@ -387,7 +387,7 @@ func reviewCredential(rc config.ResolvedConfig) (review.Credential, string, erro
 	}
 	return review.Credential{}, "", &userError{
 		msg:        "No Claude credential found; reviews run Claude on each sidecar.",
-		suggestion: "Run 'chunk auth set anthropic-oauth' to use your Claude subscription, or 'chunk auth set anthropic' for an API key.",
+		suggestion: "Run 'chunk auth refresh' to log in with your Claude subscription, or 'chunk auth set anthropic' for an API key.",
 		errMsg:     "no claude credential found",
 		hideDetail: true,
 	}

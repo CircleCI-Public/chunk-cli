@@ -293,7 +293,7 @@ func friendlyReviewError(err error) string {
 	case errors.Is(err, review.ErrClaudeMissing):
 		return "Claude Code is not installed on the sandboxes — install it in the sandbox image and set validation.sidecarImage"
 	case errors.Is(err, review.ErrCredentialRejected):
-		return "Anthropic rejected the chunk daemon's Claude credential — replace it and restart the daemon"
+		return "Anthropic rejected the chunk daemon's Claude credential — run: chunk auth refresh"
 	}
 	return err.Error()
 }

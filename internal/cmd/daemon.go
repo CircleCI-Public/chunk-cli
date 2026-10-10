@@ -70,7 +70,7 @@ func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) server.ReviewConf
 	}
 	cred, _, credErr := reviewCredential(rc)
 	if credErr != nil {
-		return server.ReviewConfig{AuthError: "no Claude credential — factory runs unavailable (run: chunk auth set anthropic-oauth, then restart the daemon)"}
+		return server.ReviewConfig{AuthError: "no Claude credential — factory runs unavailable (run: chunk auth refresh)"}
 	}
 	return server.ReviewConfig{Credential: cred, BaseURL: rc.AnthropicBaseURL}
 }
