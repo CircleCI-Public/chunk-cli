@@ -140,7 +140,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 					return err
 				}
 				if prompt == "" {
-					if prompt, err = askContinueGuidance(cmd.InOrStdin()); err != nil {
+					if prompt, err = askContinueGuidance(cmd.InOrStdin(), jsonOut); err != nil {
 						return err
 					}
 				}
@@ -304,11 +304,12 @@ func missingFactoryPromptError() error {
 }
 
 // promptContinueGuidance asks what a continued run should do differently. It
-// returns ui.ErrNoTTY without asking when there is no terminal to ask on, so a
-// script's continue checks first as it always has. Swapped out in tests.
-var promptContinueGuidance = func(in io.Reader) (string, error) {
+// returns ui.ErrNoTTY without asking when there is no terminal to ask on, or
+// when --json says a program is reading the output, so a script's continue
+// checks first as it always has. Swapped out in tests.
+var promptContinueGuidance = func(in io.Reader, jsonOut bool) (string, error) {
 	f, ok := in.(*os.File)
-	if nonInteractive() || !ok || !term.IsTerminal(int(f.Fd())) || ui.RequireStdoutTTY() != nil {
+	if nonInteractive() || jsonOut || !ok || !term.IsTerminal(int(f.Fd())) || ui.RequireStdoutTTY() != nil {
 		return "", ui.ErrNoTTY
 	}
 	return ui.PromptText("What should it do differently? (Enter to just re-check)", "")
@@ -316,8 +317,8 @@ var promptContinueGuidance = func(in io.Reader) (string, error) {
 
 // askContinueGuidance is the prompt for a continued run given none: what the
 // developer types, or "" to check the work first.
-func askContinueGuidance(in io.Reader) (string, error) {
-	guidance, err := promptContinueGuidance(in)
+func askContinueGuidance(in io.Reader, jsonOut bool) (string, error) {
+	guidance, err := promptContinueGuidance(in, jsonOut)
 	switch {
 	case errors.Is(err, ui.ErrNoTTY):
 		return "", nil

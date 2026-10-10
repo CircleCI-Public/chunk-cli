@@ -364,7 +364,7 @@ func stubPromptContinueGuidance(t *testing.T, answer string, answerErr error) *i
 	t.Helper()
 	orig := promptContinueGuidance
 	asked := 0
-	promptContinueGuidance = func(io.Reader) (string, error) {
+	promptContinueGuidance = func(io.Reader, bool) (string, error) {
 		asked++
 		return answer, answerErr
 	}
@@ -409,6 +409,14 @@ func TestFactoryContinueAsksWhatToDoDifferently(t *testing.T) {
 			assert.Equal(t, opts.Continue.Guidance, tc.wantGuidance)
 		})
 	}
+}
+
+// --json means a program is reading the run's output, which cannot answer a
+// question. Asked anyway it would block on a terminal with nothing to show
+// that it was waiting.
+func TestPromptContinueGuidanceIsNotAskedForJSON(t *testing.T) {
+	_, err := promptContinueGuidance(os.Stdin, true)
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY), "got %v", err)
 }
 
 func TestFactoryContinueCancelledAtTheQuestionStartsNothing(t *testing.T) {
