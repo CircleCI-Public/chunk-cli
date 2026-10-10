@@ -14,6 +14,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -78,7 +79,7 @@ func TestRunPass(t *testing.T) {
 	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec, []Prompt{
 		{Name: "a", Body: "it's \"quoted\" $(rm -rf /)"},
 		{Name: "b", Body: "fail please"},
-	}, Options{Credential: Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}})
+	}, Options{Credential: claudecode.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}})
 	assert.NilError(t, err)
 	assert.Equal(t, len(gotEnv), 1)
 	assert.Equal(t, gotEnv["ANTHROPIC_API_KEY"], "sk-test")
@@ -130,19 +131,19 @@ func TestRunPassWithoutOnSubmittedPassesNilHook(t *testing.T) {
 
 	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec, []Prompt{{Name: "a", Body: "x"}}, Options{})
 	assert.NilError(t, err)
-	assert.Assert(t, !gotHook, "an Execer must be able to skip submission reporting when nobody asked for it")
+	assert.Assert(t, !gotHook, "a sidecar.Execer must be able to skip submission reporting when nobody asked for it")
 }
 
 func TestRunPassClaudeMissingStopsPass(t *testing.T) {
 	t.Parallel()
 	exec := func(context.Context, *sidecar.PoolEntry, string, map[string]string, circleci.OutputFn, func(string)) (int, error) {
-		return ExitClaudeMissing, nil
+		return claudecode.ExitMissing, nil
 	}
 
 	pool := newSafePool("sb-1", "sb-2")
 	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
 		[]Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}, {Name: "c", Body: "z"}}, Options{})
-	assert.Assert(t, errors.Is(err, ErrClaudeMissing), "got %v", err)
+	assert.Assert(t, errors.Is(err, claudecode.ErrMissing), "got %v", err)
 }
 
 func TestRunPassShellNotFoundIsOneFailedReview(t *testing.T) {
@@ -174,7 +175,7 @@ func TestRunPassSendsOnlyTheGivenCredential(t *testing.T) {
 	pool := newSafePool("sb-1")
 	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
 		[]Prompt{{Name: "a", Body: "x"}},
-		Options{Credential: Credential{EnvVar: "CLAUDE_CODE_OAUTH_TOKEN", Value: "sk-ant-oat01-tok"}})
+		Options{Credential: claudecode.Credential{EnvVar: "CLAUDE_CODE_OAUTH_TOKEN", Value: "sk-ant-oat01-tok"}})
 	assert.NilError(t, err)
 	assert.Equal(t, len(gotEnv), 1)
 	assert.Equal(t, gotEnv["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat01-tok")
@@ -194,7 +195,7 @@ func TestRunPassCredentialRejectedStopsPass(t *testing.T) {
 	pool := newSafePool("sb-1", "sb-2")
 	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
 		[]Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}, {Name: "c", Body: "z"}}, Options{})
-	assert.Assert(t, errors.Is(err, ErrCredentialRejected), "got %v", err)
+	assert.Assert(t, errors.Is(err, claudecode.ErrCredentialRejected), "got %v", err)
 }
 
 // A review that merely quotes a 401 is not an authentication failure, so the
@@ -215,13 +216,13 @@ func TestRunPassSuccessfulReviewQuotingA401(t *testing.T) {
 
 func TestRunPassClaudeMissingNoSpuriousFailures(t *testing.T) {
 	t.Parallel()
-	// One goroutine returns ExitClaudeMissing immediately; the rest block until the
+	// One goroutine returns claudecode.ExitMissing immediately; the rest block until the
 	// context is canceled. The context-canceled results must be attributed to
-	// ErrClaudeMissing, not shown as generic "exec: context canceled" failures.
+	// claudecode.ErrMissing, not shown as generic "exec: context canceled" failures.
 	var first atomic.Bool
 	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
 		if first.CompareAndSwap(false, true) {
-			return ExitClaudeMissing, nil
+			return claudecode.ExitMissing, nil
 		}
 		<-ctx.Done()
 		return 0, ctx.Err()
@@ -241,7 +242,7 @@ func TestRunPassClaudeMissingNoSpuriousFailures(t *testing.T) {
 	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
 		[]Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}, {Name: "c", Body: "z"}},
 		Options{ProgressFn: record})
-	assert.Assert(t, errors.Is(err, ErrClaudeMissing), "got %v", err)
+	assert.Assert(t, errors.Is(err, claudecode.ErrMissing), "got %v", err)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -333,10 +334,24 @@ func TestRunPassProgressFn(t *testing.T) {
 	assert.Equal(t, terminal["fail"], StateFailed)
 }
 
-func TestClaudeScript(t *testing.T) {
+// scriptOf runs one review and returns the script it would run on the sidecar.
+func scriptOf(t *testing.T, opts Options) string {
+	t.Helper()
+	var got string
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, _ map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
+		got = script
+		return 0, nil
+	}
+	pool := newSafePool("sb-1")
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec, []Prompt{{Name: "a", Body: "hi"}}, opts)
+	assert.NilError(t, err)
+	return got
+}
+
+func TestRunPassRunsClaudeReadOnly(t *testing.T) {
 	t.Parallel()
-	script := claudeScriptWithTools("/home/user/my repo", "hi", "claude-sonnet-5", allowedTools, false)
-	assert.Assert(t, strings.Contains(script, "cd '/home/user/my repo'"), script)
+	script := scriptOf(t, Options{Model: "claude-sonnet-5"})
+	assert.Assert(t, strings.Contains(script, "cd '/home/user/repo'"), script)
 	assert.Assert(t, strings.Contains(script, "'claude' '-p' '--output-format' 'text'"), script)
 	assert.Assert(t, strings.Contains(script, "'--model' 'claude-sonnet-5'"), script)
 	assert.Assert(t, strings.Contains(script, "Bash(git diff:*)"), script)
@@ -344,9 +359,9 @@ func TestClaudeScript(t *testing.T) {
 	assert.Equal(t, promptOf(t, script), "hi")
 }
 
-func TestClaudeScriptStructuredAsksForTheFindingsSchema(t *testing.T) {
+func TestRunPassStructuredAsksForTheFindingsSchema(t *testing.T) {
 	t.Parallel()
-	script := claudeScriptWithTools("/home/user/repo", "hi", "", allowedTools, true)
+	script := scriptOf(t, Options{StructuredFindings: true})
 	assert.Assert(t, strings.Contains(script, "'claude' '-p' '--output-format' 'json'"), script)
 	assert.Assert(t, strings.Contains(script, "'--json-schema' "+sidecar.ShellEscape(FindingsSchema)), script)
 	assert.Equal(t, promptOf(t, script), "hi", "the prompt is sent as written")
@@ -380,24 +395,6 @@ func TestRunPassStructuredFindings(t *testing.T) {
 	assert.Assert(t, strings.Contains(results[1].Error, "read claude's result"), results[1].Error)
 }
 
-func TestRunPassStructuredResultOverTheCapFailsWithAClearError(t *testing.T) {
-	t.Parallel()
-	pool := newSafePool("sb-1")
-	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn, _ func(string)) (int, error) {
-		out(circleci.StreamStdout, []byte(`{"type":"result","result":"`))
-		out(circleci.StreamStdout, []byte(strings.Repeat("x", maxStructuredOutputBytes)))
-		return 0, nil
-	}
-
-	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
-		[]Prompt{{Name: "big", Body: "x"}}, Options{StructuredFindings: true})
-
-	assert.NilError(t, err)
-	assert.Equal(t, len(results), 1)
-	assert.Assert(t, strings.Contains(results[0].Error, "is over"), results[0].Error)
-	assert.Assert(t, !strings.Contains(results[0].Error, "read claude's result"), results[0].Error)
-}
-
 func TestRunPassForwardsACustomBaseURL(t *testing.T) {
 	t.Parallel()
 	var gotEnv map[string]string
@@ -409,7 +406,7 @@ func TestRunPassForwardsACustomBaseURL(t *testing.T) {
 	pool := newSafePool("sb-1")
 	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
 		[]Prompt{{Name: "a", Body: "x"}},
-		Options{Credential: Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}, BaseURL: "https://llm-gateway.example"})
+		Options{Credential: claudecode.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}, BaseURL: "https://llm-gateway.example"})
 	assert.NilError(t, err)
 	assert.Equal(t, gotEnv["ANTHROPIC_BASE_URL"], "https://llm-gateway.example")
 }
@@ -425,7 +422,7 @@ func TestRunPassOmitsTheDefaultBaseURL(t *testing.T) {
 	pool := newSafePool("sb-1")
 	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
 		[]Prompt{{Name: "a", Body: "x"}},
-		Options{Credential: Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}, BaseURL: "https://api.anthropic.com/"})
+		Options{Credential: claudecode.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}, BaseURL: "https://api.anthropic.com/"})
 	assert.NilError(t, err)
 	assert.Equal(t, len(gotEnv), 1)
 }

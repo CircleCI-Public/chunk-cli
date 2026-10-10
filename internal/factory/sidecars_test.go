@@ -12,6 +12,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -212,7 +213,7 @@ func TestCheckReviewsTheImplementersLatestWork(t *testing.T) {
 // newSidecarsFixture returns Sidecars whose implementer and two reviewers are
 // clones on this machine, prepared as a run leaves them. wrap, when set, wraps
 // the exec every script runs through.
-func newSidecarsFixture(t *testing.T, wrap func(review.Execer) review.Execer) (*Sidecars, *sidecar.PoolEntry, []*sidecar.PoolEntry, string) {
+func newSidecarsFixture(t *testing.T, wrap func(sidecar.Execer) sidecar.Execer) (*Sidecars, *sidecar.PoolEntry, []*sidecar.PoolEntry, string) {
 	t.Helper()
 	ctx := context.Background()
 	root := setupRepo(t)
@@ -256,7 +257,7 @@ func newSidecarsFixture(t *testing.T, wrap func(review.Execer) review.Execer) (*
 		Request:   "make the requested change",
 		Prompts:   []review.Prompt{{Name: "bugs", Body: "find bugs"}, {Name: "style", Body: "check style"}},
 		Review: review.Options{
-			Credential:         review.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
+			Credential:         claudecode.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
 			StructuredFindings: true,
 		},
 	}
@@ -280,7 +281,7 @@ func setupRepo(t *testing.T) string {
 // withoutPkill skips Check's sweep for reviews left running from an earlier
 // round. The fake sidecars are this machine, where it would kill any real
 // `claude -p` the developer has running.
-func withoutPkill(run review.Execer) review.Execer {
+func withoutPkill(run sidecar.Execer) sidecar.Execer {
 	return func(ctx context.Context, e *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
 		if strings.Contains(script, "pkill") {
 			return 0, nil
@@ -296,7 +297,7 @@ func TestCheckReportsAReviewerWithOtherCode(t *testing.T) {
 	ctx := context.Background()
 	// rev-2 gains a file the implementer never wrote just before its change
 	// is fingerprinted, as a relay that went wrong would leave it.
-	divert := func(run review.Execer) review.Execer {
+	divert := func(run sidecar.Execer) sidecar.Execer {
 		return func(ctx context.Context, e *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
 			if e.ID == "rev-2" && strings.Contains(script, "git add -A -N") {
 				script = strings.Replace(script, "git reset -q", "echo stray > stray.txt && git reset -q", 1)

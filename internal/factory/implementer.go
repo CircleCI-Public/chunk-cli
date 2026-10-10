@@ -3,7 +3,6 @@ package factory
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -43,14 +43,6 @@ var disallowedGit = []string{
 	"Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git rebase:*)",
 }
 
-// Activity is one thing the implementer did, for display.
-type Activity struct {
-	// Tool is the tool used, or "" for text the implementer wrote.
-	Tool string
-	// Detail is the tool's target (a file, a command) or the text.
-	Detail string
-}
-
 // Turn is the outcome of one implementer turn.
 type Turn struct {
 	Summary  string
@@ -61,14 +53,14 @@ type Turn struct {
 // Implementer runs Claude Code on a sidecar to write code. Every turn resumes
 // the same session, so feedback arrives with the context of the work so far.
 type Implementer struct {
-	Exec         review.Execer
+	Exec         sidecar.Execer
 	Entry        *sidecar.PoolEntry
-	Credential   review.Credential
+	Credential   claudecode.Credential
 	BaseURL      string
 	Model        string
 	Timeout      time.Duration
 	Instructions string
-	OnActivity   func(Activity)
+	OnActivity   func(claudecode.Activity)
 
 	sessionID string
 	started   bool
@@ -87,9 +79,9 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	defer cancel()
 
 	start := time.Now()
-	s := &streamParser{onActivity: im.OnActivity}
+	s := claudecode.NewStream(im.OnActivity)
 	var stderr bytes.Buffer
-	env := review.Env(im.Credential, im.BaseURL)
+	env := claudecode.Env(im.Credential, im.BaseURL)
 	// The sidecar is a sandbox, which is what lets claude skip permission
 	// prompts there even when the image runs it as root.
 	env["IS_SANDBOX"] = "1"
@@ -100,31 +92,32 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 			}
 			return
 		}
-		s.write(data)
+		s.Write(data)
 	}, nil)
-	s.flush()
+	s.Flush()
+	res, sawResult := s.Result()
 	// The session exists once claude has started it, even if this turn failed,
 	// so the next turn must resume it rather than try to create it again.
-	if s.sessionID != "" {
+	if s.SessionID() != "" {
 		im.started = true
 	}
-	turn := Turn{Summary: s.result.Result, Duration: time.Since(start), CostUSD: s.result.TotalCostUSD}
+	turn := Turn{Summary: res.Result, Duration: time.Since(start), CostUSD: res.CostUSD}
 
 	// claude puts why a turn failed in its result, so that explains a failed
 	// exit before stderr does.
-	explain := s.result.Result
+	explain := res.Result
 	if strings.TrimSpace(explain) == "" {
 		explain = stderr.String()
 	}
 	// explain stands in for stderr, so stderr goes in with the result for the
 	// credential check: a 401 there must not hide behind a result that says
 	// something else.
-	switch err := review.ClaudeRunError(ctx, timeout, code, err, s.result.Result+"\n"+stderr.String(), explain); {
+	switch err := claudecode.RunError(ctx, timeout, code, err, res.Result+"\n"+stderr.String(), explain); {
 	case err != nil:
 		return turn, fmt.Errorf("implementer: %w", err)
-	case s.result.IsError:
+	case res.IsError:
 		return turn, fmt.Errorf("implementer: %s", review.Tail(strings.TrimSpace(explain), 2000))
-	case !s.sawResult:
+	case !sawResult:
 		return turn, errors.New("implementer ended without a result")
 	}
 	return turn, nil
@@ -146,111 +139,5 @@ func (im *Implementer) script(prompt string) string {
 	if im.Model != "" {
 		args = append(args, "--model", im.Model)
 	}
-	return review.ClaudeScript(im.Entry.RepoPath, prompt, args)
-}
-
-// streamEvent is the part of one stream-json line the implementer reads.
-type streamEvent struct {
-	Type      string `json:"type"`
-	SessionID string `json:"session_id"`
-	Message   struct {
-		Content []struct {
-			Type  string          `json:"type"`
-			Text  string          `json:"text"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
-		} `json:"content"`
-	} `json:"message"`
-	IsError      bool    `json:"is_error"`
-	Result       string  `json:"result"`
-	TotalCostUSD float64 `json:"total_cost_usd"`
-}
-
-// maxLineBytes caps one buffered stream-json line. A tool result echoing a
-// large file can be long; a line past this is dropped rather than buffered.
-const maxLineBytes = 1 << 20
-
-// streamParser splits claude's stream-json output into lines as it arrives,
-// which can be mid-line, and reports what the implementer does.
-type streamParser struct {
-	onActivity func(Activity)
-	buf        []byte
-	overflow   bool
-	sessionID  string
-	result     streamEvent
-	sawResult  bool
-}
-
-func (s *streamParser) write(data []byte) {
-	for len(data) > 0 {
-		i := bytes.IndexByte(data, '\n')
-		if i < 0 {
-			s.appendPartial(data)
-			return
-		}
-		s.appendPartial(data[:i])
-		if !s.overflow {
-			s.line(s.buf)
-		}
-		s.buf, s.overflow = s.buf[:0], false
-		data = data[i+1:]
-	}
-}
-
-func (s *streamParser) appendPartial(data []byte) {
-	if s.overflow || len(s.buf)+len(data) > maxLineBytes {
-		s.overflow = true
-		return
-	}
-	s.buf = append(s.buf, data...)
-}
-
-// flush handles a last line that had no trailing newline.
-func (s *streamParser) flush() {
-	if len(s.buf) > 0 && !s.overflow {
-		s.line(s.buf)
-	}
-	s.buf, s.overflow = nil, false
-}
-
-func (s *streamParser) line(b []byte) {
-	var e streamEvent
-	if json.Unmarshal(b, &e) != nil {
-		return
-	}
-	if e.SessionID != "" {
-		s.sessionID = e.SessionID
-	}
-	switch e.Type {
-	case "result":
-		s.result, s.sawResult = e, true
-	case "assistant":
-		if s.onActivity == nil {
-			return
-		}
-		for _, c := range e.Message.Content {
-			switch c.Type {
-			case "text":
-				if t := strings.TrimSpace(c.Text); t != "" {
-					s.onActivity(Activity{Detail: t})
-				}
-			case "tool_use":
-				s.onActivity(Activity{Tool: c.Name, Detail: toolDetail(c.Input)})
-			}
-		}
-	}
-}
-
-// toolDetail picks the field of a tool's input that says what it acted on.
-func toolDetail(input json.RawMessage) string {
-	var in map[string]any
-	if json.Unmarshal(input, &in) != nil {
-		return ""
-	}
-	for _, key := range []string{"file_path", "command", "pattern", "path", "description"} {
-		if v, ok := in[key].(string); ok && v != "" {
-			return v
-		}
-	}
-	return ""
+	return claudecode.Script(im.Entry.RepoPath, prompt, args)
 }

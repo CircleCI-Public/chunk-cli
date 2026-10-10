@@ -11,6 +11,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
@@ -30,7 +31,7 @@ type StreamFunc func(ctx context.Context, entry *sidecar.PoolEntry, commandID st
 // placed in the environment of a Claude command, and never logged or put in a
 // snapshot.
 type ReviewConfig struct {
-	Credential review.Credential
+	Credential claudecode.Credential
 	// BaseURL is forwarded to claude when it is not Anthropic's own.
 	BaseURL string
 	// AuthError explains a missing Credential, reported in the snapshot so an
@@ -184,7 +185,7 @@ func poolTarget(root string, cfg *config.ProjectConfig) (orgID, image string, er
 // them. That registration is what puts a command's log in the dashboard's output
 // pane while it runs: a call that submits and streams in one step would leave
 // the command ID with nobody to hand it to.
-func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID string) string) review.Execer {
+func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID string) string) sidecar.Execer {
 	submit := d.rcfg.Submit
 	if submit == nil {
 		submit = func(ctx context.Context, pe *sidecar.PoolEntry, script string, env map[string]string) (string, error) {
@@ -290,9 +291,9 @@ func worthChanging(findings []review.Finding) []review.Finding {
 // credential is never named or echoed.
 func friendlyReviewError(err error) string {
 	switch {
-	case errors.Is(err, review.ErrClaudeMissing):
+	case errors.Is(err, claudecode.ErrMissing):
 		return "Claude Code is not installed on the sandboxes — install it in the sandbox image and set validation.sidecarImage"
-	case errors.Is(err, review.ErrCredentialRejected):
+	case errors.Is(err, claudecode.ErrCredentialRejected):
 		return "Anthropic rejected the chunk daemon's Claude credential — replace it and restart the daemon"
 	}
 	return err.Error()

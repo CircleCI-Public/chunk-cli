@@ -137,9 +137,7 @@ func TestFindingsSchemaNamesTheFieldsParseFindingsReads(t *testing.T) {
 		return slices.Sorted(maps.Keys(props))
 	}
 
-	structured, ok := reflect.TypeFor[claudeResult]().FieldByName("StructuredOutput")
-	assert.Assert(t, ok)
-	assert.DeepEqual(t, keys(schema.Properties), jsonNames(structured.Type.Elem()))
+	assert.DeepEqual(t, keys(schema.Properties), jsonNames(reflect.TypeFor[structuredFindings]()))
 
 	item := schema.Properties["findings"].Items
 	assert.Assert(t, item != nil)

@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -52,7 +53,7 @@ type detachFlags struct {
 	destroyPool bool
 	chunkBinary string
 	rc          config.ResolvedConfig
-	cred        review.Credential
+	cred        claudecode.Credential
 	parallelism int
 	model       string
 	timeout     time.Duration

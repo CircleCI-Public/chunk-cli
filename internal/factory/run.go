@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -48,15 +49,15 @@ type RunOptions struct {
 	// KeepSidecars leaves the sidecars running when the run ends.
 	KeepSidecars bool
 
-	Credential              review.Credential
+	Credential              claudecode.Credential
 	BaseURL                 string
 	Model                   string
 	ImplementerInstructions string
 	ImplementTimeout        time.Duration
 	ReviewTimeout           time.Duration
 
-	// Exec runs commands on the sidecars; review.ClientExec when nil.
-	Exec review.Execer
+	// Exec runs commands on the sidecars; sidecar.ClientExec when nil.
+	Exec sidecar.Execer
 
 	// Log is where to keep a plain-text log of the run, with its full context
 	// whatever a display of it filters out: a path, LogDefault for
@@ -73,7 +74,7 @@ type RunOptions struct {
 	// called once the run's worktree exists.
 	OnStart          func(runID string, wt Worktree)
 	OnEvent          func(Event)
-	OnActivity       func(Activity)
+	OnActivity       func(claudecode.Activity)
 	OnReviewProgress func(review.ProgressEvent)
 	OnCheck          func(Check)
 }
@@ -235,7 +236,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 
 	exec := opts.Exec
 	if exec == nil {
-		exec = review.ClientExec
+		exec = sidecar.ClientExec
 	}
 	steps := &Sidecars{
 		Exec: exec,

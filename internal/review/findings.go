@@ -6,6 +6,8 @@ import (
 	"path"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 )
 
 // Limits on what is accepted from a model's structured output. They exist
@@ -90,17 +92,10 @@ type Parsed struct {
 	Prose string
 }
 
-// claudeResult is the part of claude's --output-format json result that a
-// review needs. structured_output is set only when the answer satisfied
-// FindingsSchema.
-type claudeResult struct {
-	IsError          bool   `json:"is_error"`
-	Subtype          string `json:"subtype"`
-	Result           string `json:"result"`
-	StructuredOutput *struct {
-		Review   string       `json:"review"`
-		Findings []rawFinding `json:"findings"`
-	} `json:"structured_output"`
+// structuredFindings is a review's answer as FindingsSchema shapes it.
+type structuredFindings struct {
+	Review   string       `json:"review"`
+	Findings []rawFinding `json:"findings"`
 }
 
 // rawFinding is a finding as the review gave it, before it is checked.
@@ -121,19 +116,23 @@ const maxResultInError = 500
 // capped. A result with no structured output is an error, not a prose-only
 // review.
 func ParseFindings(output string) (Parsed, error) {
-	var res claudeResult
-	if err := json.Unmarshal([]byte(output), &res); err != nil {
-		return Parsed{}, fmt.Errorf("read claude's result: %w", err)
+	res, err := claudecode.ParseResult(output)
+	if err != nil {
+		return Parsed{}, err
 	}
 	if res.IsError || res.StructuredOutput == nil {
 		return Parsed{}, fmt.Errorf("claude gave no structured findings (%s): %s",
 			res.Subtype, truncateRunes(strings.TrimSpace(res.Result), maxResultInError))
 	}
-	findings, dropped := cleanFindings(res.StructuredOutput.Findings)
+	var answer structuredFindings
+	if err := json.Unmarshal(res.StructuredOutput, &answer); err != nil {
+		return Parsed{}, fmt.Errorf("read claude's structured findings: %w", err)
+	}
+	findings, dropped := cleanFindings(answer.Findings)
 	return Parsed{
 		Findings: findings,
 		Dropped:  dropped,
-		Prose:    strings.TrimSpace(res.StructuredOutput.Review),
+		Prose:    strings.TrimSpace(answer.Review),
 	}, nil
 }
 

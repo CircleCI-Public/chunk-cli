@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
@@ -154,7 +155,7 @@ func (l *runLog) event(e Event) {
 }
 
 // activity records what the implementer did, or said, as it works.
-func (l *runLog) activity(a Activity) {
+func (l *runLog) activity(a claudecode.Activity) {
 	if a.Tool == "" {
 		l.block("implementer", a.Detail)
 		return

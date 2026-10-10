@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 )
 
 func TestDetachScript(t *testing.T) {
@@ -56,7 +58,7 @@ func TestDetachScriptOmitsUnsetOptions(t *testing.T) {
 
 func TestDetachEnv(t *testing.T) {
 	env := DetachEnv("circle-token", Options{
-		Credential: Credential{EnvVar: "CLAUDE_CODE_OAUTH_TOKEN", Value: "claude-token"},
+		Credential: claudecode.Credential{EnvVar: "CLAUDE_CODE_OAUTH_TOKEN", Value: "claude-token"},
 	})
 	assert.DeepEqual(t, env, map[string]string{
 		"CIRCLECI_TOKEN":          "circle-token",
