@@ -161,7 +161,7 @@ chunk
 │           --json                  # Output as JSON
 │
 ├── factory                         # Build and manage factory runs
-│   └── build [prompt|-]            # Implement a prompt on a sidecar, then review and validate it until it passes
+│   ├── build [prompt|-]            # Implement a prompt on a sidecar, then review and validate it until it passes
 │       --plan <file>               # Read the prompt from a file (usually a markdown spec)
 │       --backend <name>            # circleci or docker (default: factory.backend, else circleci)
 │       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 3)
@@ -179,6 +179,12 @@ chunk
 │       --log-file <path>           # Keep the log in this file instead (implies --log)
 │       --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │       --json                      # Output as JSON
+│   ├── list                        # List the project's factory runs and their worktrees
+│   │   --json                      # Output as JSON
+│   └── clean [run...]              # Remove runs' worktrees, branches and records (default: every run not running)
+│       --yes                       # Remove without asking
+│       --force                     # Also remove worktrees with uncommitted changes, discarding them
+│       --dry-run                   # List what would be removed and stop
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
