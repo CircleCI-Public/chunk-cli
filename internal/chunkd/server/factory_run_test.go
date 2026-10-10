@@ -15,6 +15,7 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -374,4 +375,24 @@ func TestStartFactoryAdoptsAnUnregisteredRepository(t *testing.T) {
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae), "got %v", err)
 	assert.Equal(t, ae.status, http.StatusNotFound)
+}
+
+func TestFactoryTargetDockerIgnoresSidecarImage(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Validation: &config.ValidationConfig{SidecarImage: "snapshot-id"},
+	}
+	req := chunkd.FactoryRequest{Backend: chunkd.BackendDocker}
+	_, image, err := factoryTarget(t.TempDir(), cfg, req)
+	assert.NilError(t, err)
+	assert.Equal(t, image, "")
+
+	cfg.Factory = &config.FactoryConfig{Image: "chunk-sandbox:local"}
+	_, image, err = factoryTarget(t.TempDir(), cfg, req)
+	assert.NilError(t, err)
+	assert.Equal(t, image, "chunk-sandbox:local")
+
+	req.Image = "other:tag"
+	_, image, err = factoryTarget(t.TempDir(), cfg, req)
+	assert.NilError(t, err)
+	assert.Equal(t, image, "other:tag")
 }

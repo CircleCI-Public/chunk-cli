@@ -48,8 +48,9 @@ func (d *daemon) factoryAuthError(backend string) string {
 func factoryTarget(root string, cfg *config.ProjectConfig, req chunkd.FactoryRequest) (orgID, image string, err error) {
 	orgID, image = req.OrgID, req.Image
 	if req.Backend == chunkd.BackendDocker {
-		if image == "" && cfg.Validation != nil {
-			image = cfg.Validation.SidecarImage
+		// validation.sidecarImage is a CircleCI snapshot ID, not a Docker image.
+		if image == "" && cfg.Factory != nil {
+			image = cfg.Factory.Image
 		}
 		return orgID, image, nil
 	}
@@ -87,7 +88,7 @@ func factoryBackend(name string) (sidecar.Backend, error) {
 // startFactory validates a request, records a factory session and starts it in
 // the background. It returns as soon as the session is accepted.
 func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error) {
-	if req.Backend != "" && req.Backend != chunkd.BackendCircleCI && req.Backend != chunkd.BackendDocker {
+	if !config.ValidBackend(req.Backend) {
 		return chunkd.Session{}, apiErr(http.StatusBadRequest, "unknown backend %q (want %s or %s)",
 			req.Backend, chunkd.BackendCircleCI, chunkd.BackendDocker)
 	}

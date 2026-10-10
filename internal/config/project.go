@@ -23,6 +23,44 @@ const (
 // no role of its own but sidecar setup treats it like a gate command.
 const CmdInstall = "install"
 
+// Backends a factory run's sidecars can execute on. The daemon's request type
+// refers to these same names.
+const (
+	BackendCircleCI = "circleci"
+	BackendDocker   = "docker"
+)
+
+// ValidBackend reports whether name is a backend. Empty is valid: it means the
+// default, BackendCircleCI.
+func ValidBackend(name string) bool {
+	switch name {
+	case "", BackendCircleCI, BackendDocker:
+		return true
+	}
+	return false
+}
+
+// BackendOrDefault returns name, or BackendCircleCI when name is empty.
+func BackendOrDefault(name string) string {
+	if name == "" {
+		return BackendCircleCI
+	}
+	return name
+}
+
+// Command timeouts, in seconds. DefaultCommandTimeout is what a command with no
+// timeout of its own runs with, everywhere: chunk validate and the hook budgets
+// computed from it. The role defaults are what command detection writes.
+//
+// Lint gets room for a cold run: a fresh sandbox builds the linter and fetches
+// its dependencies first, which on its own can exceed a minute.
+const (
+	DefaultCommandTimeout = 300
+	DefaultTestTimeout    = 300
+	DefaultLintTimeout    = 180
+	DefaultFormatTimeout  = 30
+)
+
 // Async validation modes, the values ProjectConfig.AsyncValidate accepts.
 //
 // They exist because the judgement of which changes are safe to validate in the
@@ -49,6 +87,34 @@ type Command struct {
 	SidecarImage string `json:"sidecarImage,omitempty"`
 }
 
+// EffectiveTimeout is the timeout, in seconds, the command runs with: its own,
+// or DefaultCommandTimeout when it sets none.
+func (c Command) EffectiveTimeout() int {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return DefaultCommandTimeout
+}
+
+// KeepLongerTimeouts returns detected with each command's timeout raised to that
+// of the previous command of the same name, when the previous one was longer.
+// Re-running detection must not undo a timeout someone raised by hand, while a
+// stale default shorter than today's still gives way to it. Timeouts are
+// ceilings, so the longer one is always the safe choice. Neither input is
+// modified.
+func KeepLongerTimeouts(detected, previous []Command) []Command {
+	longest := make(map[string]int, len(previous))
+	for _, c := range previous {
+		longest[c.Name] = max(longest[c.Name], c.Timeout)
+	}
+	out := make([]Command, len(detected))
+	for i, c := range detected {
+		c.Timeout = max(c.Timeout, longest[c.Name])
+		out[i] = c
+	}
+	return out
+}
+
 // RunsLocally reports whether the command explicitly opts out of remote execution.
 func (c Command) RunsLocally() bool { return c.Local }
 
@@ -66,11 +132,20 @@ type ValidationConfig struct {
 	SidecarImage string `json:"sidecarImage,omitempty"`
 }
 
+// FactoryConfig holds project defaults for `chunk factory build`.
+type FactoryConfig struct {
+	Backend     string `json:"backend,omitempty"`     // "circleci" or "docker"
+	Image       string `json:"image,omitempty"`       // Docker image for the docker backend
+	MaxAttempts int    `json:"maxAttempts,omitempty"` // 0 means the built-in default
+	Log         bool   `json:"log,omitempty"`         // keep a run log by default
+}
+
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
 	Commands            []Command            `json:"commands,omitempty"`
 	VCS                 *VCSConfig           `json:"vcs,omitempty"`
 	Validation          *ValidationConfig    `json:"validation,omitempty"`
+	Factory             *FactoryConfig       `json:"factory,omitempty"`
 	OrgID               string               `json:"orgID,omitempty"`
 	StopHookMaxAttempts int                  `json:"stopHookMaxAttempts,omitempty"`
 	Environment         *envspec.Environment `json:"environment,omitempty"`
@@ -230,6 +305,14 @@ func (c *ProjectConfig) validate() error {
 	for _, command := range c.Commands {
 		if command.Local && command.Remote {
 			return fmt.Errorf("command %q cannot be both local and remote", command.Name)
+		}
+	}
+	if f := c.Factory; f != nil {
+		if !ValidBackend(f.Backend) {
+			return fmt.Errorf("factory.backend %q must be %q or %q", f.Backend, BackendCircleCI, BackendDocker)
+		}
+		if f.MaxAttempts < 0 {
+			return fmt.Errorf("factory.maxAttempts must not be negative, got %d", f.MaxAttempts)
 		}
 	}
 	// Trimmed before the checks below rather than after, so the entry validated

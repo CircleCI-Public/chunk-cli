@@ -711,3 +711,82 @@ func TestDetectOrgID_NoOrgs_NoTTYSuggestsOrgCreate(t *testing.T) {
 	assert.Assert(t, strings.Contains(errOut.String(), "Could not detect org ID: No organizations found."), errOut.String())
 	assert.Assert(t, strings.Contains(errOut.String(), "chunk org create"), errOut.String())
 }
+
+func runInitCmd(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	cmd := newInitCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetArgs(append([]string{
+		"--project-dir", dir, "--skip-validate", "--skip-org-id", "--skip-hooks",
+		"--skip-completions", "--skip-skills", "--skip-auth",
+	}, args...))
+	cmd.SetContext(t.Context())
+	err := cmd.Execute()
+	return errOut.String(), err
+}
+
+func TestInitFactoryFlagsWriteTheConfig(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("CI", "1")
+	dir := initGitRepo(t)
+
+	stderr, err := runInitCmd(t, dir, "--factory-backend", "docker", "--factory-image", "chunk-sandbox:local")
+	assert.NilError(t, err, stderr)
+	assert.Assert(t, strings.Contains(stderr, "Factory runs: docker (chunk-sandbox:local)"), stderr)
+	cfg, err := config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cfg.Factory, &config.FactoryConfig{Backend: "docker", Image: "chunk-sandbox:local"})
+}
+
+func TestInitFactoryNotSetWithoutFlagsOrWhenSkipped(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("CI", "1")
+	dir := initGitRepo(t)
+
+	stderr, err := runInitCmd(t, dir, "--skip-factory", "--factory-backend", "docker")
+	assert.NilError(t, err, stderr)
+	cfg, err := config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Assert(t, cfg.Factory == nil)
+
+	_, err = runInitCmd(t, dir, "--force")
+	assert.NilError(t, err)
+	cfg, err = config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Assert(t, cfg.Factory == nil)
+}
+
+func TestInitFactoryRejectsUnknownBackend(t *testing.T) {
+	isolateConfig(t)
+	dir := initGitRepo(t)
+	_, err := runInitCmd(t, dir, "--factory-backend", "podman")
+	assert.Assert(t, err != nil)
+	assert.Assert(t, strings.Contains(userMsg(err), "podman"))
+}
+
+func TestInitRerunWithoutForceHandlesFactory(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("CI", "1")
+	dir := initGitRepo(t)
+	existing := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
+	assert.NilError(t, config.SaveProjectConfig(dir, existing))
+
+	// Flags add a section to the existing config and save it.
+	stderr, err := runInitCmd(t, dir, "--factory-backend", "docker", "--factory-image", "img:1")
+	assert.NilError(t, err, stderr)
+	cfg, err := config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cfg.Factory, &config.FactoryConfig{Backend: "docker", Image: "img:1"})
+	assert.Equal(t, len(cfg.Commands), 1)
+
+	// An existing section is described and left alone.
+	stderr, err = runInitCmd(t, dir)
+	assert.NilError(t, err, stderr)
+	assert.Assert(t, strings.Contains(stderr, "Factory runs: docker (img:1)"), stderr)
+	cfg, err = config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cfg.Factory, &config.FactoryConfig{Backend: "docker", Image: "img:1"})
+}

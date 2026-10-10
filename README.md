@@ -114,6 +114,16 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 
 **Note:** `snapshot create` consumes the source sidecar — it is deleted once the snapshot is captured and cannot be reused. To resume work, launch a new sidecar from the snapshot with `chunk sidecar create --image <snapshot-id>`. Use `chunk sidecar snapshot list` to look up snapshot IDs for your org.
 
+## Factory runs
+
+`chunk factory build` has an implementer agent work on a prompt, then loops review and validation until the checks pass. `chunk init` records where runs execute in the `factory` section of `.chunk/config.json` (backend, Docker image, attempts, logging), so the command stays short:
+
+```bash
+chunk factory build --plan spec.md
+```
+
+Flags override the config, e.g. `--backend docker --image chunk-sandbox:local --max-attempts 5 --log`. See [docs/CLI.md](docs/CLI.md) for details.
+
 ## Also included: team review context
 
 An additional tool, independent of the sidecar workflow. `chunk build-prompt` mines PR review comments from your GitHub org and uses Claude to generate a context file tuned to your team's review standards, so the code agents write reflects those standards from the start.
@@ -143,6 +153,7 @@ chunk sidecar snapshot create|get|list     Manage sidecar snapshots
 chunk init                                 Initialize project configuration
 chunk refresh [claude]                     Re-login to Claude and restart the daemon
 chunk validate [name]                      Run quality checks
+chunk factory build [--plan FILE]          Implement a prompt, then review and validate it
 chunk hook disable|enable|status           Manage hook execution
 chunk skill install|list                   Manage AI agent skills
 chunk task config|run                      Configure and trigger CI tasks

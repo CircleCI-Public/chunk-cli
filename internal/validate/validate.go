@@ -52,7 +52,7 @@ func shellEscape(arg string) string {
 }
 
 // DefaultTimeout is the per-command execution timeout in seconds.
-const DefaultTimeout = 300
+const DefaultTimeout = config.DefaultCommandTimeout
 
 // List prints all configured command names and their run strings, tagged with
 // where each one runs and any role that decides it. Without the tags there is no

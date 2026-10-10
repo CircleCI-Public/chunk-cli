@@ -567,9 +567,40 @@ func detectVCS(ctx context.Context, workDir string, streams iostream.Streams, cf
 	return nil
 }
 
+// resolveGitCommonDir is the repository's shared git directory as an absolute
+// path, or a user error when workDir is not in a git repository.
+func resolveGitCommonDir(ctx context.Context, workDir string) (string, error) {
+	git := gitexec.Runner{Dir: workDir}
+	if err := git.Run(ctx, "rev-parse", "--git-dir"); err != nil {
+		return "", &userError{msg: "Not a git repository.", suggestion: suggestionGitRepo, err: err}
+	}
+	out, err := git.Output(ctx, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", &userError{msg: "Could not determine git directory.", err: fmt.Errorf("git rev-parse --git-common-dir: %w", err)}
+	}
+	dir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(workDir, dir)
+	}
+	return dir, nil
+}
+
+// writeProjectConfig saves cfg as the project's .chunk/config.json and says so.
+func writeProjectConfig(workDir string, cfg *config.ProjectConfig, streams iostream.Streams) error {
+	if err := config.SaveProjectConfig(workDir, cfg); err != nil {
+		return &userError{
+			msg:        "Could not write .chunk/config.json.",
+			suggestion: suggestionCheckPerms,
+			err:        fmt.Errorf("write config: %w", err),
+		}
+	}
+	streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
+	return nil
+}
+
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth bool
-	var projectDir string
+	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth, skipFactory bool
+	var projectDir, factoryBackend, factoryImage string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -583,6 +614,11 @@ hook config files.`,
 			ctx := cmd.Context()
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 
+			if err := checkFactoryBackend(factoryBackend); err != nil {
+				return err
+			}
+			factoryOpts := initFactoryOptions{Backend: factoryBackend, Image: factoryImage, Skip: skipFactory}
+
 			workDir := projectDir
 			if workDir == "" {
 				var err error
@@ -592,18 +628,9 @@ hook config files.`,
 				}
 			}
 
-			git := gitexec.Runner{Dir: workDir}
-			if err := git.Run(ctx, "rev-parse", "--git-dir"); err != nil {
-				return &userError{msg: "Not a git repository.", suggestion: suggestionGitRepo, err: err}
-			}
-
-			commonDirOut, err := git.Output(ctx, "rev-parse", "--git-common-dir")
+			gitCommonDir, err := resolveGitCommonDir(ctx, workDir)
 			if err != nil {
-				return &userError{msg: "Could not determine git directory.", err: fmt.Errorf("git rev-parse --git-common-dir: %w", err)}
-			}
-			gitCommonDir := strings.TrimSpace(string(commonDirOut))
-			if !filepath.IsAbs(gitCommonDir) {
-				gitCommonDir = filepath.Join(workDir, gitCommonDir)
+				return err
 			}
 
 			// Guard: exit cleanly if config exists and --force not set
@@ -613,6 +640,9 @@ hook config files.`,
 				if hasData {
 					streams.ErrPrintln("Config already exists at .chunk/config.json")
 					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
+					if err := initFactoryRerun(workDir, streams, existingCfg, factoryOpts); err != nil {
+						return err
+					}
 					// Still ensure pool state is gitignored for projects
 					// initialized before this pattern existed.
 					updateInitGitignore(workDir, streams)
@@ -659,7 +689,9 @@ hook config files.`,
 						}
 					}
 					allCommands = append(allCommands, det.Commands...)
-					cfg.Commands = allCommands
+					// With --force, cfg still holds the previous commands: keep any
+					// timeout that was raised beyond what detection suggests.
+					cfg.Commands = config.KeepLongerTimeouts(allCommands, cfg.Commands)
 					for _, c := range det.Commands {
 						streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
 					}
@@ -671,15 +703,12 @@ hook config files.`,
 				detectOrgID(ctx, rc, streams, cfg)
 			}
 
-			// Save config
-			if err := config.SaveProjectConfig(workDir, cfg); err != nil {
-				return &userError{
-					msg:        "Could not write .chunk/config.json.",
-					suggestion: suggestionCheckPerms,
-					err:        fmt.Errorf("write config: %w", err),
-				}
+			// Step 3b: where factory runs execute
+			initFactoryStep(workDir, streams, cfg, factoryOpts)
+
+			if err := writeProjectConfig(workDir, cfg, streams); err != nil {
+				return err
 			}
-			streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
 
 			updateInitGitignore(workDir, streams)
 
@@ -734,6 +763,9 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipTestSuites, "skip-test-suites", true, "Skip CircleCI test-suites.yml generation (default: skip; pass =false to use built-in Go/pytest templates)")
 	cmd.Flags().BoolVar(&skipOrgID, "skip-org-id", false, "Skip CircleCI org ID detection")
 	cmd.Flags().BoolVar(&skipAuth, "skip-auth", false, "Skip the Claude login check")
+	cmd.Flags().BoolVar(&skipFactory, "skip-factory", false, "Skip the factory backend step")
+	cmd.Flags().StringVar(&factoryBackend, "factory-backend", "", "Where factory runs execute: circleci or docker (skips the prompt)")
+	cmd.Flags().StringVar(&factoryImage, "factory-image", "", "Docker image for factory runs (skips the prompt)")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 
 	return cmd

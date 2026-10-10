@@ -41,6 +41,10 @@ const defaultBaseImage = "debian:bookworm-slim"
 // than a Docker image, so Create knows to restore from a directory.
 const snapshotScheme = "chunkfs:"
 
+// EnvImage names the environment variable that overrides the provider's default
+// image. `chunk factory build` reads it too, to know an image is configured.
+const EnvImage = "CHUNK_DOCKER_IMAGE"
+
 // label marks every container chunk creates, so they can be told apart from the
 // user's own and reaped.
 const label = "com.circleci.chunk.factory"
@@ -50,9 +54,15 @@ const label = "com.circleci.chunk.factory"
 const labelName = "com.circleci.chunk.name"
 
 // inspectAttempts bounds image lookups that fail for a reason other than the
-// image being absent; inspectBackoff is the base delay between them, growing
-// linearly. A variable so tests need not wait.
-const inspectAttempts = 5
+// image being absent. notFoundAttempts bounds lookups that answer "no such
+// image": Docker Desktop's API proxy answers that while the engine is still
+// starting after a Resource Saver shutdown, before its image store is loaded,
+// so one "not found" is not trusted. inspectBackoff is the base delay between
+// lookups, growing linearly. A variable so tests need not wait.
+const (
+	inspectAttempts  = 5
+	notFoundAttempts = 3
+)
 
 var inspectBackoff = time.Second
 
@@ -91,7 +101,7 @@ func New() (*Provider, error) {
 		return nil, fmt.Errorf("docker: connect to daemon: %w", err)
 	}
 	b := &Provider{cli: cli, baseImage: defaultBaseImage, members: map[string]member{}}
-	if img := os.Getenv("CHUNK_DOCKER_IMAGE"); img != "" {
+	if img := os.Getenv(EnvImage); img != "" {
 		b.baseImage = img
 	}
 	root := os.Getenv("CHUNK_DOCKER_WORKROOT")
@@ -207,15 +217,23 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 }
 
 // ensureImage makes sure ref is on the Docker host, pulling it only when the
-// host definitively has no such image. Any other lookup error is retried
-// briefly, then reported as itself: Docker Desktop can fail the first request
-// after a Resource Saver pause while its VM wakes, and turning that into a pull
+// host keeps saying it has no such image. Lookups are retried briefly first:
+// Docker Desktop can answer the first request after a Resource Saver shutdown
+// with an error, or with "no such image" while its engine is still starting.
+// Any other error is reported as itself, rather than turned into a pull that
 // would bury it under a misleading registry error for a locally built image.
 func (b *Provider) ensureImage(ctx context.Context, ref string) error {
 	var err error
-	for attempt := 1; attempt <= inspectAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		_, err = b.cli.ImageInspect(ctx, ref)
-		if err == nil || cerrdefs.IsNotFound(err) || attempt == inspectAttempts {
+		if err == nil {
+			return nil
+		}
+		limit := inspectAttempts
+		if cerrdefs.IsNotFound(err) {
+			limit = notFoundAttempts
+		}
+		if attempt >= limit {
 			break
 		}
 		select {
@@ -224,10 +242,7 @@ func (b *Provider) ensureImage(ctx context.Context, ref string) error {
 		case <-time.After(time.Duration(attempt) * inspectBackoff):
 		}
 	}
-	switch {
-	case err == nil:
-		return nil
-	case !cerrdefs.IsNotFound(err):
+	if !cerrdefs.IsNotFound(err) {
 		// Not "no such image": pulling would only bury the real error under a
 		// registry failure for an image that may exist only locally.
 		return fmt.Errorf("docker: look up image %s: %w", ref, err)

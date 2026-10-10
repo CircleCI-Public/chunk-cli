@@ -188,52 +188,52 @@ func commandsFromFilenames(workDir string, has map[string]bool) []config.Command
 	case has["Taskfile.yml"] || has["Taskfile.yaml"]:
 		if isGo {
 			return []config.Command{
-				{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
-				{Name: "lint", Run: "task lint", Role: config.RoleGate, Timeout: 60},
-				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Timeout: 30, Local: true},
+				{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
+				{Name: "lint", Run: "task lint", Role: config.RoleGate, Timeout: config.DefaultLintTimeout},
+				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Timeout: config.DefaultFormatTimeout, Local: true},
 			}
 		}
 		return []config.Command{
-			{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
+			{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 
 	case has["Makefile"]:
 		if isGo {
 			return []config.Command{
-				{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
-				{Name: "lint", Run: "make lint", Role: config.RoleGate, Timeout: 60},
+				{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
+				{Name: "lint", Run: "make lint", Role: config.RoleGate, Timeout: config.DefaultLintTimeout},
 			}
 		}
 		return []config.Command{
-			{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
+			{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 
 	case isGo:
 		return []config.Command{
-			{Name: "test", Run: "go test ./...", Role: config.RoleGate, Timeout: 300},
-			{Name: "lint", Run: "golangci-lint run ./...", Role: config.RoleGate, Timeout: 60},
-			{Name: "format", Run: "gofmt -w .", Role: config.RoleAutofix, Timeout: 30, Local: true},
+			{Name: "test", Run: "go test ./...", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
+			{Name: "lint", Run: "golangci-lint run ./...", Role: config.RoleGate, Timeout: config.DefaultLintTimeout},
+			{Name: "format", Run: "gofmt -w .", Role: config.RoleAutofix, Timeout: config.DefaultFormatTimeout, Local: true},
 		}
 
 	case has["Cargo.toml"]:
 		return []config.Command{
-			{Name: "test", Run: "cargo test", Role: config.RoleGate, Timeout: 300},
+			{Name: "test", Run: "cargo test", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 
 	case has["pyproject.toml"], has["requirements.txt"], has["setup.py"], has["Pipfile"]:
 		return []config.Command{
-			{Name: "test", Run: "pytest", Role: config.RoleGate, Timeout: 300},
+			{Name: "test", Run: "pytest", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 
 	case has["Gemfile"]:
 		// Assumes Rake-based test task (Rails default). RSpec/Minitest-only stacks may need manual adjustment.
 		return []config.Command{
-			{Name: "test", Run: "bundle exec rake test", Role: config.RoleGate, Timeout: 300},
+			{Name: "test", Run: "bundle exec rake test", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 
 	case has["pom.xml"]:
 		return []config.Command{
-			{Name: "test", Run: "mvn test", Role: config.RoleGate, Timeout: 300},
+			{Name: "test", Run: "mvn test", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 
 	case has["build.gradle"], has["build.gradle.kts"]:
@@ -242,7 +242,7 @@ func commandsFromFilenames(workDir string, has map[string]bool) []config.Command
 			gradleCmd = "./gradlew test"
 		}
 		return []config.Command{
-			{Name: "test", Run: gradleCmd, Role: config.RoleGate, Timeout: 300},
+			{Name: "test", Run: gradleCmd, Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 
 	case has["package.json"]:
@@ -252,14 +252,14 @@ func commandsFromFilenames(workDir string, has map[string]bool) []config.Command
 			testCmd = pm.Name + " test"
 		}
 		return []config.Command{
-			{Name: "test", Run: testCmd, Role: config.RoleGate, Timeout: 300},
+			{Name: "test", Run: testCmd, Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 	}
 
 	// Monorepo with no root package.json but a detectable package manager in subdirs.
 	if pm := DetectPackageManager(workDir); pm != nil {
 		return []config.Command{
-			{Name: "test", Run: pm.Name + " test", Role: config.RoleGate, Timeout: 300},
+			{Name: "test", Run: pm.Name + " test", Role: config.RoleGate, Timeout: config.DefaultTestTimeout},
 		}
 	}
 

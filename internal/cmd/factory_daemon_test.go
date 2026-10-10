@@ -448,3 +448,50 @@ func TestFactoryContinueRefusesAnUnknownRun(t *testing.T) {
 	assert.Equal(t, ue.Suggestion(), "Pass the run ID from the end of the run's output, or its branch: chunk/factory/<description>/<run id>.")
 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
 }
+
+func TestFactoryBuildTakesDefaultsFromTheProjectConfigAndPlan(t *testing.T) {
+	cfg := `{"orgID":"org-1","commands":[{"name":"test","run":"go test ./..."}],` +
+		`"validation":{"sidecarImage":"snapshot-id"},` +
+		`"factory":{"backend":"docker","image":"chunk-sandbox:local","maxAttempts":5,"log":true}}`
+	newPlan := func(t *testing.T, body string) string {
+		plan := filepath.Join(t.TempDir(), "spec.md")
+		assert.NilError(t, os.WriteFile(plan, []byte("# Spec\n\n"+body+"\n"), 0o644))
+		return plan
+	}
+
+	for _, tc := range []struct {
+		name         string
+		args         []string // --plan is added
+		wantAttempts int
+		wantImage    string
+		wantDocker   bool
+		wantLog      bool
+	}{
+		{name: "config defaults", wantAttempts: 5, wantImage: "chunk-sandbox:local", wantDocker: true, wantLog: true},
+		{name: "flags win", args: []string{"--max-attempts", "3", "--image", "other:tag", "--log=false"}, wantAttempts: 3, wantImage: "other:tag", wantDocker: true},
+		{name: "circleci backend flag", args: []string{"--backend", "circleci"}, wantAttempts: 5, wantImage: "snapshot-id", wantLog: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := factoryProject(t)
+			assert.NilError(t, os.WriteFile(filepath.Join(project, ".chunk", "config.json"), []byte(cfg), 0o644))
+			started := make(chan factory.RunOptions, 1)
+			scfg := fakeFactoryConfig(t, factory.ResultPassed)
+			run := scfg.RunFactory
+			scfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+				started <- opts
+				return run(ctx, opts)
+			}
+			startSessionDaemon(t, scfg)
+
+			body := "work for " + tc.name
+			_, stderr, err := runFactoryBuildCmd(t, append([]string{"--plan", newPlan(t, body)}, tc.args...)...)
+			assert.NilError(t, err, stderr)
+			got := <-started
+			assert.Equal(t, strings.TrimSpace(got.Prompt), "# Spec\n\n"+body)
+			assert.Equal(t, got.Attempts, tc.wantAttempts)
+			assert.Equal(t, got.Image, tc.wantImage)
+			assert.Equal(t, got.Backend != nil, tc.wantDocker)
+			assert.Equal(t, got.Log != "", tc.wantLog)
+		})
+	}
+}

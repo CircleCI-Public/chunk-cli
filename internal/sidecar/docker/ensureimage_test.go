@@ -57,11 +57,32 @@ func TestEnsureImagePresentDoesNotPull(t *testing.T) {
 	assert.Equal(t, len(f.pulls), 0)
 }
 
+// notFoundEvery returns enough "no such image" answers to exhaust the retries.
+func notFoundEvery() []error {
+	errs := make([]error, notFoundAttempts)
+	for i := range errs {
+		errs[i] = errNoSuchImage
+	}
+	return errs
+}
+
 func TestEnsureImageMissingPulls(t *testing.T) {
-	f := &fakeImages{inspectErrs: []error{errNoSuchImage}}
+	noBackoff(t)
+	f := &fakeImages{inspectErrs: notFoundEvery()}
 	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "alpine:3.20"))
 	assert.DeepEqual(t, f.pulls, []string{"alpine:3.20"})
-	assert.Equal(t, f.inspects, 1, "a definite not-found must not be retried")
+	assert.Equal(t, f.inspects, notFoundAttempts, "a persistent not-found is checked a few times, then pulled")
+}
+
+// TestEnsureImageNotFoundWhileDockerStarts covers Docker Desktop waking from a
+// Resource Saver shutdown: its API proxy answers "no such image" until the
+// engine has loaded its image store. A locally built image must not be pulled.
+func TestEnsureImageNotFoundWhileDockerStarts(t *testing.T) {
+	noBackoff(t)
+	f := &fakeImages{inspectErrs: []error{errNoSuchImage}}
+	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "chunk-sandbox:local"))
+	assert.Equal(t, f.inspects, 2)
+	assert.Equal(t, len(f.pulls), 0, "an image that appears on recheck must not be pulled")
 }
 
 func TestEnsureImageRetriesTransientLookupError(t *testing.T) {
@@ -88,7 +109,8 @@ func TestEnsureImagePersistentLookupErrorIsReportedNotPulled(t *testing.T) {
 
 func TestEnsureImageMissingLocalImageExplainsBuild(t *testing.T) {
 	denied := errors.New("pull access denied for chunk-sandbox")
-	f := &fakeImages{inspectErrs: []error{errNoSuchImage}, pullErr: denied}
+	noBackoff(t)
+	f := &fakeImages{inspectErrs: notFoundEvery(), pullErr: denied}
 	err := NewWithClient(f, "", "").ensureImage(context.Background(), "chunk-sandbox:local")
 	assert.ErrorIs(t, err, denied)
 	assert.ErrorContains(t, err, "not on this Docker host")

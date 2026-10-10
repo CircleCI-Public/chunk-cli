@@ -245,3 +245,61 @@ func TestSaveProjectConfigTrimsPathRules(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, cfg.AsyncValidateInert, []string{".sql"})
 }
+
+func TestFactoryConfigValidation(t *testing.T) {
+	for _, backend := range []string{"", "circleci", "docker"} {
+		cfg := &ProjectConfig{Factory: &FactoryConfig{Backend: backend, MaxAttempts: 2}}
+		assert.NilError(t, cfg.Validate(), backend)
+	}
+	err := (&ProjectConfig{Factory: &FactoryConfig{Backend: "podman"}}).Validate()
+	assert.ErrorContains(t, err, "factory.backend")
+	err = (&ProjectConfig{Factory: &FactoryConfig{MaxAttempts: -1}}).Validate()
+	assert.ErrorContains(t, err, "maxAttempts")
+}
+
+func TestFactoryConfigRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	want := &FactoryConfig{Backend: "docker", Image: "chunk-sandbox:local", MaxAttempts: 5, Log: true}
+	assert.NilError(t, SaveProjectConfig(dir, &ProjectConfig{Factory: want}))
+	got, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got.Factory, want)
+
+	writeProjectConfig(t, dir, `{"factory":{"backend":"nope"}}`)
+	_, err = LoadProjectConfig(dir)
+	assert.ErrorContains(t, err, "factory.backend")
+}
+
+func TestEffectiveTimeout(t *testing.T) {
+	assert.Equal(t, Command{Timeout: 42}.EffectiveTimeout(), 42)
+	assert.Equal(t, Command{}.EffectiveTimeout(), DefaultCommandTimeout)
+}
+
+func TestKeepLongerTimeouts(t *testing.T) {
+	detected := []Command{
+		{Name: "test", Run: "task ci:test", Timeout: DefaultTestTimeout},
+		{Name: "lint", Run: "task ci:lint", Timeout: DefaultLintTimeout},
+		{Name: "format", Run: "task fmt", Timeout: DefaultFormatTimeout},
+		{Name: CmdInstall, Run: "task mod-download"},
+	}
+	previous := []Command{
+		{Name: "lint", Run: "task lint", Timeout: 300}, // raised by hand: kept
+		{Name: "format", Run: "task fmt", Timeout: 10}, // shorter: detection wins
+		{Name: "gone", Run: "true", Timeout: 999},      // no longer detected: ignored
+	}
+	got := KeepLongerTimeouts(detected, previous)
+
+	byName := map[string]Command{}
+	for _, c := range got {
+		byName[c.Name] = c
+	}
+	assert.Equal(t, len(got), len(detected))
+	assert.Equal(t, byName["lint"].Timeout, 300)
+	assert.Equal(t, byName["lint"].Run, "task ci:lint", "only the timeout is carried over")
+	assert.Equal(t, byName["format"].Timeout, DefaultFormatTimeout)
+	assert.Equal(t, byName["test"].Timeout, DefaultTestTimeout)
+	assert.Equal(t, byName[CmdInstall].Timeout, 0)
+	_, gone := byName["gone"]
+	assert.Assert(t, !gone)
+	assert.Equal(t, detected[1].Timeout, DefaultLintTimeout, "the input is not modified")
+}

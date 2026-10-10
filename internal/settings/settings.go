@@ -17,6 +17,22 @@ const conflictsTimeout = 5
 // the cap so the two files agree on how long a gate may hold a commit.
 const maxHookTimeout = 600
 
+// stopHookBuffer is the Stop hook's headroom over the commit gate: it runs the
+// same commands, after the session, and gets a little longer to finish.
+const stopHookBuffer = 30
+
+// hookTimeouts is how long the commit gate and the Stop hook may run: long
+// enough for chunk validate to run every command in turn at the timeout it
+// really runs with, held under maxHookTimeout. Both settings files use it, so
+// the gates they generate agree.
+func hookTimeouts(commands []config.Command) (commit, stop int) {
+	total := 0
+	for _, c := range commands {
+		total += c.EffectiveTimeout()
+	}
+	return min(total, maxHookTimeout), min(stopHookBuffer+total, maxHookTimeout)
+}
+
 // Spinner text the agent shows while each hook runs. It is fixed when init
 // writes the file, so it names the command being run and nothing decided at
 // run time: whether the Stop hook hits the cache, skips a clean tree, or goes to
@@ -72,14 +88,7 @@ type codexHooksJSON struct {
 //     and the commit gate, both restricted to git commit by their "if".
 //   - A Stop hook that runs "chunk validate" after every session.
 func Build(commands []config.Command) ([]byte, error) {
-	commitTimeout := 0
-	for _, cmd := range commands {
-		timeout := cmd.Timeout
-		if timeout == 0 {
-			timeout = 60
-		}
-		commitTimeout += timeout
-	}
+	commitTimeout, stopTimeout := hookTimeouts(commands)
 	hooks := []hookEntry{
 		// The advisory notice goes first, so the agent has it before the gate can
 		// stop the commit. Its timeout is short because it only reads an answer the
@@ -95,7 +104,7 @@ func Build(commands []config.Command) ([]byte, error) {
 			Type:          "command",
 			If:            CommitIfFilter,
 			Command:       commitCommand,
-			Timeout:       min(commitTimeout, maxHookTimeout),
+			Timeout:       commitTimeout,
 			StatusMessage: commitStatusMessage,
 		},
 	}
@@ -113,17 +122,6 @@ func Build(commands []config.Command) ([]byte, error) {
 	// a settings file whose Stop hook runs `chunk validate` with no commands to
 	// run. An unconfigured project gets no hooks at all, advisory included.
 	if len(commands) > 0 {
-		// Compute a Stop hook timeout that covers all commands running sequentially.
-		stopTimeout := 30 // base buffer
-		for _, cmd := range commands {
-			t := cmd.Timeout
-			if t == 0 {
-				t = 300
-			}
-			stopTimeout += t
-		}
-		stopTimeout = min(stopTimeout, maxHookTimeout)
-
 		s.Hooks = map[string][]hookGroup{
 			"PreToolUse": {
 				{
@@ -181,16 +179,7 @@ func BuildCodex(commands []config.Command) ([]byte, error) {
 		return json.MarshalIndent(s, "", "  ")
 	}
 
-	commitTimeout := 0
-	for _, cmd := range commands {
-		timeout := cmd.Timeout
-		if timeout == 0 {
-			timeout = 60
-		}
-		commitTimeout += timeout
-	}
-	commitTimeout = min(commitTimeout, maxHookTimeout)
-	stopTimeout := min(30+commitTimeout, maxHookTimeout)
+	commitTimeout, stopTimeout := hookTimeouts(commands)
 
 	s.Hooks = map[string][]hookGroup{
 		"PreToolUse": {

@@ -30,11 +30,79 @@ Read these when working in the relevant area:
 - `cmd/` contains cobra command definitions — thin wrappers that delegate to `internal/`
 - Leaf packages must not import from `cmd/`
 
-## Code Conventions
+## Code Standards
 
-- **Early returns**: Reduce nesting depth
-- **Error handling**: Wrap errors with context using `fmt.Errorf("...: %w", err)`
-- **Naming**: Follow Go conventions — short, unexported by default, no stuttering (e.g. `pipeline.ID` not `pipeline.PipelineID`)
+These apply to every change, whoever writes it. On factory runs, the
+`maintainability` review in `.chunk/reviews/` checks the change against them.
+
+### Reuse before you write (DRY)
+
+- Search for an existing helper before writing one. Shared building blocks:
+  `gitexec.Runner` (git), `httpcl` (HTTP with retries), `iostream` (streams,
+  status, `OutputFn`), `ui` (prompts), `filecache`, `hashutil`, and `userError`
+  (user-facing errors in `cmd/`).
+- Give each piece of knowledge one home: a constant, a type or a function.
+  Don't repeat a literal that means the same thing everywhere (use
+  `chunkd.BackendDocker`, not `"docker"`). Don't copy a block to tweak it:
+  extract the shared part and pass in the difference.
+- Extract when *logic* repeats, not when two lines merely look alike. A shared
+  helper that needs a flag to choose between its callers' behaviour is the
+  wrong abstraction; keep those cases separate.
+
+### Abstractions
+
+- Define interfaces where they're consumed, and keep them small. Add one only
+  for a second implementation or a real test seam (`sidecar.Backend`,
+  `review.Execer`). Accept interfaces, return concrete types.
+- One responsibility per package, within the dependency rules above. `cmd/`
+  parses flags, calls `internal/` and formats output. No business logic.
+- Separate decisions from side effects. Put "what should happen" in a pure
+  function (`decideInitAuth`, `factory.Feedback`) and keep I/O in a thin
+  caller. Test pure functions with table-driven tests.
+
+### Structs and signatures
+
+- Use an options struct when a function needs more than about four parameters,
+  or several of the same type (`factory.RunOptions`, `sidecar.PoolOptions`).
+- No boolean parameters that switch behaviour (`run(x, true, false)`). Use a
+  named type, an options-struct field, or two functions.
+- Return a struct rather than three or more values.
+- Make the zero value useful. Add a `New…` constructor only when an invariant
+  needs one.
+- Use pointer receivers for types that are large or mutated, and don't mix
+  receiver kinds on one type.
+
+### Concurrency
+
+- Run independent I/O concurrently: sidecars, subprocesses, network calls.
+  Keep ordered or trivial steps sequential. Concurrency has to earn its
+  complexity.
+- Reuse the patterns already here: a `sync.WaitGroup` with per-item errors
+  joined by `errors.Join` (`Sidecars.onReviewers`), and a semaphore to bound
+  fan-out (`Relay.Push`). Prefer `errgroup` when the group should stop at the
+  first failure.
+- Every goroutine has a way to exit. Every blocking call takes a
+  `context.Context` and honours cancellation. Shared state is guarded, or owned
+  by one goroutine.
+
+### State and dependencies
+
+- No mutable package-level state in production code. A package-level `var` is
+  allowed only as a test seam (`mintClaudeToken`), and production code never
+  reassigns it.
+- Pass dependencies in (clients, runners, clocks) rather than reaching for
+  globals.
+
+### Readability
+
+- Use early returns to keep nesting shallow. Keep functions short and
+  single-purpose. `gocyclo` fails above 30; aim well below that.
+- Comments say *why*, not *what*. Every exported identifier has a doc comment.
+  No commented-out code, no dead code, and no TODO without a linked issue.
+- Wrap errors with context: `fmt.Errorf("...: %w", err)`. User-facing errors go
+  through `userError` in `cmd/`.
+- Follow Go naming: short, unexported by default, no stuttering (`pipeline.ID`,
+  not `pipeline.PipelineID`).
 
 ## Testing Rules
 

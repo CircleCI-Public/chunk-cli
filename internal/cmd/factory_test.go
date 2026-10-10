@@ -55,7 +55,7 @@ func TestFactoryPrompt(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := factoryPrompt(strings.NewReader(tc.stdin), tc.args, false)
+			got, err := factoryPrompt(strings.NewReader(tc.stdin), tc.args, "", false)
 			if tc.wantErr != "" {
 				assert.ErrorContains(t, err, tc.wantErr)
 				return
@@ -82,22 +82,22 @@ func TestFactoryPromptRefusesAnArgumentAndARedirectedFile(t *testing.T) {
 		return f
 	}
 
-	_, err := factoryPrompt(open(promptFile), []string{"/tmp/run.log"}, true)
+	_, err := factoryPrompt(open(promptFile), []string{"/tmp/run.log"}, "", true)
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), `Got the prompt "/tmp/run.log" as an argument and another prompt on stdin.`)
 	assert.Equal(t, ue.Suggestion(), "--log takes no file. To log to /tmp/run.log, write --log-file /tmp/run.log.")
 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
 
-	_, err = factoryPrompt(open(promptFile), []string{"add a flag"}, false)
+	_, err = factoryPrompt(open(promptFile), []string{"add a flag"}, "", false)
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.Suggestion(), "Pass the prompt as the argument or on stdin, not both.")
 
-	got, err := factoryPrompt(open(promptFile), []string{"-"}, false)
+	got, err := factoryPrompt(open(promptFile), []string{"-"}, "", false)
 	assert.NilError(t, err)
 	assert.Equal(t, got, "# Task\n\nadd a flag\n")
 
-	got, err = factoryPrompt(open(emptyFile), []string{"add a flag"}, true)
+	got, err = factoryPrompt(open(emptyFile), []string{"add a flag"}, "", true)
 	assert.NilError(t, err)
 	assert.Equal(t, got, "add a flag")
 }
