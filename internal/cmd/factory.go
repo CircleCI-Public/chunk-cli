@@ -20,6 +20,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func newFactoryCmd() *cobra.Command {
@@ -69,8 +70,9 @@ or its branch, chunk/factory/<description>/<run id>. The run works in the same
 worktree and adds a commit to the same branch, and its reviewers see the whole
 change. A prompt is optional and adds to the original request: with one, the
 implementer starts on it; without one, the work is checked first and the
-implementer is sent what failed, in a round that does not count toward
---max-attempts.
+implementer is sent what failed, in a round that counts toward
+--max-attempts. Without a prompt in a terminal, it asks for one first, and
+Enter skips it.
 
 With --log, the run keeps a plain-text log in
 ~/.chunk/factory/run-<start time>.log, with its full context whatever the
@@ -136,6 +138,11 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if continueRun != "" {
 				if err := checkFactoryContinue(root, continueRun); err != nil {
 					return err
+				}
+				if prompt == "" {
+					if prompt, err = askContinueGuidance(cmd.InOrStdin(), jsonOut); err != nil {
+						return err
+					}
 				}
 			}
 			relReviews, err := factoryReviewsDir(root, reviewsDir)
@@ -296,6 +303,33 @@ func missingFactoryPromptError() error {
 		withSuggestion(`chunk factory build "add a --verbose flag", or chunk factory build < prompt.md`).
 		withExitCode(ExitBadArgs).
 		withoutDetail()
+}
+
+// promptContinueGuidance asks what a continued run should do differently. It
+// returns ui.ErrNoTTY without asking when there is no terminal to ask on, or
+// when --json says a program is reading the output, so a script's continue
+// checks first as it always has. Swapped out in tests.
+var promptContinueGuidance = func(in io.Reader, jsonOut bool) (string, error) {
+	f, ok := in.(*os.File)
+	if nonInteractive() || jsonOut || !ok || !term.IsTerminal(int(f.Fd())) || ui.RequireStdoutTTY() != nil {
+		return "", ui.ErrNoTTY
+	}
+	return ui.PromptText("What should it do differently? (Enter to just re-check)", "")
+}
+
+// askContinueGuidance is the prompt for a continued run given none: what the
+// developer types, or "" to check the work first.
+func askContinueGuidance(in io.Reader, jsonOut bool) (string, error) {
+	guidance, err := promptContinueGuidance(in, jsonOut)
+	switch {
+	case errors.Is(err, ui.ErrNoTTY):
+		return "", nil
+	case errors.Is(err, ui.ErrCancelled):
+		return "", &userError{msg: "No factory run started.", err: err, hideDetail: true}
+	case err != nil:
+		return "", fmt.Errorf("ask what to do differently: %w", err)
+	}
+	return strings.TrimSpace(guidance), nil
 }
 
 // checkFactoryContinue explains a run that cannot be continued before anything
