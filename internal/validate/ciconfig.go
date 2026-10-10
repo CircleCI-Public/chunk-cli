@@ -136,10 +136,10 @@ var roleSpec = map[string]struct {
 	local   bool
 }{
 	roleInstall:     {config.CmdInstall, "", 0, false},
-	roleTest:        {roleTest, config.RoleGate, 300, false},
-	roleLint:        {roleLint, config.RoleGate, 60, false},
-	roleFormatCheck: {roleFormatCheck, config.RoleGate, 30, false},
-	roleFormat:      {roleFormat, config.RoleAutofix, 30, true},
+	roleTest:        {roleTest, config.RoleGate, config.DefaultTestTimeout, false},
+	roleLint:        {roleLint, config.RoleGate, config.DefaultLintTimeout, false},
+	roleFormatCheck: {roleFormatCheck, config.RoleGate, config.DefaultFormatTimeout, false},
+	roleFormat:      {roleFormat, config.RoleAutofix, config.DefaultFormatTimeout, true},
 }
 
 // emitOrder is the order commands are written to .chunk/config.json.

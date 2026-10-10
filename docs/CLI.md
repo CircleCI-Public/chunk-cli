@@ -45,6 +45,9 @@ chunk
 │   --skip-completions              # Skip shell completion installation
 │   --skip-skills                   # Skip agent skill installation
 │   --skip-auth                     # Skip the Claude login check
+│   --skip-factory                  # Skip the factory backend step
+│   --factory-backend <name>        # circleci or docker; skips the prompt
+│   --factory-image <image>         # Docker image for factory runs; skips the prompt
 │   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (default: true; pass =false to generate)
 │   --project-dir <path>            # Project directory (defaults to cwd)
 │
@@ -98,7 +101,7 @@ chunk
 │       --parallel <n>              # Maximum pool capacity (default 5)
 │       --timeout <seconds>         # Per-command timeout when the command sets none (0 for no limit)
 │       --org-id <id>               # Organization ID
-│       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
+│       --image <id>                # Snapshot ID, or Docker image with --backend docker (default: validation.sidecarImage, or factory.image for docker)
 │       --workdir <path>            # Remote working directory
 │
 ├── sidecar
@@ -159,14 +162,16 @@ chunk
 │
 ├── factory                         # Build and manage factory runs
 │   └── build [prompt|-]            # Implement a prompt on a sidecar, then review and validate it until it passes
-│       --max-attempts <n>          # Maximum rounds of review and validation (default: 3)
+│       --plan <file>               # Read the prompt from a file (usually a markdown spec)
+│       --backend <name>            # circleci or docker (default: factory.backend, else circleci)
+│       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 3)
 │       --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
 │       --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
 │       --reviews <dir>             # Directory of review prompts (default: .chunk/reviews)
 │       --no-validate               # Skip the project's validation commands
 │       --keep-sidecars             # Leave the sidecars running when the run ends
 │       --org-id <id>               # Organization ID
-│       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
+│       --image <id>                # Snapshot ID, or Docker image with --backend docker (default: validation.sidecarImage, or factory.image for docker)
 │       --model <name>              # Claude model (default: Claude Code's default)
 │       --implement-timeout <duration> # Max time for each implementer turn
 │       --review-timeout <duration> # Max time for each review
@@ -311,6 +316,15 @@ chunk
   repos than the daemon's, so they are not used: the default is every project the
   daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
   host**, sent as typed. `--focus` with no path is an error in this mode.
+- **`factory build` takes defaults from the `factory` section of `.chunk/config.json`.**
+  `{"factory": {"backend": "docker", "image": "chunk-sandbox:local", "maxAttempts": 5, "log": true}}`.
+  Precedence, highest first: an explicitly set flag, then `factory.*`, then the built-in default
+  (circleci, 3 attempts, no log). An explicit `--max-attempts 3` beats `factory.maxAttempts`. The docker
+  backend uses `--image` or `factory.image` and never `validation.sidecarImage`, which is a CircleCI
+  snapshot ID; with neither (and no `CHUNK_DOCKER_IMAGE`) the command fails before the run starts.
+  `chunk init` asks where factory runs execute and writes `factory.backend`/`factory.image`.
+- **`factory build --plan FILE` reads the prompt from a file**, as if piped on stdin. It cannot be combined
+  with a prompt argument or redirected stdin; with `--continue` it is optional guidance, like an argument.
 - **`factory build` runs on the local daemon, in the background.** `chunk factory build "<prompt>"` (or
   `chunk factory build < prompt.md`; `chunk factory build - < prompt.md` is the explicit
   form; a prompt argument with a non-empty file on stdin is refused, so a

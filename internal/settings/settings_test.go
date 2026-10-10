@@ -32,11 +32,11 @@ func commitGate(t *testing.T, entries []interface{}) map[string]interface{} {
 	return nil
 }
 
-func TestBuildHookTimeoutDefaultsToSixty(t *testing.T) {
+func TestBuildHookTimeoutDefaultsToRuntimeTimeout(t *testing.T) {
 	// A command with Timeout: 0 must produce a non-zero timeout in the generated
-	// hook entry — the default of 60s must be applied. MUT-006 caught this gap by
-	// changing the default to 0, which causes Claude Code to treat the hook as
-	// having no timeout limit.
+	// hook entry: zero makes Claude Code treat the hook as having no limit
+	// (MUT-006). The budget is the timeout chunk validate really runs the command
+	// with, so the gate never cuts off a command still inside its own timeout.
 	cmds := []config.Command{
 		{Name: "test", Run: "go test ./...", Timeout: 0},
 	}
@@ -55,7 +55,7 @@ func TestBuildHookTimeoutDefaultsToSixty(t *testing.T) {
 	assert.Equal(t, entry["if"], CommitIfFilter, "entry must carry if filter for git commit")
 
 	timeout, _ := entry["timeout"].(float64)
-	assert.Assert(t, timeout == 60, "expected default hook timeout of 60 for command with Timeout: 0, got: %v", timeout)
+	assert.Equal(t, int(timeout), config.DefaultCommandTimeout)
 }
 
 func TestBuildHookMatcherIsToolName(t *testing.T) {
@@ -201,7 +201,7 @@ func TestBuildCodexCommitTimeoutIsCapped(t *testing.T) {
 	assert.Equal(t, entries[0].Timeout, 600)
 }
 
-func TestBuildCodexTimeoutDefaultsToSixty(t *testing.T) {
+func TestBuildCodexTimeoutDefaultsToRuntimeTimeout(t *testing.T) {
 	cmds := []config.Command{
 		{Name: "test", Run: "go test ./...", Timeout: 0},
 	}
@@ -223,7 +223,7 @@ func TestBuildCodexTimeoutDefaultsToSixty(t *testing.T) {
 	assert.Assert(t, ok, "expected hook entry to be a map")
 
 	timeout, _ := entry["timeout"].(float64)
-	assert.Assert(t, timeout == 60, "expected default hook timeout of 60, got: %v", timeout)
+	assert.Equal(t, int(timeout), config.DefaultCommandTimeout)
 }
 
 func TestBuildCodexIncludesStopHook(t *testing.T) {
@@ -311,4 +311,25 @@ func TestBuildSetsStatusMessages(t *testing.T) {
 	assert.NilError(t, json.Unmarshal(data, &codex))
 	assert.Equal(t, codex.Hooks["PreToolUse"][0].Hooks[0].StatusMessage, "Running chunk validate if this is a commit")
 	assert.Equal(t, codex.Hooks["Stop"][0].Hooks[0].StatusMessage, "Running chunk validate")
+}
+
+// TestHookTimeoutsAgree pins the bug where the commit gate and the Stop hook
+// guessed different defaults for a command with no timeout (60s and 300s), and
+// the Codex file used a third formula: every hook now budgets the same commands
+// the same way.
+func TestHookTimeoutsAgree(t *testing.T) {
+	cmds := []config.Command{
+		{Name: config.CmdInstall, Run: "task mod-download"}, // no timeout of its own
+		{Name: "test", Run: "task test", Timeout: 100},
+		{Name: "format", Run: "task fmt", Timeout: 30, Role: config.RoleAutofix},
+	}
+	total := config.DefaultCommandTimeout + 100 + 30
+	commit, stop := hookTimeouts(cmds)
+	assert.Equal(t, commit, min(total, maxHookTimeout))
+	assert.Equal(t, stop, min(stopHookBuffer+total, maxHookTimeout))
+
+	small := []config.Command{{Name: "lint", Run: "task lint", Timeout: 60}}
+	commit, stop = hookTimeouts(small)
+	assert.Equal(t, commit, 60)
+	assert.Equal(t, stop, 60+stopHookBuffer, "under the cap the Stop hook keeps its buffer")
 }

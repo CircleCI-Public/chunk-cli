@@ -14,7 +14,7 @@
       "name": "lint",
       "run": "task ci:lint",
       "role": "gate",
-      "timeout": 300
+      "timeout": 180
     },
     {
       "name": "format",
@@ -30,6 +30,10 @@
   },
   "validation": {
     "sidecarImage": "4c46e935-5727-461b-9c73-d6806ecbdf36"
+  },
+  "factory": {
+    "backend": "docker",
+    "image": "chunk-sandbox:local"
   },
   "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
   "environment": {

@@ -39,7 +39,7 @@ func newFactoryCmd() *cobra.Command {
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, jsonOut, logOn, verbose bool
-	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend string
+	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan string
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
@@ -60,6 +60,11 @@ uncommitted changes included. Your checkout is never touched. The implementer's
 work is synced into the worktree each round and committed there when the run
 ends; the worktree is kept so you can look at it or carry on in it.
 
+--plan FILE reads the prompt from FILE, usually a markdown spec, as if it had
+been piped on stdin: chunk factory build --plan spec.md. Relative paths are
+relative to the current directory. Pass the prompt one way: --plan, an
+argument, or stdin.
+
 With no prompt argument, the prompt is read from redirected stdin. A - prompt
 selects stdin explicitly: chunk factory build < prompt.md or chunk factory build - < prompt.md.
 A prompt argument with a file on stdin is refused rather than drop the file.
@@ -71,7 +76,7 @@ worktree and adds a commit to the same branch, and its reviewers see the whole
 change. A prompt is optional and adds to the original request: with one, the
 implementer starts on it; without one, the work is checked first and the
 implementer is sent what failed, in a round that counts toward
---max-attempts. Without a prompt in a terminal, it asks for one first, and
+--max-attempts. --plan works like a prompt argument here. Without a prompt in a terminal, it asks for one first, and
 Enter skips it.
 
 With --log, the run keeps a plain-text log in
@@ -81,7 +86,12 @@ said, each review's findings in full, and each validation command's output
 when it failed. --log-file FILE keeps the log in FILE instead, and on its own
 turns the log on. --verbose adds the review prompts, the output of commands
 that passed, and a check each round that every reviewer has the implementer's
-change, and also shows the log here as the run writes it; it implies --log.`,
+change, and also shows the log here as the run writes it; it implies --log.
+
+Defaults for --backend, --image, --max-attempts and --log come from the
+factory section of .chunk/config.json (chunk init sets it); a flag given on the
+command line wins. For the docker backend the image is --image or
+factory.image, never validation.sidecarImage (a CircleCI snapshot ID).`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
@@ -100,8 +110,8 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			var err error
 			// A continued run needs no prompt, so stdin is only read for one when
 			// asked for or redirected from a file.
-			if continueRun == "" || len(args) > 0 || redirectedFile(cmd.InOrStdin()) {
-				prompt, err = factoryPrompt(cmd.InOrStdin(), args, logOn && logFile == "")
+			if continueRun == "" || len(args) > 0 || plan != "" || redirectedFile(cmd.InOrStdin()) {
+				prompt, err = factoryPrompt(cmd.InOrStdin(), args, plan, logOn && logFile == "")
 				if err != nil {
 					return err
 				}
@@ -130,6 +140,18 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err, blocked: true}
 			}
+			flags := cmd.Flags()
+			settings, err := resolveFactorySettings(
+				factorySettings{Backend: backend, Image: image, Attempts: attempts, Log: logOn},
+				factoryExplicit{
+					Backend:  flags.Changed("backend"),
+					Image:    flags.Changed("image"),
+					Attempts: flags.Changed("max-attempts"),
+					Log:      flags.Changed("log"),
+				}, cfg)
+			if err != nil {
+				return err
+			}
 			// The daemon loads these itself; loading them here first explains a
 			// mistake before anything starts.
 			if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
@@ -149,7 +171,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return err
 			}
-			logArg, err := factoryLogPath(logFile, logOn || verbose, time.Now())
+			logArg, err := factoryLogPath(logFile, settings.Log || verbose, time.Now())
 			if err != nil {
 				return err
 			}
@@ -166,7 +188,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 				Continue:                continueRun,
 				ReviewsDir:              relReviews,
 				NoValidate:              noValidate,
-				Attempts:                attempts,
+				Attempts:                settings.Attempts,
 				Reviewers:               reviewers,
 				Model:                   model,
 				ImplementerInstructions: implementerInstructions,
@@ -174,8 +196,8 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 				ReviewTimeoutSeconds:    int(reviewTimeout / time.Second),
 				KeepSidecars:            keepSidecars,
 				OrgID:                   orgID,
-				Image:                   image,
-				Backend:                 backend,
+				Image:                   settings.Image,
+				Backend:                 settings.Backend,
 				Log:                     logArg,
 				Verbose:                 verbose,
 			})
@@ -195,15 +217,16 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 		},
 	}
 
-	cmd.Flags().IntVar(&attempts, "max-attempts", 3, "maximum rounds of review and validation")
+	cmd.Flags().IntVar(&attempts, "max-attempts", 3, "maximum rounds of review and validation (default: factory.maxAttempts from config, else 3)")
+	cmd.Flags().StringVar(&plan, "plan", "", "read the prompt from this file, usually a markdown spec")
 	cmd.Flags().StringVar(&continueRun, "continue", "", "pick up an earlier run by its ID (the branch's final segment) or full branch")
 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
 	cmd.Flags().BoolVar(&noValidate, "no-validate", false, "skip the project's validation commands")
 	cmd.Flags().BoolVar(&keepSidecars, "keep-sidecars", false, "leave the sidecars running when the run ends")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
-	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
-	cmd.Flags().StringVar(&backend, "backend", "", "where sidecars run: circleci (default) or docker (local containers)")
+	cmd.Flags().StringVar(&image, "image", "", "image: a CircleCI snapshot ID, or a Docker image with --backend docker (default: validation.sidecarImage, or factory.image for docker)")
+	cmd.Flags().StringVar(&backend, "backend", "", "where sidecars run: circleci or docker (local containers) (default: factory.backend from config, else circleci)")
 	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
 	cmd.Flags().StringVar(&implementerInstructions, "implementer-instructions", "", "extra instructions for the implementer")
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
@@ -248,7 +271,10 @@ func factoryFlagError(cmd *cobra.Command, err error) error {
 // meant for a flag, as in --log run.log < prompt.md; bareLog says --log was
 // given without --log-file, to point at that. Only a non-empty regular file
 // counts, since a pipe or /dev/null is what scripts often inherit as stdin.
-func factoryPrompt(in io.Reader, args []string, bareLog bool) (string, error) {
+func factoryPrompt(in io.Reader, args []string, plan string, bareLog bool) (string, error) {
+	if plan != "" {
+		return planPrompt(in, args, plan)
+	}
 	if len(args) == 1 && args[0] != "-" {
 		if redirectedFile(in) {
 			return "", promptTwiceError(args[0], bareLog)
@@ -272,6 +298,29 @@ func factoryPrompt(in io.Reader, args []string, bareLog bool) (string, error) {
 			withoutDetail()
 	}
 	return prompt, nil
+}
+
+// planPrompt is the prompt in the --plan file. The prompt has one source, so an
+// argument or a file redirected to stdin alongside it is refused.
+func planPrompt(in io.Reader, args []string, plan string) (string, error) {
+	if len(args) > 0 || redirectedFile(in) {
+		return "", newUserError("Got --plan along with another prompt.").
+			withCode("command.invalid_args").
+			withSuggestion("Pass the prompt one way: --plan, an argument, or stdin.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	b, err := os.ReadFile(plan)
+	if err != nil {
+		return "", &userError{msg: fmt.Sprintf("Could not read the plan file %s.", plan), suggestion: "Check the --plan path.", err: err}
+	}
+	if strings.TrimSpace(string(b)) == "" {
+		return "", newUserError(fmt.Sprintf("The plan file %s is empty.", plan)).
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	return string(b), nil
 }
 
 // redirectedFile reports whether in is a regular file with something in it,

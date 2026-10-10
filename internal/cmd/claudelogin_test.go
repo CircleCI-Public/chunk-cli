@@ -23,7 +23,9 @@ func TestDecideInitAuth(t *testing.T) {
 		for _, interactive := range []bool{false, true} {
 			for _, insecure := range []bool{false, true} {
 				for _, skip := range []bool{false, true} {
-					got := decideInitAuth(has, interactive, insecure, skip)
+					got := decideInitAuth(initAuthState{
+						HasCredential: has, Interactive: interactive, InsecureStorage: insecure, Skip: skip,
+					})
 					switch {
 					case skip:
 						assert.Equal(t, got, skipped)

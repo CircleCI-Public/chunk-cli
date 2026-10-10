@@ -80,16 +80,24 @@ const (
 	skipped
 )
 
+// initAuthState is what the Claude credential step of `chunk init` decides on.
+type initAuthState struct {
+	HasCredential   bool
+	Interactive     bool
+	InsecureStorage bool
+	Skip            bool
+}
+
 // decideInitAuth picks what the Claude credential step of `chunk init` does.
-func decideInitAuth(hasCredential, interactive, insecureStorage, skip bool) initAuthAction {
+func decideInitAuth(s initAuthState) initAuthAction {
 	switch {
-	case skip:
+	case s.Skip:
 		return skipped
-	case hasCredential:
+	case s.HasCredential:
 		return reportExisting
-	case insecureStorage:
+	case s.InsecureStorage:
 		return hintInsecure
-	case !interactive:
+	case !s.Interactive:
 		return hintNonInteractive
 	}
 	return promptLogin
@@ -116,7 +124,12 @@ var isInteractive = func() bool {
 // claudeAuthStep makes sure the user has a Claude credential. Never fatal.
 func claudeAuthStep(ctx context.Context, streams iostream.Streams, rc config.ResolvedConfig, insecureStorage, skip bool, confirm confirmFunc) {
 	desc, has := describeCredential(rc)
-	switch decideInitAuth(has, isInteractive(), insecureStorage, skip) {
+	switch decideInitAuth(initAuthState{
+		HasCredential:   has,
+		Interactive:     isInteractive(),
+		InsecureStorage: insecureStorage,
+		Skip:            skip,
+	}) {
 	case skipped:
 	case reportExisting:
 		streams.ErrPrintln("Claude credential: " + desc)

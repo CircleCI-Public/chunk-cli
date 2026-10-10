@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // SessionState is where a whole session stands.
@@ -350,10 +352,11 @@ type SessionDetail struct {
 	Details []RoundDetail `json:"details,omitempty"`
 }
 
-// Backends a FactoryRequest can name.
+// Backends a FactoryRequest can name: the project config's, so the request and
+// the config agree.
 const (
-	BackendCircleCI = "circleci"
-	BackendDocker   = "docker"
+	BackendCircleCI = config.BackendCircleCI
+	BackendDocker   = config.BackendDocker
 )
 
 // FactoryRequest starts a factory session.

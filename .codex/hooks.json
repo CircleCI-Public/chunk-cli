@@ -2,26 +2,26 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
-            "type": "command",
-            "if": "Bash(git commit*)",
             "command": "chunk validate",
-            "timeout": 450,
-            "statusMessage": "Running chunk validate if this is a commit"
+            "if": "Bash(git commit*)",
+            "statusMessage": "Running chunk validate if this is a commit",
+            "timeout": 600,
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Bash"
       }
     ],
     "Stop": [
       {
         "hooks": [
           {
-            "type": "command",
             "command": "chunk validate",
-            "timeout": 480,
-            "statusMessage": "Running chunk validate"
+            "statusMessage": "Running chunk validate",
+            "timeout": 600,
+            "type": "command"
           }
         ]
       }
