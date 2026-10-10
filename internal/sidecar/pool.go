@@ -76,6 +76,9 @@ type PoolOptions struct {
 	RepoPath    string
 	ExistingIDs []string
 	FreshIDs    []string
+	// Backend provisions and drives the pool's sidecars. When nil, the pool
+	// uses the CircleCI backend built from client and OrgID.
+	Backend Backend
 }
 
 func poolStatePath(stateDir, name string) string {
@@ -119,9 +122,12 @@ func NewPool(
 	if opts.Size < 1 {
 		return nil, errors.New("pool size must be positive")
 	}
-	// The pool runs its sidecars through a Backend. Phase 1 derives the CircleCI
-	// backend from the client; a later phase selects Docker here instead.
-	be := NewCircleCIBackend(client, opts.OrgID)
+	// The pool runs its sidecars through a Backend: the caller's when given
+	// (Docker), else the CircleCI backend derived from the client.
+	be := opts.Backend
+	if be == nil {
+		be = NewCircleCIBackend(client, opts.OrgID)
+	}
 	stateDir := opts.StateDir
 	if stateDir == "" {
 		stateDir = opts.WorkDir
@@ -219,7 +225,7 @@ func assemblePool(
 	var cloneSnapshotID, cloneSeedID string
 	if newCount > 0 {
 		seedIdx := len(aliveExisting)
-		seed, err := be.Create(ctx, fmt.Sprintf("%s-%d", name, seedIdx), image)
+		seed, err := be.Create(ctx, fmt.Sprintf("%s-%d", name, seedIdx), image, repoPath)
 		if err != nil {
 			return nil, fmt.Errorf("create sidecar %d: %w", seedIdx, err)
 		}
@@ -318,7 +324,7 @@ func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.Sta
 	cleanupCtx := context.WithoutCancel(ctx)
 	_ = p.backend.Delete(cleanupCtx, dead.ID)
 
-	sc, err := p.backend.Create(ctx, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
+	sc, err := p.backend.Create(ctx, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image, dead.RepoPath)
 	if err != nil {
 		err = fmt.Errorf("replace: create sidecar: %w", err)
 		p.retire(dead, err)
@@ -407,7 +413,7 @@ func (p *Pool) startCloneCreation(
 	for i := range count {
 		go func(i int) {
 			index := baseIndex + i
-			sc, err := p.backend.Create(createCtx, fmt.Sprintf("%s-%d", p.name, index), snapshotID)
+			sc, err := p.backend.Create(createCtx, fmt.Sprintf("%s-%d", p.name, index), snapshotID, p.repoPath)
 			if err != nil {
 				results <- cloneResult{err: fmt.Errorf("create sidecar %d from snapshot: %w", index, err)}
 				return
@@ -740,7 +746,7 @@ func (p *Pool) replaceStaleEntry(ctx context.Context, stale *PoolEntry, status i
 	status(iostream.LevelInfo, fmt.Sprintf("sidecar %s became stale during sync, creating replacement...", stale.ID))
 	_ = p.backend.Delete(context.Background(), stale.ID)
 
-	sc, err := p.backend.Create(ctx, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
+	sc, err := p.backend.Create(ctx, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image, stale.RepoPath)
 	if err != nil {
 		return stale, fmt.Errorf("replace stale sidecar: create: %w", err)
 	}

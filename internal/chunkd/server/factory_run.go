@@ -14,20 +14,26 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar/docker"
 )
 
 // DefaultAttempts is how many rounds a factory session checks at most when the
 // request does not say.
 const DefaultAttempts = 3
 
-// factoryAuthError explains why factory sessions cannot run, or "" when they
-// can.
-func (d *daemon) factoryAuthError() string {
+// factoryAuthError explains why a factory session on the given backend cannot
+// run, or "" when it can. Every backend needs the Claude credential; only the
+// CircleCI backend needs a CircleCI client.
+func (d *daemon) factoryAuthError(backend string) string {
 	if d.rcfg.Credential.Value == "" {
 		if d.rcfg.AuthError != "" {
 			return d.rcfg.AuthError
 		}
 		return "no Claude credential configured for the chunk daemon — factory runs unavailable"
+	}
+	if backend == "docker" {
+		return ""
 	}
 	if d.rcfg.RunFactory == nil && d.client == nil {
 		return "not authenticated to CircleCI — factory runs unavailable (run: chunk auth login)"
@@ -38,7 +44,10 @@ func (d *daemon) factoryAuthError() string {
 // startFactory validates a request, records a factory session and starts it in
 // the background. It returns as soon as the session is accepted.
 func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error) {
-	if msg := d.factoryAuthError(); msg != "" {
+	if req.Backend != "" && req.Backend != "circleci" && req.Backend != "docker" {
+		return chunkd.Session{}, apiErr(http.StatusBadRequest, "unknown backend %q (want circleci or docker)", req.Backend)
+	}
+	if msg := d.factoryAuthError(req.Backend); msg != "" {
 		return chunkd.Session{}, apiErr(http.StatusServiceUnavailable, "%s", msg)
 	}
 	prompt := strings.TrimSpace(req.Prompt)
@@ -78,7 +87,13 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		return chunkd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
 	}
 	orgID, image := req.OrgID, req.Image
-	if orgID == "" || image == "" {
+	// The Docker backend needs no CircleCI org; take only the image from config
+	// (empty is fine — the Docker backend has its own default image).
+	if req.Backend == "docker" {
+		if image == "" && cfg.Validation != nil {
+			image = cfg.Validation.SidecarImage
+		}
+	} else if orgID == "" || image == "" {
 		cfgOrg, cfgImage, err := poolTarget(ps.root, cfg)
 		if err != nil && orgID == "" {
 			return chunkd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
@@ -89,6 +104,17 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		if image == "" {
 			image = cfgImage
 		}
+	}
+
+	// Build the Docker backend up front so a daemon that cannot reach the
+	// Docker socket fails the request rather than the background run.
+	var backend sidecar.Backend
+	if req.Backend == "docker" {
+		db, err := docker.New()
+		if err != nil {
+			return chunkd.Session{}, apiErr(http.StatusServiceUnavailable, "docker backend unavailable: %v", err)
+		}
+		backend = db
 	}
 	// The daemon's working directory is not the caller's, so a relative path
 	// would put the log somewhere the caller did not mean.
@@ -124,6 +150,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		Client:                  d.client,
 		OrgID:                   orgID,
 		Image:                   image,
+		Backend:                 backend,
 		KeepSidecars:            req.KeepSidecars,
 		Credential:              d.rcfg.Credential,
 		BaseURL:                 d.rcfg.BaseURL,
@@ -150,7 +177,15 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 		log.Printf("chunkd: factory (%s): %s", root, msg)
 		rec.progress(level, msg)
 	}
-	opts.Exec = d.execerFor(root, rec.attribute)
+	// execerFor wires each command into the dashboard's live output pane via the
+	// CircleCI client. The Docker backend runs commands itself, so it uses the
+	// backend's own Exec (review.ClientExec); its live output pane lands in a
+	// later phase.
+	if opts.Backend == nil {
+		opts.Exec = d.execerFor(root, rec.attribute)
+	} else {
+		opts.Exec = review.ClientExec
+	}
 	opts.OnStart = rec.started
 	opts.OnEvent = rec.event
 	opts.OnReviewProgress = rec.reviewProgress

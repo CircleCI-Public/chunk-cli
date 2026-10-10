@@ -398,7 +398,7 @@ or via the repeatable --args flag. Positional arguments are appended after any
 			// render as the remote terminal intended.
 			onOutput := func(stream string, data []byte) {
 				w := io.Out
-				if stream == circleci.StreamStderr {
+				if stream == iostream.StreamStderr {
 					w = io.Err
 				}
 				_, _ = w.Write(data)

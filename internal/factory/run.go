@@ -45,6 +45,10 @@ type RunOptions struct {
 	Client *circleci.Client
 	OrgID  string
 	Image  string
+	// Backend provisions and drives the run's sidecars. When nil, the run uses
+	// the CircleCI backend built from Client and OrgID. Set it to run the loop
+	// on a different provider, such as local Docker.
+	Backend sidecar.Backend
 	// KeepSidecars leaves the sidecars running when the run ends.
 	KeepSidecars bool
 
@@ -204,11 +208,18 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}
 
 	status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", opts.Reviewers))
+	// One backend drives the pool and the relay. The caller's choice (Docker)
+	// wins; otherwise it is the CircleCI backend built from the client.
+	backend := opts.Backend
+	if backend == nil {
+		backend = sidecar.NewCircleCIBackend(opts.Client, opts.OrgID)
+	}
 	pool, err := sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{
-		Size:  PoolSize(opts.Reviewers),
-		Name:  PoolName(rep.RunID),
-		OrgID: opts.OrgID,
-		Image: opts.Image,
+		Size:    PoolSize(opts.Reviewers),
+		Name:    PoolName(rep.RunID),
+		OrgID:   opts.OrgID,
+		Image:   opts.Image,
+		Backend: backend,
 		// The sidecars start from the worktree, and its state stays in the
 		// project, where the dashboard finds it.
 		WorkDir:  wt.Path,
@@ -248,7 +259,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Acquire:   pool.Acquire,
 		Release:   pool.Release,
 		Reviewers: Members(impl, pool.IDs()),
-		Relay:     NewRelay(sidecar.NewCircleCIBackend(opts.Client, opts.OrgID), wt.Path, status),
+		Relay:     NewRelay(backend, wt.Path, status),
 		Request:   request,
 		Prompts:   opts.Prompts,
 		Review: review.Options{

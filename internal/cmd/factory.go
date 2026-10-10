@@ -38,7 +38,7 @@ func newFactoryCmd() *cobra.Command {
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, jsonOut, logOn, verbose bool
-	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun string
+	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend string
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
@@ -168,6 +168,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 				KeepSidecars:            keepSidecars,
 				OrgID:                   orgID,
 				Image:                   image,
+				Backend:                 backend,
 				Log:                     logArg,
 				Verbose:                 verbose,
 			})
@@ -195,6 +196,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().BoolVar(&keepSidecars, "keep-sidecars", false, "leave the sidecars running when the run ends")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
+	cmd.Flags().StringVar(&backend, "backend", "", "where sidecars run: circleci (default) or docker (local containers)")
 	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
 	cmd.Flags().StringVar(&implementerInstructions, "implementer-instructions", "", "extra instructions for the implementer")
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")

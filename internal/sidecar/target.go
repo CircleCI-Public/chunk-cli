@@ -71,7 +71,7 @@ func (t Target) ExecRunner(ctx context.Context, cwd string, envVars map[string]s
 		var stdout, stderr bytes.Buffer
 		onOutput := func(stream string, data []byte) {
 			w := streams.Out
-			if stream == circleci.StreamStderr {
+			if stream == iostream.StreamStderr {
 				w = streams.Err
 				_, _ = stderr.Write(data)
 			} else {

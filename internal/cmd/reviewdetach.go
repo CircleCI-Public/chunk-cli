@@ -155,7 +155,7 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 	res, err := req.client.Exec(ctx, entry.ID, "sh", []string{"-c", review.DetachScript(spec)},
 		review.DetachEnv(req.circleToken, req.opts),
 		func(stream string, data []byte) {
-			if stream == circleci.StreamStderr {
+			if stream == iostream.StreamStderr {
 				_, _ = stderr.Write(data)
 				return
 			}
@@ -339,7 +339,7 @@ func execRead(ctx context.Context, client *circleci.Client, st detachedState) (s
 	var stdout bytes.Buffer
 	res, err := client.Exec(ctx, st.SidecarID, "sh", []string{"-c", review.ReadScript(st.RunDir)}, nil,
 		func(stream string, data []byte) {
-			if stream != circleci.StreamStderr {
+			if stream != iostream.StreamStderr {
 				_, _ = stdout.Write(data)
 			}
 		})

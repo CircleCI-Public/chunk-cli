@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -18,7 +18,7 @@ func RunScript(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, scrip
 	var stdout, stderr strings.Builder
 	tooBig := false
 	code, err := exec(ctx, entry, script, nil, func(stream string, data []byte) {
-		if stream == circleci.StreamStderr {
+		if stream == iostream.StreamStderr {
 			if stderr.Len() < maxOutputBytes {
 				stderr.Write(data)
 			}
