@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
@@ -121,7 +122,7 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 	case strings.HasPrefix(image, snapshotScheme):
 		// Clone: restore the snapshot's workspace into this member's host dir.
 		snapDir := strings.TrimPrefix(image, snapshotScheme)
-		if err := copyTree(snapDir, hostDir); err != nil {
+		if err := copyTree(ctx, snapDir, hostDir); err != nil {
 			return sidecar.Instance{}, fmt.Errorf("docker: restore snapshot: %w", err)
 		}
 	case image != "":
@@ -176,7 +177,7 @@ func (b *Provider) ensureImage(ctx context.Context, ref string) error {
 // that is already gone is not an error.
 func (b *Provider) Delete(ctx context.Context, id string) error {
 	err := b.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true})
-	if err != nil && !client.IsErrNotFound(err) {
+	if err != nil && !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("docker: remove container: %w", err)
 	}
 	if dir, ok := b.hostDir(id); ok {
@@ -201,7 +202,7 @@ func (b *Provider) Snapshot(ctx context.Context, id, name string) (string, error
 		return "", fmt.Errorf("docker: snapshot dir: %w", err)
 	}
 	// The snapshot keeps .git so clones carry the baseline commit and history.
-	if err := copyTree(src, snapDir); err != nil {
+	if err := copyTree(ctx, src, snapDir); err != nil {
 		return "", fmt.Errorf("docker: snapshot copy: %w", err)
 	}
 	return snapshotScheme + snapDir, nil
@@ -303,11 +304,11 @@ func rsyncMirror(ctx context.Context, src, dst string, extra ...string) error {
 }
 
 // copyTree copies src into dst exactly, including .git, with rsync.
-func copyTree(src, dst string) error {
+func copyTree(ctx context.Context, src, dst string) error {
 	if err := os.MkdirAll(dst, 0o777); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
 	}
-	cmd := exec.Command("rsync", "--archive", "--delete", strings.TrimRight(src, "/")+"/", strings.TrimRight(dst, "/")+"/")
+	cmd := exec.CommandContext(ctx, "rsync", "--archive", "--delete", strings.TrimRight(src, "/")+"/", strings.TrimRight(dst, "/")+"/")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("rsync copy: %w: %s", err, strings.TrimSpace(string(out)))
 	}

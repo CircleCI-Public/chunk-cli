@@ -9,29 +9,29 @@
 #     docker build -t chunk-sandbox:local -f Dockerfile.local .
 #     chunk factory build --backend docker --image chunk-sandbox:local "your task"
 #
-# It contains exactly what the loop needs:
-#   - the tools the loop's own scripts run inside the sidecar (git, sha256sum,
-#     base64, cut, pkill)
-#   - the Claude Code CLI, which the implementer and reviewers invoke
-# plus a clearly-marked slot for your project's test/lint toolchain.
+# It carries what the loop needs (git, coreutils, procps, the Claude Code CLI)
+# plus chunk-cli's own toolchain so the project's validation commands run in the
+# sidecar: Go (matching go.mod), Task, and uv/python for the harness lint step.
+# `task test`/`lint`/`fmt` fetch gotestsum, golangci-lint and gosimports via
+# `go tool`, so those need no separate install.
 #
 # The repo is NOT copied in at build time — the Docker backend bind-mounts a
 # fresh copy of your working tree into the container at run time. So this image
-# only needs tools, never your source. (That also means no rsync/ssh here: the
-# file transport is host-side.)
+# only needs tools, never your source. (No rsync/ssh here: the file transport
+# is host-side.)
 
 FROM debian:bookworm-slim
 
 ENV HOME=/root \
     DEBIAN_FRONTEND=noninteractive \
-    PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin
+    GOTOOLCHAIN=auto \
+    CGO_ENABLED=1 \
+    PATH=/root/.local/bin:/usr/local/go/bin:/root/go/bin:/usr/local/bin:/usr/bin:/bin
 
-# Tools the factory loop itself invokes inside the sidecar:
-#   git                    baseline commit, diff/collect, fingerprint
-#   coreutils              sha256sum, base64, cut (fingerprint + prompt piping)
-#   procps                 pkill (cancels a review that timed out)
-#   ca-certificates, curl  fetch the Claude installer (and TLS for the agent)
-#   bash                   a predictable shell for the loop's scripts
+# Base tools: the loop's own scripts (git, sha256sum/base64 from coreutils,
+# pkill from procps), curl/ca-certificates for installers, python3 for the
+# harness lint step, and gcc + libc6-dev because `task test` runs with -race,
+# which needs cgo.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git \
       coreutils \
@@ -39,17 +39,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
       bash \
+      python3 \
+      gcc \
+      libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# -- Project toolchain -------------------------------------------------------
-# Add whatever your repo's tests and linters need, so the validation commands
-# in .chunk/config.json can run inside the sidecar. Examples (uncomment/edit):
-#
-# RUN apt-get update && apt-get install -y --no-install-recommends \
-#       python3 python3-pip \
-#       nodejs npm \
-#       golang-go \
-#     && rm -rf /var/lib/apt/lists/*
+# Go — matches go.mod's version, architecture-detected so the image builds on
+# both amd64 and arm64 (Apple Silicon) Docker.
+ARG GO_VERSION=1.26.1
+RUN arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) goarch=amd64 ;; \
+      arm64) goarch=arm64 ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${goarch}.tar.gz" | tar -C /usr/local -xz \
+ && go version
+
+# Task (task test/lint/fmt runner) and uv (runs the harness's pylint step).
+RUN sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin \
+ && task --version \
+ && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+ && uv --version
+
+# -- Extra project toolchain -------------------------------------------------
+# chunk-cli needs only Go + Task + uv (above). For other repos, add their test
+# dependencies here (node, rust, system libs, …).
 # ---------------------------------------------------------------------------
 
 # Claude Code CLI. The native installer drops `claude` in $HOME/.local/bin,

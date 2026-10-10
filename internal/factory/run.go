@@ -106,6 +106,15 @@ type Report struct {
 	Log string
 }
 
+// backend is the backend that drives the run's pool and relay: the caller's
+// choice (such as Docker), else the CircleCI backend built from the client.
+func (o *RunOptions) backend() sidecar.Backend {
+	if o.Backend != nil {
+		return o.Backend
+	}
+	return sidecar.NewCircleCIBackend(o.Client, o.OrgID)
+}
+
 // ReviewerCount is how many reviewer sidecars a run with prompts needs when
 // asked for requested: one per prompt unless fewer are asked for, and none
 // without prompts.
@@ -207,12 +216,8 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}
 
 	status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", opts.Reviewers))
-	// One backend drives the pool and the relay. The caller's choice (Docker)
-	// wins; otherwise it is the CircleCI backend built from the client.
-	backend := opts.Backend
-	if backend == nil {
-		backend = sidecar.NewCircleCIBackend(opts.Client, opts.OrgID)
-	}
+	// One backend drives both the pool and the relay.
+	backend := opts.backend()
 	pool, err := sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{
 		Size:    PoolSize(opts.Reviewers),
 		Name:    PoolName(rep.RunID),

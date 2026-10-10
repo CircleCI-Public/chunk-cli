@@ -193,7 +193,7 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 	}
 	stream := d.rcfg.Stream
 	if stream == nil {
-		stream = func(ctx context.Context, pe *sidecar.PoolEntry, commandID string, onOutput iostream.OutputFn) (int, error) {
+		stream = func(ctx context.Context, _ *sidecar.PoolEntry, commandID string, onOutput iostream.OutputFn) (int, error) {
 			resp, err := d.client.StreamOutput(ctx, commandID, "", onOutput)
 			if err != nil {
 				return 0, err
