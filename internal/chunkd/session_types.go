@@ -178,6 +178,10 @@ type FactoryRun struct {
 	Branch   string `json:"branch,omitempty"`
 	Baseline string `json:"baseline,omitempty"`
 	Head     string `json:"head,omitempty"`
+	// BaseBranch is the branch the user was on when the run started, and
+	// DefaultBranch the repository's default; either may be "".
+	BaseBranch    string `json:"base_branch,omitempty"`
+	DefaultBranch string `json:"default_branch,omitempty"`
 	// Result is why the loop stopped, one of the Result values, once it has,
 	// and Rounds how many rounds were checked.
 	Result string `json:"result,omitempty"`

@@ -170,6 +170,13 @@ chunk
 │       --reviews <dir>             # Directory of review prompts (default: .chunk/reviews)
 │       --no-validate               # Skip the project's validation commands
 │       --keep-sidecars             # Leave the sidecars running when the run ends
+│       --push                     # Push the run's branch when it ends, without asking
+│       --pr                       # Push and open a PR (or update the branch's PR), without asking
+│       --no-publish               # Never offer to push or open a PR
+│       --base <branch>            # Branch the PR targets (default: branch you started from, else the default)
+│       --pr-title <t>             # PR title (default: the prompt's first line)
+│       --pr-body <b>              # PR description (default: prompt and run outcome)
+│       --draft                    # Open the PR as a draft
 │       --org-id <id>               # Organization ID
 │       --image <id>                # Snapshot ID, or Docker image with --backend docker (default: validation.sidecarImage, or factory.image for docker)
 │       --model <name>              # Claude model (default: Claude Code's default)

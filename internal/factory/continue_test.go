@@ -28,8 +28,24 @@ func finishedRun(t *testing.T) (root string, rec Record) {
 	return root, Record{
 		RunID: "run-1", Prompt: "add a flag",
 		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
+		BaseBranch: wt.BaseBranch, DefaultBranch: "main",
 		Result: ResultExhausted, Rounds: 3,
 	}
+}
+
+func TestNewRecordKeepsTheBranches(t *testing.T) {
+	rec := newRecord("run-1", "p", Worktree{Path: "/wt", Branch: "chunk/factory/p/run-1", BaseBranch: "feature", DefaultBranch: "main"})
+	assert.Equal(t, rec.BaseBranch, "feature")
+	assert.Equal(t, rec.DefaultBranch, "main")
+}
+
+// A continued run publishes against the original run's branches.
+func TestOpenWorktreeKeepsTheRunsBranches(t *testing.T) {
+	root, rec := finishedRun(t)
+	wt, err := openWorktree(context.Background(), root, rec, "run-2")
+	assert.NilError(t, err)
+	assert.Equal(t, wt.BaseBranch, rec.BaseBranch)
+	assert.Equal(t, wt.DefaultBranch, "main")
 }
 
 // Edits the developer made in the worktree after the run are part of the work
@@ -132,7 +148,7 @@ func TestRecordRoundTrip(t *testing.T) {
 	dataDir, err := config.ProjectDataDir(root)
 	assert.NilError(t, err)
 	want := Record{RunID: "run-2", Prompt: "add a flag", Worktree: "/wt", Branch: "chunk/factory/run-1",
-		Baseline: "abc", Head: "def", ContinuesRunID: "run-1", Result: ResultPassed, Rounds: 2}
+		Baseline: "abc", Head: "def", BaseBranch: "feature", DefaultBranch: "main", ContinuesRunID: "run-1", Result: ResultPassed, Rounds: 2}
 
 	assert.NilError(t, saveRecord(dataDir, want))
 	got, err := LoadRecord(root, "run-2")

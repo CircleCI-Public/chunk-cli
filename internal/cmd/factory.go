@@ -41,6 +41,7 @@ func newFactoryBuildCmd() *cobra.Command {
 	var keepSidecars, noValidate, jsonOut, logOn, verbose bool
 	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan string
 	var implementTimeout, reviewTimeout time.Duration
+	var pub publishFlags
 
 	cmd := &cobra.Command{
 		Use:   "build [prompt|-]",
@@ -68,6 +69,14 @@ argument, or stdin.
 With no prompt argument, the prompt is read from redirected stdin. A - prompt
 selects stdin explicitly: chunk factory build < prompt.md or chunk factory build - < prompt.md.
 A prompt argument with a file on stdin is refused rather than drop the file.
+
+When a run ends with every check passed, in a terminal, it offers to push the
+branch and open a PR into the branch you started from (the default branch if
+that was detached), or, if the branch already has a PR, to push to update it.
+--push and --pr do so without asking, --no-publish never offers, and --base,
+--pr-title, --pr-body and --draft shape the PR. A PR is opened with the GitHub
+CLI (gh); without it the branch is pushed and a compare URL is printed. Only
+chunk/factory/* branches are ever pushed, and never forced.
 
 --continue RUN picks up the work a finished run left on its branch, such as
 one whose checks still failed when its attempts ran out. RUN is the run's ID
@@ -213,7 +222,8 @@ factory.image, never validation.sidecarImage (a CircleCI snapshot ID).`,
 			if verbose && !jsonOut {
 				defer tailLog(logArg, logFrom, streams.Err)()
 			}
-			return followSession(ctx, streams, id, jsonOut)
+			pub.bodySet = flags.Changed("pr-body")
+			return followAndPublish(ctx, streams, id, jsonOut, pub, canPrompt(cmd.InOrStdin(), jsonOut))
 		},
 	}
 
@@ -235,6 +245,13 @@ factory.image, never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
+	cmd.Flags().BoolVar(&pub.push, "push", false, "push the run's branch when it ends, without asking")
+	cmd.Flags().BoolVar(&pub.pr, "pr", false, "push the run's branch and open a PR (or update the branch's PR), without asking")
+	cmd.Flags().BoolVar(&pub.none, "no-publish", false, "never offer to push or open a PR")
+	cmd.Flags().StringVar(&pub.base, "base", "", "branch the PR targets (default: the branch you started from, else the default branch)")
+	cmd.Flags().StringVar(&pub.title, "pr-title", "", "PR title (default: the prompt's first line)")
+	cmd.Flags().StringVar(&pub.body, "pr-body", "", "PR description (default: the prompt and how the run ended)")
+	cmd.Flags().BoolVar(&pub.draft, "draft", false, "open the PR as a draft")
 	cmd.SetFlagErrorFunc(factoryFlagError)
 	return cmd
 }
@@ -359,8 +376,7 @@ func missingFactoryPromptError() error {
 // when --json says a program is reading the output, so a script's continue
 // checks first as it always has. Swapped out in tests.
 var promptContinueGuidance = func(in io.Reader, jsonOut bool) (string, error) {
-	f, ok := in.(*os.File)
-	if nonInteractive() || jsonOut || !ok || !term.IsTerminal(int(f.Fd())) || ui.RequireStdoutTTY() != nil {
+	if !canPrompt(in, jsonOut) {
 		return "", ui.ErrNoTTY
 	}
 	return ui.PromptText("What should it do differently? (Enter to just re-check)", "")

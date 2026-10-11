@@ -39,7 +39,7 @@ func newFactoryDaemon(t *testing.T, run func(context.Context, factory.RunOptions
 // validation command, and the round's checks.
 func scriptedRun(result factory.Result) func(context.Context, factory.RunOptions) (factory.Report, error) {
 	return func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
-		wt := factory.Worktree{Path: "/data/factory/run-1", Branch: "chunk/factory/run-1", Baseline: "base", Head: "head"}
+		wt := factory.Worktree{Path: "/data/factory/run-1", Branch: "chunk/factory/run-1", Baseline: "base", Head: "head", BaseBranch: "feature", DefaultBranch: "main"}
 		opts.OnStart("run-1", wt)
 		opts.Status(iostream.LevelStep, "Preparing an implementer sidecar and 2 reviewer sidecar(s)...")
 
@@ -110,6 +110,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.DeepEqual(t, *detail.Factory, chunkd.FactoryRun{
 		Prompt: "add a --verbose flag", Attempts: DefaultAttempts, RunID: "run-1",
 		Worktree: "/data/factory/run-1", Branch: "chunk/factory/run-1", Baseline: "base", Head: "head",
+		BaseBranch: "feature", DefaultBranch: "main",
 		Result: "passed", Rounds: 1, Committed: true,
 		Progress: chunkd.Feed{Lines: []chunkd.FeedLine{{Level: chunkd.FeedStep, Text: "Preparing an implementer sidecar and 2 reviewer sidecar(s)..."}}, Total: 1},
 	})

@@ -28,11 +28,24 @@ type Record struct {
 	Branch   string `json:"branch"`
 	Baseline string `json:"baseline"`
 	Head     string `json:"head"`
+	// BaseBranch and DefaultBranch are what publishing the run's branch needs
+	// later; see Worktree. Records from before they were kept lack them.
+	BaseBranch    string `json:"base_branch,omitempty"`
+	DefaultBranch string `json:"default_branch,omitempty"`
 	// ContinuesRunID is the run this one continued, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
 	// Result and Rounds are how the run ended, once it has.
 	Result Result `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
+}
+
+// newRecord is the record of a run working in wt.
+func newRecord(runID, prompt string, wt Worktree) Record {
+	return Record{
+		RunID: runID, Prompt: prompt,
+		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
+		BaseBranch: wt.BaseBranch, DefaultBranch: wt.DefaultBranch,
+	}
 }
 
 // ParseRunID accepts a run's ID or its branch, as chunk factory prints both.

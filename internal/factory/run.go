@@ -178,10 +178,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if opts.OnStart != nil {
 		opts.OnStart(rep.RunID, wt)
 	}
-	rec := Record{
-		RunID: rep.RunID, Prompt: request,
-		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
-	}
+	rec := newRecord(rep.RunID, request, wt)
 	if cont != nil {
 		rec.Prompt, rec.ContinuesRunID = cont.From.Prompt, cont.From.RunID
 	}
