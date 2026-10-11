@@ -1,0 +1,11 @@
+{
+ "type": "error",
+ "error": {
+  "type": "authentication_error",
+  "message": "x-api-key header is required",
+  "details": {
+   "error_visibility": "user_facing"
+  }
+ },
+ "request_id": "req_REDACTED"
+}
