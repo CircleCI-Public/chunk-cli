@@ -9,15 +9,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sandboximage"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar/docker"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sandboximage"
+	"github.com/smeltdev/smelt/internal/sidecar/docker"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // suggestionFactoryImage is what to run after a failed or stale image build.
-const suggestionFactoryImage = "Fix Dockerfile.chunk if needed, then run: chunk factory image"
+const suggestionFactoryImage = "Fix Dockerfile.smelt if needed, then run: smelt factory image"
 
 // imageBuildLog is where the full log of a sandbox image build is kept.
 func imageBuildLog(root string) string {
@@ -35,7 +35,7 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root, dock
 	if err != nil {
 		return "", newUserError(fmt.Sprintf("Could not read %s.", dockerfile)).
 			withCode("factory.image_dockerfile").
-			withSuggestion("Run chunk factory image to write it, or chunk init.").
+			withSuggestion("Run smelt factory image to write it, or smelt init.").
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}
@@ -91,20 +91,20 @@ func newFactoryImageCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "image",
 		Short: "Build the Docker image factory runs execute in",
-		Long: `Build the image described by factory.dockerfile (Dockerfile.chunk, written by
-chunk init) if it is not on this Docker host yet. chunk factory build does the
-same before a run; use this command after editing Dockerfile.chunk by hand or
+		Long: `Build the image described by factory.dockerfile (Dockerfile.smelt, written by
+smelt init) if it is not on this Docker host yet. smelt factory build does the
+same before a run; use this command after editing Dockerfile.smelt by hand or
 when the build failed.
 
 The image's tag is derived from the Dockerfile and the dependency files it
 COPYs, so changing either makes the next build a new image. The Docker layer
 cache keeps unchanged layers cheap.
 
-Dockerfile.chunk is never overwritten without asking. If it is missing, it is
+Dockerfile.smelt is never overwritten without asking. If it is missing, it is
 generated from detection and the CI config.
 
 --rebuild builds even when the tag exists, without the layer cache.
---regenerate renders Dockerfile.chunk again, shows the diff and asks before
+--regenerate renders Dockerfile.smelt again, shows the diff and asks before
 writing it.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
@@ -164,14 +164,14 @@ func prepareDockerfile(ctx context.Context, streams iostream.Streams, root, dock
 		return &userError{msg: "Could not compare " + dockerfile + ".", err: err}
 	}
 	if diff == "" {
-		streams.ErrPrintln(dockerfile + " already matches what chunk would generate.")
+		streams.ErrPrintln(dockerfile + " already matches what smelt would generate.")
 		return nil
 	}
 	streams.ErrPrintln(diff)
 	if !isInteractive() {
 		return newUserError(dockerfile + " differs from the regenerated one.").
 			withCode("command.invalid_args").
-			withSuggestion("Run chunk factory image --regenerate in a terminal to confirm the overwrite.").
+			withSuggestion("Run smelt factory image --regenerate in a terminal to confirm the overwrite.").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}
@@ -238,7 +238,7 @@ func attemptImage(ctx context.Context, streams iostream.Streams, root, dockerfil
 }
 
 // readyImage builds and verifies the image. When that fails in a terminal with
-// claude installed, it offers to let Claude repair Dockerfile.chunk, up to
+// claude installed, it offers to let Claude repair Dockerfile.smelt, up to
 // sandboximage.MaxRepairAttempts times.
 func readyImage(ctx context.Context, streams iostream.Streams, root, dockerfile string, cfg *config.ProjectConfig, rebuild bool) (string, error) {
 	first, err := attemptImage(ctx, streams, root, dockerfile, cfg, rebuild)
@@ -306,7 +306,7 @@ func readFileOrEmpty(path string) string {
 	return string(b)
 }
 
-// dockerUnreachable is the error for a Docker daemon chunk could not connect to.
+// dockerUnreachable is the error for a Docker daemon smelt could not connect to.
 func dockerUnreachable(err error) error {
 	return &userError{msg: "Could not reach Docker.", suggestion: "Start Docker, then try again.", err: err}
 }

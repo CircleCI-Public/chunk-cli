@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
-	"github.com/CircleCI-Public/chunk-cli/internal/version"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
+	"github.com/smeltdev/smelt/internal/version"
 )
 
 var (

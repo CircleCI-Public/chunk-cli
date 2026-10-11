@@ -9,9 +9,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/cmd"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	appversion "github.com/CircleCI-Public/chunk-cli/internal/version"
+	"github.com/smeltdev/smelt/internal/cmd"
+	"github.com/smeltdev/smelt/internal/ui"
+	appversion "github.com/smeltdev/smelt/internal/version"
 )
 
 var version = "dev"
@@ -103,7 +103,7 @@ func errorSuggestion(err error) string {
 	case strings.Contains(lower, "authentication") ||
 		strings.Contains(lower, "invalid api key") ||
 		strings.Contains(lower, "401"):
-		return "Hint: Run `chunk auth set anthropic` to set up your API key."
+		return "Hint: Run `smelt auth set anthropic` to set up your API key."
 	case strings.Contains(lower, "no such host") ||
 		strings.Contains(lower, "connection refused") ||
 		strings.Contains(lower, "network is unreachable") ||

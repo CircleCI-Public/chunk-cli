@@ -5,9 +5,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envspec"
+	"github.com/smeltdev/smelt/internal/gitutil"
 )
 
 // --- cacheKey ---
@@ -79,7 +79,7 @@ func TestBuildCacheKey_DifferentCommands_NotEqual(t *testing.T) {
 }
 
 // TestBuildCacheKey_DifferentEnvironment_NotEqual covers a project that gitignores
-// .chunk/: editing the environment block changes what the commands run against
+// .smelt/: editing the environment block changes what the commands run against
 // without touching the working tree, so the config has to reach the key whole or
 // the next run reports a hit and never re-runs against the new environment.
 func TestBuildCacheKey_DifferentEnvironment_NotEqual(t *testing.T) {

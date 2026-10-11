@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // Cleanup deadlines. Cleanup runs on the way out, after a failure or an
@@ -166,7 +166,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 
 	dataDir, err := config.ProjectDataDir(opts.Root)
 	if err != nil {
-		return rep, fmt.Errorf("find chunk's data directory for the project: %w", err)
+		return rep, fmt.Errorf("find smelt's data directory for the project: %w", err)
 	}
 	author := ResolveAuthor(ctx, opts.Root, opts.Author).CommitAuthor
 	var wt Worktree
@@ -377,7 +377,7 @@ func commitWork(ctx context.Context, steps *Sidecars, wt Worktree, message strin
 
 // closePool deletes the run's sidecars, or with keep leaves them running and
 // returns their IDs. A kept pool stays in its state file, which is how the
-// dashboard and 'chunk sidecar' still find its sidecars; no later run reuses
+// dashboard and 'smelt sidecar' still find its sidecars; no later run reuses
 // it, since the name is the run's own.
 func closePool(ctx context.Context, pool *sidecar.Pool, keep bool, status iostream.StatusFunc) []string {
 	if !keep {

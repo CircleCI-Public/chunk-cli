@@ -21,7 +21,7 @@ import (
 )
 
 // makeTarGz returns a .tar.gz laid out like a release archive, with the binary
-// last. It deliberately includes a nested file whose base name is also "chunk":
+// last. It deliberately includes a nested file whose base name is also "smelt":
 // packaging no longer ships one, but the reader must not depend on that, so
 // this pins it against regressing to base-name matching.
 func makeTarGz(t *testing.T, content []byte) []byte {
@@ -35,11 +35,11 @@ func makeTarGz(t *testing.T, content []byte) []byte {
 		body []byte
 	}{
 		{"LICENSE", []byte("MIT\n")},
-		{"README.md", []byte("# chunk\n")},
-		{"share/bash-completion/completions/chunk", []byte("# bash completion for chunk\n")},
-		{"share/zsh/site-functions/_chunk", []byte("#compdef chunk\n")},
-		{"docs/chunk", []byte("not the binary either\n")},
-		{"chunk", content},
+		{"README.md", []byte("# smelt\n")},
+		{"share/bash-completion/completions/smelt", []byte("# bash completion for smelt\n")},
+		{"share/zsh/site-functions/_smelt", []byte("#compdef smelt\n")},
+		{"docs/smelt", []byte("not the binary either\n")},
+		{"smelt", content},
 	}
 	for _, e := range entries {
 		hdr := &tar.Header{
@@ -85,7 +85,7 @@ func fakeServer(t *testing.T, fx releaseFixture) (*httptest.Server, string) {
 	t.Helper()
 
 	installDir := t.TempDir()
-	installPath := filepath.Join(installDir, "chunk")
+	installPath := filepath.Join(installDir, "smelt")
 
 	checksums := fx.checksums
 	if checksums == "" && fx.archive != nil {
@@ -135,7 +135,7 @@ func runOpts(srv *httptest.Server, installPath string) Options {
 }
 
 func TestRun(t *testing.T) {
-	fakeBinary := []byte("#!/bin/sh\necho chunk v9.9.9\n")
+	fakeBinary := []byte("#!/bin/sh\necho smelt v9.9.9\n")
 	archiveData := makeTarGz(t, fakeBinary)
 
 	tests := []struct {
@@ -216,12 +216,12 @@ func TestRun(t *testing.T) {
 }
 
 func TestChecksumFor(t *testing.T) {
-	body := []byte("aaa111  chunk_Linux_x86_64.tar.gz\nBBB222  chunk_Darwin_arm64.tar.gz\n")
-	got, err := checksumFor(body, "chunk_Darwin_arm64.tar.gz")
+	body := []byte("aaa111  smelt_Linux_x86_64.tar.gz\nBBB222  smelt_Darwin_arm64.tar.gz\n")
+	got, err := checksumFor(body, "smelt_Darwin_arm64.tar.gz")
 	if err != nil || got != "bbb222" {
 		t.Fatalf("checksumFor = %q, %v", got, err)
 	}
-	if _, err := checksumFor(body, "chunk_Linux_arm64.tar.gz"); err == nil {
+	if _, err := checksumFor(body, "smelt_Linux_arm64.tar.gz"); err == nil {
 		t.Fatal("expected an error for a name that is not listed")
 	}
 }
@@ -243,7 +243,7 @@ func TestRunRefusesSourceBuilds(t *testing.T) {
 	})
 
 	t.Run("symlinked install", func(t *testing.T) {
-		link := filepath.Join(t.TempDir(), "chunk")
+		link := filepath.Join(t.TempDir(), "smelt")
 		if err := os.Symlink(installPath, link); err != nil {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
@@ -262,16 +262,16 @@ func TestIsBrewManaged(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"/opt/homebrew/bin/chunk", true},
+		{"/opt/homebrew/bin/smelt", true},
 		{"/opt/homebrew/bin/something-else", true},
 		// Callers resolve symlinks first, so the Cellar paths that
-		// <prefix>/bin/chunk points at have to match too.
-		{"/opt/homebrew/Cellar/chunk/1.2.3/bin/chunk", true},
-		{"/usr/local/Cellar/chunk/1.2.3/bin/chunk", true},
-		{"/home/linuxbrew/.linuxbrew/Cellar/chunk/1.2.3/bin/chunk", true},
-		{"/usr/local/bin/chunk", false},
-		{"/home/user/.local/bin/chunk", false},
-		{"/tmp/chunk", false},
+		// <prefix>/bin/smelt points at have to match too.
+		{"/opt/homebrew/Cellar/smelt/1.2.3/bin/smelt", true},
+		{"/usr/local/Cellar/smelt/1.2.3/bin/smelt", true},
+		{"/home/linuxbrew/.linuxbrew/Cellar/smelt/1.2.3/bin/smelt", true},
+		{"/usr/local/bin/smelt", false},
+		{"/home/user/.local/bin/smelt", false},
+		{"/tmp/smelt", false},
 	}
 	for _, tt := range tests {
 		got := isBrewManaged(tt.path)
@@ -283,8 +283,8 @@ func TestIsBrewManaged(t *testing.T) {
 
 func TestPlatformAssetName(t *testing.T) {
 	name := PlatformAssetName()
-	if !strings.HasPrefix(name, "chunk_") {
-		t.Errorf("expected name to start with chunk_, got %q", name)
+	if !strings.HasPrefix(name, "smelt_") {
+		t.Errorf("expected name to start with smelt_, got %q", name)
 	}
 	if !strings.HasSuffix(name, ".tar.gz") {
 		t.Errorf("expected name to end with .tar.gz, got %q", name)
@@ -348,12 +348,12 @@ func TestAssetNameMatchesGoreleaserTemplate(t *testing.T) {
 func TestRunRefusesBrewInstall(t *testing.T) {
 	err := Run(Options{
 		Out: io.Discard, Client: http.DefaultClient, APIBase: "https://example.invalid",
-		InstallPath: "/opt/homebrew/Cellar/chunk/1.2.3/bin/chunk", Version: "v1.0.0",
+		InstallPath: "/opt/homebrew/Cellar/smelt/1.2.3/bin/smelt", Version: "v1.0.0",
 	})
 	if err == nil {
 		t.Fatal("expected Run to refuse to replace a Homebrew-managed binary")
 	}
-	// Homebrew's chunk is another project's build; the way out is the installer,
+	// Homebrew's smelt is another project's build; the way out is the installer,
 	// never a brew command.
 	if !strings.Contains(err.Error(), "Homebrew") || !strings.Contains(err.Error(), InstallCommand) || strings.Contains(err.Error(), "brew upgrade") {
 		t.Errorf("expected the installer to be suggested, got %q", err.Error())
@@ -362,10 +362,10 @@ func TestRunRefusesBrewInstall(t *testing.T) {
 
 // The release repository is named once; everything else derives from it.
 func TestReleaseRepoIsDefinedOnce(t *testing.T) {
-	if Repo != "web3technologies/chunk-cli" {
+	if Repo != "smeltdev/smelt" {
 		t.Fatalf("Repo = %q", Repo)
 	}
-	if got := ReleaseURL("v1.2.3"); got != "https://github.com/web3technologies/chunk-cli/releases/tag/v1.2.3" {
+	if got := ReleaseURL("v1.2.3"); got != "https://github.com/smeltdev/smelt/releases/tag/v1.2.3" {
 		t.Errorf("ReleaseURL = %q", got)
 	}
 	if strings.Contains(InstallCommand, "CircleCI") {

@@ -1,6 +1,6 @@
-# Getting Started with chunk
+# Getting Started with smelt
 
-`chunk` runs your quality checks (tests, lint, format) while your AI agent is still working. By default they run locally and factory runs use Docker; this guide covers the **optional CircleCI backend**, which runs them on a **sidecar** — a clean cloud environment on CircleCI. chunk only contacts CircleCI for a project that opts in with `"factory": {"backend": "circleci"}` in `.chunk/config.json` (`chunk init --factory-backend circleci` or `chunk sidecar setup` writes it) or when you run a CircleCI command such as `chunk auth` or `chunk sidecar`. Failures surface in the inner loop instead of in CI, so you catch what only reproduces outside your machine before you ever push.
+`smelt` runs your quality checks (tests, lint, format) while your AI agent is still working. By default they run locally and factory runs use Docker; this guide covers the **optional CircleCI backend**, which runs them on a **sidecar** — a clean cloud environment on CircleCI. smelt only contacts CircleCI for a project that opts in with `"factory": {"backend": "circleci"}` in `.smelt/config.json` (`smelt init --factory-backend circleci` or `smelt sidecar setup` writes it) or when you run a CircleCI command such as `smelt auth` or `smelt sidecar`. Failures surface in the inner loop instead of in CI, so you catch what only reproduces outside your machine before you ever push.
 
 This guide sets that up: authenticate, initialize your project, create a sidecar, and run the dev loop against it.
 
@@ -11,7 +11,7 @@ It also covers **team review context** ([below](#team-review-context)) — an ad
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/web3technologies/chunk-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/smeltdev/smelt/main/install.sh | bash
 ```
 
 See the [README](../README.md#install) for pinned versions, provenance and building from source.
@@ -19,7 +19,7 @@ See the [README](../README.md#install) for pinned versions, provenance and build
 Verify:
 
 ```bash
-chunk --version
+smelt --version
 ```
 
 ---
@@ -34,14 +34,14 @@ Sidecars need a CircleCI account (free plans included).
 
 ### Skills
 
-**Skills** are instructions for AI coding agents (Claude Code, Cursor, Codex). Running `chunk skill install` copies skill files into your agent's configuration directory, teaching it how to run the sidecar dev loop and commands like `/chunk-review`.
+**Skills** are instructions for AI coding agents (Claude Code, Cursor, Codex). Running `smelt skill install` copies skill files into your agent's configuration directory, teaching it how to run the sidecar dev loop and commands like `/smelt-review`.
 
-### .chunk/ directory
+### .smelt/ directory
 
-The `.chunk/` directory lives at the root of your project and holds configuration that should be version-controlled. After `chunk init` it holds your validation commands; `chunk build-prompt` adds the review context file if you generate one:
+The `.smelt/` directory lives at the root of your project and holds configuration that should be version-controlled. After `smelt init` it holds your validation commands; `smelt build-prompt` adds the review context file if you generate one:
 
 ```
-.chunk/
+.smelt/
 ├── config.json              # Configured validation commands
 └── context/
     └── review-prompt.md     # Generated team review standards (optional)
@@ -55,23 +55,23 @@ Store credentials for the services you plan to use:
 
 ```bash
 # CircleCI — required for sidecars. Browser OAuth is recommended:
-chunk auth login           # existing CircleCI account
-chunk auth signup          # new CircleCI account
+smelt auth login           # existing CircleCI account
+smelt auth signup          # new CircleCI account
 
 # Or set a personal API token directly:
-chunk auth set circleci
+smelt auth set circleci
 
-chunk auth set anthropic   # required for init (command detection) and build-prompt
-chunk auth set github      # only needed for build-prompt
+smelt auth set anthropic   # required for init (command detection) and build-prompt
+smelt auth set github      # only needed for build-prompt
 ```
 
 Check status at any time:
 
 ```bash
-chunk auth status
+smelt auth status
 ```
 
-Credentials are stored in your system keychain by default. Pass `--insecure-storage` to `chunk auth set` to store them in `~/.config/chunk/config.json` instead (respects `XDG_CONFIG_HOME`). You can also set them as environment variables, which take precedence over both:
+Credentials are stored in your system keychain by default. Pass `--insecure-storage` to `smelt auth set` to store them in `~/.config/smelt/config.json` instead (respects `XDG_CONFIG_HOME`). You can also set them as environment variables, which take precedence over both:
 
 | Variable | Used by |
 |---|---|
@@ -79,29 +79,29 @@ Credentials are stored in your system keychain by default. Pass `--insecure-stor
 | `CLAUDE_CODE_OAUTH_TOKEN` | `review` (when no API key is set) |
 | `GITHUB_TOKEN` | `build-prompt` |
 | `CIRCLE_TOKEN` | `sidecar`, `task` |
-| `CIRCLECI_ORG_ID` | `sidecar` (optional; overrides `orgID` in `.chunk/config.json`) |
+| `CIRCLECI_ORG_ID` | `sidecar` (optional; overrides `orgID` in `.smelt/config.json`) |
 
 ---
 
 ## Step 2: Initialize your project
 
-Run this once per project. It auto-detects your test and lint commands (using Claude), creates `.chunk/config.json`, and wires up `.claude/settings.json` so hooks run automatically when your AI coding agent commits code.
+Run this once per project. It auto-detects your test and lint commands (using Claude), creates `.smelt/config.json`, and wires up `.claude/settings.json` so hooks run automatically when your AI coding agent commits code.
 
 ```bash
-chunk init
+smelt init
 ```
 
 Run this after authenticating — init uses your CircleCI credentials to detect your org ID and save it to the project config. If you belong to one org it's selected automatically; if you belong to several, init shows a picker. Org ID is needed for sidecar commands, so capturing it here means you won't be prompted later.
 
 What it creates:
 
-- **`.chunk/config.json`** — list of validation commands (test, lint, format) and your CircleCI org ID; tracked in git
-- **`.gitignore` entry for `.chunk/*-pool.json`** — machine-local validate/mutate pool state (sidecar IDs); not for commit. Keeps `.chunk/config.json` tracked
+- **`.smelt/config.json`** — list of validation commands (test, lint, format) and your CircleCI org ID; tracked in git
+- **`.gitignore` entry for `.smelt/*-pool.json`** — machine-local validate/mutate pool state (sidecar IDs); not for commit. Keeps `.smelt/config.json` tracked
 - **`.claude/settings.json`** — hooks that run validation before commits and after each agent session, plus one that reports finished background runs before each prompt; tracked in git
 - **`.codex/hooks.json`** — the commit and session hooks, for Codex sessions (only written if Codex is installed); tracked in git
-- **`.git/hooks/pre-commit`** — runs `chunk validate` locally before every commit; not tracked in git
+- **`.git/hooks/pre-commit`** — runs `smelt validate` locally before every commit; not tracked in git
 
-`chunk init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.
+`smelt init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.
 
 Review the generated config and adjust commands if needed:
 
@@ -118,30 +118,30 @@ Review the generated config and adjust commands if needed:
 Run validations manually:
 
 ```bash
-chunk validate           # run all commands
-chunk validate test      # run a specific command
-chunk validate --list    # list what's configured
-chunk validate --dry-run # print commands without executing
+smelt validate           # run all commands
+smelt validate test      # run a specific command
+smelt validate --list    # list what's configured
+smelt validate --dry-run # print commands without executing
 ```
 
 ---
 
 ## Step 3: Create your first sidecar
 
-Sidecar commands need a CircleCI org ID. The recommended path is to authenticate and run `chunk init` before using sidecars — init captures the org ID automatically and saves it to `.chunk/config.json`. After that, `chunk sidecar create` just works.
+Sidecar commands need a CircleCI org ID. The recommended path is to authenticate and run `smelt init` before using sidecars — init captures the org ID automatically and saves it to `.smelt/config.json`. After that, `smelt sidecar create` just works.
 
 If you skipped that or need to set the org ID manually:
 
 ```bash
 # List your orgs — single-org users can skip this, init auto-selected it
-chunk org list
+smelt org list
 
 # Persist the ID to the project config
-chunk config set orgID <your-org-id>
+smelt config set orgID <your-org-id>
 ```
 
-`chunk config show` displays the resolved `orgID` when set. One-off overrides:
-`chunk sidecar create --org-id <id>` or `CIRCLECI_ORG_ID=<id> chunk sidecar create`.
+`smelt config show` displays the resolved `orgID` when set. One-off overrides:
+`smelt sidecar create --org-id <id>` or `CIRCLECI_ORG_ID=<id> smelt sidecar create`.
 See [docs/CLI.md](CLI.md) for the full resolution order (`--org-id` → env →
 project config → interactive picker).
 
@@ -153,32 +153,32 @@ This is the core workflow — sync your working tree to the sidecar, then run yo
 
 ```bash
 # Create a sidecar (--name is optional; a random name is generated if omitted)
-chunk sidecar create
-chunk sidecar create --name my-sidecar
+smelt sidecar create
+smelt sidecar create --name my-sidecar
 
 # Set it as active
-chunk sidecar use <id>
+smelt sidecar use <id>
 
 # Inspect command placement
-chunk validate --list               # tags each command [local|remote, role]
+smelt validate --list               # tags each command [local|remote, role]
 
 # Dev loop: sync then validate
-chunk sidecar sync           # push local changes to sidecar
-chunk validate               # commands run remotely unless configured local
-chunk validate --local       # force every command to run locally
+smelt sidecar sync           # push local changes to sidecar
+smelt validate               # commands run remotely unless configured local
+smelt validate --local       # force every command to run locally
 
 # Inspect or clear the active sidecar
-chunk sidecar current        # show which sidecar is active
-chunk sidecar forget         # unset the active sidecar (does not delete it)
+smelt sidecar current        # show which sidecar is active
+smelt sidecar forget         # unset the active sidecar (does not delete it)
 ```
 
 Commands run remotely by default. Set `"local": true` on commands that must run in the local working tree, such as formatters whose edits need to be retained. `"remote": true` remains supported as an explicit annotation, but is equivalent to leaving both fields unset. A command cannot set both `local` and `remote`.
 
 With no `validation.sidecarImage` recorded, a sidecar that has to be created is started from whichever of your org's snapshots best fits the repo — one named after the repo first, then one built for the detected stack. The chosen snapshot and the reason are printed. If no snapshot fits, the default image is used, which has none of your dependencies on it; record a snapshot ID to pin the environment instead of relying on the match.
 
-The active sidecar and snapshot state are stored in `$XDG_DATA_HOME/chunk/<project>/` (default: `~/.local/share/chunk/<project>/`) — never inside the repo. The project key is derived from the git root path.
+The active sidecar and snapshot state are stored in `$XDG_DATA_HOME/smelt/<project>/` (default: `~/.local/share/smelt/<project>/`) — never inside the repo. The project key is derived from the git root path.
 
-Or hand this off to the `chunk-sidecar` skill:
+Or hand this off to the `smelt-sidecar` skill:
 
 ```
 validate on the sidecar
@@ -194,23 +194,23 @@ The skill handles the full loop: auth checks → find active sidecar → sync �
 Skills let your AI coding agent drive the loop above itself, instead of you running each command by hand.
 
 ```bash
-chunk skill install     # install or update all skills
-chunk skill list        # check installation status
+smelt skill install     # install or update all skills
+smelt skill list        # check installation status
 ```
 
 After installing, your agent gains these skills:
 
 | Skill | Trigger | What it does |
 |---|---|---|
-| `chunk-sidecar` | "validate on the sidecar" / "sidecar dev loop" | Syncs and validates changes on a sidecar |
-| `chunk-sidecar-setup` | "set up chunk sidecar" / "walk me through sidecar setup" | Interactive first-time onboarding: auth, orgID, create, install deps, snapshot |
-| `chunk-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing on a temporary sidecar pool to find undertested code |
+| `smelt-sidecar` | "validate on the sidecar" / "sidecar dev loop" | Syncs and validates changes on a sidecar |
+| `smelt-sidecar-setup` | "set up smelt sidecar" / "walk me through sidecar setup" | Interactive first-time onboarding: auth, orgID, create, install deps, snapshot |
+| `smelt-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing on a temporary sidecar pool to find undertested code |
 | `debug-ci-failures` | "debug CI" / "why is CI failing" | Analyzes CircleCI build failures and flaky tests |
-| `chunk-review` | "review my changes" / "chunk review" | Applies your team's review standards to the current diff |
+| `smelt-review` | "review my changes" / "smelt review" | Applies your team's review standards to the current diff |
 
 See [docs/SKILLS.md](SKILLS.md) for full details on each skill.
 
-**Shortcut:** rather than doing Steps 3–4 by hand, you can hand them to your agent. Say "set up chunk sidecar" and the `chunk-sidecar-setup` wizard walks through auth, orgID, creation, dependency installation, and snapshotting — then hands off to `chunk-sidecar` for the dev loop.
+**Shortcut:** rather than doing Steps 3–4 by hand, you can hand them to your agent. Say "set up smelt sidecar" and the `smelt-sidecar-setup` wizard walks through auth, orgID, creation, dependency installation, and snapshotting — then hands off to `smelt-sidecar` for the dev loop.
 
 ---
 
@@ -220,82 +220,82 @@ The sections below cover the sidecar workflow in more detail. Skip them until yo
 
 ### Syncing
 
-`chunk sidecar sync` mirrors your working tree to the sidecar with rsync over an SSH tunnel, skipping files matched by `.gitignore`. Uncommitted changes are included and later syncs transfer only what changed. The branch does not need to be pushed to GitHub.
+`smelt sidecar sync` mirrors your working tree to the sidecar with rsync over an SSH tunnel, skipping files matched by `.gitignore`. Uncommitted changes are included and later syncs transfer only what changed. The branch does not need to be pushed to GitHub.
 
 ```bash
-chunk sidecar sync
+smelt sidecar sync
 ```
 
 To fall back to the git checkout/patch approach (requires the branch to be pushed to GitHub):
 
 ```bash
-chunk sidecar sync --checkout
+smelt sidecar sync --checkout
 ```
 
 ### SSH key management
 
-chunk generates and manages its own SSH keypair at `~/.ssh/chunk_ai`. The public key is registered with each sidecar automatically when you first sync or SSH in — you do not need to create keys, run `ssh-add`, or pass an identity file.
+smelt generates and manages its own SSH keypair at `~/.ssh/smelt_ai`. The public key is registered with each sidecar automatically when you first sync or SSH in — you do not need to create keys, run `ssh-add`, or pass an identity file.
 
 If sync or SSH fails with `permission denied (publickey)`, re-register the key:
 
 ```bash
-chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub
+smelt sidecar add-ssh-key --public-key-file ~/.ssh/smelt_ai.pub
 ```
 
-If the key is missing or corrupted, delete `~/.ssh/chunk_ai*` and chunk will regenerate the pair on next use.
+If the key is missing or corrupted, delete `~/.ssh/smelt_ai*` and smelt will regenerate the pair on next use.
 
 ### Validation pools
 
-`chunk validate` currently uses a managed pool with capacity one. Remote commands are queued on that sidecar in configuration order, then commands explicitly configured with `local: true` run locally. Placement does not implicitly increase pool capacity.
+`smelt validate` currently uses a managed pool with capacity one. Remote commands are queued on that sidecar in configuration order, then commands explicitly configured with `local: true` run locally. Placement does not implicitly increase pool capacity.
 
-`chunk validate variants` uses a temporary pool sized by `--parallel`. Variants are queued onto the next available pool member, and the pool is deleted when the run finishes.
+`smelt validate variants` uses a temporary pool sized by `--parallel`. Variants are queued onto the next available pool member, and the pool is deleted when the run finishes.
 
 ### Environment setup
 
 Auto-detect your tech stack and save it to config:
 
 ```bash
-chunk sidecar env   # detect stack, save to config
+smelt sidecar env   # detect stack, save to config
 ```
 
 ### Environment variables
 
-`chunk sidecar ssh`, `chunk sidecar setup`, and `chunk validate` (when running remotely) automatically load `.env.local` from your working directory and forward its variables to the remote sidecar session. This lets you pass secrets and configuration without embedding them in your shell or committing them to the repo.
+`smelt sidecar ssh`, `smelt sidecar setup`, and `smelt validate` (when running remotely) automatically load `.env.local` from your working directory and forward its variables to the remote sidecar session. This lets you pass secrets and configuration without embedding them in your shell or committing them to the repo.
 
 ```bash
 # .env.local is loaded automatically — no flag needed
-chunk sidecar ssh
-chunk validate --remote
+smelt sidecar ssh
+smelt validate --remote
 
 # Override with a different file
-chunk sidecar ssh --env-file /path/to/other.env
-chunk validate --remote --env-file /path/to/other.env
+smelt sidecar ssh --env-file /path/to/other.env
+smelt validate --remote --env-file /path/to/other.env
 
 # Add individual variables (merged on top of the file)
-chunk sidecar ssh --env MY_VAR=value
-chunk validate --remote --env MY_VAR=value
+smelt sidecar ssh --env MY_VAR=value
+smelt validate --remote --env MY_VAR=value
 ```
 
 Variables from `--env` flags take precedence over those in `--env-file`. `.env.local` is gitignored by convention, so it's a safe place to store project-specific secrets.
 
-### Monitoring sidecars with chunk watch
+### Monitoring sidecars with smelt watch
 
-`chunk watch` opens a live TUI dashboard that shows all your sidecars and their activity in real time. Run it in any project directory while a sync or validation is in progress:
+`smelt watch` opens a live TUI dashboard that shows all your sidecars and their activity in real time. Run it in any project directory while a sync or validation is in progress:
 
 ```bash
-chunk watch
+smelt watch
 ```
 
 The dashboard refreshes every 5 seconds. The left pane lists the sidecars that actually exist, grouped by project: the daemon checks each one against the CircleCI API and drops any that have expired or been deleted, as long as the sidecar's state recorded which org it belongs to. State written before the org was recorded can't rule a sidecar out, so those sidecars stay listed until they age out. Each row shows what the sidecar is doing — running a command, or idle along with how its last run ended — and its last activity time. A sidecar the API hasn't confirmed yet (for example, when you're not authenticated) is shown as `unconfirmed`. The right pane shows the activity log — sync, validate, exec, and setup events — for the selected sidecar.
 
-When the daemon has `chunk factory build` runs, they are listed above the sidecars, and selecting one shows it in the right pane: each round's implementer turn, validation commands and reviews, the run's progress, its sidecars, and once it ends, the branch and worktree its work is on. Press `→` to move into the run, `Enter` to open a row's output, and `x` twice to cancel the run. `q` only closes the dashboard; the run carries on.
+When the daemon has `smelt factory build` runs, they are listed above the sidecars, and selecting one shows it in the right pane: each round's implementer turn, validation commands and reviews, the run's progress, its sidecars, and once it ends, the branch and worktree its work is on. Press `→` to move into the run, `Enter` to open a row's output, and `x` twice to cancel the run. `q` only closes the dashboard; the run carries on.
 
 ```
-chunk watch  1 sidecar  main@a3f9e12                      15:04:32
+smelt watch  1 sidecar  main@a3f9e12                      15:04:32
 ──────────────────────────────────────────────────────────────────
- sidecars              │ activity  chunk-cli/my-sidecar
+ sidecars              │ activity  smelt/my-sidecar
                        │
-── chunk-cli           │ 14:58:01  sync      ✓  done
+── smelt           │ 14:58:01  sync      ✓  done
 ▶ my-sidecar           │ 14:55:12  validate  ✓  done
   ✓ idle · last passed │ 14:52:44  sync      ✓  done
   6m ago               │
@@ -306,12 +306,12 @@ chunk watch  1 sidecar  main@a3f9e12                      15:04:32
 `watch` shows every project you've watched or validated in before, not just the current one:
 
 ```bash
-chunk watch                   # all projects chunk has seen
-chunk watch --focus           # current directory only
-chunk watch /path/to/other    # add another project
+smelt watch                   # all projects smelt has seen
+smelt watch --focus           # current directory only
+smelt watch /path/to/other    # add another project
 ```
 
-You don't have to have the dashboard open at the time. Every sidecar `chunk validate`
+You don't have to have the dashboard open at the time. Every sidecar `smelt validate`
 run records its results to disk, so runs you made with no dashboard open are waiting
 for you the next time you open one. Purely local runs have no sidecar, so they don't
 get a row.
@@ -320,7 +320,7 @@ get a row.
 
 #### Reading a command's output
 
-An invocation marked `▤` in the activity pane has output the chunk daemon still
+An invocation marked `▤` in the activity pane has output the smelt daemon still
 holds. Press `Enter` on it to open a scrollback view: a command that is still
 running tails live, and one that has already finished is replayed from the
 buffer. This is the answer to "the hook ran validate, it failed, and the output
@@ -350,8 +350,8 @@ For scripts and for agents with no terminal, the same output is available withou
 the TUI:
 
 ```bash
-chunk sidecar logs <command-id>        # command IDs appear in the dashboard
-chunk sidecar logs <command-id> -f     # keep printing until the command exits
+smelt sidecar logs <command-id>        # command IDs appear in the dashboard
+smelt sidecar logs <command-id> -f     # keep printing until the command exits
 ```
 
 Output goes to stdout so it can be piped; a non-zero remote status is reported on
@@ -378,10 +378,10 @@ an idle sidecar.
 Capture a configured environment so future sidecars boot fast:
 
 ```bash
-chunk sidecar snapshot list
-chunk sidecar snapshot create --name checkpoint
+smelt sidecar snapshot list
+smelt sidecar snapshot create --name checkpoint
 # Later:
-chunk sidecar create --image <snapshot-id>           # name auto-generated
+smelt sidecar create --image <snapshot-id>           # name auto-generated
 ```
 
 `snapshot list` prints each snapshot's name and ID for your org (from `--org-id`, project config, or the org picker). `snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it belonged to the active pool, that member is removed from local active-pool state; the state is cleared only when the pool becomes empty. Launch a new pool member from the snapshot to resume work.
@@ -394,21 +394,21 @@ Lock files (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`) record platform-
 
 ```bash
 # 1. Sync your local tree to the sidecar
-chunk sidecar sync
+smelt sidecar sync
 
 # 2. Run the package manager install on the sidecar to regenerate the lock file
-chunk validate --remote --cmd "npm install"   # or yarn install / pnpm install
+smelt validate --remote --cmd "npm install"   # or yarn install / pnpm install
 
 # 3. Pull the updated lock file back to your local working tree
 #    Replace <repo> with your repository name (e.g. my-app)
-chunk sidecar ssh -- cat /home/user/<repo>/package-lock.json > package-lock.json
+smelt sidecar ssh -- cat /home/user/<repo>/package-lock.json > package-lock.json
 
 # 4. Commit the Linux-generated lock file
 git add package-lock.json
 git commit -m "Regenerate lock file on Linux"
 ```
 
-> **Note:** `chunk sidecar sync` is one-way (local → sidecar). Step 3 manually pulls only the lock file back; it does not affect any other files. Run this workflow whenever you add or upgrade a dependency on macOS before pushing to CI.
+> **Note:** `smelt sidecar sync` is one-way (local → sidecar). Step 3 manually pulls only the lock file back; it does not affect any other files. Run this workflow whenever you add or upgrade a dependency on macOS before pushing to CI.
 
 ---
 
@@ -420,9 +420,9 @@ CircleCI Smarter Testing splits your test suite into independent **atoms** and d
 
 **Built-in templates (Go and pytest):**
 
-By default, `chunk init` detects `go.mod` or `pyproject.toml` and writes a matching template. If the file already exists it is left as-is. You can skip this by passing `--skip-test-suites=false` to `chunk init`.
+By default, `smelt init` detects `go.mod` or `pyproject.toml` and writes a matching template. If the file already exists it is left as-is. You can skip this by passing `--skip-test-suites=false` to `smelt init`.
 
-**Other stacks (Jest, RSpec, etc.):** write the file manually or ask your AI agent to `"scaffold test-suites.yml"` (the `chunk-sidecar` skill covers per-language patterns). The file schema:
+**Other stacks (Jest, RSpec, etc.):** write the file manually or ask your AI agent to `"scaffold test-suites.yml"` (the `smelt-sidecar` skill covers per-language patterns). The file schema:
 
 ```yaml
 ---
@@ -450,16 +450,16 @@ After writing `.circleci/test-suites.yml`, use the sidecar to verify it works in
 
 ```bash
 # 1. Push your local tree (including the new file) to the sidecar
-chunk sidecar sync
+smelt sidecar sync
 
 # 2. Test discover — should print one atom per line and exit zero
-chunk validate --remote --cmd "go list -f '{{ if or (len .TestGoFiles) (len .XTestGoFiles) }} {{ .ImportPath }} {{end}}' ./..."
+smelt validate --remote --cmd "go list -f '{{ if or (len .TestGoFiles) (len .XTestGoFiles) }} {{ .ImportPath }} {{end}}' ./..."
 
 # 3. Test run with a sample atom — should produce junit XML at the declared path
-chunk validate --remote --cmd "go tool gotestsum --junitfile=test-reports/tests.xml -- -race ./internal/config/..."
+smelt validate --remote --cmd "go tool gotestsum --junitfile=test-reports/tests.xml -- -race ./internal/config/..."
 
 # 4. Validate your CircleCI config references the suite correctly
-chunk validate --remote --cmd "circleci config validate"
+smelt validate --remote --cmd "circleci config validate"
 ```
 
 Replace the Go commands above with your stack's `discover` and `run` commands. For the run step, substitute `<< test.atoms >>` with one or two atoms from discover's output and `<< outputs.junit >>` with the `outputs.junit` path from your YAML.
@@ -497,14 +497,14 @@ The `--suite` value must match the `name` field in `.circleci/test-suites.yml`. 
 
 ## Hook behavior
 
-After `chunk init`, two hooks run automatically in Claude Code and Cursor:
+After `smelt init`, two hooks run automatically in Claude Code and Cursor:
 
 - **PreToolUse** — runs before every `git commit`. Blocks the commit if any validation command fails.
 - **Stop** — runs when the agent finishes a session. Skips if the working tree is clean; runs all configured commands otherwise.
 
 The Stop hook retries up to `stopHookMaxAttempts` times (default: 3) before giving up and letting the session end.
 
-A successful Stop-hook run is cached, so if the hook fires again with nothing changed it prints `skipped (no changes since last successful run)` rather than re-running your commands. Failures are never cached. Running `chunk validate` yourself always executes the commands.
+A successful Stop-hook run is cached, so if the hook fires again with nothing changed it prints `skipped (no changes since last successful run)` rather than re-running your commands. Failures are never cached. Running `smelt validate` yourself always executes the commands.
 
 See [docs/HOOKS.md](HOOKS.md) for configuration details and [Result Caching](HOOKS.md#result-caching) for what invalidates the cache.
 
@@ -512,14 +512,14 @@ See [docs/HOOKS.md](HOOKS.md) for configuration details and [Result Caching](HOO
 
 ## Team review context
 
-An additional tool, independent of the sidecar workflow above. `chunk build-prompt` mines your GitHub PR history and generates a prompt that captures how your team reviews code. Run it once and commit the output.
+An additional tool, independent of the sidecar workflow above. `smelt build-prompt` mines your GitHub PR history and generates a prompt that captures how your team reviews code. Run it once and commit the output.
 
 ```bash
 # Auto-detects org and repos from your git remote
-chunk build-prompt
+smelt build-prompt
 
 # Or specify explicitly
-chunk build-prompt --org myorg --repos api,backend --top 10 --since 2024-01-01
+smelt build-prompt --org myorg --repos api,backend --top 10 --since 2024-01-01
 ```
 
 The pipeline runs three steps:
@@ -528,14 +528,14 @@ The pipeline runs three steps:
 2. **Analyze** — sends comments to Claude Sonnet to extract patterns
 3. **Generate** — sends patterns to Claude Opus to produce a focused prompt
 
-Output lands at `.chunk/context/review-prompt.md`. Commit this file — your team's AI agents will read it automatically.
+Output lands at `.smelt/context/review-prompt.md`. Commit this file — your team's AI agents will read it automatically.
 
-Requires `chunk auth set anthropic` and `chunk auth set github`.
+Requires `smelt auth set anthropic` and `smelt auth set github`.
 
 Once that file exists and skills are installed, ask your agent to review:
 
 ```
-chunk review
+smelt review
 review my changes
 review PR #123
 ```
@@ -546,30 +546,30 @@ The agent loads your team's prompt, diffs the changes, and returns filtered find
 
 ## Use the factory in another repo
 
-The factory's docker backend runs in a Docker image built for your repo. `chunk init` writes the recipe
+The factory's docker backend runs in a Docker image built for your repo. `smelt init` writes the recipe
 for it, so you don't write a Dockerfile by hand:
 
 ```
-$ chunk init
+$ smelt init
 Where should factory runs execute?  › docker (local containers)
 Detected: typescript · cimg/node:24.21.0 (circleci config)
-✓ Wrote Dockerfile.chunk
+✓ Wrote Dockerfile.smelt
 Build the factory image now? (a few minutes the first time) [Y/n]
-$ chunk factory build --plan spec.md
+$ smelt factory build --plan spec.md
 ```
 
 - **Where the recipe comes from.** Detection of your stack, and the Docker image your CircleCI gate jobs
   run in when they all share one (matching CI is the point). Nothing here uses an agent.
-- **`Dockerfile.chunk` is committed.** Review it, edit it, share it with the team. chunk never overwrites
-  it without asking; `chunk factory image --regenerate` shows a diff and confirms first.
+- **`Dockerfile.smelt` is committed.** Review it, edit it, share it with the team. smelt never overwrites
+  it without asking; `smelt factory image --regenerate` shows a diff and confirms first.
 - **Dependencies are baked in as the package manager's cache** (for example `pnpm fetch`), so installs in
   a run are offline and fast. The image is rebuilt when the Dockerfile or a lockfile it copies changes,
-  and `chunk factory build` does that for you before the run starts.
+  and `smelt factory build` does that for you before the run starts.
 - **Unknown stack?** You get a minimal Debian image plus the agent tools; add your toolchain where the
   comment says.
-- **Build by hand** after editing, or after a failed build: `chunk factory image` (`--rebuild` to skip
-  the layer cache). Use `chunk init --skip-image-build` to write the file without building.
-- **Own image?** Set `factory.image` (or pass `--image`) and chunk uses it as is and never builds it.
+- **Build by hand** after editing, or after a failed build: `smelt factory image` (`--rebuild` to skip
+  the layer cache). Use `smelt init --skip-image-build` to write the file without building.
+- **Own image?** Set `factory.image` (or pass `--image`) and smelt uses it as is and never builds it.
 
 ---
 
@@ -579,18 +579,18 @@ $ chunk factory build --plan spec.md
 Make changes
 
 Validate on a sidecar
-    └─ chunk sidecar sync + chunk validate --remote   (or locally: chunk validate)
+    └─ smelt sidecar sync + smelt validate --remote   (or locally: smelt validate)
     └─ or hand it to the agent: "validate on the sidecar"
-    └─ chunk watch   (optional: live dashboard to see sync/validate progress)
+    └─ smelt watch   (optional: live dashboard to see sync/validate progress)
 
 Before committing
-    └─ Hook runs chunk validate automatically
+    └─ Hook runs smelt validate automatically
 
 Push
 
 Optionally, if you generated review context
-    └─ Agent picks up .chunk/context/review-prompt.md automatically
-    └─ "chunk review" → agent applies team standards → filtered findings
+    └─ Agent picks up .smelt/context/review-prompt.md automatically
+    └─ "smelt review" → agent applies team standards → filtered findings
 ```
 
 ---

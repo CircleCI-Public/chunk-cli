@@ -1,4 +1,4 @@
-module github.com/CircleCI-Public/chunk-cli
+module github.com/smeltdev/smelt
 
 go 1.26.0
 

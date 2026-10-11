@@ -13,11 +13,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 // resolutionEnv gives a project rooted in a temp dir with its own state and
@@ -74,13 +74,13 @@ func TestResolveSidecarReportsCreateRejection(t *testing.T) {
 	assert.Equal(t, ue.ErrorCode(), "sidecar.not_authorized")
 	assert.Assert(t, strings.Contains(ue.Detail(), "org-1"),
 		"the detail must name the org that refused, got %q", ue.Detail())
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk org list"),
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt org list"),
 		"the suggestion must point at a next step, got %q", ue.Suggestion())
 	assert.Equal(t, ue.UserExitCode(), ExitAuthError)
 }
 
 // TestResolveSidecarReportsUnpickableOrg covers the no-org-ID case: a fresh
-// repo with nothing in .chunk/config.json, more than one collaboration to
+// repo with nothing in .smelt/config.json, more than one collaboration to
 // choose from, and no TTY to choose with. The picker's suggestion is the
 // useful part and used to be swallowed with the error.
 func TestResolveSidecarReportsUnpickableOrg(t *testing.T) {

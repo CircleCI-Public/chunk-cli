@@ -8,14 +8,14 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
+	"github.com/smeltdev/smelt/internal/envspec"
 )
 
 func writeProjectConfig(t *testing.T, workDir, data string) {
 	t.Helper()
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(data), 0o600))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o700))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(data), 0o600))
 }
 
 // Configs written before the test command stopped being persisted still carry a
@@ -275,7 +275,7 @@ func TestFactoryConfigAuthor(t *testing.T) {
 
 func TestFactoryConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	want := &FactoryConfig{Backend: "docker", Image: "chunk-sandbox:local", MaxAttempts: 5, Log: true}
+	want := &FactoryConfig{Backend: "docker", Image: "smelt-sandbox:local", MaxAttempts: 5, Log: true}
 	assert.NilError(t, SaveProjectConfig(dir, &ProjectConfig{Factory: want}))
 	got, err := LoadProjectConfig(dir)
 	assert.NilError(t, err)
@@ -325,7 +325,7 @@ func TestValidateFactoryDockerfile(t *testing.T) {
 		path    string
 		wantErr bool
 	}{
-		{"", false}, {"Dockerfile.chunk", false}, {"docker/Dockerfile.chunk", false},
+		{"", false}, {"Dockerfile.smelt", false}, {"docker/Dockerfile.smelt", false},
 		{"/etc/Dockerfile", true}, {"../Dockerfile", true}, {"a/../../Dockerfile", true},
 	} {
 		cfg := &ProjectConfig{Factory: &FactoryConfig{Dockerfile: tt.path}}

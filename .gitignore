@@ -5,8 +5,8 @@
 bin/
 dist/
 share/
-/chunk
-/chunk-*
+/smelt
+/smelt-*
 
 # Binaries
 *.backup
@@ -36,21 +36,21 @@ PLANS.md
 .worktrees
 
 # sidecar sync scratch files
-.chunk/sidecar*.patch
+.smelt/sidecar*.patch
 
 # active sidecar tracking
-.chunk/sidecar.json
-.chunk/sidecar.*.json
+.smelt/sidecar.json
+.smelt/sidecar.*.json
 
 # managed sidecar pool state
-.chunk/*-pool.json
-.chunk/review-run.json
+.smelt/*-pool.json
+.smelt/review-run.json
 
 # mutation variants scratch file
-.chunk/variants.json
+.smelt/variants.json
 
 # hook disable sentinel
-.chunk/hooks-disabled
+.smelt/hooks-disabled
 
 test-fetch-on-stale-sidecar.log
 

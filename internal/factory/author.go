@@ -5,15 +5,16 @@ import (
 	"os"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitexec"
 )
 
-// The identity chunk commits as when nobody else is named, so a run never
+// The identity smelt commits as when nobody else is named, so a run never
 // stops to ask for one.
 const (
-	defaultAuthorName  = "chunk"
-	defaultAuthorEmail = "chunk@users.noreply.github.com"
+	defaultAuthorName  = brand.Command
+	defaultAuthorEmail = brand.Command + "@users.noreply.github.com"
 )
 
 // AuthorSource is where a resolved author came from.
@@ -23,7 +24,7 @@ type AuthorSource int
 const (
 	AuthorFromConfig AuthorSource = iota // factory.author
 	AuthorFromGit                        // the developer's git user.name and user.email
-	AuthorDefault                        // nobody was named, so chunk
+	AuthorDefault                        // nobody was named, so smelt
 )
 
 // ResolvedAuthor is the author of a run's commits and where it came from.
@@ -34,12 +35,12 @@ type ResolvedAuthor struct {
 
 // ResolveAuthor picks who the commits on a run's branch are attributed to: the
 // configured author (factory.author), else the developer's git identity in
-// root, else chunk. Those commits are the ones a published PR carries.
+// root, else smelt. Those commits are the ones a published PR carries.
 func ResolveAuthor(ctx context.Context, root string, configured config.CommitAuthor) ResolvedAuthor {
 	return chooseAuthor(configured, developerIdentity(ctx, root))
 }
 
-// chooseAuthor returns the first complete identity, falling back to chunk's.
+// chooseAuthor returns the first complete identity, falling back to smelt's.
 func chooseAuthor(configured, developer config.CommitAuthor) ResolvedAuthor {
 	switch {
 	case configured.Complete():
@@ -68,7 +69,7 @@ func developerIdentity(ctx context.Context, root string) config.CommitAuthor {
 	return config.CommitAuthor{Name: strings.TrimSpace(string(name)), Email: strings.TrimSpace(string(email))}
 }
 
-// commitEnv commits as author, or as chunk when author is incomplete, whatever
+// commitEnv commits as author, or as smelt when author is incomplete, whatever
 // the repository's own identity settings say.
 func commitEnv(author config.CommitAuthor) []string {
 	a := chooseAuthor(author, config.CommitAuthor{})

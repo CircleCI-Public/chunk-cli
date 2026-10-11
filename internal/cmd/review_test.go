@@ -8,9 +8,9 @@ import (
 	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/review"
 )
 
 const reviewBaseURL = "https://api.anthropic.com"
@@ -67,10 +67,10 @@ func TestCredentialRejectedFromEnvironmentKeepsTheKeychain(t *testing.T) {
 // A key stored with --insecure-storage is not in the environment, so telling
 // the user to unset an env var would leave them stuck.
 func TestCredentialRejectedFromConfigFileNamesTheFile(t *testing.T) {
-	err := credentialRejected(review.Credential{EnvVar: config.EnvAnthropicAPIKey}, "Config file (/home/u/.config/chunk/config.json)", reviewBaseURL, review.ErrCredentialRejected)
+	err := credentialRejected(review.Credential{EnvVar: config.EnvAnthropicAPIKey}, "Config file (/home/u/.config/smelt/config.json)", reviewBaseURL, review.ErrCredentialRejected)
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
-	assert.Equal(t, ue.msg, "Anthropic rejected the API key in config file (/home/u/.config/chunk/config.json).")
+	assert.Equal(t, ue.msg, "Anthropic rejected the API key in config file (/home/u/.config/smelt/config.json).")
 	assert.Assert(t, strings.Contains(ue.suggestion, "--insecure-storage"), "suggestion: %s", ue.suggestion)
 	assert.Equal(t, ue.exitCode, ExitAuthError)
 }

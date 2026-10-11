@@ -7,10 +7,10 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 // fakeBackend records the scripts Verify runs and fails the ones it is told to.
@@ -67,12 +67,12 @@ func TestVerify(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := &fakeBackend{failing: tt.failing}
-			res, err := Verify(context.Background(), f, VerifyOptions{Dir: dir, Image: "chunk-x:abc", Install: "pnpm install", Gate: gate})
+			res, err := Verify(context.Background(), f, VerifyOptions{Dir: dir, Image: "smelt-x:abc", Install: "pnpm install", Gate: gate})
 			assert.NilError(t, err)
 			assert.Equal(t, res.Step, tt.wantStep)
 			assert.Equal(t, len(f.scripts), tt.wantScripts)
 			assert.DeepEqual(t, f.deleted, []string{"c1"})
-			assert.DeepEqual(t, f.created, []string{"chunk-x:abc"})
+			assert.DeepEqual(t, f.created, []string{"smelt-x:abc"})
 			assert.Equal(t, f.synced, dir)
 			assert.Equal(t, f.repoPath, sidecar.DefaultWorkspace("my-repo"))
 			assert.Assert(t, strings.HasPrefix(f.scripts[0], "cd "+sidecar.ShellEscape(f.repoPath)+" && "), f.scripts[0])

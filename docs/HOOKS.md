@@ -4,11 +4,11 @@ Quality checks that run automatically as Claude Code works.
 
 ## How It Works
 
-`chunk init` generates `.claude/settings.json` with two hooks:
+`smelt init` generates `.claude/settings.json` with two hooks:
 
 **PreToolUse** — matches the `Bash` tool. Each hook entry carries an `if: "Bash(git commit*)"` filter so only git commit commands trigger validation. If any command fails, the commit is blocked. The group also holds one entry that cannot block: the advisory merge-conflict notice described below.
 
-**Stop** — runs `chunk validate` after every session ends. Skips everything
+**Stop** — runs `smelt validate` after every session ends. Skips everything
 when the working tree is clean. When there are changes, it runs all configured
 commands so problems are surfaced before the agent stops working.
 
@@ -17,13 +17,13 @@ need no CircleCI account, and ignore `remote: true`. Only a project on the
 circleci backend (`"factory": {"backend": "circleci"}`) sends them to sidecars.
 On that backend the Stop hook is the one run most likely to have several
 independent remote commands (`test`, `lint`, `acceptance-test`, ...) in play at
-once, so it also benefits from `chunk validate` spreading them across more than
+once, so it also benefits from `smelt validate` spreading them across more than
 one sidecar; see [CLI.md](CLI.md) for the `--parallel` flag and default. The
 commit-time `PreToolUse` entries below each name a single command already, so
 they run on whichever one sidecar is active either way.
 
-**UserPromptSubmit** — runs `chunk validate results`, which prints what
-background runs (`chunk validate --async`) concluded and then forgets them. It
+**UserPromptSubmit** — runs `smelt validate results`, which prints what
+background runs (`smelt validate --async`) concluded and then forgets them. It
 runs no commands, only reads results the daemon is already holding, so its
 timeout is 10s. This hook exists because a background run's answer arrives after
 Stop has already fired and the agent has gone; the next prompt is the first
@@ -38,7 +38,7 @@ nothing to report and the hook stays silent.
 ## Background Validation
 
 A Stop hook that runs the full check suite is the right thing for a risky
-change and an expensive interruption for a typo. When the chunk daemon is
+change and an expensive interruption for a typo. When the smelt daemon is
 running, the Stop hook offers it the choice: run the checks now, while the hook
 waits, or take them into the background and answer on the next turn.
 
@@ -50,7 +50,7 @@ The daemon takes the offer when the change is:
 
 Both lists are defaults, not rules: `asyncValidateInert` adds to what counts as
 prose here, and `asyncValidateBlocking` names paths this project always waits
-for, whatever their size. See [Configuration](#chunkconfigjson).
+for, whatever their size. See [Configuration](#smeltconfigjson).
 
 ### What "under 500 lines" is measured against
 
@@ -88,7 +88,7 @@ It holds the caller — the blocking behaviour of every earlier version — when
 
 Only the Stop hook is ever released. The commit gate on PreToolUse never is —
 releasing it would let the commit it exists to hold back go through
-unvalidated — and a `chunk validate` typed at a terminal has no later turn to
+unvalidated — and a `smelt validate` typed at a terminal has no later turn to
 hear the answer on, so it always waits too.
 
 A released hook prints where the answer will come from and exits 0:
@@ -100,7 +100,7 @@ A released hook prints where the answer will come from and exits 0:
 and the next turn begins with what it concluded:
 
 ```
-chunk validate passed in the background (0192cf6e)
+smelt validate passed in the background (0192cf6e)
 ```
 
 Failures arrive the same way, with the output of the run that failed. Because
@@ -121,7 +121,7 @@ about the state it ran against — the state the agent's turn actually produced 
 and it is reported with that said rather than discarded:
 
 ```
-chunk validate passed in the background (0192cf6e) — for the code as it was when that turn ended; the tree has changed since
+smelt validate passed in the background (0192cf6e) — for the code as it was when that turn ended; the tree has changed since
 ```
 
 It is off by default, for one reason: **a snapshot holds nothing git was told to
@@ -133,7 +133,7 @@ Projects whose checks run against source alone lose nothing by turning it on.
 Two smaller things to know. The copy is a real git worktree, so tools that ask
 git about it get answers; it is removed when the run ends, and a daemon killed
 mid-run leaves an entry that the next cleanup prunes. And remote commands in a
-snapshot run register their output under the copy, so the `chunk watch` logs
+snapshot run register their output under the copy, so the `smelt watch` logs
 pane will not show it — the event log and the run itself are still filed under
 the real project.
 
@@ -194,17 +194,17 @@ because history is a heuristic and that setting is an instruction.
 ## What the User Sees
 
 While a hook runs, the agent's spinner shows the entry's `statusMessage`:
-`Running chunk validate` for the Stop hook, `Running chunk validate lint before commit` for a
-commit gate entry. It is written by `chunk init`, so it names the command and
-nothing decided at run time — re-run `chunk init` after renaming a command.
+`Running smelt validate` for the Stop hook, `Running smelt validate lint before commit` for a
+commit gate entry. It is written by `smelt init`, so it names the command and
+nothing decided at run time — re-run `smelt init` after renaming a command.
 
 When a hook finishes without a failure, it says what happened through its
 `systemMessage`:
 
 ```
-chunk validate passed: format, lint, test (42s)
-chunk validate: skipped, nothing changed since the last pass
-chunk validate: running in the background (small change, 42 lines)
+smelt validate passed: format, lint, test (42s)
+smelt validate: skipped, nothing changed since the last pass
+smelt validate: running in the background (small change, 42 lines)
 ```
 
 A clean working tree prints nothing: most turns change nothing, and a line on
@@ -212,17 +212,17 @@ every one of them is a line nobody reads.
 
 Codex shows a `systemMessage` as a warning rather than a note, so under Codex a
 pass and a cache hit print nothing; a run handed to the background still says
-so. Codex recognises a hook by a hash of its definition, so after `chunk init`
-adds or changes these fields, approve chunk's hooks again in `/hooks` — until
+so. Codex recognises a hook by a hash of its definition, so after `smelt init`
+adds or changes these fields, approve smelt's hooks again in `/hooks` — until
 then Codex skips them.
 
 ## Result Caching
 
-In hook mode only, a successful `chunk validate` run is cached. If the hook
+In hook mode only, a successful `smelt validate` run is cached. If the hook
 fires again with nothing changed, the commands are skipped entirely:
 
 ```
-chunk validate: skipped (no changes since last successful run)
+smelt validate: skipped (no changes since last successful run)
 ```
 
 Only successes are cached. A failing run is never stored, so the agent always
@@ -233,9 +233,9 @@ fingerprint, taken once per hook invocation.
 
 The cache key covers:
 
-- all of `.chunk/config.json` — the `commands` block, and the `environment` block
+- all of `.smelt/config.json` — the `commands` block, and the `environment` block
   that decides what those commands run against. A project that gitignores
-  `.chunk/` still gets a re-run when either changes
+  `.smelt/` still gets a re-run when either changes
 - the execution target — the configured sidecar snapshot image and the active
   sidecar's ID, so a result validated against one sidecar is never reused for
   another
@@ -260,7 +260,7 @@ Two things deliberately stay out of the key:
 
 Caching is skipped, and commands always run, when:
 
-- the run is not a hook invocation (a manual `chunk validate` never caches)
+- the run is not a hook invocation (a manual `smelt validate` never caches)
 - `--cmd` supplied an inline command
 - the working-tree state cannot be hashed reliably — not a git repo, a repo with
   no commits yet, or a changed path that cannot be read (an unreadable file, or a
@@ -273,7 +273,7 @@ the config alone and would stay stable across code changes, so no cache is
 consulted at all. When the working tree cannot be hashed, the hook says so:
 
 ```
-chunk validate: working tree state unavailable (hash sub: changed path is not a
+smelt validate: working tree state unavailable (hash sub: changed path is not a
 regular file); running everything, caching nothing
 ```
 
@@ -283,7 +283,7 @@ a repo that never prints `skipped` is not left unexplained.
 Entries live outside the repo, under the per-project data directory:
 
 ```
-$XDG_DATA_HOME/chunk/<sha256-of-project-path>/validate-cache/
+$XDG_DATA_HOME/smelt/<sha256-of-project-path>/validate-cache/
 ```
 
 Each entry is a small JSON file. Keys are content-addressed, so a superseded
@@ -294,10 +294,10 @@ is always safe and forces a re-run.
 
 ## Merge Conflict Advisories
 
-`chunk init` adds one more entry to the commit hook group:
+`smelt init` adds one more entry to the commit hook group:
 
 ```
-chunk conflicts --hook
+smelt conflicts --hook
 ```
 
 It reports whether the current branch still merges cleanly into
@@ -317,7 +317,7 @@ break off into a rebase in the middle of an unrelated task.
 
 ### Where the answer comes from
 
-Nothing is computed in the hook. The `chunk watch` daemon previews the merge in
+Nothing is computed in the hook. The `smelt watch` daemon previews the merge in
 the background and the hook reads the stored result over a Unix socket, so it
 returns immediately:
 
@@ -336,16 +336,16 @@ returns immediately:
 - **Committed history only.** Uncommitted changes are invisible to the
   preview, so a conflict that exists solely in unstaged edits is not reported.
   The notice says so every time it fires.
-- **No daemon, no answer.** `chunk watch` starts the daemon, which keeps
+- **No daemon, no answer.** `smelt watch` starts the daemon, which keeps
   running after the dashboard is closed. Without it the hook prints nothing
   and the commit proceeds untouched.
 - **Cases with nothing to compare** — a detached HEAD, a repository with no
   recorded default branch, a branch that is itself the merge target — produce no
-  notice. Run `chunk conflicts` by hand to see which of these applies:
+  notice. Run `smelt conflicts` by hand to see which of these applies:
 
 ```bash
-chunk conflicts          # human-readable status, including why there is no answer
-chunk conflicts --json   # the raw report
+smelt conflicts          # human-readable status, including why there is no answer
+smelt conflicts --json   # the raw report
 ```
 
 Codex hooks (`.codex/hooks.json`) do not get this entry: the advisory depends on
@@ -361,18 +361,18 @@ configuration is needed.
 ## Quick Start
 
 ```bash
-# 1. Install chunk (see README)
-chunk --version
+# 1. Install smelt (see README)
+smelt --version
 
 # 2. Initialize project (detects commands, writes settings.json)
-chunk init
+smelt init
 
-# 3. Edit .chunk/config.json to adjust commands if needed
+# 3. Edit .smelt/config.json to adjust commands if needed
 ```
 
 ## Configuration
 
-### `.chunk/config.json`
+### `.smelt/config.json`
 
 Commands are defined in the project config:
 
@@ -424,21 +424,21 @@ silently never matching. An extension matches whatever its case (`.SQL` and
   allowed to win. A repo that lints its markdown puts `.md` here and the
   built-in "markdown is prose" rule stops applying to it.
 
-Set them with `chunk config set` rather than by hand, which validates the value
+Set them with `smelt config set` rather than by hand, which validates the value
 before writing it:
 
 ```bash
-chunk config set asyncValidateMaxLines 800
-chunk config set asyncValidateBlocking ".tf,.sql"
-chunk config set asyncValidateInert ""
+smelt config set asyncValidateMaxLines 800
+smelt config set asyncValidateBlocking ".tf,.sql"
+smelt config set asyncValidateInert ""
 ```
 
-Each `set` replaces that list. The `chunk-validate-config` skill drives all of
+Each `set` replaces that list. The `smelt-validate-config` skill drives all of
 this from a conversation — see [SKILLS.md](SKILLS.md).
 
 ### `.claude/settings.json`
 
-Generated by `chunk init`:
+Generated by `smelt init`:
 
 ```json
 {
@@ -447,24 +447,24 @@ Generated by `chunk init`:
       {
         "matcher": "Bash",
         "hooks": [
-          {"type": "command", "if": "Bash(git commit*)", "command": "chunk conflicts --hook", "timeout": 5, "statusMessage": "Running chunk conflicts before commit"},
-          {"type": "command", "if": "Bash(git commit*)", "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate format", "timeout": 30, "statusMessage": "Running chunk validate format before commit"},
-          {"type": "command", "if": "Bash(git commit*)", "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint", "timeout": 60, "statusMessage": "Running chunk validate lint before commit"},
-          {"type": "command", "if": "Bash(git commit*)", "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test", "timeout": 300, "statusMessage": "Running chunk validate test before commit"}
+          {"type": "command", "if": "Bash(git commit*)", "command": "smelt conflicts --hook", "timeout": 5, "statusMessage": "Running smelt conflicts before commit"},
+          {"type": "command", "if": "Bash(git commit*)", "command": "cd ${CLAUDE_PROJECT_DIR:-.} && smelt validate format", "timeout": 30, "statusMessage": "Running smelt validate format before commit"},
+          {"type": "command", "if": "Bash(git commit*)", "command": "cd ${CLAUDE_PROJECT_DIR:-.} && smelt validate lint", "timeout": 60, "statusMessage": "Running smelt validate lint before commit"},
+          {"type": "command", "if": "Bash(git commit*)", "command": "cd ${CLAUDE_PROJECT_DIR:-.} && smelt validate test", "timeout": 300, "statusMessage": "Running smelt validate test before commit"}
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          {"type": "command", "command": "chunk validate", "timeout": 420, "statusMessage": "Running chunk validate"}
+          {"type": "command", "command": "smelt validate", "timeout": 420, "statusMessage": "Running smelt validate"}
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          {"type": "command", "command": "chunk validate results", "timeout": 10}
+          {"type": "command", "command": "smelt validate results", "timeout": 10}
         ]
       }
     ]
@@ -472,7 +472,7 @@ Generated by `chunk init`:
 }
 ```
 
-The `Bash(chunk:*)` permission is also granted so chunk CLI commands run
+The `Bash(smelt:*)` permission is also granted so smelt CLI commands run
 without prompting.
 
 ### `.codex/hooks.json`
@@ -481,17 +481,17 @@ Codex handles hooks differently in two ways that shape this file:
 
 - **Matching hooks run concurrently.** One entry per command would have a
   formatter rewriting files while lint and test read them. The commit gate is a
-  single `chunk validate` that runs every command in turn, with a timeout
+  single `smelt validate` that runs every command in turn, with a timeout
   covering all of them (capped at 600s).
 - **There is no per-entry `if`.** The `Bash` matcher filters only by tool name,
-  so the gate starts before every Bash call. `chunk validate` reads
+  so the gate starts before every Bash call. `smelt validate` reads
   `tool_input.command` from the hook payload and exits at once, writing nothing,
   for anything that is not a `git commit`. The entry still carries the `if`
-  because that is how `chunk init` recognises its own entries when merging.
+  because that is how `smelt init` recognises its own entries when merging.
 
 Codex also runs hooks in the session's working directory, which may be a
-subdirectory of the project. As a hook, `chunk validate` looks upward from
-there to the nearest `.chunk/config.json`, stopping at the git root.
+subdirectory of the project. As a hook, `smelt validate` looks upward from
+there to the nearest `.smelt/config.json`, stopping at the git root.
 
 ```json
 {
@@ -500,14 +500,14 @@ there to the nearest `.chunk/config.json`, stopping at the git root.
       {
         "matcher": "Bash",
         "hooks": [
-          {"type": "command", "if": "Bash(git commit*)", "command": "chunk validate", "timeout": 390, "statusMessage": "Running chunk validate if this is a commit"}
+          {"type": "command", "if": "Bash(git commit*)", "command": "smelt validate", "timeout": 390, "statusMessage": "Running smelt validate if this is a commit"}
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          {"type": "command", "command": "chunk validate", "timeout": 420, "statusMessage": "Running chunk validate"}
+          {"type": "command", "command": "smelt validate", "timeout": 420, "statusMessage": "Running smelt validate"}
         ]
       }
     ]
@@ -515,8 +515,8 @@ there to the nearest `.chunk/config.json`, stopping at the git root.
 }
 ```
 
-Hooks written by an older `chunk init` have one commit gate entry per command.
-Re-running `chunk init` replaces them with the single entry, after which Codex
+Hooks written by an older `smelt init` have one commit gate entry per command.
+Re-running `smelt init` replaces them with the single entry, after which Codex
 asks for the hooks to be trusted again in `/hooks`.
 
 ## Supported Environments
@@ -525,29 +525,29 @@ asks for the hooks to be trusted again in `/hooks`.
 |---|---|---|
 | **Claude Code** (CLI / terminal) | Fully supported | Canonical provider |
 | **Cursor** | Supported | Reads `.claude/settings.json` directly |
-| **Codex** | Supported | `chunk init` writes `.codex/hooks.json` when Codex is detected |
+| **Codex** | Supported | `smelt init` writes `.codex/hooks.json` when Codex is detected |
 
 ## Disabling Stop-Hook Validation
 
-Temporarily disable the `chunk validate` Stop hook without modifying `.claude/settings.json`:
+Temporarily disable the `smelt validate` Stop hook without modifying `.claude/settings.json`:
 
 ```bash
-chunk hook disable   # Creates .chunk/hooks-disabled sentinel file
-chunk hook enable    # Removes the sentinel file
-chunk hook status    # Shows "enabled" or "disabled"
+smelt hook disable   # Creates .smelt/hooks-disabled sentinel file
+smelt hook enable    # Removes the sentinel file
+smelt hook status    # Shows "enabled" or "disabled"
 ```
 
-Stop-hook validation is also skipped when the `CHUNK_HOOKS_DISABLED` environment variable is set to any non-empty value. This does not suppress `PreToolUse` commit hooks generated by `chunk init`, because those commands run directly from `.claude/settings.json`.
+Stop-hook validation is also skipped when the `SMELT_HOOKS_DISABLED` environment variable is set to any non-empty value. This does not suppress `PreToolUse` commit hooks generated by `smelt init`, because those commands run directly from `.claude/settings.json`.
 
 The `--project` flag overrides the project root used to locate the sentinel file.
 
 ## Manual Validation
 
-Use `chunk validate` to run checks manually (outside of hooks):
+Use `smelt validate` to run checks manually (outside of hooks):
 
 ```bash
-chunk validate           # Run all configured commands
-chunk validate test      # Run a specific command
-chunk validate --list    # List configured commands
-chunk validate --dry-run # Show commands without executing
+smelt validate           # Run all configured commands
+smelt validate test      # Run a specific command
+smelt validate --list    # List configured commands
+smelt validate --dry-run # Show commands without executing
 ```

@@ -8,7 +8,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 func TestDecideAuthorChange(t *testing.T) {
@@ -61,17 +61,17 @@ func TestFactoryAuthorCommand(t *testing.T) {
 		assert.NilError(t, exec.Command("git", "-C", dir, "config", kv[0], kv[1]).Run())
 	}
 
-	// Showing works before chunk init; setting needs a config to write to.
+	// Showing works before smelt init; setting needs a config to write to.
 	out, err := runFactoryAuthorCmd(t)
 	assert.NilError(t, err)
 	assert.Equal(t, strings.TrimSpace(out), "Factory commits as: Dev Eloper <dev@example.com> (your git identity)")
 	_, err = runFactoryAuthorCmd(t, "Ada <ada@example.com>")
-	assert.Assert(t, strings.Contains(userMsg(err), "no .chunk/config.json"))
+	assert.Assert(t, strings.Contains(userMsg(err), "no .smelt/config.json"))
 
 	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{Factory: &config.FactoryConfig{Backend: "docker"}}))
 	out, err = runFactoryAuthorCmd(t, "Ada <ada@example.com>")
 	assert.NilError(t, err)
-	assert.Equal(t, strings.TrimSpace(out), "Factory commits as: Ada <ada@example.com> (factory.author in .chunk/config.json)")
+	assert.Equal(t, strings.TrimSpace(out), "Factory commits as: Ada <ada@example.com> (factory.author in .smelt/config.json)")
 	cfg, err := config.LoadProjectConfig(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, cfg.Factory, &config.FactoryConfig{Backend: "docker", Author: "Ada <ada@example.com>"})

@@ -1,21 +1,21 @@
-# chunk mutate
+# smelt mutate
 
 Mutation testing finds gaps in test coverage by changing production code and
 checking whether the test suite detects each change. A mutation that passes the
 test suite is reported as `SURVIVED` and points to behavior that lacks an
 effective assertion.
 
-`chunk mutate` currently supports Go projects. It parses non-test Go files with
+`smelt mutate` currently supports Go projects. It parses non-test Go files with
 the standard library, enumerates operator substitutions, and creates a small
 patch for each mutation without changing the local working tree.
 
 ## Enumerate mutations
 
 ```sh
-chunk mutate
-chunk mutate ./internal/...
-chunk mutate --max 100
-chunk mutate --output json
+smelt mutate
+smelt mutate ./internal/...
+smelt mutate --max 100
+smelt mutate --output json
 ```
 
 Without `--parallel`, the command prints the candidate inventory and exits.
@@ -24,9 +24,9 @@ The optional path may name a file, directory, or recursive `...` pattern.
 ## Run mutations
 
 ```sh
-chunk mutate --parallel 10
-chunk mutate --parallel 10 --max 100
-chunk mutate --parallel 10 --test-cmd "task test"
+smelt mutate --parallel 10
+smelt mutate --parallel 10 --max 100
+smelt mutate --parallel 10 --test-cmd "task test"
 ```
 
 With `--parallel N`, the command creates or reuses the `mutate` sidecar pool
@@ -38,7 +38,7 @@ receives one mutation patch, runs the configured `test` command, reverses the
 patch, and returns to the pool for another mutation. A member whose workspace
 can no longer be trusted is replaced with a fresh sidecar.
 
-The test command defaults to the command named `test` in `.chunk/config.json`.
+The test command defaults to the command named `test` in `.smelt/config.json`.
 Use `--test-cmd` to override it and `--test-timeout` to bound each run. Sidecars
 and pool state are retained for reuse unless `--destroy-pool` is passed; a
 retained pool waits for sidecars still being created so they are recorded for

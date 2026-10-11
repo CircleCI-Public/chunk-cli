@@ -10,7 +10,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
 func TestResolveCR(t *testing.T) {
@@ -254,7 +254,7 @@ func TestRenderResources(t *testing.T) {
 	now := time.Now()
 	tests := []struct {
 		name      string
-		in        *chunkd.Resources
+		in        *smeltd.Resources
 		wantEmpty bool
 		contains  []string
 	}{
@@ -265,12 +265,12 @@ func TestRenderResources(t *testing.T) {
 		},
 		{
 			name:      "zero timestamp renders nothing",
-			in:        &chunkd.Resources{CPUPercent: 50},
+			in:        &smeltd.Resources{CPUPercent: 50},
 			wantEmpty: true,
 		},
 		{
 			name: "percentages when limits are known",
-			in: &chunkd.Resources{
+			in: &smeltd.Resources{
 				CPUPercent: 42, MemUsedBytes: 512, MemLimitBytes: 1024,
 				DiskUsedBytes: 30, DiskTotalBytes: 100, SampledAt: now,
 			},
@@ -278,16 +278,16 @@ func TestRenderResources(t *testing.T) {
 		},
 		{
 			name: "absolute memory when no limit is known",
-			in: &chunkd.Resources{
+			in: &smeltd.Resources{
 				CPUPercent: 10, MemUsedBytes: 5 * 1024 * 1024, SampledAt: now,
 			},
 			contains: []string{"mem", "5.0M"},
 		},
 		{
 			name: "stale sample is marked rather than hidden",
-			in: &chunkd.Resources{
+			in: &smeltd.Resources{
 				CPUPercent: 42, MemUsedBytes: 512, MemLimitBytes: 1024,
-				SampledAt: now.Add(-10 * chunkd.StaleSamples * chunkd.SampleInterval),
+				SampledAt: now.Add(-10 * smeltd.StaleSamples * smeltd.SampleInterval),
 			},
 			contains: []string{"stale"},
 		},
@@ -309,7 +309,7 @@ func TestRenderResources(t *testing.T) {
 // The line is drawn indented two columns into the left pane. A typical reading
 // has to fit whole, or the disk figure — last on the line — is what gets clipped.
 func TestRenderResourcesFitsTheSidecarPane(t *testing.T) {
-	r := &chunkd.Resources{
+	r := &smeltd.Resources{
 		CPUPercent: 42, MemUsedBytes: 512, MemLimitBytes: 1024,
 		DiskUsedBytes: 51, DiskTotalBytes: 100, SampledAt: time.Now(),
 	}
@@ -329,7 +329,7 @@ func TestStaleBudgetOutlivesAPollCycle(t *testing.T) {
 	// served the sample rather than when the sampler produced it.
 	const arrivalAge = 6 * time.Second
 
-	budget := chunkd.StaleSamples * chunkd.SampleInterval
+	budget := smeltd.StaleSamples * smeltd.SampleInterval
 	assert.Assert(t, budget > pollInterval+arrivalAge,
 		"stale budget %s must outlast one poll cycle (%s) plus sampler latency (%s)",
 		budget, pollInterval, arrivalAge)

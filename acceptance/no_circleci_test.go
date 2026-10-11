@@ -11,12 +11,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
-// By default chunk never reaches CircleCI, even on a machine with a CircleCI
+// By default smelt never reaches CircleCI, even on a machine with a CircleCI
 // token: this runs the real binary against a CircleCI that counts every request.
 func TestDefaultConfigMakesNoCircleCIRequests(t *testing.T) {
 	var requests atomic.Int32
@@ -28,9 +28,9 @@ func TestDefaultConfigMakesNoCircleCIRequests(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, ".chunk"), 0o755))
+	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, ".smelt"), 0o755))
 	cfg := `{"commands":[{"name":"lint","run":"echo ran-locally","remote":true}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, ".chunk", "config.json"), []byte(cfg), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, ".smelt", "config.json"), []byte(cfg), 0o644))
 
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL // and env.CircleToken is set: a token is present

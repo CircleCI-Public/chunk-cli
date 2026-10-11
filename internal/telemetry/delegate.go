@@ -11,10 +11,10 @@ import (
 
 	"github.com/segmentio/analytics-go/v3"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry/receiver"
+	"github.com/smeltdev/smelt/internal/telemetry/receiver"
 )
 
-// delegateDestination buffers events and, on Close, re-execs the chunk
+// delegateDestination buffers events and, on Close, re-execs the smelt
 // binary as a detached "receive-telemetry" subprocess to deliver them. This
 // keeps Segment's network round trip off the CLI's exit path.
 type delegateDestination struct {

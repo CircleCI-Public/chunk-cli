@@ -11,7 +11,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 func TestResolveHookRootHonoursCanceledContext(t *testing.T) {
@@ -39,19 +39,19 @@ func TestHooksDisable_CreatesSentinel(t *testing.T) {
 	dir := t.TempDir()
 	_, _, err := runHooksCmd(t, dir, "disable")
 	assert.NilError(t, err)
-	_, statErr := os.Stat(filepath.Join(dir, ".chunk", "hooks-disabled"))
+	_, statErr := os.Stat(filepath.Join(dir, ".smelt", "hooks-disabled"))
 	assert.NilError(t, statErr, "expected sentinel file to exist")
 }
 
 func TestHooksEnable_RemovesSentinel(t *testing.T) {
 	dir := t.TempDir()
-	chunkDir := filepath.Join(dir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "hooks-disabled"), []byte{}, 0o644))
+	smeltDir := filepath.Join(dir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "hooks-disabled"), []byte{}, 0o644))
 
 	_, _, err := runHooksCmd(t, dir, "enable")
 	assert.NilError(t, err)
-	_, statErr := os.Stat(filepath.Join(chunkDir, "hooks-disabled"))
+	_, statErr := os.Stat(filepath.Join(smeltDir, "hooks-disabled"))
 	assert.Assert(t, os.IsNotExist(statErr), "expected sentinel file to be removed")
 }
 
@@ -63,9 +63,9 @@ func TestHooksEnable_NoopWhenAlreadyEnabled(t *testing.T) {
 
 func TestHooksStatus_Disabled(t *testing.T) {
 	dir := t.TempDir()
-	chunkDir := filepath.Join(dir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "hooks-disabled"), []byte{}, 0o644))
+	smeltDir := filepath.Join(dir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "hooks-disabled"), []byte{}, 0o644))
 
 	out, _, err := runHooksCmd(t, dir, "status")
 	assert.NilError(t, err)
@@ -79,10 +79,10 @@ func TestHooksStatus_Enabled(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "enabled"), "got: %s", out)
 }
 
-// TestValidateHookPath_HooksDisabled verifies that when CHUNK_HOOKS_DISABLED is
+// TestValidateHookPath_HooksDisabled verifies that when SMELT_HOOKS_DISABLED is
 // set the validate hook path exits 1 and prints a clear message to stderr.
 func TestValidateHookPath_HooksDisabled(t *testing.T) {
-	t.Setenv(config.EnvChunkHooksDisabled, "1")
+	t.Setenv(config.EnvSmeltHooksDisabled, "1")
 
 	dir := t.TempDir()
 	root := newTestRootCmd()

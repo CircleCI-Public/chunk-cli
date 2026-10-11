@@ -11,12 +11,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
+	"github.com/smeltdev/smelt/internal/session"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/testing/recorder"
 )
 
 // sessionEnv is a project configured to validate remotely, plus the fake API it
@@ -36,10 +36,10 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	t.Cleanup(srv.Close)
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"test","run":"echo test","remote":true}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(cfg), 0o644))
 
 	// One HOME across both runs, so they share the state directory the way two
 	// sessions on one machine do.
@@ -49,12 +49,12 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 
 	sshDir := filepath.Join(env.HomeDir, ".ssh")
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "smelt_ai")))
 
 	return &sessionEnv{cci: cci, env: env, workDir: workDir}
 }
 
-// validateAs runs `chunk validate` as the given agent session, identified the way
+// validateAs runs `smelt validate` as the given agent session, identified the way
 // Claude Code identifies one to every command it runs.
 func (e *sessionEnv) validateAs(t *testing.T, sessionID string) {
 	t.Helper()
@@ -128,7 +128,7 @@ func TestSessionCreatesOwnSidecarAlways(t *testing.T) {
 func TestLegacyStateIsNotAdoptedWhileWarm(t *testing.T) {
 	e := newSessionEnv(t)
 
-	// Exactly what an older chunk left behind: keyed to a session by file name,
+	// Exactly what an older smelt left behind: keyed to a session by file name,
 	// with no owner inside the file.
 	writeSidecarState(t, e.env, e.workDir, "session-one", "sb-in-use")
 
@@ -156,7 +156,7 @@ func TestSidecarCurrentNamesTheOwningSession(t *testing.T) {
 }
 
 // TestParallelSessionsSidecarNames pins the naming that makes two sidecars
-// tellable apart in `chunk sidecar list`.
+// tellable apart in `smelt sidecar list`.
 func TestParallelSessionsSidecarNames(t *testing.T) {
 	e := newSessionEnv(t)
 

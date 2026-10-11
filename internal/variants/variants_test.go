@@ -14,18 +14,18 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/variants"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/variants"
 )
 
 const sidecarInstancesPath = "/api/v3/sidecar/instances"
 
 func nopStatus(_ iostream.Level, _ string) {}
 
-// isolateHome points HOME at a temp dir. OpenSession generates ~/.ssh/chunk_ai
+// isolateHome points HOME at a temp dir. OpenSession generates ~/.ssh/smelt_ai
 // on demand, so a test that reaches it writes a private key into whatever HOME
 // points at — the developer's real one under "task test" without this.
 func isolateHome(t *testing.T) {

@@ -1,4 +1,4 @@
-// Package watch implements the chunk watch TUI dashboard.
+// Package watch implements the smelt watch TUI dashboard.
 package watch
 
 import (
@@ -13,11 +13,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/session"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
+	"github.com/smeltdev/smelt/internal/upgrade"
 )
 
 const (
@@ -123,7 +123,7 @@ type sidecarInfo struct {
 	lastOp       eventlog.Op
 	lastResult   string // how the last validate or review run ended: levelDone, levelError, or "" for none
 	// resources is the latest resource sample, nil when the daemon has none.
-	resources *chunkd.Resources
+	resources *smeltd.Resources
 }
 
 // pane identifies which side of the split layout has keyboard focus.
@@ -145,7 +145,7 @@ type dataMsg struct {
 	events   [][]eventlog.Event // per-project; index matches Model.projects
 	branches []string
 	headRefs []string
-	commands [][]chunkd.CommandState
+	commands [][]smeltd.CommandState
 	authErr  string
 	// sessions are the daemon's runs, and reviewAuthErr its reason for being
 	// unable to start one.
@@ -188,7 +188,7 @@ type Model struct {
 	hasDarkBG bool // updated by tea.BackgroundColorMsg
 
 	updateAvailable string // non-empty tag (e.g. "v1.2.3") when an update is available
-	upgradeCmd      string // "chunk upgrade" or "brew upgrade chunk"
+	upgradeCmd      string // "smelt upgrade" or "brew upgrade smelt"
 
 	// relaunch is set when a poll that finds the daemon gone should start
 	// another instead of freezing on the last snapshot. Only the caller knows
@@ -196,14 +196,14 @@ type Model struct {
 	relaunch bool
 
 	// ownSession is the session running this dashboard, empty when a human ran
-	// `chunk watch` from a plain shell. When it matches a row's session that row
+	// `smelt watch` from a plain shell. When it matches a row's session that row
 	// is labelled as the viewer's own, which is the fastest way to answer "which
 	// of these is mine" without reading UUIDs.
 	ownSession string
 
 	// commands is every command the daemon is buffering output for, per project;
 	// index matches projects. Used to resolve an invocation to a command ID.
-	commands [][]chunkd.CommandState
+	commands [][]smeltd.CommandState
 
 	// output is the open scrollback pane, nil when none is open.
 	output *outputPane
@@ -217,7 +217,7 @@ type Model struct {
 
 	// conn is the daemon this dashboard talks to, shown in the header next to
 	// whether the last poll reached it.
-	conn chunkd.Connection
+	conn smeltd.Connection
 
 	// sessions are the runs the left pane lists, across projects, and
 	// runSidecars the sidecars of each factory run among them, by run ID. Those
@@ -246,7 +246,7 @@ type Model struct {
 const noSelection = "\x00"
 
 // New creates a Model ready to run. When watchAll is true (the default for
-// `chunk watch`; `--focus` turns it off), each poll also checks for projects
+// `smelt watch`; `--focus` turns it off), each poll also checks for projects
 // that have saved a sidecar since the dashboard started and adds them, so a
 // sidecar started after the dashboard launches still shows up without a
 // restart.
@@ -261,7 +261,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		watchAll:      watchAll,
 		ownSession:    session.IDFromEnv(),
 		hasDarkBG:     lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
-		conn:          chunkd.CurrentConnection(),
+		conn:          smeltd.CurrentConnection(),
 		spinning:      true, // Init starts the first chain
 	}
 }
@@ -269,7 +269,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 // WithConnection returns a copy of m that reports conn as the daemon it talks
 // to. New reads it from the environment; this is for callers and tests that
 // already know.
-func (m Model) WithConnection(conn chunkd.Connection) Model {
+func (m Model) WithConnection(conn smeltd.Connection) Model {
 	m.conn = conn
 	return m
 }
@@ -399,7 +399,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// A finished command's buffer is final: the daemon appends everything the
 		// stream produced before marking it done, and serves data and Running
-		// under one lock, so a chunk that reported Running:false was already
+		// under one lock, so a smelt that reported Running:false was already
 		// complete. Polling past it is a socket round trip every 200ms for output
 		// that cannot change — and the pane can sit open on a finished command
 		// indefinitely.
@@ -463,7 +463,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
-	v.WindowTitle = "chunk watch"
+	v.WindowTitle = "smelt watch"
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
@@ -508,7 +508,7 @@ func (m Model) renderHeader(st watchStyles) string {
 	if r := len(m.sessions); r > 0 {
 		count = fmt.Sprintf("%d run%s · %s", r, plural(r), count)
 	}
-	title := st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
+	title := st.emphasis("smelt watch") + "  " + st.muted(count) + contextTag
 	right := m.runTag(st) + m.connectionTag(st) + "  " + st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {

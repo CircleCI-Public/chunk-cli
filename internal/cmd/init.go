@@ -13,16 +13,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/settings"
-	"github.com/CircleCI-Public/chunk-cli/internal/skills"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/validate"
+	"github.com/smeltdev/smelt/internal/anthropic"
+	"github.com/smeltdev/smelt/internal/authprompt"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/gitremote"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/settings"
+	"github.com/smeltdev/smelt/internal/skills"
+	"github.com/smeltdev/smelt/internal/ui"
+	"github.com/smeltdev/smelt/internal/validate"
 )
 
 // confirmFunc asks the user a yes/no question. Matches ui.Confirm signature.
@@ -75,7 +76,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .claude/settings.json"))
-		streams.ErrPrintln(ui.Dim("  Hidden Claude Code config. Runs `chunk validate` before commits and after each agent session."))
+		streams.ErrPrintln(ui.Dim("  Hidden Claude Code config. Runs `smelt validate` before commits and after each agent session."))
 		return nil
 	}
 
@@ -128,7 +129,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .claude/settings.json"))
-	streams.ErrPrintln(ui.Dim("  Hidden Claude Code config. Runs `chunk validate` before commits and after each agent session."))
+	streams.ErrPrintln(ui.Dim("  Hidden Claude Code config. Runs `smelt validate` before commits and after each agent session."))
 	return nil
 }
 
@@ -263,14 +264,14 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 	return nil
 }
 
-// poolGitignoreEntries are machine-local pool state files under .chunk/.
+// poolGitignoreEntries are machine-local pool state files under .smelt/.
 // config.json and other project config must stay tracked.
 var poolGitignoreEntries = []string{
-	".chunk/*-pool.json",
+	".smelt/*-pool.json",
 }
 
 // ensureGitignoreEntries appends validate pool patterns to .gitignore if they
-// are not already present. Does not ignore .chunk/config.json.
+// are not already present. Does not ignore .smelt/config.json.
 func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 	path := filepath.Join(workDir, ".gitignore")
 
@@ -302,7 +303,7 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 		}
 	}
 
-	if _, err := f.WriteString("\n# chunk local pool state\n"); err != nil {
+	if _, err := f.WriteString("\n# smelt local pool state\n"); err != nil {
 		return err
 	}
 	for _, entry := range toAdd {
@@ -312,7 +313,7 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 	}
 
 	streams.ErrPrintln(ui.Success("Updated .gitignore with local pool state patterns"))
-	streams.ErrPrintln(ui.Dim("  Machine-local sidecar pool IDs; not for commit. Keeps .chunk/config.json tracked."))
+	streams.ErrPrintln(ui.Dim("  Machine-local sidecar pool IDs; not for commit. Keeps .smelt/config.json tracked."))
 	return nil
 }
 
@@ -324,21 +325,21 @@ func updateInitGitignore(workDir string, streams iostream.Streams) {
 	}
 }
 
-// initPlan is which backend-dependent steps `chunk init` runs. Everything that
+// initPlan is which backend-dependent steps `smelt init` runs. Everything that
 // reaches CircleCI, or sets a project up for it, is gated on the circleci
 // backend the user chose, so the plan is decided from that choice alone.
 type initPlan struct {
 	DetectOrgID bool
 	TestSuites  bool // scaffold or hint at .circleci/test-suites.yml
-	RemoteHints bool // mention `chunk validate --remote` in the summary
+	RemoteHints bool // mention `smelt validate --remote` in the summary
 	Skills      []string
 }
 
 // Skills init installs. The sidecar ones describe CircleCI cloud sidecars, so
 // they only go in for a project that chose that backend.
 var (
-	genericInitSkills  = []string{"chunk-validate-config"}
-	circleCIInitSkills = []string{"chunk-sidecar", "chunk-sidecar-setup"}
+	genericInitSkills  = []string{"smelt-validate-config"}
+	circleCIInitSkills = []string{"smelt-sidecar", "smelt-sidecar-setup"}
 )
 
 // planInit decides the backend-dependent steps. The backend is chosen before
@@ -412,7 +413,7 @@ func printTestSuitesHint(workDir string, streams iostream.Streams) {
 	}
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("Next step: set up a sidecar"))
-	streams.ErrPrintln(ui.Dim("  Ask your AI coding agent to run the chunk-sidecar skill to spin up"))
+	streams.ErrPrintln(ui.Dim("  Ask your AI coding agent to run the smelt-sidecar skill to spin up"))
 	streams.ErrPrintln(ui.Dim("  a microVM, sync your repo, and run tests remotely."))
 }
 
@@ -434,14 +435,14 @@ func writeAllHookFiles(workDir string, commands []config.Command, streams iostre
 	return nil
 }
 
-const gitHookContent = "#!/bin/sh\nchunk validate\n"
+const gitHookContent = "#!/bin/sh\n" + brand.Command + " validate\n"
 
 // writeGitHook writes a pre-commit hook to the repository's git hooks
 // directory. gitCommonDir must be the resolved path returned by
 // `git rev-parse --git-common-dir`, so the hook lands in the shared hooks
 // directory even when running from a worktree. If a pre-commit hook already
-// exists and calls chunk validate it is left as-is; if it exists but does not
-// call chunk validate, the call is appended preserving the existing permissions.
+// exists and calls smelt validate it is left as-is; if it exists but does not
+// call smelt validate, the call is appended preserving the existing permissions.
 func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 	hooksDir := filepath.Join(gitCommonDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
@@ -470,11 +471,11 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .git/hooks/pre-commit"))
-		streams.ErrPrintln(ui.Dim("  Not tracked in git. Runs `chunk validate` locally before every commit you make."))
+		streams.ErrPrintln(ui.Dim("  Not tracked in git. Runs `smelt validate` locally before every commit you make."))
 		return nil
 	}
 
-	if strings.Contains(string(existing), "chunk validate") {
+	if strings.Contains(string(existing), brand.Command+" validate") {
 		streams.ErrPrintln(ui.Success("Git pre-commit hook already up to date"))
 		return nil
 	}
@@ -487,7 +488,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 		return &userError{msg: "Could not stat .git/hooks/pre-commit.", suggestion: suggestionCheckPerms, err: fmt.Errorf("lstat pre-commit hook: %w", lstatErr)}
 	}
 	if lstatErr == nil && linfo.Mode()&os.ModeSymlink != 0 {
-		streams.ErrPrintf("%s\n", ui.Warning(".git/hooks/pre-commit is a symlink; skipping modification to avoid breaking your hook manager. Add `chunk validate` to the hook manually."))
+		streams.ErrPrintf("%s\n", ui.Warning(".git/hooks/pre-commit is a symlink; skipping modification to avoid breaking your hook manager. Add `smelt validate` to the hook manually."))
 		return nil
 	}
 
@@ -495,7 +496,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 	if len(content) > 0 && content[len(content)-1] != '\n' {
 		content += "\n"
 	}
-	content += "chunk validate\n"
+	content += brand.Command + " validate\n"
 	info, statErr := os.Stat(path)
 	if statErr != nil {
 		return &userError{msg: "Could not stat .git/hooks/pre-commit.", suggestion: suggestionCheckPerms, err: fmt.Errorf("stat pre-commit hook: %w", statErr)}
@@ -508,7 +509,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .git/hooks/pre-commit"))
-	streams.ErrPrintln(ui.Dim("  Not tracked in git. Runs `chunk validate` locally before every commit you make."))
+	streams.ErrPrintln(ui.Dim("  Not tracked in git. Runs `smelt validate` locally before every commit you make."))
 	return nil
 }
 
@@ -551,27 +552,27 @@ func printInitSummary(commands []config.Command, remoteHints bool, streams iostr
 		streams.ErrPrintln(ui.CommandList(entries))
 	}
 	streams.ErrPrintln("")
-	streams.ErrPrintf("Config: %s\n", ui.Bold(".chunk/config.json"))
+	streams.ErrPrintf("Config: %s\n", ui.Bold(".smelt/config.json"))
 	streams.ErrPrintf("  Edit to add, remove, or adjust commands.\n")
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("Run validation:"))
-	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("run all commands locally"))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("smelt validate"), ui.Dim("run all commands locally"))
 	if !remoteHints {
 		return
 	}
-	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate --remote"), ui.Dim("run all commands on a remote sidecar"))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("smelt validate --remote"), ui.Dim("run all commands on a remote sidecar"))
 	for _, c := range commands {
 		if c.Name == "install" {
 			continue
 		}
-		streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate --remote "+c.Name), ui.Dim("run "+c.Name+" remotely"))
+		streams.ErrPrintf("  %-28s %s\n", ui.Cyan("smelt validate --remote "+c.Name), ui.Dim("run "+c.Name+" remotely"))
 	}
 }
 
 // detectOrgID attempts to resolve a CircleCI org ID without prompting for auth.
 // Auto-selects when the user belongs to exactly one org; shows a picker when
 // interactive with multiple orgs. Skipped gracefully on auth failure, no TTY,
-// or cancellation — none of these are fatal for chunk init.
+// or cancellation — none of these are fatal for smelt init.
 func detectOrgID(ctx context.Context, rc config.ResolvedConfig, streams iostream.Streams, cfg *config.ProjectConfig) {
 	client, err := authprompt.ResolveCircleCIClient(rc, nil)
 	if err != nil {
@@ -623,16 +624,16 @@ func resolveGitCommonDir(ctx context.Context, workDir string) (string, error) {
 	return dir, nil
 }
 
-// writeProjectConfig saves cfg as the project's .chunk/config.json and says so.
+// writeProjectConfig saves cfg as the project's .smelt/config.json and says so.
 func writeProjectConfig(workDir string, cfg *config.ProjectConfig, streams iostream.Streams) error {
 	if err := config.SaveProjectConfig(workDir, cfg); err != nil {
 		return &userError{
-			msg:        "Could not write .chunk/config.json.",
+			msg:        "Could not write .smelt/config.json.",
 			suggestion: suggestionCheckPerms,
 			err:        fmt.Errorf("write config: %w", err),
 		}
 	}
-	streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
+	streams.ErrPrintln(ui.Success("Wrote .smelt/config.json"))
 	return nil
 }
 
@@ -672,7 +673,7 @@ func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize project configuration",
-		Long: `Set up .chunk/config.json with VCS and validate command configuration.
+		Long: `Set up .smelt/config.json with VCS and validate command configuration.
 
 Detects VCS org/repo from git remote, detects test commands, and generates
 hook config files.`,
@@ -705,8 +706,8 @@ hook config files.`,
 			if loadErr == nil && !force {
 				hasData := existingCfg.HasCommands() || existingCfg.VCS != nil
 				if hasData {
-					streams.ErrPrintln("Config already exists at .chunk/config.json")
-					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
+					streams.ErrPrintln("Config already exists at .smelt/config.json")
+					streams.ErrPrintln(ui.Dim("To overwrite: smelt init --force"))
 					if err := initFactoryRerun(ctx, workDir, streams, existingCfg, factoryOpts); err != nil {
 						return err
 					}
@@ -816,7 +817,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipOrgID, "skip-org-id", false, "Skip CircleCI org ID detection (circleci backend only)")
 	cmd.Flags().BoolVar(&skipAuth, "skip-auth", false, "Skip the Claude login check")
 	cmd.Flags().BoolVar(&skipFactory, "skip-factory", false, "Skip the factory backend step")
-	cmd.Flags().BoolVar(&skipImageBuild, "skip-image-build", false, "Write Dockerfile.chunk for docker factory runs but do not offer to build the image")
+	cmd.Flags().BoolVar(&skipImageBuild, "skip-image-build", false, "Write Dockerfile.smelt for docker factory runs but do not offer to build the image")
 	cmd.Flags().StringVar(&factoryBackend, "factory-backend", "", "Where factory runs execute: docker (default) or circleci (skips the prompt)")
 	cmd.Flags().StringVar(&factoryImage, "factory-image", "", "Docker image for factory runs (skips the prompt)")
 	cmd.Flags().StringVar(&factoryAuthor, "factory-author", "", `Who factory commits are attributed to, as "Name <email>" (default: your git identity)`)

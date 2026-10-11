@@ -3,15 +3,15 @@ package cmd
 import (
 	"os"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar/docker"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/sidecar/docker"
 )
 
 // defaultFactoryAttempts is how many rounds a factory run checks when neither
 // --max-attempts nor factory.maxAttempts says.
 const defaultFactoryAttempts = 3
 
-// factorySettings are the `chunk factory build` settings that can come from
+// factorySettings are the `smelt factory build` settings that can come from
 // either a flag or the project config.
 type factorySettings struct {
 	Backend  string
@@ -25,7 +25,7 @@ type factorySettings struct {
 }
 
 // imageSource says where the resolved image came from, which decides whether
-// chunk may build it.
+// smelt may build it.
 type imageSource int
 
 const (
@@ -33,7 +33,7 @@ const (
 	imageFromFlag                   // --image
 	imageFromConfig                 // factory.image: user-managed, never auto-built
 	imageFromDockerfile             // factory.dockerfile: managed, built when missing
-	imageFromEnv                    // CHUNK_DOCKER_IMAGE, read by the provider
+	imageFromEnv                    // SMELT_DOCKER_IMAGE, read by the provider
 )
 
 // factoryExplicit says which factorySettings were set by a flag, as opposed to
@@ -84,7 +84,7 @@ func resolveFactorySettings(flags factorySettings, set factoryExplicit, cfg *con
 	if out.Backend == config.BackendDocker && out.ImageSource == imageUnset {
 		return out, newUserError("No Docker image is set for factory runs.").
 			withCode("command.invalid_args").
-			withSuggestion("Pass --image, or run chunk init to write a Dockerfile.chunk (or set factory.image in .chunk/config.json).").
+			withSuggestion("Pass --image, or run smelt init to write a Dockerfile.smelt (or set factory.image in .smelt/config.json).").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}

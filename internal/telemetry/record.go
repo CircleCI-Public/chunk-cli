@@ -15,12 +15,12 @@ import (
 
 // Outcomes a command_invocation event can report. Only success and the three
 // failure kinds exist so a dashboard can tell a run that never got going
-// (blocked) or whose checks did not pass (check_failed) from chunk itself
+// (blocked) or whose checks did not pass (check_failed) from smelt itself
 // going wrong (failure).
 const (
 	OutcomeSuccess     = "success"
 	OutcomeBlocked     = "blocked"      // the user could not proceed: bad args, not authed, not configured, not found
-	OutcomeCheckFailed = "check_failed" // chunk worked, but the project's own checks did not pass
+	OutcomeCheckFailed = "check_failed" // smelt worked, but the project's own checks did not pass
 	OutcomeFailure     = "failure"      // an actual error: API failure, internal error, anything unclassified
 )
 
@@ -107,8 +107,8 @@ func record(cmd *cobra.Command) {
 // message is deliberately never sent: this codebase's error-wrapping
 // convention (fmt.Errorf("...: %w", err)) means messages routinely embed
 // absolute file paths, which would violate the no-PII guarantee below.
-// chunk-cli events are distinguished from circleci-cli events via
-// Context.App.Name ("chunk-cli").
+// smelt events are distinguished from circleci-cli events via
+// Context.App.Name ("smelt").
 func RecordNow(cmd *cobra.Command, err error, duration time.Duration) {
 	tc := FromContext(cmd.Context())
 	if tc == nil {

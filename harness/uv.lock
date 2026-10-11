@@ -132,7 +132,7 @@ wheels = [
 ]
 
 [[package]]
-name = "chunk-scripts"
+name = "smelt-scripts"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

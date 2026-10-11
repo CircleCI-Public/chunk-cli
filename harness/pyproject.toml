@@ -1,7 +1,7 @@
 [project]
-name = "chunk-scripts"
+name = "smelt-scripts"
 version = "0.1.0"
-description = "Development scripts for chunk-cli"
+description = "Development scripts for smelt"
 requires-python = ">=3.12"
 dependencies = [
     "claude-agent-sdk>=0.2.152,<1",

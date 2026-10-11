@@ -8,9 +8,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 // TestDeprecationWarning_SunsetInOutput checks that a Deprecation + Sunset
@@ -78,7 +78,7 @@ func TestGone_410WithServerMessageInOutput(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusGone)
-		_, _ = w.Write([]byte(`{"error":"upgrade chunk CLI to v2.x or later to use this API"}`))
+		_, _ = w.Write([]byte(`{"error":"upgrade smelt CLI to v2.x or later to use this API"}`))
 	}))
 	defer srv.Close()
 
@@ -90,6 +90,6 @@ func TestGone_410WithServerMessageInOutput(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit on 410")
 	assert.Assert(t, strings.Contains(result.Stderr, "out of date"),
 		"expected 'out of date' in stderr, got: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "upgrade chunk CLI to v2.x"),
+	assert.Assert(t, strings.Contains(result.Stderr, "upgrade smelt CLI to v2.x"),
 		"expected server message in stderr, got: %s", result.Stderr)
 }

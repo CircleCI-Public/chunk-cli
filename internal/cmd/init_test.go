@@ -16,11 +16,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/settings"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/settings"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func fakeConfirmYes(_ string, _ bool) (bool, error) { return true, nil }
@@ -116,7 +116,7 @@ func TestWriteSettingsExistingMergeApplied(t *testing.T) {
 		allowStrs[i] = v.(string)
 	}
 	assert.Assert(t, slices.Contains(allowStrs, "Read"))
-	assert.Assert(t, slices.Contains(allowStrs, "Bash(chunk:*)"))
+	assert.Assert(t, slices.Contains(allowStrs, "Bash(smelt:*)"))
 
 	// Hooks added — both kinds. "hooks != nil" would pass with only the commit
 	// hooks merged in, which is exactly the state that left repos looking
@@ -126,8 +126,8 @@ func TestWriteSettingsExistingMergeApplied(t *testing.T) {
 
 	commitCommands := mergedHookCommands(hooks["PreToolUse"])
 	assert.Assert(t, slices.ContainsFunc(commitCommands, func(c string) bool {
-		return strings.HasSuffix(c, "chunk validate")
-	}), "expected the commit hook to call chunk validate, got: %v", commitCommands)
+		return strings.HasSuffix(c, "smelt validate")
+	}), "expected the commit hook to call smelt validate, got: %v", commitCommands)
 
 	stopCommands := mergedHookCommands(hooks["Stop"])
 	assert.DeepEqual(t, stopCommands, []string{settings.StopCommand})
@@ -329,7 +329,7 @@ func TestCompletionInstalledFalseWhenNoRCFile(t *testing.T) {
 func TestCompletionInstalledTrueWhenTagPresent(t *testing.T) {
 	home := setupShellEnv(t)
 	rcFile := filepath.Join(home, ".zshrc")
-	assert.NilError(t, os.WriteFile(rcFile, []byte(completionTag+"\nsource <(chunk completion zsh)\n"), 0o644))
+	assert.NilError(t, os.WriteFile(rcFile, []byte(completionTag+"\nsource <(smelt completion zsh)\n"), 0o644))
 
 	installed, err := completionInstalled()
 	assert.NilError(t, err)
@@ -355,14 +355,14 @@ func TestInstallCompletionWritesRCFile(t *testing.T) {
 	data, err := os.ReadFile(rcFile)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(data), completionTag))
-	assert.Assert(t, strings.Contains(string(data), "source <(chunk completion zsh)"))
+	assert.Assert(t, strings.Contains(string(data), "source <(smelt completion zsh)"))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte(ui.Success("Completion installed."))))
 }
 
 func TestInstallCompletionSkipsWhenAlreadyInstalled(t *testing.T) {
 	home := setupShellEnv(t)
 	rcFile := filepath.Join(home, ".zshrc")
-	existing := completionTag + "\nsource <(chunk completion zsh)\n"
+	existing := completionTag + "\nsource <(smelt completion zsh)\n"
 	assert.NilError(t, os.WriteFile(rcFile, []byte(existing), 0o644))
 
 	streams, _, errOut := testStreams()
@@ -443,7 +443,7 @@ func TestWriteGitHookAppendsToExisting(t *testing.T) {
 	assert.NilError(t, err)
 	content := string(data)
 	assert.Assert(t, strings.HasPrefix(content, existing))
-	assert.Assert(t, strings.Contains(content, "chunk validate"))
+	assert.Assert(t, strings.Contains(content, "smelt validate"))
 
 	info, err := os.Stat(filepath.Join(hooksDir, "pre-commit"))
 	assert.NilError(t, err)
@@ -465,7 +465,7 @@ func TestEnsureGitignoreEntriesCreatesNew(t *testing.T) {
 	for _, entry := range poolGitignoreEntries {
 		assert.Assert(t, strings.Contains(content, entry), "missing %s", entry)
 	}
-	assert.Assert(t, !strings.Contains(content, ".chunk/config.json"), "must not ignore config.json")
+	assert.Assert(t, !strings.Contains(content, ".smelt/config.json"), "must not ignore config.json")
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Updated .gitignore")))
 }
 
@@ -513,7 +513,7 @@ func TestEnsureGitignoreEntriesAddsMissingNewline(t *testing.T) {
 	assert.NilError(t, err)
 	content := string(data)
 	assert.Assert(t, strings.HasPrefix(content, "node_modules/\n"), "missing newline before append")
-	assert.Assert(t, strings.Contains(content, ".chunk/*-pool.json"))
+	assert.Assert(t, strings.Contains(content, ".smelt/*-pool.json"))
 }
 
 func TestWriteGitHookSymlinkSkipped(t *testing.T) {
@@ -524,7 +524,7 @@ func TestWriteGitHookSymlinkSkipped(t *testing.T) {
 	hooksDir := filepath.Join(dir, ".git", "hooks")
 	assert.NilError(t, os.MkdirAll(hooksDir, 0o755))
 
-	// Create a real file that the symlink points to (no "chunk validate" so the
+	// Create a real file that the symlink points to (no "smelt validate" so the
 	// append path would normally be taken).
 	target := filepath.Join(dir, "pre-commit-real")
 	assert.NilError(t, os.WriteFile(target, []byte("#!/bin/sh\nnpm test\n"), 0o755))
@@ -544,7 +544,7 @@ func TestWriteGitHookSymlinkSkipped(t *testing.T) {
 	// Target file must be unmodified.
 	data, err := os.ReadFile(target)
 	assert.NilError(t, err)
-	assert.Assert(t, !strings.Contains(string(data), "chunk validate"), "symlink target must not have been modified")
+	assert.Assert(t, !strings.Contains(string(data), "smelt validate"), "symlink target must not have been modified")
 
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("symlink")))
 }
@@ -562,17 +562,17 @@ func TestInstallSkillsStepUsesProjectScope(t *testing.T) {
 	installSkillsStep(workDir, streams, planInit(true).Skills)
 
 	// Skills must appear in the project dir, not in $HOME.
-	skillPath := filepath.Join(workDir, ".claude", "skills", "chunk-sidecar", "SKILL.md")
+	skillPath := filepath.Join(workDir, ".claude", "skills", "smelt-sidecar", "SKILL.md")
 	_, err := os.Stat(skillPath)
 	assert.NilError(t, err, "expected skill installed at %s", skillPath)
 
-	homePath := filepath.Join(home, ".claude", "skills", "chunk-sidecar", "SKILL.md")
+	homePath := filepath.Join(home, ".claude", "skills", "smelt-sidecar", "SKILL.md")
 	_, err = os.Stat(homePath)
 	assert.Assert(t, os.IsNotExist(err), "skill must not be installed under $HOME")
 }
 
 // TestInstallSkillsStepInstallsSidecarSetup verifies the onboarding wizard ships
-// alongside chunk-sidecar. Without it, chunk-sidecar's first-time setup path
+// alongside smelt-sidecar. Without it, smelt-sidecar's first-time setup path
 // routes to a skill that is not installed.
 func TestInstallSkillsStepInstallsSidecarSetup(t *testing.T) {
 	workDir := t.TempDir()
@@ -581,7 +581,7 @@ func TestInstallSkillsStepInstallsSidecarSetup(t *testing.T) {
 	streams, _, _ := testStreams()
 	installSkillsStep(workDir, streams, planInit(true).Skills)
 
-	for _, name := range []string{"chunk-sidecar", "chunk-sidecar-setup"} {
+	for _, name := range []string{"smelt-sidecar", "smelt-sidecar-setup"} {
 		skillPath := filepath.Join(workDir, ".claude", "skills", name, "SKILL.md")
 		_, err := os.Stat(skillPath)
 		assert.NilError(t, err, "expected skill installed at %s", skillPath)
@@ -605,12 +605,12 @@ func TestPrintInitSummaryWithCommands(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "task test"), "missing test command run")
 	assert.Assert(t, strings.Contains(out, "lint"), "missing lint command name")
 	assert.Assert(t, strings.Contains(out, "task lint"), "missing lint command run")
-	assert.Assert(t, strings.Contains(out, ".chunk/config.json"), "missing config path")
-	assert.Assert(t, strings.Contains(out, "chunk validate"), "missing validate hint")
-	assert.Assert(t, strings.Contains(out, "chunk validate --remote"), "missing remote hint")
+	assert.Assert(t, strings.Contains(out, ".smelt/config.json"), "missing config path")
+	assert.Assert(t, strings.Contains(out, "smelt validate"), "missing validate hint")
+	assert.Assert(t, strings.Contains(out, "smelt validate --remote"), "missing remote hint")
 	assert.Assert(t, !strings.Contains(out, "CircleCI"), "should not mention CircleCI in init output")
-	assert.Assert(t, strings.Contains(out, "chunk validate --remote test"), "missing per-command remote hint")
-	assert.Assert(t, strings.Contains(out, "chunk validate --remote lint"), "missing per-command remote hint")
+	assert.Assert(t, strings.Contains(out, "smelt validate --remote test"), "missing per-command remote hint")
+	assert.Assert(t, strings.Contains(out, "smelt validate --remote lint"), "missing per-command remote hint")
 	assert.Assert(t, !strings.Contains(out, "<name>"), "should not show placeholder when commands are known")
 }
 
@@ -623,8 +623,8 @@ func TestPrintInitSummaryNoCommands(t *testing.T) {
 
 	out := errOut.String()
 	assert.Assert(t, !strings.Contains(out, "Validation commands:"), "should not show command table when none configured")
-	assert.Assert(t, strings.Contains(out, ".chunk/config.json"), "missing config path")
-	assert.Assert(t, strings.Contains(out, "chunk validate"), "missing validate hint")
+	assert.Assert(t, strings.Contains(out, ".smelt/config.json"), "missing config path")
+	assert.Assert(t, strings.Contains(out, "smelt validate"), "missing validate hint")
 }
 
 func newDetectOrgIDFake(t *testing.T) (*fakes.FakeCircleCI, config.ResolvedConfig) {
@@ -696,7 +696,7 @@ func TestInstallCompletionBashWritesRCFile(t *testing.T) {
 	data, err := os.ReadFile(rcFile)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(data), completionTag))
-	assert.Assert(t, strings.Contains(string(data), "source <(chunk completion bash)"))
+	assert.Assert(t, strings.Contains(string(data), "source <(smelt completion bash)"))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte(ui.Success("Completion installed."))))
 }
 
@@ -709,7 +709,7 @@ func TestDetectOrgID_NoOrgs_NoTTYSuggestsOrgCreate(t *testing.T) {
 	detectOrgID(context.Background(), rc, streams, cfg)
 	assert.Equal(t, cfg.OrgID, "")
 	assert.Assert(t, strings.Contains(errOut.String(), "Could not detect org ID: No organizations found."), errOut.String())
-	assert.Assert(t, strings.Contains(errOut.String(), "chunk org create"), errOut.String())
+	assert.Assert(t, strings.Contains(errOut.String(), "smelt org create"), errOut.String())
 }
 
 func runInitCmd(t *testing.T, dir string, args ...string) (string, error) {
@@ -733,12 +733,12 @@ func TestInitFactoryFlagsWriteTheConfig(t *testing.T) {
 	t.Setenv("CI", "1")
 	dir := initGitRepo(t)
 
-	stderr, err := runInitCmd(t, dir, "--factory-backend", "docker", "--factory-image", "chunk-sandbox:local")
+	stderr, err := runInitCmd(t, dir, "--factory-backend", "docker", "--factory-image", "smelt-sandbox:local")
 	assert.NilError(t, err, stderr)
-	assert.Assert(t, strings.Contains(stderr, "Factory runs: docker (chunk-sandbox:local)"), stderr)
+	assert.Assert(t, strings.Contains(stderr, "Factory runs: docker (smelt-sandbox:local)"), stderr)
 	cfg, err := config.LoadProjectConfig(dir)
 	assert.NilError(t, err)
-	assert.DeepEqual(t, cfg.Factory, &config.FactoryConfig{Backend: "docker", Image: "chunk-sandbox:local"})
+	assert.DeepEqual(t, cfg.Factory, &config.FactoryConfig{Backend: "docker", Image: "smelt-sandbox:local"})
 }
 
 func TestInitFactoryNotSetWithoutFlagsOrWhenSkipped(t *testing.T) {

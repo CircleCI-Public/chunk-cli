@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 // ErrNoRecord means a run left no record to continue it from: there was no
-// such run, or chunk made it before runs kept one.
+// such run, or smelt made it before runs kept one.
 var ErrNoRecord = errors.New("no record of the run")
 
 // Record is what a later run needs to continue a run: the request, and where
@@ -48,7 +48,7 @@ func newRecord(runID, prompt string, wt Worktree) Record {
 	}
 }
 
-// ParseRunID accepts a run's ID or its branch, as chunk factory prints both.
+// ParseRunID accepts a run's ID or its branch, as smelt factory prints both.
 // Factory branch names end in the stable run ID; older branches contain only
 // that ID after branchPrefix.
 func ParseRunID(s string) string {
@@ -67,7 +67,7 @@ func recordPath(dataDir, runID string) string {
 func LoadRecord(root, runID string) (Record, error) {
 	dataDir, err := config.ProjectDataDir(root)
 	if err != nil {
-		return Record{}, fmt.Errorf("find chunk's data directory for the project: %w", err)
+		return Record{}, fmt.Errorf("find smelt's data directory for the project: %w", err)
 	}
 	b, err := os.ReadFile(recordPath(dataDir, runID))
 	if errors.Is(err, os.ErrNotExist) {

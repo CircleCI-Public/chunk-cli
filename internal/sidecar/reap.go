@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/session"
 )
 
 // StaleAfter is how long a sidecar's state file may go untouched before the
@@ -190,7 +190,7 @@ func Reap(ctx context.Context, client *circleci.Client, orgID string) (ReapResul
 // deleting the sidecar through the API first when it still exists.
 //
 // Removing one file is not enough. Adoption re-keys an ID under the adopting
-// session and branch, and older chunk versions copied rather than moved the file,
+// session and branch, and older smelt versions copied rather than moved the file,
 // so the same ID can be recorded two or three times over; dropping a single file
 // leaves a duplicate behind that resurrects the dead ID on the next run.
 //

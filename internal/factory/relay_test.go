@@ -11,17 +11,17 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 // newRelay returns a relay through dir whose sidecars are directories on this
 // machine: the fake sidecar runs every command locally, so rsync and ssh run
-// for real through the same WebSocket tunnel chunk uses, and a sidecar's
+// for real through the same WebSocket tunnel smelt uses, and a sidecar's
 // workspace is a local path.
 func newRelay(t *testing.T, dir string) *Relay {
 	t.Helper()
@@ -33,8 +33,8 @@ func newRelay(t *testing.T, dir string) *Relay {
 
 	homeDir := t.TempDir()
 	t.Setenv(config.EnvHome, homeDir)
-	// chunk generates its own key here, as it does on a developer's machine:
-	// the system ssh rsync runs must accept the format chunk writes.
+	// smelt generates its own key here, as it does on a developer's machine:
+	// the system ssh rsync runs must accept the format smelt writes.
 	sshSrv := fakes.NewSSHServerAcceptingAnyKey(t)
 	sshSrv.RunLocally()
 

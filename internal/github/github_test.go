@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fixtures"
+	"github.com/smeltdev/smelt/internal/github"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/fixtures"
 )
 
 // newTestClient creates a Client wired to the given fake server.

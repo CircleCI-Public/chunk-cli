@@ -5,8 +5,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/ciconfig"
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
+	"github.com/smeltdev/smelt/internal/ciconfig"
+	"github.com/smeltdev/smelt/internal/envspec"
 )
 
 func jsEnv() *envspec.Environment {

@@ -1,5 +1,5 @@
 // Package receiver forwards buffered telemetry events to Segment. It runs
-// inside the detached "chunk receive-telemetry" subprocess spawned by
+// inside the detached "smelt receive-telemetry" subprocess spawned by
 // internal/telemetry's delegateDestination, out of the parent CLI's exit path.
 package receiver
 
@@ -10,13 +10,15 @@ import (
 	"os"
 
 	"github.com/segmentio/analytics-go/v3"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
 const (
 	// EnvWriteKey configures the Segment write key for the delegate subprocess.
-	EnvWriteKey = "__CHUNK_TELEMETRY_WRITE_KEY"
+	EnvWriteKey = "__" + brand.EnvPrefix + "TELEMETRY_WRITE_KEY"
 	// EnvTelemetryEndpoint configures the Segment endpoint for the delegate subprocess.
-	EnvTelemetryEndpoint = "__CHUNK_TELEMETRY_ENDPOINT"
+	EnvTelemetryEndpoint = "__" + brand.EnvPrefix + "TELEMETRY_ENDPOINT"
 )
 
 // Receive decodes a JSON array of buffered messages from in and forwards them

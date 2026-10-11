@@ -1,4 +1,4 @@
-// Package mutate implements mutation testing stages for chunk mutate.
+// Package mutate implements mutation testing stages for smelt mutate.
 package mutate
 
 import (
@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 // Mutation is a single candidate change to production code.

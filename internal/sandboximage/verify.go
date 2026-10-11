@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // Verification steps, in the order they run.
@@ -86,7 +87,7 @@ func Verify(ctx context.Context, b verifyBackend, opts VerifyOptions) (VerifyRes
 	if err != nil {
 		return VerifyResult{}, err
 	}
-	inst, err := b.Create(ctx, "chunk-verify", opts.Image, repoPath)
+	inst, err := b.Create(ctx, brand.Command+"-verify", opts.Image, repoPath)
 	if err != nil {
 		return VerifyResult{}, fmt.Errorf("start verification container: %w", err)
 	}

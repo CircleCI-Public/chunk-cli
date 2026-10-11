@@ -53,7 +53,7 @@ var errNoSuchImage = errors.Join(errors.New("no such image"), cerrdefs.ErrNotFou
 
 func TestEnsureImagePresentDoesNotPull(t *testing.T) {
 	f := &fakeImages{}
-	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "chunk-sandbox:local"))
+	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local"))
 	assert.Equal(t, len(f.pulls), 0)
 }
 
@@ -80,7 +80,7 @@ func TestEnsureImageMissingPulls(t *testing.T) {
 func TestEnsureImageNotFoundWhileDockerStarts(t *testing.T) {
 	noBackoff(t)
 	f := &fakeImages{inspectErrs: []error{errNoSuchImage}}
-	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "chunk-sandbox:local"))
+	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local"))
 	assert.Equal(t, f.inspects, 2)
 	assert.Equal(t, len(f.pulls), 0, "an image that appears on recheck must not be pulled")
 }
@@ -88,7 +88,7 @@ func TestEnsureImageNotFoundWhileDockerStarts(t *testing.T) {
 func TestEnsureImageRetriesTransientLookupError(t *testing.T) {
 	noBackoff(t)
 	f := &fakeImages{inspectErrs: []error{errors.New("EOF")}}
-	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "chunk-sandbox:local"))
+	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local"))
 	assert.Equal(t, f.inspects, 2)
 	assert.Equal(t, len(f.pulls), 0, "a transient lookup error must not trigger a pull")
 }
@@ -100,19 +100,19 @@ func TestEnsureImagePersistentLookupErrorIsReportedNotPulled(t *testing.T) {
 	for range inspectAttempts {
 		f.inspectErrs = append(f.inspectErrs, boom)
 	}
-	err := NewWithClient(f, "", "").ensureImage(context.Background(), "chunk-sandbox:local")
+	err := NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local")
 	assert.ErrorIs(t, err, boom)
-	assert.ErrorContains(t, err, "look up image chunk-sandbox:local")
+	assert.ErrorContains(t, err, "look up image smelt-sandbox:local")
 	assert.Equal(t, f.inspects, inspectAttempts)
 	assert.Equal(t, len(f.pulls), 0)
 }
 
 func TestEnsureImageMissingLocalImageExplainsBuild(t *testing.T) {
-	denied := errors.New("pull access denied for chunk-sandbox")
+	denied := errors.New("pull access denied for smelt-sandbox")
 	noBackoff(t)
 	f := &fakeImages{inspectErrs: notFoundEvery(), pullErr: denied}
-	err := NewWithClient(f, "", "").ensureImage(context.Background(), "chunk-sandbox:local")
+	err := NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local")
 	assert.ErrorIs(t, err, denied)
 	assert.ErrorContains(t, err, "not on this Docker host")
-	assert.ErrorContains(t, err, "docker build -t chunk-sandbox:local -f Dockerfile.local .")
+	assert.ErrorContains(t, err, "docker build -t smelt-sandbox:local -f Dockerfile.local .")
 }

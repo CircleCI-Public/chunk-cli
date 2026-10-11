@@ -9,11 +9,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/mutate"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/mutate"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func newMutateCmd() *cobra.Command {
@@ -29,7 +29,7 @@ func newMutateCmd() *cobra.Command {
 		Use:   "mutate [path]",
 		Short: "Find test coverage gaps via mutation testing",
 		Long: `Enumerate candidate mutations in production code and validate them against
-the test suite using chunk sidecars. Survivors — mutations the suite fails to
+the test suite using smelt sidecars. Survivors — mutations the suite fails to
 catch — reveal real coverage gaps.
 
 Without --parallel, prints the mutation inventory and exits.
@@ -52,7 +52,7 @@ against the test suite in parallel.`,
 				return &userError{
 					msg:    "Could not detect project language.",
 					errMsg: "language detection failed",
-					suggestion: "Set \"environment\": {\"stack\": \"go\"} in .chunk/config.json " +
+					suggestion: "Set \"environment\": {\"stack\": \"go\"} in .smelt/config.json " +
 						"or ensure a marker file (go.mod, package.json, Cargo.toml) exists.",
 				}
 			}
@@ -105,7 +105,7 @@ against the test suite in parallel.`,
 				return &userError{
 					msg:        "No test command configured.",
 					errMsg:     "test command not found",
-					suggestion: "Add a \"test\" command to .chunk/config.json or pass --test-cmd.",
+					suggestion: "Add a \"test\" command to .smelt/config.json or pass --test-cmd.",
 				}
 			}
 

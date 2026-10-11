@@ -23,10 +23,10 @@ func agentEnvSignals() []struct{ env, agent string } {
 	}
 }
 
-// DetectCodingAgent returns a stable name for the AI coding agent chunk-cli
+// DetectCodingAgent returns a stable name for the AI coding agent smelt
 // appears to have been invoked from, based on well-known environment
 // variables those agents set in their shells. Returns "" if no known agent
-// is detected, which is the common case for a human running chunk directly.
+// is detected, which is the common case for a human running smelt directly.
 func DetectCodingAgent() string {
 	for _, sig := range agentEnvSignals() {
 		if os.Getenv(sig.env) != "" {

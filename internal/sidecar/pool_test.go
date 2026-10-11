@@ -15,16 +15,16 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 func TestPoolStatePath(t *testing.T) {
-	assert.Equal(t, poolStatePath("/my/project", "validate"), "/my/project/.chunk/validate-pool.json")
-	assert.Equal(t, poolStatePath("/my/project", "mutate"), "/my/project/.chunk/mutate-pool.json")
+	assert.Equal(t, poolStatePath("/my/project", "validate"), "/my/project/.smelt/validate-pool.json")
+	assert.Equal(t, poolStatePath("/my/project", "mutate"), "/my/project/.smelt/mutate-pool.json")
 }
 
 func TestPoolStateRoundTrip(t *testing.T) {
@@ -46,7 +46,7 @@ func TestPoolStateRoundTrip(t *testing.T) {
 
 func TestSavePoolStateReturnsWriteError(t *testing.T) {
 	dir := t.TempDir()
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".chunk"), nil, 0o600))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".smelt"), nil, 0o600))
 
 	err := savePoolState(dir, "validate", &poolState{SidecarIDs: []string{"sb-1"}})
 	assert.Assert(t, err != nil)
@@ -169,7 +169,7 @@ func setupPoolTest(t *testing.T) poolTestEnv {
 	t.Helper()
 	homeDir := t.TempDir()
 	t.Setenv(config.EnvHome, homeDir)
-	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "smelt_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
 	sshSrv.SetResult("", 0)
 

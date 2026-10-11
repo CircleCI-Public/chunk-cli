@@ -8,14 +8,14 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/anthropic"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 // defaultTestCommand is used by the Node.js case when no lock file narrows the package manager.
 const defaultTestCommand = "npm test"
 
-// Sources a detection can come from, for display in `chunk init`.
+// Sources a detection can come from, for display in `smelt init`.
 const (
 	sourceLayout = "the repository layout"
 	sourceClaude = "Claude"
@@ -317,7 +317,7 @@ func gatherRepoContext(workDir string, rootFiles []string) string {
 		"Cargo.toml",
 		"Taskfile.yml",
 		"Taskfile.yaml",
-		".chunk/config.json",
+		".smelt/config.json",
 		".npmrc",
 		".yarnrc",
 		".yarnrc.yml",

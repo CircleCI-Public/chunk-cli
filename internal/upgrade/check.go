@@ -10,8 +10,8 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/version"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/version"
 )
 
 const (
@@ -56,10 +56,10 @@ func Check() string {
 }
 
 // disabled reports whether the update check is switched off: in CI, where
-// nobody reads the notice, or by the user setting CHUNK_NO_UPDATE_CHECK. No
+// nobody reads the notice, or by the user setting SMELT_NO_UPDATE_CHECK. No
 // request is made either way, not just no notice printed.
 func disabled() bool {
-	return os.Getenv(config.EnvCI) != "" || os.Getenv(config.EnvChunkNoUpdateCheck) != ""
+	return os.Getenv(config.EnvCI) != "" || os.Getenv(config.EnvSmeltNoUpdateCheck) != ""
 }
 
 // CheckForUpdate returns the latest release tag if it is strictly newer than

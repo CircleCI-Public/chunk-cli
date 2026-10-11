@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
 )
 
 func TestIsRetryable(t *testing.T) {

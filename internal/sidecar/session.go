@@ -18,16 +18,17 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/circleci"
 )
 
 const (
-	defaultKeyName = "chunk_ai"
+	defaultKeyName = brand.Command + "_ai"
 	defaultSSHUser = "user"
-	knownHostsFile = "chunk_ai_known_hosts"
+	knownHostsFile = brand.Command + "_ai_known_hosts"
 )
 
-// DefaultKeyPath returns the default SSH private key path used by chunk.
+// DefaultKeyPath returns the default SSH private key path used by smelt.
 func DefaultKeyPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -120,7 +121,7 @@ var keyGenLockTimeout = 5 * time.Second
 
 // EnsureKeyPair generates the keypair at path if it is not already there, and
 // reports whether it generated one. Concurrent callers see a single generation:
-// goroutines in this process via keyGenMu, and other chunk processes sharing the
+// goroutines in this process via keyGenMu, and other smelt processes sharing the
 // same HOME via an O_EXCL lock file.
 func EnsureKeyPair(path string) (generated bool, err error) {
 	keyGenMu.Lock()
@@ -137,7 +138,7 @@ func EnsureKeyPair(path string) (generated bool, err error) {
 		return false, fmt.Errorf("create .ssh directory: %w", err)
 	}
 
-	// A bare stat-then-generate races two first-run chunk processes — parallel
+	// A bare stat-then-generate races two first-run smelt processes — parallel
 	// agent sessions share one HOME — and either strands a private key whose
 	// public half was never registered with the sidecar, or interleaves the two
 	// writes into a mismatched pair that is never repaired, because the stat
@@ -164,7 +165,7 @@ func EnsureKeyPair(path string) (generated bool, err error) {
 }
 
 // migrateLegacyKey rewrites a PKCS8 private key, which earlier versions of
-// chunk generated, in OpenSSH format. The system ssh that rsync runs cannot
+// smelt generated, in OpenSSH format. The system ssh that rsync runs cannot
 // load a PKCS8 ed25519 key on macOS. The key material is unchanged, so the
 // .pub file and the registration on any sidecar stay valid. Any other key is
 // left alone. Concurrent callers each write an equivalent file atomically.
@@ -251,7 +252,7 @@ const keyGenPollInterval = 10 * time.Millisecond
 // Each call to ExecOverSSH opens and closes its own SSH connection.
 type Session struct {
 	URL          string // WebSocket tunnel URL (ws:// or wss://)
-	IdentityFile string // path to SSH private key (~/.ssh/chunk_ai)
+	IdentityFile string // path to SSH private key (~/.ssh/smelt_ai)
 	KnownHosts   string // path to known_hosts file
 }
 
@@ -305,7 +306,7 @@ func addSSHKey(ctx context.Context, client *circleci.Client, sidecarID, pubKey s
 	return nil, lastErr
 }
 
-// OpenSession registers the default SSH key (~/.ssh/chunk_ai) with the sidecar
+// OpenSession registers the default SSH key (~/.ssh/smelt_ai) with the sidecar
 // and returns session info. The keypair is generated when it does not exist yet,
 // so every path that reaches a sidecar gets one without the user creating keys
 // by hand. retryOn404 should be true only for freshly created sidecars where a

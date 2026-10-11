@@ -7,7 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
 // tailInterval is how often an open output pane asks the daemon for more bytes.
@@ -25,10 +25,10 @@ const tailInterval = 200 * time.Millisecond
 // daemon's retained window, so opening a finished command still shows all of it.
 const maxPaneLines = 5000
 
-// outputMsg carries a chunk of command output back to the model.
+// outputMsg carries a piece of command output back to the model.
 type outputMsg struct {
 	commandID string
-	chunk     chunkd.OutputChunk
+	piece     smeltd.OutputChunk
 	err       error
 }
 
@@ -228,8 +228,8 @@ func (p *outputPane) scrollBy(delta, height int) {
 // fetchOutput asks the daemon for more of a command's output.
 func fetchOutput(commandID string, offset int64) tea.Cmd {
 	return func() tea.Msg {
-		chunk, err := chunkd.FetchOutput(commandID, offset)
-		return outputMsg{commandID: commandID, chunk: chunk, err: err}
+		piece, err := smeltd.FetchOutput(commandID, offset)
+		return outputMsg{commandID: commandID, piece: piece, err: err}
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
+	"github.com/smeltdev/smelt/internal/keyring"
 )
 
 func setupTempConfig(t *testing.T) string {
@@ -34,7 +34,7 @@ func TestProjectDataDir_RootedUnderXDG(t *testing.T) {
 	t.Setenv(EnvXDGDataHome, xdgHome)
 	d, err := ProjectDataDir("/home/user/myproject")
 	assert.NilError(t, err)
-	assert.Assert(t, strings.HasPrefix(d, filepath.Join(xdgHome, "chunk")), "expected path under XDG data dir, got %s", d)
+	assert.Assert(t, strings.HasPrefix(d, filepath.Join(xdgHome, "smelt")), "expected path under XDG data dir, got %s", d)
 }
 
 func TestProjectDataDir_Deterministic(t *testing.T) {
@@ -111,7 +111,7 @@ func TestCanonicalProjectRoot_FallsBackToClean(t *testing.T) {
 // reaches here untouched. EvalSymlinks leaves it relative, so without an
 // absolute step "." survives canonicalisation — and "." is not a name for any
 // one project. It names whichever directory the reader happens to be standing
-// in, which for the chunk daemon is its own.
+// in, which for the smelt daemon is its own.
 func TestCanonicalProjectRoot_MakesRelativeRootsAbsolute(t *testing.T) {
 	project := filepath.Join(t.TempDir(), "project")
 	assert.NilError(t, os.MkdirAll(project, 0o755))
@@ -147,7 +147,7 @@ func TestDir_XDGSet(t *testing.T) {
 	t.Setenv(EnvXDGConfigHome, "/tmp/custom-xdg")
 	d, err := Dir()
 	assert.NilError(t, err)
-	assert.Equal(t, d, "/tmp/custom-xdg/chunk")
+	assert.Equal(t, d, "/tmp/custom-xdg/smelt")
 }
 
 func TestDir_XDGUnset(t *testing.T) {
@@ -155,14 +155,14 @@ func TestDir_XDGUnset(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	d, err := Dir()
 	assert.NilError(t, err)
-	assert.Equal(t, d, filepath.Join(home, ".config", "chunk"))
+	assert.Equal(t, d, filepath.Join(home, ".config", "smelt"))
 }
 
 func TestPath(t *testing.T) {
 	t.Setenv(EnvXDGConfigHome, "/tmp/xdg")
 	p, err := Path()
 	assert.NilError(t, err)
-	assert.Equal(t, p, "/tmp/xdg/chunk/config.json")
+	assert.Equal(t, p, "/tmp/xdg/smelt/config.json")
 }
 
 // --- Load ---
@@ -178,11 +178,11 @@ func TestLoad_NoFile(t *testing.T) {
 
 func TestLoad_ValidFile(t *testing.T) {
 	dir := setupTempConfig(t)
-	chunkDir := filepath.Join(dir, "chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
+	smeltDir := filepath.Join(dir, "smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o700))
 
 	data := `{"anthropicAPIKey":"sk-test-1234","model":"claude-test"}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(data), 0o600))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(data), 0o600))
 
 	cfg, err := Load()
 	assert.NilError(t, err)
@@ -192,11 +192,11 @@ func TestLoad_ValidFile(t *testing.T) {
 
 func TestLoad_MigratesLegacyAPIKey(t *testing.T) {
 	dir := setupTempConfig(t)
-	chunkDir := filepath.Join(dir, "chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
+	smeltDir := filepath.Join(dir, "smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o700))
 
 	data := `{"apiKey":"sk-legacy-1234","model":"claude-test"}`
-	p := filepath.Join(chunkDir, "config.json")
+	p := filepath.Join(smeltDir, "config.json")
 	assert.NilError(t, os.WriteFile(p, []byte(data), 0o600))
 
 	cfg, err := Load()
@@ -218,11 +218,11 @@ func TestLoad_MigratesLegacyAPIKey(t *testing.T) {
 
 func TestLoad_NewKeyTakesPrecedenceOverLegacy(t *testing.T) {
 	dir := setupTempConfig(t)
-	chunkDir := filepath.Join(dir, "chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
+	smeltDir := filepath.Join(dir, "smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o700))
 
 	data := `{"apiKey":"sk-old","anthropicAPIKey":"sk-new"}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(data), 0o600))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(data), 0o600))
 
 	cfg, err := Load()
 	assert.NilError(t, err)
@@ -232,9 +232,9 @@ func TestLoad_NewKeyTakesPrecedenceOverLegacy(t *testing.T) {
 
 func TestLoad_InvalidJSON(t *testing.T) {
 	dir := setupTempConfig(t)
-	chunkDir := filepath.Join(dir, "chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte("{bad"), 0o600))
+	smeltDir := filepath.Join(dir, "smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o700))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte("{bad"), 0o600))
 
 	_, err := Load()
 	assert.Assert(t, err != nil, "expected JSON parse error")
@@ -245,9 +245,9 @@ func TestLoad_Unreadable(t *testing.T) {
 		t.Skip("skipping: root bypasses file permission checks")
 	}
 	dir := setupTempConfig(t)
-	chunkDir := filepath.Join(dir, "chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte("{}"), 0o000))
+	smeltDir := filepath.Join(dir, "smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o700))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte("{}"), 0o000))
 
 	_, err := Load()
 	assert.Assert(t, err != nil, "expected permission error")
@@ -262,7 +262,7 @@ func TestSave_CreatesDir(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Verify directory was created with correct permissions
-	info, err := os.Stat(filepath.Join(dir, "chunk"))
+	info, err := os.Stat(filepath.Join(dir, "smelt"))
 	assert.NilError(t, err)
 	assert.Equal(t, info.Mode().Perm(), os.FileMode(0o700))
 
@@ -438,7 +438,7 @@ func TestResolve_CircleCITokenFromConfigFile(t *testing.T) {
 	assert.NilError(t, Save(UserConfig{CircleCIToken: "cci-from-file"}))
 	p, err := Path()
 	assert.NilError(t, err)
-	assert.Assert(t, strings.HasPrefix(p, filepath.Join(dir, "chunk")), "expected config path under temp XDG config dir")
+	assert.Assert(t, strings.HasPrefix(p, filepath.Join(dir, "smelt")), "expected config path under temp XDG config dir")
 
 	rc, err := Resolve("", "", false)
 	assert.NilError(t, err)
@@ -452,7 +452,7 @@ func TestResolveCircleCI_ConfigFile(t *testing.T) {
 	assert.NilError(t, Save(UserConfig{CircleCIToken: "cci-from-file"}))
 	p, err := Path()
 	assert.NilError(t, err)
-	assert.Assert(t, strings.HasPrefix(p, filepath.Join(dir, "chunk")), "expected config path under temp XDG config dir")
+	assert.Assert(t, strings.HasPrefix(p, filepath.Join(dir, "smelt")), "expected config path under temp XDG config dir")
 
 	rc, err := ResolveCircleCI(false)
 	assert.NilError(t, err)
@@ -488,7 +488,7 @@ func TestResolve_ClaudeOAuthTokenFromKeychain(t *testing.T) {
 // config file holding one is simply ignored.
 func TestResolve_ClaudeOAuthTokenIgnoresConfigFile(t *testing.T) {
 	dir := setupTempConfig(t)
-	path := filepath.Join(dir, "chunk", "config.json")
+	path := filepath.Join(dir, "smelt", "config.json")
 	assert.NilError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	assert.NilError(t, os.WriteFile(path, []byte(`{"claudeOAuthToken":"oat-from-file"}`), 0o600))
 

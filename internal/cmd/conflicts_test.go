@@ -14,7 +14,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
 // noDaemon points the daemon socket at an empty directory, so nothing is
@@ -32,21 +32,21 @@ func noDaemon(t *testing.T) {
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	t.Setenv("SMELT_DAEMON_DIR", dir)
 }
 
 // serveConflicts stands up a Unix socket answering /conflicts the way the daemon
 // does, so the command has an answer to report. A fake daemon rather than a
 // stubbed fetch: what stdout carries is only worth asserting on if it came out
 // of the same socket read the hook really performs.
-func serveConflicts(t *testing.T, report chunkd.ConflictReport) {
+func serveConflicts(t *testing.T, report smeltd.ConflictReport) {
 	t.Helper()
 	// Not t.TempDir(): it embeds the test name, and a unix socket path is capped
 	// at 104 bytes on darwin, so a descriptive name silently breaks listen.
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	t.Setenv("SMELT_DAEMON_DIR", dir)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/conflicts", func(w http.ResponseWriter, _ *http.Request) {
@@ -61,11 +61,11 @@ func serveConflicts(t *testing.T, report chunkd.ConflictReport) {
 
 // conflictedReport is a daemon answer that does have something to advise, which
 // is the only state in which hook mode prints anything at all.
-func conflictedReport() chunkd.ConflictReport {
-	return chunkd.ConflictReport{
+func conflictedReport() smeltd.ConflictReport {
+	return smeltd.ConflictReport{
 		Root:  "/repo",
 		Known: true,
-		Conflict: &chunkd.ConflictState{
+		Conflict: &smeltd.ConflictState{
 			Branch:          "feature",
 			Target:          "origin/main",
 			Conflicted:      true,
@@ -91,7 +91,7 @@ func runConflictsCmd(t *testing.T, dir string, args ...string) (string, string, 
 
 func TestConflictsExitsZeroWithoutADaemon(t *testing.T) {
 	// The guarantee the whole feature rests on. This command runs from the same
-	// commit hook as `chunk validate`, whose non-zero exit blocks the commit, so
+	// commit hook as `smelt validate`, whose non-zero exit blocks the commit, so
 	// an advisory that can fail is a gate nobody asked for.
 	noDaemon(t)
 	_, _, err := runConflictsCmd(t, t.TempDir())
@@ -99,7 +99,7 @@ func TestConflictsExitsZeroWithoutADaemon(t *testing.T) {
 }
 
 func TestConflictsHookModeSaysNothingWithoutADaemon(t *testing.T) {
-	// Silence, not an explanation. Most people do not have `chunk watch` open,
+	// Silence, not an explanation. Most people do not have `smelt watch` open,
 	// and a hook that announced that on every commit would be pure noise.
 	noDaemon(t)
 	out, errOut, err := runConflictsCmd(t, t.TempDir(), "--hook")
@@ -114,7 +114,7 @@ func TestConflictsManualModeExplainsAMissingDaemon(t *testing.T) {
 	noDaemon(t)
 	out, _, err := runConflictsCmd(t, t.TempDir())
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Contains(out, "chunk watch"))
+	assert.Check(t, cmp.Contains(out, "smelt watch"))
 }
 
 // The complaint this split exists for: a socket the user cannot open is not a
@@ -130,11 +130,11 @@ func TestConflictsManualModeDoesNotSendAnUnreadableSocketToStartADaemon(t *testi
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "daemon.sock"), nil, 0o600))
 	assert.NilError(t, os.Chmod(dir, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	t.Setenv("SMELT_DAEMON_DIR", dir)
 
 	out, _, runErr := runConflictsCmd(t, t.TempDir())
 	assert.NilError(t, runErr)
-	assert.Check(t, !cmp.Contains(out, "chunk watch")().Success(),
+	assert.Check(t, !cmp.Contains(out, "smelt watch")().Success(),
 		"starting a second daemon leaves the same socket unreadable: %s", out)
 	assert.Check(t, cmp.Contains(out, "cannot be opened"))
 }
@@ -157,7 +157,7 @@ func TestConflictsJSONModeKeepsOneShapeWithoutADaemon(t *testing.T) {
 	out, _, err := runConflictsCmd(t, t.TempDir(), "--json")
 	assert.NilError(t, err)
 
-	var report chunkd.ConflictReport
+	var report smeltd.ConflictReport
 	assert.NilError(t, json.Unmarshal([]byte(out), &report))
 	assert.Check(t, !report.Known, "an unreachable daemon is not a known project")
 	assert.Assert(t, report.Conflict != nil, "the reason must survive as a report, not an error object")
@@ -183,7 +183,7 @@ func TestConflictsJSONModeReportsTheDaemonsAnswer(t *testing.T) {
 	out, _, err := runConflictsCmd(t, t.TempDir(), "--json")
 	assert.NilError(t, err)
 
-	var report chunkd.ConflictReport
+	var report smeltd.ConflictReport
 	assert.NilError(t, json.Unmarshal([]byte(out), &report))
 	assert.Check(t, report.Known)
 	assert.Assert(t, report.Conflict != nil)
@@ -245,7 +245,7 @@ func stalledDaemon(t *testing.T) {
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	t.Setenv("SMELT_DAEMON_DIR", dir)
 
 	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
 	assert.NilError(t, err)
@@ -266,7 +266,7 @@ func stalledDaemon(t *testing.T) {
 
 func TestConflictsManualModeDoesNotBlameAMissingDaemonForASlowOne(t *testing.T) {
 	// What the reader is told has to match what happened. A daemon that is up
-	// but busy was being reported with "Run `chunk watch` to start it", sending
+	// but busy was being reported with "Run `smelt watch` to start it", sending
 	// someone to start a daemon they already have.
 	stalledDaemon(t)
 
@@ -291,8 +291,8 @@ func TestConflictsHookModeStaysQuietWhenTheDaemonStalls(t *testing.T) {
 // pendingReport is what the daemon serves for the first firstConflictDelay
 // after it starts: the project is tracked, no check has completed. Known with a
 // nil Conflict is the shape, and every mode has to survive it.
-func pendingReport() chunkd.ConflictReport {
-	return chunkd.ConflictReport{Root: "/repo", Known: true}
+func pendingReport() smeltd.ConflictReport {
+	return smeltd.ConflictReport{Root: "/repo", Known: true}
 }
 
 func TestConflictsHookModeIsQuietBeforeTheFirstCheck(t *testing.T) {
@@ -327,7 +327,7 @@ func TestConflictsJSONModeKeepsOneShapeBeforeTheFirstCheck(t *testing.T) {
 	out, _, err := runConflictsCmd(t, t.TempDir(), "--json")
 	assert.NilError(t, err)
 
-	var report chunkd.ConflictReport
+	var report smeltd.ConflictReport
 	assert.NilError(t, json.Unmarshal([]byte(out), &report))
 	assert.Check(t, report.Known)
 	assert.Check(t, cmp.Nil(report.Conflict))

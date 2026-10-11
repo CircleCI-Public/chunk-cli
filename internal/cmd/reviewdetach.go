@@ -14,13 +14,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // detachRequest carries what a detached review needs from the review command.
@@ -32,7 +33,7 @@ type detachRequest struct {
 	orgID       string
 	image       string
 	destroyPool bool
-	chunkBinary string // Linux chunk build to upload; empty to install the latest release
+	smeltBinary string // Linux smelt build to upload; empty to install the latest release
 	circleToken string
 	tokenSource string // where circleToken came from, for auth errors
 	parallelism int
@@ -50,7 +51,7 @@ type detachFlags struct {
 	orgID       string
 	image       string
 	destroyPool bool
-	chunkBinary string
+	smeltBinary string
 	rc          config.ResolvedConfig
 	cred        review.Credential
 	parallelism int
@@ -69,7 +70,7 @@ func newDetachRequest(args []string, f detachFlags) detachRequest {
 		orgID:       f.orgID,
 		image:       f.image,
 		destroyPool: f.destroyPool,
-		chunkBinary: f.chunkBinary,
+		smeltBinary: f.smeltBinary,
 		circleToken: f.rc.CircleCIToken,
 		tokenSource: f.rc.CircleCITokenSource,
 		parallelism: f.parallelism,
@@ -91,7 +92,7 @@ type detachedRun struct {
 }
 
 // runReviewDetached hands the whole review to a primary sidecar and returns once
-// it has started, so the laptop can close. The primary runs chunk review itself,
+// it has started, so the laptop can close. The primary runs smelt review itself,
 // with its own pool of reviewer sidecars, and leaves the report in a run
 // directory on its home.
 func runReviewDetached(ctx context.Context, req detachRequest) error {
@@ -142,10 +143,10 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 		DestroyPool: req.destroyPool,
 		Install:     review.InstallRelease,
 	}
-	if req.chunkBinary != "" {
-		statusFn(iostream.LevelStep, "Uploading chunk to the primary sidecar...")
-		if err := uploadBinary(ctx, req.client, entry.ID, req.chunkBinary, req.streams); err != nil {
-			return &userError{msg: "Could not upload chunk to the primary sidecar.", err: err}
+	if req.smeltBinary != "" {
+		statusFn(iostream.LevelStep, "Uploading smelt to the primary sidecar...")
+		if err := uploadBinary(ctx, req.client, entry.ID, req.smeltBinary, req.streams); err != nil {
+			return &userError{msg: "Could not upload smelt to the primary sidecar.", err: err}
 		}
 		spec.Install = ""
 	}
@@ -166,22 +167,22 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 	}
 	if res.ExitCode == review.ExitBadBinary {
 		return &userError{
-			msg:        "The chunk on the primary sidecar cannot run.",
-			suggestion: "It must be a Linux build for the sidecar's architecture: GOOS=linux GOARCH=amd64 go build -o dist/chunk-linux . && chunk review --detach --chunk-binary dist/chunk-linux",
+			msg:        "The smelt on the primary sidecar cannot run.",
+			suggestion: "It must be a Linux build for the sidecar's architecture: GOOS=linux GOARCH=amd64 go build -o dist/smelt-linux . && smelt review --detach --smelt-binary dist/smelt-linux",
 			hideDetail: true,
 		}
 	}
 	if res.ExitCode == review.ExitNoReview {
 		return &userError{
-			msg:        "The chunk installed on the primary sidecar has no review command.",
-			suggestion: "The latest release predates it. Build for Linux and pass it: GOOS=linux GOARCH=amd64 go build -o dist/chunk-linux . && chunk review --detach --chunk-binary dist/chunk-linux",
+			msg:        "The smelt installed on the primary sidecar has no review command.",
+			suggestion: "The latest release predates it. Build for Linux and pass it: GOOS=linux GOARCH=amd64 go build -o dist/smelt-linux . && smelt review --detach --smelt-binary dist/smelt-linux",
 			hideDetail: true,
 		}
 	}
 	if res.ExitCode != 0 {
 		return &userError{
 			msg:        "Starting the review on the primary sidecar failed.",
-			suggestion: "Pass --chunk-binary with a Linux build if the release download is blocked.",
+			suggestion: "Pass --smelt-binary with a Linux build if the release download is blocked.",
 			err:        fmt.Errorf("exit %d: %s", res.ExitCode, strings.TrimSpace(stderr.String())),
 		}
 	}
@@ -201,7 +202,7 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 	}
 	req.streams.Printf("Review started on sidecar %s.\n\n", entry.ID)
 	req.streams.Printf("It keeps running if you close this terminal. To read it later:\n")
-	req.streams.Printf("  chunk review results\n")
+	req.streams.Printf("  smelt review results\n")
 	return nil
 }
 
@@ -233,7 +234,7 @@ func relativePromptsDir(workDir, dir string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// uploadBinary streams a gzipped chunk build to $HOME/chunk on the sidecar.
+// uploadBinary streams a gzipped smelt build to $HOME/smelt on the sidecar.
 func uploadBinary(ctx context.Context, client *circleci.Client, sidecarID, path string, streams iostream.Streams) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -256,7 +257,7 @@ func uploadBinary(ctx context.Context, client *circleci.Client, sidecarID, path 
 }
 
 // detachedState is what a detached review leaves in the project so that
-// 'chunk review results' can find it again without any arguments.
+// 'smelt review results' can find it again without any arguments.
 type detachedState struct {
 	SidecarID string    `json:"sidecar_id"`
 	RunDir    string    `json:"run_dir"`
@@ -264,7 +265,7 @@ type detachedState struct {
 }
 
 func detachedStatePath(workDir string) string {
-	return filepath.Join(workDir, ".chunk", "review-run.json")
+	return filepath.Join(workDir, brand.ProjectDir, "review-run.json")
 }
 
 func saveDetachedState(workDir string, st detachedState) error {
@@ -315,7 +316,7 @@ func newReviewResultsCmd() *cobra.Command {
 			if err != nil {
 				return &userError{
 					msg:        "No detached review found in this project.",
-					suggestion: "Start one with: chunk review --detach",
+					suggestion: "Start one with: smelt review --detach",
 					hideDetail: true,
 					err:        err,
 				}
@@ -371,7 +372,7 @@ func checkNoActiveRun(ctx context.Context, client *circleci.Client, workDir stri
 	return &userError{
 		msg: fmt.Sprintf("A detached review is still running on sidecar %s (started %s ago).",
 			st.SidecarID, time.Since(st.StartedAt).Round(time.Second)),
-		suggestion: "Read it with 'chunk review results', or wait for it to finish before starting another.",
+		suggestion: "Read it with 'smelt review results', or wait for it to finish before starting another.",
 		hideDetail: true,
 	}
 }
@@ -381,7 +382,7 @@ func printDetachedResults(ctx context.Context, client *circleci.Client, streams 
 	if err != nil {
 		return &userError{
 			msg:        fmt.Sprintf("Could not reach the primary sidecar %s.", st.SidecarID),
-			suggestion: "It may have expired. Run 'chunk review --detach' to start again.",
+			suggestion: "It may have expired. Run 'smelt review --detach' to start again.",
 			err:        err,
 		}
 	}
@@ -398,13 +399,13 @@ func printDetachedResults(ctx context.Context, client *circleci.Client, streams 
 	case review.RunMissing:
 		return &userError{
 			msg:        "The primary sidecar no longer has this review.",
-			suggestion: "Run 'chunk review --detach' to start again.",
+			suggestion: "Run 'smelt review --detach' to start again.",
 			hideDetail: true,
 		}
 	case review.RunDied:
 		return &userError{
 			msg:        "The review on the primary sidecar stopped before it finished.",
-			suggestion: "Its process is gone and it left no exit code, so the sidecar may have restarted. Run 'chunk review --detach' to start again." + logSuffix(status.Body),
+			suggestion: "Its process is gone and it left no exit code, so the sidecar may have restarted. Run 'smelt review --detach' to start again." + logSuffix(status.Body),
 			hideDetail: true,
 		}
 	case review.RunRunning:
@@ -444,7 +445,7 @@ func printDetachedResults(ctx context.Context, client *circleci.Client, streams 
 	return detachedFailure(report, status)
 }
 
-// detachedFailure turns a finished run into the error the local 'chunk review'
+// detachedFailure turns a finished run into the error the local 'smelt review'
 // would have returned: failed reviews, or a run that exited nonzero even though
 // its report shows no failures, such as a pass that stopped early.
 func detachedFailure(report reviewReport, status review.RunStatus) error {

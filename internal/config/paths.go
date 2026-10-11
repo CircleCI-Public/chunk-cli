@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
-const appName = "chunk"
+const appName = brand.AppDir
 
 // AppState returns XDG_STATE_HOME or ~/.local/state.
 func AppState() (string, error) {
@@ -19,7 +21,7 @@ func AppState() (string, error) {
 	return filepath.Join(sh, appName), nil
 }
 
-// Dir returns the chunk config directory, respecting XDG_CONFIG_HOME.
+// Dir returns the smelt config directory, respecting XDG_CONFIG_HOME.
 func Dir() (string, error) {
 	ch, err := configHome()
 	if err != nil {
@@ -37,7 +39,7 @@ func Path() (string, error) {
 	return filepath.Join(d, "config.json"), nil
 }
 
-// AppData returns the chunk data directory, respecting XDG_DATA_HOME.
+// AppData returns the smelt data directory, respecting XDG_DATA_HOME.
 func AppData() (string, error) {
 	dh, err := dataHome()
 	if err != nil {

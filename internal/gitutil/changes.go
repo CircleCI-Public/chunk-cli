@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
+	"github.com/smeltdev/smelt/internal/changeset"
 )
 
 // maxCountBytes caps the total untracked content read to count lines. Untracked
@@ -157,15 +157,15 @@ func countLines(path string, remaining int64) (int, int64, error) {
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
-			chunk := buf[:n]
+			piece := buf[:n]
 			if first {
 				first = false
-				if bytes.IndexByte(chunk, 0) >= 0 {
+				if bytes.IndexByte(piece, 0) >= 0 {
 					return 0, read + int64(n), nil
 				}
 			}
-			lines += bytes.Count(chunk, []byte{'\n'})
-			lastByte = chunk[len(chunk)-1]
+			lines += bytes.Count(piece, []byte{'\n'})
+			lastByte = piece[len(piece)-1]
 			read += int64(n)
 		}
 		if err != nil {

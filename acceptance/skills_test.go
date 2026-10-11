@@ -8,8 +8,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
 )
 
 func TestSkillsInstall(t *testing.T) {
@@ -28,7 +28,7 @@ func TestSkillsInstall(t *testing.T) {
 	assert.Assert(t, strings.Contains(combined, "claude:"),
 		"expected per-agent output for claude, got: %s", combined)
 
-	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+	for _, name := range []string{"smelt-review", "smelt-testing-gaps", "smelt-sidecar", "debug-ci-failures"} {
 		skillFile := filepath.Join(claudeDir, "skills", name, "SKILL.md")
 		info, err := os.Stat(skillFile)
 		assert.NilError(t, err, "expected skill %s to exist", name)
@@ -80,14 +80,14 @@ func TestSkillsList(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "chunk-review"),
-		"expected 'chunk-review' in output, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "chunk-testing-gaps"),
-		"expected 'chunk-testing-gaps' in output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "smelt-review"),
+		"expected 'smelt-review' in output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "smelt-testing-gaps"),
+		"expected 'smelt-testing-gaps' in output, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "debug-ci-failures"),
 		"expected 'debug-ci-failures' in output, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "chunk-sidecar"),
-		"expected 'chunk-sidecar' in output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "smelt-sidecar"),
+		"expected 'smelt-sidecar' in output, got: %s", combined)
 	// Should show per-agent status.
 	assert.Assert(t, strings.Contains(combined, "claude:"),
 		"expected per-agent status for claude, got: %s", combined)
@@ -121,7 +121,7 @@ func TestSkillsInstallCodexPath(t *testing.T) {
 	assert.Assert(t, strings.Contains(combined, "claude: skipped"),
 		"expected claude skipped, got: %s", combined)
 
-	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+	for _, name := range []string{"smelt-review", "smelt-testing-gaps", "smelt-sidecar", "debug-ci-failures"} {
 		skillFile := filepath.Join(codexDir, "skills", name, "SKILL.md")
 		info, err := os.Stat(skillFile)
 		assert.NilError(t, err, "expected skill %s to exist under .agents", name)
@@ -151,7 +151,7 @@ func TestSkillsInstallBothAgents(t *testing.T) {
 
 	// Verify files exist under both agent dirs.
 	for _, dir := range []string{claudeDir, codexDir} {
-		for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+		for _, name := range []string{"smelt-review", "smelt-testing-gaps", "smelt-sidecar", "debug-ci-failures"} {
 			skillFile := filepath.Join(dir, "skills", name, "SKILL.md")
 			_, err := os.Stat(skillFile)
 			assert.NilError(t, err, "expected skill %s under %s", name, dir)
@@ -169,7 +169,7 @@ func TestSkillsInstallOutdatedUpdate(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "first install failed: %s", result.Stderr)
 
 	// Tamper with one skill file to make it outdated.
-	tampered := filepath.Join(claudeDir, "skills", "chunk-review", "SKILL.md")
+	tampered := filepath.Join(claudeDir, "skills", "smelt-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(tampered, []byte("tampered content"), 0o644))
 
 	// Re-run install: should detect outdated and update.
@@ -179,8 +179,8 @@ func TestSkillsInstallOutdatedUpdate(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "updated"),
 		"expected 'updated' message for tampered skill, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "chunk-review"),
-		"expected chunk-review in update output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "smelt-review"),
+		"expected smelt-review in update output, got: %s", combined)
 
 	// Verify file content is restored (no longer tampered).
 	restored, err := os.ReadFile(tampered)
@@ -248,7 +248,7 @@ func TestSkillsListStateLabels(t *testing.T) {
 		"expected 'current' state after install, got: %s", combined)
 
 	// Tamper one skill to create "outdated" state.
-	tampered := filepath.Join(claudeDir, "skills", "chunk-review", "SKILL.md")
+	tampered := filepath.Join(claudeDir, "skills", "smelt-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(tampered, []byte("tampered"), 0o644))
 
 	result = binary.RunCLI(t, []string{"skill", "list", "--user"}, env, env.HomeDir)
@@ -268,7 +268,7 @@ func TestSkillsListMixedStates(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "install failed: %s", result.Stderr)
 
 	// Tamper one skill to make it outdated.
-	tampered := filepath.Join(claudeDir, "skills", "chunk-review", "SKILL.md")
+	tampered := filepath.Join(claudeDir, "skills", "smelt-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(tampered, []byte("tampered"), 0o644))
 
 	// Delete another skill entirely to make it missing.
@@ -296,7 +296,7 @@ func TestSkillsInstallDefaultScopeIsProject(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+	for _, name := range []string{"smelt-review", "smelt-testing-gaps", "smelt-sidecar", "debug-ci-failures"} {
 		skillFile := filepath.Join(projectDir, ".claude", "skills", name, "SKILL.md")
 		info, err := os.Stat(skillFile)
 		assert.NilError(t, err, "expected default-scope skill %s to exist at %s", name, skillFile)
@@ -322,7 +322,7 @@ func TestSkillsInstallProjectScope(t *testing.T) {
 		"expected per-agent output for claude, got: %s", combined)
 
 	// Skills should be installed into the project dir, not the home dir.
-	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+	for _, name := range []string{"smelt-review", "smelt-testing-gaps", "smelt-sidecar", "debug-ci-failures"} {
 		skillFile := filepath.Join(projectDir, ".claude", "skills", name, "SKILL.md")
 		info, err := os.Stat(skillFile)
 		assert.NilError(t, err, "expected project-scope skill %s to exist at %s", name, skillFile)
@@ -364,7 +364,7 @@ func TestSkillsInstallProjectScopeNotIsolatedFromUserScope(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "project-scope install failed: %s", result.Stderr)
 
 	// Both locations should have skills.
-	for _, name := range []string{"chunk-review", "chunk-testing-gaps"} {
+	for _, name := range []string{"smelt-review", "smelt-testing-gaps"} {
 		userFile := filepath.Join(claudeDir, "skills", name, "SKILL.md")
 		projectFile := filepath.Join(projectDir, ".claude", "skills", name, "SKILL.md")
 		_, err := os.Stat(userFile)
@@ -411,7 +411,7 @@ func TestSkillsInstallMutuallyExclusiveFlags(t *testing.T) {
 		"expected 'mutually exclusive' error, got: %s", combined)
 }
 
-// TestSkillsListNoFlagsDefaultsToProjectScope verifies that "chunk skill list" with no
+// TestSkillsListNoFlagsDefaultsToProjectScope verifies that "smelt skill list" with no
 // flags resolves to project scope (i.e. uses the working directory, not the user home).
 // A regression in resolveScope for the list subcommand would cause it to use user scope,
 // which would show "n/a" for agents whose config dirs do not exist in the home dir,

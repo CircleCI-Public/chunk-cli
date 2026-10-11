@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -129,7 +129,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long: "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\n" +
+		Long: "Set a config value. Use 'smelt auth set <provider>' to store credentials with validation.\n\n" +
 			"User keys: model, useSSHIdentityFile, telemetry, notifications, autoLaunchDaemon\n" +
 			"Project keys: orgID, validation.sidecarImage, asyncValidate, asyncValidateMaxLines,\n" +
 			"asyncValidateWorktree, asyncValidateInert, asyncValidateBlocking\n\n" +

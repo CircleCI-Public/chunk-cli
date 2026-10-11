@@ -12,9 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/session"
 )
 
 var activeReplacementMu sync.Mutex
@@ -163,7 +163,7 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 		return err
 	}
 	pruneRekeyedState(dir, path, a.SidecarIDs)
-	// Write a breadcrumb so chunk watch can discover this project.
+	// Write a breadcrumb so smelt watch can discover this project.
 	_ = RegisterProjectRoot(dir, root)
 	return nil
 }
@@ -201,7 +201,7 @@ func pruneRekeyedState(dir, keep string, sidecarIDs []string) {
 }
 
 // projectRootFile names the breadcrumb that maps a project data directory back
-// to the project it holds state for. It is the only way the chunk daemon
+// to the project it holds state for. It is the only way the smelt daemon
 // discovers projects, so a data directory without one is invisible to it
 // however much it holds.
 const projectRootFile = "project-root"
@@ -216,7 +216,7 @@ func ProjectRootPath(dataDir string) string {
 }
 
 // RegisterProjectRoot writes the breadcrumb that makes root discoverable by
-// AllProjectRoots, and so by the chunk daemon and its dashboard. dataDir must be
+// AllProjectRoots, and so by the smelt daemon and its dashboard. dataDir must be
 // the data directory for root, since the daemon derives one from the other.
 //
 // Every write of project state should call this, not just sidecar state: a
@@ -225,7 +225,7 @@ func ProjectRootPath(dataDir string) string {
 //
 // The root is canonicalised before it is written, because the callers disagree
 // about how to spell one: a validate run passes the working directory it was
-// given, while chunk watch passes git's top-level, which on macOS comes back
+// given, while smelt watch passes git's top-level, which on macOS comes back
 // through /private. Both hash to the same data directory, so the breadcrumb
 // would flip between spellings as each wrote it, and a reader that keys on the
 // string sees one project as two sharing a single log.
@@ -239,7 +239,7 @@ func RegisterProjectRoot(dataDir, root string) error {
 	return os.WriteFile(ProjectRootPath(dataDir), []byte(config.CanonicalProjectRoot(root)), 0o644)
 }
 
-// AllProjectRoots returns the roots of all projects chunk has recorded state
+// AllProjectRoots returns the roots of all projects smelt has recorded state
 // for, by reading the breadcrumb files written by RegisterProjectRoot. Roots are
 // canonicalised and de-duplicated on the way out, so breadcrumbs written before
 // RegisterProjectRoot canonicalised them cannot list one project twice.

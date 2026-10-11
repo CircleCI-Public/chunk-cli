@@ -1,11 +1,11 @@
 # CLI Command Tree
 
-Complete command reference for the `chunk` CLI.
+Complete command reference for the `smelt` CLI.
 
 ## Command Tree
 
 ```
-chunk
+smelt
 ├── auth
 │   ├── login                       # Log in to CircleCI via browser (recommended)
 │   │   --no-browser                # Print the login URL instead of opening a browser
@@ -26,7 +26,7 @@ chunk
 │   --repos <items>                 # Comma-separated repo names
 │   --top <n>                       # Top reviewers to include (default: 5)
 │   --since <YYYY-MM-DD>            # Start date (default: 3 months ago)
-│   --output <path>                 # Output path (default: .chunk/context/review-prompt.md)
+│   --output <path>                 # Output path (default: .smelt/context/review-prompt.md)
 │   --max-comments <n>              # Max comments per reviewer (0 = no limit)
 │   --analyze-model <model>         # Model for analysis step
 │   --prompt-model <model>          # Model for prompt generation step
@@ -46,9 +46,9 @@ chunk
 │   --skip-skills                   # Skip agent skill installation
 │   --skip-auth                     # Skip the Claude login check
 │   --skip-factory                  # Skip the factory backend step
-│   --factory-backend <name>        # docker (default) or circleci; skips the prompt. Asked first: the circleci path alone detects the org ID, installs the chunk-sidecar skills and offers test-suites.yml
+│   --factory-backend <name>        # docker (default) or circleci; skips the prompt. Asked first: the circleci path alone detects the org ID, installs the smelt-sidecar skills and offers test-suites.yml
 │   --factory-image <image>         # Docker image for factory runs (user-managed, never auto-built); skips the prompt
-│   --skip-image-build              # Write Dockerfile.chunk for docker runs but don't offer to build the image
+│   --skip-image-build              # Write Dockerfile.smelt for docker runs but don't offer to build the image
 │   --factory-author "Name <email>" # Who factory commits are attributed to (default: your git identity)
 │   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (circleci backend only; default: true; pass =false to generate)
 │   --project-dir <path>            # Project directory (defaults to cwd)
@@ -61,7 +61,7 @@ chunk
 │   │   --new-branch                # Create a new branch
 │   │   --no-pipeline-as-tool       # Disable pipeline-as-tool mode
 │   │   --json                      # Output as JSON
-│   └── config                      # Set up .chunk/run.json for this repository
+│   └── config                      # Set up .smelt/run.json for this repository
 │       --force                     # Overwrite existing configuration without confirmation
 │
 ├── skill
@@ -93,7 +93,7 @@ chunk
 │   --project <path>                # Override project directory
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
-│   --async                         # Run in the background via the chunk daemon; results are read later
+│   --async                         # Run in the background via the smelt daemon; results are read later
 │   │
 │   ├── results                     # Print results of finished background runs, then forget them
 │   │   --project <path>            # Override project directory
@@ -139,7 +139,7 @@ chunk
 │   │   --checkout                  # Sync via git checkout/patch instead of bundle (requires branch pushed to GitHub)
 │   ├── env                         # Detect tech stack and print environment spec as JSON
 │   │   --dir <path>                # Directory to analyse (default: .)
-│   │   --no-save                   # Print only, do not save to .chunk/config.json
+│   │   --no-save                   # Print only, do not save to .smelt/config.json
 │   ├── build                       # Generate Dockerfile and build test image from env spec
 │   │   --dir <path>                # Directory to write Dockerfile.test and build from
 │   │   --tag <tag>                 # Image tag (e.g. myapp:latest)
@@ -169,7 +169,7 @@ chunk
 │       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 3)
 │       --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
 │       --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
-│       --reviews <dir>             # Directory of review prompts (default: .chunk/reviews)
+│       --reviews <dir>             # Directory of review prompts (default: .smelt/reviews)
 │       --no-validate               # Skip the project's validation commands
 │       --keep-sidecars             # Leave the sidecars running when the run ends
 │       --push                     # Push the run's branch when it ends, without asking
@@ -184,7 +184,7 @@ chunk
 │       --model <name>              # Claude model (default: Claude Code's default)
 │       --implement-timeout <duration> # Max time for each implementer turn
 │       --review-timeout <duration> # Max time for each review
-│       --log                       # Keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log
+│       --log                       # Keep a log of the run's full context in ~/.smelt/factory/run-<start time>.log
 │       --log-file <path>           # Keep the log in this file instead (implies --log)
 │       --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │       --json                      # Output as JSON
@@ -198,7 +198,7 @@ chunk
 │   │   --unset                     # Remove factory.author, so each person commits as themselves
 │   └── image                       # Build the Docker image factory runs execute in (factory.dockerfile)
 │       --rebuild                   # Build even when the image exists, without the layer cache
-│       --regenerate                # Render Dockerfile.chunk again, show the diff, confirm before writing
+│       --regenerate                # Render Dockerfile.smelt again, show the diff, confirm before writing
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
@@ -208,10 +208,10 @@ chunk
 │   --hook                          # Emit Claude Code hook JSON so the notice reaches the agent
 │   --json                          # Print the raw conflict report as JSON
 │
-├── hook                            # Manage chunk hook execution
+├── hook                            # Manage smelt hook execution
 │   --project <path>                # Override project directory
-│   ├── disable                     # Disable chunk validate hooks
-│   ├── enable                      # Re-enable chunk validate hooks
+│   ├── disable                     # Disable smelt validate hooks
+│   ├── enable                      # Re-enable smelt validate hooks
 │   └── status                      # Show whether hooks are enabled or disabled
 │
 ├── completion
@@ -223,12 +223,12 @@ chunk
 
 ## Behavior Decisions
 
-- `auth login` and `auth signup` both use OAuth and store the resulting token in the system keychain (or `~/.config/chunk/config.json` with `--insecure-storage`). They differ only in which page the browser opens: login for existing accounts, signup for new ones. Use `--no-browser` to print the URL instead of opening it automatically.
-- `auth signup` fails with a user-friendly error if a CircleCI token is already stored; run `chunk auth remove circleci` first to clear it. Existing accounts should use `chunk auth login`.
-- After a successful `auth signup`, chunk checks whether the new account belongs to any organization. If it belongs to none, chunk prompts for a name and creates a standalone org, so the first sidecar command does not fail on having none. Without a terminal it prints a warning pointing at `chunk org create <name>` instead; the signup itself still succeeds.
-- Commands that resolve an org (sidecar, validate, init, mutate, prune) offer the same org creation prompt when the account has no organizations. Without a terminal, or with `CI` set, sidecar, validate, mutate and prune fail with a suggestion to run `chunk org create <name>` or pass `--org-id`; `init` prints a warning and finishes without writing an org ID.
-- `init` ends with a Claude credential step: it reports the credential in use, or (interactively) offers to run `claude setup-token` and store the token in the keychain. Without a terminal, with `CI` set, or with `--insecure-storage` it only prints a hint. It also runs when `.chunk/config.json` already exists. A failed or declined login is never fatal. The token is never written to `.chunk/config.json`.
-- `auth refresh` / `refresh` always replace the stored token without a confirmation, warn when `CLAUDE_CODE_OAUTH_TOKEN` or an API key overrides it, and restart a running chunk daemon. `auth set anthropic-oauth` and `auth remove anthropic-oauth` restart it too.
+- `auth login` and `auth signup` both use OAuth and store the resulting token in the system keychain (or `~/.config/smelt/config.json` with `--insecure-storage`). They differ only in which page the browser opens: login for existing accounts, signup for new ones. Use `--no-browser` to print the URL instead of opening it automatically.
+- `auth signup` fails with a user-friendly error if a CircleCI token is already stored; run `smelt auth remove circleci` first to clear it. Existing accounts should use `smelt auth login`.
+- After a successful `auth signup`, smelt checks whether the new account belongs to any organization. If it belongs to none, smelt prompts for a name and creates a standalone org, so the first sidecar command does not fail on having none. Without a terminal it prints a warning pointing at `smelt org create <name>` instead; the signup itself still succeeds.
+- Commands that resolve an org (sidecar, validate, init, mutate, prune) offer the same org creation prompt when the account has no organizations. Without a terminal, or with `CI` set, sidecar, validate, mutate and prune fail with a suggestion to run `smelt org create <name>` or pass `--org-id`; `init` prints a warning and finishes without writing an org ID.
+- `init` ends with a Claude credential step: it reports the credential in use, or (interactively) offers to run `claude setup-token` and store the token in the keychain. Without a terminal, with `CI` set, or with `--insecure-storage` it only prints a hint. It also runs when `.smelt/config.json` already exists. A failed or declined login is never fatal. The token is never written to `.smelt/config.json`.
+- `auth refresh` / `refresh` always replace the stored token without a confirmation, warn when `CLAUDE_CODE_OAUTH_TOKEN` or an API key overrides it, and restart a running smelt daemon. `auth set anthropic-oauth` and `auth remove anthropic-oauth` restart it too.
 - `org create` is hidden from the default help output. It requires CircleCI authentication and creates a standalone org (not tied to a VCS provider), printing the org name, ID, and slug on success.
 - `build-prompt` auto-detects org and repos from the git remote when flags
   are omitted. If `--org` is provided explicitly, `--repos` is required.
@@ -237,36 +237,36 @@ chunk
 - `build-prompt` does not write intermediate files by default. Pass `--debug` to write the raw details JSON, analysis markdown, and PR rankings CSV alongside the prompt — useful when diagnosing unexpected prompt output.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
-- `config set` user keys: `model`, `telemetry`, `notifications`. Project keys (`.chunk/config.json`):
-  `orgID`, `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
-- **CircleCI is opt-in, and a CircleCI token is not consent.** chunk contacts
+- `config set` user keys: `model`, `telemetry`, `notifications`. Project keys (`.smelt/config.json`):
+  `orgID`, `validation.sidecarImage`. Credentials use `smelt auth set`, not `config set`.
+- **CircleCI is opt-in, and a CircleCI token is not consent.** smelt contacts
   CircleCI only for a project with `"factory": {"backend": "circleci"}` in
-  `.chunk/config.json` (or a request that names `--backend circleci`), and for
+  `.smelt/config.json` (or a request that names `--backend circleci`), and for
   the explicitly CircleCI commands: `auth`, `sidecar`, `task`, `org`, `prune`,
   `build-prompt`'s CircleCI parts, `review`, `mutate`. An empty backend means
   `docker`. Having `CIRCLE_TOKEN`, a keychain entry or an `orgID` in the config
   never causes traffic by itself.
 - Without the circleci backend, every validation command runs in the local
-  working tree, `remote: true` is ignored, and `chunk validate`, the git
+  working tree, `remote: true` is ignored, and `smelt validate`, the git
   pre-commit hook, the agent hooks and the daemon's background validation never
   create, sync to or exec on a CircleCI sidecar. A dim note ("running lint
   locally; remote validation needs the circleci backend") is printed once per
   run for commands marked remote. `validate --remote`, `validate variants` and
   `--mark-remote` are the exceptions: `--remote` and `variants` fail with an
   error explaining the opt-in rather than silently falling back, and
-  `--mark-remote` (like `chunk sidecar setup`) opts the project in by setting
+  `--mark-remote` (like `smelt sidecar setup`) opts the project in by setting
   `factory.backend` to `circleci`.
 - On the circleci backend, validation commands run remotely by default. Set
   `local: true` on a command to run it in the local working tree. `remote: true`
   remains an explicit, backwards-compatible annotation; setting both fields is
   invalid.
 - `validate --mark-remote` sets `remote: true` and clears `local: true` on commands
-  in `.chunk/config.json`, then exits. With a `[name]` it marks that one command;
+  in `.smelt/config.json`, then exits. With a `[name]` it marks that one command;
   without it every configured command **except `role: autofix`** ones, which it
   names as skipped — a formatter that runs on the sidecar rewrites files there and
   the edits never reach the local working tree. Naming an autofix command marks it
   anyway, for the caller who means it. Commands already marked are reported as no
-  change. `chunk sidecar setup` marks install and gate commands automatically, so
+  change. `smelt sidecar setup` marks install and gate commands automatically, so
   `--mark-remote` is for the rest: a sidecar set up by hand, or a command whose
   role does not qualify. Unmarking is still a hand edit of the config.
 - On the circleci backend, command placement is independent of `validation.sidecarImage`: explicit local
@@ -289,7 +289,7 @@ chunk
   Recreating a sidecar costs a full initial sync, so shrinking on every small
   run would make the common case pay for the parallel one.
 - **Snapshot selection.** When a sidecar has to be created and no
-  `validation.sidecarImage` is recorded (project-level or per-command), `chunk`
+  `validation.sidecarImage` is recorded (project-level or per-command), `smelt`
   picks one of the org's snapshots instead of booting the bare default image.
   A snapshot matches on its name and tag, split into tokens: the repo name
   (from the git remote, then `vcs.repo`, then the directory name) outranks the
@@ -300,34 +300,34 @@ chunk
   repo's own. Selection never fails a run: an unreachable snapshot API is
   warned about and treated as no match.
 - **`upgrade` follows this fork's releases.** It reads the latest release of
-  `web3technologies/chunk-cli` (the one place the repository is named is
-  `internal/upgrade`), downloads `chunk_<Os>_<arch>.tar.gz` and verifies it
+  `smeltdev/smelt` (the one place the repository is named is
+  `internal/upgrade`), downloads `smelt_<Os>_<arch>.tar.gz` and verifies it
   against that release's `checksums.txt` before replacing the binary; a missing
   or mismatched checksum aborts with the installed binary untouched. It refuses
   on a source build (`version` is `dev`, or the binary is a symlink as
   `task dev-install` makes) and says to `git pull && task build`, and on a
   Homebrew-managed binary (that is CircleCI's build) and points at the install
-  script. Stop the daemon afterwards. The update notice and `chunk watch`'s
+  script. Stop the daemon afterwards. The update notice and `smelt watch`'s
   footer use the same source and are silent for `dev` builds.
 - Telemetry is opt-out, and off unless the binary was built with a Segment
   write key (`-X .../internal/telemetry.WriteKey=...`; release builds set it
-  only if the `CHUNK_TELEMETRY_WRITE_KEY` secret exists). Without a key nothing
-  is created or sent whatever the preference says, and `chunk config show` says
+  only if the `SMELT_TELEMETRY_WRITE_KEY` secret exists). Without a key nothing
+  is created or sent whatever the preference says, and `smelt config show` says
   so. When a key is present: events are anonymous until you authenticate with
   CircleCI; after that they include your CircleCI user ID, and earlier
   anonymous events from the same install are linked to it. They never include
   flag values, argument values, names or email addresses. It's disabled by the
-  `CHUNK_NO_TELEMETRY` / `NO_ANALYTICS` / `DO_NOT_TRACK` / `CI` environment
-  variables (first match wins, in that order), or `chunk config set telemetry false`.
+  `SMELT_NO_TELEMETRY` / `NO_ANALYTICS` / `DO_NOT_TRACK` / `CI` environment
+  variables (first match wins, in that order), or `smelt config set telemetry false`.
 - **Org ID resolution** for `sidecar create`, `sidecar list`, and other sidecar
   subcommands that need an org (in order): `--org-id` flag → `CIRCLECI_ORG_ID`
-  env var → `orgID` in `.chunk/config.json` → interactive org picker (TTY only).
+  env var → `orgID` in `.smelt/config.json` → interactive org picker (TTY only).
   Non-interactive sessions (agents, CI) should set `orgID` in project config or
   pass `--org-id` / `CIRCLECI_ORG_ID`.
 - **`conflicts` is advisory and always exits 0.** It reports what the watch
   daemon already computed and never previews a merge itself, so it returns
   immediately. It is deliberately incapable of failing: it runs from the same
-  commit hook group as `chunk validate`, whose non-zero exit blocks a commit,
+  commit hook group as `smelt validate`, whose non-zero exit blocks a commit,
   and a merge conflict with the default branch is information rather than a
   reason to stop. With no daemon running, `--hook` prints nothing at all —
   the daemon is optional, and announcing its absence on every commit would be
@@ -359,65 +359,65 @@ chunk
   history only** — uncommitted work in the tree is invisible to it. A detached
   HEAD, a repo with no recorded default branch, and a branch that is itself the
   merge target all produce "no answer" rather than a clean bill of health.
-- **`watch` can show a remote daemon.** With `CHUNK_DAEMON_REMOTE_ADDR` and
-  `CHUNK_DAEMON_TCP_TOKEN` set, `watch` reads the daemon at that TCP address instead
+- **`watch` can show a remote daemon.** With `SMELT_DAEMON_REMOTE_ADDR` and
+  `SMELT_DAEMON_TCP_TOKEN` set, `watch` reads the daemon at that TCP address instead
   of the local socket, and never starts a local daemon. The header names the
   daemon (`local` or `remote host:port`) and turns red with `unreachable` when the
-  last poll failed; a rejected token says so and names `CHUNK_DAEMON_TCP_TOKEN`.
+  last poll failed; a rejected token says so and names `SMELT_DAEMON_TCP_TOKEN`.
   The local machine's working directory and project registry describe different
   repos than the daemon's, so they are not used: the default is every project the
   daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
   host**, sent as typed. `--focus` with no path is an error in this mode.
-- **`factory build` takes defaults from the `factory` section of `.chunk/config.json`.**
-  `{"factory": {"backend": "docker", "image": "chunk-sandbox:local", "maxAttempts": 5, "log": true}}`.
+- **`factory build` takes defaults from the `factory` section of `.smelt/config.json`.**
+  `{"factory": {"backend": "docker", "image": "smelt-sandbox:local", "maxAttempts": 5, "log": true}}`.
   Precedence, highest first: an explicitly set flag, then `factory.*`, then the built-in default
   (circleci, 3 attempts, no log). An explicit `--max-attempts 3` beats `factory.maxAttempts`. The docker
   backend uses `--image` or `factory.image` and never `validation.sidecarImage`, which is a CircleCI
-  snapshot ID; with neither (and no `CHUNK_DOCKER_IMAGE`) the command fails before the run starts.
-  `chunk init` asks where factory runs execute and writes `factory.backend` (and, for docker,
+  snapshot ID; with neither (and no `SMELT_DOCKER_IMAGE`) the command fails before the run starts.
+  `smelt init` asks where factory runs execute and writes `factory.backend` (and, for docker,
   `factory.dockerfile`).
 - **The docker backend's image is resolved, highest first, from `--image`, `factory.image`,
-  `factory.dockerfile`, then `CHUNK_DOCKER_IMAGE`.** `factory.image` is explicit and user-managed: it is
+  `factory.dockerfile`, then `SMELT_DOCKER_IMAGE`.** `factory.image` is explicit and user-managed: it is
   never built, so a repo with its own `docker build` flow keeps it. `factory.dockerfile` (a
-  repo-relative path, `Dockerfile.chunk` when `chunk init` wrote it) is managed: the image tag is
-  `chunk-<repo>:<12 hex of sha256(Dockerfile + each COPY source's path and content)>`, so a change to
+  repo-relative path, `Dockerfile.smelt` when `smelt init` wrote it) is managed: the image tag is
+  `smelt-<repo>:<12 hex of sha256(Dockerfile + each COPY source's path and content)>`, so a change to
   the Dockerfile or a copied lockfile is a new tag, and `factory build` builds it first when it is
   missing. The build context is exactly the Dockerfile's `COPY` sources (absolute paths, `..` and
-  wildcards are rejected), never the repo. A failed build is an error pointing at `chunk factory image`.
-- **`chunk init` and `chunk factory image` verify what they build.** The image runs in a throwaway
+  wildcards are rejected), never the repo. A failed build is an error pointing at `smelt factory image`.
+- **`smelt init` and `smelt factory image` verify what they build.** The image runs in a throwaway
   container over a copy of the repo: first the agent kit (`git`, `claude`, `sha256sum`, `pkill`), then the
   install step, then the cheapest gate (lint, format, typecheck, test). If the build or a check fails in a
-  terminal with `claude` installed, chunk offers to let Claude edit `Dockerfile.chunk` (up to 3 attempts,
+  terminal with `claude` installed, smelt offers to let Claude edit `Dockerfile.smelt` (up to 3 attempts,
   only that file may change) and prints the diff on success. `factory build` never verifies or repairs.
 - **The docker backend runs the install step once per sidecar** (the detected `install` setup step, else
   the `install` command) after the first sync and before the agent starts, streaming its output into the
   run log. Existing `pnpm install &&` prefixes in validation commands are left alone.
-- **`Dockerfile.chunk` is generated from detection, never overwritten silently.** The base image is the
+- **`Dockerfile.smelt` is generated from detection, never overwritten silently.** The base image is the
   one every CI gate job uses (`.circleci/config.yml`), else the detected stack's image. Dependencies
   are baked as the package manager's store (pnpm, npm, yarn, uv, pip, Go, Cargo), not as an installed
   tree, because the workspace is bind-mounted over the repo at run time. An unknown stack gets a
   minimal Debian image with a comment to add a toolchain.
 - **The factory branch's commits are attributed to the developer.** They use `factory.author`
-  (`"Name <email>"`) when set, else the repo's git `user.name`/`user.email`, else `chunk`. These are
-  the commits a published PR carries. `.chunk/config.json` is committed, so `factory.author` applies to
-  everyone in the repo: `chunk init` writes it only when you choose someone other than your git
-  identity. `chunk factory author` shows the author and its source; with an argument it sets
+  (`"Name <email>"`) when set, else the repo's git `user.name`/`user.email`, else `smelt`. These are
+  the commits a published PR carries. `.smelt/config.json` is committed, so `factory.author` applies to
+  everyone in the repo: `smelt init` writes it only when you choose someone other than your git
+  identity. `smelt factory author` shows the author and its source; with an argument it sets
   `factory.author`, and `--unset` removes it.
 - **`factory build --plan FILE` reads the prompt from a file**, as if piped on stdin. It cannot be combined
   with a prompt argument or redirected stdin; with `--continue` it is optional guidance, like an argument.
-- **`factory build` runs on the local daemon, in the background.** `chunk factory build "<prompt>"` (or
-  `chunk factory build < prompt.md`; `chunk factory build - < prompt.md` is the explicit
+- **`factory build` runs on the local daemon, in the background.** `smelt factory build "<prompt>"` (or
+  `smelt factory build < prompt.md`; `smelt factory build - < prompt.md` is the explicit
   form; a prompt argument with a non-empty file on stdin is refused, so a
   stray word such as `--log run.log < prompt.md` cannot drop the file) checks
   the project's review prompts and validation commands, starts the daemon if
   needed, and starts a factory session, which the daemon starts tracking the
   project for if it has not seen it before; it follows the run
   until it ends. Ctrl-C stops the run and waits for it to commit the work done
-  so far; the run belongs to the daemon, so if `chunk factory build` loses contact it
-  keeps going and `chunk watch` still shows it. It uses the daemon's
+  so far; the run belongs to the daemon, so if `smelt factory build` loses contact it
+  keeps going and `smelt watch` still shows it. It uses the daemon's
   Claude and CircleCI credentials, resolved when the daemon started, and the
   project's configured org and image unless `--org-id` or `--image` say
-  otherwise. It is refused when `CHUNK_DAEMON_REMOTE_ADDR` is set, since a run
+  otherwise. It is refused when `SMELT_DAEMON_REMOTE_ADDR` is set, since a run
   works from this machine's files. The project needs a git remote named
   `origin` (the sidecars clone from it); `factory build` fails up front without one.
   A project has one active run at a time. Runs are kept in memory: a daemon
@@ -434,12 +434,12 @@ chunk
   raising them again or contradicting itself. As it follows the run it prints the sidecars being
   prepared and each round's findings, with the end of any failed validation
   command's output.
-  Factory branches are named `chunk/factory/<description>/<run id>`. The
+  Factory branches are named `smelt/<description>/<run id>`. The
   description is a short slug made from the prompt's first line, while the
   final segment remains the stable run ID. When the run ends it prints that
   branch, how to keep it, how long the run took and what the implementer cost,
   and exits non-zero unless every check passed. `--log` has the run keep a
-  plain-text log in `~/.chunk/factory/run-<start time>.log`, and
+  plain-text log in `~/.smelt/factory/run-<start time>.log`, and
   `--log-file <path>` keeps it in a file of your choosing instead (it implies
   `--log`), with the full context the display leaves
   out — each prompt the implementer is sent, what it did and said, every
@@ -453,7 +453,7 @@ chunk
   fixed safety prompt, which is useful for controlled harness experiments.
 - **`factory build --continue` picks up a finished run's work.** A run whose checks
   still fail when it ends (exhausted or stuck) prints
-  `chunk factory build --continue <run id>`. The continued run reopens the earlier
+  `smelt factory build --continue <run id>`. The continued run reopens the earlier
   run's worktree (adding it back from its branch if it was removed, and first
   committing any edits made in it by hand), adds a commit to the same branch,
   and measures the work from the same baseline, so reviewers see the whole
@@ -518,9 +518,9 @@ chunk
     invocation the daemon no longer knows about says so.
   - Output streaming needs a CircleCI token. Without one the dashboard still works
     and shows a one-line hint in the footer; the daemon never prompts.
-- **`chunk sidecar logs <command-id>`** is the non-TUI door onto the same output,
+- **`smelt sidecar logs <command-id>`** is the non-TUI door onto the same output,
   for scripts and for agents with no terminal. Command IDs appear in the `watch`
-  dashboard. It reads the chunk daemon's buffer when the daemon has the command
+  dashboard. It reads the smelt daemon's buffer when the daemon has the command
   and falls back to streaming from the API when it does not, so it works either
   way. `-f`/`--follow` keeps printing until the command exits.
   - Output goes to stdout and nothing else does, so it can be piped. A non-zero
@@ -545,7 +545,7 @@ chunk
   session's name. Rows that share a branch carry a label naming the session
   (`⧉ session d7d915b2`), because the branch name no longer tells them apart and
   generated sidecar names shorten to the repo name for all of them.
-- `chunk init` uses Claude to auto-detect the test command for the project.
+- `smelt init` uses Claude to auto-detect the test command for the project.
   It generates `.claude/settings.json` with pre-commit hooks. It never touches
   CircleCI — tokens are prompted inline only when a command actually needs them.
 - `sidecar sync` mirrors the working tree to the sidecar with rsync, honouring
@@ -557,17 +557,17 @@ chunk
   than the one using it now — the session line is what tells two parallel sessions
   apart. `--json` carries `session_id` and `owner_pid` in full.
 - `sidecar ssh -- <cmd>` forwards stdin when the process stdin is a pipe, enabling
-  patterns like `cat bundle | chunk sidecar ssh -- git fetch ...`.
+  patterns like `cat bundle | smelt sidecar ssh -- git fetch ...`.
 - **`sidecar ssh` exits with the remote status**, for both a command and an
   interactive shell, and prints nothing of its own, the same as `ssh` and
-  `sidecar exec`. A remote status can therefore coincide with one of chunk's own
-  exit codes (2–5); chunk's own failures are the ones that print an error. A
+  `sidecar exec`. A remote status can therefore coincide with one of smelt's own
+  exit codes (2–5); smelt's own failures are the ones that print an error. A
   process killed by a signal additionally reports the signal on stderr.
 - **Sidecar state is per agent session.** Two agent sessions open in the same
   working tree must not share a sidecar: they would sync into the same remote
   workspace and reset the checkout under each other's test run. State files are
   keyed by session and branch, where the session is the Stop hook payload's
-  `session_id`, or `CLAUDE_CODE_SESSION_ID` (overridable with `CHUNK_SESSION_ID`)
+  `session_id`, or `CLAUDE_CODE_SESSION_ID` (overridable with `SMELT_SESSION_ID`)
   for the commands an agent runs itself. Every session always creates its own
   sidecar — adoption was removed to prevent two sessions from syncing into the
   same remote workspace and resetting each other's checkout. Parallel sessions
@@ -618,31 +618,31 @@ chunk
 - Commands that require a CircleCI token (`task run`, `task config`, `sidecar *`,
   `validate --sidecar-id`) prompt for it inline at the point of need rather than
   failing with an error.
-- `chunk auth set github` stores a GitHub token in the config file; previously
+- `smelt auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.
-- `chunk hook disable` creates a `.chunk/hooks-disabled` sentinel file inspected by the `chunk validate` Stop hook; `hook enable` removes it. Stop-hook validation is also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
-- **Hook runs may be validated in the background.** When the chunk daemon is
-  running, a Stop-hook `chunk validate` offers the daemon the choice of running
+- `smelt hook disable` creates a `.smelt/hooks-disabled` sentinel file inspected by the `smelt validate` Stop hook; `hook enable` removes it. Stop-hook validation is also disabled when `SMELT_HOOKS_DISABLED` is set in the environment.
+- **Hook runs may be validated in the background.** When the smelt daemon is
+  running, a Stop-hook `smelt validate` offers the daemon the choice of running
   the checks after the hook has exited. The daemon takes the offer for a change
   under 500 lines, or one confined to docs and text files, and holds the caller
   for anything larger, anything it cannot measure, and any project whose last
   run failed. Size is measured against the last state that passed its checks
   rather than against `HEAD`, so consecutive small changes do not accumulate
   into a large one and a commit neither hides a change nor resets the count. Results of a background run reach the agent on its next turn, via
-  the `chunk validate results` hook. Only hook runs are ever released — a
-  `chunk validate` typed at a terminal always waits. Set `asyncValidate` in
-  `.chunk/config.json` to `never` or `always` to override the judgement, and
+  the `smelt validate results` hook. Only hook runs are ever released — a
+  `smelt validate` typed at a terminal always waits. Set `asyncValidate` in
+  `.smelt/config.json` to `never` or `always` to override the judgement, and
   `asyncValidateMaxLines` to move the threshold, `asyncValidateInert` and
   `asyncValidateBlocking` to say which paths it applies to. See
   [HOOKS.md](HOOKS.md#background-validation).
-- `chunk validate` caches successful runs in hook mode only, keyed by
-  `.chunk/config.json`, the execution target, the HEAD SHA, and the contents of
+- `smelt validate` caches successful runs in hook mode only, keyed by
+  `.smelt/config.json`, the execution target, the HEAD SHA, and the contents of
   all changed files; a repeat hook invocation with nothing changed prints
   `skipped` instead of re-running. Manual runs, `--cmd` inline commands, and
   repos whose state cannot be hashed never cache. Entries expire after 7 days.
   See [HOOKS.md](HOOKS.md#result-caching).
 - **`validate --async` and `validate results` are two halves of one flow.**
-  `--async` hands the run to the chunk daemon and returns immediately; `results`
+  `--async` hands the run to the smelt daemon and returns immediately; `results`
   reads what finished and prints it to stdout. Nothing installs a hook to call
   `results` yet: a background run is something you ask for explicitly, so
   reading its answer back is too. Wiring it into a hook waits for the change
@@ -671,13 +671,13 @@ chunk
 - The update check never delays a command: if the check has not finished by the
   time the command has, the notice is dropped rather than waited for. It is
   skipped entirely in CI (`CI` set), when the user sets
-  `CHUNK_NO_UPDATE_CHECK`, under `go test`, and for `completion`,
+  `SMELT_NO_UPDATE_CHECK`, under `go test`, and for `completion`,
   `receive-telemetry`, `upgrade`, and shell-completion requests, which either run
   on every keypress or report versions themselves. `watch` runs its own check and
   renders the notice in the TUI footer instead.
 - The notice suggests the install script when the running binary resolves into
   a Homebrew prefix (that is CircleCI's build, not this project's), and
-  `chunk upgrade` otherwise. `chunk upgrade` refuses to replace a
+  `smelt upgrade` otherwise. `smelt upgrade` refuses to replace a
   Homebrew-managed binary in place. No notice is shown for `dev` builds.
 - The notice names both versions (`v1.0.0 → v1.0.1`) and links the new
   release's GitHub page, so the reason to upgrade is one click away. The `watch`
@@ -687,18 +687,18 @@ chunk
 
 | Key | Scope | Description |
 |-----|-------|-------------|
-| `model` | user config (`~/.config/chunk/config.json`) | Claude model override |
-| `telemetry` | user config (`~/.config/chunk/config.json`) | Usage telemetry preference (`true`/`false`, default: `true`); only matters to a build that has a telemetry write key, which default builds do not |
-| `notifications` | user config (`~/.config/chunk/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
-| `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
-| `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
-| `asyncValidate` | `.chunk/config.json` | Whether hook runs may be validated in the background: `auto` (default), `always`, `never` |
-| `asyncValidateMaxLines` | `.chunk/config.json` | Largest change, in lines, still validated in the background under `auto` (default: 500) |
-| `asyncValidateWorktree` | `.chunk/config.json` | Run background checks in a checked-out snapshot so edits cannot make the result stale (`true`/`false`, default: `false` — a snapshot holds nothing gitignored) |
-| `asyncValidateInert` | `.chunk/config.json` | Extensions (`.sql`) or file names (`NOTICE`) this project also counts as prose, validated in the background at any size; adds to the built-in list |
-| `asyncValidateBlocking` | `.chunk/config.json` | Extensions or file names that always block, over an inert default, the line threshold, and `asyncValidate: always` |
+| `model` | user config (`~/.config/smelt/config.json`) | Claude model override |
+| `telemetry` | user config (`~/.config/smelt/config.json`) | Usage telemetry preference (`true`/`false`, default: `true`); only matters to a build that has a telemetry write key, which default builds do not |
+| `notifications` | user config (`~/.config/smelt/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
+| `orgID` | `.smelt/config.json` | CircleCI organization ID for sidecar subcommands |
+| `validation.sidecarImage` | `.smelt/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
+| `asyncValidate` | `.smelt/config.json` | Whether hook runs may be validated in the background: `auto` (default), `always`, `never` |
+| `asyncValidateMaxLines` | `.smelt/config.json` | Largest change, in lines, still validated in the background under `auto` (default: 500) |
+| `asyncValidateWorktree` | `.smelt/config.json` | Run background checks in a checked-out snapshot so edits cannot make the result stale (`true`/`false`, default: `false` — a snapshot holds nothing gitignored) |
+| `asyncValidateInert` | `.smelt/config.json` | Extensions (`.sql`) or file names (`NOTICE`) this project also counts as prose, validated in the background at any size; adds to the built-in list |
+| `asyncValidateBlocking` | `.smelt/config.json` | Extensions or file names that always block, over an inert default, the line threshold, and `asyncValidate: always` |
 
-`chunk config show` displays resolved user credentials and, when run from a
+`smelt config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project
 config).
 

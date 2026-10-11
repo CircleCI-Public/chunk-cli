@@ -41,16 +41,16 @@ func TestOnlyChanged(t *testing.T) {
 		before, after string
 		want          bool
 	}{
-		{"dockerfile edited", "", " M Dockerfile.chunk\n", true},
-		{"dockerfile already dirty", " M Dockerfile.chunk\n", " M Dockerfile.chunk\n", true},
-		{"other file touched", "", " M Dockerfile.chunk\n M main.go\n", false},
+		{"dockerfile edited", "", " M Dockerfile.smelt\n", true},
+		{"dockerfile already dirty", " M Dockerfile.smelt\n", " M Dockerfile.smelt\n", true},
+		{"other file touched", "", " M Dockerfile.smelt\n M main.go\n", false},
 		{"other file only", "", "?? notes.txt\n", false},
-		{"preexisting change kept", " M main.go\n", " M Dockerfile.chunk\n M main.go\n", true},
+		{"preexisting change kept", " M main.go\n", " M Dockerfile.smelt\n M main.go\n", true},
 		{"preexisting change reverted", " M main.go\n", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, OnlyChanged(tt.before, tt.after, "Dockerfile.chunk"), tt.want)
+			assert.Equal(t, OnlyChanged(tt.before, tt.after, "Dockerfile.smelt"), tt.want)
 		})
 	}
 }
@@ -69,7 +69,7 @@ func (f *fakeFixer) Fix(_ context.Context, dir, _ string) error {
 func gitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, "Dockerfile.chunk"), []byte("FROM x\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "Dockerfile.smelt"), []byte("FROM x\n"), 0o644))
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644))
 	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"}} {
 		cmd := exec.Command("git", args...)
@@ -81,7 +81,7 @@ func gitRepo(t *testing.T) string {
 }
 
 func editDockerfile(dir string, call int) error {
-	return os.WriteFile(filepath.Join(dir, "Dockerfile.chunk"), []byte("FROM y\n# attempt "+string(rune('0'+call))+"\n"), 0o644)
+	return os.WriteFile(filepath.Join(dir, "Dockerfile.smelt"), []byte("FROM y\n# attempt "+string(rune('0'+call))+"\n"), 0o644)
 }
 
 func TestRunRepairFixesOnSecondAttempt(t *testing.T) {
@@ -89,7 +89,7 @@ func TestRunRepairFixesOnSecondAttempt(t *testing.T) {
 	fixer := &fakeFixer{edit: editDockerfile}
 	retries := 0
 	res, err := RunRepair(context.Background(), RepairOptions{
-		Dir: dir, Dockerfile: "Dockerfile.chunk", Failure: "bad package", Fixer: fixer,
+		Dir: dir, Dockerfile: "Dockerfile.smelt", Failure: "bad package", Fixer: fixer,
 		Retry: func(context.Context) (string, error) {
 			retries++
 			if retries < 2 {
@@ -107,7 +107,7 @@ func TestRunRepairGivesUpAfterThreeAttempts(t *testing.T) {
 	dir := gitRepo(t)
 	fixer := &fakeFixer{edit: editDockerfile}
 	res, err := RunRepair(context.Background(), RepairOptions{
-		Dir: dir, Dockerfile: "Dockerfile.chunk", Failure: "bad", Fixer: fixer,
+		Dir: dir, Dockerfile: "Dockerfile.smelt", Failure: "bad", Fixer: fixer,
 		Retry: func(context.Context) (string, error) { return "nope", nil },
 	})
 	assert.NilError(t, err)
@@ -123,7 +123,7 @@ func TestRunRepairStopsWhenOtherFilesChange(t *testing.T) {
 		return os.WriteFile(filepath.Join(dir, "main.go"), []byte("changed"), 0o644)
 	}}
 	_, err := RunRepair(context.Background(), RepairOptions{
-		Dir: dir, Dockerfile: "Dockerfile.chunk", Fixer: fixer,
+		Dir: dir, Dockerfile: "Dockerfile.smelt", Fixer: fixer,
 		Retry: func(context.Context) (string, error) { t.Fatal("must not rebuild"); return "", nil },
 	})
 	assert.Assert(t, errors.Is(err, ErrOtherFilesChanged), "%v", err)
@@ -131,8 +131,8 @@ func TestRunRepairStopsWhenOtherFilesChange(t *testing.T) {
 }
 
 func TestRepairPromptStatesTheRules(t *testing.T) {
-	p := RepairPrompt("Dockerfile.chunk", "E: Unable to locate package nodjs")
+	p := RepairPrompt("Dockerfile.smelt", "E: Unable to locate package nodjs")
 	assert.Assert(t, strings.Contains(p, "nodjs"))
-	assert.Assert(t, strings.Contains(p, "Edit only Dockerfile.chunk"))
+	assert.Assert(t, strings.Contains(p, "Edit only Dockerfile.smelt"))
 	assert.Assert(t, strings.Contains(p, "agent kit"))
 }

@@ -9,14 +9,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
-	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/authprompt"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/oauth"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 const (
@@ -74,7 +74,7 @@ func newAuthSignupCmd() *cobra.Command {
 			if rc.CircleCIToken != "" {
 				return &userError{
 					msg:        "Already authenticated.",
-					suggestion: "Run `chunk auth remove circleci` to clear your token first, then re-run `chunk auth signup`. If you already have a CircleCI account, use `chunk auth login`.",
+					suggestion: "Run `smelt auth remove circleci` to clear your token first, then re-run `smelt auth signup`. If you already have a CircleCI account, use `smelt auth login`.",
 					errMsg:     "auth signup: already authenticated",
 				}
 			}
@@ -88,9 +88,9 @@ func newAuthSignupCmd() *cobra.Command {
 func authLogin(ctx context.Context, streams iostream.Streams, baseURL string, noBrowser, signup, insecureStorage bool) error {
 	streams.Println("")
 	if signup {
-		streams.Println(ui.Bold("Chunk CLI - CircleCI Sign Up"))
+		streams.Println(ui.Bold("Smelt CLI - CircleCI Sign Up"))
 	} else {
-		streams.Println(ui.Bold("Chunk CLI - CircleCI Login"))
+		streams.Println(ui.Bold("Smelt CLI - CircleCI Login"))
 	}
 	streams.Println("")
 
@@ -102,7 +102,7 @@ func authLogin(ctx context.Context, streams iostream.Streams, baseURL string, no
 	if err != nil {
 		return &userError{
 			msg:        "Login failed.",
-			suggestion: "Try again or use `chunk auth set circleci` to set a token manually.",
+			suggestion: "Try again or use `smelt auth set circleci` to set a token manually.",
 			err:        fmt.Errorf("oauth login: %w", err),
 		}
 	}
@@ -156,7 +156,7 @@ func newAuthSetCmd() *cobra.Command {
 
 func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, envSet, force, insecureStorage bool) error {
 	io.Println("")
-	io.Println(ui.Bold("Chunk CLI - CircleCI Token Setup"))
+	io.Println(ui.Bold("Smelt CLI - CircleCI Token Setup"))
 	io.Println("")
 	io.Println("Create a CircleCI token at https://app.circleci.com/settings/user/tokens")
 	printSaveHint(io, "Token", insecureStorage)
@@ -215,7 +215,7 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, e
 
 func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, envSet, force, insecureStorage bool) error {
 	io.Println("")
-	io.Println(ui.Bold("Chunk CLI - Anthropic API Key Setup"))
+	io.Println(ui.Bold("Smelt CLI - Anthropic API Key Setup"))
 	io.Println("")
 	io.Println("Enter your Anthropic API key (starts with sk-ant-).")
 	printSaveHint(io, "Key", insecureStorage)
@@ -292,7 +292,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 
 	io.Println("")
 	printSaved(io, "Anthropic API key", insecureStorage)
-	io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
+	io.Println(ui.Dim("You can now run code reviews with: smelt build-prompt"))
 	return nil
 }
 
@@ -306,7 +306,7 @@ func authSetAnthropicOAuth(ctx context.Context, io iostream.Streams, baseURL str
 	}
 
 	io.Println("")
-	io.Println(ui.Bold("Chunk CLI - Claude Subscription Setup"))
+	io.Println(ui.Bold("Smelt CLI - Claude Subscription Setup"))
 	io.Println("")
 	io.Println("This runs 'claude setup-token' to mint a long-lived token from your")
 	io.Println("Claude subscription, so reviews on sidecars authenticate as you.")
@@ -342,7 +342,7 @@ func authSetAnthropicOAuth(ctx context.Context, io iostream.Streams, baseURL str
 
 	io.Println("")
 	printSaved(io, "Claude subscription token", insecureStorage)
-	io.Println(ui.Dim("You can now run reviews on sidecars with: chunk review"))
+	io.Println(ui.Dim("You can now run reviews on sidecars with: smelt review"))
 	return nil
 }
 
@@ -403,9 +403,9 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 			err:        fmt.Errorf("save token: %w", err),
 		}
 	}
-	// The chunk daemon resolves its client once at startup, so one running from
+	// The smelt daemon resolves its client once at startup, so one running from
 	// before this login cannot see the new token.
-	chunkd.StopForCredentialChange()
+	smeltd.StopForCredentialChange()
 	if userID != uuid.Nil {
 		if err := config.SaveUserID(userID); err != nil {
 			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
@@ -426,7 +426,7 @@ func newAuthStatusCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 
 			io.Println("")
-			io.Println(ui.Bold("Chunk CLI - Authentication Status"))
+			io.Println(ui.Bold("Smelt CLI - Authentication Status"))
 			io.Println("")
 
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
@@ -449,7 +449,7 @@ func newAuthStatusCmd() *cobra.Command {
 					io.ErrPrintln(ui.FormatError(
 						"CircleCI token validation failed.",
 						"",
-						"Run `chunk auth login` to log in again, or `chunk auth set circleci` to set a token manually.",
+						"Run `smelt auth login` to log in again, or `smelt auth set circleci` to set a token manually.",
 					))
 					hasFailure = true
 				} else {
@@ -470,7 +470,7 @@ func newAuthStatusCmd() *cobra.Command {
 					io.ErrPrintln(ui.FormatError(
 						"API key validation failed.",
 						"The API key could not be validated with the Anthropic API.",
-						"Run `chunk auth set anthropic` to set a new key.",
+						"Run `smelt auth set anthropic` to set a new key.",
 					))
 					hasFailure = true
 				} else {
@@ -484,7 +484,7 @@ func newAuthStatusCmd() *cobra.Command {
 			io.Println(ui.Bold("Claude subscription"))
 			if rc.ClaudeOAuthToken == "" {
 				io.Println("  Not set")
-				io.Println(ui.Dim("  Run `chunk auth set anthropic-oauth` to configure."))
+				io.Println(ui.Dim("  Run `smelt auth set anthropic-oauth` to configure."))
 			} else {
 				io.Printf("  Source: %s\n", rc.ClaudeOAuthTokenSource)
 				io.Printf("  Token:  %s\n", config.MaskKey(rc.ClaudeOAuthToken))
@@ -495,7 +495,7 @@ func newAuthStatusCmd() *cobra.Command {
 			io.Println(ui.Bold("GitHub"))
 			if rc.GitHubToken == "" {
 				io.Println("  Not set")
-				io.Println(ui.Dim("  Run `chunk auth set github` to configure."))
+				io.Println(ui.Dim("  Run `smelt auth set github` to configure."))
 			} else {
 				io.Printf("  Source: %s\n", rc.GitHubTokenSource)
 				io.Printf("  Token:  %s\n", config.MaskKey(rc.GitHubToken))
@@ -504,7 +504,7 @@ func newAuthStatusCmd() *cobra.Command {
 					io.ErrPrintln(ui.FormatError(
 						"GitHub token validation failed.",
 						"",
-						"Run `chunk auth set github` to set a new token.",
+						"Run `smelt auth set github` to set a new token.",
 					))
 					hasFailure = true
 				} else {
@@ -662,7 +662,7 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool
 		if cfg, err := config.Load(); err == nil && cfg.CircleCIToken != "" {
 			cfgPath, _ := config.Path()
 			io.Println(ui.Warning("A CircleCI token is still stored in the config file: " + cfgPath))
-			io.Println(ui.Dim("Run `chunk auth remove --insecure-storage circleci` to remove it, or edit the file directly."))
+			io.Println(ui.Dim("Run `smelt auth remove --insecure-storage circleci` to remove it, or edit the file directly."))
 		}
 	}
 	if envSet {
@@ -725,7 +725,7 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force, insecureStorage boo
 		if cfg, err := config.Load(); err == nil && cfg.AnthropicAPIKey != "" {
 			cfgPath, _ := config.Path()
 			io.Println(ui.Warning("An Anthropic API key is still stored in the config file: " + cfgPath))
-			io.Println(ui.Dim("Run `chunk auth remove --insecure-storage anthropic` to remove it, or edit the file directly."))
+			io.Println(ui.Dim("Run `smelt auth remove --insecure-storage anthropic` to remove it, or edit the file directly."))
 		}
 	}
 	if envSet {
@@ -736,7 +736,7 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force, insecureStorage boo
 
 func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, envSet, force, insecureStorage bool) error {
 	io.Println("")
-	io.Println(ui.Bold("Chunk CLI - GitHub Token Setup"))
+	io.Println(ui.Bold("Smelt CLI - GitHub Token Setup"))
 	io.Println("")
 	io.Println("Create a token at https://github.com/settings/tokens")
 	printSaveHint(io, "Token", insecureStorage)
@@ -862,7 +862,7 @@ func authRemoveGitHub(io iostream.Streams, envSet, force, insecureStorage bool) 
 		if cfg, err := config.Load(); err == nil && cfg.GitHubToken != "" {
 			cfgPath, _ := config.Path()
 			io.Println(ui.Warning("A GitHub token is still stored in the config file: " + cfgPath))
-			io.Println(ui.Dim("Run `chunk auth remove --insecure-storage github` to remove it, or edit the file directly."))
+			io.Println(ui.Dim("Run `smelt auth remove --insecure-storage github` to remove it, or edit the file directly."))
 		}
 	}
 	if envSet {

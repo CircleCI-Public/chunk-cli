@@ -31,15 +31,15 @@ func checkDeprecation(onWarn func(string), h http.Header) {
 		if t, err := http.ParseTime(sunset); err == nil {
 			days := int(time.Until(t).Hours() / 24)
 			if days > 0 {
-				onWarn(fmt.Sprintf("this API endpoint is deprecated and will be removed in %d days — upgrade chunk CLI", days))
+				onWarn(fmt.Sprintf("this API endpoint is deprecated and will be removed in %d days — upgrade smelt CLI", days))
 			} else {
-				onWarn("this API endpoint is deprecated and removal is imminent — upgrade chunk CLI")
+				onWarn("this API endpoint is deprecated and removal is imminent — upgrade smelt CLI")
 			}
 		} else {
-			onWarn(fmt.Sprintf("this API endpoint is deprecated and will be removed on %s — upgrade chunk CLI", sunset))
+			onWarn(fmt.Sprintf("this API endpoint is deprecated and will be removed on %s — upgrade smelt CLI", sunset))
 		}
 	} else {
-		onWarn("this API endpoint is deprecated and will be removed — upgrade chunk CLI")
+		onWarn("this API endpoint is deprecated and will be removed — upgrade smelt CLI")
 	}
 }
 
@@ -89,8 +89,8 @@ type Config struct {
 	//
 	// This is deliberately a reload and not a refresh: there is no refresh grant
 	// to call, so the only way a token can improve is if something else stored a
-	// new one. It exists for long-lived processes — a chunk daemon holds one
-	// client for its whole life, and without this a `chunk auth login` in
+	// new one. It exists for long-lived processes — a smelt daemon holds one
+	// client for its whole life, and without this a `smelt auth login` in
 	// another terminal never reaches it.
 	ReloadToken func() (string, error)
 }

@@ -33,6 +33,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/segmentio/analytics-go/v3"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
 // WriteKey is the Segment write key events are sent with. It is set at build
@@ -89,7 +91,7 @@ type Config struct {
 type Meta struct {
 	Version    string
 	InstanceID uuid.UUID
-	// SessionTrackingID, when non-zero, is used as AnonymousId so all chunk
+	// SessionTrackingID, when non-zero, is used as AnonymousId so all smelt
 	// invocations within a session share a common anonymous identifier.
 	// When zero, InstanceID is used as AnonymousId instead.
 	SessionTrackingID uuid.UUID
@@ -143,7 +145,7 @@ func (m *Meta) toContext() *analytics.Context {
 		traits[k] = v
 	}
 	return &analytics.Context{
-		App: analytics.AppInfo{Name: "chunk-cli", Version: m.Version},
+		App: analytics.AppInfo{Name: brand.Command, Version: m.Version},
 		OS:  analytics.OSInfo{Name: m.OSName, Version: m.OSVersion},
 		Device: analytics.DeviceInfo{
 			Id:    m.InstanceID.String(),

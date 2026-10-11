@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/version"
+	"github.com/smeltdev/smelt/internal/version"
 )
 
 func TestSkipUpdateCheck(t *testing.T) {
@@ -25,7 +25,7 @@ func TestSkipUpdateCheck(t *testing.T) {
 		}
 	}
 
-	// receive-telemetry is re-execed by every chunk invocation, and upgrade
+	// receive-telemetry is re-execed by every smelt invocation, and upgrade
 	// and watch report versions themselves.
 	for _, name := range []string{"completion", "receive-telemetry", "upgrade", "watch"} {
 		cmd, _, err := root.Find([]string{name})
@@ -97,7 +97,7 @@ func TestPrintUpdateNotice(t *testing.T) {
 
 		for _, want := range []string{
 			"v1.2.3 → v9.9.9",
-			"https://github.com/web3technologies/chunk-cli/releases/tag/v9.9.9",
+			"https://github.com/smeltdev/smelt/releases/tag/v9.9.9",
 		} {
 			if !strings.Contains(stderr.String(), want) {
 				t.Errorf("expected notice to contain %q, got %q", want, stderr.String())

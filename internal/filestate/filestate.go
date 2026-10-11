@@ -26,8 +26,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
-	"github.com/CircleCI-Public/chunk-cli/internal/hashutil"
+	"github.com/smeltdev/smelt/internal/changeset"
+	"github.com/smeltdev/smelt/internal/hashutil"
 )
 
 // Walk budgets. Past either of them Build fails rather than returning a partial
@@ -224,15 +224,15 @@ func hashAndCount(path string, remaining int64) (string, int, int64, error) {
 	for {
 		n, readErr := reader.Read(buf)
 		if n > 0 {
-			chunk := buf[:n]
-			_, _ = h.Write(chunk)
+			piece := buf[:n]
+			_, _ = h.Write(piece)
 			if first {
 				first = false
-				binary = bytes.IndexByte(chunk, 0) >= 0
+				binary = bytes.IndexByte(piece, 0) >= 0
 			}
 			if !binary {
-				lines += bytes.Count(chunk, []byte{'\n'})
-				lastByte = chunk[len(chunk)-1]
+				lines += bytes.Count(piece, []byte{'\n'})
+				lastByte = piece[len(piece)-1]
 			}
 			read += int64(n)
 		}

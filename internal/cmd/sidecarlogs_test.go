@@ -15,8 +15,8 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
 func TestReportExitCode(t *testing.T) {
@@ -68,16 +68,16 @@ func TestSidecarLogsIsRegistered(t *testing.T) {
 	assert.Check(t, found, "sidecar logs should be registered as a subcommand")
 }
 
-// fakeChunkd serves /output over a unix socket at the daemon's expected path,
+// fakeSmeltd serves /output over a unix socket at the daemon's expected path,
 // returning the supplied chunks in order.
-func fakeChunkd(t *testing.T, chunks []chunkd.OutputChunk) {
+func fakeSmeltd(t *testing.T, chunks []smeltd.OutputChunk) {
 	t.Helper()
 	// Not t.TempDir(): a unix socket path is capped near 104 bytes and macOS
 	// temp dirs are long enough to blow that on their own.
-	dir, err := os.MkdirTemp("/tmp", "chunkd")
+	dir, err := os.MkdirTemp("/tmp", "smeltd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	t.Setenv("SMELT_DAEMON_DIR", dir)
 
 	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
 	assert.NilError(t, err)
@@ -88,12 +88,12 @@ func fakeChunkd(t *testing.T, chunks []chunkd.OutputChunk) {
 		func(w http.ResponseWriter, _ *http.Request) {
 			mu.Lock()
 			defer mu.Unlock()
-			chunk := chunks[len(chunks)-1]
+			piece := chunks[len(chunks)-1]
 			if i < len(chunks) {
-				chunk = chunks[i]
+				piece = chunks[i]
 				i++
 			}
-			_ = json.NewEncoder(w).Encode(chunk)
+			_ = json.NewEncoder(w).Encode(piece)
 		})}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
@@ -102,7 +102,7 @@ func fakeChunkd(t *testing.T, chunks []chunkd.OutputChunk) {
 // A stream that dies mid-follow leaves no exit code, so reporting only the code
 // would end the follow silently at exit 0 as though the command had finished.
 func TestFollowReportsAStreamThatEndedEarly(t *testing.T) {
-	fakeChunkd(t, []chunkd.OutputChunk{
+	fakeSmeltd(t, []smeltd.OutputChunk{
 		{Found: true, Running: true, Data: []byte("first\n"), NextOffset: 6},
 		{Found: true, Running: false, NextOffset: 6, Error: "connection reset"},
 	})

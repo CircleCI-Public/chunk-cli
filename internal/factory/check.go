@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/smeltdev/smelt/internal/review"
 )
 
 // Kind is what produced a check: a review prompt or a validation command.

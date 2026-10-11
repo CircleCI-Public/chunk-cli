@@ -60,7 +60,7 @@ func (m Message) Unwrap() analytics.Message {
 //
 // It accepts the legacy bare `[]analytics.Track` form as well as the envelope
 // form: the delegate re-execs the binary at os.Executable(), which an upgrade
-// may have replaced with a newer chunk between the parent's start and its
+// may have replaced with a newer smelt between the parent's start and its
 // exit, so a new receiver can be handed an old CLI's payload.
 func decode(data []byte) ([]analytics.Message, error) {
 	var envelopes []Message

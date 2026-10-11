@@ -8,7 +8,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/filecache"
+	"github.com/smeltdev/smelt/internal/filecache"
 )
 
 type entry struct {

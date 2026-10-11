@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
 // submitAndStream submits a command to a sidecar, registers it with the watch
@@ -21,7 +21,7 @@ import (
 //
 // Every path that runs a command a developer might later want to read goes
 // through here. A command submitted any other way still runs, but it is
-// invisible to both `chunk watch` and `chunk sidecar logs` — which reads as
+// invisible to both `smelt watch` and `smelt sidecar logs` — which reads as
 // output being lost rather than never captured.
 //
 // reg may be nil for internal probes — commands the tool issues on its own
@@ -31,7 +31,7 @@ import (
 // either way, where the registration is not.
 func submitAndStream(
 	ctx context.Context, client *circleci.Client, sidecarID string,
-	reg *chunkd.CommandReg, command string, args []string,
+	reg *smeltd.CommandReg, command string, args []string,
 	onOutput iostream.OutputFn,
 ) (*circleci.ExecResponse, error) {
 	// Both phases are wrapped so a failure says which one it was. They fail for
@@ -48,7 +48,7 @@ func submitAndStream(
 		if reg.SubmittedAt.IsZero() {
 			reg.SubmittedAt = time.Now()
 		}
-		chunkd.RegisterCommand(*reg)
+		smeltd.RegisterCommand(*reg)
 	}
 	resp, err := client.StreamOutput(ctx, commandID, "", onOutput)
 	if err != nil {

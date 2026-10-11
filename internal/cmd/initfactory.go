@@ -7,15 +7,15 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CircleCI-Public/chunk-cli/envbuilder"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sandboximage"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/envbuilder"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sandboximage"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
-// initFactoryOptions are the flags that steer the factory step of `chunk init`.
+// initFactoryOptions are the flags that steer the factory step of `smelt init`.
 type initFactoryOptions struct {
 	// Backend and Image are --factory-backend and --factory-image. Either one
 	// given answers the step without a prompt.
@@ -26,7 +26,7 @@ type initFactoryOptions struct {
 	Author string
 	// Skip is --skip-factory.
 	Skip bool
-	// SkipImageBuild is --skip-image-build: write Dockerfile.chunk but do not
+	// SkipImageBuild is --skip-image-build: write Dockerfile.smelt but do not
 	// offer to build it.
 	SkipImageBuild bool
 }
@@ -34,7 +34,7 @@ type initFactoryOptions struct {
 // flagsGiven reports whether either flag answered the step.
 func (o initFactoryOptions) flagsGiven() bool { return o.Backend != "" || o.Image != "" }
 
-// initFactoryAction is what the factory step of `chunk init` does.
+// initFactoryAction is what the factory step of `smelt init` does.
 type initFactoryAction int
 
 const (
@@ -44,7 +44,7 @@ const (
 	factoryAsk                                   // ask where runs execute
 )
 
-// initFactoryState is what the factory step of `chunk init` decides on.
+// initFactoryState is what the factory step of `smelt init` decides on.
 type initFactoryState struct {
 	Interactive bool
 	FlagsGiven  bool
@@ -183,7 +183,7 @@ func initFactoryBackendStep(ctx context.Context, workDir string, streams iostrea
 	if opts.Author == "" {
 		if author, ok := askAuthor(streams, factory.ResolveAuthor(ctx, workDir, config.CommitAuthor{})); ok && author != "" {
 			cfg.Factory.Author = author
-			streams.ErrPrintln(ui.Dim("Saved factory.author; .chunk/config.json is committed, so everyone here commits as this author."))
+			streams.ErrPrintln(ui.Dim("Saved factory.author; .smelt/config.json is committed, so everyone here commits as this author."))
 		}
 	}
 	return true
@@ -247,7 +247,7 @@ func managesImage(cfg *config.ProjectConfig) bool {
 }
 
 // initManagedImage is the docker half of the factory step: it writes
-// Dockerfile.chunk unless one exists, records it as factory.dockerfile, and
+// Dockerfile.smelt unless one exists, records it as factory.dockerfile, and
 // offers to build the image.
 func initManagedImage(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig, opts initFactoryOptions) {
 	if !managesImage(cfg) {
@@ -257,20 +257,20 @@ func initManagedImage(ctx context.Context, workDir string, streams iostream.Stre
 	saveDetectedEnvironment(ctx, workDir, streams, cfg)
 	if err := writeInitDockerfile(ctx, workDir, streams, cfg, dockerfile); err != nil {
 		streams.ErrPrintf("%s\n", ui.Warning(err.Error()))
-		streams.ErrPrintln(ui.Dim("Once Docker is running: chunk factory image"))
+		streams.ErrPrintln(ui.Dim("Once Docker is running: smelt factory image"))
 		return
 	}
 	cfg.Factory.Dockerfile = dockerfile
-	streams.ErrPrintln(ui.Dim(dockerfile + " is yours to edit and commit; chunk rebuilds the image when it or a dependency lockfile changes."))
+	streams.ErrPrintln(ui.Dim(dockerfile + " is yours to edit and commit; smelt rebuilds the image when it or a dependency lockfile changes."))
 
 	if opts.SkipImageBuild || !isInteractive() {
-		streams.ErrPrintln(ui.Dim("Build the factory image with: chunk factory image"))
+		streams.ErrPrintln(ui.Dim("Build the factory image with: smelt factory image"))
 		return
 	}
 	build, err := ui.Confirm("Build the factory image now? (a few minutes the first time)", true)
 	if err != nil || !build {
 		warnPromptError(streams, err)
-		streams.ErrPrintln(ui.Dim("Build it later with: chunk factory image (chunk factory build also does it)"))
+		streams.ErrPrintln(ui.Dim("Build it later with: smelt factory image (smelt factory build also does it)"))
 		return
 	}
 	tag, err := readyImage(ctx, streams, workDir, dockerfile, cfg, false)
@@ -278,7 +278,7 @@ func initManagedImage(ctx context.Context, workDir string, streams iostream.Stre
 		streams.ErrPrintf("%s\n", ui.Warning(errorSummary(err)))
 		return
 	}
-	streams.ErrPrintln(ui.Success("Ready: " + tag + ". Try: chunk factory build --plan spec.md"))
+	streams.ErrPrintln(ui.Success("Ready: " + tag + ". Try: smelt factory build --plan spec.md"))
 }
 
 // writeInitDockerfile writes dockerfile from detection, or keeps and says so

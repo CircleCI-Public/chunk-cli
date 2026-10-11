@@ -7,9 +7,9 @@ vars:
 
 tasks:
   build:
-    desc: Build the chunk binary
+    desc: Build the smelt binary
     cmds:
-      - go build -o dist/chunk .
+      - go build -o dist/smelt .
 
   test:
     desc: Run the tests
@@ -26,6 +26,7 @@ tasks:
     cmds:
       - go tool golangci-lint run {{.ARGS}}
       - task: check:circleci
+      - task: check:names
       - task: lint:shell
       - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py
       - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py
@@ -43,16 +44,16 @@ tasks:
       - go mod tidy -v
 
   dev-install:
-    desc: Symlink dist/chunk into ~/.local/bin so hooks pick up the local build automatically after each `task build`
+    desc: Symlink dist/smelt into ~/.local/bin so hooks pick up the local build automatically after each `task build`
     cmds:
       - task: build
       - mkdir -p ${HOME}/.local/bin
-      - ln -sf "$(pwd)/dist/chunk" ${HOME}/.local/bin/chunk
+      - ln -sf "$(pwd)/dist/smelt" ${HOME}/.local/bin/smelt
 
   dev-uninstall:
-    desc: Remove the dev symlink from ~/.local/bin (restores the system chunk)
+    desc: Remove the dev symlink from ~/.local/bin (restores the system smelt)
     cmds:
-      - rm -f ${HOME}/.local/bin/chunk
+      - rm -f ${HOME}/.local/bin/smelt
 
   acceptance-test:
     desc: Run acceptance tests
@@ -63,7 +64,7 @@ tasks:
 
   env-harness:
     desc: |
-      Run chunk sidecar env/build against target repos, using Claude to improve
+      Run smelt sidecar env/build against target repos, using Claude to improve
       envbuilder on failure. Args are passed through to harness/environment.py.
       Examples:
         task env-harness                                       # all known repos
@@ -95,7 +96,7 @@ tasks:
       - task: tag
         vars: { VERSION: '{{.VERSION}}' }
       - |
-        TAG=$(cat /tmp/chunk-release-tag)
+        TAG=$(cat /tmp/smelt-release-tag)
         git push origin "${TAG}"
         echo "Pushed ${TAG}; the Release workflow will publish it."
 
@@ -125,6 +126,11 @@ tasks:
     desc: Fail on references to CircleCI-owned repositories, packages and endpoints outside the CircleCI backend
     cmds:
       - scripts/check-circleci.sh
+
+  check:names:
+    desc: Fail on the old project name outside the license attribution and CircleCI API-contract strings
+    cmds:
+      - scripts/check-names.sh
 
   # Tasks below here are intended mainly to be run as part of CI
 
@@ -188,4 +194,4 @@ tasks:
 
         echo "Tagging version: ${TAG}"
         git tag "${TAG}"
-        echo "${TAG}" > /tmp/chunk-release-tag
+        echo "${TAG}" > /tmp/smelt-release-tag

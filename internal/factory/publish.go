@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/smeltdev/smelt/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/gitremote"
 )
 
 // DefaultRemote is the remote a run's branch is published to.
@@ -99,7 +99,7 @@ func DecidePublish(f PublishFacts) PublishDecision {
 }
 
 // CheckHeadBranch refuses a head branch that is not a factory branch or is
-// the default branch. Nothing but a chunk/factory/* branch is ever pushed.
+// the default branch. Nothing but a smelt/* branch is ever pushed.
 func CheckHeadBranch(head, defaultBranch string) error {
 	switch {
 	case !strings.HasPrefix(head, branchPrefix):
@@ -304,7 +304,7 @@ func PRBody(prompt, runID, result string, rounds int, stat string) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(prompt))
 	b.WriteString("\n\n---\n")
-	fmt.Fprintf(&b, "Written by chunk factory run %s", runID)
+	fmt.Fprintf(&b, "Written by smelt factory run %s", runID)
 	if result != "" {
 		fmt.Fprintf(&b, ": %s after %d round(s)", result, rounds)
 	}

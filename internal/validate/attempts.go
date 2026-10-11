@@ -6,10 +6,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
 // DefaultMaxAttempts is the default number of consecutive Stop hook re-signals
-// before chunk gives up and tells the agent to ask the user for help.
+// before smelt gives up and tells the agent to ask the user for help.
 const DefaultMaxAttempts = 3
 
 type attemptsState struct {
@@ -17,7 +19,7 @@ type attemptsState struct {
 }
 
 func sessionPath(sessionID string) string {
-	return filepath.Join(os.TempDir(), "chunk-run", "sessions", sessionID+".json")
+	return filepath.Join(os.TempDir(), brand.Command+"-run", "sessions", sessionID+".json")
 }
 
 // TrackFailedAttempt increments the failure counter for the given session and
@@ -30,7 +32,7 @@ func TrackFailedAttempt(sessionID string, warn io.Writer) int {
 	}
 	state.Count++
 	if err := writeAttemptsState(sessionID, state); err != nil && warn != nil {
-		_, _ = fmt.Fprintf(warn, "chunk validate: could not persist attempt count: %v\n", err)
+		_, _ = fmt.Fprintf(warn, "smelt validate: could not persist attempt count: %v\n", err)
 	}
 	return state.Count
 }

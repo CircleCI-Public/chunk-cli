@@ -11,7 +11,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/envspec"
 )
 
 // Command roles describe what a command does. Only RoleGate is acted on:
@@ -53,7 +54,7 @@ func BackendOrDefault(name string) string {
 
 // UsesCircleCI reports whether the project opted into the CircleCI backend,
 // which it does only by setting factory.backend to "circleci". A CircleCI token
-// on the machine is not consent, so every gate that decides whether chunk may
+// on the machine is not consent, so every gate that decides whether smelt may
 // reach CircleCI on a project's behalf asks this rather than deriving it.
 func (c *ProjectConfig) UsesCircleCI() bool {
 	return c != nil && c.Factory != nil && c.Factory.Backend == BackendCircleCI
@@ -68,7 +69,7 @@ func (c *ProjectConfig) UseCircleCI() {
 }
 
 // Command timeouts, in seconds. DefaultCommandTimeout is what a command with no
-// timeout of its own runs with, everywhere: chunk validate and the hook budgets
+// timeout of its own runs with, everywhere: smelt validate and the hook budgets
 // computed from it. The role defaults are what command detection writes.
 //
 // Lint gets room for a cold run: a fresh sandbox builds the linter and fetches
@@ -156,11 +157,11 @@ type ValidationConfig struct {
 	SidecarImage string `json:"sidecarImage,omitempty"`
 }
 
-// FactoryConfig holds project defaults for `chunk factory build`.
+// FactoryConfig holds project defaults for `smelt factory build`.
 type FactoryConfig struct {
 	Backend string `json:"backend,omitempty"` // "docker" (the default) or "circleci"
 	Image   string `json:"image,omitempty"`   // Docker image for the docker backend; user-managed, never auto-built
-	// Dockerfile is the repo-relative Dockerfile chunk builds the docker
+	// Dockerfile is the repo-relative Dockerfile smelt builds the docker
 	// backend's image from. Unlike Image it is managed: the tag is computed
 	// from its content and the image is built when missing.
 	Dockerfile  string `json:"dockerfile,omitempty"`
@@ -203,7 +204,7 @@ func (f *FactoryConfig) CommitAuthor() (CommitAuthor, error) {
 	return ParseCommitAuthor(f.Author)
 }
 
-// ProjectConfig is the per-repo configuration stored in .chunk/config.json.
+// ProjectConfig is the per-repo configuration stored in .smelt/config.json.
 type ProjectConfig struct {
 	Commands            []Command            `json:"commands,omitempty"`
 	VCS                 *VCSConfig           `json:"vcs,omitempty"`
@@ -239,9 +240,9 @@ type ProjectConfig struct {
 	AsyncValidateBlocking []string `json:"asyncValidateBlocking,omitempty"`
 }
 
-// LoadProjectConfig reads .chunk/config.json from workDir.
+// LoadProjectConfig reads .smelt/config.json from workDir.
 func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
-	path := filepath.Join(workDir, ".chunk", "config.json")
+	path := filepath.Join(workDir, brand.ProjectDir, "config.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("could not read config.json: %w", err)
@@ -341,12 +342,12 @@ func (c *ProjectConfig) FindCommand(name string) *Command {
 	return nil
 }
 
-// SaveProjectConfig writes the config back to .chunk/config.json.
+// SaveProjectConfig writes the config back to .smelt/config.json.
 func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
 	if err := cfg.validate(); err != nil {
 		return fmt.Errorf("validate config.json: %w", err)
 	}
-	dir := filepath.Join(workDir, ".chunk")
+	dir := filepath.Join(workDir, brand.ProjectDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -472,7 +473,7 @@ var knownExtensions = map[string]bool{
 	"yml": true, "zsh": true,
 }
 
-// SaveCommand upserts a command in .chunk/config.json.
+// SaveCommand upserts a command in .smelt/config.json.
 func SaveCommand(workDir, name, command string) error {
 	cfg, err := LoadProjectConfig(workDir)
 	if err != nil {

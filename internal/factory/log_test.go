@@ -10,9 +10,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
 )
 
 // newTestLog opens a log in a temp directory with a fixed clock.
@@ -127,7 +127,7 @@ func TestLogVerboseAddsPromptsAndPassingOutput(t *testing.T) {
 		lg, path := newTestLog(t, verbose)
 		lg.start("20261002-150405", opts, opts.Prompt)
 		lg.check(Check{Name: "test", Kind: KindValidate, Status: StatusPassed, SidecarID: "impl", Output: "ok pkg"})
-		lg.close(Report{Started: true, Committed: true, Outcome: Outcome{Result: ResultPassed, Rounds: 1}, Worktree: Worktree{Branch: "chunk/factory/1"}}, nil)
+		lg.close(Report{Started: true, Committed: true, Outcome: Outcome{Result: ResultPassed, Rounds: 1}, Worktree: Worktree{Branch: "smelt/1"}}, nil)
 		got := readLog(t, path)
 
 		// Every log says what the run was set to do.
@@ -137,7 +137,7 @@ func TestLogVerboseAddsPromptsAndPassingOutput(t *testing.T) {
 			"info  attempts 3, 1 reviewer sidecar(s)\n",
 			"info  review prompts: adversarial\n",
 			"info  validation commands: test: task test\n",
-			"end   result passed after 1 round(s), committed true to chunk/factory/1\n",
+			"end   result passed after 1 round(s), committed true to smelt/1\n",
 			"end   run finished\n",
 		} {
 			assert.Assert(t, strings.Contains(got, want), "verbose=%t: missing %q in:\n%s", verbose, want, got)
@@ -188,7 +188,7 @@ func TestLogDefaultPath(t *testing.T) {
 	lg, err := openLog(LogDefault, "20261002-150405", false)
 	assert.NilError(t, err)
 	lg.close(Report{}, nil)
-	assert.Equal(t, lg.path, filepath.Join(home, ".chunk", "factory", "run-20261002-150405.log"))
+	assert.Equal(t, lg.path, filepath.Join(home, ".smelt", "factory", "run-20261002-150405.log"))
 }
 
 // TestLogOffRecordsNothing guards the nil log: with no --log, the run's hooks

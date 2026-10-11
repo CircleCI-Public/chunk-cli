@@ -48,12 +48,12 @@ func archiveName(t *testing.T) string {
 	default:
 		t.Skipf("install.sh supports amd64 and arm64, not %s", runtime.GOARCH)
 	}
-	return fmt.Sprintf("chunk_%s_%s.tar.gz", osName, arch)
+	return fmt.Sprintf("smelt_%s_%s.tar.gz", osName, arch)
 }
 
-// fakeChunk is a release's binary: it prints its own version.
-func fakeChunk(version string) []byte {
-	return []byte("#!/bin/sh\necho \"chunk version " + version + "\"\n")
+// fakeSmelt is a release's binary: it prints its own version.
+func fakeSmelt(version string) []byte {
+	return []byte("#!/bin/sh\necho \"smelt version " + version + "\"\n")
 }
 
 func tarball(t *testing.T, binary []byte) []byte {
@@ -61,7 +61,7 @@ func tarball(t *testing.T, binary []byte) []byte {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	assert.NilError(t, tw.WriteHeader(&tar.Header{Name: "chunk", Mode: 0o755, Size: int64(len(binary)), Typeflag: tar.TypeReg}))
+	assert.NilError(t, tw.WriteHeader(&tar.Header{Name: "smelt", Mode: 0o755, Size: int64(len(binary)), Typeflag: tar.TypeReg}))
 	_, err := tw.Write(binary)
 	assert.NilError(t, err)
 	assert.NilError(t, tw.Close())
@@ -71,7 +71,7 @@ func tarball(t *testing.T, binary []byte) []byte {
 
 func goodRelease(t *testing.T, version string) release {
 	t.Helper()
-	archive := tarball(t, fakeChunk(version))
+	archive := tarball(t, fakeSmelt(version))
 	sum := sha256.Sum256(archive)
 	return release{
 		archive:   archive,
@@ -162,7 +162,7 @@ func runInstall(t *testing.T, o runOptions) result {
 		"TMPDIR=" + t.TempDir(),
 		"NO_COLOR=1",
 		"SHELL=" + o.shell,
-		"CHUNK_DOWNLOAD_BASE=" + o.base,
+		"SMELT_DOWNLOAD_BASE=" + o.base,
 		"no_proxy=*",
 		"NO_PROXY=*",
 	}
@@ -173,7 +173,7 @@ func runInstall(t *testing.T, o runOptions) result {
 		env = append(env, "VERSION="+o.version)
 	}
 	if o.force {
-		env = append(env, "CHUNK_FORCE=1")
+		env = append(env, "SMELT_FORCE=1")
 	}
 	cmd := exec.Command("bash", script)
 	cmd.Env = env
@@ -181,7 +181,7 @@ func runInstall(t *testing.T, o runOptions) result {
 	return result{output: string(out), err: err}
 }
 
-func chunkVersion(t *testing.T, path string) string {
+func smeltVersion(t *testing.T, path string) string {
 	t.Helper()
 	out, err := exec.Command(path).CombinedOutput()
 	assert.NilError(t, err, string(out))
@@ -202,8 +202,8 @@ func TestInstallLatest(t *testing.T) {
 	res := runInstall(t, runOptions{base: srv.URL, destDir: dest, home: home, shell: "/bin/zsh"})
 	assert.NilError(t, res.err, res.output)
 
-	assert.Equal(t, chunkVersion(t, filepath.Join(dest, "chunk")), "chunk version 1.2.0")
-	assert.Assert(t, strings.Contains(res.output, "cd your-repo && chunk init"), res.output)
+	assert.Equal(t, smeltVersion(t, filepath.Join(dest, "smelt")), "smelt version 1.2.0")
+	assert.Assert(t, strings.Contains(res.output, "cd your-repo && smelt init"), res.output)
 }
 
 func TestInstallDefaultsToHomeLocalBin(t *testing.T) {
@@ -214,7 +214,7 @@ func TestInstallDefaultsToHomeLocalBin(t *testing.T) {
 	assert.NilError(t, res.err, res.output)
 
 	// Created on demand, with no sudo.
-	assert.Equal(t, chunkVersion(t, filepath.Join(home, ".local", "bin", "chunk")), "chunk version 1.2.0")
+	assert.Equal(t, smeltVersion(t, filepath.Join(home, ".local", "bin", "smelt")), "smelt version 1.2.0")
 	assert.Assert(t, !strings.Contains(res.output, "sudo"), res.output)
 }
 
@@ -229,7 +229,7 @@ func TestInstallPinnedVersionWithOrWithoutV(t *testing.T) {
 
 			res := runInstall(t, runOptions{base: srv.URL, destDir: dest, home: home, version: pin, shell: "/bin/zsh"})
 			assert.NilError(t, res.err, res.output)
-			assert.Equal(t, chunkVersion(t, filepath.Join(dest, "chunk")), "chunk version 1.0.0")
+			assert.Equal(t, smeltVersion(t, filepath.Join(dest, "smelt")), "smelt version 1.0.0")
 		})
 	}
 }
@@ -237,7 +237,7 @@ func TestInstallPinnedVersionWithOrWithoutV(t *testing.T) {
 func TestInstallChecksumMismatchInstallsNothing(t *testing.T) {
 	home, dest := setup(t)
 	rel := goodRelease(t, "1.2.0")
-	rel.archive = tarball(t, fakeChunk("tampered")) // no longer what checksums.txt vouches for
+	rel.archive = tarball(t, fakeSmelt("tampered")) // no longer what checksums.txt vouches for
 	srv := fakeReleases(t, "1.2.0", map[string]release{"1.2.0": rel})
 
 	res := runInstall(t, runOptions{base: srv.URL, destDir: dest, home: home, shell: "/bin/zsh"})
@@ -285,12 +285,12 @@ func TestInstallRerunUpgradesInPlace(t *testing.T) {
 	srv := fakeReleases(t, "1.0.0", releases)
 	res := runInstall(t, runOptions{base: srv.URL, destDir: dest, home: home, shell: "/bin/zsh"})
 	assert.NilError(t, res.err, res.output)
-	assert.Equal(t, chunkVersion(t, filepath.Join(dest, "chunk")), "chunk version 1.0.0")
+	assert.Equal(t, smeltVersion(t, filepath.Join(dest, "smelt")), "smelt version 1.0.0")
 
 	srv2 := fakeReleases(t, "1.1.0", releases)
 	res = runInstall(t, runOptions{base: srv2.URL, destDir: dest, home: home, shell: "/bin/zsh"})
 	assert.NilError(t, res.err, res.output)
-	assert.Equal(t, chunkVersion(t, filepath.Join(dest, "chunk")), "chunk version 1.1.0")
+	assert.Equal(t, smeltVersion(t, filepath.Join(dest, "smelt")), "smelt version 1.1.0")
 
 	// The staging file is renamed over the binary, never left behind.
 	entries, err := os.ReadDir(dest)
@@ -302,31 +302,31 @@ func TestInstallRefusesToReplaceASymlink(t *testing.T) {
 	home, dest := setup(t)
 	srv := fakeReleases(t, "1.2.0", map[string]release{"1.2.0": goodRelease(t, "1.2.0")})
 
-	// What `task dev-install` leaves: bin/chunk -> a working-tree build.
-	devBuild := filepath.Join(home, "dist-chunk")
-	assert.NilError(t, os.WriteFile(devBuild, fakeChunk("dev-build"), 0o755))
+	// What `task dev-install` leaves: bin/smelt -> a working-tree build.
+	devBuild := filepath.Join(home, "dist-smelt")
+	assert.NilError(t, os.WriteFile(devBuild, fakeSmelt("dev-build"), 0o755))
 	assert.NilError(t, os.MkdirAll(dest, 0o755))
-	assert.NilError(t, os.Symlink(devBuild, filepath.Join(dest, "chunk")))
+	assert.NilError(t, os.Symlink(devBuild, filepath.Join(dest, "smelt")))
 
 	res := runInstall(t, runOptions{base: srv.URL, destDir: dest, home: home, shell: "/bin/zsh"})
 	assert.Assert(t, res.err != nil, res.output)
 	assert.Assert(t, strings.Contains(res.output, "symlink"), res.output)
-	assert.Assert(t, strings.Contains(res.output, "CHUNK_FORCE=1"), res.output)
-	target, err := os.Readlink(filepath.Join(dest, "chunk"))
+	assert.Assert(t, strings.Contains(res.output, "SMELT_FORCE=1"), res.output)
+	target, err := os.Readlink(filepath.Join(dest, "smelt"))
 	assert.NilError(t, err)
 	assert.Equal(t, target, devBuild)
-	assert.Equal(t, chunkVersion(t, devBuild), "chunk version dev-build")
+	assert.Equal(t, smeltVersion(t, devBuild), "smelt version dev-build")
 
-	t.Run("CHUNK_FORCE=1 replaces it", func(t *testing.T) {
+	t.Run("SMELT_FORCE=1 replaces it", func(t *testing.T) {
 		res := runInstall(t, runOptions{base: srv.URL, destDir: dest, home: home, shell: "/bin/zsh", force: true})
 		assert.NilError(t, res.err, res.output)
 
-		info, err := os.Lstat(filepath.Join(dest, "chunk"))
+		info, err := os.Lstat(filepath.Join(dest, "smelt"))
 		assert.NilError(t, err)
 		assert.Assert(t, info.Mode()&os.ModeSymlink == 0, "still a symlink")
-		assert.Equal(t, chunkVersion(t, filepath.Join(dest, "chunk")), "chunk version 1.2.0")
+		assert.Equal(t, smeltVersion(t, filepath.Join(dest, "smelt")), "smelt version 1.2.0")
 		// The dev build the symlink pointed at is untouched.
-		assert.Equal(t, chunkVersion(t, devBuild), "chunk version dev-build")
+		assert.Equal(t, smeltVersion(t, devBuild), "smelt version dev-build")
 	})
 }
 

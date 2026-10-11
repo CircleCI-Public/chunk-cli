@@ -15,11 +15,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 func TestShellEscape(t *testing.T) {
@@ -49,12 +49,12 @@ func TestShellEscape(t *testing.T) {
 
 func writeConfig(t *testing.T, dir string, commands []config.Command) string {
 	t.Helper()
-	chunkDir := filepath.Join(dir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(dir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := config.ProjectConfig{Commands: commands}
 	data, err := json.Marshal(cfg)
 	assert.NilError(t, err)
-	path := filepath.Join(chunkDir, "config.json")
+	path := filepath.Join(smeltDir, "config.json")
 	assert.NilError(t, os.WriteFile(path, data, 0o644))
 	return path
 }
@@ -114,9 +114,9 @@ func TestLoadProjectConfig(t *testing.T) {
 
 	t.Run("invalid json", func(t *testing.T) {
 		dir := t.TempDir()
-		chunkDir := filepath.Join(dir, ".chunk")
-		assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-		assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte("{bad"), 0o644))
+		smeltDir := filepath.Join(dir, ".smelt")
+		assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
+		assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte("{bad"), 0o644))
 
 		_, err := config.LoadProjectConfig(dir)
 		assert.ErrorContains(t, err, "parse config.json")
@@ -197,12 +197,12 @@ func TestFormatDuration(t *testing.T) {
 func TestRunAllEnvVars(t *testing.T) {
 	t.Run("env vars are passed to commands", func(t *testing.T) {
 		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "echo $CHUNK_TEST_VAR"},
+			{Name: "test", Run: "echo $SMELT_TEST_VAR"},
 		}}
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		envVars := map[string]string{"CHUNK_TEST_VAR": "hello-from-env-local"}
+		envVars := map[string]string{"SMELT_TEST_VAR": "hello-from-env-local"}
 		_, err := RunAll(context.Background(), ".", cfg, envVars, testStatus(&statusBuf), streams)
 		assert.NilError(t, err)
 		assert.Assert(t, strings.Contains(out.String(), "hello-from-env-local"), "got: %s", out.String())
@@ -284,11 +284,11 @@ func TestRunAll(t *testing.T) {
 
 func TestCommandTimeoutRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	chunkDir := filepath.Join(dir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(dir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 
 	raw := `{"commands":[{"name":"lint","run":"eslint .","timeout":60}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(raw), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(raw), 0o644))
 
 	cfg, err := config.LoadProjectConfig(dir)
 	assert.NilError(t, err)
@@ -310,7 +310,7 @@ func TestCommandTimeoutOmitted(t *testing.T) {
 	}}
 	assert.NilError(t, config.SaveProjectConfig(dir, cfg))
 
-	data, err := os.ReadFile(filepath.Join(dir, ".chunk", "config.json"))
+	data, err := os.ReadFile(filepath.Join(dir, ".smelt", "config.json"))
 	assert.NilError(t, err)
 	// timeout should not appear when zero
 	assert.Assert(t, !strings.Contains(string(data), "timeout"), "expected timeout to be omitted, got: %s", data)
@@ -503,7 +503,7 @@ func TestRunRemoteSSH(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		homeDir := t.TempDir()
 		t.Setenv(config.EnvHome, homeDir)
-		pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
+		pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "smelt_ai"))
 		sshSrv := fakes.NewSSHServer(t, pubKey)
 		sshSrv.SetResult("hello from remote\n", 0)
 
@@ -532,7 +532,7 @@ func TestRunRemoteSSH(t *testing.T) {
 	t.Run("non-zero exit code", func(t *testing.T) {
 		homeDir := t.TempDir()
 		t.Setenv(config.EnvHome, homeDir)
-		pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
+		pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "smelt_ai"))
 		sshSrv := fakes.NewSSHServer(t, pubKey)
 		sshSrv.SetResult("", 1)
 
@@ -557,7 +557,7 @@ func TestRunRemoteSSH(t *testing.T) {
 	t.Run("multiple commands stop on first failure", func(t *testing.T) {
 		homeDir := t.TempDir()
 		t.Setenv(config.EnvHome, homeDir)
-		pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
+		pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "smelt_ai"))
 		sshSrv := fakes.NewSSHServer(t, pubKey)
 		sshSrv.SetResult("", 1)
 

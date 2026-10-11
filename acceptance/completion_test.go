@@ -8,8 +8,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
 )
 
 func TestCompletionInstallZsh(t *testing.T) {
@@ -26,9 +26,9 @@ func TestCompletionInstallZsh(t *testing.T) {
 
 	data, err := os.ReadFile(zshrc)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "# chunk shell completion"),
+	assert.Assert(t, strings.Contains(string(data), "# smelt shell completion"),
 		"expected completion tag in .zshrc, got: %s", string(data))
-	assert.Assert(t, strings.Contains(string(data), "chunk completion zsh"),
+	assert.Assert(t, strings.Contains(string(data), "smelt completion zsh"),
 		"expected zsh source line in .zshrc, got: %s", string(data))
 }
 
@@ -46,8 +46,8 @@ func TestCompletionInstallBash(t *testing.T) {
 
 	data, err := os.ReadFile(bashrc)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "chunk completion bash"), "expected completion in .bashrc")
-	assert.Assert(t, strings.Contains(string(data), "# chunk shell completion"),
+	assert.Assert(t, strings.Contains(string(data), "smelt completion bash"), "expected completion in .bashrc")
+	assert.Assert(t, strings.Contains(string(data), "# smelt shell completion"),
 		"expected completion tag in .bashrc, got: %s", string(data))
 }
 
@@ -66,7 +66,7 @@ func TestCompletionInstallBashProfile(t *testing.T) {
 
 	data, err := os.ReadFile(bashProfile)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "chunk completion bash"), "expected completion in .bash_profile")
+	assert.Assert(t, strings.Contains(string(data), "smelt completion bash"), "expected completion in .bash_profile")
 }
 
 func TestCompletionInstallIdempotent(t *testing.T) {
@@ -134,7 +134,7 @@ func TestCompletionInstallBashCreatesRCFile(t *testing.T) {
 
 	data, err := os.ReadFile(bashProfile)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "chunk completion bash"),
+	assert.Assert(t, strings.Contains(string(data), "smelt completion bash"),
 		"expected completion line in created file, got: %s", string(data))
 }
 
@@ -172,7 +172,7 @@ func TestCompletionInstallUninstallRoundTrip(t *testing.T) {
 	// Verify completion was added
 	data, err := os.ReadFile(zshrc)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "# chunk shell completion"),
+	assert.Assert(t, strings.Contains(string(data), "# smelt shell completion"),
 		"expected tag after install")
 
 	// Uninstall
@@ -182,9 +182,9 @@ func TestCompletionInstallUninstallRoundTrip(t *testing.T) {
 	// Verify completion block is removed
 	data, err = os.ReadFile(zshrc)
 	assert.NilError(t, err)
-	assert.Assert(t, !strings.Contains(string(data), "# chunk shell completion"),
+	assert.Assert(t, !strings.Contains(string(data), "# smelt shell completion"),
 		"completion tag should be removed, got: %s", string(data))
-	assert.Assert(t, !strings.Contains(string(data), "chunk completion zsh"),
+	assert.Assert(t, !strings.Contains(string(data), "smelt completion zsh"),
 		"source line should be removed, got: %s", string(data))
 }
 

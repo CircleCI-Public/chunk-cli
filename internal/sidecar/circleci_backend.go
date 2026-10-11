@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // circleciBackend runs sidecars as CircleCI microVMs. It wraps a circleci

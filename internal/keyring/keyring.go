@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
 const (
-	servicePrefix = "com.circleci.chunk:"
+	servicePrefix = brand.KeychainPrefix
 
 	// SourceKeychain is the source label used when a value comes from the system keychain.
 	SourceKeychain = "System keychain"
@@ -45,7 +47,7 @@ var ErrNotFound = errors.New("credential not found in keychain")
 func username() string {
 	u, err := user.Current()
 	if err != nil {
-		return "chunk"
+		return brand.KeychainFallbackUser
 	}
 	return u.Username
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
 )
 
 // OrgInfo is the response from POST /api/v2/organization.

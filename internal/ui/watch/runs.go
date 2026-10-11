@@ -9,8 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // maxRuns caps the runs the left pane lists. Live runs are always listed; the
@@ -20,7 +20,7 @@ const maxRuns = 5
 
 // sessionInfo is one of the daemon's runs with the project it belongs to.
 type sessionInfo struct {
-	s          chunkd.Session
+	s          smeltd.Session
 	label      string
 	projectIdx int // index into Model.projects, for finding the run's commands
 }
@@ -34,7 +34,7 @@ type sessionActionMsg struct {
 
 func cancelSessionCmd(id string) tea.Cmd {
 	return func() tea.Msg {
-		if err := chunkd.CancelSession(id); err != nil {
+		if err := smeltd.CancelSession(id); err != nil {
 			return sessionActionMsg{id: id, err: err}
 		}
 		return sessionActionMsg{id: id, note: "cancel requested"}
@@ -43,7 +43,7 @@ func cancelSessionCmd(id string) tea.Cmd {
 
 // collectSessions flattens every project's sessions, live ones first and the rest
 // newest first.
-func collectSessions(projects []chunkd.ProjectSnapshot) []sessionInfo {
+func collectSessions(projects []smeltd.ProjectSnapshot) []sessionInfo {
 	var out []sessionInfo
 	for i, p := range projects {
 		label := p.RepoName
@@ -110,7 +110,7 @@ func splitRunSidecars(sidecars []sidecarInfo, runs []sessionInfo) (rest []sideca
 // anySessionLive reports whether a run is running (the spinner runs for it).
 func anySessionLive(sessions []sessionInfo) bool {
 	for _, s := range sessions {
-		if s.s.State == chunkd.SessionRunning {
+		if s.s.State == smeltd.SessionRunning {
 			return true
 		}
 	}
@@ -243,7 +243,7 @@ type runItem struct {
 }
 
 // runItems lists a run's selectable rows in the order the pane draws them.
-func runItems(s chunkd.Session) []runItem {
+func runItems(s smeltd.Session) []runItem {
 	var items []runItem
 	for ri, r := range s.Rounds {
 		if r.Implement != nil {
@@ -275,7 +275,7 @@ func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cm
 			m.runNote = "no output for this review yet"
 			return m, nil
 		}
-		return m.openOutput(rv.CommandID, fmt.Sprintf("round %d review: %s", r.Number, rv.Name), rv.State == chunkd.PromptRunning)
+		return m.openOutput(rv.CommandID, fmt.Sprintf("round %d review: %s", r.Number, rv.Name), rv.State == smeltd.PromptRunning)
 	case itemCheck:
 		c := r.Checks[it.idx]
 		text := strings.TrimRight(c.Output, "\n")
@@ -354,7 +354,7 @@ func (m Model) renderRunList(st watchStyles) []string {
 }
 
 // runTitle names a run by the first line of its prompt.
-func runTitle(s chunkd.Session) string {
+func runTitle(s smeltd.Session) string {
 	if f := s.Factory; f != nil {
 		for _, l := range strings.Split(f.Prompt, "\n") {
 			if l = strings.TrimSpace(strings.TrimLeft(l, "# ")); l != "" {
@@ -366,9 +366,9 @@ func runTitle(s chunkd.Session) string {
 }
 
 // runStatus is a run's one-line state for the run list.
-func runStatus(s chunkd.Session) string {
+func runStatus(s smeltd.Session) string {
 	switch s.State {
-	case chunkd.SessionRunning:
+	case smeltd.SessionRunning:
 		parts := []string{}
 		if f := s.Factory; f != nil && f.Attempts > 0 {
 			parts = append(parts, fmt.Sprintf("round %d/%d", max(len(s.Rounds), 1), f.Attempts))
@@ -376,7 +376,7 @@ func runStatus(s chunkd.Session) string {
 			parts = append(parts, fmt.Sprintf("round %d", len(s.Rounds)))
 		}
 		return strings.Join(append(parts, ui.FormatDuration(sessionElapsed(s).Truncate(time.Second))), " · ")
-	case chunkd.SessionDone, chunkd.SessionFailed, chunkd.SessionCancelled:
+	case smeltd.SessionDone, smeltd.SessionFailed, smeltd.SessionCancelled:
 	}
 	out := runOutcome(s)
 	if s.EndedAt != nil {
@@ -386,23 +386,23 @@ func runStatus(s chunkd.Session) string {
 }
 
 // runOutcome is how an ended run came out, in a word or two.
-func runOutcome(s chunkd.Session) string {
+func runOutcome(s smeltd.Session) string {
 	switch s.State {
-	case chunkd.SessionCancelled:
+	case smeltd.SessionCancelled:
 		return "cancelled"
-	case chunkd.SessionFailed:
+	case smeltd.SessionFailed:
 		return "failed"
-	case chunkd.SessionRunning, chunkd.SessionDone:
+	case smeltd.SessionRunning, smeltd.SessionDone:
 	}
 	if f := s.Factory; f != nil {
 		switch f.Result {
-		case chunkd.ResultPassed:
+		case smeltd.ResultPassed:
 			return "passed"
-		case chunkd.ResultExhausted:
+		case smeltd.ResultExhausted:
 			return "still failing"
-		case chunkd.ResultStuck:
+		case smeltd.ResultStuck:
 			return "stuck"
-		case chunkd.ResultNoChange:
+		case smeltd.ResultNoChange:
 			return "no change"
 		}
 	}
@@ -414,19 +414,19 @@ func runOutcome(s chunkd.Session) string {
 
 // loopFailed reports whether the run's loop ended without passing, which a
 // factory run does while the run itself finishes cleanly.
-func loopFailed(s chunkd.Session) bool {
-	return len(s.Stages) > 0 && s.Stages[0].State == chunkd.StageFailed
+func loopFailed(s smeltd.Session) bool {
+	return len(s.Stages) > 0 && s.Stages[0].State == smeltd.StageFailed
 }
 
-func (m Model) runIcon(st watchStyles, s chunkd.Session) string {
+func (m Model) runIcon(st watchStyles, s smeltd.Session) string {
 	switch s.State {
-	case chunkd.SessionRunning:
+	case smeltd.SessionRunning:
 		return st.running(spinFrames[m.spinIdx%len(spinFrames)])
-	case chunkd.SessionCancelled:
+	case smeltd.SessionCancelled:
 		return st.warning(ui.IconWarn)
-	case chunkd.SessionFailed:
+	case smeltd.SessionFailed:
 		return st.err(ui.IconFail)
-	case chunkd.SessionDone:
+	case smeltd.SessionDone:
 		if loopFailed(s) {
 			return st.err(ui.IconFail)
 		}
@@ -435,7 +435,7 @@ func (m Model) runIcon(st watchStyles, s chunkd.Session) string {
 	return st.muted("?")
 }
 
-func sessionElapsed(s chunkd.Session) time.Duration {
+func sessionElapsed(s smeltd.Session) time.Duration {
 	if s.EndedAt != nil {
 		return s.EndedAt.Sub(s.StartedAt)
 	}
@@ -443,22 +443,22 @@ func sessionElapsed(s chunkd.Session) time.Duration {
 }
 
 // runHeadline says where a run stands, for the top of its pane.
-func runHeadline(st watchStyles, s chunkd.Session) string {
+func runHeadline(st watchStyles, s smeltd.Session) string {
 	note := ""
 	if len(s.Stages) > 0 {
 		note = strings.Join(strings.Fields(s.Stages[0].Note), " ")
 	}
 	switch s.State {
-	case chunkd.SessionRunning:
+	case smeltd.SessionRunning:
 		if f := s.Factory; f != nil && f.Attempts > 0 {
 			return st.running(fmt.Sprintf("running · round %d of at most %d", max(len(s.Rounds), 1), f.Attempts))
 		}
 		return st.running("running")
-	case chunkd.SessionCancelled:
+	case smeltd.SessionCancelled:
 		return st.warning("cancelled")
-	case chunkd.SessionFailed:
+	case smeltd.SessionFailed:
 		return st.err("failed")
-	case chunkd.SessionDone:
+	case smeltd.SessionDone:
 	}
 	if note == "" {
 		note = runOutcome(s)
@@ -506,7 +506,7 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 			selStart, selEnd = len(body)+at, len(body)+at+1
 		}
 		body = append(body, rows...)
-		item += len(runItems(chunkd.Session{Rounds: s.Rounds[ri : ri+1]}))
+		item += len(runItems(smeltd.Session{Rounds: s.Rounds[ri : ri+1]}))
 	}
 	body = append(body, m.runFooterLines(st, run)...)
 
@@ -542,9 +542,9 @@ type runRow struct {
 // renderRunRound draws one round's header and rows. first is the run-wide
 // index of the round's first row; at is the line within the returned rows of
 // the selected one, -1 when it is in another round.
-func (m Model) renderRunRound(st watchStyles, r chunkd.Round, first, sel int, focused bool) (lines []string, at int) {
+func (m Model) renderRunRound(st watchStyles, r smeltd.Round, first, sel int, focused bool) (lines []string, at int) {
 	head := fmt.Sprintf("  Round %d  %s", r.Number, roundStateText(st, r))
-	if len(r.Reviews) > 0 && (r.Findings > 0 || r.State == chunkd.RoundDone) {
+	if len(r.Reviews) > 0 && (r.Findings > 0 || r.State == smeltd.RoundDone) {
 		head += st.dim(fmt.Sprintf("  ·  %d finding%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
 	}
 	lines = []string{head}
@@ -577,7 +577,7 @@ func (m Model) renderRunRound(st watchStyles, r chunkd.Round, first, sel int, fo
 }
 
 // roundRows builds a round's rows in runItems order.
-func (m Model) roundRows(st watchStyles, r chunkd.Round) []runRow {
+func (m Model) roundRows(st watchStyles, r smeltd.Round) []runRow {
 	var rows []runRow
 	if impl := r.Implement; impl != nil {
 		rows = append(rows, m.implementRow(st, r, impl))
@@ -595,15 +595,15 @@ func (m Model) spinner(st watchStyles) string {
 	return st.running(spinFrames[m.spinIdx%len(spinFrames)])
 }
 
-func (m Model) implementRow(st watchStyles, r chunkd.Round, impl *chunkd.RoundImplement) runRow {
+func (m Model) implementRow(st watchStyles, r smeltd.Round, impl *smeltd.RoundImplement) runRow {
 	row := runRow{name: "implement"}
 	switch impl.State {
-	case chunkd.ImplementRunning:
+	case smeltd.ImplementRunning:
 		row.icon = m.spinner(st)
 		if !r.StartedAt.IsZero() {
 			row.detail = st.dim(ui.FormatDuration(time.Since(r.StartedAt).Truncate(time.Second)))
 		}
-	case chunkd.ImplementApplied:
+	case smeltd.ImplementApplied:
 		row.icon = st.success(ui.IconOK)
 		parts := []string{ui.FormatDuration(time.Duration(impl.DurationMS) * time.Millisecond)}
 		if impl.CostUSD > 0 {
@@ -613,10 +613,10 @@ func (m Model) implementRow(st watchStyles, r chunkd.Round, impl *chunkd.RoundIm
 			parts = append(parts, impl.Stat)
 		}
 		row.detail = st.dim(strings.Join(parts, " · "))
-	case chunkd.ImplementEmpty:
+	case smeltd.ImplementEmpty:
 		row.icon = st.warning(ui.IconWarn)
 		row.detail = st.muted("made no changes")
-	case chunkd.ImplementFailed:
+	case smeltd.ImplementFailed:
 		row.icon = st.err(ui.IconFail)
 		row.detail = st.err(truncate(strings.Join(strings.Fields(impl.Error), " "), 80))
 	default:
@@ -625,15 +625,15 @@ func (m Model) implementRow(st watchStyles, r chunkd.Round, impl *chunkd.RoundIm
 	return row
 }
 
-func checkRow(st watchStyles, c chunkd.RoundCheck) runRow {
+func checkRow(st watchStyles, c smeltd.RoundCheck) runRow {
 	row := runRow{name: c.Name}
 	dur := ui.FormatDuration(time.Duration(c.DurationMS) * time.Millisecond)
 	switch c.Status {
-	case chunkd.CheckPassed:
+	case smeltd.CheckPassed:
 		row.icon, row.detail = st.success(ui.IconOK), st.dim(dur)
-	case chunkd.CheckFailed:
+	case smeltd.CheckFailed:
 		row.icon, row.detail = st.err(ui.IconFail), st.dim(dur)+"  "+st.err("failed")
-	case chunkd.CheckErrored:
+	case smeltd.CheckErrored:
 		row.icon, row.detail = st.err(ui.IconFail), st.err(truncate(strings.Join(strings.Fields(c.Error), " "), 80))
 	default:
 		row.icon, row.detail = st.vdim("·"), st.muted(c.Status)
@@ -641,18 +641,18 @@ func checkRow(st watchStyles, c chunkd.RoundCheck) runRow {
 	return row
 }
 
-func (m Model) reviewRow(st watchStyles, p chunkd.ReviewPrompt) runRow {
+func (m Model) reviewRow(st watchStyles, p smeltd.ReviewPrompt) runRow {
 	row := runRow{name: "review: " + p.Name}
 	switch p.State {
-	case chunkd.PromptQueued:
+	case smeltd.PromptQueued:
 		row.icon = st.vdim("·")
-	case chunkd.PromptRunning:
+	case smeltd.PromptRunning:
 		row.icon = m.spinner(st)
 		row.detail = st.running("↪ " + p.SidecarID[:min(8, len(p.SidecarID))])
-	case chunkd.PromptDone:
+	case smeltd.PromptDone:
 		row.icon, row.detail = reviewOutcome(st, p)
 		row.detail = st.dim(ui.FormatDuration(time.Duration(p.DurationMS)*time.Millisecond)) + row.detail
-	case chunkd.PromptFailed:
+	case smeltd.PromptFailed:
 		row.icon = st.err(ui.IconFail)
 		row.detail = st.err(truncate(strings.Join(strings.Fields(p.Error), " "), 80))
 	}
@@ -663,16 +663,16 @@ func (m Model) reviewRow(st watchStyles, p chunkd.ReviewPrompt) runRow {
 // review. A factory review is a check, and passes unless it found something
 // worth changing, so findings that are not worth changing do not fail it.
 // Until its status is known, any finding is worth a second look.
-func reviewOutcome(st watchStyles, p chunkd.ReviewPrompt) (icon, note string) {
+func reviewOutcome(st watchStyles, p smeltd.ReviewPrompt) (icon, note string) {
 	switch p.Status {
-	case chunkd.CheckPassed:
+	case smeltd.CheckPassed:
 		if p.Findings == 0 {
 			return st.success(ui.IconOK), ""
 		}
 		return st.success(ui.IconOK), "  " + st.dim(fmt.Sprintf("%d finding%s, none worth changing", p.Findings, plural(p.Findings)))
-	case chunkd.CheckFailed:
+	case smeltd.CheckFailed:
 		return st.err(ui.IconFail), "  " + st.err(fmt.Sprintf("%d worth changing", p.Worth))
-	case chunkd.CheckErrored:
+	case smeltd.CheckErrored:
 		return st.err(ui.IconFail), "  " + st.err(truncate(strings.Join(strings.Fields(p.Error), " "), 80))
 	}
 	if p.Findings > 0 {
@@ -681,17 +681,17 @@ func reviewOutcome(st watchStyles, p chunkd.ReviewPrompt) (icon, note string) {
 	return st.success(ui.IconOK), ""
 }
 
-func roundStateText(st watchStyles, r chunkd.Round) string {
+func roundStateText(st watchStyles, r smeltd.Round) string {
 	switch r.State {
-	case chunkd.RoundStarted:
+	case smeltd.RoundStarted:
 		return st.running("starting")
-	case chunkd.RoundImplementing:
+	case smeltd.RoundImplementing:
 		return st.running("implementing")
-	case chunkd.RoundChecking:
+	case smeltd.RoundChecking:
 		return st.running("reviewing and validating")
-	case chunkd.RoundDone:
+	case smeltd.RoundDone:
 		return st.muted("done")
-	case chunkd.RoundFailed:
+	case smeltd.RoundFailed:
 		return st.err("failed")
 	}
 	return string(r.State)
@@ -745,16 +745,16 @@ func (m Model) runFooterLines(st watchStyles, run sessionInfo) []string {
 	return lines
 }
 
-func feedText(st watchStyles, l chunkd.FeedLine) string {
+func feedText(st watchStyles, l smeltd.FeedLine) string {
 	text := truncate(strings.Join(strings.Fields(l.Text), " "), 200)
 	switch l.Level {
-	case chunkd.FeedError:
+	case smeltd.FeedError:
 		return st.err(text)
-	case chunkd.FeedWarn:
+	case smeltd.FeedWarn:
 		return st.warning(text)
-	case chunkd.FeedDone:
+	case smeltd.FeedDone:
 		return st.success(text)
-	case chunkd.FeedStep, chunkd.FeedInfo:
+	case smeltd.FeedStep, smeltd.FeedInfo:
 	}
 	return st.dim(text)
 }
@@ -764,7 +764,7 @@ func feedText(st watchStyles, l chunkd.FeedLine) string {
 func (m Model) runTag(st watchStyles) string {
 	running := 0
 	for _, s := range m.sessions {
-		if s.s.State == chunkd.SessionRunning {
+		if s.s.State == smeltd.SessionRunning {
 			running++
 		}
 	}

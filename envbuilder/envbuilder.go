@@ -14,8 +14,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	"github.com/smeltdev/smelt/internal/envspec"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
 )
 
 const (

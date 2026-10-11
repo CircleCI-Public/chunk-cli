@@ -10,10 +10,10 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 func TestPublishFlagsMode(t *testing.T) {
@@ -53,7 +53,7 @@ func (h *fakePRHost) Create(_ context.Context, pr factory.PRCreate) (string, err
 
 // publishProject is a project with a bare origin holding main and a factory
 // branch with committed work, described as the finished run the daemon reports.
-func publishProject(t *testing.T) (*chunkd.FactoryRun, string) {
+func publishProject(t *testing.T) (*smeltd.FactoryRun, string) {
 	t.Helper()
 	root := gitrepo.SetupGitRepo(t, "o", "r")
 	origin := filepath.Join(t.TempDir(), "origin.git")
@@ -63,10 +63,10 @@ func publishProject(t *testing.T) (*chunkd.FactoryRun, string) {
 	runGit(t, root, "fetch", "origin")
 	wt, err := factory.CreateWorktree(context.Background(), factory.WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag"})
 	assert.NilError(t, err)
-	return &chunkd.FactoryRun{
+	return &smeltd.FactoryRun{
 		Prompt: "add a flag", RunID: "run-1", Worktree: wt.Path, Branch: wt.Branch,
 		BaseBranch: wt.BaseBranch, DefaultBranch: "main",
-		Result: chunkd.ResultPassed, Rounds: 1, Committed: true,
+		Result: smeltd.ResultPassed, Rounds: 1, Committed: true,
 	}, origin
 }
 
@@ -83,7 +83,7 @@ func TestPublishRun(t *testing.T) {
 		prompt      bool
 		answer      bool
 		pr          *factory.PR
-		mutate      func(*chunkd.FactoryRun)
+		mutate      func(*smeltd.FactoryRun)
 		wantAsked   bool
 		wantPushed  bool
 		wantCreated int
@@ -96,9 +96,9 @@ func TestPublishRun(t *testing.T) {
 		{name: "--pr opens without asking", flags: publishFlags{pr: true}, wantPushed: true, wantCreated: 1},
 		{name: "--pr with a PR does not create another", flags: publishFlags{pr: true}, pr: existing, wantPushed: true},
 		{name: "--no-publish does nothing", flags: publishFlags{none: true}, prompt: true},
-		{name: "failed run is not offered", prompt: true, mutate: func(f *chunkd.FactoryRun) { f.Result = chunkd.ResultExhausted }},
-		{name: "failed run with --pr is published", flags: publishFlags{pr: true}, mutate: func(f *chunkd.FactoryRun) { f.Result = chunkd.ResultExhausted }, wantPushed: true, wantCreated: 1},
-		{name: "uncommitted run is not published", flags: publishFlags{pr: true}, mutate: func(f *chunkd.FactoryRun) { f.Committed = false }},
+		{name: "failed run is not offered", prompt: true, mutate: func(f *smeltd.FactoryRun) { f.Result = smeltd.ResultExhausted }},
+		{name: "failed run with --pr is published", flags: publishFlags{pr: true}, mutate: func(f *smeltd.FactoryRun) { f.Result = smeltd.ResultExhausted }, wantPushed: true, wantCreated: 1},
+		{name: "uncommitted run is not published", flags: publishFlags{pr: true}, mutate: func(f *smeltd.FactoryRun) { f.Committed = false }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -134,7 +134,7 @@ func TestPublishRunRefusesTheDefaultBranch(t *testing.T) {
 	err := publishRun(t.Context(), iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}, f, publishFlags{pr: true}, false, host)
 	assert.Assert(t, err != nil)
 	assert.Equal(t, len(host.created), 0)
-	assert.Assert(t, !pushed(t, origin, "chunk"))
+	assert.Assert(t, !pushed(t, origin, "smelt"))
 }
 
 func TestPublishRunRejectsConflictingFlags(t *testing.T) {

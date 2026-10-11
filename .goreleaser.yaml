@@ -1,22 +1,22 @@
-# GoReleaser configuration for chunk
+# GoReleaser configuration for smelt
 # Documentation: https://goreleaser.com
 
 version: 2
 
-# Archives are named chunk_<Os>_<arch>.tar.gz; install.sh and `chunk upgrade`
+# Archives are named smelt_<Os>_<arch>.tar.gz; install.sh and `smelt upgrade`
 # download exactly that, and internal/upgrade pins its name to this template.
-project_name: chunk
+project_name: smelt
 
 before:
   hooks:
-    - go run . completion bash --output share/bash-completion/completions/chunk
-    - go run . completion zsh --output share/zsh/site-functions/_chunk
-    - go run . completion fish --output share/fish/vendor_completions.d/chunk.fish
-    - go run . man --output share/man/man1/chunk.1
+    - go run . completion bash --output share/bash-completion/completions/smelt
+    - go run . completion zsh --output share/zsh/site-functions/_smelt
+    - go run . completion fish --output share/fish/vendor_completions.d/smelt.fish
+    - go run . man --output share/man/man1/smelt.1
 
 builds:
-  - id: chunk
-    binary: chunk
+  - id: smelt
+    binary: smelt
     main: .
 
     env:
@@ -26,8 +26,8 @@ builds:
       - -trimpath
 
     ldflags:
-      # The version carries its "v" so `chunk --version` prints the tag.
-      - "-s -w -X main.version=v{{.Version}} -X github.com/CircleCI-Public/chunk-cli/internal/telemetry.WriteKey={{ envOrDefault \"CHUNK_TELEMETRY_WRITE_KEY\" \"\" }}"
+      # The version carries its "v" so `smelt --version` prints the tag.
+      - "-s -w -X main.version=v{{.Version}} -X github.com/smeltdev/smelt/internal/telemetry.WriteKey={{ envOrDefault \"SMELT_TELEMETRY_WRITE_KEY\" \"\" }}"
 
     goos:
       - linux
@@ -57,14 +57,14 @@ archives:
     files:
       - LICENSE
       - README.md
-      - src: ./share/man/man1/chunk.1
-        dst: share/man/man1/chunk.1
-      - src: ./share/bash-completion/completions/chunk
-        dst: share/bash-completion/completions/chunk
-      - src: ./share/zsh/site-functions/_chunk
-        dst: share/zsh/site-functions/_chunk
-      - src: ./share/fish/vendor_completions.d/chunk.fish
-        dst: share/fish/vendor_completions.d/chunk.fish
+      - src: ./share/man/man1/smelt.1
+        dst: share/man/man1/smelt.1
+      - src: ./share/bash-completion/completions/smelt
+        dst: share/bash-completion/completions/smelt
+      - src: ./share/zsh/site-functions/_smelt
+        dst: share/zsh/site-functions/_smelt
+      - src: ./share/fish/vendor_completions.d/smelt.fish
+        dst: share/fish/vendor_completions.d/smelt.fish
 
 checksum:
   name_template: 'checksums.txt'
@@ -83,29 +83,29 @@ changelog:
       - Merge branch
 
 nfpms:
-  - package_name: chunk
+  - package_name: smelt
     license: MIT
     maintainer: web3technologies <noreply@github.com>
-    homepage: https://github.com/web3technologies/chunk-cli
-    description: Chunk CLI, inner loop validation for AI coding agents.
+    homepage: https://github.com/smeltdev/smelt
+    description: Smelt CLI, inner loop validation for AI coding agents.
     recommends:
       - bash-completion
     contents:
-      - src: ./share/man/man1/chunk.1
-        dst: /usr/share/man/man1/chunk.1
+      - src: ./share/man/man1/smelt.1
+        dst: /usr/share/man/man1/smelt.1
         file_info:
           mode: 0644
-      - src: ./share/bash-completion/completions/chunk
-        dst: /usr/share/bash-completion/completions/chunk
-      - src: ./share/zsh/site-functions/_chunk
-        dst: /usr/share/zsh/site-functions/_chunk
-      - src: ./share/zsh/site-functions/_chunk
-        dst: /usr/share/zsh/vendor-completions/_chunk
+      - src: ./share/bash-completion/completions/smelt
+        dst: /usr/share/bash-completion/completions/smelt
+      - src: ./share/zsh/site-functions/_smelt
+        dst: /usr/share/zsh/site-functions/_smelt
+      - src: ./share/zsh/site-functions/_smelt
+        dst: /usr/share/zsh/vendor-completions/_smelt
         packager: deb
-      - src: ./share/fish/vendor_completions.d/chunk.fish
-        dst: /usr/share/fish/vendor_completions.d/chunk.fish
+      - src: ./share/fish/vendor_completions.d/smelt.fish
+        dst: /usr/share/fish/vendor_completions.d/smelt.fish
       - src: ./packaging/deb/copyright
-        dst: /usr/share/doc/chunk/copyright
+        dst: /usr/share/doc/smelt/copyright
         packager: deb
         file_info:
           mode: 0644
@@ -127,7 +127,7 @@ notarize:
 release:
   github:
     owner: web3technologies
-    name: chunk-cli
+    name: smelt
   draft: false
   prerelease: auto
   # install.sh rides along with every release so the curl one-liner and a

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/gitexec"
 )
 
 // RepoRoot returns the root directory of the current git repository

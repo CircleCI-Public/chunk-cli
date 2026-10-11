@@ -8,23 +8,23 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
-	"github.com/CircleCI-Public/chunk-cli/internal/version"
+	"github.com/smeltdev/smelt/internal/authprompt"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envctx"
+	"github.com/smeltdev/smelt/internal/github"
+	"github.com/smeltdev/smelt/internal/session"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/smeltd/server"
+	"github.com/smeltdev/smelt/internal/version"
 )
 
-// newDaemonCmd returns the hidden command the chunk daemon runs as. Its name is
-// chunkd's, because chunkd is what launches it.
+// newDaemonCmd returns the hidden command the smelt daemon runs as. Its name is
+// smeltd's, because smeltd is what launches it.
 func newDaemonCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:    chunkd.DaemonSubcommand,
-		Short:  "Run the chunk daemon (internal use only)",
+		Use:    smeltd.DaemonSubcommand,
+		Short:  "Run the smelt daemon (internal use only)",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// The CircleCI client is resolved lazily, the first time a request
@@ -34,7 +34,7 @@ func newDaemonCmd() *cobra.Command {
 			//
 			// This process is detached with no terminal, so resolution must not
 			// prompt. ResolveCircleCIClient returns ErrNeedsAuth instead of
-			// asking; prompting is `chunk watch`'s job, in the parent process.
+			// asking; prompting is `smelt watch`'s job, in the parent process.
 			resolve := func() (*circleci.Client, string) {
 				rc, err := config.ResolveCircleCI(false)
 				if err != nil {
@@ -73,7 +73,7 @@ func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) server.ReviewConf
 	}
 	cred, _, credErr := reviewCredential(rc)
 	if credErr != nil {
-		return server.ReviewConfig{AuthError: "no Claude credential — factory runs unavailable (run: chunk auth refresh)"}
+		return server.ReviewConfig{AuthError: "no Claude credential — factory runs unavailable (run: smelt auth refresh)"}
 	}
 	return server.ReviewConfig{Credential: cred, BaseURL: rc.AnthropicBaseURL}
 }
@@ -81,7 +81,7 @@ func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) server.ReviewConf
 // authMessage renders a credential-resolution failure for the dashboard. An
 // empty logs pane with no explanation sends people hunting the wrong fault.
 //
-// It lives here rather than in chunkd because ErrNeedsAuth is authprompt's, and
+// It lives here rather than in smeltd because ErrNeedsAuth is authprompt's, and
 // the daemon has no business importing the auth flow to tell one failure from
 // another — this is the layer that already holds the error.
 func authMessage(err error) string {
@@ -89,7 +89,7 @@ func authMessage(err error) string {
 		return ""
 	}
 	if errors.Is(err, authprompt.ErrNeedsAuth) {
-		return "not authenticated to CircleCI — command output unavailable (run: chunk auth login)"
+		return "not authenticated to CircleCI — command output unavailable (run: smelt auth login)"
 	}
 	return "could not authenticate to CircleCI — command output unavailable: " + err.Error()
 }
@@ -124,8 +124,8 @@ func makeValidateRunner() server.ValidateRunner {
 		//
 		// Use workDir (the caller's original working directory) rather than
 		// projectRoot (the git top-level used for state keying) so the subprocess
-		// loads .chunk/config.json from the right location when the project's
-		// .chunk directory sits below the git root. Fall back to projectRoot for
+		// loads .smelt/config.json from the right location when the project's
+		// .smelt directory sits below the git root. Fall back to projectRoot for
 		// requests from older clients that did not send workDir.
 		target := workDir
 		if target == "" {

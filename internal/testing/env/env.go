@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
 // TestEnv builds an isolated environment for CLI invocations.
@@ -17,7 +19,7 @@ type TestEnv struct {
 	AnthropicKey string
 	CircleToken  string
 	Extra        map[string]string
-	// Binary, when set, is the chunk binary to run instead of the default build.
+	// Binary, when set, is the smelt binary to run instead of the default build.
 	Binary string
 }
 
@@ -47,7 +49,7 @@ func (e *TestEnv) Environ() []string {
 		"SHELL=/bin/zsh",
 		"NO_COLOR=1",
 		"TERM=dumb",
-		"CHUNK_NO_TELEMETRY=1",
+		brand.Env("NO_TELEMETRY") + "=1",
 	}
 
 	if e.GithubToken != "" {

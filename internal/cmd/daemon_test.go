@@ -9,7 +9,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 // projectWithCommand writes a project whose only validate command prints a
@@ -105,14 +105,14 @@ func TestValidateRunnerReportsAnUnknownFlagAsBadArgs(t *testing.T) {
 }
 
 // When the request carries a workDir (the caller's original cwd), the runner
-// uses it for --project so .chunk/config.json is found at the right location.
-// This matters when the .chunk directory sits below the git root: projectRoot
-// (the git top-level) and workDir (the .chunk parent) then differ, and
+// uses it for --project so .smelt/config.json is found at the right location.
+// This matters when the .smelt directory sits below the git root: projectRoot
+// (the git top-level) and workDir (the .smelt parent) then differ, and
 // validating from projectRoot would fail to find the config.
 func TestValidateRunnerPrefersWorkDirOverProjectRootForProject(t *testing.T) {
 	isolateConfig(t)
 	workDir := projectWithCommand(t, "ran-in-workdir")
-	projectRoot := t.TempDir() // simulates the git root, no .chunk here
+	projectRoot := t.TempDir() // simulates the git root, no .smelt here
 	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer

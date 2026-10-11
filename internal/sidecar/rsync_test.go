@@ -21,13 +21,13 @@ var hardeningOpts = []string{
 }
 
 func TestSSHCommand(t *testing.T) {
-	sess := &Session{IdentityFile: "/home/dev/.ssh/chunk_ai"}
+	sess := &Session{IdentityFile: "/home/dev/.ssh/smelt_ai"}
 	got := sshCommand(sess, "2222")
 
 	want := append([]string{
 		"ssh -p 2222",
 		"-o IdentitiesOnly=yes",
-		"-i /home/dev/.ssh/chunk_ai",
+		"-i /home/dev/.ssh/smelt_ai",
 	}, hardeningOpts...)
 	for _, w := range want {
 		assert.Assert(t, strings.Contains(got, w), "want %q in %q", w, got)
@@ -47,7 +47,7 @@ func TestSSHCommand(t *testing.T) {
 // ignores the rest, so a repeated IdentitiesOnly would make the later value dead
 // weight rather than an override.
 func TestSSHCommandSetsIdentitiesOnlyAtMostOnce(t *testing.T) {
-	cmd := sshCommand(&Session{IdentityFile: "/home/dev/.ssh/chunk_ai"}, "2222")
+	cmd := sshCommand(&Session{IdentityFile: "/home/dev/.ssh/smelt_ai"}, "2222")
 	assert.Assert(t, strings.Count(cmd, "-o IdentitiesOnly=") <= 1,
 		"IdentitiesOnly set more than once, later values are ignored: %q", cmd)
 }
@@ -61,14 +61,14 @@ func TestWorktreeWorkspace(t *testing.T) {
 	}{
 		{
 			name:      "GitHub HTTPS URL",
-			originURL: "https://github.com/CircleCI-Public/chunk-cli.git",
-			wantPath:  DefaultWorkspace("chunk-cli"),
+			originURL: "https://github.com/smeltdev/smelt.git",
+			wantPath:  DefaultWorkspace("smelt"),
 			wantOK:    true,
 		},
 		{
 			name:      "GitHub SSH URL",
-			originURL: "git@github.com:CircleCI-Public/chunk-cli.git",
-			wantPath:  DefaultWorkspace("chunk-cli"),
+			originURL: "git@github.com:CircleCI-Public/smelt.git",
+			wantPath:  DefaultWorkspace("smelt"),
 			wantOK:    true,
 		},
 		{

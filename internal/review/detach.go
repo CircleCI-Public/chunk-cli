@@ -5,9 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/upgrade"
 )
 
 // PrimaryPoolName names the one-sidecar pool that hosts a detached review. It
@@ -17,7 +18,7 @@ const PrimaryPoolName = "review-primary"
 
 // RunsDir is where detached runs keep their files on the primary, relative to
 // the sidecar user's home.
-const RunsDir = ".chunk-review"
+const RunsDir = brand.ProjectDir + "-review"
 
 // Files a detached run leaves in its run directory.
 const (
@@ -27,22 +28,22 @@ const (
 	PidFile    = "pid"         // the run's shell; lets a reader tell a dead run from a live one
 )
 
-// InstallRelease is the shell that installs the latest released chunk into
+// InstallRelease is the shell that installs the latest released smelt into
 // $HOME on a Linux sidecar. Used when no local binary is uploaded.
 const InstallRelease = `case "$(uname -m)" in aarch64|arm64) A=arm64;; *) A=x86_64;; esac
-curl -fsSL "https://github.com/` + upgrade.Repo + `/releases/latest/download/` + upgrade.AssetPrefix + `_Linux_${A}.tar.gz" | tar -xz -C "$HOME" chunk`
+curl -fsSL "https://github.com/` + upgrade.Repo + `/releases/latest/download/` + upgrade.AssetPrefix + `_Linux_${A}.tar.gz" | tar -xz -C "$HOME" smelt`
 
 // UploadInstall is the shell that installs a binary streamed on stdin, gzipped,
-// as $HOME/chunk. It writes a new file and moves it into place, because writing
-// over a chunk that an earlier detached review is still running fails with
+// as $HOME/smelt. It writes a new file and moves it into place, because writing
+// over a smelt that an earlier detached review is still running fails with
 // "text file busy".
-const UploadInstall = `gunzip > "$HOME/chunk.new" && chmod +x "$HOME/chunk.new" && mv -f "$HOME/chunk.new" "$HOME/chunk"`
+const UploadInstall = `gunzip > "$HOME/smelt.new" && chmod +x "$HOME/smelt.new" && mv -f "$HOME/smelt.new" "$HOME/smelt"`
 
 // Exit codes of the detach script.
 const (
-	// ExitNoReview means the chunk on the primary runs but has no review command.
+	// ExitNoReview means the smelt on the primary runs but has no review command.
 	ExitNoReview = 64
-	// ExitBadBinary means the chunk on the primary cannot be executed at all,
+	// ExitBadBinary means the smelt on the primary cannot be executed at all,
 	// for example a build for another OS or architecture.
 	ExitBadBinary = 66
 )
@@ -58,7 +59,7 @@ type DetachSpec struct {
 	Timeout     time.Duration
 	Image       string // snapshot for the primary's reviewer sidecars; empty for its config default
 	DestroyPool bool   // delete the primary's reviewer sidecars when the review ends
-	// Install is a shell fragment that puts chunk at $HOME/chunk, run before
+	// Install is a shell fragment that puts smelt at $HOME/smelt, run before
 	// the review starts. Empty when the binary is already there.
 	Install string
 }
@@ -72,7 +73,7 @@ func (s DetachSpec) RunDir() string { return RunsDir + "/" + s.RunID }
 // directory, which is printed as the script's last line.
 func DetachScript(s DetachSpec) string {
 	args := []string{
-		`"$HOME/chunk"`, "review", "--json",
+		`"$HOME/smelt"`, "review", "--json",
 		"--org-id", sidecar.ShellEscape(s.OrgID),
 		"--parallelism", fmt.Sprint(s.Parallelism),
 	}
@@ -106,14 +107,14 @@ func DetachScript(s DetachSpec) string {
 	if s.Install != "" {
 		fmt.Fprintln(&b, s.Install)
 	}
-	// A chunk that cannot run, or a release older than 'chunk review', would
+	// A smelt that cannot run, or a release older than 'smelt review', would
 	// fail in the background where nobody is watching, so find out here, while
 	// the caller can still be told. A missing or non-executable file, or shell
-	// exit 126 or 127, means chunk cannot run; any other failure means it ran
+	// exit 126 or 127, means smelt cannot run; any other failure means it ran
 	// without a review command.
-	fmt.Fprintf(&b, "[ -x \"$HOME/chunk\" ] || exit %d\n", ExitBadBinary)
+	fmt.Fprintf(&b, "[ -x \"$HOME/smelt\" ] || exit %d\n", ExitBadBinary)
 	b.WriteString("rc=0\n")
-	b.WriteString("\"$HOME/chunk\" review --help >/dev/null 2>&1 || rc=$?\n")
+	b.WriteString("\"$HOME/smelt\" review --help >/dev/null 2>&1 || rc=$?\n")
 	fmt.Fprintf(&b, "case $rc in 0) ;; 126|127) exit %d;; *) exit %d;; esac\n", ExitBadBinary, ExitNoReview)
 	fmt.Fprintf(&b, "cd %s\n", sidecar.ShellEscape(s.RepoPath))
 	fmt.Fprintf(&b, "nohup setsid sh -c %s >/dev/null 2>&1 </dev/null &\n", sidecar.ShellEscape(inner))
@@ -122,7 +123,7 @@ func DetachScript(s DetachSpec) string {
 }
 
 // DetachEnv is the environment the primary's review runs with: the credentials
-// its own chunk needs to create the reviewer sidecars and to run Claude on them.
+// its own smelt needs to create the reviewer sidecars and to run Claude on them.
 func DetachEnv(circleCIToken string, opts Options) map[string]string {
 	env := Env(opts.Credential, opts.BaseURL)
 	env[config.EnvCircleCIToken] = circleCIToken

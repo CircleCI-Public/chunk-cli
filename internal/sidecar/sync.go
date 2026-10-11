@@ -8,11 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/gitremote"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // syncFanOutConcurrency caps concurrent sidecar syncs during pool sync, so a
@@ -21,10 +22,10 @@ import (
 const syncFanOutConcurrency = 8
 
 // sidecarHome returns the base home directory on the sidecar. It reads
-// CHUNK_SIDECAR_HOME so the default "/home/user" can be overridden when the
+// SMELT_SIDECAR_HOME so the default "/home/user" can be overridden when the
 // image uses a different OS user.
 func sidecarHome() string {
-	if h := os.Getenv("CHUNK_SIDECAR_HOME"); h != "" {
+	if h := os.Getenv(brand.Env("SIDECAR_HOME")); h != "" {
 		return h
 	}
 	return "/home/user"

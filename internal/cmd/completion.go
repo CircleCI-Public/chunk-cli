@@ -10,14 +10,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/closer"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/closer"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
-const completionTag = "# chunk shell completion"
+const completionTag = "# " + brand.Command + " shell completion"
 
 func newCompletionCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -47,7 +48,7 @@ func detectShell(home string) (shellConfig, error) {
 		return shellConfig{
 			name:   "zsh",
 			rcFile: filepath.Join(home, ".zshrc"),
-			source: "source <(chunk completion zsh)",
+			source: "source <(" + brand.Command + " completion zsh)",
 		}, nil
 	case strings.HasSuffix(shell, "bash"):
 		rcFile := filepath.Join(home, ".bash_profile")
@@ -57,7 +58,7 @@ func detectShell(home string) (shellConfig, error) {
 		return shellConfig{
 			name:   "bash",
 			rcFile: rcFile,
-			source: "source <(chunk completion bash)",
+			source: "source <(" + brand.Command + " completion bash)",
 		}, nil
 	default:
 		return shellConfig{}, &userError{
@@ -292,7 +293,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 					skip = true
 					continue
 				}
-				if skip && strings.Contains(line, "source <(chunk completion") {
+				if skip && strings.Contains(line, "source <("+brand.Command+" completion") {
 					skip = false
 					continue
 				}

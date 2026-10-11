@@ -9,11 +9,11 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/gitremote"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // publishFlags is what --push, --pr and the flags that shape the PR asked for.
@@ -71,7 +71,7 @@ func publishAfterRun(ctx context.Context, streams iostream.Streams, sessionID st
 	if _, err := flags.mode(); err != nil {
 		return err
 	}
-	detail, err := chunkd.FetchSession(sessionID)
+	detail, err := smeltd.FetchSession(sessionID)
 	if err != nil || !detail.State.Finished() || detail.Factory == nil {
 		return nil
 	}
@@ -80,7 +80,7 @@ func publishAfterRun(ctx context.Context, streams iostream.Streams, sessionID st
 
 // publishRun publishes the finished run f through host. Anything short of
 // committed work in a kept worktree is left alone.
-func publishRun(ctx context.Context, streams iostream.Streams, f *chunkd.FactoryRun, flags publishFlags, prompt bool, host factory.PRHost) error {
+func publishRun(ctx context.Context, streams iostream.Streams, f *smeltd.FactoryRun, flags publishFlags, prompt bool, host factory.PRHost) error {
 	mode, err := flags.mode()
 	if err != nil {
 		return err
@@ -104,7 +104,7 @@ func publishRun(ctx context.Context, streams iostream.Streams, f *chunkd.Factory
 
 	_, remoteErr := gitremote.URL(ctx, f.Worktree, pub.Remote)
 	facts := factory.PublishFacts{
-		Mode: mode, Committed: f.Committed, Passed: f.Result == chunkd.ResultPassed,
+		Mode: mode, Committed: f.Committed, Passed: f.Result == smeltd.ResultPassed,
 		HasRemote: remoteErr == nil, Interactive: prompt,
 	}
 	// Nothing to do needs neither the guard nor the PR lookup.

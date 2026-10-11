@@ -9,12 +9,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/validate"
-	"github.com/CircleCI-Public/chunk-cli/internal/variants"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/ui"
+	"github.com/smeltdev/smelt/internal/validate"
+	"github.com/smeltdev/smelt/internal/variants"
 )
 
 func newValidateVariantsCmd() *cobra.Command {
@@ -95,7 +95,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			if len(cmds) == 0 {
 				return &userError{
 					msg:        "No remote commands configured.",
-					suggestion: "Remove local: true from at least one command in .chunk/config.json.",
+					suggestion: "Remove local: true from at least one command in .smelt/config.json.",
 					errMsg:     "no remote commands configured",
 				}
 			}
@@ -236,7 +236,7 @@ func reportVariantSummary(results []variants.Result, statusFn iostream.StatusFun
 //
 // It defers to sidecar.ResolveWorkspace rather than reimplementing the priority
 // order, so variants land where the rest of the CLI puts a workspace:
-// <sidecarHome>/<repo>. That is not a cosmetic detail. `chunk sidecar env build`
+// <sidecarHome>/<repo>. That is not a cosmetic detail. `smelt sidecar env build`
 // provisions dependencies in that directory before the snapshot is taken, so a
 // sync into any other path gets a tree the snapshot never prepared, every
 // command fails for environmental reasons, and every mutant reads as caught.

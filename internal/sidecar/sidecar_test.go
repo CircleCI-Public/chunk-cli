@@ -9,10 +9,10 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 func newClient(t *testing.T, serverURL string) *circleci.Client {
@@ -30,14 +30,14 @@ func TestOpenSessionGeneratesMissingKey(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	// Use a temp dir as HOME so ~/.ssh/chunk_ai definitely doesn't exist.
+	// Use a temp dir as HOME so ~/.ssh/smelt_ai definitely doesn't exist.
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()
 
-	keyPath := filepath.Join(home, ".ssh", "chunk_ai")
+	keyPath := filepath.Join(home, ".ssh", "smelt_ai")
 	sess, err := sidecar.OpenSession(ctx, cl, "sb-1", false)
 	assert.NilError(t, err)
 	assert.Equal(t, sess.IdentityFile, keyPath)
@@ -59,7 +59,7 @@ func TestOpenSessionKeepsExistingKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
-	keyPath := filepath.Join(home, ".ssh", "chunk_ai")
+	keyPath := filepath.Join(home, ".ssh", "smelt_ai")
 	fakes.GenerateSSHKeypairAt(t, keyPath)
 	privBefore, err := os.ReadFile(keyPath)
 	assert.NilError(t, err)

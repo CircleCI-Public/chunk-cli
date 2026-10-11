@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
+	"github.com/smeltdev/smelt/internal/session"
 )
 
 // ActiveSnapshot holds the most recently created snapshot for a project.

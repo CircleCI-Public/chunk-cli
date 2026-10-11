@@ -10,7 +10,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 const fakeToken = "sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"

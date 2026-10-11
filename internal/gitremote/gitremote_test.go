@@ -7,8 +7,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/gitremote"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 func TestParseRemoteURL(t *testing.T) {
@@ -21,21 +21,21 @@ func TestParseRemoteURL(t *testing.T) {
 	}{
 		{
 			name:     "ssh",
-			url:      "git@github.com:CircleCI-Public/chunk-cli.git",
+			url:      "git@github.com:CircleCI-Public/smelt.git",
 			wantOrg:  "CircleCI-Public",
-			wantRepo: "chunk-cli",
+			wantRepo: "smelt",
 		},
 		{
 			name:     "https",
-			url:      "https://github.com/CircleCI-Public/chunk-cli.git",
-			wantOrg:  "CircleCI-Public",
-			wantRepo: "chunk-cli",
+			url:      "https://github.com/smeltdev/smelt.git",
+			wantOrg:  "smeltdev",
+			wantRepo: "smelt",
 		},
 		{
 			name:     "https without .git",
-			url:      "https://github.com/CircleCI-Public/chunk-cli",
-			wantOrg:  "CircleCI-Public",
-			wantRepo: "chunk-cli",
+			url:      "https://github.com/smeltdev/smelt",
+			wantOrg:  "smeltdev",
+			wantRepo: "smelt",
 		},
 		{
 			name:     "ssh without .git",

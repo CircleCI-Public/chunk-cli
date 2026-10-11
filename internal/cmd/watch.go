@@ -9,13 +9,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
+	"github.com/smeltdev/smelt/internal/ui/watch"
 )
 
 // watchCmdName is the name of the watch command, referenced by the update-check
@@ -38,12 +38,12 @@ func newWatchCmd() *cobra.Command {
 				return fmt.Errorf("watch requires a TTY")
 			}
 
-			if chunkd.CurrentConnection().Remote != "" {
+			if smeltd.CurrentConnection().Remote != "" {
 				return runRemoteWatch(cmd, focus, args)
 			}
 
-			if err := chunkd.EnsureRunning(); err != nil {
-				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
+			if err := smeltd.EnsureRunning(); err != nil {
+				iostream.FromCmd(cmd).ErrPrintf("smelt watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 
 			cwd, err := os.Getwd()
@@ -103,7 +103,7 @@ func newWatchCmd() *cobra.Command {
 }
 
 // runRemoteWatch runs the dashboard against a daemon on another machine
-// (CHUNK_DAEMON_REMOTE_ADDR).
+// (SMELT_DAEMON_REMOTE_ADDR).
 //
 // Nothing about the local machine is used to pick what to show. The daemon
 // tracks its own projects at its own paths, so this machine's working directory,
@@ -112,19 +112,19 @@ func newWatchCmd() *cobra.Command {
 // quiet one. The default is therefore everything the daemon tracks. Paths given
 // as arguments are taken as paths on the daemon's host and sent as typed.
 func runRemoteWatch(cmd *cobra.Command, focus bool, args []string) error {
-	if chunkd.TCPToken() == "" {
+	if smeltd.TCPToken() == "" {
 		// A daemon only listens on TCP with a token, so a client without one
 		// cannot be talking to a working daemon. Say so before the dashboard
 		// clears the screen and a 401 becomes an unexplained red header.
-		return newUserError("CHUNK_DAEMON_REMOTE_ADDR is set but CHUNK_DAEMON_TCP_TOKEN is not.").
+		return newUserError("SMELT_DAEMON_REMOTE_ADDR is set but SMELT_DAEMON_TCP_TOKEN is not.").
 			withCode("watch.remote_token_missing").
-			withSuggestion("Set CHUNK_DAEMON_TCP_TOKEN to the token the remote daemon was started with.").
+			withSuggestion("Set SMELT_DAEMON_TCP_TOKEN to the token the remote daemon was started with.").
 			withoutDetail()
 	}
 	if focus && len(args) == 0 {
 		return newUserError("--focus needs at least one path on the remote daemon's host.").
 			withCode("command.invalid_args").
-			withSuggestion("Run: chunk watch --focus /path/on/the/daemon/host, or drop --focus to watch every project the daemon tracks.").
+			withSuggestion("Run: smelt watch --focus /path/on/the/daemon/host, or drop --focus to watch every project the daemon tracks.").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}
@@ -147,7 +147,7 @@ func remoteProjects(paths []string) []watch.ProjectEntry {
 
 // watchRoots returns the directories the dashboard should watch: the current
 // directory plus any explicitly named ones, and — unless focus is set — every
-// project chunk has seen before.
+// project smelt has seen before.
 func watchRoots(cwd string, focus bool, args []string) ([]string, error) {
 	roots := []string{cwd}
 	if !focus {

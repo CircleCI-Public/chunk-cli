@@ -8,8 +8,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitexec"
 )
 
 // MaxRepairAttempts is how many times Claude may edit the Dockerfile.
@@ -150,7 +150,7 @@ func RepairPrompt(dockerfile, failure string) string {
 
 %[2]s
 
-Fix it. Edit only %[1]s: keep its section headers and the "chunk agent kit" section, and change nothing else in the repo. Reply with one sentence saying what you changed.`, dockerfile, failure)
+Fix it. Edit only %[1]s: keep its section headers and the "smelt agent kit" section, and change nothing else in the repo. Reply with one sentence saying what you changed.`, dockerfile, failure)
 }
 
 // ClaudeFixer runs the host's claude CLI headlessly with only Read and Edit.

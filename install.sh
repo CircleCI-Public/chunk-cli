@@ -22,26 +22,26 @@
 #
 # SPDX-License-Identifier: MIT
 #
-# Install the Chunk CLI.
-# https://github.com/web3technologies/chunk-cli
+# Install the Smelt CLI.
+# https://github.com/smeltdev/smelt
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/web3technologies/chunk-cli/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/smeltdev/smelt/main/install.sh | bash
 #
 # Environment overrides:
 #   VERSION   Specific version to install (e.g. 1.2.3 or v1.2.3).
 #             Defaults to the latest non-prerelease. Preview/prerelease builds
 #             are NOT resolved automatically; set VERSION explicitly for those.
-#   DESTDIR   Install directory for the `chunk` binary. Default: $HOME/.local/bin,
+#   DESTDIR   Install directory for the `smelt` binary. Default: $HOME/.local/bin,
 #             which needs no sudo. sudo is used only for a DESTDIR you name that
 #             is not writable.
-#   REPO      GitHub "owner/name". Default: web3technologies/chunk-cli.
-#   CHUNK_DOWNLOAD_BASE
+#   REPO      GitHub "owner/name". Default: smeltdev/smelt.
+#   SMELT_DOWNLOAD_BASE
 #             Where releases are fetched from. Default: https://github.com/${REPO}.
 #             Used for the /releases/latest redirect and the downloads; mainly
 #             for tests.
-#   CHUNK_FORCE=1
-#             Replace DESTDIR/chunk even if it is a symlink (e.g. from
+#   SMELT_FORCE=1
+#             Replace DESTDIR/smelt even if it is a symlink (e.g. from
 #             `task dev-install`).
 #
 # Dependencies: curl, tar, grep, install, and one of sha256sum / shasum.
@@ -54,8 +54,8 @@ set -o pipefail
 # line. If the download to a pipe (curl | bash) is truncated, bash never
 # reaches the call and nothing executes half-way.
 install_cli() {
-	REPO="${REPO:-web3technologies/chunk-cli}"
-	DOWNLOAD_BASE="${CHUNK_DOWNLOAD_BASE:-https://github.com/${REPO}}"
+	REPO="${REPO:-smeltdev/smelt}"
+	DOWNLOAD_BASE="${SMELT_DOWNLOAD_BASE:-https://github.com/${REPO}}"
 	DEFAULT_DESTDIR="${HOME:-}/.local/bin"
 	DESTDIR_SET="${DESTDIR:-}"
 	DESTDIR="${DESTDIR:-${DEFAULT_DESTDIR}}"
@@ -88,10 +88,10 @@ install_cli() {
 	esac
 
 	# --- refuse to clobber a dev symlink ------------------------------------
-	# `task dev-install` symlinks DESTDIR/chunk to a working-tree build so hooks
+	# `task dev-install` symlinks DESTDIR/smelt to a working-tree build so hooks
 	# pick up each `task build`. Replacing it would silently break that setup.
-	if [ -L "${DESTDIR}/chunk" ] && [ "${CHUNK_FORCE:-}" != "1" ]; then
-		fail "${DESTDIR}/chunk is a symlink (to $(readlink "${DESTDIR}/chunk" 2>/dev/null || echo "somewhere")), probably from 'task dev-install'. Not replacing it. Run 'task dev-uninstall' first, or re-run with CHUNK_FORCE=1 to replace the symlink."
+	if [ -L "${DESTDIR}/smelt" ] && [ "${SMELT_FORCE:-}" != "1" ]; then
+		fail "${DESTDIR}/smelt is a symlink (to $(readlink "${DESTDIR}/smelt" 2>/dev/null || echo "somewhere")), probably from 'task dev-install'. Not replacing it. Run 'task dev-uninstall' first, or re-run with SMELT_FORCE=1 to replace the symlink."
 	fi
 
 	# --- resolve version ----------------------------------------------------
@@ -109,14 +109,14 @@ install_cli() {
 			fail "Could not determine the latest version. Set VERSION explicitly and re-run."
 		fi
 	fi
-	info "Installing Chunk CLI ${BOLD}v${VERSION}${RESET} (${OS}/${ARCH})"
+	info "Installing Smelt CLI ${BOLD}v${VERSION}${RESET} (${OS}/${ARCH})"
 
-	ARCHIVE="chunk_${OS}_${ARCH}.tar.gz"
+	ARCHIVE="smelt_${OS}_${ARCH}.tar.gz"
 	CHECKSUMS="checksums.txt"
 	DL_BASE="${DOWNLOAD_BASE}/releases/download/v${VERSION}"
 
 	# --- scratch dir, removed on every exit ----------------------------------
-	SCRATCH=$(mktemp -d 2>/dev/null || mktemp -d -t chunk)
+	SCRATCH=$(mktemp -d 2>/dev/null || mktemp -d -t smelt)
 	STAGED=""
 	STAGED_WITH_SUDO=""
 	cleanup() {
@@ -153,36 +153,36 @@ install_cli() {
 		|| fail "Checksum mismatch for ${ARCHIVE} (expected ${expected}, got ${actual}). Nothing was installed."
 
 	# --- unpack -------------------------------------------------------------
-	tar -xzf "${SCRATCH}/${ARCHIVE}" -C "${SCRATCH}" chunk \
-		|| fail "Could not extract 'chunk' from ${ARCHIVE}."
-	[ -f "${SCRATCH}/chunk" ] || fail "'chunk' binary not found after extracting ${ARCHIVE}."
+	tar -xzf "${SCRATCH}/${ARCHIVE}" -C "${SCRATCH}" smelt \
+		|| fail "Could not extract 'smelt' from ${ARCHIVE}."
+	[ -f "${SCRATCH}/smelt" ] || fail "'smelt' binary not found after extracting ${ARCHIVE}."
 
 	# --- install: stage next to the target, then rename over it -------------
-	# The rename is atomic, so a chunk that is running (or a failure half-way)
-	# never leaves a partial binary at DESTDIR/chunk.
+	# The rename is atomic, so a smelt that is running (or a failure half-way)
+	# never leaves a partial binary at DESTDIR/smelt.
 	info "Installing to ${BOLD}${DESTDIR}${RESET}"
-	staging="${DESTDIR}/.chunk.tmp.$$"
+	staging="${DESTDIR}/.smelt.tmp.$$"
 	if { [ -d "${DESTDIR}" ] || mkdir -p "${DESTDIR}" 2>/dev/null; } && [ -w "${DESTDIR}" ]; then
 		STAGED="${staging}"
-		install -m 0755 "${SCRATCH}/chunk" "${STAGED}"
-		mv -f "${STAGED}" "${DESTDIR}/chunk"
+		install -m 0755 "${SCRATCH}/smelt" "${STAGED}"
+		mv -f "${STAGED}" "${DESTDIR}/smelt"
 	elif [ -n "${DESTDIR_SET}" ] && command -v sudo >/dev/null 2>&1; then
 		info "${DESTDIR} is not writable; using sudo"
 		sudo mkdir -p "${DESTDIR}"
 		STAGED="${staging}"
 		STAGED_WITH_SUDO=1
-		sudo install -m 0755 "${SCRATCH}/chunk" "${STAGED}"
-		sudo mv -f "${STAGED}" "${DESTDIR}/chunk"
+		sudo install -m 0755 "${SCRATCH}/smelt" "${STAGED}"
+		sudo mv -f "${STAGED}" "${DESTDIR}/smelt"
 	else
 		fail "${DESTDIR} is not writable. Re-run with DESTDIR set to a writable directory."
 	fi
 	STAGED=""
 
-	info "Installed: ${BOLD}v${VERSION}${RESET} at ${DESTDIR}/chunk"
+	info "Installed: ${BOLD}v${VERSION}${RESET} at ${DESTDIR}/smelt"
 	print_path_hint
 	check_prerequisites
 	echo >&2
-	info "Next: ${BOLD}cd your-repo && chunk init${RESET}"
+	info "Next: ${BOLD}cd your-repo && smelt init${RESET}"
 }
 
 # print_path_hint says how to put DESTDIR on PATH, in the user's own shell's
@@ -207,18 +207,18 @@ print_path_hint() {
 		fish) echo "  fish_add_path ${shown}" >&2 ;;
 		*)    echo "  export PATH=\"${shown}:\$PATH\"   # add this to your shell's startup file" >&2 ;;
 	esac
-	echo "Or run ${DESTDIR}/chunk directly." >&2
+	echo "Or run ${DESTDIR}/smelt directly." >&2
 }
 
-# check_prerequisites warns about tools chunk uses that are missing. Nothing
-# here fails the install: chunk is useful without some of them.
+# check_prerequisites warns about tools smelt uses that are missing. Nothing
+# here fails the install: smelt is useful without some of them.
 check_prerequisites() {
 	missing=0
 	check_tool() {
 		command -v "$1" >/dev/null 2>&1 && return 0
 		if [ "$missing" -eq 0 ]; then
 			echo >&2
-			warn "Some tools chunk works with were not found:"
+			warn "Some tools smelt works with were not found:"
 		fi
 		missing=1
 		echo "  - $1: $2" >&2

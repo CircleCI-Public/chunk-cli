@@ -7,8 +7,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
 // runValidateResults invokes args against a root command with no daemon
@@ -17,7 +17,7 @@ import (
 func runValidateResults(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	isolateConfig(t)
-	t.Setenv("CHUNK_DAEMON_DIR", t.TempDir())
+	t.Setenv("SMELT_DAEMON_DIR", t.TempDir())
 
 	var outBuf, errBuf bytes.Buffer
 	root := newTestRootCmd()
@@ -29,7 +29,7 @@ func runValidateResults(t *testing.T, args ...string) (stdout, stderr string, er
 }
 
 // The subcommand reads daemon state and validates nothing, so it must work in a
-// directory with no chunk config at all. If it were routed through the normal
+// directory with no smelt config at all. If it were routed through the normal
 // validate path instead, the missing config would fail it before it ever asked
 // the daemon anything.
 func TestValidateResultsNeedsNoProjectConfig(t *testing.T) {
@@ -59,7 +59,7 @@ func TestResultsReportsADiscardedRunWithoutAVerdict(t *testing.T) {
 	var out bytes.Buffer
 	streams := iostream.Streams{Out: &out, Err: &out}
 
-	printResults(streams, []chunkd.TaskState{{ID: "abcdef123456", Stale: true}})
+	printResults(streams, []smeltd.TaskState{{ID: "abcdef123456", Stale: true}})
 
 	got := out.String()
 	assert.Assert(t, strings.Contains(got, "discarded"),
@@ -80,7 +80,7 @@ func TestResultsDoesNotPrintOutputOfADiscardedRun(t *testing.T) {
 	var out bytes.Buffer
 	streams := iostream.Streams{Out: &out, Err: &out}
 
-	printResults(streams, []chunkd.TaskState{
+	printResults(streams, []smeltd.TaskState{
 		{ID: "abcdef123456", Stale: true, ExitCode: 1, Output: "some_test.go:42: FAIL"},
 	})
 
@@ -99,7 +99,7 @@ func TestResultsQualifiesAStaleSnapshotVerdictInsteadOfDiscardingIt(t *testing.T
 	var out bytes.Buffer
 	streams := iostream.Streams{Out: &out, Err: &out}
 
-	printResults(streams, []chunkd.TaskState{
+	printResults(streams, []smeltd.TaskState{
 		{ID: "abcdef123456", Stale: true, Snapshot: true, ExitCode: 0},
 	})
 
@@ -117,7 +117,7 @@ func TestResultsStillReportsRealVerdicts(t *testing.T) {
 	var out bytes.Buffer
 	streams := iostream.Streams{Out: &out, Err: &out}
 
-	printResults(streams, []chunkd.TaskState{
+	printResults(streams, []smeltd.TaskState{
 		{ID: "aaaaaaaa1111", ExitCode: 0},
 		{ID: "bbbbbbbb2222", ExitCode: 1, Output: "0/1 passed"},
 	})

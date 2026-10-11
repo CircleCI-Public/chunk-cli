@@ -8,10 +8,10 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
-	"github.com/CircleCI-Public/chunk-cli/internal/variants"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/variants"
 )
 
 // isolateSidecarState points the sidecar state directory at a temp dir so
@@ -24,13 +24,13 @@ func isolateSidecarState(t *testing.T) {
 }
 
 // TestResolveVariantsWorkspaceDefaultsToSidecarHome is the regression guard for a
-// default that used to be ./workspace/<repo>. `chunk sidecar env build` provisions
+// default that used to be ./workspace/<repo>. `smelt sidecar env build` provisions
 // dependencies in <sidecarHome>/<repo> before the snapshot is taken, so syncing
 // anywhere else hands every variant a tree the snapshot never prepared: the
 // commands fail environmentally and every mutant reads as caught.
 func TestResolveVariantsWorkspaceDefaultsToSidecarHome(t *testing.T) {
 	isolateSidecarState(t)
-	t.Setenv("CHUNK_SIDECAR_HOME", "/home/runner")
+	t.Setenv("SMELT_SIDECAR_HOME", "/home/runner")
 
 	repoDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 
@@ -54,7 +54,7 @@ func TestResolveVariantsWorkspacePrefersWorkdirFlag(t *testing.T) {
 // remote or active sidecar, the workspace defaults to <sidecarHome>/<basename>.
 func TestResolveVariantsWorkspaceFallsBackToBasename(t *testing.T) {
 	isolateSidecarState(t)
-	t.Setenv("CHUNK_SIDECAR_HOME", "/home/user")
+	t.Setenv("SMELT_SIDECAR_HOME", "/home/user")
 
 	dir := t.TempDir()
 	ws, err := resolveVariantsWorkspace(context.Background(), "", dir)

@@ -1,6 +1,6 @@
 package validate
 
-import "github.com/CircleCI-Public/chunk-cli/internal/config"
+import "github.com/smeltdev/smelt/internal/config"
 
 // Placement controls where validation commands execute.
 type Placement uint8

@@ -9,7 +9,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 // finishedRun is a run that ended with work committed on its branch: an edit,
@@ -34,7 +34,7 @@ func finishedRun(t *testing.T) (root string, rec Record) {
 }
 
 func TestNewRecordKeepsTheBranches(t *testing.T) {
-	rec := newRecord("run-1", "p", Worktree{Path: "/wt", Branch: "chunk/factory/p/run-1", BaseBranch: "feature", DefaultBranch: "main"})
+	rec := newRecord("run-1", "p", Worktree{Path: "/wt", Branch: "smelt/p/run-1", BaseBranch: "feature", DefaultBranch: "main"})
 	assert.Equal(t, rec.BaseBranch, "feature")
 	assert.Equal(t, rec.DefaultBranch, "main")
 }
@@ -61,7 +61,7 @@ func TestOpenWorktreeCommitsEditsMadeSinceTheRun(t *testing.T) {
 	assert.Equal(t, wt.Baseline, rec.Baseline, "the work is still measured from the original baseline")
 	assert.Equal(t, gitOutput(t, wt.Path, "status", "--porcelain"), "")
 	assert.Equal(t, gitOutput(t, root, "log", "-1", "--format=%s", rec.Branch),
-		"Edits made in the worktree before chunk factory run run-2 continued it")
+		"Edits made in the worktree before smelt factory run run-2 continued it")
 	assert.Equal(t, gitOutput(t, root, "show", rec.Branch+":by-hand.go"), "package main")
 }
 
@@ -80,10 +80,10 @@ func TestOpenWorktreeAddsARemovedWorktreeBack(t *testing.T) {
 func TestOpenWorktreeRefusesAMissingBranch(t *testing.T) {
 	ctx := context.Background()
 	root, rec := finishedRun(t)
-	rec.Branch = "chunk/factory/gone"
+	rec.Branch = "smelt/gone"
 
 	_, err := openWorktree(ctx, root, rec, "run-2", config.CommitAuthor{})
-	assert.ErrorContains(t, err, "the run's branch chunk/factory/gone is gone")
+	assert.ErrorContains(t, err, "the run's branch smelt/gone is gone")
 }
 
 func TestOpenWorktreeRefusesABranchThatLeftItsBaseline(t *testing.T) {
@@ -129,7 +129,7 @@ func TestContinuationWithoutGuidanceChecksFirst(t *testing.T) {
 	assert.Assert(t, strings.Contains(c.prompt(), "`git diff HEAD` shows it"))
 	assert.Assert(t, !strings.Contains(c.prompt(), "The developer adds"))
 	assert.Equal(t, c.commitMessage("run-2", Outcome{Result: ResultPassed, Rounds: 2}),
-		"add a flag\n\nWritten by chunk factory run run-2, continuing run run-1 (passed after 2 round(s)).\n")
+		"add a flag\n\nWritten by smelt factory run run-2, continuing run run-1 (passed after 2 round(s)).\n")
 }
 
 func TestContinuationWithGuidanceImplementsFirst(t *testing.T) {
@@ -139,7 +139,7 @@ func TestContinuationWithGuidanceImplementsFirst(t *testing.T) {
 	assert.Equal(t, c.request(), "add a flag\n\nFollow-up from the developer:\n\nyou may update the test")
 	assert.Assert(t, strings.HasSuffix(c.prompt(), "The developer adds:\n\nyou may update the test"))
 	assert.Equal(t, c.commitMessage("run-2", Outcome{Result: ResultExhausted, Rounds: 3}),
-		"add a flag\n\nyou may update the test\n\nWritten by chunk factory run run-2, continuing run run-1 (exhausted after 3 round(s)).\n")
+		"add a flag\n\nyou may update the test\n\nWritten by smelt factory run run-2, continuing run run-1 (exhausted after 3 round(s)).\n")
 }
 
 func TestRecordRoundTrip(t *testing.T) {
@@ -147,7 +147,7 @@ func TestRecordRoundTrip(t *testing.T) {
 	root := newProject(t)
 	dataDir, err := config.ProjectDataDir(root)
 	assert.NilError(t, err)
-	want := Record{RunID: "run-2", Prompt: "add a flag", Worktree: "/wt", Branch: "chunk/factory/run-1",
+	want := Record{RunID: "run-2", Prompt: "add a flag", Worktree: "/wt", Branch: "smelt/run-1",
 		Baseline: "abc", Head: "def", BaseBranch: "feature", DefaultBranch: "main", ContinuesRunID: "run-1", Result: ResultPassed, Rounds: 2}
 
 	assert.NilError(t, saveRecord(dataDir, want))
@@ -161,6 +161,6 @@ func TestRecordRoundTrip(t *testing.T) {
 
 func TestParseRunID(t *testing.T) {
 	assert.Equal(t, ParseRunID("20261006-171526"), "20261006-171526")
-	assert.Equal(t, ParseRunID(" chunk/factory/20261006-171526\n"), "20261006-171526")
-	assert.Equal(t, ParseRunID(" chunk/factory/add-a-status-command/20261006-171526\n"), "20261006-171526")
+	assert.Equal(t, ParseRunID(" smelt/20261006-171526\n"), "20261006-171526")
+	assert.Equal(t, ParseRunID(" smelt/add-a-status-command/20261006-171526\n"), "20261006-171526")
 }

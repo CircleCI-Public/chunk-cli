@@ -4,17 +4,19 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
 // shadowIdentity is the author git needs to write a commit object. The commit
 // is a handle for a tree and nothing else — never pushed, never referenced,
-// collected by gc — so it carries chunk's name rather than the developer's,
+// collected by gc — so it carries smelt's name rather than the developer's,
 // which should never appear on an object they did not make.
 var shadowIdentity = []string{
-	"GIT_AUTHOR_NAME=chunk",
-	"GIT_AUTHOR_EMAIL=chunk@local",
-	"GIT_COMMITTER_NAME=chunk",
-	"GIT_COMMITTER_EMAIL=chunk@local",
+	"GIT_AUTHOR_NAME=smelt",
+	"GIT_AUTHOR_EMAIL=smelt@local",
+	"GIT_COMMITTER_NAME=smelt",
+	"GIT_COMMITTER_EMAIL=smelt@local",
 }
 
 // MaterializeTree checks out a tree snapshot into its own directory and returns
@@ -44,12 +46,12 @@ func MaterializeTree(dir, tree string) (string, func(), error) {
 	}
 
 	commit, err := gitOutEnv(dir, append(os.Environ(), shadowIdentity...),
-		"commit-tree", tree, "-m", "chunk snapshot")
+		"commit-tree", tree, "-m", "smelt snapshot")
 	if err != nil {
 		return "", nil, fmt.Errorf("commit snapshot: %w", err)
 	}
 
-	path, err := os.MkdirTemp("", "chunk-shadow-")
+	path, err := os.MkdirTemp("", brand.Command+"-shadow-")
 	if err != nil {
 		return "", nil, fmt.Errorf("create shadow dir: %w", err)
 	}

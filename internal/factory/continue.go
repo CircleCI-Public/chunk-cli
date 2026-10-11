@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitexec"
 )
 
 // Continuation is a run that picks up the work an earlier run left on its
@@ -65,7 +65,7 @@ func (c *Continuation) commitMessage(runID string, o Outcome) string {
 	if g := strings.TrimSpace(c.Guidance); g != "" {
 		fmt.Fprintf(&b, "%s\n\n", g)
 	}
-	fmt.Fprintf(&b, "Written by chunk factory run %s, continuing run %s", runID, c.From.RunID)
+	fmt.Fprintf(&b, "Written by smelt factory run %s, continuing run %s", runID, c.From.RunID)
 	if o.Result != "" {
 		fmt.Fprintf(&b, " (%s after %d round(s))", o.Result, o.Rounds)
 	}
@@ -99,7 +99,7 @@ func openWorktree(ctx context.Context, root string, rec Record, runID string, au
 	if err != nil || strings.TrimSpace(string(out)) != wt.Branch {
 		return Worktree{}, fmt.Errorf("the worktree %s is not on the branch %s", wt.Path, wt.Branch)
 	}
-	if _, err := wt.Commit(ctx, "Edits made in the worktree before chunk factory run "+runID+" continued it\n"); err != nil {
+	if _, err := wt.Commit(ctx, "Edits made in the worktree before smelt factory run "+runID+" continued it\n"); err != nil {
 		return Worktree{}, err
 	}
 	return wt, nil

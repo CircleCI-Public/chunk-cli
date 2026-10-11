@@ -15,13 +15,13 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/smeltd/server"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // fakeFactoryConfig is a daemon whose factory runs do one round without
@@ -49,7 +49,7 @@ func fakeFactoryConfig(t *testing.T, result factory.Result) server.ReviewConfig 
 			checks[0].Findings = []review.Finding{{File: "flag.go", Line: 1, Severity: "high", Body: "unused"}}
 		}
 		opts.OnEvent(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: checks})
-		_, err = wt.Commit(ctx, "chunk factory: add a flag")
+		_, err = wt.Commit(ctx, "smelt factory: add a flag")
 		stat, statErr := wt.Stat(ctx)
 		return factory.Report{
 			RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil, Stat: stat, StatErr: statErr,
@@ -67,7 +67,7 @@ func factoryProject(t *testing.T) string {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	project := sessionProject(t)
 	cfg := `{"orgID":"org-1","factory":{"backend":"circleci"},"commands":[{"name":"test","run":"go test ./..."}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(project, ".chunk", "config.json"), []byte(cfg), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(project, ".smelt", "config.json"), []byte(cfg), 0o644))
 	t.Chdir(project)
 	return project
 }
@@ -99,7 +99,7 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 	assert.NilError(t, err, stderr)
 
 	for _, want := range []string{
-		"started on the chunk daemon",
+		"started on the smelt daemon",
 		// The run ends before the first poll, so only where it ended shows,
 		// out of the default attempts.
 		"round 1/3: done — 1 of 1 checks passed",
@@ -107,7 +107,7 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 		"implementer finished",
 		"added the flag",
 		"test passed",
-		"Committed 1 file changed, 1 insertion(+) to chunk/factory/add-a-verbose-flag/run-1",
+		"Committed 1 file changed, 1 insertion(+) to smelt/add-a-verbose-flag/run-1",
 		// The project's uncommitted config is the run's baseline.
 		"Apply it with: git diff --binary",
 		"review bugs: no findings worth changing",
@@ -160,7 +160,7 @@ func TestFactoryLogFlagsReachTheDaemon(t *testing.T) {
 			}
 			home, err := os.UserHomeDir()
 			assert.NilError(t, err)
-			assert.Equal(t, filepath.Dir(got.Log), filepath.Join(home, ".chunk", "factory"))
+			assert.Equal(t, filepath.Dir(got.Log), filepath.Join(home, ".smelt", "factory"))
 			assert.Assert(t, strings.HasPrefix(filepath.Base(got.Log), "run-") && strings.HasSuffix(got.Log, ".log"), got.Log)
 		})
 	}
@@ -175,7 +175,7 @@ func TestFactoryWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
 	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("[high] flag.go:1 unused")), stderr)
-	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("Keep working on it with: chunk factory build --continue run-1")), stderr)
+	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("Keep working on it with: smelt factory build --continue run-1")), stderr)
 }
 
 // --json prints the run's record, and the exit code still says whether its
@@ -188,7 +188,7 @@ func TestFactoryJSONWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
-	var detail chunkd.SessionDetail
+	var detail smeltd.SessionDetail
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &detail), stdout)
 	assert.Equal(t, detail.Factory.Result, "exhausted")
 	// Progress still goes to stderr, but the closing report is the JSON.
@@ -214,7 +214,7 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 		}
 		close(started)
 		<-ctx.Done()
-		_, err = wt.Commit(context.WithoutCancel(ctx), "chunk factory: add a flag")
+		_, err = wt.Commit(context.WithoutCancel(ctx), "smelt factory: add a flag")
 		stat, statErr := wt.Stat(context.WithoutCancel(ctx))
 		return factory.Report{RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil, Stat: stat, StatErr: statErr}, ctx.Err()
 	}
@@ -231,7 +231,7 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "The factory run was cancelled.")
-	for _, want := range []string{"Stopping", "Committed 1 file changed, 1 insertion(+) to chunk/factory/add-a-verbose-flag/run-1"} {
+	for _, want := range []string{"Stopping", "Committed 1 file changed, 1 insertion(+) to smelt/add-a-verbose-flag/run-1"} {
 		assert.Assert(t, bytes.Contains([]byte(stderr), []byte(want)), "missing %q in:\n%s", want, stderr)
 	}
 }
@@ -279,8 +279,8 @@ func TestFactoryRefusesLogFlagMisuse(t *testing.T) {
 	}{
 		{args: []string{"--log=run.log", "add a flag"}, wantMsg: "--log takes no file.", wantS: "Write --log-file run.log."},
 		{args: []string{"--log=", "add a flag"}, wantMsg: "--log takes no file.", wantS: "Write --log-file FILE."},
-		{args: []string{"--log-file", "", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
-		{args: []string{"--log-file=", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
+		{args: []string{"--log-file", "", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.smelt/factory."},
+		{args: []string{"--log-file=", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.smelt/factory."},
 	} {
 		_, _, err := runFactoryBuildCmd(t, tc.args...)
 		var ue *userError
@@ -308,7 +308,7 @@ func writeFactoryRecord(t *testing.T, project, runID string) {
 	t.Helper()
 	dataDir, err := config.ProjectDataDir(project)
 	assert.NilError(t, err)
-	rec := factory.Record{RunID: runID, Prompt: "add a --verbose flag", Branch: "chunk/factory/add-a-verbose-flag/" + runID, Result: factory.ResultExhausted, Rounds: 3}
+	rec := factory.Record{RunID: runID, Prompt: "add a --verbose flag", Branch: "smelt/add-a-verbose-flag/" + runID, Result: factory.ResultExhausted, Rounds: 3}
 	b, err := json.Marshal(rec)
 	assert.NilError(t, err)
 	assert.NilError(t, os.MkdirAll(filepath.Join(dataDir, "factory"), 0o700))
@@ -325,7 +325,7 @@ func TestFactoryContinueReachesTheRun(t *testing.T) {
 		wantAttempts int
 	}{
 		{name: "by ID, without guidance", args: []string{"--continue", "run-0"}, wantAttempts: 3},
-		{name: "by branch, with guidance", args: []string{"--continue", "chunk/factory/add-a-verbose-flag/run-0", "you may update the test"},
+		{name: "by branch, with guidance", args: []string{"--continue", "smelt/add-a-verbose-flag/run-0", "you may update the test"},
 			wantGuidance: "you may update the test", wantAttempts: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -348,7 +348,7 @@ func TestFactoryContinueReachesTheRun(t *testing.T) {
 			assert.Equal(t, opts.Continue.From.RunID, "run-0")
 			assert.Equal(t, opts.Continue.From.Prompt, "add a --verbose flag")
 			assert.Equal(t, opts.Continue.Guidance, tc.wantGuidance)
-			var detail chunkd.SessionDetail
+			var detail smeltd.SessionDetail
 			assert.NilError(t, json.Unmarshal([]byte(stdout), &detail))
 			assert.Equal(t, detail.Factory.ContinuesRunID, "run-0")
 			assert.Equal(t, detail.Factory.Prompt, "add a --verbose flag")
@@ -445,14 +445,14 @@ func TestFactoryContinueRefusesAnUnknownRun(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "No factory run nope to continue in this project.")
-	assert.Equal(t, ue.Suggestion(), "Pass the run ID from the end of the run's output, or its branch: chunk/factory/<description>/<run id>.")
+	assert.Equal(t, ue.Suggestion(), "Pass the run ID from the end of the run's output, or its branch: smelt/<description>/<run id>.")
 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
 }
 
 func TestFactoryBuildTakesDefaultsFromTheProjectConfigAndPlan(t *testing.T) {
 	cfg := `{"orgID":"org-1","commands":[{"name":"test","run":"go test ./..."}],` +
 		`"validation":{"sidecarImage":"snapshot-id"},` +
-		`"factory":{"backend":"docker","image":"chunk-sandbox:local","maxAttempts":5,"log":true}}`
+		`"factory":{"backend":"docker","image":"smelt-sandbox:local","maxAttempts":5,"log":true}}`
 	newPlan := func(t *testing.T, body string) string {
 		plan := filepath.Join(t.TempDir(), "spec.md")
 		assert.NilError(t, os.WriteFile(plan, []byte("# Spec\n\n"+body+"\n"), 0o644))
@@ -467,13 +467,13 @@ func TestFactoryBuildTakesDefaultsFromTheProjectConfigAndPlan(t *testing.T) {
 		wantDocker   bool
 		wantLog      bool
 	}{
-		{name: "config defaults", wantAttempts: 5, wantImage: "chunk-sandbox:local", wantDocker: true, wantLog: true},
+		{name: "config defaults", wantAttempts: 5, wantImage: "smelt-sandbox:local", wantDocker: true, wantLog: true},
 		{name: "flags win", args: []string{"--max-attempts", "3", "--image", "other:tag", "--log=false"}, wantAttempts: 3, wantImage: "other:tag", wantDocker: true},
 		{name: "circleci backend flag", args: []string{"--backend", "circleci"}, wantAttempts: 5, wantImage: "snapshot-id", wantLog: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			project := factoryProject(t)
-			assert.NilError(t, os.WriteFile(filepath.Join(project, ".chunk", "config.json"), []byte(cfg), 0o644))
+			assert.NilError(t, os.WriteFile(filepath.Join(project, ".smelt", "config.json"), []byte(cfg), 0o644))
 			started := make(chan factory.RunOptions, 1)
 			scfg := fakeFactoryConfig(t, factory.ResultPassed)
 			run := scfg.RunFactory

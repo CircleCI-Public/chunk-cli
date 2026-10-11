@@ -16,29 +16,29 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 // captureRegistrations stands up a Unix socket answering /command the way the
 // daemon does, and returns a channel of what was registered. A fake daemon
 // rather than a stubbed client: the registration crossing a real socket is the
 // part that has silently not happened before.
-func captureRegistrations(t *testing.T) <-chan chunkd.CommandReg {
+func captureRegistrations(t *testing.T) <-chan smeltd.CommandReg {
 	t.Helper()
 	// Not t.TempDir(): it embeds the test name, and a unix socket path is capped
 	// at 104 bytes on darwin, so a descriptive name silently breaks listen.
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	t.Setenv("SMELT_DAEMON_DIR", dir)
 
-	regs := make(chan chunkd.CommandReg, 4)
+	regs := make(chan smeltd.CommandReg, 4)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/command", func(w http.ResponseWriter, r *http.Request) {
-		var reg chunkd.CommandReg
+		var reg smeltd.CommandReg
 		if err := json.NewDecoder(r.Body).Decode(&reg); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -74,7 +74,7 @@ func TestSubmitAndStreamRegistersBeforeStreaming(t *testing.T) {
 	client := newFakeSidecarClient(t)
 
 	_, err := submitAndStream(context.Background(), client, "sb-1",
-		&chunkd.CommandReg{
+		&smeltd.CommandReg{
 			SidecarID:   "sb-1",
 			ProjectRoot: "/tmp/proj",
 			Op:          string(eventlog.OpExec),
@@ -103,7 +103,7 @@ func TestSidecarExecRegistersWithTheDaemon(t *testing.T) {
 	client := newFakeSidecarClient(t)
 
 	_, err := submitAndStream(context.Background(), client, "sb-2",
-		&chunkd.CommandReg{
+		&smeltd.CommandReg{
 			SidecarID:   "sb-2",
 			ProjectRoot: t.TempDir(),
 			Op:          string(eventlog.OpExec),
@@ -134,7 +134,7 @@ func TestSubmitAndStreamReportsSubmitFailure(t *testing.T) {
 	assert.NilError(t, err)
 
 	_, err = submitAndStream(context.Background(), client, "sb-3",
-		&chunkd.CommandReg{SidecarID: "sb-3", Op: string(eventlog.OpExec)},
+		&smeltd.CommandReg{SidecarID: "sb-3", Op: string(eventlog.OpExec)},
 		"echo", nil, func(string, []byte) {})
 	assert.Check(t, err != nil, "a rejected submission must return an error")
 
@@ -168,7 +168,7 @@ func TestSubmitAndStreamWrappingPreservesErrorMatching(t *testing.T) {
 	assert.NilError(t, err)
 
 	_, err = submitAndStream(context.Background(), client, "sb-1",
-		&chunkd.CommandReg{SidecarID: "sb-1", Op: string(eventlog.OpExec)},
+		&smeltd.CommandReg{SidecarID: "sb-1", Op: string(eventlog.OpExec)},
 		"echo", nil, func(string, []byte) {})
 
 	assert.Assert(t, err != nil)

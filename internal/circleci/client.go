@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"time"
 
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sse"
-	"github.com/CircleCI-Public/chunk-cli/internal/version"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sse"
+	"github.com/smeltdev/smelt/internal/version"
 )
 
 // ErrTokenNotFound indicates no CircleCI token was found in env or config.
@@ -247,7 +247,7 @@ type execSubmitAttrs struct {
 //
 // Splitting submission from streaming is what makes a command observable while
 // it runs: the ID is the handle to its output stream, and a caller that wants to
-// hand that handle to something else — a log tailer, the chunk daemon — needs it
+// hand that handle to something else — a log tailer, the smelt daemon — needs it
 // before the command finishes, not after.
 func (c *Client) SubmitExec(
 	ctx context.Context, sidecarID, command string, args []string, env map[string]string,

@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
+	"github.com/smeltdev/smelt/internal/testing/recorder"
 )
 
 // FakeAnthropic serves canned responses for the Anthropic Messages API.

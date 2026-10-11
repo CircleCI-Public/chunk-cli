@@ -10,7 +10,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 // newSubmitStreamFake wires the shared SSE fake and returns a client plus the

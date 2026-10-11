@@ -9,18 +9,18 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
-// writeRemoteCommandConfig writes a .chunk/config.json with one remote command
+// writeRemoteCommandConfig writes a .smelt/config.json with one remote command
 // and no validation.sidecarImage — the "repo with no sidecar image" case.
 func writeRemoteCommandConfig(t *testing.T, workDir string) {
 	t.Helper()
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := map[string]any{
 		"factory": map[string]string{"backend": "circleci"},
 		"commands": []map[string]any{
@@ -29,7 +29,7 @@ func writeRemoteCommandConfig(t *testing.T, workDir string) {
 	}
 	data, err := json.Marshal(cfg)
 	assert.NilError(t, err)
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), data, 0o644))
 }
 
 // createdSidecarImage returns the image attribute of the single create-sidecar
@@ -55,7 +55,7 @@ func createdSidecarImage(t *testing.T, cci *fakes.FakeCircleCI) string {
 	return image
 }
 
-// runValidateForSnapshotSelection runs `chunk validate` in a fresh repo with no
+// runValidateForSnapshotSelection runs `smelt validate` in a fresh repo with no
 // configured sidecar image, against the given org snapshots. seedFiles are
 // written into the working tree first so stack detection has something to read.
 // Sync fails because no SSH server is listening, which is fine: sidecar
@@ -80,7 +80,7 @@ func runValidateForSnapshotSelection(t *testing.T, snapshots []fakes.Snapshot, s
 
 	sshDir := filepath.Join(env.HomeDir, ".ssh")
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "smelt_ai")))
 
 	binary.RunCLI(t, []string{"validate"}, env, workDir)
 	return cci

@@ -11,23 +11,23 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/anthropic"
+	"github.com/smeltdev/smelt/internal/authprompt"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/github"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/oauth"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 const (
-	suggestionCircleCIAuth  = "Set " + config.EnvCircleToken + " or run 'chunk auth login'."
-	suggestionAnthropicAuth = "Set " + config.EnvAnthropicAPIKey + " or run 'chunk auth set anthropic'."
-	suggestionGitHubAuth    = "Set " + config.EnvGitHubToken + " or run 'chunk auth set github'."
+	suggestionCircleCIAuth  = "Set " + config.EnvCircleToken + " or run 'smelt auth login'."
+	suggestionAnthropicAuth = "Set " + config.EnvAnthropicAPIKey + " or run 'smelt auth set anthropic'."
+	suggestionGitHubAuth    = "Set " + config.EnvGitHubToken + " or run 'smelt auth set github'."
 )
 
 func insecureStorageFlag(cmd *cobra.Command) bool {
@@ -135,9 +135,9 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 	if err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, insecureStorage); err != nil {
 		return nil, err
 	}
-	// The chunk daemon resolves its client once at startup, so one running from
+	// The smelt daemon resolves its client once at startup, so one running from
 	// before this login cannot see the new token.
-	chunkd.StopForCredentialChange()
+	smeltd.StopForCredentialChange()
 	if userID != uuid.Nil {
 		// Intentionally overwrites any previously saved user ID — account
 		// switching should reflect the newly authenticated user.
@@ -161,10 +161,10 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 const backfillUserIDTimeout = 3 * time.Second
 
 // backfillUserID persists and identifies the CircleCI user for an install that
-// authenticated without the user ID being saved: logins from before chunk
+// authenticated without the user ID being saved: logins from before smelt
 // recorded it, tokens supplied via the environment, or a login whose
 // /api/v2/me lookup was rate limited. Without it those installs report
-// anonymously until the user happens to run `chunk auth login` again.
+// anonymously until the user happens to run `smelt auth login` again.
 //
 // It only runs while telemetry is on and no user ID is saved, so the lookup
 // happens once per install rather than on every command. Like the rest of

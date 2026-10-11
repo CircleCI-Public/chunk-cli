@@ -15,26 +15,26 @@ import (
 	"charm.land/lipgloss/v2"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/smeltd/server"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
-func liveSession(id string, state chunkd.SessionState, started time.Time) sessionInfo {
-	return sessionInfo{label: "repo", s: chunkd.Session{
+func liveSession(id string, state smeltd.SessionState, started time.Time) sessionInfo {
+	return sessionInfo{label: "repo", s: smeltd.Session{
 		ID: id, State: state, StartedAt: started, Branch: "feature", HeadSHA: "0123456789abcdef",
-		Stages: []chunkd.Stage{
-			{ID: chunkd.StageFactoryLoop, State: chunkd.StageRunning},
+		Stages: []smeltd.Stage{
+			{ID: smeltd.StageFactoryLoop, State: smeltd.StageRunning},
 		},
 	}}
 }
 
 func sessModel(sessions ...sessionInfo) Model {
-	m := New(nil, true).WithConnection(chunkd.Connection{})
+	m := New(nil, true).WithConnection(smeltd.Connection{})
 	m.width, m.height = 110, 40
 	m.sessions = sessions
 	return m
@@ -55,13 +55,13 @@ func press(m Model, codes ...rune) (Model, tea.Cmd) {
 func TestCollectSessionsPutsLiveOnesFirstThenNewest(t *testing.T) {
 	now := time.Now()
 	ended := now
-	done := chunkd.Session{ID: "done-new", State: chunkd.SessionDone, StartedAt: now, EndedAt: &ended}
-	old := chunkd.Session{ID: "done-old", State: chunkd.SessionDone, StartedAt: now.Add(-time.Hour), EndedAt: &ended}
-	live := chunkd.Session{ID: "live", State: chunkd.SessionRunning, StartedAt: now.Add(-2 * time.Hour)}
+	done := smeltd.Session{ID: "done-new", State: smeltd.SessionDone, StartedAt: now, EndedAt: &ended}
+	old := smeltd.Session{ID: "done-old", State: smeltd.SessionDone, StartedAt: now.Add(-time.Hour), EndedAt: &ended}
+	live := smeltd.Session{ID: "live", State: smeltd.SessionRunning, StartedAt: now.Add(-2 * time.Hour)}
 
-	got := collectSessions([]chunkd.ProjectSnapshot{
-		{Root: "/a", RepoName: "a", Sessions: []chunkd.Session{old, done}},
-		{Root: "/b", Sessions: []chunkd.Session{live}},
+	got := collectSessions([]smeltd.ProjectSnapshot{
+		{Root: "/a", RepoName: "a", Sessions: []smeltd.Session{old, done}},
+		{Root: "/b", Sessions: []smeltd.Session{live}},
 	})
 
 	assert.Equal(t, got[0].s.ID, "live", "a live session comes first, however old")
@@ -70,25 +70,25 @@ func TestCollectSessionsPutsLiveOnesFirstThenNewest(t *testing.T) {
 	assert.Equal(t, got[0].label, "b", "a project with no repo name falls back to its directory")
 }
 
-func factoryRun(id string, state chunkd.SessionState, started time.Time) sessionInfo {
+func factoryRun(id string, state smeltd.SessionState, started time.Time) sessionInfo {
 	r := liveSession(id, state, started)
-	r.s.Branch = "chunk/factory/" + id
-	r.s.Factory = &chunkd.FactoryRun{Prompt: "# Add a --verbose flag\n\nto chunk validate", Attempts: 3, RunID: id, Worktree: "/tmp/wt/" + id}
+	r.s.Branch = "smelt/" + id
+	r.s.Factory = &smeltd.FactoryRun{Prompt: "# Add a --verbose flag\n\nto smelt validate", Attempts: 3, RunID: id, Worktree: "/tmp/wt/" + id}
 	return r
 }
 
 func TestVisibleRunsKeepsLiveOnesAndCapsRecentEndedOnes(t *testing.T) {
 	now := time.Now()
 	var all []sessionInfo
-	all = append(all, liveSession("live", chunkd.SessionRunning, now))
+	all = append(all, liveSession("live", smeltd.SessionRunning, now))
 	for i := range maxRuns + 2 {
 		ended := now.Add(-time.Duration(i) * time.Minute)
-		s := liveSession(fmt.Sprintf("done-%d", i), chunkd.SessionDone, ended)
+		s := liveSession(fmt.Sprintf("done-%d", i), smeltd.SessionDone, ended)
 		s.s.EndedAt = &ended
 		all = append(all, s)
 	}
 	old := now.Add(-2 * staleAfter)
-	stale := liveSession("stale", chunkd.SessionDone, old)
+	stale := liveSession("stale", smeltd.SessionDone, old)
 	stale.s.EndedAt = &old
 
 	got := visibleRuns(append(all[:2:2], stale), now)
@@ -100,7 +100,7 @@ func TestVisibleRunsKeepsLiveOnesAndCapsRecentEndedOnes(t *testing.T) {
 }
 
 func TestSplitRunSidecarsAttachesAFactoryRunsPoolToTheRun(t *testing.T) {
-	run := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	run := factoryRun("abc", smeltd.SessionRunning, time.Now())
 	run.s.Factory.SidecarIDs = []string{"1", "2", "3"}
 	sidecars := []sidecarInfo{
 		{id: "1", name: "anything"},
@@ -115,8 +115,8 @@ func TestSplitRunSidecarsAttachesAFactoryRunsPoolToTheRun(t *testing.T) {
 }
 
 func TestSplitRunSidecarsDoesNotMixRunsWithTheSameFactoryID(t *testing.T) {
-	a := factoryRun("same", chunkd.SessionRunning, time.Now())
-	b := factoryRun("same", chunkd.SessionRunning, time.Now())
+	a := factoryRun("same", smeltd.SessionRunning, time.Now())
+	b := factoryRun("same", smeltd.SessionRunning, time.Now())
 	a.s.ID, a.s.Factory.SidecarIDs = "session-a", []string{"sidecar-a"}
 	b.s.ID, b.s.Factory.SidecarIDs = "session-b", []string{"sidecar-b"}
 
@@ -129,20 +129,20 @@ func TestSplitRunSidecarsDoesNotMixRunsWithTheSameFactoryID(t *testing.T) {
 // The factory run's pane shows the work a round did, each check and review,
 // where the work is, and fits the screen however short it is.
 func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
-	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
-	r.s.Rounds = []chunkd.Round{{
-		Number: 1, State: chunkd.RoundDone, Note: "1 of 3 checks passed",
-		Implement: &chunkd.RoundImplement{State: chunkd.ImplementApplied, DurationMS: 4000, CostUSD: 0.41, Stat: "3 files changed"},
-		Checks: []chunkd.RoundCheck{
+	r := factoryRun("abc", smeltd.SessionRunning, time.Now().Add(-time.Minute))
+	r.s.Rounds = []smeltd.Round{{
+		Number: 1, State: smeltd.RoundDone, Note: "1 of 3 checks passed",
+		Implement: &smeltd.RoundImplement{State: smeltd.ImplementApplied, DurationMS: 4000, CostUSD: 0.41, Stat: "3 files changed"},
+		Checks: []smeltd.RoundCheck{
 			{Name: "test", Status: "passed", DurationMS: 1000},
 			{Name: "lint", Status: "failed", DurationMS: 500, Output: "app.go:3: unused variable"},
 		},
-		Reviews: []chunkd.ReviewPrompt{{Name: "bugs", State: chunkd.PromptDone, Findings: 2, CommandID: "cmd-r"}},
+		Reviews: []smeltd.ReviewPrompt{{Name: "bugs", State: smeltd.PromptDone, Findings: 2, CommandID: "cmd-r"}},
 	}, {
-		Number: 2, State: chunkd.RoundImplementing,
-		Implement: &chunkd.RoundImplement{State: chunkd.ImplementRunning},
+		Number: 2, State: smeltd.RoundImplementing,
+		Implement: &smeltd.RoundImplement{State: smeltd.ImplementRunning},
 	}}
-	r.s.Factory.Progress = chunkd.Feed{Lines: []chunkd.FeedLine{{Level: chunkd.FeedStep, Text: "syncing the implementer"}}, Total: 1}
+	r.s.Factory.Progress = smeltd.Feed{Lines: []smeltd.FeedLine{{Level: smeltd.FeedStep, Text: "syncing the implementer"}}, Total: 1}
 
 	for _, height := range []int{12, 24, 50} {
 		m := sessModel(r)
@@ -165,18 +165,18 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 }
 
 func TestEndedFactoryRunSaysWhereItsWorkIs(t *testing.T) {
-	r := factoryRun("abc", chunkd.SessionDone, time.Now().Add(-time.Hour))
+	r := factoryRun("abc", smeltd.SessionDone, time.Now().Add(-time.Hour))
 	ended := time.Now()
 	r.s.EndedAt = &ended
-	r.s.Stages[0].State, r.s.Stages[0].Note = chunkd.StageFailed, "checks still failed after 3 round(s)"
+	r.s.Stages[0].State, r.s.Stages[0].Note = smeltd.StageFailed, "checks still failed after 3 round(s)"
 	r.s.Factory.Result, r.s.Factory.Committed = "exhausted", true
-	r.s.Factory.Branch, r.s.Factory.Log = "chunk/factory/abc", "/tmp/run.log"
+	r.s.Factory.Branch, r.s.Factory.Log = "smelt/abc", "/tmp/run.log"
 	r.s.Factory.Stat = "2 files changed, 10 insertions(+)"
 
 	m := sessModel(r)
 	m.selRun = "abc"
 	out := m.render()
-	for _, want := range []string{"still failing", "checks still failed after 3 round(s)", "chunk/factory/abc", "committed · 2 files changed, 10 insertions(+)", "/tmp/run.log"} {
+	for _, want := range []string{"still failing", "checks still failed after 3 round(s)", "smelt/abc", "committed · 2 files changed, 10 insertions(+)", "/tmp/run.log"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 	}
 }
@@ -193,7 +193,7 @@ func TestNoRunsLeavesTheSidecarPaneAsItWas(t *testing.T) {
 // Runs and sidecars are one list to the selection: down off the last run
 // lands on the first sidecar, and up off it goes back.
 func TestSelectionMovesFromRunsToSidecarsAndBack(t *testing.T) {
-	m := sessModel(factoryRun("a", chunkd.SessionRunning, time.Now()), factoryRun("b", chunkd.SessionDone, time.Now()))
+	m := sessModel(factoryRun("a", smeltd.SessionRunning, time.Now()), factoryRun("b", smeltd.SessionDone, time.Now()))
 	m.sidecars = []sidecarInfo{{id: "sc-1", name: "box"}, {id: "sc-2", name: "box2"}}
 	m = m.reselectRun()
 	assert.Equal(t, m.selRun, "a", "the first poll lands on the newest run")
@@ -214,7 +214,7 @@ func TestSelectionMovesFromRunsToSidecarsAndBack(t *testing.T) {
 func TestShortDashboardKeepsItsSelectionVisible(t *testing.T) {
 	var runs []sessionInfo
 	for i := range maxRuns {
-		run := factoryRun(fmt.Sprintf("run-%d", i), chunkd.SessionRunning, time.Now())
+		run := factoryRun(fmt.Sprintf("run-%d", i), smeltd.SessionRunning, time.Now())
 		run.s.Factory.Prompt = fmt.Sprintf("run %d", i)
 		runs = append(runs, run)
 	}
@@ -233,12 +233,12 @@ func TestShortDashboardKeepsItsSelectionVisible(t *testing.T) {
 }
 
 func TestRunItemsOpenTheirOutput(t *testing.T) {
-	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
-	r.s.Rounds = []chunkd.Round{{
-		Number: 1, State: chunkd.RoundDone,
-		Implement: &chunkd.RoundImplement{State: chunkd.ImplementApplied, Summary: "Added the flag."},
-		Checks:    []chunkd.RoundCheck{{Name: "lint", Status: "failed", Output: "app.go:3: unused"}, {Name: "test", Status: "passed"}},
-		Reviews:   []chunkd.ReviewPrompt{{Name: "bugs", State: chunkd.PromptDone, CommandID: "cmd-r"}},
+	r := factoryRun("abc", smeltd.SessionRunning, time.Now())
+	r.s.Rounds = []smeltd.Round{{
+		Number: 1, State: smeltd.RoundDone,
+		Implement: &smeltd.RoundImplement{State: smeltd.ImplementApplied, Summary: "Added the flag."},
+		Checks:    []smeltd.RoundCheck{{Name: "lint", Status: "failed", Output: "app.go:3: unused"}, {Name: "test", Status: "passed"}},
+		Reviews:   []smeltd.ReviewPrompt{{Name: "bugs", State: smeltd.PromptDone, CommandID: "cmd-r"}},
 	}}
 	m := sessModel(r)
 	m.selRun = "abc"
@@ -265,8 +265,8 @@ func TestRunItemsOpenTheirOutput(t *testing.T) {
 
 func TestRunKeysQuitDetachesCancelNeedsConfirmation(t *testing.T) {
 	m := sessModel(
-		liveSession("run-1", chunkd.SessionRunning, time.Now()),
-		liveSession("run-2", chunkd.SessionRunning, time.Now().Add(-time.Minute)),
+		liveSession("run-1", smeltd.SessionRunning, time.Now()),
+		liveSession("run-2", smeltd.SessionRunning, time.Now().Add(-time.Minute)),
 	)
 	m = m.reselectRun()
 
@@ -293,8 +293,8 @@ func TestRunKeysQuitDetachesCancelNeedsConfirmation(t *testing.T) {
 
 func TestCancelResultOnlyUpdatesTheRunItCameFrom(t *testing.T) {
 	m := sessModel(
-		liveSession("run-1", chunkd.SessionRunning, time.Now()),
-		liveSession("run-2", chunkd.SessionRunning, time.Now().Add(-time.Minute)),
+		liveSession("run-1", smeltd.SessionRunning, time.Now()),
+		liveSession("run-2", smeltd.SessionRunning, time.Now().Add(-time.Minute)),
 	).reselectRun()
 	m, _ = press(m, tea.KeyDown)
 	assert.Equal(t, m.selRun, "run-2")
@@ -312,7 +312,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	sockDir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-	t.Setenv("CHUNK_DAEMON_DIR", sockDir)
+	t.Setenv("SMELT_DAEMON_DIR", sockDir)
 
 	project := t.TempDir()
 	run := func(args ...string) {
@@ -323,11 +323,11 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 		assert.NilError(t, runErr, string(out))
 	}
 	run("init", "-b", "main")
-	prompts := filepath.Join(project, ".chunk", "reviews")
+	prompts := filepath.Join(project, ".smelt", "reviews")
 	assert.NilError(t, os.MkdirAll(prompts, 0o755))
 	assert.NilError(t, os.WriteFile(filepath.Join(prompts, "bugs.md"), []byte("find bugs"), 0o644))
 	projectCfg := `{"orgID":"org-1","commands":[{"name":"test","run":"go test ./..."}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(project, ".chunk", "config.json"), []byte(projectCfg), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(project, ".smelt", "config.json"), []byte(projectCfg), 0o644))
 	run("add", ".")
 	run("commit", "-m", "init")
 	dataDir, err := config.ProjectDataDir(project)
@@ -354,12 +354,12 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 			t.Error("daemon did not shut down")
 		}
 	})
-	waitForCond(t, "daemon", chunkd.IsDaemonRunning)
+	waitForCond(t, "daemon", smeltd.IsDaemonRunning)
 
-	id, err := chunkd.StartFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	id, err := smeltd.StartFactory(smeltd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
 	assert.NilError(t, err)
-	state := func() chunkd.SessionState {
-		d, fetchErr := chunkd.FetchSession(id)
+	state := func() smeltd.SessionState {
+		d, fetchErr := smeltd.FetchSession(id)
 		assert.NilError(t, fetchErr)
 		return d.State
 	}
@@ -381,7 +381,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	_, isQuit := quitCmd().(tea.QuitMsg)
 	assert.Assert(t, isQuit)
 	time.Sleep(100 * time.Millisecond)
-	assert.Equal(t, state(), chunkd.SessionRunning)
+	assert.Equal(t, state(), smeltd.SessionRunning)
 
 	// The confirmed cancel key stops it.
 	m, cmd := press(m, 'x', 'x')
@@ -389,7 +389,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	res, ok := cmd().(sessionActionMsg)
 	assert.Assert(t, ok)
 	assert.NilError(t, res.err)
-	waitForCond(t, "session cancelled", func() bool { return state() == chunkd.SessionCancelled })
+	waitForCond(t, "session cancelled", func() bool { return state() == smeltd.SessionCancelled })
 }
 
 func waitForCond(t *testing.T, what string, ok func() bool) {
@@ -408,14 +408,14 @@ func waitForCond(t *testing.T, what string, ok func() bool) {
 // does not offer does nothing, and one it offers works.
 func TestFooterOffersOnlyTheKeysThatWork(t *testing.T) {
 	ended := time.Now()
-	done := liveSession("done", chunkd.SessionDone, ended.Add(-time.Minute))
+	done := liveSession("done", smeltd.SessionDone, ended.Add(-time.Minute))
 	done.s.EndedAt = &ended
 
 	for _, tc := range []struct {
 		run    sessionInfo
 		cancel bool
 	}{
-		{liveSession("live", chunkd.SessionRunning, time.Now()), true},
+		{liveSession("live", smeltd.SessionRunning, time.Now()), true},
 		{done, false},
 	} {
 		m := sessModel(tc.run).reselectRun()
@@ -468,18 +468,18 @@ func TestTextPaneWrapsAndScrollsWithinTheScreen(t *testing.T) {
 func TestFactoryReviewRowsSayWhetherTheReviewPassed(t *testing.T) {
 	st := newWatchStyles(false)
 	m := sessModel()
-	row := func(p chunkd.ReviewPrompt) string {
-		p.Name, p.State = "bugs", chunkd.PromptDone
+	row := func(p smeltd.ReviewPrompt) string {
+		p.Name, p.State = "bugs", smeltd.PromptDone
 		r := m.reviewRow(st, p)
 		return stripANSI(r.icon + " " + r.detail)
 	}
 
-	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "passed"}), ui.IconOK+" 0ms")
-	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "passed", Findings: 2}), ui.IconOK+" 0ms  2 findings, none worth changing")
-	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "failed", Findings: 3, Worth: 1}), ui.IconFail+" 0ms  1 worth changing")
-	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "errored", Error: "timed out"}), ui.IconFail+" 0ms  timed out")
+	assert.Equal(t, row(smeltd.ReviewPrompt{Status: "passed"}), ui.IconOK+" 0ms")
+	assert.Equal(t, row(smeltd.ReviewPrompt{Status: "passed", Findings: 2}), ui.IconOK+" 0ms  2 findings, none worth changing")
+	assert.Equal(t, row(smeltd.ReviewPrompt{Status: "failed", Findings: 3, Worth: 1}), ui.IconFail+" 0ms  1 worth changing")
+	assert.Equal(t, row(smeltd.ReviewPrompt{Status: "errored", Error: "timed out"}), ui.IconFail+" 0ms  timed out")
 	// Until its status is known, any finding is flagged.
-	assert.Equal(t, row(chunkd.ReviewPrompt{Findings: 2}), ui.IconWarn+" 0ms  2 findings")
+	assert.Equal(t, row(smeltd.ReviewPrompt{Findings: 2}), ui.IconWarn+" 0ms  2 findings")
 }
 
 func stripANSI(s string) string { return regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(s, "") }

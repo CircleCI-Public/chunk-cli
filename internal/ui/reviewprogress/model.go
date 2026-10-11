@@ -1,4 +1,4 @@
-// Package reviewprogress implements the BubbleTea TUI for chunk review passes.
+// Package reviewprogress implements the BubbleTea TUI for smelt review passes.
 package reviewprogress
 
 import (
@@ -10,8 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/promptrows"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/ui/promptrows"
 )
 
 const spinInterval = 160 * time.Millisecond
@@ -124,7 +124,7 @@ func (m Model) render() string {
 	var b strings.Builder
 
 	// Header
-	header := st.Emph.Render("chunk review") +
+	header := st.Emph.Render("smelt review") +
 		st.VDim.Render("  ·  ") +
 		st.Muted.Render(fmt.Sprintf("%d prompt(s)", len(m.rows))) +
 		st.VDim.Render("  ·  ") +

@@ -38,13 +38,13 @@ func TestDetachScript(t *testing.T) {
 	assert.Assert(t, strings.Contains(script, "--parallelism 3"), script)
 	assert.Assert(t, strings.Contains(script, "--timeout"), script)
 
-	// A chunk without 'review' is caught before anything is backgrounded.
+	// A smelt without 'review' is caught before anything is backgrounded.
 	assert.Assert(t, strings.Index(script, "review --help") < strings.Index(script, "nohup setsid"), script)
 	assert.Assert(t, strings.Contains(script, "exit 66;; *) exit 64"), script)
 
 	// The run directory is the last thing printed, for the caller to read.
 	assert.Assert(t, strings.HasSuffix(script, "echo \"$RUN\"\n"), script)
-	assert.Assert(t, strings.Contains(script, `RUN="$HOME/.chunk-review/20260929-120000"`), script)
+	assert.Assert(t, strings.Contains(script, `RUN="$HOME/.smelt-review/20260929-120000"`), script)
 }
 
 func TestDetachScriptOmitsUnsetOptions(t *testing.T) {
@@ -96,8 +96,8 @@ func TestParseRead(t *testing.T) {
 }
 
 func TestReadScriptQuotesRunDir(t *testing.T) {
-	script := ReadScript("/home/user/.chunk-review/a b'c")
-	assert.Assert(t, strings.HasPrefix(script, `cd '/home/user/.chunk-review/a b'\''c'`), script)
+	script := ReadScript("/home/user/.smelt-review/a b'c")
+	assert.Assert(t, strings.HasPrefix(script, `cd '/home/user/.smelt-review/a b'\''c'`), script)
 }
 
 func TestDetachScriptPassesReviewOptions(t *testing.T) {
@@ -113,18 +113,18 @@ func TestDetachScriptPassesReviewOptions(t *testing.T) {
 }
 
 func TestUploadInstallReplacesTheBinaryInPlace(t *testing.T) {
-	// Writing over a running chunk fails; a new file moved over it does not.
-	assert.Assert(t, strings.Contains(UploadInstall, `mv -f "$HOME/chunk.new" "$HOME/chunk"`), UploadInstall)
-	assert.Assert(t, !strings.Contains(UploadInstall, `> "$HOME/chunk" `), UploadInstall)
+	// Writing over a running smelt fails; a new file moved over it does not.
+	assert.Assert(t, strings.Contains(UploadInstall, `mv -f "$HOME/smelt.new" "$HOME/smelt"`), UploadInstall)
+	assert.Assert(t, !strings.Contains(UploadInstall, `> "$HOME/smelt" `), UploadInstall)
 }
 
 // runDetachScript runs the detach script in a shell whose home holds the given
-// stand-in for chunk, and returns the script's exit code.
-func runDetachScript(t *testing.T, chunk string) int {
+// stand-in for smelt, and returns the script's exit code.
+func runDetachScript(t *testing.T, piece string) int {
 	t.Helper()
 	home := t.TempDir()
-	if chunk != "" {
-		assert.NilError(t, os.WriteFile(filepath.Join(home, "chunk"), []byte(chunk), 0o755))
+	if piece != "" {
+		assert.NilError(t, os.WriteFile(filepath.Join(home, "smelt"), []byte(piece), 0o755))
 	}
 	script := DetachScript(DetachSpec{RunID: "r", RepoPath: t.TempDir(), OrgID: "o", Parallelism: 1})
 	cmd := exec.Command("sh", "-c", script)
@@ -138,7 +138,7 @@ func runDetachScript(t *testing.T, chunk string) int {
 	return exitErr.ExitCode()
 }
 
-func TestDetachScriptTellsBrokenChunkFromOneWithoutReview(t *testing.T) {
+func TestDetachScriptTellsBrokenSmeltFromOneWithoutReview(t *testing.T) {
 	t.Run("not executable as a program", func(t *testing.T) {
 		// A file the kernel cannot run, such as a build for another OS.
 		assert.Equal(t, runDetachScript(t, "garbage"), ExitBadBinary)

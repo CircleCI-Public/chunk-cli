@@ -13,7 +13,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 // execWith runs a command against a fake configured with the given canned
@@ -293,8 +293,8 @@ func TestExtractServerMessage(t *testing.T) {
 	}{
 		{
 			name: "v3 nested envelope",
-			body: `{"error":{"id":"ff5c93354749c51f","title":"sidecar is out of date; delete and recreate with: chunk sidecar create"}}`,
-			want: "sidecar is out of date; delete and recreate with: chunk sidecar create",
+			body: `{"error":{"id":"ff5c93354749c51f","title":"sidecar is out of date; delete and recreate with: smelt sidecar create"}}`,
+			want: "sidecar is out of date; delete and recreate with: smelt sidecar create",
 		},
 		{name: "bare error string", body: `{"error":"gone away"}`, want: "gone away"},
 		{name: "message field", body: `{"message":"nope"}`, want: "nope"},

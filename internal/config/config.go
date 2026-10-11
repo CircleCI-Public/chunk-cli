@@ -13,7 +13,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/sethvargo/go-envconfig/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/keyring"
 )
 
 // marshalIndent encodes v as indented JSON without HTML-escaping special characters
@@ -42,11 +43,11 @@ const (
 	// and the path cannot be resolved. Callers should prefer configFileSource() for user-facing messages.
 	SourceConfigFile = "Config file (user config)"
 
-	// SourceProjectConfig is the source label for values from .chunk/config.json.
-	SourceProjectConfig = "Project config (.chunk/config.json)"
+	// SourceProjectConfig is the source label for values from .smelt/config.json.
+	SourceProjectConfig = "Project config (" + brand.ProjectDir + "/config.json)"
 )
 
-// Chunk-specific environment variable names.
+// Smelt-specific environment variable names.
 //
 //nolint:gosec // env var names, not credentials
 const (
@@ -60,10 +61,10 @@ const (
 	EnvGitHubAPIURL       = "GITHUB_API_URL"
 	EnvModel              = "CODE_REVIEW_CLI_MODEL"
 	EnvCircleCIOrgID      = "CIRCLECI_ORG_ID"
-	EnvChunkHooksDisabled = "CHUNK_HOOKS_DISABLED"
-	EnvChunkNoTelemetry   = "CHUNK_NO_TELEMETRY"
-	EnvChunkSessionID     = "CHUNK_SESSION_ID"
-	EnvChunkNoUpdateCheck = "CHUNK_NO_UPDATE_CHECK"
+	EnvSmeltHooksDisabled = brand.EnvPrefix + "HOOKS_DISABLED"
+	EnvSmeltNoTelemetry   = brand.EnvPrefix + "NO_TELEMETRY"
+	EnvSmeltSessionID     = brand.EnvPrefix + "SESSION_ID"
+	EnvSmeltNoUpdateCheck = brand.EnvPrefix + "NO_UPDATE_CHECK"
 )
 
 // System/standard environment variable names.
@@ -81,7 +82,7 @@ const (
 
 // noTelemetryEnvVars are well-known environment variables that disable
 // telemetry regardless of the persisted user preference.
-var noTelemetryEnvVars = []string{EnvChunkNoTelemetry, EnvNoAnalytics, EnvDoNotTrack, EnvCI}
+var noTelemetryEnvVars = []string{EnvSmeltNoTelemetry, EnvNoAnalytics, EnvDoNotTrack, EnvCI}
 
 // EnvVars holds all environment variables the application reads.
 //
@@ -133,9 +134,9 @@ type UserConfig struct {
 	// false (zero value) means disabled; true means enabled (opt-in).
 	Notifications bool `json:"notifications,omitempty"`
 
-	// AutoLaunchDaemon controls whether chunk commands automatically start the
-	// chunk daemon when it is not running. false (zero value / default) means
-	// the daemon must be started explicitly with `chunk watch`.
+	// AutoLaunchDaemon controls whether smelt commands automatically start the
+	// smelt daemon when it is not running. false (zero value / default) means
+	// the daemon must be started explicitly with `smelt watch`.
 	AutoLaunchDaemon bool `json:"autoLaunchDaemon,omitempty"`
 
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
@@ -165,7 +166,7 @@ type ResolvedConfig struct {
 }
 
 // configFileSource returns a source label that includes the actual config file
-// path, e.g. "Config file (~/.config/chunk/config.json)". Falls back to
+// path, e.g. "Config file (~/.config/smelt/config.json)". Falls back to
 // SourceConfigFile if the path cannot be resolved.
 func configFileSource() string {
 	if p, err := Path(); err == nil {
@@ -322,18 +323,18 @@ func IsTelemetry(cfg UserConfig) bool {
 	return *cfg.Telemetry
 }
 
-// chunkTelemetryNamespace is a fixed UUID used as the v5 namespace when
+// smeltTelemetryNamespace is a fixed UUID used as the v5 namespace when
 // deriving per-session anonymous tracking IDs. It was generated specifically
-// for chunk-cli (rather than reusing a published example namespace) so the
+// for smelt (rather than reusing a published example namespace) so the
 // hash domain is unique to this tool and session IDs from other tools can
 // never collide. Changing it would orphan previously reported session IDs.
-var chunkTelemetryNamespace = uuid.MustParse("455166ad-6bea-4450-89bd-0dce51341582")
+var smeltTelemetryNamespace = uuid.MustParse("455166ad-6bea-4450-89bd-0dce51341582")
 
 // SessionTrackingID derives a stable, anonymous UUID from the given session
 // ID string. The result is deterministic (same input → same UUID) but not
 // reversible, so the original session ID cannot be recovered from it.
 func SessionTrackingID(sessionID string) uuid.UUID {
-	return uuid.NewSHA1(chunkTelemetryNamespace, []byte(sessionID))
+	return uuid.NewSHA1(smeltTelemetryNamespace, []byte(sessionID))
 }
 
 // EnsureInstanceID returns the persisted anonymous instance ID used to
@@ -487,7 +488,7 @@ func MaskKey(key string) string {
 }
 
 // ResolveOrgID returns the CircleCI org ID for display in config show.
-// Priority: CIRCLECI_ORG_ID env var > orgID in .chunk/config.json for workDir.
+// Priority: CIRCLECI_ORG_ID env var > orgID in .smelt/config.json for workDir.
 func ResolveOrgID(workDir string) (value, source string) {
 	env, err := LoadEnv(context.Background())
 	if err == nil && env.CircleCIOrgID != "" {
@@ -511,7 +512,7 @@ var ValidConfigKeys = map[string]bool{
 }
 
 // ValidProjectConfigKeys are the keys accepted by "config set" that write to
-// the project config (.chunk/config.json).
+// the project config (.smelt/config.json).
 var ValidProjectConfigKeys = map[string]bool{
 	"orgID":                   true,
 	"validation.sidecarImage": true,

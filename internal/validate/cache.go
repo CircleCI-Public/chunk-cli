@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/hashutil"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/hashutil"
 )
 
 // CachedResult records the timestamp of a successful validate run. Only
@@ -36,7 +36,7 @@ type CacheKeyInputs struct {
 	CommandName string
 	// Config is the project config driving the run, hashed whole. The commands
 	// are the obvious input, but the environment block decides what those
-	// commands run against, and a project that gitignores .chunk/ gets no
+	// commands run against, and a project that gitignores .smelt/ gets no
 	// invalidation from the working-tree digest when any of it changes.
 	Config *config.ProjectConfig
 	// Target identifies where the commands execute: "" for a local run,

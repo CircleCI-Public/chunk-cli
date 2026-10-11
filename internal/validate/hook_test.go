@@ -101,8 +101,8 @@ func TestHooksDisabled_EnvVar(t *testing.T) {
 
 func TestHooksDisabled_SentinelFile(t *testing.T) {
 	dir := t.TempDir()
-	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".chunk", "hooks-disabled"), []byte{}, 0o644))
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".smelt"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".smelt", "hooks-disabled"), []byte{}, 0o644))
 	assert.Equal(t, HooksDisabled(dir, false), true)
 }
 

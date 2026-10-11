@@ -1,16 +1,16 @@
 # syntax=docker/dockerfile:1
 #
-# Local sandbox image for `chunk factory --backend docker`.
+# Local sandbox image for `smelt factory --backend docker`.
 #
 # This is the environment a factory *sidecar* runs in — the box the AI agent
 # edits code on and where your tests run. Build it once, then point the factory
 # at it:
 #
-#     docker build -t chunk-sandbox:local -f Dockerfile.local .
-#     chunk factory build --backend docker --image chunk-sandbox:local "your task"
+#     docker build -t smelt-sandbox:local -f Dockerfile.local .
+#     smelt factory build --backend docker --image smelt-sandbox:local "your task"
 #
 # It carries what the loop needs (git, coreutils, procps, the Claude Code CLI)
-# plus chunk-cli's own toolchain so the project's validation commands run in the
+# plus smelt's own toolchain so the project's validation commands run in the
 # sidecar: Go (matching go.mod), Task, and uv/python for the harness lint step.
 # `task test`/`lint`/`fmt` fetch gotestsum, golangci-lint and gosimports via
 # `go tool`, so those need no separate install.
@@ -18,7 +18,7 @@
 # The repo is NOT copied in at build time — the Docker backend bind-mounts a
 # fresh copy of your working tree into the container at run time. So this image
 # only needs tools, never your source. (The file transport is host-side; the
-# rsync and ssh below are only for chunk-cli's own tests.)
+# rsync and ssh below are only for smelt's own tests.)
 
 FROM debian:bookworm-slim
 
@@ -66,7 +66,7 @@ RUN sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bi
  && uv --version
 
 # -- Extra project toolchain -------------------------------------------------
-# chunk-cli needs only Go + Task + uv (above). For other repos, add their test
+# smelt needs only Go + Task + uv (above). For other repos, add their test
 # dependencies here (node, rust, system libs, …).
 # ---------------------------------------------------------------------------
 

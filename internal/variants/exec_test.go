@@ -10,11 +10,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 func discardStatus(_ iostream.Level, _ string) {}
@@ -27,7 +27,7 @@ func newSession(t *testing.T, exitFor func(command string) (string, int)) (*side
 
 	homeDir := t.TempDir()
 	t.Setenv(config.EnvHome, homeDir)
-	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "smelt_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
 	sshSrv.SetResultFn(exitFor)
 

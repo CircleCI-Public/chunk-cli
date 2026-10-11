@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/smeltdev/smelt/internal/circleci"
 )
 
 // fakePrompts returns a Prompts struct that replays canned responses.

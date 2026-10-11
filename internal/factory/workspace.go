@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // workspace is the implementer's checkout on its sidecar. The loop keeps the
@@ -33,16 +33,16 @@ func (c Change) Empty() bool {
 	return c.Stat == ""
 }
 
-// gitIdentity commits as chunk whatever the sidecar image's git config says:
+// gitIdentity commits as smelt whatever the sidecar image's git config says:
 // an image may have no identity set, require signed commits, or install hooks.
 const gitIdentity = "git -c user.name=" + defaultAuthorName + " -c user.email=" + defaultAuthorEmail + " -c commit.gpgsign=false"
 
 // commitBaseline commits whatever the developer's synced tree holds, so their
 // own uncommitted work is part of the baseline rather than of the change the
 // reviewers see. The commit is made even when the tree is clean, so the
-// baseline is always a commit chunk made.
+// baseline is always a commit smelt made.
 func (w *workspace) commitBaseline(ctx context.Context) error {
-	script := fmt.Sprintf(`cd %s && git add -A && %s commit -q --no-verify --allow-empty -m "chunk factory baseline" && git rev-parse HEAD`,
+	script := fmt.Sprintf(`cd %s && git add -A && %s commit -q --no-verify --allow-empty -m "smelt factory baseline" && git rev-parse HEAD`,
 		sidecar.ShellEscape(w.entry.RepoPath), gitIdentity)
 	out, err := w.run(ctx, script)
 	if err != nil {

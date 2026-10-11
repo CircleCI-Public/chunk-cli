@@ -15,13 +15,13 @@ type Environment struct {
 }
 
 // StepTest is the detected test command. It is not a provisioning step: it
-// exists only as the input to the Dockerfile CMD that `chunk sidecar build`
+// exists only as the input to the Dockerfile CMD that `smelt sidecar build`
 // generates from a piped env spec, and is never run as part of the sidecar
 // setup sequence. How a project's tests are actually invoked is user-owned
 // config — see config.ProjectConfig.Commands.
 const StepTest = "test"
 
-// ForConfig returns a copy of e suitable for persisting to .chunk/config.json,
+// ForConfig returns a copy of e suitable for persisting to .smelt/config.json,
 // with the StepTest step removed so that Setup contains only steps that are
 // really run during setup.
 //

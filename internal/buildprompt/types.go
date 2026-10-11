@@ -3,8 +3,8 @@ package buildprompt
 import (
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/github"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // Options holds the configuration for a build-prompt run.

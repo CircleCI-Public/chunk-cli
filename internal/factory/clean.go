@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitexec"
 )
 
 // RunState says what became of a run.
@@ -83,7 +83,7 @@ func (e RunEntry) Has(runID string) bool {
 func Inventory(ctx context.Context, root string, active map[string]bool) ([]RunEntry, error) {
 	dataDir, err := config.ProjectDataDir(root)
 	if err != nil {
-		return nil, fmt.Errorf("find chunk's data directory for the project: %w", err)
+		return nil, fmt.Errorf("find smelt's data directory for the project: %w", err)
 	}
 	records, err := listRecords(dataDir)
 	if err != nil {
@@ -322,7 +322,7 @@ func RemoveRun(ctx context.Context, root string, e RunEntry, force bool) (Remova
 	}
 	dataDir, err := config.ProjectDataDir(root)
 	if err != nil {
-		return done, fmt.Errorf("find chunk's data directory for the project: %w", err)
+		return done, fmt.Errorf("find smelt's data directory for the project: %w", err)
 	}
 	git := gitexec.Runner{Dir: root}
 

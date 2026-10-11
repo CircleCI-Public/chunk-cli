@@ -1,11 +1,11 @@
 # Architecture
 
-Module layout and dependency rules for the `chunk` Go CLI.
+Module layout and dependency rules for the `smelt` Go CLI.
 
 ## Directory Structure
 
 ```
-chunk-cli/
+smelt/
 ├── main.go                    # Entry point: cobra bootstrap + usererr handling
 ├── skills/                    # Skill definitions (go:embed) and skill subdirectories
 ├── acceptance/                # Acceptance tests
@@ -24,9 +24,10 @@ chunk-cli/
     │   ├── upgrade.go         # upgrade
     │   └── validate.go        # validate
     ├── anthropic/             # Anthropic Messages API client
+    ├── brand/                 # The project's name and every name derived from it (folders, SMELT_ env, keychain, labels, branches)
     ├── buildprompt/           # Three-step pipeline: discover → analyze → generate
     ├── circleci/              # CircleCI REST API client
-    ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
+    ├── config/                # User config (XDG_CONFIG_HOME/smelt/config.json)
     ├── filecache/             # Generic JSON-on-disk cache (FileCache[T])
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitexec/               # Low-level local Git process execution
@@ -46,10 +47,10 @@ chunk-cli/
     ├── testing/recorder/      # HTTP recorder for tests
     ├── tui/                   # Terminal UI components (confirm, input, select)
     ├── ui/                    # Colors, formatting, spinner
-    ├── upgrade/               # CLI self-upgrade and update check; names the release repo (web3technologies/chunk-cli) once, verifies checksums.txt
+    ├── upgrade/               # CLI self-upgrade and update check; names the release repo (smeltdev/smelt) once, verifies checksums.txt
     ├── installscript/         # End-to-end tests for install.sh (fake release server)
     ├── validate/              # Validation command logic
-    └── chunkd/                # The daemon's API: wire types, client, paths, lifecycle
+    └── smeltd/                # The daemon's API: wire types, client, paths, lifecycle
         └── server/            # The daemon itself: poll loop, stores, handlers, factory runs
 ```
 
@@ -167,7 +168,7 @@ Not all values support all layers — for example, CircleCI and GitHub
 tokens have no flag, so their chain is `env var > config file`. The
 Anthropic API key and model support the full chain.
 
-User config lives at `$XDG_CONFIG_HOME/chunk/config.json` (default: `~/.config/chunk/config.json`):
+User config lives at `$XDG_CONFIG_HOME/smelt/config.json` (default: `~/.config/smelt/config.json`):
 
 ```json
 {
@@ -176,7 +177,7 @@ User config lives at `$XDG_CONFIG_HOME/chunk/config.json` (default: `~/.config/c
 }
 ```
 
-Project config lives in `.chunk/config.json` (per repository):
+Project config lives in `.smelt/config.json` (per repository):
 
 ```json
 {
@@ -201,43 +202,43 @@ in `config.Resolve` and makes clients testable.
 | `GITHUB_TOKEN` | github | GitHub authentication |
 | `GITHUB_API_URL` | github, upgrade | GitHub API endpoint override (also used by the update check) |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |
-| `CIRCLECI_ORG_ID` | sidecar | CircleCI organization ID (overrides `orgID` in `.chunk/config.json`) |
+| `CIRCLECI_ORG_ID` | sidecar | CircleCI organization ID (overrides `orgID` in `.smelt/config.json`) |
 | `CIRCLECI_BASE_URL` | circleci | CircleCI endpoint override |
 | `CLAUDE_PROJECT_DIR` | settings | IDE-provided project directory used by generated `PreToolUse` hooks |
 | `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
-| `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
+| `SMELT_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
 | `CLAUDE_CODE_SESSION_ID` | session, sidecar | Which agent session is running the command, so parallel sessions in one working tree get their own sidecar pool |
-| `CHUNK_SESSION_ID` | session, sidecar | Pins that session identity by hand; wins over `CLAUDE_CODE_SESSION_ID` |
+| `SMELT_SESSION_ID` | session, sidecar | Pins that session identity by hand; wins over `CLAUDE_CODE_SESSION_ID` |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
 | `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
 | `XDG_STATE_HOME` | upgrade | User state directory for the 24 h update-check cache (default: `~/.local/state`) |
-| `CHUNK_NO_TELEMETRY` | telemetry | Disable usage telemetry (any non-empty value) |
+| `SMELT_NO_TELEMETRY` | telemetry | Disable usage telemetry (any non-empty value) |
 | `NO_ANALYTICS` | telemetry | Disable usage telemetry (any non-empty value) |
 | `DO_NOT_TRACK` | telemetry | Disable usage telemetry (any non-empty value) |
 | `CI` | telemetry, upgrade | Also disables usage telemetry and the update check (set by most CI systems) |
-| `CHUNK_NO_UPDATE_CHECK` | upgrade | Disable the new-version check and its notice (any non-empty value) |
-| `CHUNK_TELEMETRY_LOG` | telemetry | Log telemetry events to stderr instead of (or alongside) sending them |
+| `SMELT_NO_UPDATE_CHECK` | upgrade | Disable the new-version check and its notice (any non-empty value) |
+| `SMELT_TELEMETRY_LOG` | telemetry | Log telemetry events to stderr instead of (or alongside) sending them |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | sidecar | Standard Go proxy env vars, honored when dialing the sidecar's WebSocket SSH tunnel (needed in devcontainers/networks where egress is proxy-only) |
 
 ## Telemetry (`internal/telemetry/`)
 
 Modeled on circleci-cli's `internal/telemetry` package. The write key is a
 build-time variable (`telemetry.WriteKey`, set with `-X` in `.goreleaser.yaml`
-from the `CHUNK_TELEMETRY_WRITE_KEY` secret) and is empty by default: with no
+from the `SMELT_TELEMETRY_WRITE_KEY` secret) and is empty by default: with no
 key, `NewSender` adds no delegate, nothing is buffered for delivery and no
 `receive-telemetry` subprocess is ever started. The opt-out variables and
-`chunk config set telemetry` still apply to a build that has a key. When a key
+`smelt config set telemetry` still apply to a build that has a key. When a key
 is present, every command reports
 a single `command_invocation` event containing the command path and the names
 (never values) of flags the user set — no flag values, argument values, file
-paths, or other PII. Events are tagged with `context_app_name` (`chunk-cli`). The
+paths, or other PII. Events are tagged with `context_app_name` (`smelt`). The
 install UUID is sent as `AnonymousId` (not `UserId`) to avoid mixing machine
 identifiers with real user IDs in shared event counts. When the user has
 authenticated, their CircleCI user UUID is also sent as `UserId`.
 
 The event's `outcome` is one of `success`, `blocked` (the user could not
 proceed: bad args, not authenticated, not configured, not found),
-`check_failed` (chunk ran and the project's own checks exited non-zero), or
+`check_failed` (smelt ran and the project's own checks exited non-zero), or
 `failure` (an actual error: API failure, internal error, anything
 unclassified). Errors choose their outcome by implementing
 `telemetry.Classified`; an error that does not is a `failure`.
@@ -247,7 +248,7 @@ When an auth flow validates a token, it persists the user UUID
 user ID to the rest of the current run, and sends a Segment `identify` joining
 the anonymous history to the user: one for the current session tracking ID
 (if any) and one for the instance ID, which is the `AnonymousId` of every run
-made outside an agent session. `chunk auth remove circleci` clears the stored
+made outside an agent session. `smelt auth remove circleci` clears the stored
 user ID once no CircleCI token resolves anywhere.
 
 Installs that authenticated before the user ID was recorded (or via an
@@ -264,13 +265,13 @@ command would lose its one-time identify. Buffered events reach the
 receiver also accepts the older bare-track array.
 
 Every event's `Context` also carries the operating system (`runtime.GOOS`)
-and, if detected, the AI coding agent chunk-cli was invoked from (e.g.
+and, if detected, the AI coding agent smelt was invoked from (e.g.
 `claude-code`, `cursor`) — see `internal/telemetry/agent.go`'s
 `DetectCodingAgent`, which checks for well-known environment variables those
 agents set in the shells they spawn. The agent list is intentionally
 conservative: only signals confirmed to be set by the agent itself are
 included, to avoid misattributing invocations. Detection returns `""` when no
-known agent is found, the common case for a human running `chunk` directly.
+known agent is found, the common case for a human running `smelt` directly.
 
 - `internal/cmd/root.go`'s `setupTelemetry` resolves the user's preference
   (opt-out env var → `telemetry` config field, first match wins) and
@@ -278,18 +279,18 @@ known agent is found, the common case for a human running `chunk` directly.
   `RecordForSubcommands` wraps every subcommand's `RunE` so it reports its
   event automatically, with no per-command changes needed.
 - Events are never sent inline. `Sender.Close()` marshals buffered events to
-  JSON and hands them to a detached `chunk receive-telemetry` subprocess
+  JSON and hands them to a detached `smelt receive-telemetry` subprocess
   (see `internal/telemetry/delegate.go` and the hidden command in
   `internal/cmd/receivetelemetry.go`), so a slow or unreachable Segment
   endpoint never delays CLI exit. The subprocess forwards them via
   `internal/telemetry/receiver`.
-- `CHUNK_TELEMETRY_LOG=1` logs event payloads to stderr instead of (or
+- `SMELT_TELEMETRY_LOG=1` logs event payloads to stderr instead of (or
   alongside) sending them — useful for verifying what a command reports
   without touching the network.
 - The Segment write key is `telemetry.WriteKey`, injected at build time and
   empty in source: this repository carries no key. Events are tagged as
-  chunk-cli invocations via `Context.App.Name` ("chunk-cli") in
-  `Meta.toContext` (`internal/telemetry/telemetry.go`). `CHUNK_TELEMETRY_LOG`
+  smelt invocations via `Context.App.Name` ("smelt") in
+  `Meta.toContext` (`internal/telemetry/telemetry.go`). `SMELT_TELEMETRY_LOG`
   still works without touching the network, independent of the write key.
 - `setupTelemetry` also checks `testing.Testing()` before sending, so a real
   write key committed to source still can't trigger sends (or the recursive
@@ -297,11 +298,11 @@ known agent is found, the common case for a human running `chunk` directly.
 
 ## Pre-Commit Hooks
 
-`chunk init` generates `.claude/settings.json` with a `PreToolUse` hook that
+`smelt init` generates `.claude/settings.json` with a `PreToolUse` hook that
 runs configured validation commands before the AI agent commits code. See
 **[docs/HOOKS.md](HOOKS.md)** for details.
 
-`chunk validate` runs those same commands manually. In hook mode it additionally
+`smelt validate` runs those same commands manually. In hook mode it additionally
 caches successful runs. Both tree-dependent hook decisions read one
 `gitutil.Fingerprint` call: it returns the HEAD SHA, a digest of the contents of
 every changed file, and whether the tree is clean at all. A clean tree skips the
@@ -315,19 +316,19 @@ refused as a key, since a config-only key would stay stable across code changes;
 it, because a repo that never caches is otherwise silent about why. See
 **[docs/HOOKS.md](HOOKS.md#result-caching)** for the user-facing behaviour.
 
-## Chunk Daemon (`internal/chunkd/`, `internal/chunkd/server/`)
+## Smelt Daemon (`internal/smeltd/`, `internal/smeltd/server/`)
 
-The daemon is split in two. `internal/chunkd` is its API: the types that go over
+The daemon is split in two. `internal/smeltd` is its API: the types that go over
 the wire, the HTTP client, the socket and pid paths, and starting the process.
 Its internal dependencies are `eventlog`, `iostream` and `version`.
-`internal/chunkd/server` is the daemon itself and imports `chunkd` for the types
-it serves. Clients — `chunk watch`, `chunk factory build`, hooks, `chunk validate` —
-import `chunkd` only, so they depend on the daemon's API and never on the factory
+`internal/smeltd/server` is the daemon itself and imports `smeltd` for the types
+it serves. Clients — `smelt watch`, `smelt factory build`, hooks, `smelt validate` —
+import `smeltd` only, so they depend on the daemon's API and never on the factory
 loop, the review runner or the sidecar pool behind it. Only `cmd/daemon.go`,
 which runs the daemon, imports `server` (and tests that start a real one).
 
-Starting the daemon belongs to `chunkd` too. It is this binary re-executed as
-the hidden `chunk _daemon` (`chunkd.DaemonSubcommand`, which `cmd` registers
+Starting the daemon belongs to `smeltd` too. It is this binary re-executed as
+the hidden `smelt _daemon` (`smeltd.DaemonSubcommand`, which `cmd` registers
 under that name); callers only say when they need one, with `EnsureRunning` at
 startup, which also replaces a daemon from another build. A dashboard that
 keeps polling opts into `FetchSnapshotRelaunching`, which starts a daemon again
@@ -341,38 +342,38 @@ The split is in the imports, not yet everywhere at runtime:
   in-process, through the `ValidateRunner` that `cmd/daemon.go` passes in, so
   the code doing the work lives in `cmd/validate.go`.
 - **Projects are registered by writing a file, not by asking the daemon.**
-  `chunk watch`, `chunk validate` and `chunk review` write the breadcrumbs
+  `smelt watch`, `smelt validate` and `smelt review` write the breadcrumbs
   `AllProjectRoots` reads, and the daemon finds projects by scanning them.
 - **The snapshot is the dashboard's view.** It carries each project's raw
-  `eventlog.Event`s, and `chunk watch` works out from them what happened.
-- **`chunk factory build` reads the daemon's files to check a request.** With
+  `eventlog.Event`s, and `smelt watch` works out from them what happened.
+- **`smelt factory build` reads the daemon's files to check a request.** With
   `--continue`, `checkFactoryContinue` loads the earlier run's record from the
   project's data directory before asking the daemon, which loads it again.
   This only works while the two share a filesystem.
 
-The daemon backs `chunk watch` and runs `chunk factory build`. It polls every
+The daemon backs `smelt watch` and runs `smelt factory build`. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte
 offset, and serves snapshots as JSON over a Unix socket at
-`~/.chunk/daemon/daemon.sock` (`CHUNK_DAEMON_DIR` overrides the directory).
+`~/.smelt/daemon/daemon.sock` (`SMELT_DAEMON_DIR` overrides the directory).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CHUNK_DAEMON_DIR` | `~/.chunk/daemon/` | Override the directory for the socket, pid file and log. The socket path (`<dir>/daemon.sock`) must fit the OS limit (104 bytes on macOS, 108 on Linux); a longer one is refused up front with this variable named as the fix |
-| `CHUNK_DAEMON_TCP_ADDR` | _(disabled)_ | Bind a TCP listener on this address in addition to the Unix socket (e.g. `127.0.0.1:7777`); requires `CHUNK_DAEMON_TCP_TOKEN` |
-| `CHUNK_DAEMON_REMOTE_ADDR` | _(local socket)_ | Connect to a remote daemon at this TCP address instead of the local socket (e.g. `127.0.0.1:7777` via an SSH tunnel) |
-| `CHUNK_DAEMON_TCP_TOKEN` | _(required when TCP is enabled)_ | Bearer token required on every TCP request; set the same value on the daemon and all clients. TCP traffic is not encrypted — use an SSH tunnel (`ssh -L`) when the daemon is not on loopback. |
+| `SMELT_DAEMON_DIR` | `~/.smelt/daemon/` | Override the directory for the socket, pid file and log. The socket path (`<dir>/daemon.sock`) must fit the OS limit (104 bytes on macOS, 108 on Linux); a longer one is refused up front with this variable named as the fix |
+| `SMELT_DAEMON_TCP_ADDR` | _(disabled)_ | Bind a TCP listener on this address in addition to the Unix socket (e.g. `127.0.0.1:7777`); requires `SMELT_DAEMON_TCP_TOKEN` |
+| `SMELT_DAEMON_REMOTE_ADDR` | _(local socket)_ | Connect to a remote daemon at this TCP address instead of the local socket (e.g. `127.0.0.1:7777` via an SSH tunnel) |
+| `SMELT_DAEMON_TCP_TOKEN` | _(required when TCP is enabled)_ | Bearer token required on every TCP request; set the same value on the daemon and all clients. TCP traffic is not encrypted — use an SSH tunnel (`ssh -L`) when the daemon is not on loopback. |
 
 ### Remote viewing
 
-`chunk watch` is a pure client of `/snapshot` and `/output`; it opens no local
+`smelt watch` is a pure client of `/snapshot` and `/output`; it opens no local
 state, so it works unchanged against a daemon reached over TCP. What differs:
 
-- `EnsureRunning` / `EnsureLaunched` are no-ops when `CHUNK_DAEMON_REMOTE_ADDR`
+- `EnsureRunning` / `EnsureLaunched` are no-ops when `SMELT_DAEMON_REMOTE_ADDR`
   is set. A remote daemon is managed where it runs.
 - Project filters are matched on the daemon's host. `snapshot` accepts a root by
   its own spelling or its symlink-resolved one, because a remote viewer can only
   type a path as it knows it and that need not be the daemon's key.
-- A 401 surfaces as `chunkd.ErrUnauthorized` and an unreachable address is
+- A 401 surfaces as `smeltd.ErrUnauthorized` and an unreachable address is
   reported with the address in the message (`requestError`), so the header
   (`Connection.Label`) and footer say which daemon failed and why.
 
@@ -380,7 +381,7 @@ Beyond that it owns three things that outlive the processes they came from.
 
 ### Command output buffering
 
-`chunk validate` and `chunk sidecar exec` submit a remote command and register
+`smelt validate` and `smelt sidecar exec` submit a remote command and register
 it with the daemon before consuming any output. Both go through one helper
 (`submitAndStream`), so a new command path cannot quietly skip registration and
 leave its output unreachable:
@@ -429,7 +430,7 @@ Design constraints worth preserving:
   `Snapshot.AuthError` and carries on serving. It has no terminal, so a process
   blocked on a hidden prompt would be indistinguishable from one that has hung.
   Resolution is deferred to first use because it can read the OS keychain, and the
-  daemon starts on every `chunk watch` whether or not anything needs a token.
+  daemon starts on every `smelt watch` whether or not anything needs a token.
 
 ### Pre-PR sessions
 
@@ -437,7 +438,7 @@ A session is the daemon's record of one factory run for a project: an
 implementer works in a worktree of its own, and reviews and validation commands
 check the work until it passes.
 The daemon is the **local** one (Unix socket); a run works from files on this
-machine. `chunk factory build` starts and follows one, and `chunk watch` shows it
+machine. `smelt factory build` starts and follows one, and `smelt watch` shows it
 live.
 
 ```
@@ -467,7 +468,7 @@ not yet.
 `factory_loop`, whose state is `running | done | failed` and whose note says
 why the loop stopped. A `Round` carries its implementer turn (`implement`, in
 state `running | applied | empty | failed`), its reviews (the same
-`ReviewPrompt` rows `chunk review` draws), finding counts, and a note on how it
+`ReviewPrompt` rows `smelt review` draws), finding counts, and a note on how it
 went.
 
 - **State in snapshots, text on demand.** Snapshots hold state only; review
@@ -487,13 +488,13 @@ went.
   content is still untrusted: entries with no file or body, or a path that is
   absolute or climbs out of the repo, are dropped and counted; at most 50 are
   kept. A round counts *distinct* findings (`DedupeFindings`) and, of those, the
-  ones **worth changing**: severity high or medium. In-process `chunk review`
+  ones **worth changing**: severity high or medium. In-process `smelt review`
   does not ask for findings, so its prompts and output are unchanged.
 - **One active session per project.**
-- **Prompts come from the project** (`.chunk/reviews`): `reviews_dir` must be
+- **Prompts come from the project** (`.smelt/reviews`): `reviews_dir` must be
   relative and may not leave the project.
 - **Detach is not cancel.** A viewer disconnecting changes nothing; the session
-  belongs to the daemon. `chunk factory build` cancels its run on Ctrl-C; the
+  belongs to the daemon. `smelt factory build` cancels its run on Ctrl-C; the
   dashboard cancels on a confirmed `x x`.
 - **In memory only.** Like async validate tasks, a daemon restart loses the
   session record (the last 10 per project are kept while it runs). A factory
@@ -550,7 +551,7 @@ no SSH involved.
 A hook run delegated to the daemon (`POST /validate`) can set `allow_async`,
 offering to be released before the answer exists. The daemon weighs the change
 (`risk.go`) and either runs it while the caller waits or starts a tracked task
-(`asyncvalidate.go`) and answers with its ID. `chunk validate results` reads
+(`asyncvalidate.go`) and answers with its ID. `smelt validate results` reads
 finished results back on the next turn.
 
 ```
@@ -635,10 +636,10 @@ GET  /validate/collect?root=<path>                 → {tasks}
 ## Sidecar Sync Strategy (`internal/sidecar/`)
 
 **Everything syncs with rsync.** `RsyncSync` / `RsyncSyncEphemeral` back
-`chunk sidecar sync`, variants and the `chunk factory build` relay from implementer to
+`smelt sidecar sync`, variants and the `smelt factory build` relay from implementer to
 reviewers; `rsyncPoolSidecar` backs the sidecar pool (seed, fan-out, stale
-replacement, dead-sidecar replacement), and so pooled `chunk validate`,
-`chunk review` and the `chunk factory build` initial sync. All of them funnel into
+replacement, dead-sidecar replacement), and so pooled `smelt validate`,
+`smelt review` and the `smelt factory build` initial sync. All of them funnel into
 `rsyncTo`.
 
 The git-bundle strategy and the checkout/patch strategy are gone. #539 removed
@@ -666,11 +667,11 @@ Consequences worth knowing:
 
 ## Data Flow: merge conflict advisories
 
-The `chunkd` daemon answers "does this branch still merge cleanly?" out of band,
+The `smeltd` daemon answers "does this branch still merge cleanly?" out of band,
 so the hook that reports it never computes anything:
 
 ```
-chunkd daemon (one process, all projects)
+smeltd daemon (one process, all projects)
   pollLoop            every 5s   → sidecar state, event log, git HEAD
   checkConflictsLoop  every 60s  → per project:
                                    gitutil.FetchRemoteBranch  (every 3 min)
@@ -678,9 +679,9 @@ chunkd daemon (one process, all projects)
                                    gitutil.PreviewMerge       (merge-tree)
                                    → projectState.conflict
 
-chunk conflicts --hook
+smelt conflicts --hook
   → GET /conflicts?root=…  (Unix socket)
-  → chunkd.ConflictNotice  → hookSpecificOutput.additionalContext on stdout
+  → smeltd.ConflictNotice  → hookSpecificOutput.additionalContext on stdout
 ```
 
 Three properties the layering exists to hold:

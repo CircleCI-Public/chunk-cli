@@ -36,10 +36,10 @@ linters:
             - "!**/internal/authprompt/**"
             - "!**/internal/variants/**"
             - "!**/internal/factory/**"
-            - "!**/internal/chunkd/server/**"
+            - "!**/internal/smeltd/server/**"
             - "!**/internal/cmd/**"
           deny:
-            - pkg: github.com/CircleCI-Public/chunk-cli/internal/circleci
+            - pkg: github.com/smeltdev/smelt/internal/circleci
               desc: the CircleCI API client is opt-in; only the CircleCI backend packages and explicit CircleCI commands may import it (see .golangci.yml)
 
     govet:

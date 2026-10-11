@@ -10,10 +10,10 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 const runConfigJSON = `{
@@ -54,10 +54,10 @@ func writeRunConfig(t *testing.T, workDir string) {
 
 func writeRunConfigJSON(t *testing.T, workDir, configJSON string) {
 	t.Helper()
-	chunkDir := filepath.Join(workDir, ".chunk")
-	err := os.MkdirAll(chunkDir, 0o755)
+	smeltDir := filepath.Join(workDir, ".smelt")
+	err := os.MkdirAll(smeltDir, 0o755)
 	assert.NilError(t, err)
-	err = os.WriteFile(filepath.Join(chunkDir, "run.json"), []byte(configJSON), 0o644)
+	err = os.WriteFile(filepath.Join(smeltDir, "run.json"), []byte(configJSON), 0o644)
 	assert.NilError(t, err)
 }
 
@@ -96,7 +96,7 @@ func TestTaskRunHappyPath(t *testing.T) {
 	assert.Equal(t, body["agent_type"], "prompt")
 	assert.Equal(t, body["checkout_branch"], "develop")
 	assert.Equal(t, body["definition_id"], "e2016e4e-0172-47b3-a4ea-a3ee1a592dba")
-	assert.Equal(t, body["trigger_source"], "chunk-cli")
+	assert.Equal(t, body["trigger_source"], "chunk-cli") // CircleCI API contract: do not rename
 
 	params := body["parameters"].(map[string]interface{})
 	assert.Equal(t, params["custom-prompt"], "Fix the flaky test")
@@ -318,7 +318,7 @@ func TestTaskRunMissingToken(t *testing.T) {
 
 func TestTaskRunMissingConfig(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	// No .chunk/run.json
+	// No .smelt/run.json
 
 	env := testenv.NewTestEnv(t)
 
@@ -685,10 +685,10 @@ func TestTaskRunMalformedRunJSONMissingDefs(t *testing.T) {
 func TestTaskRunNotInGitRepo(t *testing.T) {
 	// Running outside a git repository should fail
 	workDir := t.TempDir()
-	chunkDir := filepath.Join(workDir, ".chunk")
-	err := os.MkdirAll(chunkDir, 0o755)
+	smeltDir := filepath.Join(workDir, ".smelt")
+	err := os.MkdirAll(smeltDir, 0o755)
 	assert.NilError(t, err)
-	err = os.WriteFile(filepath.Join(chunkDir, "run.json"), []byte(runConfigJSON), 0o644)
+	err = os.WriteFile(filepath.Join(smeltDir, "run.json"), []byte(runConfigJSON), 0o644)
 	assert.NilError(t, err)
 
 	env := testenv.NewTestEnv(t)

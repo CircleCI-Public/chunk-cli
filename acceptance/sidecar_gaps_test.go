@@ -8,11 +8,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 // --- exec error paths ---
@@ -331,11 +331,11 @@ func TestSidecarCreateNotFoundNamesConfigSources(t *testing.T) {
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 5, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "Org org-from-project (from Project config (.chunk/config.json))"),
+	assert.Assert(t, strings.Contains(result.Stderr, "Org org-from-project (from Project config (.smelt/config.json))"),
 		"expected org source, got: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "snapshot snap-from-project (from Project config (.chunk/config.json))"),
+	assert.Assert(t, strings.Contains(result.Stderr, "snapshot snap-from-project (from Project config (.smelt/config.json))"),
 		"expected image source, got: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk config set validation.sidecarImage"),
+	assert.Assert(t, strings.Contains(result.Stderr, "smelt config set validation.sidecarImage"),
 		"expected config fix, got: %s", result.Stderr)
 	assert.Assert(t, !strings.Contains(result.Stderr, "--image requires"),
 		"did not pass --image, got: %s", result.Stderr)

@@ -7,8 +7,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 func TestSelectSnapshot(t *testing.T) {
@@ -21,7 +21,7 @@ func TestSelectSnapshot(t *testing.T) {
 		{
 			name:      "no snapshots",
 			snapshots: nil,
-			criteria:  SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria:  SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:    "",
 		},
 		{
@@ -30,34 +30,34 @@ func TestSelectSnapshot(t *testing.T) {
 				{ID: "s1", Name: "billing-service"},
 				{ID: "s2", Name: "frontend-node"},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "",
 		},
 		{
 			name: "exact repo name wins over stack match",
 			snapshots: []circleci.Snapshot{
 				{ID: "s1", Name: "go-base"},
-				{ID: "s2", Name: "chunk-cli"},
+				{ID: "s2", Name: "smelt"},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "s2",
 		},
 		{
 			name: "repo tokens match a decorated name",
 			snapshots: []circleci.Snapshot{
 				{ID: "s1", Name: "go-base"},
-				{ID: "s2", Name: "chunk-cli-uv-lint"},
+				{ID: "s2", Name: "smelt-uv-lint"},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "s2",
 		},
 		{
 			name: "exact repo name beats a decorated one",
 			snapshots: []circleci.Snapshot{
-				{ID: "s1", Name: "chunk-cli-uv-lint"},
-				{ID: "s2", Name: "chunk-cli"},
+				{ID: "s1", Name: "smelt-uv-lint"},
+				{ID: "s2", Name: "smelt"},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "s2",
 		},
 		{
@@ -92,7 +92,7 @@ func TestSelectSnapshot(t *testing.T) {
 				{ID: "s1", Name: "python-base"},
 				{ID: "s2", Name: "golang-base"},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "s2",
 		},
 		{
@@ -109,7 +109,7 @@ func TestSelectSnapshot(t *testing.T) {
 				{ID: "s1", Name: "mongo-api"},
 				{ID: "s2", Name: "django-worker"},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "",
 		},
 		{
@@ -118,7 +118,7 @@ func TestSelectSnapshot(t *testing.T) {
 				{ID: "s1", Name: "go", IsSystem: true},
 				{ID: "s2", Name: "go", IsSystem: false},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "s2",
 		},
 		{
@@ -126,7 +126,7 @@ func TestSelectSnapshot(t *testing.T) {
 			snapshots: []circleci.Snapshot{
 				{ID: "s1", Name: "billing-service", IsSystem: false},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "",
 		},
 		{
@@ -134,15 +134,15 @@ func TestSelectSnapshot(t *testing.T) {
 			snapshots: []circleci.Snapshot{
 				{ID: "s1", Name: "team-base", Tag: "go"},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "s1",
 		},
 		{
 			name: "names are compared case- and separator-insensitively",
 			snapshots: []circleci.Snapshot{
-				{ID: "s1", Name: "Chunk CLI"},
+				{ID: "s1", Name: "Smelt CLI"},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli"},
+			criteria: SnapshotCriteria{Repo: "smelt"},
 			wantID:   "s1",
 		},
 		{
@@ -151,7 +151,7 @@ func TestSelectSnapshot(t *testing.T) {
 				{ID: "s2", Name: "go-base"},
 				{ID: "s1", Name: "go-base"},
 			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+			criteria: SnapshotCriteria{Repo: "smelt", Stack: "go"},
 			wantID:   "s1",
 		},
 		{
@@ -178,38 +178,38 @@ func TestSelectSnapshot(t *testing.T) {
 	}
 }
 
-// A repo whose name is a superset of a snapshot's must not match it: "chunk"
-// and "chunk-cli" are different projects.
+// A repo whose name is a superset of a snapshot's must not match it: "smelt"
+// and "smelt-cli" are different projects.
 func TestSelectSnapshotRequiresEveryRepoToken(t *testing.T) {
-	snapshots := []circleci.Snapshot{{ID: "s1", Name: "chunk"}}
-	_, ok := SelectSnapshot(snapshots, SnapshotCriteria{Repo: "chunk-cli"})
+	snapshots := []circleci.Snapshot{{ID: "s1", Name: "smelt"}}
+	_, ok := SelectSnapshot(snapshots, SnapshotCriteria{Repo: "smelt-cli"})
 	assert.Assert(t, !ok)
 }
 
 func TestSelectSnapshotReasonNamesTheSignal(t *testing.T) {
 	match, ok := SelectSnapshot(
 		[]circleci.Snapshot{{ID: "s1", Name: "go-base"}},
-		SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+		SnapshotCriteria{Repo: "smelt", Stack: "go"},
 	)
 	assert.Assert(t, ok)
 	assert.Equal(t, match.Reason, "built for go")
 
 	match, ok = SelectSnapshot(
-		[]circleci.Snapshot{{ID: "s1", Name: "chunk-cli"}},
-		SnapshotCriteria{Repo: "chunk-cli", Stack: "go"},
+		[]circleci.Snapshot{{ID: "s1", Name: "smelt"}},
+		SnapshotCriteria{Repo: "smelt", Stack: "go"},
 	)
 	assert.Assert(t, ok)
-	assert.Equal(t, match.Reason, "named for repo chunk-cli")
+	assert.Equal(t, match.Reason, "named for repo smelt")
 }
 
 func TestResolveSnapshot(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Snapshots = []fakes.Snapshot{
 		{ID: "snap-1", OrgID: "org-abc", Name: "billing-service"},
-		{ID: "snap-2", OrgID: "org-abc", Name: "chunk-cli"},
+		{ID: "snap-2", OrgID: "org-abc", Name: "smelt"},
 		// Belongs to a different org, so it must never be considered even
 		// though it is the strongest possible name match.
-		{ID: "snap-3", OrgID: "org-other", Name: "chunk-cli"},
+		{ID: "snap-3", OrgID: "org-other", Name: "smelt"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -218,7 +218,7 @@ func TestResolveSnapshot(t *testing.T) {
 	assert.NilError(t, err)
 
 	match, ok, err := ResolveSnapshot(context.Background(), cl, "org-abc",
-		SnapshotCriteria{Repo: "chunk-cli", Stack: "go"})
+		SnapshotCriteria{Repo: "smelt", Stack: "go"})
 	assert.NilError(t, err)
 	assert.Assert(t, ok)
 	assert.Equal(t, match.Snapshot.ID, "snap-2")
@@ -236,7 +236,7 @@ func TestResolveSnapshotNoMatch(t *testing.T) {
 	assert.NilError(t, err)
 
 	_, ok, err := ResolveSnapshot(context.Background(), cl, "org-abc",
-		SnapshotCriteria{Repo: "chunk-cli", Stack: "go"})
+		SnapshotCriteria{Repo: "smelt", Stack: "go"})
 	assert.NilError(t, err)
 	assert.Assert(t, !ok)
 }
@@ -251,7 +251,7 @@ func TestResolveSnapshotAPIError(t *testing.T) {
 	assert.NilError(t, err)
 
 	_, ok, err := ResolveSnapshot(context.Background(), cl, "org-abc",
-		SnapshotCriteria{Repo: "chunk-cli", Stack: "go"})
+		SnapshotCriteria{Repo: "smelt", Stack: "go"})
 	assert.Assert(t, err != nil)
 	assert.Assert(t, !ok)
 }

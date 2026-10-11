@@ -16,7 +16,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
 )
 
 func TestCallJSONRoundTrip(t *testing.T) {
@@ -380,7 +380,7 @@ func TestRetries504Exhausted(t *testing.T) {
 
 // A 401 is the only signal that a long-lived client's token has gone stale.
 // Reloading and retrying is what lets a process that outlives a login — the
-// chunk daemon holds one client for its whole life — pick the new token up.
+// smelt daemon holds one client for its whole life — pick the new token up.
 func TestReloadToken_RetriesOnceWithTheNewToken(t *testing.T) {
 	var seen []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -495,7 +495,7 @@ func TestReloadToken_RetryResendsTheBody(t *testing.T) {
 	})
 
 	_, err := cl.Call(context.Background(),
-		hc.NewRequest(http.MethodPost, "/x", hc.Body(map[string]string{"name": "chunk"})))
+		hc.NewRequest(http.MethodPost, "/x", hc.Body(map[string]string{"name": "smelt"})))
 	assert.NilError(t, err)
 	assert.Assert(t, cmp.Len(bodies, 2))
 	assert.Check(t, cmp.Equal(bodies[1], bodies[0]), "the retry must resend the original body")

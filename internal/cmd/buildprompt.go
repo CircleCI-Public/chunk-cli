@@ -8,11 +8,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/buildprompt"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/github"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func newBuildPromptCmd() *cobra.Command {
@@ -67,7 +67,7 @@ func newBuildPromptCmd() *cobra.Command {
 
 			// Warn about legacy output paths
 			streams := iostream.FromCmd(cmd)
-			for _, legacy := range []string{"./review-prompt.md", ".chunk/review-prompt.md"} {
+			for _, legacy := range []string{"./review-prompt.md", ".smelt/review-prompt.md"} {
 				if _, err := os.Stat(legacy); err == nil {
 					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Found legacy output at %s — default output is now %s", legacy, output)))
 				}
@@ -124,7 +124,7 @@ func newBuildPromptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repos, "repos", "", "Comma-separated repository names")
 	cmd.Flags().IntVar(&top, "top", 5, "Number of top reviewers to include")
 	cmd.Flags().StringVar(&since, "since", defaultSince(), "Start date (YYYY-MM-DD)")
-	cmd.Flags().StringVar(&output, "output", ".chunk/context/review-prompt.md", "Output file path")
+	cmd.Flags().StringVar(&output, "output", ".smelt/context/review-prompt.md", "Output file path")
 	cmd.Flags().IntVar(&maxComments, "max-comments", 0, "Max comments per reviewer (0 = no limit)")
 	cmd.Flags().StringVar(&analyzeModel, "analyze-model", "", "Model for analysis step")
 	cmd.Flags().StringVar(&promptModel, "prompt-model", "", "Model for prompt generation step")

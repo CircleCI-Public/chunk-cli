@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
 )
 
 const (

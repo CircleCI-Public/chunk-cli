@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/gitutil"
 )
 
 // branchPrefix is where factory branches live.
-const branchPrefix = "chunk/factory/"
+const branchPrefix = brand.BranchPrefix
 
 // maxBranchSlugLen keeps branch names short enough to read in listings.
 const maxBranchSlugLen = 48
@@ -35,7 +36,7 @@ type Worktree struct {
 	BaseBranch    string
 	DefaultBranch string
 	// Author is who the branch's commits are attributed to; an incomplete one
-	// means chunk.
+	// means smelt.
 	Author config.CommitAuthor
 }
 
@@ -52,7 +53,7 @@ type WorktreeOptions struct {
 }
 
 // CreateWorktree checks out a new worktree of the repository at root into path,
-// on a branch named chunk/factory/<prompt slug>/<runID>. It starts from the
+// on a branch named smelt/<prompt slug>/<runID>. It starts from the
 // developer's files as they are now: uncommitted work, untracked files included,
 // is committed on the branch first, so it is the baseline and not part of the
 // change under review.
@@ -76,7 +77,7 @@ func CreateWorktree(ctx context.Context, o WorktreeOptions) (Worktree, error) {
 	start := head
 	if tree != strings.TrimSpace(string(headTree)) {
 		out, err := (gitexec.Runner{Dir: root, Env: commitEnv(o.Author)}).Output(ctx, "commit-tree", tree, "-p", head,
-			"-m", "chunk factory baseline: uncommitted changes when run "+runID+" started")
+			"-m", "smelt factory baseline: uncommitted changes when run "+runID+" started")
 		if err != nil {
 			return Worktree{}, fmt.Errorf("commit your uncommitted changes as the baseline: %w", err)
 		}
@@ -182,7 +183,7 @@ func CommitMessage(prompt, runID string, o Outcome) string {
 	if rest = strings.Trim(rest, "\r\n"); rest != "" {
 		fmt.Fprintf(&b, "%s\n\n", rest)
 	}
-	fmt.Fprintf(&b, "Written by chunk factory run %s", runID)
+	fmt.Fprintf(&b, "Written by smelt factory run %s", runID)
 	if o.Result != "" {
 		fmt.Fprintf(&b, " (%s after %d round(s))", o.Result, o.Rounds)
 	}

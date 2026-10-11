@@ -7,7 +7,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/eventlog"
 )
 
 // A review run is filed as a step event, an optional error event carrying why

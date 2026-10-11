@@ -68,10 +68,10 @@ func (f *fakeDocker) ImagePull(context.Context, string, image.PullOptions) (io.R
 func goPlan(t *testing.T) Plan {
 	t.Helper()
 	dir := writeRepo(t, map[string]string{
-		"Dockerfile.chunk": "FROM x\nCOPY go.mod /tmp/\n",
+		"Dockerfile.smelt": "FROM x\nCOPY go.mod /tmp/\n",
 		"go.mod":           "module a\n",
 	})
-	p, err := NewPlan(dir, "Dockerfile.chunk")
+	p, err := NewPlan(dir, "Dockerfile.smelt")
 	assert.NilError(t, err)
 	return p
 }
@@ -96,7 +96,7 @@ func TestEnsureBuildsAMissingTagWithLabelAndLog(t *testing.T) {
 	assert.Equal(t, told, plan.Tag)
 	assert.DeepEqual(t, f.builds[0].Tags, []string{plan.Tag})
 	assert.Equal(t, f.builds[0].Labels[LabelSandbox], plan.Slug)
-	assert.Equal(t, f.builds[0].Dockerfile, "Dockerfile.chunk")
+	assert.Equal(t, f.builds[0].Dockerfile, "Dockerfile.smelt")
 	assert.Assert(t, !f.builds[0].NoCache)
 	logged, err := os.ReadFile(logPath)
 	assert.NilError(t, err)
@@ -130,14 +130,14 @@ func TestBuildLive(t *testing.T) {
 		t.Skipf("no docker: %v", err)
 	}
 	defer func() { _ = b.Close() }()
-	if _, err := b.Exists(context.Background(), "chunk-live-probe:none"); err != nil {
+	if _, err := b.Exists(context.Background(), "smelt-live-probe:none"); err != nil {
 		t.Skipf("docker daemon unreachable: %v", err)
 	}
 	dir := writeRepo(t, map[string]string{
-		"Dockerfile.chunk": "FROM busybox:stable\nCOPY go.mod /tmp/go.mod\nCMD [\"sleep\", \"infinity\"]\n",
+		"Dockerfile.smelt": "FROM busybox:stable\nCOPY go.mod /tmp/go.mod\nCMD [\"sleep\", \"infinity\"]\n",
 		"go.mod":           "module tiny\n",
 	})
-	plan, err := NewPlan(dir, "Dockerfile.chunk")
+	plan, err := NewPlan(dir, "Dockerfile.smelt")
 	assert.NilError(t, err)
 	_, err = b.Ensure(context.Background(), plan, EnsureOptions{})
 	assert.NilError(t, err)

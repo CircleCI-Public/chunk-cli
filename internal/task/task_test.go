@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 const testRunConfig = `{
@@ -32,11 +32,11 @@ const testRunConfig = `{
 
 func writeConfig(t *testing.T, dir, content string) {
 	t.Helper()
-	chunkDir := filepath.Join(dir, ".chunk")
-	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
+	smeltDir := filepath.Join(dir, ".smelt")
+	if err := os.MkdirAll(smeltDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(chunkDir, "run.json"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(smeltDir, "run.json"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -310,7 +310,7 @@ func TestTriggerRunHappyPath(t *testing.T) {
 	if body["checkout_branch"] != "develop" {
 		t.Fatalf("checkout_branch = %v, want develop", body["checkout_branch"])
 	}
-	if body["trigger_source"] != "chunk-cli" {
+	if body["trigger_source"] != "chunk-cli" { // CircleCI API contract: do not rename
 		t.Fatalf("trigger_source = %v, want chunk-cli", body["trigger_source"])
 	}
 

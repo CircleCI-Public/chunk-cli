@@ -8,8 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
 )
 
 // LogDefault is the RunOptions.Log that puts the run's log at DefaultLogPath.
@@ -22,7 +23,7 @@ func DefaultLogPath(runID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".chunk", "factory", "run-"+runID+".log"), nil
+	return filepath.Join(home, brand.HomeDir, "factory", "run-"+runID+".log"), nil
 }
 
 // runLog is a plain-text record of a factory run that outlives it, written for

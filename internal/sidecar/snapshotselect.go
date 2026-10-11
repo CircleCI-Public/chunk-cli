@@ -6,13 +6,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/smeltdev/smelt/internal/circleci"
 )
 
 // SnapshotCriteria describes the repository a sidecar is being created for.
 // Both fields are optional: an empty Repo or Stack simply contributes no score.
 type SnapshotCriteria struct {
-	// Repo is the repository name, e.g. "chunk-cli".
+	// Repo is the repository name, e.g. "smelt".
 	Repo string
 	// Stack is the detected tech stack as envbuilder names it, e.g. "go" or
 	// "typescript". Callers pass "" when detection failed.
@@ -23,7 +23,7 @@ type SnapshotCriteria struct {
 type SnapshotMatch struct {
 	Snapshot circleci.Snapshot
 	// Reason is a short human-readable justification, e.g. "matches repo
-	// chunk-cli". Callers surface it so the choice is never silent.
+	// smelt". Callers surface it so the choice is never silent.
 	Reason string
 }
 
@@ -31,7 +31,7 @@ type SnapshotMatch struct {
 // outrank a stronger one, however many weak signals a name accumulates.
 const (
 	scoreRepoExact = 1000 // whole name is the repo name
-	scoreRepoToken = 100  // repo name appears as a token, e.g. "chunk-cli-go"
+	scoreRepoToken = 100  // repo name appears as a token, e.g. "smelt-go"
 	scoreStack     = 10   // stack (or a known alias) appears as a token
 	scoreOwned     = 1    // tiebreak: the org's own snapshot over a system one
 )
@@ -82,7 +82,7 @@ func isSeparator(r rune) bool {
 }
 
 // normalizeName lowercases a snapshot name and collapses separators so that
-// "Chunk CLI" and "chunk-cli" compare equal. It defers to isSeparator for what
+// "Smelt CLI" and "smelt" compare equal. It defers to isSeparator for what
 // counts as a separator: the two must agree, or a name normalizes into parts
 // that nameTokens can never produce and the token match silently fails.
 func normalizeName(s string) string {
