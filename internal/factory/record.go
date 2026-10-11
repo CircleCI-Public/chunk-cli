@@ -37,6 +37,9 @@ type Record struct {
 	// Result and Rounds are how the run ended, once it has.
 	Result Result `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
+	// Notes are the written account of the branch's change, once the run
+	// that committed it has written them.
+	Notes *Notes `json:"notes,omitempty"`
 }
 
 // newRecord is the record of a run working in wt.

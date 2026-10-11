@@ -56,23 +56,6 @@ func (c *Continuation) request() string {
 	return r
 }
 
-// commitMessage is the continued run's commit message: the original request's
-// subject, the guidance if there was any, and which run it continued.
-func (c *Continuation) commitMessage(runID string, o Outcome) string {
-	subject, _, _ := strings.Cut(strings.TrimSpace(c.From.Prompt), "\n")
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", subject)
-	if g := strings.TrimSpace(c.Guidance); g != "" {
-		fmt.Fprintf(&b, "%s\n\n", g)
-	}
-	fmt.Fprintf(&b, "Written by smelt factory run %s, continuing run %s", runID, c.From.RunID)
-	if o.Result != "" {
-		fmt.Fprintf(&b, " (%s after %d round(s))", o.Result, o.Rounds)
-	}
-	b.WriteString(".\n")
-	return b.String()
-}
-
 // openWorktree returns the worktree of the run rec describes, adding it back
 // from the run's branch if it was removed. Edits made in it since that run
 // ended are committed on the branch first, so they are part of the work the

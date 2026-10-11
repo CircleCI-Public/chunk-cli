@@ -95,11 +95,17 @@ func publishRun(ctx context.Context, streams iostream.Streams, f *smeltd.Factory
 		Title: flags.title, Body: flags.body, Draft: flags.draft,
 		Host: host,
 	}
+	var stored *factory.Notes
+	if f.Notes != nil {
+		n := factory.Notes(*f.Notes)
+		stored = &n
+	}
+	notes := factory.ResolveNotes(f.Prompt, stored)
 	if pub.Title == "" {
-		pub.Title = factory.PRTitle(f.Prompt)
+		pub.Title = notes.Title
 	}
 	if !flags.bodySet {
-		pub.Body = factory.PRBody(f.Prompt, f.RunID, f.Result, f.Rounds, f.Stat)
+		pub.Body = notes.PRBody(f.RunID, factory.Outcome{Result: factory.Result(f.Result), Rounds: f.Rounds}, f.Stat)
 	}
 
 	_, remoteErr := gitremote.URL(ctx, f.Worktree, pub.Remote)

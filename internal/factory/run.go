@@ -103,6 +103,9 @@ type Report struct {
 	// no changes. StatErr says why it could not be worked out.
 	Stat    string
 	StatErr error
+	// Notes are the account of the committed change, nil when there was none
+	// to describe. They are the fallback when they could not be written.
+	Notes *Notes
 	// WorktreeRemoved reports that the run ended before the implementer started
 	// and its worktree, holding nothing, was removed.
 	WorktreeRemoved bool
@@ -203,8 +206,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}()
 	defer func() {
 		if rep.Started {
-			rec.Result, rec.Rounds = rep.Outcome.Result, rep.Outcome.Rounds
-			keepRecord(dataDir, rec, status)
+			keepEndedRecord(dataDir, rec, rep, status)
 		}
 	}()
 	// A continued run's sidecars are synced from the baseline's files, and
@@ -293,7 +295,16 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if err := steps.Prepare(ctx); err != nil {
 		return rep, fmt.Errorf("set up the implementer's workspace: %w", err)
 	}
-	loop := Loop{Attempts: opts.Attempts, OnEvent: opts.OnEvent}
+	// The implementer's last turn goes into the notes.
+	lastSummary := ""
+	loop := Loop{Attempts: opts.Attempts, OnEvent: func(e Event) {
+		if e.Kind == EventImplemented {
+			lastSummary = e.Turn.Summary
+		}
+		if opts.OnEvent != nil {
+			opts.OnEvent(e)
+		}
+	}}
 	if cont != nil {
 		if err := steps.Relay.Push(ctx, []*sidecar.PoolEntry{impl}); err != nil {
 			return rep, fmt.Errorf("bring the work of run %s to the implementer: %w", cont.From.RunID, err)
@@ -306,15 +317,54 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	keepRecord(dataDir, rec, status)
 	rep.Started = true
 	rep.Outcome, err = loop.Run(ctx, steps, opts.Prompt)
-	message := CommitMessage(opts.Prompt, rep.RunID, rep.Outcome)
-	if cont != nil {
-		message = cont.commitMessage(rep.RunID, rep.Outcome)
-	}
-	rep.Committed = commitWork(ctx, steps, wt, message, status)
-	if rep.Committed {
-		rep.Stat, rep.StatErr = workStat(ctx, wt)
-	}
+	concludeRun(ctx, steps, wt, &rep, NotesInput{Request: request, Summary: lastSummary, Log: lg.block}, status)
 	return rep, err
+}
+
+// concludeRun commits the implementer's work and describes it. The commit is
+// made before the notes are written, so the implementer can read the change
+// from it; its message is rewritten once they are. It sets what the run left
+// behind in rep.
+func concludeRun(ctx context.Context, steps *Sidecars, wt Worktree, rep *Report, in NotesInput, status iostream.StatusFunc) {
+	rep.Committed = commitWork(ctx, steps, wt, Notes{Title: requestTitle(in.Request)}.CommitMessage(rep.RunID, rep.Outcome, ""), status)
+	if !rep.Committed {
+		return
+	}
+	rep.Stat, rep.StatErr = workStat(ctx, wt)
+	if rep.Stat != "" {
+		rep.Notes = describeWork(ctx, steps, wt, *rep, in, status)
+	}
+}
+
+// describeWork writes the notes of the committed work and rewrites the
+// commit's message with them. When the notes cannot be written the commit
+// carries the fallback, with a warning saying why.
+func describeWork(ctx context.Context, steps *Sidecars, wt Worktree, rep Report, in NotesInput, status iostream.StatusFunc) *Notes {
+	in.Outcome, in.Baseline = rep.Outcome, wt.Baseline
+	var err error
+	if in.DiffStat, err = diffStat(context.WithoutCancel(ctx), wt); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("could not read the diff stat for the PR notes: %v", err))
+	}
+	status(iostream.LevelStep, "writing PR notes…")
+	notes, err := steps.WriteNotes(ctx, in)
+	if err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("PR notes were not generated: %v", err))
+	} else {
+		status(iostream.LevelDone, "PR notes written")
+	}
+	amendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	if err := wt.Amend(amendCtx, notes.CommitMessage(rep.RunID, rep.Outcome, rep.Stat)); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("could not put the notes in the commit message: %v", err))
+	}
+	return &notes
+}
+
+// diffStat is the committed work's per-file diff stat, after the run has ended.
+func diffStat(ctx context.Context, wt Worktree) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, cleanupTimeout)
+	defer cancel()
+	return wt.DiffStat(ctx)
 }
 
 // keepRecord saves the run's record, so a later run can continue it. A run
@@ -323,6 +373,12 @@ func keepRecord(dataDir string, rec Record, status iostream.StatusFunc) {
 	if err := saveRecord(dataDir, rec); err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("this run cannot be continued later: %v", err))
 	}
+}
+
+// keepEndedRecord saves rec with how the run ended and the notes it wrote.
+func keepEndedRecord(dataDir string, rec Record, rep Report, status iostream.StatusFunc) {
+	rec.Result, rec.Rounds, rec.Notes = rep.Outcome.Result, rep.Outcome.Rounds, rep.Notes
+	keepRecord(dataDir, rec, status)
 }
 
 // restoreWorktree puts the work's files back in a continued run's worktree

@@ -422,6 +422,10 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 	if rep.StatErr != nil {
 		f.StatError = rep.StatErr.Error()
 	}
+	if rep.Notes != nil {
+		n := smeltd.Notes(*rep.Notes)
+		f.Notes = &n
+	}
 	f.WorktreeRemoved = rep.WorktreeRemoved
 	f.KeptSidecars = rep.KeptSidecars
 	f.Log = rep.Log

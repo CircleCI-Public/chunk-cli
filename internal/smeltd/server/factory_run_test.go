@@ -397,3 +397,18 @@ func TestFactoryTargetDockerIgnoresSidecarImage(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, image, "other:tag")
 }
+
+// A finished run's notes reach the session's record, where the CLI publishes
+// them from.
+func TestFactoryRecorderFinishKeepsTheNotes(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}})
+	assert.Equal(t, busy, "")
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+
+	rec.finish(factory.Report{Committed: true, Notes: &factory.Notes{Title: "Add a flag", What: "- w", Why: "- y", How: "- h"}}, nil)
+
+	got := entry.snapshot().Factory.Notes
+	assert.Assert(t, got != nil)
+	assert.DeepEqual(t, *got, smeltd.Notes{Title: "Add a flag", What: "- w", Why: "- y", How: "- h"})
+}
