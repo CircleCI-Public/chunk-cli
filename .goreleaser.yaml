@@ -85,7 +85,7 @@ changelog:
 nfpms:
   - package_name: smelt
     license: MIT
-    maintainer: web3technologies <noreply@github.com>
+    maintainer: smeltdev <noreply@github.com>
     homepage: https://github.com/smeltdev/smelt
     description: Smelt CLI, inner loop validation for AI coding agents.
     recommends:
@@ -126,7 +126,7 @@ notarize:
 # Metadata for the release
 release:
   github:
-    owner: web3technologies
+    owner: smeltdev
     name: smelt
   draft: false
   prerelease: auto
