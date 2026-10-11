@@ -10,6 +10,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 // fakeBackend records the scripts Verify runs and fails the ones it is told to.
@@ -49,6 +50,9 @@ func (f *fakeBackend) Delete(_ context.Context, id string) error {
 
 func TestVerify(t *testing.T) {
 	gate := &config.Command{Name: "lint", Run: "pnpm lint"}
+	// The workspace is named after the origin remote's repo, as a real run
+	// names it, not after the directory.
+	dir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 	tests := []struct {
 		name        string
 		failing     string
@@ -63,14 +67,15 @@ func TestVerify(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := &fakeBackend{failing: tt.failing}
-			res, err := Verify(context.Background(), f, VerifyOptions{Dir: "/src/My Repo", Image: "chunk-x:abc", Install: "pnpm install", Gate: gate})
+			res, err := Verify(context.Background(), f, VerifyOptions{Dir: dir, Image: "chunk-x:abc", Install: "pnpm install", Gate: gate})
 			assert.NilError(t, err)
 			assert.Equal(t, res.Step, tt.wantStep)
 			assert.Equal(t, len(f.scripts), tt.wantScripts)
 			assert.DeepEqual(t, f.deleted, []string{"c1"})
 			assert.DeepEqual(t, f.created, []string{"chunk-x:abc"})
-			assert.Equal(t, f.synced, "/src/My Repo")
-			assert.Assert(t, strings.HasSuffix(f.repoPath, "/my-repo"), f.repoPath)
+			assert.Equal(t, f.synced, dir)
+			assert.Equal(t, f.repoPath, sidecar.DefaultWorkspace("my-repo"))
+			assert.Assert(t, strings.HasPrefix(f.scripts[0], "cd "+sidecar.ShellEscape(f.repoPath)+" && "), f.scripts[0])
 			if tt.wantStep != "" {
 				assert.Equal(t, res.ExitCode, 1)
 				assert.Equal(t, res.OutputTail, "boom")
@@ -82,7 +87,7 @@ func TestVerify(t *testing.T) {
 
 func TestVerifySkipsMissingInstallAndGate(t *testing.T) {
 	f := &fakeBackend{}
-	res, err := Verify(context.Background(), f, VerifyOptions{Dir: "/src/r", Image: "i"})
+	res, err := Verify(context.Background(), f, VerifyOptions{Dir: gitrepo.SetupGitRepo(t, "my-org", "r"), Image: "i"})
 	assert.NilError(t, err)
 	assert.Assert(t, res.OK())
 	assert.Equal(t, len(f.scripts), 1)

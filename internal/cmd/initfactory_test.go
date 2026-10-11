@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,7 +12,9 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandboximage"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // withFakeGenerator replaces Docker-backed rendering for one test.
@@ -119,6 +124,27 @@ func TestManagesImage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, managesImage(&config.ProjectConfig{Factory: tt.factory}), tt.want)
+		})
+	}
+}
+
+func TestWarnPromptError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		warn bool
+	}{
+		// A confirm answered "no" returns a nil error, which is no failure.
+		{"answered", nil, false},
+		{"no terminal", ui.ErrNoTTY, false},
+		{"cancelled", fmt.Errorf("prompt: %w", ui.ErrCancelled), false},
+		{"broken", errors.New("terminal went away"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var errb bytes.Buffer
+			warnPromptError(iostream.Streams{Out: &bytes.Buffer{}, Err: &errb}, tt.err)
+			assert.Equal(t, errb.Len() > 0, tt.warn, errb.String())
 		})
 	}
 }

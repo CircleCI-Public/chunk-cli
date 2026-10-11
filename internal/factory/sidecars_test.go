@@ -375,3 +375,22 @@ func TestInstallDependenciesReportsAFailingSidecar(t *testing.T) {
 	assert.ErrorContains(t, err, "r1")
 	assert.ErrorContains(t, err, "ERR_PNPM_NO_OFFLINE_TARBALL")
 }
+
+func TestInstallDependenciesTimesOut(t *testing.T) {
+	// A hung install fails setup once its timeout passes, rather than blocking
+	// the run until it is cancelled.
+	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
+		onOutput(iostream.StreamStdout, []byte("resolving...\n"))
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	s := &Sidecars{
+		Exec:           exec,
+		Install:        "pnpm install",
+		InstallTimeout: 50 * time.Millisecond,
+		Implementer:    &Implementer{Entry: &sidecar.PoolEntry{ID: "impl"}},
+	}
+	err := s.installDependencies(context.Background())
+	assert.ErrorContains(t, err, "timed out after 50ms")
+	assert.ErrorContains(t, err, "resolving...")
+}

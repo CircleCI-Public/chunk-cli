@@ -30,6 +30,16 @@ func sidecarHome() string {
 	return "/home/user"
 }
 
+// RepoWorkspace is the default workspace path for the repository at dir,
+// named after its origin remote's repo, as the pool names it.
+func RepoWorkspace(ctx context.Context, dir string) (string, error) {
+	_, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, dir)
+	if err != nil {
+		return "", fmt.Errorf("detect repo: %w", err)
+	}
+	return DefaultWorkspace(repo), nil
+}
+
 // DefaultWorkspace returns the default remote workspace path for a repo.
 // Use this when creating pool sidecars to avoid inheriting a stale saved path.
 func DefaultWorkspace(repo string) string {

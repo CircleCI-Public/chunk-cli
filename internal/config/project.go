@@ -56,7 +56,12 @@ func BackendOrDefault(name string) string {
 //
 // Lint gets room for a cold run: a fresh sandbox builds the linter and fetches
 // its dependencies first, which on its own can exceed a minute.
+//
+// DefaultInstallTimeout bounds the dependency install a factory sidecar or an
+// image verification runs before anything else, so a hung install fails the
+// run instead of blocking it.
 const (
+	DefaultInstallTimeout = 600
 	DefaultCommandTimeout = 300
 	DefaultTestTimeout    = 300
 	DefaultLintTimeout    = 180

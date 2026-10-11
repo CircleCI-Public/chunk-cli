@@ -196,7 +196,7 @@ func askFactory(streams iostream.Streams) (backend string, ok bool) {
 // warnPromptError reports a prompt that failed for a reason other than there
 // being no terminal or the user cancelling, which need no explanation.
 func warnPromptError(streams iostream.Streams, err error) {
-	if errors.Is(err, ui.ErrNoTTY) || errors.Is(err, ui.ErrCancelled) {
+	if err == nil || errors.Is(err, ui.ErrNoTTY) || errors.Is(err, ui.ErrCancelled) {
 		return
 	}
 	streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not ask about factory runs: %v", err)))

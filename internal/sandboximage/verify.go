@@ -60,12 +60,10 @@ func (r VerifyResult) Describe() string {
 	return fmt.Sprintf("verification failed at %s (exit %d):\n%s", r.Step, r.ExitCode, r.OutputTail)
 }
 
-// gatePreference is the order in which validation commands are cheapest.
-var gatePreference = []string{"lint", "format", "typecheck", "test"}
-
 // PickGate returns the cheapest configured validation command, or nil.
 func PickGate(commands []config.Command) *config.Command {
-	for _, name := range gatePreference {
+	// Cheapest first.
+	for _, name := range [...]string{"lint", "format", "typecheck", "test"} {
 		for i := range commands {
 			if commands[i].Name == name && commands[i].Run != "" {
 				return &commands[i]
@@ -76,7 +74,7 @@ func PickGate(commands []config.Command) *config.Command {
 }
 
 // Verify runs the image in a throwaway container over a scratch copy of the
-// repo, mounted at the factory's repo path: the agent kit, then the install
+// repo, mounted where a factory run mounts it (named after the origin remote): the agent kit, then the install
 // step, then one gate, stopping at the first failure. The container and the
 // scratch copy are always removed.
 func Verify(ctx context.Context, b verifyBackend, opts VerifyOptions) (VerifyResult, error) {
@@ -84,7 +82,10 @@ func Verify(ctx context.Context, b verifyBackend, opts VerifyOptions) (VerifyRes
 	if status == nil {
 		status = func(iostream.Level, string) {}
 	}
-	repoPath := sidecar.DefaultWorkspace(Slug(baseName(opts.Dir)))
+	repoPath, err := sidecar.RepoWorkspace(ctx, opts.Dir)
+	if err != nil {
+		return VerifyResult{}, err
+	}
 	inst, err := b.Create(ctx, "chunk-verify", opts.Image, repoPath)
 	if err != nil {
 		return VerifyResult{}, fmt.Errorf("start verification container: %w", err)
@@ -101,7 +102,7 @@ func Verify(ctx context.Context, b verifyBackend, opts VerifyOptions) (VerifyRes
 
 	steps := []verifyStep{{StepKit, kitCheck, time.Minute}}
 	if opts.Install != "" {
-		steps = append(steps, verifyStep{StepInstall, opts.Install, 10 * time.Minute})
+		steps = append(steps, verifyStep{StepInstall, opts.Install, config.DefaultInstallTimeout * time.Second})
 	}
 	if opts.Gate != nil {
 		steps = append(steps, verifyStep{StepGate, opts.Gate.Run, time.Duration(opts.Gate.EffectiveTimeout()) * time.Second})
@@ -122,11 +123,6 @@ type verifyStep struct {
 	timeout      time.Duration
 }
 
-func baseName(dir string) string {
-	dir = strings.TrimRight(dir, "/")
-	return dir[strings.LastIndex(dir, "/")+1:]
-}
-
 // runStep runs one script in the repo and reports a non-zero exit as a failed
 // VerifyResult rather than an error.
 func runStep(ctx context.Context, b verifyBackend, inst sidecar.Instance, repoPath, name, script string, timeout time.Duration) (VerifyResult, error) {
@@ -134,7 +130,7 @@ func runStep(ctx context.Context, b verifyBackend, inst sidecar.Instance, repoPa
 	defer cancel()
 	var out tail
 	var partial strings.Builder
-	code, err := b.Exec(ctx, inst.ID, "cd '"+repoPath+"' && "+script, nil, func(_ string, data []byte) {
+	code, err := b.Exec(ctx, inst.ID, "cd "+sidecar.ShellEscape(repoPath)+" && "+script, nil, func(_ string, data []byte) {
 		partial.Write(data)
 		for {
 			s := partial.String()

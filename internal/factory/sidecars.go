@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -78,6 +79,9 @@ type Sidecars struct {
 	// sidecar before the baseline commit. A prebuilt image holds only the
 	// package manager's store, since the workspace is mounted over the repo.
 	Install string
+	// InstallTimeout bounds Install on each sidecar; zero means
+	// config.DefaultInstallTimeout.
+	InstallTimeout time.Duration
 	// OnInstallOutput receives each sidecar's install output as it arrives.
 	OnInstallOutput func(sidecarID string, line string)
 	// OnCheck is called as each validation command finishes. Reviews report
@@ -338,6 +342,12 @@ func (s *Sidecars) installDependencies(ctx context.Context) error {
 }
 
 func (s *Sidecars) installOn(ctx context.Context, e *sidecar.PoolEntry) error {
+	timeout := s.InstallTimeout
+	if timeout <= 0 {
+		timeout = config.DefaultInstallTimeout * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	var tail strings.Builder
 	code, err := s.Exec(ctx, e, inRepo(e, s.Install), nil, func(_ string, data []byte) {
 		if s.OnInstallOutput != nil {
@@ -353,6 +363,8 @@ func (s *Sidecars) installOn(ctx context.Context, e *sidecar.PoolEntry) error {
 		}
 	}, nil)
 	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return fmt.Errorf("%s: %q timed out after %s: %s", e.ID, s.Install, timeout, review.Tail(strings.TrimSpace(tail.String()), 2000))
 	case err != nil:
 		return fmt.Errorf("%s: %w", e.ID, err)
 	case code != 0:
