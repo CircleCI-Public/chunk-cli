@@ -187,9 +187,19 @@ smelt
 │       --log                       # Keep a log of the run's full context in ~/.smelt/factory/run-<start time>.log
 │       --log-file <path>           # Keep the log in this file instead (implies --log)
 │       --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
-│       --json                      # Output as JSON
+│       --detach                    # Start the run and return at once; it continues on the daemon (not with --pr/--push)
+│       --json                      # Output as JSON (with --detach: {"run_id","session_id","branch","worktree"})
 │   ├── list                        # List the project's factory runs and their worktrees
-│   │   --json                      # Output as JSON
+│   │   --json                      # Output as JSON (each entry has run_id, the newest, and state)
+│   ├── status [run-id]             # A run's state, rounds, reviews, result and cost (default: the newest run)
+│   │   --json                      # Output as JSON: the daemon's session, or the record with "state":"done"
+│   ├── stop <run-id>               # Stop a running run; the work so far is committed. A finished run is reported, not an error
+│   ├── publish <run-id>            # Push a finished run's branch, or open or update its PR
+│   │   --push | --pr               # Mode; without either, asks in a terminal
+│   │   --base <branch>             # Branch the PR targets
+│   │   --pr-title <title>          # PR title
+│   │   --pr-body <text>            # PR description
+│   │   --draft                     # Open the PR as a draft
 │   ├── clean [run...]              # Remove runs' worktrees, branches and records (default: every run not running)
 │   │   --yes                       # Remove without asking
 │   │   --force                     # Also remove worktrees with uncommitted changes, discarding them
@@ -701,6 +711,35 @@ smelt
 `smelt config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project
 config).
+
+## Plugins
+
+`smelt <name> [args…]`, when `<name>` is not a built-in command and a program
+named `smelt-<name>` is on `PATH`, runs that program with `args`, the same
+stdin, stdout and stderr, and exits with its exit code.
+
+- `<name>` must match `^[a-z][a-z0-9-]*$`. The lookup is `PATH` only, never the
+  current directory, and a built-in command always wins over a plugin of the
+  same name.
+- The plugin gets `SMELT_BIN` (the absolute path of the running smelt, so it
+  calls the same build) and `SMELT_VERSION`.
+- Without such a program the error is the usual unknown-command one, plus
+  `No smelt-<name> plugin is installed either.`
+- `smelt --help` ends with a `Plugins:` section listing the `smelt-*` programs
+  found on `PATH`.
+
+## Run control
+
+`smelt factory build --detach` starts a run and returns once the run has its
+branch, so another program can drive it: `status` polls, `stop` cancels (as
+Ctrl-C does) and `publish` pushes or opens the PR once it has finished. Run IDs
+are accepted as the full ID or the branch's final segment. `publish` applies the
+end-of-run guards: only `smelt/` branches, never forced, never the default
+branch. A run the daemon no longer knows, after a restart, is reported from its
+record, with `"state":"done"`.
+
+Usage errors (an unknown command, the wrong number of arguments) exit with
+`ExitBadArgs` and cobra's own message.
 
 ## Flag Conventions
 

@@ -32,13 +32,14 @@ func newFactoryCmd() *cobra.Command {
 		Short: "Build and manage factory runs",
 		RunE:  groupRunE,
 	}
-	cmd.AddCommand(newFactoryBuildCmd(), newFactoryListCmd(), newFactoryCleanCmd(), newFactoryAuthorCmd(), newFactoryImageCmd())
+	cmd.AddCommand(newFactoryBuildCmd(), newFactoryListCmd(), newFactoryCleanCmd(), newFactoryAuthorCmd(), newFactoryImageCmd(),
+		newFactoryStatusCmd(), newFactoryStopCmd(), newFactoryPublishCmd())
 	return cmd
 }
 
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, jsonOut, logOn, verbose bool
+	var keepSidecars, noValidate, jsonOut, logOn, verbose, detach bool
 	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan string
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
@@ -126,18 +127,8 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 					return err
 				}
 			}
-			if cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "" {
-				return newUserError("--log-file needs a file.").
-					withCode("command.invalid_flags").
-					withSuggestion("Write --log-file FILE, or --log to log to ~/.smelt/factory.").
-					withExitCode(ExitBadArgs).
-					withoutDetail()
-			}
-			if attempts < 1 {
-				return newUserError("--max-attempts must be at least 1.").
-					withCode("command.invalid_args").
-					withExitCode(ExitBadArgs).
-					withoutDetail()
+			if err := checkBuildFlags(cmd, buildChecks{logFile: logFile, attempts: attempts, detach: detach, pub: pub}); err != nil {
+				return err
 			}
 			if err := requireLocalDaemon(); err != nil {
 				return err
@@ -214,6 +205,9 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			if err != nil {
 				return sessionError(err)
 			}
+			if detach {
+				return detachRun(ctx, streams, id, jsonOut)
+			}
 			streams.ErrPrintf("Factory run %s started on the smelt daemon. Ctrl-C stops it.\n", id)
 			if logArg != "" {
 				streams.ErrPrintf("Logging to %s\n", logArg)
@@ -246,6 +240,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.smelt/factory/run-<start time>.log")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
+	cmd.Flags().BoolVar(&detach, "detach", false, "start the run and return at once; it continues on the daemon (see 'smelt factory status', 'stop' and 'publish')")
 	cmd.Flags().BoolVar(&pub.push, "push", false, "push the run's branch when it ends, without asking")
 	cmd.Flags().BoolVar(&pub.pr, "pr", false, "push the run's branch and open a PR (or update the branch's PR), without asking")
 	cmd.Flags().BoolVar(&pub.none, "no-publish", false, "never offer to push or open a PR")
@@ -255,6 +250,35 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().BoolVar(&pub.draft, "draft", false, "open the PR as a draft")
 	cmd.SetFlagErrorFunc(factoryFlagError)
 	return cmd
+}
+
+// buildChecks is the flag values checkBuildFlags judges.
+type buildChecks struct {
+	logFile  string
+	attempts int
+	detach   bool
+	pub      publishFlags
+}
+
+// checkBuildFlags refuses flag values that cannot work, before anything starts.
+func checkBuildFlags(cmd *cobra.Command, c buildChecks) error {
+	if cmd.Flags().Changed("log-file") && strings.TrimSpace(c.logFile) == "" {
+		return newUserError("--log-file needs a file.").
+			withCode("command.invalid_flags").
+			withSuggestion("Write --log-file FILE, or --log to log to ~/.smelt/factory.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	if c.detach && (c.pub.push || c.pub.pr) {
+		return refuseDetachPublish()
+	}
+	if c.attempts < 1 {
+		return newUserError("--max-attempts must be at least 1.").
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	return nil
 }
 
 // factoryFlagError points --log=FILE, which named the log's file before
@@ -628,15 +652,20 @@ func printFactoryTotals(detail smeltd.SessionDetail, status iostream.StatusFunc)
 	if detail.EndedAt != nil {
 		ended = *detail.EndedAt
 	}
-	var cost float64
-	turns := 0
+	cost, turns := implementerCost(detail)
+	status(iostream.LevelInfo, fmt.Sprintf("The run took %s; %d implementer turn(s) cost $%.2f.", ended.Sub(detail.StartedAt).Round(time.Second), turns, cost))
+}
+
+// implementerCost is what the implementer's finished turns cost, and how many
+// there were.
+func implementerCost(detail smeltd.SessionDetail) (cost float64, turns int) {
 	for _, r := range detail.Rounds {
 		if impl := r.Implement; impl != nil && impl.State != smeltd.ImplementRunning {
 			cost += impl.CostUSD
 			turns++
 		}
 	}
-	status(iostream.LevelInfo, fmt.Sprintf("The run took %s; %d implementer turn(s) cost $%.2f.", ended.Sub(detail.StartedAt).Round(time.Second), turns, cost))
+	return cost, turns
 }
 
 // printFactoryLeftovers says what a run left behind: its committed work, or
