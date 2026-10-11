@@ -2,15 +2,15 @@ package review
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/smeltdev/smelt/internal/harness"
+	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
@@ -29,21 +29,15 @@ const maxOutputBytes = 256 * 1024
 // a truncated result would not decode at all.
 const maxStructuredOutputBytes = 8 << 20
 
-// ExitClaudeMissing is the exit code a script running claude on a sidecar uses
-// for claude not being on PATH, so every caller reports it the same way. Not
-// the shell's own 127, which claude also exits with when something it shelled
-// out to is missing: that is one broken review, not a dead pass.
-const ExitClaudeMissing = 97
+// ExitClaudeMissing is the exit code a script running an agent on a sidecar
+// uses for the agent not being on PATH.
+const ExitClaudeMissing = harness.MissingExitCode
 
 // ErrClaudeMissing is returned when a sidecar has no claude binary.
-var ErrClaudeMissing = errors.New("claude is not installed on the sidecar")
+var ErrClaudeMissing = claude.ErrMissing
 
 // ErrCredentialRejected is returned when Anthropic rejects the credential.
-var ErrCredentialRejected = errors.New("anthropic rejected the credential")
-
-// credentialRejectedRe matches claude's own authentication failure, which reads
-// the same for a revoked API key and a stale subscription token.
-var credentialRejectedRe = regexp.MustCompile(`(?i)failed to authenticate.*\b401\b`)
+var ErrCredentialRejected = claude.ErrCredentialRejected
 
 // fatal reports whether an error fails every review the same way, so the pass
 // should stop rather than run the rest and report identical failures. Every
@@ -52,13 +46,8 @@ func fatal(err error) bool {
 	return errors.Is(err, ErrClaudeMissing) || errors.Is(err, ErrCredentialRejected)
 }
 
-// Credential is the Claude credential a review authenticates with. EnvVar is
-// the variable claude reads it from, so only one of the two is ever sent and a
-// stale one cannot shadow the other.
-type Credential struct {
-	EnvVar string
-	Value  string
-}
+// Credential is the credential a review authenticates with.
+type Credential = harness.Credential
 
 // allowedTools limits reviewers to reading the repository. A review reports
 // findings; it has no business editing the tree the next pass reviews.
@@ -98,6 +87,8 @@ type ProgressEvent struct {
 
 // Options configures one review pass.
 type Options struct {
+	// Harness is the agent that runs each review; Claude Code when nil.
+	Harness    harness.Harness
 	Credential Credential
 	// BaseURL is forwarded to claude when it is not Anthropic's own, so a
 	// credential issued by a gateway is sent to that gateway.
@@ -119,6 +110,14 @@ type Options struct {
 	// caller registers the run for output replay, which has to happen while the
 	// command is still in flight.
 	OnSubmitted func(entry *sidecar.PoolEntry, prompt, commandID string)
+}
+
+// agent is the harness that runs the reviews.
+func (o Options) agent() harness.Harness {
+	if o.Harness == nil {
+		return claude.Harness{}
+	}
+	return o.Harness
 }
 
 // Result is the outcome of one prompt in one pass. Output and Error are not
@@ -280,19 +279,24 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	if opts.OnSubmitted != nil {
 		onSubmitted = func(commandID string) { opts.OnSubmitted(entry, p.Name, commandID) }
 	}
-	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, p.Body, opts.Model, tools, opts.StructuredFindings), Env(opts.Credential, opts.BaseURL), onOutput, onSubmitted)
+	in := harness.ReviewInput{RepoPath: entry.RepoPath, Prompt: p.Body, Model: opts.Model, Tools: tools}
+	if opts.StructuredFindings {
+		in.Schema = FindingsSchema
+	}
+	h := opts.agent()
+	code, err := exec(ctx, entry, h.ReviewScript(in), h.Env(opts.Credential, opts.BaseURL), onOutput, onSubmitted)
 	r.Output = strings.TrimSpace(stdout.String())
 	r.Duration = time.Since(start)
-	if err := ClaudeRunError(ctx, opts.Timeout, code, err, r.Output, stderr.String()); err != nil {
+	if err := h.RunError(ctx, opts.Timeout, code, err, r.Output, stderr.String()); err != nil {
 		return r.fail(err)
 	}
 	if opts.StructuredFindings {
 		// A result cut at the cap cannot decode; say why instead of reporting
 		// malformed JSON.
 		if stdoutCut {
-			return r.fail(fmt.Errorf("claude's result is over %d bytes", stdoutLimit))
+			return r.fail(fmt.Errorf("%s's result is over %d bytes", h.Name(), stdoutLimit))
 		}
-		parsed, err := ParseFindings(r.Output)
+		parsed, err := parseReview(h, r.Output)
 		if err != nil {
 			return r.fail(err)
 		}
@@ -303,93 +307,29 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 }
 
 // ClaudeRunError explains how a claude run on a sidecar ended, or returns nil
-// when it exited 0. ctx is the run's own context, bounded by timeout; code and
-// execErr are what the Execer returned, and stdout and stderr what claude
-// wrote. Every caller running claude classifies its end here, so a missing
-// binary or a rejected credential reads the same whatever ran.
+// when it exited 0; see claude.Harness.RunError.
 func ClaudeRunError(ctx context.Context, timeout time.Duration, code int, execErr error, stdout, stderr string) error {
-	switch {
-	case ctx.Err() == context.DeadlineExceeded:
-		return fmt.Errorf("timed out after %s", timeout)
-	case execErr != nil:
-		return fmt.Errorf("exec: %w", execErr)
-	case code == ExitClaudeMissing:
-		return ErrClaudeMissing
-	case code != 0 && CredentialRejected(stdout, stderr):
-		return ErrCredentialRejected
-	case code != 0:
-		return exitError(code, stderr)
-	}
-	return nil
+	return claude.Harness{}.RunError(ctx, timeout, code, execErr, stdout, stderr)
 }
 
-// CredentialRejected reports whether claude failed to authenticate. Both
-// streams are checked: the 401 lands on stdout, while stderr can carry
-// unrelated warnings.
+// CredentialRejected reports whether claude failed to authenticate.
 func CredentialRejected(stdout, stderr string) bool {
-	return credentialRejectedRe.MatchString(stdout) || credentialRejectedRe.MatchString(stderr)
+	return claude.CredentialRejected(stdout, stderr)
 }
 
 // stderrTail is how much of stderr a failed command reports.
 const stderrTail = 2000
 
-func exitError(code int, stderr string) error {
-	stderr = strings.TrimSpace(stderr)
-	if stderr == "" {
-		return fmt.Errorf("claude exited %d", code)
-	}
-	return fmt.Errorf("claude exited %d: %s", code, Tail(stderr, stderrTail))
-}
-
-// Tail keeps the last n bytes of s, marking the cut. The end is kept because
-// that is where compilers, test runners and claude say what went wrong.
-func Tail(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "…" + s[len(s)-n:]
-}
-
-// claudeScriptWithTools builds the shell script that runs one review, with an
-// explicit tool allowlist and, when structured is set, claude's JSON result
-// constrained by FindingsSchema.
-func claudeScriptWithTools(repoPath, prompt, model string, tools []string, structured bool) string {
-	format := "text"
-	if structured {
-		format = "json"
-	}
-	args := []string{"claude", "-p", "--output-format", format, "--allowedTools", strings.Join(tools, ",")}
-	if structured {
-		args = append(args, "--json-schema", FindingsSchema)
-	}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	return ClaudeScript(repoPath, prompt, args)
-}
+// Tail keeps the last n bytes of s, marking the cut.
+func Tail(s string, n int) string { return harness.Tail(s, n) }
 
 // ClaudeScript builds the shell script that runs claude in repoPath on a
-// sidecar with prompt on stdin. args is the whole command line, starting with
-// "claude". The prompt is piped in base64-encoded, so no quoting in it can
-// reach the shell. Claude Code's native installer puts claude in ~/.local/bin,
-// which a non-login sh does not have on PATH.
+// sidecar with prompt on stdin; see claude.Script.
 func ClaudeScript(repoPath, prompt string, args []string) string {
-	encoded := base64.StdEncoding.EncodeToString([]byte(prompt))
-	return fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
-command -v claude >/dev/null 2>&1 || exit %d
-cd %s && echo %s | base64 -d | %s`,
-		ExitClaudeMissing, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
+	return claude.Script(repoPath, prompt, args)
 }
 
-// defaultBaseURL is where claude sends requests when no base URL is set.
-const defaultBaseURL = "https://api.anthropic.com"
-
-// Env is the environment claude runs with on a sidecar: only the credential,
-// and the base URL when it points somewhere other than Anthropic.
+// Env is the environment claude runs with on a sidecar.
 func Env(cred Credential, baseURL string) map[string]string {
-	env := map[string]string{cred.EnvVar: cred.Value}
-	if baseURL != "" && strings.TrimRight(baseURL, "/") != defaultBaseURL {
-		env["ANTHROPIC_BASE_URL"] = baseURL
-	}
-	return env
+	return claude.Harness{}.Env(cred, baseURL)
 }

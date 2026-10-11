@@ -9,6 +9,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/circleci"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -59,6 +60,9 @@ type RunOptions struct {
 	// KeepSidecars leaves the sidecars running when the run ends.
 	KeepSidecars bool
 
+	// Harness is the coding agent for the implementer and the reviewers; Claude
+	// Code when nil. Credential is its credential.
+	Harness                 harness.Harness
 	Credential              review.Credential
 	BaseURL                 string
 	Model                   string
@@ -267,7 +271,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	steps := &Sidecars{
 		Exec: exec,
 		Implementer: &Implementer{
-			Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
+			Harness: opts.Harness, Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
 			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions,
 			OnActivity: opts.OnActivity,
 		},
@@ -278,7 +282,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Request:   request,
 		Prompts:   opts.Prompts,
 		Review: review.Options{
-			Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
+			Harness: opts.Harness, Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
 			StructuredFindings: true,
 			ProgressFn:         opts.OnReviewProgress,
 		},

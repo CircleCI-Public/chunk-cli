@@ -305,6 +305,9 @@ func (r *factoryRecorder) event(ev factory.Event) {
 			impl.State = smeltd.ImplementApplied
 			impl.DurationMS = ev.Turn.Duration.Milliseconds()
 			impl.CostUSD = ev.Turn.CostUSD
+			impl.Harness, impl.Model = string(ev.Turn.Harness), ev.Turn.Model
+			impl.InputTokens, impl.CachedTokens, impl.OutputTokens = ev.Turn.InputTokens, ev.Turn.CachedTokens, ev.Turn.OutputTokens
+			impl.RateLimit = ev.Turn.RateLimit
 			impl.Summary = ev.Turn.Summary
 		}
 	case factory.EventCollected:

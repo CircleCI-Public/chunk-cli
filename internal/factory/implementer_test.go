@@ -123,6 +123,7 @@ func TestImplementerAddsRunSpecificInstructions(t *testing.T) {
 func TestImplementerResumesItsSession(t *testing.T) {
 	im, home, _ := newImplementer(t, streamOK)
 
+	im.sessionID = "created-by-smelt"
 	_, err := im.Run(context.Background(), "first")
 	assert.NilError(t, err)
 	_, err = im.Run(context.Background(), "fix it")
@@ -132,8 +133,9 @@ func TestImplementerResumesItsSession(t *testing.T) {
 	assert.NilError(t, err)
 	lines := strings.Split(strings.TrimSuffix(string(args), "--end--\n"), "--end--\n")
 	assert.Equal(t, len(lines), 2)
-	assert.Assert(t, strings.Contains(lines[0], "--session-id "+im.sessionID), lines[0])
-	assert.Assert(t, strings.Contains(lines[1], "--resume "+im.sessionID), lines[1])
+	assert.Assert(t, strings.Contains(lines[0], "--session-id created-by-smelt"), lines[0])
+	// The agent reports the session it is in ("s" in the fake); that is the one resumed.
+	assert.Assert(t, strings.Contains(lines[1], "--resume s"), lines[1])
 	assert.Assert(t, strings.Contains(lines[0], "Bash(git commit:*)"), "git commits are disallowed: %s", lines[0])
 }
 
@@ -194,28 +196,4 @@ func TestImplementerReportsMissingClaude(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	_, err := im.Run(context.Background(), "p")
 	assert.Assert(t, errors.Is(err, review.ErrClaudeMissing), "got %v", err)
-}
-
-// TestStreamParserReassemblesSplitLines covers output arriving in chunks that
-// cut lines anywhere, as the exec stream delivers it.
-func TestStreamParserReassemblesSplitLines(t *testing.T) {
-	var acts []Activity
-	p := &streamParser{onActivity: func(a Activity) { acts = append(acts, a) }}
-	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.go"}}]}}` + "\n" +
-		`{"type":"result","result":"ok"}`
-	for i := 0; i < len(stream); i += 7 {
-		p.write([]byte(stream[i:min(i+7, len(stream))]))
-	}
-	p.flush()
-	assert.DeepEqual(t, acts, []Activity{{Tool: "Read", Detail: "a.go"}})
-	assert.Assert(t, p.sawResult)
-	assert.Equal(t, p.result.Result, "ok")
-}
-
-func TestStreamParserDropsOversizedLines(t *testing.T) {
-	p := &streamParser{}
-	p.write([]byte(`{"type":"user","x":"` + strings.Repeat("a", maxLineBytes) + `"}` + "\n"))
-	p.write([]byte(`{"type":"result","result":"ok"}` + "\n"))
-	assert.Assert(t, p.sawResult)
-	assert.Assert(t, len(p.buf) < maxLineBytes)
 }

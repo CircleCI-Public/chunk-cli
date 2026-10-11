@@ -109,6 +109,9 @@ func (s *Sidecars) Prepare(ctx context.Context) error {
 	if err := s.installDependencies(ctx); err != nil {
 		return err
 	}
+	if err := s.prepareHarness(ctx); err != nil {
+		return err
+	}
 	s.ws = workspace{exec: s.Exec, entry: s.Implementer.Entry}
 	if err := s.ws.commitBaseline(ctx); err != nil {
 		return err
@@ -371,4 +374,24 @@ func (s *Sidecars) installOn(ctx context.Context, e *sidecar.PoolEntry) error {
 		return fmt.Errorf("%s: %q exited %d: %s", e.ID, s.Install, code, review.Tail(strings.TrimSpace(tail.String()), 2000))
 	}
 	return nil
+}
+
+// prepareHarness runs the agent's own setup once on every sidecar, after the
+// dependencies are installed. Its secrets are in the setup's environment only,
+// so later turns never get them.
+func (s *Sidecars) prepareHarness(ctx context.Context) error {
+	script, env := s.Implementer.agent().Prepare(s.Implementer.Credential)
+	if script == "" {
+		return nil
+	}
+	prepare := func(e *sidecar.PoolEntry) error {
+		if _, err := review.RunScriptEnv(ctx, s.Exec, e, script, env, 64<<10); err != nil {
+			return fmt.Errorf("%s: set up %s: %w", e.ID, s.Implementer.agent().Name(), err)
+		}
+		return nil
+	}
+	if err := prepare(s.Implementer.Entry); err != nil {
+		return err
+	}
+	return s.onReviewers(prepare)
 }

@@ -137,9 +137,8 @@ func TestFindingsSchemaNamesTheFieldsParseFindingsReads(t *testing.T) {
 		return slices.Sorted(maps.Keys(props))
 	}
 
-	structured, ok := reflect.TypeFor[claudeResult]().FieldByName("StructuredOutput")
-	assert.Assert(t, ok)
-	assert.DeepEqual(t, keys(schema.Properties), jsonNames(structured.Type.Elem()))
+	// The harnesses read the answer as a review and its findings.
+	assert.DeepEqual(t, keys(schema.Properties), []string{"findings", "review"})
 
 	item := schema.Properties["findings"].Items
 	assert.Assert(t, item != nil)

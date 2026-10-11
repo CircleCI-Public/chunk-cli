@@ -6,6 +6,9 @@ import (
 	"path"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/smeltdev/smelt/internal/harness"
+	"github.com/smeltdev/smelt/internal/harness/claude"
 )
 
 // Limits on what is accepted from a model's structured output. They exist
@@ -90,19 +93,6 @@ type Parsed struct {
 	Prose string
 }
 
-// claudeResult is the part of claude's --output-format json result that a
-// review needs. structured_output is set only when the answer satisfied
-// FindingsSchema.
-type claudeResult struct {
-	IsError          bool   `json:"is_error"`
-	Subtype          string `json:"subtype"`
-	Result           string `json:"result"`
-	StructuredOutput *struct {
-		Review   string       `json:"review"`
-		Findings []rawFinding `json:"findings"`
-	} `json:"structured_output"`
-}
-
 // rawFinding is a finding as the review gave it, before it is checked.
 type rawFinding struct {
 	File     string `json:"file"`
@@ -112,29 +102,28 @@ type rawFinding struct {
 	Patch    string `json:"patch"`
 }
 
-// maxResultInError caps how much of claude's own result text an error quotes.
-const maxResultInError = 500
-
 // ParseFindings reads the findings out of claude's JSON result. Claude Code has
 // already checked the shape against FindingsSchema; what is left is the content,
 // which is still untrusted: paths are confined to the repository and sizes are
-// capped. A result with no structured output is an error, not a prose-only
-// review.
+// capped.
 func ParseFindings(output string) (Parsed, error) {
-	var res claudeResult
-	if err := json.Unmarshal([]byte(output), &res); err != nil {
-		return Parsed{}, fmt.Errorf("read claude's result: %w", err)
+	return parseReview(claude.Harness{}, output)
+}
+
+// parseReview reads the findings out of h's review output.
+func parseReview(h harness.Harness, output string) (Parsed, error) {
+	payload, err := h.ParseReview(output)
+	if err != nil {
+		return Parsed{}, err
 	}
-	if res.IsError || res.StructuredOutput == nil {
-		return Parsed{}, fmt.Errorf("claude gave no structured findings (%s): %s",
-			res.Subtype, truncateRunes(strings.TrimSpace(res.Result), maxResultInError))
+	var raw []rawFinding
+	if len(payload.Findings) > 0 {
+		if err := json.Unmarshal(payload.Findings, &raw); err != nil {
+			return Parsed{}, fmt.Errorf("read %s's findings: %w", h.Name(), err)
+		}
 	}
-	findings, dropped := cleanFindings(res.StructuredOutput.Findings)
-	return Parsed{
-		Findings: findings,
-		Dropped:  dropped,
-		Prose:    strings.TrimSpace(res.StructuredOutput.Review),
-	}, nil
+	findings, dropped := cleanFindings(raw)
+	return Parsed{Findings: findings, Dropped: dropped, Prose: strings.TrimSpace(payload.Review)}, nil
 }
 
 func cleanFindings(raw []rawFinding) ([]Finding, int) {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 )
 
@@ -85,6 +86,15 @@ type RoundImplement struct {
 	State      ImplementState `json:"state"`
 	DurationMS int64          `json:"duration_ms,omitempty"`
 	CostUSD    float64        `json:"cost_usd,omitempty"`
+	// Harness and Model are the agent that ran the turn.
+	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model,omitempty"`
+	// The tokens the turn spent, when the agent reports them.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	CachedTokens int `json:"cached_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+	// RateLimit is the last rate-limit signal the agent emitted during the turn.
+	RateLimit *harness.RateLimit `json:"rate_limit,omitempty"`
 	// Summary is the implementer's own account of the turn.
 	Summary string `json:"summary,omitempty"`
 	// Stat summarizes the work so far against the run's baseline.
