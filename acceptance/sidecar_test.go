@@ -11,11 +11,11 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/testing/recorder"
 )
 
 func TestSidecarsListHappyPath(t *testing.T) {
@@ -378,7 +378,7 @@ func TestSidecarsSyncCheckoutFlagRemoved(t *testing.T) {
 }
 
 // TestSidecarsSshNoKey verifies that `sidecar ssh` generates the default
-// keypair at ~/.ssh/chunk_ai instead of asking the user to run ssh-keygen.
+// keypair at ~/.ssh/smelt_ai instead of asking the user to run ssh-keygen.
 // Reaching a sidecar has to work without `sidecar setup` having run first.
 //
 // The first run uses a server accepting any key, since the test cannot know
@@ -398,8 +398,8 @@ func TestSidecarsSshNoKey(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	// No key at env.HomeDir/.ssh/chunk_ai — the default path.
-	keyPath := filepath.Join(env.HomeDir, ".ssh", "chunk_ai")
+	// No key at env.HomeDir/.ssh/smelt_ai — the default path.
+	keyPath := filepath.Join(env.HomeDir, ".ssh", "smelt_ai")
 	_, err := os.Stat(keyPath)
 	assert.Assert(t, os.IsNotExist(err), "expected no key before the run")
 
@@ -438,7 +438,7 @@ func TestSidecarsSshNoKey(t *testing.T) {
 
 // TestSidecarsSshPassesThroughExitCode verifies that a remote command exiting
 // non-zero makes `sidecar ssh` exit with that same code, as ssh does, without
-// chunk printing an error of its own over the command's output.
+// smelt printing an error of its own over the command's output.
 func TestSidecarsSshPassesThroughExitCode(t *testing.T) {
 	sshSrv := fakes.NewSSHServerAcceptingAnyKey(t)
 	sshSrv.SetResult("partial output\n", 3)
@@ -455,7 +455,7 @@ func TestSidecarsSshPassesThroughExitCode(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 3, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	assert.Equal(t, result.Stdout, "partial output\n")
-	assert.Equal(t, result.Stderr, "", "remote exit should not be reported as a chunk error")
+	assert.Equal(t, result.Stderr, "", "remote exit should not be reported as a smelt error")
 }
 
 func TestSidecarsExecWithArgs(t *testing.T) {
@@ -780,7 +780,7 @@ func TestSidecarDeleteForceSkipsConfirmation(t *testing.T) {
 	assert.Equal(t, len(cci.Sidecars), 0, "expected sidecar to be deleted")
 }
 
-// TestPruneRequiresForceWithoutTTY verifies that chunk prune requires --force
+// TestPruneRequiresForceWithoutTTY verifies that smelt prune requires --force
 // (or a TTY) to proceed; without either it exits non-zero.
 func TestPruneRequiresForceWithoutTTY(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()

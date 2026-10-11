@@ -6,12 +6,12 @@
   "targeted_by_pass": 3,
   "profiles": {
     "control": {
-      "reviews": [".chunk/reviews/adversarial.md", ".chunk/reviews/correctness.md", ".chunk/reviews/testing.md"],
+      "reviews": [".smelt/reviews/adversarial.md", ".smelt/reviews/correctness.md", ".smelt/reviews/testing.md"],
       "implementer_instructions": "Use your judgment about which validation commands to run before finishing.",
       "reviewers": 0
     },
     "lean": {
-      "reviews": [".chunk/reviews/adversarial.md", ".chunk/reviews/testing.md"],
+      "reviews": [".smelt/reviews/adversarial.md", ".smelt/reviews/testing.md"],
       "implementer_instructions": "Factory runs all repository-wide validation after this turn. Format changed files and run only the smallest focused test that exercises the changed behavior. Do not run repository-wide tests, lint, or vet.",
       "reviewers": 0
     },

@@ -10,10 +10,10 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 func TestConfigSetAndShow(t *testing.T) {
@@ -111,7 +111,7 @@ func TestConfigFilePermissions(t *testing.T) {
 	result := binary.RunCLI(t, []string{"config", "set", "model", "test-model"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "config set failed\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	configDir := filepath.Join(env.HomeDir, ".config", "chunk")
+	configDir := filepath.Join(env.HomeDir, ".config", "smelt")
 	configFile := filepath.Join(configDir, "config.json")
 
 	dirInfo, err := os.Stat(configDir)
@@ -322,7 +322,7 @@ func TestConfigSetOrgID(t *testing.T) {
 	setResult := binary.RunCLI(t, []string{"config", "set", "orgID", "org-xyz"}, env, workDir)
 	assert.Equal(t, setResult.ExitCode, 0, "config set orgID failed\nstdout: %s\nstderr: %s", setResult.Stdout, setResult.Stderr)
 
-	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "config.json"))
+	data, err := os.ReadFile(filepath.Join(workDir, ".smelt", "config.json"))
 	assert.NilError(t, err)
 	var cfg map[string]string
 	err = json.Unmarshal(data, &cfg)
@@ -389,7 +389,7 @@ func TestConfigSetBackgroundValidationKeys(t *testing.T) {
 	result := binary.RunCLI(t, []string{"config", "set", "asyncValidateBlocking", ".sql,.tf"}, env, repoDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	data, err := os.ReadFile(filepath.Join(repoDir, ".chunk", "config.json"))
+	data, err := os.ReadFile(filepath.Join(repoDir, ".smelt", "config.json"))
 	assert.NilError(t, err)
 	var cfg config.ProjectConfig
 	assert.NilError(t, json.Unmarshal(data, &cfg))

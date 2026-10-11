@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 func makeEvent(op Op, level, msg string) Event {

@@ -13,16 +13,16 @@ import (
 	petname "github.com/dustinkirkland/golang-petname"
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/envbuilder"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/envbuilder"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envspec"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func randomSidecarName() string {
@@ -70,7 +70,7 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 	if active == nil {
 		return &userError{
 			msg:        "No active sidecar is set.",
-			suggestion: "Pass --sidecar-id, or run 'chunk sidecar use <id>' or 'chunk sidecar create'.",
+			suggestion: "Pass --sidecar-id, or run 'smelt sidecar use <id>' or 'smelt sidecar create'.",
 			errMsg:     "no active sidecar and --sidecar-id not provided",
 		}
 	}
@@ -132,7 +132,7 @@ func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string,
 		if nonInteractive() {
 			return "", &userError{
 				msg:        "No interactive terminal available to select an organization.",
-				suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
+				suggestion: "Run 'smelt org list' to find your org ID, then set it with 'smelt config set orgID <id>' or pass --org-id.",
 				err:        ui.ErrNoTTY,
 			}
 		}
@@ -147,7 +147,7 @@ func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string,
 				// available", which the message already says in full.
 				return "", &userError{
 					msg:        "No interactive terminal available to select an organization.",
-					suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
+					suggestion: "Run 'smelt org list' to find your org ID, then set it with 'smelt config set orgID <id>' or pass --org-id.",
 					err:        err,
 					hideDetail: true,
 				}
@@ -249,8 +249,8 @@ func newSidecarCreateCmd() *cobra.Command {
 				return err
 			}
 			// Where the image came from, for the error if it is rejected. Left
-			// empty when chunk picks one itself: a rejected image the caller
-			// chose is a mistake worth explaining, while a rejected one chunk
+			// empty when smelt picks one itself: a rejected image the caller
+			// chose is a mistake worth explaining, while a rejected one smelt
 			// chose is not something the caller can act on.
 			var imageSource string
 			if image != "" {
@@ -294,7 +294,7 @@ func newSidecarCreateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (auto-generated if not provided)")
-	cmd.Flags().StringVar(&image, "image", "", "Snapshot ID (from 'chunk sidecar snapshot create')")
+	cmd.Flags().StringVar(&image, "image", "", "Snapshot ID (from 'smelt sidecar snapshot create')")
 
 	return cmd
 }
@@ -373,10 +373,10 @@ Arguments to the remote command can be passed as positional arguments (after --)
 or via the repeatable --args flag. Positional arguments are appended after any
 --args values.`,
 		Example: `  # Pass arguments after --
-  chunk sidecar exec --command sh -- -c "echo hello"
+  smelt sidecar exec --command sh -- -c "echo hello"
 
   # Pass arguments with the repeatable --args flag
-  chunk sidecar exec --command sh --args="-c" --args="echo hello"`,
+  smelt sidecar exec --command sh --args="-c" --args="echo hello"`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
@@ -409,7 +409,7 @@ or via the repeatable --args flag. Positional arguments are appended after any
 			// it is not a repo, and an empty one simply groups under no project.
 			projectRoot, _ := os.Getwd()
 			resp, err := submitAndStream(cmd.Context(), client, sidecarID,
-				&chunkd.CommandReg{
+				&smeltd.CommandReg{
 					SidecarID:   sidecarID,
 					ProjectRoot: projectRoot,
 					Op:          string(eventlog.OpExec),
@@ -716,16 +716,16 @@ func newSidecarEnvCmd() *cobra.Command {
 		Use:   "env",
 		Short: "Detect tech stack and print environment spec as JSON",
 		Long: `Analyse the repository at --dir, detect its tech stack, and print
-a JSON environment spec to stdout. Pipe this into 'chunk sidecar build' to
+a JSON environment spec to stdout. Pipe this into 'smelt sidecar build' to
 generate a Dockerfile and build a test image.
 
-By default the detected environment is saved to .chunk/config.json so that
-'chunk sidecar setup' can reuse it without re-detecting. Pass --no-save to
+By default the detected environment is saved to .smelt/config.json so that
+'smelt sidecar setup' can reuse it without re-detecting. Pass --no-save to
 print only without writing.
 
 The saved copy omits the detected test command: it is an input to the test
 image's CMD, not a step that runs during setup. Pipe stdout into
-'chunk sidecar build' rather than reusing the saved spec.`,
+'smelt sidecar build' rather than reusing the saved spec.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			if _, err := os.Stat(dir); err != nil {
@@ -770,7 +770,7 @@ image's CMD, not a step that runs during setup. Pipe stdout into
 	}
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to detect environment in")
-	cmd.Flags().BoolVar(&noSave, "no-save", false, "Print only without saving to .chunk/config.json")
+	cmd.Flags().BoolVar(&noSave, "no-save", false, "Print only without saving to .smelt/config.json")
 
 	return cmd
 }
@@ -781,11 +781,11 @@ func newSidecarBuildCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build",
 		Short: "Generate a Dockerfile from an environment spec and build a test image",
-		Long: `Read a JSON environment spec from stdin (produced by 'chunk sidecar env'),
+		Long: `Read a JSON environment spec from stdin (produced by 'smelt sidecar env'),
 write Dockerfile.test to --dir, and build a Docker test image from it.
 
 Example:
-  chunk sidecar env --dir . | chunk sidecar build --dir .`,
+  smelt sidecar env --dir . | smelt sidecar build --dir .`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if tag != "" && !validDockerTag.MatchString(tag) {
 				return &userError{
@@ -804,7 +804,7 @@ Example:
 				if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 					return &userError{
 						msg:        "No input on stdin.",
-						suggestion: "Pipe a JSON env spec, for example: chunk sidecar env | chunk sidecar build",
+						suggestion: "Pipe a JSON env spec, for example: smelt sidecar env | smelt sidecar build",
 						errMsg:     "no input on stdin",
 					}
 				}
@@ -818,7 +818,7 @@ Example:
 			if err := json.Unmarshal(raw, &env); err != nil {
 				return &userError{
 					msg:        "Invalid environment spec.",
-					suggestion: "Pipe the output of 'chunk sidecar env' into this command.",
+					suggestion: "Pipe the output of 'smelt sidecar env' into this command.",
 					err:        err,
 				}
 			}
@@ -884,7 +884,7 @@ func newSidecarSnapshotCreateCmd() *cobra.Command {
 Once the snapshot is captured, the source sidecar is deleted to avoid
 leaking the build instance. If the deleted sidecar belonged to the active pool,
 the member is removed from local active-pool state. Launch a new pool member
-from the snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
+from the snapshot with 'smelt sidecar create --image <snapshot-id>'.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			if len(name) > 255 {
@@ -1028,16 +1028,16 @@ func newSidecarSetupCmd() *cobra.Command {
 		Long: `Detect the tech stack in --dir, sync files, run the setup commands
 in a sidecar, and create a snapshot of the prepared environment.
 
-The detected environment is saved to .chunk/config.json on first run.
+The detected environment is saved to .smelt/config.json on first run.
 Subsequent runs reuse the saved environment and skip detection unless
 --force is passed.
 
 If no active sidecar is set, pass --org-id and --name to create one first.
 
 Example:
-  chunk sidecar setup --dir .
-  chunk sidecar setup --dir . --name my-sidecar --org-id <org-id>
-  chunk sidecar setup --dir . --force`,
+  smelt sidecar setup --dir .
+  smelt sidecar setup --dir . --name my-sidecar --org-id <org-id>
+  smelt sidecar setup --dir . --force`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)
 			status := newStatusFunc(streams)
@@ -1060,7 +1060,7 @@ Example:
 			var env *envbuilder.Environment
 			var detectionErr error
 			if envCached {
-				streams.ErrPrintln("Using environment from .chunk/config.json")
+				streams.ErrPrintln("Using environment from .smelt/config.json")
 				env = cfg.Environment
 			} else {
 				status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))
@@ -1130,12 +1130,12 @@ Example:
 				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
 					streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
 				} else {
-					streams.ErrPrintf("Selected the circleci backend and marked install and gate commands as remote in .chunk/config.json\n")
+					streams.ErrPrintf("Selected the circleci backend and marked install and gate commands as remote in .smelt/config.json\n")
 				}
 
 				streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it:\n")
-				streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n")
-				streams.ErrPrintf("  chunk sidecar snapshot list              # list snapshot IDs for your org\n\n")
+				streams.ErrPrintf("  smelt sidecar snapshot create --name <snapshot-name>\n")
+				streams.ErrPrintf("  smelt sidecar snapshot list              # list snapshot IDs for your org\n\n")
 
 				return nil
 			}()
@@ -1152,7 +1152,7 @@ Example:
 				// step is skipped (see sidecarSetupRunSetup).
 				setupStepTotal = env.ProvisioningSteps()
 			}
-			_ = telemetry.FromContext(cmd.Context()).Track("chunk_sidecar_setup", map[string]any{
+			_ = telemetry.FromContext(cmd.Context()).Track("smelt_sidecar_setup", map[string]any{
 				"stack":            stack,
 				"setup_step_total": setupStepTotal,
 				"env_cached":       envCached,
@@ -1168,7 +1168,7 @@ Example:
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (used when creating a new sidecar)")
 	cmd.Flags().BoolVar(&skipSync, "skip-sync", false, "Skip syncing files to the sidecar")
-	cmd.Flags().BoolVar(&force, "force", false, "Re-detect environment even if cached in .chunk/config.json")
+	cmd.Flags().BoolVar(&force, "force", false, "Re-detect environment even if cached in .smelt/config.json")
 	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
 

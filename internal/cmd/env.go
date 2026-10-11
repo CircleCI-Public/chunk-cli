@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/secrets"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 const defaultEnvFile = ".env.local"

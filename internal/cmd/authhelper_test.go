@@ -14,11 +14,11 @@ import (
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/session"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func isolateConfig(t *testing.T) {
@@ -26,7 +26,7 @@ func isolateConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
-	t.Setenv(config.EnvChunkSessionID, "")
+	t.Setenv(config.EnvSmeltSessionID, "")
 	t.Setenv(session.EnvClaudeSessionID, "")
 	// Keychain service keys are derived from these base URLs, which otherwise
 	// default to production. Point them at an unroutable host so a test that

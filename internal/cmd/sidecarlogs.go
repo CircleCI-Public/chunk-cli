@@ -6,20 +6,20 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // newSidecarLogsCmd prints a remote command's output.
 //
-// This is the non-TUI door onto the same data `chunk watch` shows, which matters
+// This is the non-TUI door onto the same data `smelt watch` shows, which matters
 // because the most common reader here has no terminal at all: an agent that just
 // ran validate and wants to know why it failed can pipe this, where it cannot
 // drive a dashboard.
 //
-// It prefers the chunk daemon's buffer and falls back to the API, so it works
+// It prefers the smelt daemon's buffer and falls back to the API, so it works
 // whether or not a daemon is running.
 func newSidecarLogsCmd() *cobra.Command {
 	var follow bool
@@ -28,8 +28,8 @@ func newSidecarLogsCmd() *cobra.Command {
 		Use:   "logs <command-id>",
 		Short: "Print the output of a command that ran on a sidecar",
 		Long: "Print the output of a command that ran on a sidecar.\n\n" +
-			"Command IDs appear in the chunk watch dashboard. Output is read from the\n" +
-			"chunk daemon's buffer when it has it, and from the CircleCI API otherwise.\n\n" +
+			"Command IDs appear in the smelt watch dashboard. Output is read from the\n" +
+			"smelt daemon's buffer when it has it, and from the CircleCI API otherwise.\n\n" +
 			"Exits non-zero only when reading failed. A command that itself exited\n" +
 			"non-zero is reported on stderr as \"exit status N\" and does not change this\n" +
 			"command's own status, so a failing remote command is not a failing read.",
@@ -41,20 +41,20 @@ func newSidecarLogsCmd() *cobra.Command {
 
 			// The daemon first: it needs no network round trip and it holds output
 			// for commands whose submitting process has long since exited.
-			if chunk, err := chunkd.FetchOutput(commandID, 0); err == nil && chunk.Found {
-				if chunk.Truncated {
+			if piece, err := smeltd.FetchOutput(commandID, 0); err == nil && piece.Found {
+				if piece.Truncated {
 					io.ErrPrintln("warning: earlier output was dropped from the buffer")
 				}
-				_, _ = io.Out.Write(chunk.Data)
-				if chunk.Error != "" {
+				_, _ = io.Out.Write(piece.Data)
+				if piece.Error != "" {
 					// Output may be short because streaming broke, not because the
 					// command was quiet. Say which.
-					io.ErrPrintf("warning: output stream ended early: %s\n", chunk.Error)
+					io.ErrPrintf("warning: output stream ended early: %s\n", piece.Error)
 				}
-				if !chunk.Running || !follow {
-					return reportExitCode(chunk.ExitCode, io)
+				if !piece.Running || !follow {
+					return reportExitCode(piece.ExitCode, io)
 				}
-				return followFromDaemon(cmd, commandID, chunk.NextOffset, io)
+				return followFromDaemon(cmd, commandID, piece.NextOffset, io)
 			}
 
 			// No daemon, or it has forgotten this command: stream from the API.
@@ -82,7 +82,7 @@ func newSidecarLogsCmd() *cobra.Command {
 				}
 				return &userError{
 					msg:        fmt.Sprintf("Could not read output for command %s.", commandID),
-					suggestion: "Check the command ID in the chunk watch dashboard.",
+					suggestion: "Check the command ID in the smelt watch dashboard.",
 					err:        err,
 				}
 			}
@@ -104,28 +104,28 @@ func followFromDaemon(cmd *cobra.Command, commandID string, offset int64, io ios
 			return ctx.Err()
 		case <-time.After(followInterval):
 		}
-		chunk, err := chunkd.FetchOutput(commandID, offset)
+		piece, err := smeltd.FetchOutput(commandID, offset)
 		if err != nil {
-			return &userError{msg: "Lost contact with the chunk daemon while following output.", err: err}
+			return &userError{msg: "Lost contact with the smelt daemon while following output.", err: err}
 		}
-		if !chunk.Found {
+		if !piece.Found {
 			// The daemon evicted the command mid-follow. Report what happened
 			// rather than exiting 0 as though the command had passed.
 			return &userError{
-				msg:    fmt.Sprintf("The chunk daemon dropped output for command %s while following it.", commandID),
+				msg:    fmt.Sprintf("The smelt daemon dropped output for command %s while following it.", commandID),
 				errMsg: "command output evicted",
 			}
 		}
-		_, _ = io.Out.Write(chunk.Data)
-		offset = chunk.NextOffset
-		if !chunk.Running {
+		_, _ = io.Out.Write(piece.Data)
+		offset = piece.NextOffset
+		if !piece.Running {
 			// Same reasoning as the non-follow path: a stream that broke leaves no
 			// exit code, so reporting only the code would end a truncated follow
 			// silently at exit 0, as though the command had simply finished.
-			if chunk.Error != "" {
-				io.ErrPrintf("warning: output stream ended early: %s\n", chunk.Error)
+			if piece.Error != "" {
+				io.ErrPrintf("warning: output stream ended early: %s\n", piece.Error)
 			}
-			return reportExitCode(chunk.ExitCode, io)
+			return reportExitCode(piece.ExitCode, io)
 		}
 	}
 }

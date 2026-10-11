@@ -6,14 +6,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // reviewActivity files a review pass in the project event log. Readers match
@@ -37,7 +37,7 @@ type reviewActivity struct {
 // recording is best-effort and must never fail a review.
 func newReviewActivity(ctx context.Context, workDir string) *reviewActivity {
 	// The git root, not workDir, because sidecar state and the daemon's project
-	// breadcrumb key on it. A .chunk below the git root would otherwise split a
+	// breadcrumb key on it. A .smelt below the git root would otherwise split a
 	// project's state across two data directories.
 	root := workDir
 	if gitRoot := gitutil.TopLevelCtx(ctx, workDir); gitRoot != "" {
@@ -102,7 +102,7 @@ func (a *reviewActivity) submitted(entry *sidecar.PoolEntry, prompt, commandID s
 	if a == nil {
 		return
 	}
-	chunkd.RegisterCommand(chunkd.CommandReg{
+	smeltd.RegisterCommand(smeltd.CommandReg{
 		CommandID:   commandID,
 		SidecarID:   entry.ID,
 		ProjectRoot: a.projectRoot,

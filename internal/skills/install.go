@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/CircleCI-Public/chunk-cli/skills"
+	"github.com/smeltdev/smelt/skills"
 )
 
 // Scope determines where skills are installed.
@@ -39,28 +39,28 @@ type Skill struct {
 // All is the ordered list of bundled skills.
 var All = []Skill{
 	{
-		Name:        "chunk-testing-gaps",
-		Description: `Use when asked to "find testing gaps", "chunk testing-gaps", "mutation test", "mutate this code", or "find surviving mutants". Runs a 4-stage mutation testing process.`,
+		Name:        "smelt-testing-gaps",
+		Description: `Use when asked to "find testing gaps", "smelt testing-gaps", "mutation test", "mutate this code", or "find surviving mutants". Runs a 4-stage mutation testing process.`,
 	},
 	{
-		Name:        "chunk-review",
-		Description: `Use when asked to "review recent changes", "chunk review", "review my diff", "review this PR", or "review my changes". Applies team-specific review standards from .chunk/review-prompt.md.`,
+		Name:        "smelt-review",
+		Description: `Use when asked to "review recent changes", "smelt review", "review my diff", "review this PR", or "review my changes". Applies team-specific review standards from .smelt/review-prompt.md.`,
 	},
 	{
 		Name:        "debug-ci-failures",
 		Description: `Debug CircleCI build failures, analyze test results, and identify flaky tests. Use when asked to "debug CI", "why is CI failing", "fix CI failures", "find flaky tests", or "check CircleCI".`,
 	},
 	{
-		Name:        "chunk-sidecar",
-		Description: `Run build/test/validate on a remote chunk sidecar instead of locally. Use when asked to "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "check this on the sidecar", "run smarter testing doctor", "diagnose smarter testing", or when edits need remote verification. Also covers creating sidecars, snapshots, and env customization.`,
+		Name:        "smelt-sidecar",
+		Description: `Run build/test/validate on a remote smelt sidecar instead of locally. Use when asked to "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "check this on the sidecar", "run smarter testing doctor", "diagnose smarter testing", or when edits need remote verification. Also covers creating sidecars, snapshots, and env customization.`,
 	},
 	{
-		Name:        "chunk-validate-config",
-		Description: `Read and set the asyncValidate* keys in .chunk/config.json, which decide whether the agent waits for validation or is told the answer on its next turn. Use when asked to "stop chunk blocking every turn", "run my tests in the background", "configure background validation", "always validate my migrations", "change the async validate threshold", or why a change blocked instead of being backgrounded.`,
+		Name:        "smelt-validate-config",
+		Description: `Read and set the asyncValidate* keys in .smelt/config.json, which decide whether the agent waits for validation or is told the answer on its next turn. Use when asked to "stop smelt blocking every turn", "run my tests in the background", "configure background validation", "always validate my migrations", "change the async validate threshold", or why a change blocked instead of being backgrounded.`,
 	},
 	{
-		Name:        "chunk-sidecar-setup",
-		Description: `Interactive onboarding wizard for setting up a chunk sidecar from scratch. Use when asked to "set up chunk sidecar", "onboard to chunk", "first time sidecar", "configure sidecar from scratch", "walk me through sidecar setup", or "I've never used a chunk sidecar before". Covers auth, orgID, sidecar creation, dependency install, snapshot creation, and handoff to the dev loop.`,
+		Name:        "smelt-sidecar-setup",
+		Description: `Interactive onboarding wizard for setting up a smelt sidecar from scratch. Use when asked to "set up smelt sidecar", "onboard to smelt", "first time sidecar", "configure sidecar from scratch", "walk me through sidecar setup", or "I've never used a smelt sidecar before". Covers auth, orgID, sidecar creation, dependency install, snapshot creation, and handoff to the dev loop.`,
 	},
 }
 

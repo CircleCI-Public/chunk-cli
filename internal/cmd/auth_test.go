@@ -13,10 +13,10 @@ import (
 	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 func TestAuthSignupAlreadyAuthenticated(t *testing.T) {
@@ -34,8 +34,8 @@ func TestAuthSignupAlreadyAuthenticated(t *testing.T) {
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Assert(t, strings.Contains(ue.UserMessage(), "Already authenticated."),
 		"expected 'Already authenticated.' in message, got: %s", ue.UserMessage())
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk auth remove"),
-		"expected suggestion to mention 'chunk auth remove', got: %s", ue.Suggestion())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt auth remove"),
+		"expected suggestion to mention 'smelt auth remove', got: %s", ue.Suggestion())
 }
 
 // trackingDestination records the telemetry messages a command reports, so
@@ -173,13 +173,13 @@ func TestAuthRemoveCircleCI_InsecureStorageKeepsUserIDWhileKeychainTokenAuthenti
 }
 
 // backfillFixture signs an install in with a token but no saved user ID, as an
-// install that logged in before chunk persisted the ID does, and attaches a
+// install that logged in before smelt persisted the ID does, and attaches a
 // telemetry Sender recording what it reports.
 func backfillFixture(t *testing.T) (*fakes.FakeCircleCI, config.ResolvedConfig, context.Context, *trackingDestination) {
 	t.Helper()
 	isolateConfig(t)
 	// Telemetry is off under CI; these tests exercise the opted-in path.
-	for _, env := range []string{config.EnvChunkNoTelemetry, config.EnvNoAnalytics, config.EnvDoNotTrack, config.EnvCI} {
+	for _, env := range []string{config.EnvSmeltNoTelemetry, config.EnvNoAnalytics, config.EnvDoNotTrack, config.EnvCI} {
 		t.Setenv(env, "")
 	}
 

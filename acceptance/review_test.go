@@ -10,11 +10,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 func writePrompts(t *testing.T, dir string, names ...string) {
@@ -31,7 +31,7 @@ func TestReviewNoDefaultDir(t *testing.T) {
 	result := binary.RunCLI(t, []string{"review"}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "No .chunk/reviews directory"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "No .smelt/reviews directory"), "stderr: %s", result.Stderr)
 }
 
 func TestReviewTooManyDirs(t *testing.T) {
@@ -54,7 +54,7 @@ func TestReviewNoPrompts(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stderr, "No prompts found"), "stderr: %s", result.Stderr)
 }
 
-// setupReviewProject returns a project with a .chunk/reviews directory and a
+// setupReviewProject returns a project with a .smelt/reviews directory and a
 // fake CircleCI whose sidecars answer every exec with resp.
 func setupReviewProject(t *testing.T, resp *fakes.ExecResponse, prompts ...string) (*testenv.TestEnv, *fakes.FakeCircleCI, string) {
 	t.Helper()
@@ -63,7 +63,7 @@ func setupReviewProject(t *testing.T, resp *fakes.ExecResponse, prompts ...strin
 
 	sshDir := filepath.Join(env.HomeDir, ".ssh")
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(sshDir, "chunk_ai"))
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(sshDir, "smelt_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
 	useLocalSidecar(t, env, sshSrv)
 
@@ -75,8 +75,8 @@ func setupReviewProject(t *testing.T, resp *fakes.ExecResponse, prompts ...strin
 	env.CircleCIURL = srv.URL
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeChunkConfig(t, workDir, nil)
-	writePrompts(t, filepath.Join(workDir, ".chunk", "reviews"), prompts...)
+	writeSmeltConfig(t, workDir, nil)
+	writePrompts(t, filepath.Join(workDir, ".smelt", "reviews"), prompts...)
 	return env, cci, workDir
 }
 
@@ -104,7 +104,7 @@ func TestReviewRunsEachPromptOnPool(t *testing.T) {
 	}
 	assert.Equal(t, reviews, 3)
 
-	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "review-pool.json"))
+	data, err := os.ReadFile(filepath.Join(workDir, ".smelt", "review-pool.json"))
 	assert.NilError(t, err)
 	var state struct {
 		SidecarIDs []string `json:"sidecar_ids"`

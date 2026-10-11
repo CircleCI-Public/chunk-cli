@@ -6,16 +6,16 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 // commitGate returns the generated commit gate entry. Looked up by command
-// rather than indexed because the group also holds chunk's advisory conflict
+// rather than indexed because the group also holds smelt's advisory conflict
 // notice, and a positional assertion would break every time that list gains an
 // entry — which says nothing about the timeout under test.
 //
-// The needle is the chunk validate invocation and not the command's Run text:
-// hook entries invoke chunk validate so they route through the daemon, so the
+// The needle is the smelt validate invocation and not the command's Run text:
+// hook entries invoke smelt validate so they route through the daemon, so the
 // raw command never appears in settings.json.
 func commitGate(t *testing.T, entries []interface{}) map[string]interface{} {
 	t.Helper()
@@ -35,7 +35,7 @@ func commitGate(t *testing.T, entries []interface{}) map[string]interface{} {
 func TestBuildHookTimeoutDefaultsToRuntimeTimeout(t *testing.T) {
 	// A command with Timeout: 0 must produce a non-zero timeout in the generated
 	// hook entry: zero makes Claude Code treat the hook as having no limit
-	// (MUT-006). The budget is the timeout chunk validate really runs the command
+	// (MUT-006). The budget is the timeout smelt validate really runs the command
 	// with, so the gate never cuts off a command still inside its own timeout.
 	cmds := []config.Command{
 		{Name: "test", Run: "go test ./...", Timeout: 0},
@@ -182,8 +182,8 @@ func TestBuildCodexCommitGateIsOneSequentialEntry(t *testing.T) {
 
 	entries := codexCommitEntries(t, data)
 	assert.Equal(t, len(entries), 1)
-	assert.Equal(t, entries[0].Command, "chunk validate")
-	// Merge recognises chunk's entry by its "if", so it stays even though Codex
+	assert.Equal(t, entries[0].Command, "smelt validate")
+	// Merge recognises smelt's entry by its "if", so it stays even though Codex
 	// does not act on it.
 	assert.Equal(t, entries[0].If, CommitIfFilter)
 	assert.Equal(t, entries[0].Timeout, 390, "timeout must cover every command in turn")
@@ -246,7 +246,7 @@ func TestBuildCodexIncludesStopHook(t *testing.T) {
 	assert.Assert(t, ok && len(entries) > 0, "expected stop hook entries")
 	entry, ok := entries[0].(map[string]interface{})
 	assert.Assert(t, ok, "expected stop hook entry to be a map")
-	assert.Equal(t, entry["command"], "chunk validate")
+	assert.Equal(t, entry["command"], "smelt validate")
 }
 
 func TestBuildCodexNoCommandsProducesEmptyHooks(t *testing.T) {
@@ -260,7 +260,7 @@ func TestBuildCodexNoCommandsProducesEmptyHooks(t *testing.T) {
 	assert.Assert(t, !hasHooks, "BuildCodex with no commands must produce empty hooks")
 }
 
-// With no commands there is nothing to validate, so chunk writes no hooks at all.
+// With no commands there is nothing to validate, so smelt writes no hooks at all.
 func TestBuildWritesNoHooksWithoutCommands(t *testing.T) {
 	data, err := Build(nil)
 	assert.NilError(t, err)
@@ -300,17 +300,17 @@ func TestBuildSetsStatusMessages(t *testing.T) {
 	data, err := Build(cmds)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, statusMessages(t, data), map[string]string{
-		ConflictsCommand: "Running chunk conflicts before commit",
-		commitCommand:    "Running chunk validate before commit",
-		StopCommand:      "Running chunk validate",
+		ConflictsCommand: "Running smelt conflicts before commit",
+		commitCommand:    "Running smelt validate before commit",
+		StopCommand:      "Running smelt validate",
 	})
 
 	data, err = BuildCodex(cmds)
 	assert.NilError(t, err)
 	var codex codexHooksJSON
 	assert.NilError(t, json.Unmarshal(data, &codex))
-	assert.Equal(t, codex.Hooks["PreToolUse"][0].Hooks[0].StatusMessage, "Running chunk validate if this is a commit")
-	assert.Equal(t, codex.Hooks["Stop"][0].Hooks[0].StatusMessage, "Running chunk validate")
+	assert.Equal(t, codex.Hooks["PreToolUse"][0].Hooks[0].StatusMessage, "Running smelt validate if this is a commit")
+	assert.Equal(t, codex.Hooks["Stop"][0].Hooks[0].StatusMessage, "Running smelt validate")
 }
 
 // TestHookTimeoutsAgree pins the bug where the commit gate and the Stop hook

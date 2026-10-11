@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/gitexec"
 )
 
 // ErrMergeTreeUnsupported reports a git too old for `merge-tree --write-tree`,

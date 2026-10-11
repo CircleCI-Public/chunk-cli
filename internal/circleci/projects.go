@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
 )
 
 // FollowedProject represents a project returned by the v1.1 API.

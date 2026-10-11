@@ -8,22 +8,22 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/claudeauth"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/authprompt"
+	"github.com/smeltdev/smelt/internal/claudeauth"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // Replaceable from tests so none of them runs the real claude binary.
 var (
 	mintClaudeToken = claudeauth.SetupToken
 	// stopDaemonForCredentialChange reports whether a running daemon was stopped.
-	stopDaemonForCredentialChange = chunkd.StopForCredentialChange
+	stopDaemonForCredentialChange = smeltd.StopForCredentialChange
 )
 
-const hintClaudeLogin = "Run 'chunk auth refresh' when you're ready."
+const hintClaudeLogin = "Run 'smelt auth refresh' when you're ready."
 
 // mintAndStoreClaudeToken runs `claude setup-token` and stores the result in the
 // keychain, then stops a running daemon so its next launch reads the new token.
@@ -80,7 +80,7 @@ const (
 	skipped
 )
 
-// initAuthState is what the Claude credential step of `chunk init` decides on.
+// initAuthState is what the Claude credential step of `smelt init` decides on.
 type initAuthState struct {
 	HasCredential   bool
 	Interactive     bool
@@ -88,7 +88,7 @@ type initAuthState struct {
 	Skip            bool
 }
 
-// decideInitAuth picks what the Claude credential step of `chunk init` does.
+// decideInitAuth picks what the Claude credential step of `smelt init` does.
 func decideInitAuth(s initAuthState) initAuthAction {
 	switch {
 	case s.Skip:
@@ -182,7 +182,7 @@ func newRefreshCmd(use string) *cobra.Command {
 	return &cobra.Command{
 		Use:       use,
 		Short:     "Log in again and replace the stored credential",
-		Long:      "Re-mint the Claude subscription token with 'claude setup-token' and replace the stored one. A running chunk daemon is restarted to pick it up.",
+		Long:      "Re-mint the Claude subscription token with 'claude setup-token' and replace the stored one. A running smelt daemon is restarted to pick it up.",
 		Args:      cobra.MaximumNArgs(1),
 		ValidArgs: refreshProviders,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -228,7 +228,7 @@ func refreshClaude(ctx context.Context, io iostream.Streams, rc config.ResolvedC
 		io.Println("No Claude credential is currently in effect.")
 	}
 	if strings.HasPrefix(rc.ClaudeOAuthTokenSource, "Environment") {
-		io.Println(ui.Warning(config.EnvClaudeOAuthToken + " is set and overrides the keychain; refreshing the stored token won't change what chunk uses until it is unset."))
+		io.Println(ui.Warning(config.EnvClaudeOAuthToken + " is set and overrides the keychain; refreshing the stored token won't change what smelt uses until it is unset."))
 	}
 	if rc.AnthropicAPIKey != "" {
 		io.Println(ui.Warning(config.EnvAnthropicAPIKey + " / the stored API key takes precedence over the subscription token."))
@@ -240,7 +240,7 @@ func refreshClaude(ctx context.Context, io iostream.Streams, rc config.ResolvedC
 	}
 	printSaved(io, "Claude subscription token", false)
 	if restarted {
-		io.Println(ui.Dim("A running chunk daemon was restarted to pick up the new token."))
+		io.Println(ui.Dim("A running smelt daemon was restarted to pick up the new token."))
 	}
 	return nil
 }

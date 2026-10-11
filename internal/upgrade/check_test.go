@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 func TestDisabled(t *testing.T) {
@@ -30,7 +30,7 @@ func TestDisabled(t *testing.T) {
 			// Set both every time: this suite itself runs in CI, where CI is
 			// already set and would otherwise leak into the "enabled" case.
 			t.Setenv(config.EnvCI, tc.ci)
-			t.Setenv(config.EnvChunkNoUpdateCheck, tc.noCheck)
+			t.Setenv(config.EnvSmeltNoUpdateCheck, tc.noCheck)
 			if got := disabled(); got != tc.wantDisabled {
 				t.Fatalf("disabled() = %v, want %v", got, tc.wantDisabled)
 			}
@@ -69,14 +69,14 @@ func TestCheckForUpdate(t *testing.T) {
 		t.Cleanup(srv.Close)
 
 		CheckForUpdate(t.TempDir(), srv.URL, "v1.0.0")
-		if want := "/repos/web3technologies/chunk-cli/releases/latest"; path != want {
+		if want := "/repos/smeltdev/smelt/releases/latest"; path != want {
 			t.Fatalf("asked %q, want %q", path, want)
 		}
 	})
 
 	t.Run("ignores a cache written for another repository", func(t *testing.T) {
 		dir := t.TempDir()
-		data, _ := json.Marshal(updateCache{Repo: "CircleCI-Public/chunk-cli", CheckedAt: time.Now(), LatestVersion: "v9.0.0"})
+		data, _ := json.Marshal(updateCache{Repo: "CircleCI-Public/smelt", CheckedAt: time.Now(), LatestVersion: "v9.0.0"})
 		_ = os.WriteFile(filepath.Join(dir, cacheFileName), data, 0o600)
 
 		srv := releaseServer(t, "v2.0.0")
@@ -256,7 +256,7 @@ func TestCheckForUpdate_claimsCacheWindowBeforeFetch(t *testing.T) {
 }
 
 // The cache is written by short-lived processes that can overlap — parallel
-// agent sessions each running chunk — and a reader that catches a truncated
+// agent sessions each running smelt — and a reader that catches a truncated
 // file falls back to refetching, which is the rate-limit hole the claim
 // window exists to close. writeCache renames a temp file into place, so a
 // reader must only ever observe a complete record.

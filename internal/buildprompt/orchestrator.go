@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/anthropic"
+	"github.com/smeltdev/smelt/internal/github"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // maxCommentsPerReviewer returns the maximum comment count across all groups.

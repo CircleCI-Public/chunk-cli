@@ -21,7 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/closer"
+	"github.com/smeltdev/smelt/internal/closer"
 )
 
 // ExecResult holds the output of a command executed over SSH.

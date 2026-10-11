@@ -20,19 +20,20 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/filecache"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/notify"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/validate"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envctx"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/filecache"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/notify"
+	"github.com/smeltdev/smelt/internal/session"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
+	"github.com/smeltdev/smelt/internal/validate"
 )
 
 const (
@@ -84,8 +85,8 @@ type hookContext struct {
 
 // skipsCommitGate reports whether this is a PreToolUse run for a command that
 // is not a git commit. Claude Code filters those out with the entry's "if"
-// condition before chunk ever starts; Codex has no such field and runs the
-// commit gate before every Bash call, so chunk has to filter them itself.
+// condition before smelt ever starts; Codex has no such field and runs the
+// commit gate before every Bash call, so smelt has to filter them itself.
 //
 // A payload whose command could not be read runs the gate: the gate exists to
 // hold back commits, and a run it did not need costs less than a commit it
@@ -281,8 +282,8 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 	cfg.UseCircleCI()
 	if err != nil {
 		return &userError{
-			msg:        fmt.Sprintf("No command named %q in .chunk/config.json.", name),
-			suggestion: "List the configured commands with: chunk validate --list",
+			msg:        fmt.Sprintf("No command named %q in .smelt/config.json.", name),
+			suggestion: "List the configured commands with: smelt validate --list",
 			err:        err,
 		}
 	}
@@ -301,7 +302,7 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 	if len(changed) > 0 {
 		streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Recorded remote placement: %s", strings.Join(changed, ", "))))
 	}
-	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("runs these on the sidecar"))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("smelt validate"), ui.Dim("runs these on the sidecar"))
 	reportSkippedAutofix(skipped, streams)
 	return nil
 }
@@ -370,16 +371,16 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.sidecarID, "sidecar-id", "", "Sidecar ID for remote execution")
 	cmd.Flags().StringVar(&opts.orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&opts.workdir, "workdir", "", "Working directory on sidecar (reads from sidecar.json, defaults to /home/user/<repo>)")
-	cmd.Flags().BoolVar(&opts.markRemote, "mark-remote", false, "Mark [name] (or every command) as remote in .chunk/config.json and exit")
+	cmd.Flags().BoolVar(&opts.markRemote, "mark-remote", false, "Mark [name] (or every command) as remote in .smelt/config.json and exit")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show commands without executing")
 	cmd.Flags().BoolVar(&opts.list, "list", false, "List all configured commands")
 	cmd.Flags().BoolVar(&opts.jsonOut, "json", false, "Output as JSON (only applies with --list)")
 	cmd.Flags().StringVar(&opts.inlineCmd, "cmd", "", "Run an inline command instead of config")
-	cmd.Flags().BoolVar(&opts.save, "save", false, "Save --cmd to .chunk/config.json")
+	cmd.Flags().BoolVar(&opts.save, "save", false, "Save --cmd to .smelt/config.json")
 	cmd.Flags().StringVar(&opts.projectDir, "project", "", "Override project directory")
 	cmd.Flags().StringArrayVarP(&opts.envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&opts.envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
-	cmd.Flags().BoolVar(&opts.async, "async", false, "Run in the background via the chunk daemon and report on a later run")
+	cmd.Flags().BoolVar(&opts.async, "async", false, "Run in the background via the smelt daemon and report on a later run")
 	cmd.Flags().BoolVar(&opts.noDaemon, "no-daemon", false, "")
 	_ = cmd.Flags().MarkHidden("no-daemon")
 	cmd.Flags().StringVar(&opts.attributeTo, "attribute-to", "", "")
@@ -428,8 +429,8 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	} else {
 		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate [%s]", sessionLabel)))
 	}
-	if validate.HooksDisabled(workDir, envctx.Getenv(ctx, config.EnvChunkHooksDisabled) != "") {
-		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
+	if validate.HooksDisabled(workDir, envctx.Getenv(ctx, config.EnvSmeltHooksDisabled) != "") {
+		streams.ErrPrintln("smelt validate: hooks are disabled — skipping validation")
 		return ctx, streams, false, validate.NewHookExitError(1)
 	}
 	// Say so when the tree could not be fingerprinted. Everything below degrades
@@ -438,7 +439,7 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	// dirty submodule, say) is otherwise indistinguishable from one where the
 	// cache is working and nothing is ever unchanged.
 	if treeErr != nil {
-		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: working tree state unavailable (%v); running everything, caching nothing", treeErr)))
+		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("smelt validate: working tree state unavailable (%v); running everything, caching nothing", treeErr)))
 	}
 	// A snapshot run is exempt from the clean-tree skip, and must be: the
 	// snapshot was checked out from the state being validated, so git sees a
@@ -502,12 +503,12 @@ func resolveWorkDir(opts *validateOpts) (string, error) {
 }
 
 // shouldUseDaemon reports whether this validate run should be delegated to the
-// chunk daemon. Hook runs always run inline (stdin consumed, per-session attempt
+// smelt daemon. Hook runs always run inline (stdin consumed, per-session attempt
 // tracking). --no-daemon skips this to avoid re-delegation when the daemon calls
 // us in-process. Delegation is skipped for daemons from a different build since
 // they may not support the /validate endpoint.
 func shouldUseDaemon(hook *hookContext, noDaemon bool) bool {
-	return hook == nil && !noDaemon && chunkd.IsDaemonCompatible()
+	return hook == nil && !noDaemon && smeltd.IsDaemonCompatible()
 }
 
 // resolveHookRun completes the hook context read from stdin and settles the
@@ -524,13 +525,13 @@ func resolveHookRun(hook *hookContext, opts *validateOpts, workDir string) (*hoo
 }
 
 // hookProjectRoot returns the project a hook run validates, starting from dir:
-// the nearest directory at or above it holding .chunk/config.json, stopping at
+// the nearest directory at or above it holding .smelt/config.json, stopping at
 // the git root. Codex runs hooks in the session's working directory, which is
 // wherever Codex was started and may be a subdirectory of the project. Returns
 // dir when no config is found, so the run reports the missing config as usual.
 func hookProjectRoot(dir string) string {
 	for d := dir; ; {
-		if _, err := os.Stat(filepath.Join(d, ".chunk", "config.json")); err == nil {
+		if _, err := os.Stat(filepath.Join(d, brand.ProjectDir, "config.json")); err == nil {
 			return d
 		}
 		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
@@ -560,9 +561,9 @@ func maybeReturnCachedHookResult(
 	if _, ok := resultCache.Get(cacheKey); !ok {
 		return false, nil
 	}
-	streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
+	streams.ErrPrintln("smelt validate: skipped (no changes since last successful run)")
 	n := len(cfg.Commands)
-	const skipped = "chunk validate: skipped, nothing changed since the last pass"
+	const skipped = "smelt validate: skipped, nothing changed since the last pass"
 	return true, finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, skipped, nil, statusFn, streams, nil)
 }
 
@@ -668,7 +669,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	statusFn(iostream.LevelStep, "chunk validate")
+	statusFn(iostream.LevelStep, "smelt validate")
 
 	// Reap before reading state, so a file naming a sidecar that no longer exists
 	// is gone before it can be promoted and reused. Loading first would hand
@@ -690,7 +691,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	//
 	// Use the git root rather than workDir so the event log lands in the same
 	// data directory as sidecar state, which keys on the git top-level. A
-	// project whose .chunk sits below the git root would otherwise split its
+	// project whose .smelt sits below the git root would otherwise split its
 	// state across two data directories. The plan gets the same root, so
 	// registered commands are filed under the project the daemon tracks.
 	attributionDir := opts.attributionRoot(workDir)
@@ -722,7 +723,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, newPoolRecorders(recorder, pooled), statusFn, streams)
 	}
 	recordRunState(ctx, runState{pool: validatePool, orgID: opts.orgID, cache: resultCache, cacheKey: cacheKey, execErr: execErr}, statusFn, streams)
-	passed := fmt.Sprintf("chunk validate passed: %s (%s)", commandNames(slices.Concat(executionPlan.LocalCommands, executionPlan.RemoteCommands)), ui.FormatDuration(time.Since(start)))
+	passed := fmt.Sprintf("smelt validate passed: %s (%s)", commandNames(slices.Concat(executionPlan.LocalCommands, executionPlan.RemoteCommands)), ui.FormatDuration(time.Since(start)))
 	return finishValidate(cmd, hook, execErr, start, cfg, result, passed, recorder, statusFn, streams, notifyFunc(rc.Notifications))
 }
 
@@ -798,7 +799,7 @@ func recordRunState(ctx context.Context, s runState, statusFn iostream.StatusFun
 	}
 	if s.execErr == nil && s.cache != nil {
 		if err := s.cache.Put(s.cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
-			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
+			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("smelt validate: cache write failed: %v", err)))
 		}
 	}
 }
@@ -809,7 +810,7 @@ func recordRunState(ctx context.Context, s runState, statusFn iostream.StatusFun
 func circleCIBackendRequired(what string) error {
 	return newUserError(what + " needs the circleci backend, and this project uses the default (local) one.").
 		withCode("validate.circleci_backend_required").
-		withSuggestion("Opt in with: chunk validate --mark-remote   (or add \"factory\": {\"backend\": \"circleci\"} to .chunk/config.json)").
+		withSuggestion("Opt in with: smelt validate --mark-remote   (or add \"factory\": {\"backend\": \"circleci\"} to .smelt/config.json)").
 		withExitCode(ExitBadArgs).
 		withoutDetail()
 }
@@ -975,7 +976,7 @@ func ensureValidateCommand(workDir, name string, cfg *config.ProjectConfig, stre
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return nil, &userError{
 			msg:        fmt.Sprintf("Command %q is not configured.", name),
-			suggestion: "Add it to .chunk/config.json.",
+			suggestion: "Add it to .smelt/config.json.",
 			errMsg:     fmt.Sprintf("command %q is not configured", name),
 		}
 	}
@@ -992,9 +993,9 @@ func ensureValidateCommand(workDir, name string, cfg *config.ProjectConfig, stre
 		return nil, &userError{msg: "No command entered.", errMsg: "no command entered"}
 	}
 	if err := config.SaveCommand(workDir, name, input); err != nil {
-		return nil, &userError{msg: "Could not save command to .chunk/config.json.", err: err}
+		return nil, &userError{msg: "Could not save command to .smelt/config.json.", err: err}
 	}
-	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
+	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .smelt/config.json", name)))
 	updated, err := config.LoadProjectConfig(workDir)
 	if err != nil {
 		return nil, fmt.Errorf("reload project config: %w", err)
@@ -1041,7 +1042,7 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 		op = eventlog.OpHook
 	}
 	// Register the project alongside the log about to be written to it. A run's
-	// results are never sent to the chunk daemon — it reads this same log off
+	// results are never sent to the smelt daemon — it reads this same log off
 	// disk — and only saving sidecar state used to register a project, so a run
 	// with no sidecar logged its results where no daemon would ever look for
 	// them. Registered remote commands were reached the same way: the daemon
@@ -1176,9 +1177,9 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 	}
 	if notifyFn != nil {
 		if execErr != nil {
-			notifyFn("chunk validate failed", fmt.Sprintf("%d/%d checks passed · %s", result.Passed, result.Total, elapsed))
+			notifyFn("smelt validate failed", fmt.Sprintf("%d/%d checks passed · %s", result.Passed, result.Total, elapsed))
 		} else {
-			notifyFn("chunk validate passed", fmt.Sprintf("%d/%d checks passed · %s", result.Passed, result.Total, elapsed))
+			notifyFn("smelt validate passed", fmt.Sprintf("%d/%d checks passed · %s", result.Passed, result.Total, elapsed))
 		}
 	}
 	if hook == nil {
@@ -1204,7 +1205,7 @@ func validateEnvFlag(envVarsFlag []string) error {
 	return nil
 }
 
-// runValidateViaDaemon delegates a validate run to the chunk daemon and writes
+// runValidateViaDaemon delegates a validate run to the smelt daemon and writes
 // its captured output to streams. When hook is non-nil its context is forwarded
 // to the subprocess via hidden flags so it runs as a hook invocation.
 //
@@ -1228,7 +1229,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, i
 			reqArgs = append(reqArgs, "--stop-hook-active")
 		}
 	}
-	req := chunkd.ValidateRequest{
+	req := smeltd.ValidateRequest{
 		Args:         reqArgs,
 		ProjectRoot:  workDir,
 		WorkDir:      workDir,
@@ -1241,13 +1242,13 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, i
 	// Forward local credentials only over the Unix socket (isolated to the local
 	// filesystem). Over TCP the remote daemon runs with its own credentials and
 	// can provision its own sidecar when an org ID is provided.
-	if chunkd.TCPRemoteAddr() == "" {
+	if smeltd.TCPRemoteAddr() == "" {
 		req.CircleCIToken = circleCIToken
 		req.Env = os.Environ()
 	} else {
 		req.OrgID = orgID
 	}
-	resp, err := chunkd.RunValidate(req)
+	resp, err := smeltd.RunValidate(req)
 	if err != nil {
 		return fmt.Errorf("daemon validate: %w", err)
 	}
@@ -1268,7 +1269,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, i
 // says so in its hook response; otherwise the user sees the hook finish with
 // nothing to show whether it checked anything. That is written under Codex
 // too, where it shows as a warning: work still outstanding is worth one.
-func reportDelegatedValidate(resp chunkd.ValidateResponse, hook *hookContext, streams iostream.Streams) error {
+func reportDelegatedValidate(resp smeltd.ValidateResponse, hook *hookContext, streams iostream.Streams) error {
 	if resp.TaskID != "" {
 		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf(
 			"validating in the background: %s (%s)", shortTaskID(resp.TaskID), resp.Reason)))
@@ -1276,7 +1277,7 @@ func reportDelegatedValidate(resp chunkd.ValidateResponse, hook *hookContext, st
 		if hook == nil {
 			return nil
 		}
-		return writeStopHookMessage(streams.Out, fmt.Sprintf("chunk validate: running in the background (%s)", resp.Reason))
+		return writeStopHookMessage(streams.Out, fmt.Sprintf("smelt validate: running in the background (%s)", resp.Reason))
 	}
 	if resp.Reason != "" {
 		streams.ErrPrintf("  %s\n", ui.ErrDim("validating now: "+resp.Reason))
@@ -1297,11 +1298,11 @@ func reportDelegatedValidate(resp chunkd.ValidateResponse, hook *hookContext, st
 // expects, and a score printed on every turn is how a number stops being read
 // at all. Advice is printed whenever there is any, since advice exists only
 // where there is something to act on.
-func reportRisk(risk *chunkd.RiskSummary, streams iostream.Streams) {
+func reportRisk(risk *smeltd.RiskSummary, streams iostream.Streams) {
 	if risk == nil {
 		return
 	}
-	if risk.Band != chunkd.BandLow {
+	if risk.Band != smeltd.BandLow {
 		streams.ErrPrintf("  %s\n", ui.ErrDim(risk.String()))
 	}
 	if risk.Advice != "" {
@@ -1320,12 +1321,12 @@ func reportRisk(risk *chunkd.RiskSummary, streams iostream.Streams) {
 // daemon's build cannot be checked, which is why a new piece of hook context
 // goes in a request field (see ValidateRequest.HookCodex) rather than a flag.
 func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDaemon bool, streams iostream.Streams) (bool, error) {
-	if hook == nil || noDaemon || !chunkd.IsDaemonCompatible() {
+	if hook == nil || noDaemon || !smeltd.IsDaemonCompatible() {
 		return false, nil
 	}
 	// If hooks are disabled in this environment, don't delegate — the daemon
 	// subprocess won't inherit this process's env var, so initHook must handle it.
-	if os.Getenv(config.EnvChunkHooksDisabled) != "" {
+	if os.Getenv(config.EnvSmeltHooksDisabled) != "" {
 		return false, nil
 	}
 	insecureStorage := insecureStorageFlag(cmd)
@@ -1334,13 +1335,13 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDa
 		return false, nil // fall back to inline; inline path handles auth
 	}
 	err = runValidateViaDaemon(workDir, os.Args[1:], rc.CircleCIToken, "", "", hook, streams)
-	if errors.Is(err, chunkd.ErrDaemonUnavailable) {
+	if errors.Is(err, smeltd.ErrDaemonUnavailable) {
 		return false, nil // daemon disappeared between check and POST; run inline
 	}
 	return true, err
 }
 
-// delegateToDaemon hands the run to the chunk daemon when it should be, and
+// delegateToDaemon hands the run to the smelt daemon when it should be, and
 // reports whether it did. A caller told false runs the commands inline.
 //
 // Async and synchronous delegation are decided together because they are the
@@ -1360,7 +1361,7 @@ func delegateToDaemon(opts *validateOpts, hook *hookContext, workDir, circleCITo
 		// the IsDaemonCompatible check and the POST (connection refused), and the
 		// daemon lacks the /validate endpoint because it is from an older build
 		// (404). Both fall through to inline execution.
-		if !errors.Is(err, chunkd.ErrDaemonUnavailable) {
+		if !errors.Is(err, smeltd.ErrDaemonUnavailable) {
 			return true, err
 		}
 	}
@@ -1376,20 +1377,20 @@ func delegateToDaemon(opts *validateOpts, hook *hookContext, workDir, circleCITo
 // the time it finished. Running inline is the honest fallback — the answer is
 // slower to arrive but reaches the caller while it is still true.
 func tryAsyncDelegate(workDir, circleCIToken string, streams iostream.Streams) (bool, error) {
-	if !chunkd.IsDaemonCompatible() {
-		streams.ErrPrintln(ui.ErrDim("chunk validate: no chunk daemon, running inline"))
+	if !smeltd.IsDaemonCompatible() {
+		streams.ErrPrintln(ui.ErrDim("smelt validate: no smelt daemon, running inline"))
 		return false, nil
 	}
-	taskID, err := chunkd.StartAsyncValidate(workDir, os.Args[1:], circleCIToken)
+	taskID, err := smeltd.StartAsyncValidate(workDir, os.Args[1:], circleCIToken)
 	switch {
-	case errors.Is(err, chunkd.ErrAsyncRefused):
+	case errors.Is(err, smeltd.ErrAsyncRefused):
 		// The daemon's own words: it refuses for more than one reason, and a
 		// developer told the wrong one goes looking in the wrong place.
-		reason := strings.TrimPrefix(err.Error(), chunkd.ErrAsyncRefused.Error()+": ")
-		streams.ErrPrintln(ui.ErrDim("chunk validate: " + reason + ", running inline"))
+		reason := strings.TrimPrefix(err.Error(), smeltd.ErrAsyncRefused.Error()+": ")
+		streams.ErrPrintln(ui.ErrDim("smelt validate: " + reason + ", running inline"))
 		return false, nil
-	case errors.Is(err, chunkd.ErrDaemonUnavailable):
-		streams.ErrPrintln(ui.ErrDim("chunk validate: chunk daemon unavailable, running inline"))
+	case errors.Is(err, smeltd.ErrDaemonUnavailable):
+		streams.ErrPrintln(ui.ErrDim("smelt validate: smelt daemon unavailable, running inline"))
 		return false, nil
 	case err != nil:
 		return true, err
@@ -1444,12 +1445,12 @@ func newValidateResultsCmd() *cobra.Command {
 // stdout is the channel by which a background result reaches the agent that
 // caused it. Progress and warnings stay on stderr.
 func runResults(workDir string, streams iostream.Streams) error {
-	tasks, err := chunkd.CollectValidateResults(workDir)
+	tasks, err := smeltd.CollectValidateResults(workDir)
 	if err != nil {
 		// Nothing to collect is the common case, not a failure: no daemon means
 		// no background runs. Reporting it as an error on a hook path would put
 		// noise in front of the agent on every turn.
-		if errors.Is(err, chunkd.ErrDaemonUnavailable) {
+		if errors.Is(err, smeltd.ErrDaemonUnavailable) {
 			return nil
 		}
 		return err
@@ -1461,7 +1462,7 @@ func runResults(workDir string, streams iostream.Streams) error {
 // printResults writes what background runs concluded. Split from runResults so
 // the wording can be tested directly: what an agent is told is the whole point
 // of the feature, and driving it through a socket to find out is a poor trade.
-func printResults(streams iostream.Streams, tasks []chunkd.TaskState) {
+func printResults(streams iostream.Streams, tasks []smeltd.TaskState) {
 	for _, t := range tasks {
 		// A live-tree run the tree has moved past reports no verdict, only that it
 		// was discarded. The daemon strips the exit code and output of such a task
@@ -1475,7 +1476,7 @@ func printResults(streams iostream.Streams, tasks []chunkd.TaskState) {
 		// there is indistinguishable from no run happening, which leaves a whole
 		// class of projects getting nothing with nothing to explain it.
 		if t.Stale && !t.Snapshot {
-			streams.Printf("chunk validate discarded a background run (%s): the working tree changed while it ran, so its result no longer describes your code\n", shortTaskID(t.ID))
+			streams.Printf("smelt validate discarded a background run (%s): the working tree changed while it ran, so its result no longer describes your code\n", shortTaskID(t.ID))
 			streams.Printf("  if this repeats, the run is probably changing the tree itself; gitignore what it writes\n")
 			continue
 		}
@@ -1489,10 +1490,10 @@ func printResults(streams iostream.Streams, tasks []chunkd.TaskState) {
 			as = " — for the code as it was when that turn ended; the tree has changed since"
 		}
 		if t.Passed() {
-			streams.Printf("chunk validate passed in the background (%s)%s\n", shortTaskID(t.ID), as)
+			streams.Printf("smelt validate passed in the background (%s)%s\n", shortTaskID(t.ID), as)
 			continue
 		}
-		streams.Printf("chunk validate FAILED in the background (%s), exit status %d%s\n", shortTaskID(t.ID), t.ExitCode, as)
+		streams.Printf("smelt validate FAILED in the background (%s), exit status %d%s\n", shortTaskID(t.ID), t.ExitCode, as)
 		if t.Output != "" {
 			streams.Printf("%s\n", strings.TrimRight(t.Output, "\n"))
 		}
@@ -1535,9 +1536,9 @@ func saveInlineValidateCommand(workDir, name, inlineCmd string, save bool, strea
 		name = defaultInlineCommandName
 	}
 	if err := config.SaveCommand(workDir, name, inlineCmd); err != nil {
-		return &userError{msg: "Could not save command to .chunk/config.json.", err: err}
+		return &userError{msg: "Could not save command to .smelt/config.json.", err: err}
 	}
-	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
+	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .smelt/config.json", name)))
 	return nil
 }
 
@@ -1672,7 +1673,7 @@ func onValidateCommandSubmitted(sidecarID, projectRoot, commandName string, setC
 		if setCommandID != nil {
 			setCommandID(commandID)
 		}
-		chunkd.RegisterCommand(chunkd.CommandReg{
+		smeltd.RegisterCommand(smeltd.CommandReg{
 			CommandID:   commandID,
 			SidecarID:   sidecarID,
 			ProjectRoot: projectRoot,
@@ -1787,7 +1788,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	// snapshots that fits this repo; autoSelectSnapshotImage returns "" (the
 	// old behaviour) when none does.
 	// A passed-in image always comes from the project config; one chosen here
-	// is chunk's pick and gets no source.
+	// is smelt's pick and gets no source.
 	var imageSource string
 	if image != "" {
 		imageSource = config.SourceProjectConfig
@@ -1805,7 +1806,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		}
 		return false, image, &userError{
 			msg:        "Could not create a sidecar.",
-			suggestion: "Check your network connection or run 'chunk sidecar create' manually.",
+			suggestion: "Check your network connection or run 'smelt sidecar create' manually.",
 			err:        err,
 		}
 	}
@@ -1837,7 +1838,7 @@ var branchSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
 // When a session ID is present the branch is encoded as an 8-hex-char suffix
 // (sha256(sessionID+":"+branch)[:4]) so the raw branch name is never exposed,
 // and the session ID is trimmed to its first 8 characters so a name stays
-// readable in `chunk sidecar list` — a session ID is a 36-character UUID, and
+// readable in `smelt sidecar list` — a session ID is a 36-character UUID, and
 // unlike the state file name this one only has to be recognisable, not unique
 // (two sessions sharing a prefix get two sidecars with one name and different
 // IDs):
@@ -1878,8 +1879,8 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 	return base + "-validate"
 }
 
-const suggestionValidateNotConfigured = "Run 'chunk init' to detect and configure validation commands.\n" +
-	"This also installs the /chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
+const suggestionValidateNotConfigured = "Run 'smelt init' to detect and configure validation commands.\n" +
+	"This also installs the /smelt-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
 
 // validateCacheDir returns the directory used to store validate result cache
 // entries for the given project root.
@@ -1985,7 +1986,7 @@ func setupValidatePool(ctx context.Context, client *circleci.Client, opts *valid
 		}
 		return nil, &userError{
 			msg:        "Could not prepare the sidecar pool for validation.",
-			suggestion: "Check your network connection or run 'chunk sidecar create' manually.",
+			suggestion: "Check your network connection or run 'smelt sidecar create' manually.",
 			err:        err,
 		}
 	}

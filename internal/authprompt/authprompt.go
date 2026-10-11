@@ -8,13 +8,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
-	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
-	"github.com/CircleCI-Public/chunk-cli/internal/version"
+	"github.com/smeltdev/smelt/internal/anthropic"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/github"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
+	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/version"
 )
 
 // ErrNeedsAuth is returned by Resolve* functions when no credentials are

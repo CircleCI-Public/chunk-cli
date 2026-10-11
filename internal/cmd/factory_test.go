@@ -13,10 +13,10 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
 // TestFactoryChecksOnlyToleratesMissingDefaultReviews guards against a
@@ -113,20 +113,20 @@ func TestFactoryArgs(t *testing.T) {
 
 func TestKeepWorkHint(t *testing.T) {
 	// A branch that starts at the developer's HEAD merges.
-	clean := &chunkd.FactoryRun{Branch: "chunk/factory/run-1", Baseline: "abc", Head: "abc"}
-	assert.Equal(t, keepWorkHint(clean), "Merge it with: git merge chunk/factory/run-1")
+	clean := &smeltd.FactoryRun{Branch: "smelt/run-1", Baseline: "abc", Head: "abc"}
+	assert.Equal(t, keepWorkHint(clean), "Merge it with: git merge smelt/run-1")
 
 	// One that starts from their uncommitted work would collide with that work
 	// in their checkout, so only the run's own changes are applied.
-	dirty := &chunkd.FactoryRun{Branch: "chunk/factory/run-1", Baseline: "def", Head: "abc"}
-	assert.Equal(t, keepWorkHint(dirty), "Apply it with: git diff --binary def chunk/factory/run-1 | git apply")
+	dirty := &smeltd.FactoryRun{Branch: "smelt/run-1", Baseline: "def", Head: "abc"}
+	assert.Equal(t, keepWorkHint(dirty), "Apply it with: git diff --binary def smelt/run-1 | git apply")
 }
 
 func TestFactoryLogPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	now := time.Date(2026, 10, 2, 15, 4, 5, 0, time.UTC)
-	byTime := filepath.Join(home, ".chunk", "factory", "run-20261002-150405.log")
+	byTime := filepath.Join(home, ".smelt", "factory", "run-20261002-150405.log")
 	for _, tc := range []struct {
 		name string
 		path string
@@ -239,17 +239,17 @@ func TestLogTailKeepsSidecarOutputOffTheTerminal(t *testing.T) {
 }
 
 func TestPrintFactoryLeftoversPointsOnlyAtAKeptWorktree(t *testing.T) {
-	collect := func(f *chunkd.FactoryRun) []string {
+	collect := func(f *smeltd.FactoryRun) []string {
 		var said []string
 		status := func(_ iostream.Level, msg string) { said = append(said, msg) }
 		printFactoryLeftovers(f, status, iostream.Streams{Out: io.Discard, Err: io.Discard})
 		return said
 	}
 
-	kept := collect(&chunkd.FactoryRun{Worktree: "/wt/run-1"})
+	kept := collect(&smeltd.FactoryRun{Worktree: "/wt/run-1"})
 	assert.DeepEqual(t, kept, []string{"The work was not committed. It is in the worktree /wt/run-1"})
 
 	// A run that failed before the implementer started had its empty worktree
 	// removed; pointing at it would send the reader to a path that is gone.
-	assert.Check(t, cmp.Len(collect(&chunkd.FactoryRun{Worktree: "/wt/run-1", WorktreeRemoved: true}), 0))
+	assert.Check(t, cmp.Len(collect(&smeltd.FactoryRun{Worktree: "/wt/run-1", WorktreeRemoved: true}), 0))
 }

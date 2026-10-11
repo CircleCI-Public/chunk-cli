@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/smeltdev/smelt/internal/circleci"
 )
 
 type RunParams struct {
@@ -30,7 +30,7 @@ func TriggerRun(ctx context.Context, client *circleci.Client, cfg *RunConfig, pa
 		AgentType:          "prompt",
 		DefinitionID:       defID,
 		CheckoutBranch:     branch,
-		TriggerSource:      "chunk-cli",
+		TriggerSource:      "chunk-cli", // CircleCI API contract: do not rename
 		TriggerType:        "api",
 		ChunkEnvironmentID: envID,
 		Parameters: map[string]interface{}{

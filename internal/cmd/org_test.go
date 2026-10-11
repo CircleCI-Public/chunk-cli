@@ -12,11 +12,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func TestOrgCreateHappyPath(t *testing.T) {
@@ -253,7 +253,7 @@ func TestCreateFirstOrg_NoTTYSuggestsOrgCreate(t *testing.T) {
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Equal(t, ue.UserMessage(), "No organizations found.")
 	assert.Equal(t, ue.UserExitCode(), ExitNotFound)
-	assert.Assert(t, strings.Contains(ue.suggestion, "chunk org create"), ue.suggestion)
+	assert.Assert(t, strings.Contains(ue.suggestion, "smelt org create"), ue.suggestion)
 }
 
 func TestCreateFirstOrg_Cancelled(t *testing.T) {
@@ -358,7 +358,7 @@ func TestEnsureOrgAfterSignup_NoTTYWarns(t *testing.T) {
 
 	var errOut bytes.Buffer
 	ensureOrgAfterSignup(context.Background(), iostream.Streams{Out: io.Discard, Err: &errOut}, srv.URL, "test-token")
-	assert.Assert(t, strings.Contains(errOut.String(), "chunk org create"), errOut.String())
+	assert.Assert(t, strings.Contains(errOut.String(), "smelt org create"), errOut.String())
 }
 
 func TestEnsureOrgAfterSignup_CreateFailedShowsCause(t *testing.T) {

@@ -13,7 +13,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/hashutil"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/hashutil"
 )
 
 // tagHexLen is how much of the content digest goes into a tag.
@@ -21,9 +22,9 @@ const tagHexLen = 12
 
 // CopySources returns the repo-relative files the Dockerfile COPYs from the
 // build context, in order and without duplicates. It reads the Dockerfile, so
-// it works on one that chunk did not generate. A source that is absolute,
+// it works on one that smelt did not generate. A source that is absolute,
 // escapes the context, uses a wildcard, or comes from another stage or URL is
-// an error: chunk sends exactly these files, so it must know them.
+// an error: smelt sends exactly these files, so it must know them.
 func CopySources(dockerfile string) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
@@ -215,4 +216,4 @@ func Slug(name string) string {
 }
 
 // ImageName is the repository part of a sandbox image tag.
-func ImageName(slug string) string { return "chunk-" + slug }
+func ImageName(slug string) string { return brand.ImagePrefix + slug }

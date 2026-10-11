@@ -5,7 +5,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/hashutil"
+	"github.com/smeltdev/smelt/internal/hashutil"
 )
 
 func TestSumPartsSameInputsEqual(t *testing.T) {

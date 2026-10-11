@@ -123,7 +123,7 @@ func NewSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 }
 
 // NewSSHServerAcceptingAnyKey starts a server like NewSSHServer but authorises
-// whichever key the client presents. Use it when chunk generates the keypair
+// whichever key the client presents. Use it when smelt generates the keypair
 // itself, so the test cannot know the public key in advance. Pair it with
 // RestrictToKey once the generated key is known.
 func NewSSHServerAcceptingAnyKey(t *testing.T) *SSHServer {
@@ -134,7 +134,7 @@ func NewSSHServerAcceptingAnyKey(t *testing.T) *SSHServer {
 
 // RestrictToKey narrows the server to accept only authorizedKey from now on.
 // Keeping the same server (and so the same host key and address) lets a test
-// first let chunk generate a keypair, then prove the private key chunk kept is
+// first let smelt generate a keypair, then prove the private key smelt kept is
 // the pair of the public key it registered.
 func (s *SSHServer) RestrictToKey(authorizedKey ssh.PublicKey) {
 	s.mu.Lock()
@@ -211,7 +211,7 @@ func (s *SSHServer) SetResultFn(fn func(command string) (stdout string, exitCode
 // RunLocally makes the server execute each command with sh on this machine,
 // wiring the session's stdin, stdout and stderr to it, instead of returning a
 // canned result. Paths on the "sidecar" are then local paths, which lets a test
-// drive a real rsync through the same tunnel chunk uses for a sidecar.
+// drive a real rsync through the same tunnel smelt uses for a sidecar.
 func (s *SSHServer) RunLocally() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -28,8 +28,9 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // defaultBaseImage is the image a member runs when none is configured. The real
@@ -37,21 +38,21 @@ import (
 // this default at least provides a shell and git on most tags.
 const defaultBaseImage = "debian:bookworm-slim"
 
-// snapshotScheme marks a Snapshot ref as a chunk host-directory snapshot rather
+// snapshotScheme marks a Snapshot ref as a smelt host-directory snapshot rather
 // than a Docker image, so Create knows to restore from a directory.
-const snapshotScheme = "chunkfs:"
+const snapshotScheme = brand.Command + "fs:"
 
 // EnvImage names the environment variable that overrides the provider's default
-// image. `chunk factory build` reads it too, to know an image is configured.
-const EnvImage = "CHUNK_DOCKER_IMAGE"
+// image. `smelt factory build` reads it too, to know an image is configured.
+const EnvImage = brand.EnvPrefix + "DOCKER_IMAGE"
 
-// label marks every container chunk creates, so they can be told apart from the
+// label marks every container smelt creates, so they can be told apart from the
 // user's own and reaped.
-const label = "com.circleci.chunk.factory"
+const label = brand.LabelPrefix + "factory"
 
 // labelName carries the name the pool gave a member, since the container's
 // own name has a uniqueness suffix appended.
-const labelName = "com.circleci.chunk.name"
+const labelName = brand.LabelPrefix + "name"
 
 // inspectAttempts bounds image lookups that fail for a reason other than the
 // image being absent. notFoundAttempts bounds lookups that answer "no such
@@ -115,13 +116,13 @@ func New() (*Provider, error) {
 	if img := os.Getenv(EnvImage); img != "" {
 		b.baseImage = img
 	}
-	root := os.Getenv("CHUNK_DOCKER_WORKROOT")
+	root := os.Getenv(brand.Env("DOCKER_WORKROOT"))
 	if root == "" {
 		cache, err := os.UserCacheDir()
 		if err != nil {
 			cache = os.TempDir()
 		}
-		root = filepath.Join(cache, "chunk", "docker")
+		root = filepath.Join(cache, brand.AppDir, "docker")
 	}
 	b.workRoot = root
 	return b, nil
@@ -160,7 +161,7 @@ func (b *Provider) hostDir(id string) (string, bool) {
 
 // Create provisions a container whose workspace at repoPath is a bind-mounted
 // host directory. image selects the source: empty or a Docker reference starts
-// a fresh container from that image; a chunkfs snapshot ref restores the
+// a fresh container from that image; a smeltfs snapshot ref restores the
 // snapshot's workspace into the new host directory (and runs the base image).
 func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (sidecar.Instance, error) {
 	if repoPath == "" {
@@ -288,7 +289,7 @@ func (b *Provider) Delete(ctx context.Context, id string) error {
 }
 
 // Snapshot copies the member's workspace aside, records the image it runs, and
-// returns a chunkfs ref to the result. It is independent of the seed
+// returns a smeltfs ref to the result. It is independent of the seed
 // container's lifecycle, so a later Delete of the seed does not disturb clones
 // restoring from it.
 func (b *Provider) Snapshot(ctx context.Context, id, name string) (string, error) {

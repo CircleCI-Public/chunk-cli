@@ -13,12 +13,13 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/image"
 
-	"github.com/CircleCI-Public/chunk-cli/envbuilder"
-	"github.com/CircleCI-Public/chunk-cli/internal/ciconfig"
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar/docker"
+	"github.com/smeltdev/smelt/envbuilder"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/ciconfig"
+	"github.com/smeltdev/smelt/internal/envspec"
+	"github.com/smeltdev/smelt/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar/docker"
 )
 
 // Generated is a rendered Dockerfile and the Recipe it came from.
@@ -196,7 +197,7 @@ func Diff(ctx context.Context, dir, dockerfile, next string) (string, error) {
 
 // DiffText returns a unified diff between two versions of the file called name.
 func DiffText(ctx context.Context, name, before, after string) (string, error) {
-	tmp, err := os.MkdirTemp("", "chunk-diff-")
+	tmp, err := os.MkdirTemp("", brand.Command+"-diff-")
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}

@@ -9,12 +9,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/task"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/task"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func newTaskCmd() *cobra.Command {
@@ -38,7 +38,7 @@ func newTaskRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Trigger a task run",
-		Long:  "Trigger a task run.\n\nRequires: CircleCI auth (chunk auth login)",
+		Long:  "Trigger a task run.\n\nRequires: CircleCI auth (smelt auth login)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -106,8 +106,8 @@ func newTaskConfigCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Set up .chunk/run.json for this repository",
-		Long:  "Set up .chunk/run.json for this repository.\n\nRequires: CircleCI auth (chunk auth login)",
+		Short: "Set up .smelt/run.json for this repository",
+		Long:  "Set up .smelt/run.json for this repository.\n\nRequires: CircleCI auth (smelt auth login)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			ctx := cmd.Context()
@@ -143,7 +143,7 @@ func newTaskConfigCmd() *cobra.Command {
 			}
 
 			io.Println("")
-			io.Println(ui.Bold("Chunk Run Setup"))
+			io.Println(ui.Bold("Smelt Run Setup"))
 			io.Println("")
 
 			insecureStorage := insecureStorageFlag(cmd)
@@ -185,9 +185,9 @@ func newTaskConfigCmd() *cobra.Command {
 			}
 
 			io.Println("")
-			io.Println(ui.Success("Configuration saved to .chunk/run.json"))
+			io.Println(ui.Success("Configuration saved to .smelt/run.json"))
 			io.Println("")
-			io.Println(ui.Dim("Run a task with: chunk task run --definition <name> --prompt <text>"))
+			io.Println(ui.Dim("Run a task with: smelt task run --definition <name> --prompt <text>"))
 			return nil
 		},
 	}

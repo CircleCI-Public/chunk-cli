@@ -16,10 +16,11 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/gitremote"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // proxyErrDrainTimeout bounds how long a failed rsync waits for the SSH proxy
@@ -75,7 +76,7 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 
 	// Detect a git worktree by walking up from cwd to find the git root, then
 	// checking whether .git there is a file (worktree pointer) or a directory
-	// (normal checkout). Walking up ensures detection works when chunk is run
+	// (normal checkout). Walking up ensures detection works when smelt is run
 	// from a subdirectory of the worktree.
 	gitRoot, _ := findGitRootFrom(cwd)
 	var isWorktree bool
@@ -154,7 +155,7 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 // tracks but git ignores are left alone too: a sync never sends them, so the
 // workspace not having them is no reason to delete them. Anything else in
 // localDir that is not in the workspace is deleted, so localDir must be a
-// directory chunk owns.
+// directory smelt owns.
 func RsyncPull(ctx context.Context,
 	client *circleci.Client, sidecarID, repoPath, localDir string,
 	status iostream.StatusFunc) error {
@@ -260,7 +261,7 @@ func escapeRsyncPattern(path string) string {
 // writeExcludeFile writes patterns, one per line, to a temporary file for
 // rsync's --exclude-from and returns its path.
 func writeExcludeFile(patterns []string) (string, error) {
-	f, err := os.CreateTemp("", "chunk-rsync-exclude-")
+	f, err := os.CreateTemp("", brand.Command+"-rsync-exclude-")
 	if err != nil {
 		return "", fmt.Errorf("rsync pull: create exclude file: %w", err)
 	}

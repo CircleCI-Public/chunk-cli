@@ -10,7 +10,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
+	"github.com/smeltdev/smelt/internal/changeset"
 )
 
 func snapshot(t *testing.T, dir string) string {

@@ -9,8 +9,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar/docker"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/sidecar/docker"
 )
 
 func TestResolveFactorySettings(t *testing.T) {
@@ -75,9 +75,9 @@ func TestResolveFactoryImageSource(t *testing.T) {
 		wantFile   string
 		wantSource imageSource
 	}{
-		{"flag beats everything", "flag:img", config.FactoryConfig{Image: "cfg:img", Dockerfile: "Dockerfile.chunk"}, "env:img", "flag:img", "", imageFromFlag},
-		{"factory.image beats dockerfile", "", config.FactoryConfig{Image: "chunk-sandbox:local", Dockerfile: "Dockerfile.chunk"}, "env:img", "chunk-sandbox:local", "", imageFromConfig},
-		{"dockerfile beats env", "", config.FactoryConfig{Dockerfile: "Dockerfile.chunk"}, "env:img", "", "Dockerfile.chunk", imageFromDockerfile},
+		{"flag beats everything", "flag:img", config.FactoryConfig{Image: "cfg:img", Dockerfile: "Dockerfile.smelt"}, "env:img", "flag:img", "", imageFromFlag},
+		{"factory.image beats dockerfile", "", config.FactoryConfig{Image: "smelt-sandbox:local", Dockerfile: "Dockerfile.smelt"}, "env:img", "smelt-sandbox:local", "", imageFromConfig},
+		{"dockerfile beats env", "", config.FactoryConfig{Dockerfile: "Dockerfile.smelt"}, "env:img", "", "Dockerfile.smelt", imageFromDockerfile},
 		{"env last", "", config.FactoryConfig{}, "env:img", "", "", imageFromEnv},
 	}
 	for _, tt := range tests {

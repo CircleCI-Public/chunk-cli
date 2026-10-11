@@ -9,18 +9,18 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envspec"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 func TestSnapshotCriteriaFromGitRemote(t *testing.T) {
-	dir := gitrepo.SetupGitRepo(t, "CircleCI-Public", "chunk-cli")
+	dir := gitrepo.SetupGitRepo(t, "CircleCI-Public", "smelt")
 
 	got := snapshotCriteria(dir, nil)
-	assert.Equal(t, got.Repo, "chunk-cli")
+	assert.Equal(t, got.Repo, "smelt")
 }
 
 func TestSnapshotCriteriaFallsBackToDirectoryName(t *testing.T) {
@@ -37,9 +37,9 @@ func TestSnapshotCriteriaFallsBackToConfiguredRepo(t *testing.T) {
 	dir := filepath.Join(parent, "checkout")
 	assert.NilError(t, os.Mkdir(dir, 0o755))
 
-	cfg := &config.ProjectConfig{VCS: &config.VCSConfig{Repo: "chunk-cli"}}
+	cfg := &config.ProjectConfig{VCS: &config.VCSConfig{Repo: "smelt"}}
 	got := snapshotCriteria(dir, cfg)
-	assert.Equal(t, got.Repo, "chunk-cli")
+	assert.Equal(t, got.Repo, "smelt")
 }
 
 // The saved environment is authoritative: re-walking the tree can disagree with
@@ -85,8 +85,8 @@ func TestSnapshotMissHint(t *testing.T) {
 		criteria sidecar.SnapshotCriteria
 		want     string
 	}{
-		{sidecar.SnapshotCriteria{Repo: "chunk-cli", Stack: "go"}, "no snapshot matches chunk-cli or go; using the default image"},
-		{sidecar.SnapshotCriteria{Repo: "chunk-cli"}, "no snapshot matches chunk-cli; using the default image"},
+		{sidecar.SnapshotCriteria{Repo: "smelt", Stack: "go"}, "no snapshot matches smelt or go; using the default image"},
+		{sidecar.SnapshotCriteria{Repo: "smelt"}, "no snapshot matches smelt; using the default image"},
 		{sidecar.SnapshotCriteria{Stack: "go"}, "no snapshot matches go; using the default image"},
 		{sidecar.SnapshotCriteria{}, "no snapshot to match against; using the default image"},
 	}

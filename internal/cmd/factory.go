@@ -15,12 +15,12 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func newFactoryCmd() *cobra.Command {
@@ -51,23 +51,23 @@ review its work with each prompt in the reviews directory, each on its own
 sidecar, and run the project's validation commands, feeding failures back to
 the implementer until every check passes or attempts run out.
 
-The run happens on the local chunk daemon, as a session: watch it in
-'chunk watch'. Ctrl-C stops the run, and what the implementer did so far is
+The run happens on the local smelt daemon, as a session: watch it in
+'smelt watch'. Ctrl-C stops the run, and what the implementer did so far is
 still committed.
 
 The run works in a git worktree of its own, on a branch named from the prompt:
-chunk/factory/<description>/<run id>. It starts from your files as they are,
+smelt/<description>/<run id>. It starts from your files as they are,
 uncommitted changes included. Your checkout is never touched. The implementer's
 work is synced into the worktree each round and committed there when the run
 ends; the worktree is kept so you can look at it or carry on in it.
 
 --plan FILE reads the prompt from FILE, usually a markdown spec, as if it had
-been piped on stdin: chunk factory build --plan spec.md. Relative paths are
+been piped on stdin: smelt factory build --plan spec.md. Relative paths are
 relative to the current directory. Pass the prompt one way: --plan, an
 argument, or stdin.
 
 With no prompt argument, the prompt is read from redirected stdin. A - prompt
-selects stdin explicitly: chunk factory build < prompt.md or chunk factory build - < prompt.md.
+selects stdin explicitly: smelt factory build < prompt.md or smelt factory build - < prompt.md.
 A prompt argument with a file on stdin is refused rather than drop the file.
 
 When a run ends with every check passed, in a terminal, it offers to push the
@@ -76,11 +76,11 @@ that was detached), or, if the branch already has a PR, to push to update it.
 --push and --pr do so without asking, --no-publish never offers, and --base,
 --pr-title, --pr-body and --draft shape the PR. A PR is opened with the GitHub
 CLI (gh); without it the branch is pushed and a compare URL is printed. Only
-chunk/factory/* branches are ever pushed, and never forced.
+smelt/* branches are ever pushed, and never forced.
 
 --continue RUN picks up the work a finished run left on its branch, such as
 one whose checks still failed when its attempts ran out. RUN is the run's ID
-or its branch, chunk/factory/<description>/<run id>. The run works in the same
+or its branch, smelt/<description>/<run id>. The run works in the same
 worktree and adds a commit to the same branch, and its reviewers see the whole
 change. A prompt is optional and adds to the original request: with one, the
 implementer starts on it; without one, the work is checked first and the
@@ -89,7 +89,7 @@ implementer is sent what failed, in a round that counts toward
 Enter skips it.
 
 With --log, the run keeps a plain-text log in
-~/.chunk/factory/run-<start time>.log, with its full context whatever the
+~/.smelt/factory/run-<start time>.log, with its full context whatever the
 display leaves out: every prompt the implementer is sent and what it did and
 said, each review's findings in full, and each validation command's output
 when it failed. --log-file FILE keeps the log in FILE instead, and on its own
@@ -98,7 +98,7 @@ that passed, and a check each round that every reviewer has the implementer's
 change, and also shows the log here as the run writes it; it implies --log.
 
 Defaults for --backend, --image, --max-attempts and --log come from the
-factory section of .chunk/config.json (chunk init sets it); a flag given on the
+factory section of .smelt/config.json (smelt init sets it); a flag given on the
 command line wins. For the docker backend the image is --image,
 factory.image (used as is), or factory.dockerfile (built here when its image is
 missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
@@ -109,7 +109,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			}
 			return newUserError("Pass the prompt as one argument or on stdin.").
 				withCode("command.invalid_args").
-				withSuggestion(`Quote it: chunk factory build "add a --verbose flag", or send a file on stdin: chunk factory build < prompt.md`).
+				withSuggestion(`Quote it: smelt factory build "add a --verbose flag", or send a file on stdin: smelt factory build < prompt.md`).
 				withExitCode(ExitBadArgs).
 				withoutDetail()
 		},
@@ -129,7 +129,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			if cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "" {
 				return newUserError("--log-file needs a file.").
 					withCode("command.invalid_flags").
-					withSuggestion("Write --log-file FILE, or --log to log to ~/.chunk/factory.").
+					withSuggestion("Write --log-file FILE, or --log to log to ~/.smelt/factory.").
 					withExitCode(ExitBadArgs).
 					withoutDetail()
 			}
@@ -189,10 +189,10 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			// starts after whatever the file holds before the run is started.
 			logFrom := logSize(logArg)
 
-			if err := chunkd.EnsureRunning(); err != nil {
-				return &userError{msg: "Could not start the chunk daemon.", err: err}
+			if err := smeltd.EnsureRunning(); err != nil {
+				return &userError{msg: "Could not start the smelt daemon.", err: err}
 			}
-			id, err := chunkd.StartFactory(chunkd.FactoryRequest{
+			id, err := smeltd.StartFactory(smeltd.FactoryRequest{
 				ProjectRoot:             root,
 				Prompt:                  prompt,
 				Continue:                continueRun,
@@ -214,7 +214,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			if err != nil {
 				return sessionError(err)
 			}
-			streams.ErrPrintf("Factory run %s started on the chunk daemon. Ctrl-C stops it.\n", id)
+			streams.ErrPrintf("Factory run %s started on the smelt daemon. Ctrl-C stops it.\n", id)
 			if logArg != "" {
 				streams.ErrPrintf("Logging to %s\n", logArg)
 			}
@@ -243,7 +243,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
 	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
-	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log")
+	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.smelt/factory/run-<start time>.log")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
 	cmd.Flags().BoolVar(&pub.push, "push", false, "push the run's branch when it ends, without asking")
@@ -367,7 +367,7 @@ func promptTwiceError(arg string, bareLog bool) error {
 func missingFactoryPromptError() error {
 	return newUserError("Pass the prompt as an argument or on stdin.").
 		withCode("command.invalid_args").
-		withSuggestion(`chunk factory build "add a --verbose flag", or chunk factory build < prompt.md`).
+		withSuggestion(`smelt factory build "add a --verbose flag", or smelt factory build < prompt.md`).
 		withExitCode(ExitBadArgs).
 		withoutDetail()
 }
@@ -408,7 +408,7 @@ func checkFactoryContinue(root, run string) error {
 	case errors.Is(err, factory.ErrNoRecord):
 		return newUserError(fmt.Sprintf("No factory run %s to continue in this project.", factory.ParseRunID(run))).
 			withCode("command.invalid_args").
-			withSuggestion("Pass the run ID from the end of the run's output, or its branch: chunk/factory/<description>/<run id>.").
+			withSuggestion("Pass the run ID from the end of the run's output, or its branch: smelt/<description>/<run id>.").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}
@@ -430,7 +430,7 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 	case errors.Is(err, factory.ErrNothingToCheck):
 		return nil, nil, &userError{
 			msg:        "Nothing to check the implementer's work with.",
-			suggestion: fmt.Sprintf("Add review prompts to %s, or validation commands with 'chunk init'.", review.DefaultDir),
+			suggestion: fmt.Sprintf("Add review prompts to %s, or validation commands with 'smelt init'.", review.DefaultDir),
 			hideDetail: true,
 			blocked:    true,
 		}
@@ -442,7 +442,7 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 
 // printFactoryWork summarizes the work committed on the run's branch and says
 // how to keep it. The daemon worked out the summary as the run ended.
-func printFactoryWork(f *chunkd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
+func printFactoryWork(f *smeltd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
 	if f.StatError != "" {
 		status(iostream.LevelWarn, fmt.Sprintf("could not summarize the work on %s: %s", f.Branch, f.StatError))
 		streams.ErrPrintf("  Worktree: %s\n", f.Worktree)
@@ -453,7 +453,7 @@ func printFactoryWork(f *chunkd.FactoryRun, status iostream.StatusFunc, streams 
 		return
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Committed %s to %s", f.Stat, f.Branch))
-	streams.ErrPrintf("  Worktree: %s\n  %s\n  When you're done with it: chunk factory clean %s\n", f.Worktree, keepWorkHint(f), factory.ParseRunID(f.Branch))
+	streams.ErrPrintf("  Worktree: %s\n  %s\n  When you're done with it: smelt factory clean %s\n", f.Worktree, keepWorkHint(f), factory.ParseRunID(f.Branch))
 }
 
 // keepWorkHint says how to bring the run's work into the developer's checkout.
@@ -461,7 +461,7 @@ func printFactoryWork(f *chunkd.FactoryRun, status iostream.StatusFunc, streams 
 // their uncommitted work committed as the baseline, a merge would collide with
 // that same work still uncommitted in their checkout, so they apply the run's
 // own changes on top of it instead.
-func keepWorkHint(f *chunkd.FactoryRun) string {
+func keepWorkHint(f *smeltd.FactoryRun) string {
 	if f.Baseline == f.Head {
 		return "Merge it with: git merge " + f.Branch
 	}
@@ -597,7 +597,7 @@ func factoryLogPath(path string, on bool, now time.Time) (string, error) {
 
 // finishFactory prints where a factory run ended up and maps anything short of
 // every check passing to an error.
-func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOut bool) error {
+func finishFactory(streams iostream.Streams, detail smeltd.SessionDetail, jsonOut bool) error {
 	status := newStatusFunc(streams)
 	f := detail.Factory
 	if jsonOut {
@@ -612,18 +612,18 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 	}
 	printFactoryTotals(detail, status)
 	switch detail.State {
-	case chunkd.SessionCancelled:
+	case smeltd.SessionCancelled:
 		return newUserError("The factory run was cancelled.").withoutDetail()
-	case chunkd.SessionFailed:
+	case smeltd.SessionFailed:
 		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
-	case chunkd.SessionRunning, chunkd.SessionDone:
+	case smeltd.SessionRunning, smeltd.SessionDone:
 	}
 	return reportOutcome(status, f.Result, f.Rounds)
 }
 
 // printFactoryTotals says how long the run took and what the implementer's
-// turns cost. What the reviews cost is not reported to chunk.
-func printFactoryTotals(detail chunkd.SessionDetail, status iostream.StatusFunc) {
+// turns cost. What the reviews cost is not reported to smelt.
+func printFactoryTotals(detail smeltd.SessionDetail, status iostream.StatusFunc) {
 	ended := time.Now()
 	if detail.EndedAt != nil {
 		ended = *detail.EndedAt
@@ -631,7 +631,7 @@ func printFactoryTotals(detail chunkd.SessionDetail, status iostream.StatusFunc)
 	var cost float64
 	turns := 0
 	for _, r := range detail.Rounds {
-		if impl := r.Implement; impl != nil && impl.State != chunkd.ImplementRunning {
+		if impl := r.Implement; impl != nil && impl.State != smeltd.ImplementRunning {
 			cost += impl.CostUSD
 			turns++
 		}
@@ -642,7 +642,7 @@ func printFactoryTotals(detail chunkd.SessionDetail, status iostream.StatusFunc)
 // printFactoryLeftovers says what a run left behind: its committed work, or
 // where its uncommitted work still is. Sidecars kept running were said in the
 // run's progress.
-func printFactoryLeftovers(f *chunkd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
+func printFactoryLeftovers(f *smeltd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
 	switch {
 	case f.Committed:
 		printFactoryWork(f, status, streams)
@@ -655,26 +655,26 @@ func printFactoryLeftovers(f *chunkd.FactoryRun, status iostream.StatusFunc, str
 // printFactoryContinueHint says how to carry on a run whose committed work
 // still fails its checks. The branch names the run whose record a continued
 // run reads, the first in a chain of them.
-func printFactoryContinueHint(f *chunkd.FactoryRun, status iostream.StatusFunc) {
+func printFactoryContinueHint(f *smeltd.FactoryRun, status iostream.StatusFunc) {
 	failing := f.Result == string(factory.ResultExhausted) || f.Result == string(factory.ResultStuck)
 	if !failing || !f.Committed || f.Branch == "" {
 		return
 	}
-	status(iostream.LevelInfo, fmt.Sprintf(`Keep working on it with: chunk factory build --continue %s ["what to do differently"]`, factory.ParseRunID(f.Branch)))
+	status(iostream.LevelInfo, fmt.Sprintf(`Keep working on it with: smelt factory build --continue %s ["what to do differently"]`, factory.ParseRunID(f.Branch)))
 }
 
 // reportOutcome says why the loop stopped and returns an error unless every
 // check passed. How each round's checks came out was said as it was checked.
 func reportOutcome(status iostream.StatusFunc, result string, rounds int) error {
 	switch result {
-	case chunkd.ResultPassed:
+	case smeltd.ResultPassed:
 		status(iostream.LevelDone, fmt.Sprintf("All checks passed after %d round(s).", rounds))
 		return nil
-	case chunkd.ResultNoChange:
+	case smeltd.ResultNoChange:
 		return &userError{msg: "The implementer made no changes.", hideDetail: true, errMsg: "no changes"}
-	case chunkd.ResultStuck:
+	case smeltd.ResultStuck:
 		return &userError{msg: fmt.Sprintf("The implementer stopped changing the code after round %d, with checks still failing.", rounds), hideDetail: true, errMsg: "stuck"}
-	case chunkd.ResultExhausted:
+	case smeltd.ResultExhausted:
 	}
 	return &userError{msg: fmt.Sprintf("Checks still failed after %d round(s).", rounds), hideDetail: true, errMsg: "attempts exhausted"}
 }

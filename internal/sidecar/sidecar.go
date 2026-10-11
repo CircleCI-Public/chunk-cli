@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 func Create(ctx context.Context, client *circleci.Client, orgID, name, image string) (*circleci.Sidecar, error) {

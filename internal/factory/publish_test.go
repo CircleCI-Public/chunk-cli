@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -40,15 +41,22 @@ func TestDecidePublish(t *testing.T) {
 }
 
 func TestCheckHeadBranch(t *testing.T) {
-	assert.NilError(t, CheckHeadBranch("chunk/factory/x/run-1", "main"))
-	assert.ErrorContains(t, CheckHeadBranch("main", "main"), "not a chunk/factory/")
-	assert.ErrorContains(t, CheckHeadBranch("chunk/factory/x/run-1", "chunk/factory/x/run-1"), "default branch")
+	assert.NilError(t, CheckHeadBranch("smelt/x/run-1", "main"))
+	assert.ErrorContains(t, CheckHeadBranch("main", "main"), "not a smelt/")
+	assert.ErrorContains(t, CheckHeadBranch("smelt/x/run-1", "smelt/x/run-1"), "default branch")
+	// Branches made by the tool this one was forked from are not ours to push.
+	assert.ErrorContains(t, CheckHeadBranch("chunk/factory/x/run-1", "main"), "not a smelt/")
+	assert.ErrorContains(t, CheckHeadBranch("feature/smelt/x", "main"), "not a smelt/")
+}
+
+func TestNewRunsAreNamedUnderSmelt(t *testing.T) {
+	assert.Equal(t, branchName("add a flag", "20261011-120000"), "smelt/add-a-flag/20261011-120000")
 }
 
 func TestChooseBase(t *testing.T) {
 	assert.Equal(t, ChooseBase("", "feature", "main"), "feature")
 	assert.Equal(t, ChooseBase("", "", "main"), "main")
-	assert.Equal(t, ChooseBase("", "chunk/factory/a/run-0", "main"), "main")
+	assert.Equal(t, ChooseBase("", "smelt/a/run-0", "main"), "main")
 	assert.Equal(t, ChooseBase("release", "feature", "main"), "release")
 }
 
@@ -115,7 +123,7 @@ func TestPublicationRefusesTheDefaultBranch(t *testing.T) {
 	_, err := pub.Resolve(ctx)
 	assert.Assert(t, err != nil)
 	assert.Assert(t, pub.Push(ctx) != nil)
-	assert.Equal(t, gitOutput(t, origin, "for-each-ref", "refs/heads/chunk"), "")
+	assert.Equal(t, gitOutput(t, origin, "for-each-ref", "refs/heads/smelt"), "")
 }
 
 func TestPublicationBaseFallsBackToDefaultWhenNotOnRemote(t *testing.T) {
@@ -131,4 +139,5 @@ func TestCreateWorktreeRecordsBranches(t *testing.T) {
 	wt, err := CreateWorktree(context.Background(), WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "x"})
 	assert.NilError(t, err)
 	assert.Equal(t, wt.BaseBranch, gitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD"))
+	assert.Assert(t, strings.HasPrefix(wt.Branch, "smelt/"), wt.Branch)
 }

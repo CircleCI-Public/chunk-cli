@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
+	"github.com/smeltdev/smelt/internal/testing/recorder"
 )
 
 // FakeGitHub serves canned responses for GitHub's GraphQL API.

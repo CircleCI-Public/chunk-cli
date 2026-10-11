@@ -11,8 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // PoolEntry is a single ready-to-use sidecar checked out from a Pool.
@@ -67,9 +68,9 @@ type PoolOptions struct {
 	Image string
 	// WorkDir is the tree synced to every member.
 	WorkDir string
-	// StateDir is where the pool's state is kept, under .chunk; WorkDir when
+	// StateDir is where the pool's state is kept, under .smelt; WorkDir when
 	// empty. It differs when the synced tree is not the project the pool
-	// belongs to, such as a worktree, whose .chunk would be synced and
+	// belongs to, such as a worktree, whose .smelt would be synced and
 	// committed with the work.
 	StateDir    string
 	RepoPath    string
@@ -81,7 +82,7 @@ type PoolOptions struct {
 }
 
 func poolStatePath(stateDir, name string) string {
-	return filepath.Join(stateDir, ".chunk", name+"-pool.json")
+	return filepath.Join(stateDir, brand.ProjectDir, name+"-pool.json")
 }
 
 func loadPoolState(stateDir, name string) (*poolState, error) {

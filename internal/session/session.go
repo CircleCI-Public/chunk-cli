@@ -1,4 +1,4 @@
-// Package session tracks the identity of the agent session driving a chunk
+// Package session tracks the identity of the agent session driving a smelt
 // invocation, so per-session state (which sidecar this session owns) stays
 // separate when several sessions share one working tree.
 package session
@@ -8,18 +8,18 @@ import (
 	"os"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 // EnvClaudeSessionID is set by Claude Code in the environment of every command
 // it runs. It is what makes a session identifiable outside the Stop hook, where
 // the session ID arrives in the hook payload instead: an agent running
-// `chunk sidecar sync` or `chunk validate --remote` itself would otherwise look
+// `smelt sidecar sync` or `smelt validate --remote` itself would otherwise look
 // anonymous and share one sidecar with every other session in the repo.
 //
 // It lives here rather than in the config package because, like the agent
 // signals in internal/telemetry, it is a variable another tool sets rather than
-// one of chunk's own. config.EnvChunkSessionID, which users set themselves, does
+// one of smelt's own. config.EnvSmeltSessionID, which users set themselves, does
 // live there.
 const EnvClaudeSessionID = "CLAUDE_CODE_SESSION_ID"
 
@@ -40,7 +40,7 @@ func IDFromCtx(ctx context.Context) string {
 // IDFromSlice returns the session ID from a KEY=VALUE env slice, applying the
 // same precedence and sanitisation as IDFromEnv.
 func IDFromSlice(env []string) string {
-	for _, name := range []string{config.EnvChunkSessionID, EnvClaudeSessionID} {
+	for _, name := range []string{config.EnvSmeltSessionID, EnvClaudeSessionID} {
 		prefix := name + "="
 		for _, e := range env {
 			if strings.HasPrefix(e, prefix) {
@@ -56,7 +56,7 @@ func IDFromSlice(env []string) string {
 // IDFromEnv returns the session ID advertised by the environment, or "" when
 // nothing in it names a session.
 //
-// config.EnvChunkSessionID wins over the agent's own variable, so an agent chunk
+// config.EnvSmeltSessionID wins over the agent's own variable, so an agent smelt
 // does not recognise — or a test — can still pin a session identity by hand.
 //
 // The value is sanitised because it becomes part of a state file name and of a
@@ -65,7 +65,7 @@ func IDFromSlice(env []string) string {
 // nothing; it only stops a hostile or malformed value from escaping the state
 // directory.
 func IDFromEnv() string {
-	for _, name := range []string{config.EnvChunkSessionID, EnvClaudeSessionID} {
+	for _, name := range []string{config.EnvSmeltSessionID, EnvClaudeSessionID} {
 		if id := sanitize(os.Getenv(name)); id != "" {
 			return id
 		}

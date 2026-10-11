@@ -69,7 +69,7 @@ const (
 // unrestricted, and one that does not is pinned to branches that are not the
 // developer's. Both shapes are needed — a repo whose convention is namespaced
 // branches writes filters that a flat name fails.
-var probeBranches = []string{"chunk-working-branch", "chunk/working-branch"}
+var probeBranches = []string{"smelt-working-branch", "smelt/working-branch"}
 
 // Step kinds this package treats specially. Everything else is either a
 // built-in with no command of its own or an invocation of a custom or orb
@@ -286,7 +286,7 @@ func gateJobs(f file) []workflowJob {
 }
 
 // runsOnWorkingBranch reports whether a job's filters admit an ordinary
-// working branch — the branch a developer is on while they use chunk.
+// working branch — the branch a developer is on while they use smelt.
 //
 // Deliberately not "runs on the default branch". A job pinned to the default
 // branch is a deploy, a publish, or a post-merge suite too slow to gate a pull
@@ -331,7 +331,7 @@ func admits(pattern, branch string) bool {
 		body := strings.TrimSuffix(strings.TrimPrefix(pattern, "/"), "/")
 		// CircleCI matches a filter regex against the whole branch name — the
 		// reason its own docs write `only: /^config-test.*/` with a trailing
-		// `.*`. Unanchored, `ignore: /^chunk/` would match a namespaced working
+		// `.*`. Unanchored, `ignore: /^smelt/` would match a namespaced working
 		// branch and drop a job CircleCI in fact runs on it.
 		re, err := regexp.Compile(`\A(?:` + body + `)\z`)
 		if err != nil {

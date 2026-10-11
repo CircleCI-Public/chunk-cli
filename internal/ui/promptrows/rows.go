@@ -1,5 +1,5 @@
 // Package promptrows renders the prompts of a review pass as rows: one line per
-// prompt with its state, sidecar and timing. chunk review draws its own pass
+// prompt with its state, sidecar and timing. smelt review draws its own pass
 // with it, and the watch dashboard draws a factory round's reviews.
 package promptrows
 
@@ -10,7 +10,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 const (
@@ -32,8 +32,8 @@ const (
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // Row is one prompt of a review pass as the row renderers show it. Each view
-// fills it in from its own source, which is what lets `chunk review` and
-// `chunk watch` draw a review identically.
+// fills it in from its own source, which is what lets `smelt review` and
+// `smelt watch` draw a review identically.
 type Row struct {
 	Name      string
 	SidecarID string

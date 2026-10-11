@@ -10,8 +10,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 // newTestClient creates a Client pointed at the given test server.
@@ -272,7 +272,7 @@ func TestExec(t *testing.T) {
 	t.Run("outdated sidecar surfaces server message", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		fake.CommandOutputStatusCode = http.StatusGone
-		fake.CommandOutputMessage = "sidecar predates async exec; recreate with: chunk sidecar create"
+		fake.CommandOutputMessage = "sidecar predates async exec; recreate with: smelt sidecar create"
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 
@@ -327,7 +327,7 @@ func TestTriggerRun(t *testing.T) {
 		ctx := context.Background()
 
 		resp, err := client.TriggerRun(ctx, "org-1", "proj-1", TriggerRunRequest{
-			AgentType:      "chunk",
+			AgentType:      "smelt",
 			DefinitionID:   "def-1",
 			CheckoutBranch: "main",
 			TriggerSource:  "cli",
@@ -391,7 +391,7 @@ func TestMapErr_410_SurfacesBody(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusGone)
-			_, _ = w.Write([]byte(`{"error":"upgrade chunk CLI to v2.x or later"}`))
+			_, _ = w.Write([]byte(`{"error":"upgrade smelt CLI to v2.x or later"}`))
 		}))
 		defer srv.Close()
 
@@ -399,7 +399,7 @@ func TestMapErr_410_SurfacesBody(t *testing.T) {
 		_, err := client.ListSidecars(context.Background(), "org-1", false)
 
 		assert.Assert(t, err != nil)
-		assert.Assert(t, strings.Contains(err.Error(), "upgrade chunk CLI"), "error should include server message, got: %v", err)
+		assert.Assert(t, strings.Contains(err.Error(), "upgrade smelt CLI"), "error should include server message, got: %v", err)
 	})
 
 	t.Run("json message field", func(t *testing.T) {

@@ -1,4 +1,4 @@
-// Command receiverbin is a minimal stand-in for the chunk binary's hidden
+// Command receiverbin is a minimal stand-in for the smelt binary's hidden
 // "receive-telemetry" subcommand, built by TestMain in delegate_test.go. It
 // has no other subcommands, so pointing delegateDestination.bin at it lets
 // tests exercise the real subprocess spawn/stdin/env-var path without any
@@ -8,7 +8,7 @@ package main
 import (
 	"os"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry/receiver"
+	"github.com/smeltdev/smelt/internal/telemetry/receiver"
 )
 
 func main() {

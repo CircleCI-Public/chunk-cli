@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/closer"
+	"github.com/smeltdev/smelt/internal/closer"
 )
 
 // ParseEnvPairs parses a slice of KEY=VALUE strings and returns a map.

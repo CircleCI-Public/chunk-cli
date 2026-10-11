@@ -17,18 +17,18 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string) {
 	t.Helper()
-	chunkDir := filepath.Join(workDir, ".chunk")
-	err := os.MkdirAll(chunkDir, 0o755)
+	smeltDir := filepath.Join(workDir, ".smelt")
+	err := os.MkdirAll(smeltDir, 0o755)
 	assert.NilError(t, err)
 
 	type command struct {
@@ -46,7 +46,7 @@ func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string
 	config := map[string]interface{}{"commands": commands, "factory": map[string]string{"backend": "circleci"}}
 	data, err := json.Marshal(config)
 	assert.NilError(t, err)
-	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644)
+	err = os.WriteFile(filepath.Join(smeltDir, "config.json"), data, 0o644)
 	assert.NilError(t, err)
 }
 
@@ -179,7 +179,7 @@ func TestValidateRunDryRunTestOnly(t *testing.T) {
 
 func TestValidateRunDryRunNoConfig(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	// No .chunk/config.json
+	// No .smelt/config.json
 
 	env := testenv.NewTestEnv(t)
 
@@ -189,7 +189,7 @@ func TestValidateRunDryRunNoConfig(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "no validate commands") || strings.Contains(combined, "chunk init"),
+	assert.Assert(t, strings.Contains(combined, "no validate commands") || strings.Contains(combined, "smelt init"),
 		"expected no-commands-configured error, got: %s", combined)
 }
 
@@ -353,9 +353,9 @@ func TestValidateInlineCmdDryRun(t *testing.T) {
 
 func TestValidateInlineCmdSave(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	// Create .chunk dir so config can be saved
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	// Create .smelt dir so config can be saved
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 
 	env := testenv.NewTestEnv(t)
 
@@ -366,7 +366,7 @@ func TestValidateInlineCmdSave(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
 	// Verify command was saved to config
-	data, err := os.ReadFile(filepath.Join(chunkDir, "config.json"))
+	data, err := os.ReadFile(filepath.Join(smeltDir, "config.json"))
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(data), "lint"),
 		"expected 'lint' in saved config, got: %s", string(data))
@@ -425,7 +425,7 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 
 	sshDir := filepath.Join(env.HomeDir, ".ssh")
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "smelt_ai")))
 
 	result := binary.RunCLI(t, []string{
 		"validate",
@@ -450,7 +450,7 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 }
 
 func TestValidateSidecarImageNoActiveSidecarAutoCreates(t *testing.T) {
-	// Plain chunk validate with sidecarImage configured but no active sidecar must
+	// Plain smelt validate with sidecarImage configured but no active sidecar must
 	// auto-create a sandbox — the configured image signals intent to run remotely.
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyURL = "127.0.0.1"
@@ -459,8 +459,8 @@ func TestValidateSidecarImageNoActiveSidecarAutoCreates(t *testing.T) {
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := map[string]interface{}{
 		"factory": map[string]string{"backend": "circleci"},
 		"commands": []map[string]interface{}{
@@ -472,7 +472,7 @@ func TestValidateSidecarImageNoActiveSidecarAutoCreates(t *testing.T) {
 	}
 	data, err := json.Marshal(cfg)
 	assert.NilError(t, err)
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), data, 0o644))
 
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
@@ -480,7 +480,7 @@ func TestValidateSidecarImageNoActiveSidecarAutoCreates(t *testing.T) {
 
 	sshDir := filepath.Join(env.HomeDir, ".ssh")
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "smelt_ai")))
 
 	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
 
@@ -516,8 +516,8 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	defer srv.Close()
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := map[string]interface{}{
 		"factory": map[string]string{"backend": "circleci"},
 		"commands": []map[string]interface{}{
@@ -530,7 +530,7 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	}
 	data, err := json.Marshal(cfg)
 	assert.NilError(t, err)
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), data, 0o644))
 
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
@@ -538,7 +538,7 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 
 	sshDir := filepath.Join(env.HomeDir, ".ssh")
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "smelt_ai")))
 
 	result := binary.RunCLIWithStdin(t, []string{
 		"validate",
@@ -589,7 +589,7 @@ func useLocalSidecar(t *testing.T, env *testenv.TestEnv, sshSrv *fakes.SSHServer
 		}
 	}
 	sshSrv.RunLocally()
-	env.Extra["CHUNK_SIDECAR_HOME"] = t.TempDir()
+	env.Extra["SMELT_SIDECAR_HOME"] = t.TempDir()
 }
 
 func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
@@ -598,7 +598,7 @@ func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
 
 	sshDir := filepath.Join(env.HomeDir, ".ssh")
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(sshDir, "chunk_ai"))
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(sshDir, "smelt_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
 	useLocalSidecar(t, env, sshSrv)
 
@@ -609,10 +609,10 @@ func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"remote","run":"true"},{"name":"local","run":"printf local > local-result","local":true}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(cfg), 0o644))
 
 	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
 
@@ -646,10 +646,10 @@ func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
 // writeRemoteProjectConfig writes a config with a single remote command.
 func writeRemoteProjectConfig(t *testing.T, workDir string) {
 	t.Helper()
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"test","run":"true","remote":true}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(cfg), 0o644))
 }
 
 // writeSidecarState writes a session-keyed sidecar state file into the test
@@ -665,7 +665,7 @@ func writeSidecarState(t *testing.T, e *testenv.TestEnv, projectRoot, sessionID,
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, filename), data, 0o644))
 }
 
-// projectDataDir mirrors config.ProjectDataDir, <XDG_DATA_HOME>/chunk/<sha256(root)>,
+// projectDataDir mirrors config.ProjectDataDir, <XDG_DATA_HOME>/smelt/<sha256(root)>,
 // derived from e.HomeDir so the parent process environment is left alone.
 func projectDataDir(t *testing.T, e *testenv.TestEnv, projectRoot string) string {
 	t.Helper()
@@ -675,7 +675,7 @@ func projectDataDir(t *testing.T, e *testenv.TestEnv, projectRoot string) string
 	realRoot, err := filepath.EvalSymlinks(projectRoot)
 	assert.NilError(t, err)
 	sum := sha256.Sum256([]byte(filepath.Clean(realRoot)))
-	return filepath.Join(e.HomeDir, ".local", "share", "chunk", fmt.Sprintf("%x", sum))
+	return filepath.Join(e.HomeDir, ".local", "share", "smelt", fmt.Sprintf("%x", sum))
 }
 
 // TestValidateHookMode_SuccessResponse verifies that a successful hook run
@@ -690,7 +690,7 @@ func TestValidateHookMode_SuccessResponse(t *testing.T) {
 		hookStdin(t, "test-session-success-line", false))
 
 	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for passing hook; stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(hookSystemMessage(t, result.Stdout), "chunk validate passed"),
+	assert.Assert(t, strings.Contains(hookSystemMessage(t, result.Stdout), "smelt validate passed"),
 		"expected completion message; got stdout: %s stderr: %s", result.Stdout, result.Stderr)
 	assert.Assert(t, !strings.Contains(result.Stdout, "validation-command-output"),
 		"command output must not contaminate hook JSON; got stdout: %s", result.Stdout)
@@ -708,10 +708,10 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 	defer srv.Close()
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"test","run":"true","remote":true}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(cfg), 0o644))
 	// Dirty tree ensures the hook actually runs.
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "dirty.txt"), []byte("x"), 0o644))
 
@@ -721,7 +721,7 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 
 	sshDir := filepath.Join(env.HomeDir, ".ssh")
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "smelt_ai")))
 
 	result := binary.RunCLIWithStdin(t, []string{
 		"validate",

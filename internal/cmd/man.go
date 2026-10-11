@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/closer"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/closer"
+	"github.com/smeltdev/smelt/internal/telemetry"
 )
 
 func newManCmd() *cobra.Command {
@@ -31,7 +33,7 @@ func newManCmd() *cobra.Command {
 			}
 			defer closer.ErrorHandler(f, &err)
 			header := &doc.GenManHeader{
-				Title:   "CHUNK",
+				Title:   strings.ToUpper(brand.Command),
 				Section: "1",
 			}
 			return doc.GenMan(cmd.Root(), header, f)

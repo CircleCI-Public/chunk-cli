@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	"github.com/smeltdev/smelt/internal/testing/binary"
 )
 
 func TestMain(m *testing.M) {
@@ -14,6 +14,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "skipping acceptance tests: %v\n", err)
 		os.Exit(0)
 	}
-	fmt.Fprintf(os.Stderr, "built chunk binary: %s\n", path)
+	fmt.Fprintf(os.Stderr, "built smelt binary: %s\n", path)
 	os.Exit(m.Run())
 }

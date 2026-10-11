@@ -6,7 +6,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
+	"github.com/smeltdev/smelt/internal/session"
 )
 
 func TestSaveAndLoadActiveSnapshot(t *testing.T) {

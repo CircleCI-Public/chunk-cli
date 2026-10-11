@@ -8,9 +8,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 func TestSidecarSnapshotCreateSendsSidecarIDInBody(t *testing.T) {

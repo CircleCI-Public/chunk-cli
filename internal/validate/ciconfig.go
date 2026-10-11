@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/ciconfig"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/ciconfig"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 // Roles a CI step can be classified into, in the order they are emitted.
@@ -142,14 +142,14 @@ var roleSpec = map[string]struct {
 	roleFormat:      {roleFormat, config.RoleAutofix, config.DefaultFormatTimeout, true},
 }
 
-// emitOrder is the order commands are written to .chunk/config.json.
+// emitOrder is the order commands are written to .smelt/config.json.
 var emitOrder = []string{roleInstall, roleTest, roleLint, roleFormatCheck, roleFormat}
 
 // commandsFromCI derives validate commands from the repo's CircleCI config,
 // which names the checks that actually gate a pull request. Commands are
 // empty when there is no config, when the config cannot be parsed, when it is
 // dynamic, or when nothing in it classifies — in every case the caller falls
-// back to filename detection, and Notes says why so `chunk init` can tell the
+// back to filename detection, and Notes says why so `smelt init` can tell the
 // user.
 //
 // At most one command is kept per role: the first match wins, so a job's

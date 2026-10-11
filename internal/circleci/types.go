@@ -38,7 +38,7 @@ type TriggerRunRequest struct {
 	CheckoutBranch     string                 `json:"checkout_branch"`
 	TriggerSource      string                 `json:"trigger_source"`
 	TriggerType        string                 `json:"trigger_type"`
-	ChunkEnvironmentID *string                `json:"chunk_environment_id,omitempty"`
+	ChunkEnvironmentID *string                `json:"chunk_environment_id,omitempty"` // CircleCI API contract: do not rename
 	Parameters         map[string]interface{} `json:"parameters"`
 	Stats              *TriggerRunStats       `json:"stats,omitempty"`
 }

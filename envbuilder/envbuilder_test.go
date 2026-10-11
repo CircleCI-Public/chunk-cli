@@ -13,7 +13,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/smeltdev/smelt/internal/httpcl"
 )
 
 // --- pure function tests ---

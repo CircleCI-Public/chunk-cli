@@ -32,7 +32,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Optional: with no secret set the key is empty and telemetry never sends.
-          CHUNK_TELEMETRY_WRITE_KEY: ${{ secrets.CHUNK_TELEMETRY_WRITE_KEY }}
+          SMELT_TELEMETRY_WRITE_KEY: ${{ secrets.SMELT_TELEMETRY_WRITE_KEY }}
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:

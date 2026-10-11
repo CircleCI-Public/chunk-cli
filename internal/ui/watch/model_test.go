@@ -11,8 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
 // groupEvents tests
@@ -399,11 +399,11 @@ func TestRender_daemonErrorIsVisibleAndStillFitsTheTerminal(t *testing.T) {
 		m.width = 100
 		m.height = height
 		m.selectedIdx = 0
-		m.daemonErr = errors.New("connect to chunk daemon: no such file")
+		m.daemonErr = errors.New("connect to smelt daemon: no such file")
 
 		out := m.render()
 
-		assert.Assert(t, strings.Contains(out, "daemon unavailable: connect to chunk daemon"),
+		assert.Assert(t, strings.Contains(out, "daemon unavailable: connect to smelt daemon"),
 			"height %d: message missing:\n%s", height, out)
 		assert.Assert(t, strings.Count(out, "\n") <= height,
 			"height %d: rendered %d lines, which would clip the message", height, strings.Count(out, "\n"))
@@ -452,7 +452,7 @@ func TestRenderFooter_updateNoticeNeverWidensFooter(t *testing.T) {
 			limit := max(width, footerWidth(m.renderFooter(m.styles())))
 
 			m.updateAvailable = "v1.2.3"
-			m.upgradeCmd = "chunk upgrade"
+			m.upgradeCmd = "smelt upgrade"
 			if got := footerWidth(m.renderFooter(m.styles())); got > limit {
 				t.Errorf("width %d, pane %v: update notice widened footer to %d (limit %d)", width, focus, got, limit)
 			}
@@ -473,10 +473,10 @@ func TestRenderFooter_updateNoticeShownWhenItFits(t *testing.T) {
 	m := New(nil, false)
 	m.width = 200
 	m.updateAvailable = "v1.2.3"
-	m.upgradeCmd = "chunk upgrade"
+	m.upgradeCmd = "smelt upgrade"
 
 	footer := m.renderFooter(m.styles())
-	if !strings.Contains(footer, "v1.2.3") || !strings.Contains(footer, "chunk upgrade") {
+	if !strings.Contains(footer, "v1.2.3") || !strings.Contains(footer, "smelt upgrade") {
 		t.Errorf("expected update notice in footer, got %q", footer)
 	}
 }
@@ -495,8 +495,8 @@ func sessionModel(own string, sidecars []sidecarInfo) Model {
 
 func TestRenderSidecarPane_singleSessionKeepsBranchLabel(t *testing.T) {
 	m := sessionModel("sessA", []sidecarInfo{
-		{id: "id1", name: "chunk-cli-sessA", sessionID: "sessA",
-			repoName: "chunk-cli", branch: "main", lastActivity: time.Now()},
+		{id: "id1", name: "smelt-sessA", sessionID: "sessA",
+			repoName: "smelt", branch: "main", lastActivity: time.Now()},
 	})
 
 	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
@@ -511,10 +511,10 @@ func TestRenderSidecarPane_singleSessionKeepsBranchLabel(t *testing.T) {
 func TestRenderSidecarPane_twoSessionsAreNamed(t *testing.T) {
 	now := time.Now()
 	m := sessionModel("aaaaaaaa-1111-2222-3333-444444444444", []sidecarInfo{
-		{id: "id1", name: "chunk-cli-aaaaaaaa", sessionID: "aaaaaaaa-1111-2222-3333-444444444444",
-			repoName: "chunk-cli", branch: "main", lastActivity: now},
-		{id: "id2", name: "chunk-cli-bbbbbbbb", sessionID: "bbbbbbbb-1111-2222-3333-444444444444",
-			repoName: "chunk-cli", branch: "main", lastActivity: now.Add(-5 * time.Minute)},
+		{id: "id1", name: "smelt-aaaaaaaa", sessionID: "aaaaaaaa-1111-2222-3333-444444444444",
+			repoName: "smelt", branch: "main", lastActivity: now},
+		{id: "id2", name: "smelt-bbbbbbbb", sessionID: "bbbbbbbb-1111-2222-3333-444444444444",
+			repoName: "smelt", branch: "main", lastActivity: now.Add(-5 * time.Minute)},
 	})
 
 	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
@@ -530,8 +530,8 @@ func TestRenderSidecarPane_twoSessionsAreNamed(t *testing.T) {
 func TestRenderSidecarPane_groupHeaderPrintedOncePerWorktree(t *testing.T) {
 	now := time.Now()
 	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", branch: "main", lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", branch: "main", lastActivity: now},
+		{id: "id1", sessionID: "sessA", repoName: "smelt", branch: "main", lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "smelt", branch: "main", lastActivity: now},
 	})
 
 	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
@@ -607,7 +607,7 @@ func tallSidecars(n int) []sidecarInfo {
 		sidecars[i] = sidecarInfo{
 			id: fmt.Sprintf("s%d", i), repoName: fmt.Sprintf("repo-%d", i), branch: "main",
 			snapshotName: "snap", lastActivity: now,
-			resources: &chunkd.Resources{SampledAt: now, CPUPercent: 5},
+			resources: &smeltd.Resources{SampledAt: now, CPUPercent: 5},
 		}
 	}
 	return sidecars
@@ -704,17 +704,17 @@ func TestRenderSidecarPane_sameBranchInTwoCheckoutsNamesTheDirectory(t *testing.
 	// worktree, so both collapse under one repo header — and the basenames match
 	// too, which is exactly why the branch alone cannot name these rows.
 	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0, lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/tmp/chunk-cli", branch: "main", projectIdx: 1,
+		{id: "id1", sessionID: "sessA", repoName: "smelt", projectName: "smelt",
+			projectPath: "/Users/j/work/smelt", branch: "main", projectIdx: 0, lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "smelt", projectName: "smelt",
+			projectPath: "/Users/j/tmp/smelt", branch: "main", projectIdx: 1,
 			lastActivity: now.Add(-1 * time.Minute)},
 	})
 
 	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
-	assert.Assert(t, strings.Contains(pane, "work/chunk-cli"), pane)
-	assert.Assert(t, strings.Contains(pane, "tmp/chunk-cli"), pane)
+	assert.Assert(t, strings.Contains(pane, "work/smelt"), pane)
+	assert.Assert(t, strings.Contains(pane, "tmp/smelt"), pane)
 }
 
 func TestRenderSidecarPane_distinctBranchesKeepTheirBranchLabels(t *testing.T) {
@@ -722,10 +722,10 @@ func TestRenderSidecarPane_distinctBranchesKeepTheirBranchLabels(t *testing.T) {
 	// Two directories of one repo on different branches: the branch already tells
 	// them apart, so nothing should change.
 	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0, lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", projectName: "chunk-cli-wt",
-			projectPath: "/Users/j/work/chunk-cli-wt", branch: "feature", projectIdx: 1,
+		{id: "id1", sessionID: "sessA", repoName: "smelt", projectName: "smelt",
+			projectPath: "/Users/j/work/smelt", branch: "main", projectIdx: 0, lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "smelt", projectName: "smelt-wt",
+			projectPath: "/Users/j/work/smelt-wt", branch: "feature", projectIdx: 1,
 			lastActivity: now.Add(-1 * time.Minute)},
 	})
 
@@ -733,7 +733,7 @@ func TestRenderSidecarPane_distinctBranchesKeepTheirBranchLabels(t *testing.T) {
 
 	assert.Assert(t, strings.Contains(pane, "main"), pane)
 	assert.Assert(t, strings.Contains(pane, "feature"), pane)
-	assert.Assert(t, !strings.Contains(pane, "work/chunk-cli"), pane)
+	assert.Assert(t, !strings.Contains(pane, "work/smelt"), pane)
 }
 
 func TestRenderSidecarPane_ambiguousBranchNamesTheDirectoryInTheGroupHeader(t *testing.T) {
@@ -741,21 +741,21 @@ func TestRenderSidecarPane_ambiguousBranchNamesTheDirectoryInTheGroupHeader(t *t
 	// One of the two checkouts is itself shared by two sessions: its group header
 	// has to name the directory, since "main" would match the other checkout.
 	m := sessionModel("sessA", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0, lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0,
+		{id: "id1", sessionID: "sessA", repoName: "smelt", projectName: "smelt",
+			projectPath: "/Users/j/work/smelt", branch: "main", projectIdx: 0, lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "smelt", projectName: "smelt",
+			projectPath: "/Users/j/work/smelt", branch: "main", projectIdx: 0,
 			lastActivity: now.Add(-1 * time.Minute)},
-		{id: "id3", sessionID: "sessC", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/tmp/chunk-cli", branch: "main", projectIdx: 1,
+		{id: "id3", sessionID: "sessC", repoName: "smelt", projectName: "smelt",
+			projectPath: "/Users/j/tmp/smelt", branch: "main", projectIdx: 1,
 			lastActivity: now.Add(-2 * time.Minute)},
 	})
 
 	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
-	assert.Assert(t, strings.Contains(pane, "work/chunk-cli"), pane)
+	assert.Assert(t, strings.Contains(pane, "work/smelt"), pane)
 	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
-	assert.Assert(t, strings.Contains(pane, "tmp/chunk-cli"), pane)
+	assert.Assert(t, strings.Contains(pane, "tmp/smelt"), pane)
 }
 
 func TestShortestUniqueSuffixes(t *testing.T) {
@@ -766,13 +766,13 @@ func TestShortestUniqueSuffixes(t *testing.T) {
 	}{
 		{
 			"colliding basenames take the parent",
-			map[int]string{0: "/Users/j/work/chunk-cli", 1: "/Users/j/tmp/chunk-cli"},
-			map[int]string{0: "work/chunk-cli", 1: "tmp/chunk-cli"},
+			map[int]string{0: "/Users/j/work/smelt", 1: "/Users/j/tmp/smelt"},
+			map[int]string{0: "work/smelt", 1: "tmp/smelt"},
 		},
 		{
 			"distinct basenames stay short",
-			map[int]string{0: "/Users/j/work/chunk-cli", 1: "/Users/j/work/chunk-cli-wt"},
-			map[int]string{0: "chunk-cli", 1: "chunk-cli-wt"},
+			map[int]string{0: "/Users/j/work/smelt", 1: "/Users/j/work/smelt-wt"},
+			map[int]string{0: "smelt", 1: "smelt-wt"},
 		},
 		{
 			"digs as deep as it must",
@@ -870,7 +870,7 @@ func TestSortByActivity_keepsWorktreeGroupsTogether(t *testing.T) {
 func TestRenderActivityPane_namesTheSelectedSession(t *testing.T) {
 	now := time.Now()
 	m := sessionModel("mine1234-abcd", []sidecarInfo{
-		{id: "id1", name: "sc-1", sessionID: "theirs99-abcd", repoName: "chunk-cli",
+		{id: "id1", name: "sc-1", sessionID: "theirs99-abcd", repoName: "smelt",
 			branch: "main", lastActivity: now},
 	})
 	m.selectedIdx = 0
@@ -885,11 +885,11 @@ func TestRenderActivityPane_namesTheSelectedSession(t *testing.T) {
 
 func TestConvertSnapshot_carriesSessionID(t *testing.T) {
 	now := time.Now()
-	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
+	snap := smeltd.Snapshot{Projects: []smeltd.ProjectSnapshot{{
 		Root:     "/tmp/repo",
 		Branch:   "main",
 		RepoName: "repo",
-		Sidecars: []chunkd.SidecarState{
+		Sidecars: []smeltd.SidecarState{
 			{ID: "id1", Name: "sc-1", SessionID: "sessA", LastActivity: now},
 			{ID: "id2", Name: "sc-2", SessionID: "sessB", LastActivity: now},
 		},
@@ -927,7 +927,7 @@ func TestConvertSnapshot_localRunGetsNoRow(t *testing.T) {
 
 func TestConvertSnapshot_projectWithOnlyLocalRunsIsEmpty(t *testing.T) {
 	now := time.Now()
-	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
+	snap := smeltd.Snapshot{Projects: []smeltd.ProjectSnapshot{{
 		Root: "/repo", Branch: "main", RepoName: "repo",
 		Events: []eventlog.Event{{Ts: now, Op: eventlog.OpValidate, Level: levelDone}},
 	}}}
@@ -945,9 +945,9 @@ func TestConvertSnapshot_resultComesFromTheLastValidateRun(t *testing.T) {
 	ev := func(ago time.Duration, id string, op eventlog.Op, level string, final bool) eventlog.Event {
 		return eventlog.Event{Ts: now.Add(-ago), SidecarID: id, Op: op, Level: level, Final: final}
 	}
-	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
+	snap := smeltd.Snapshot{Projects: []smeltd.ProjectSnapshot{{
 		Root: "/repo", Branch: "main", RepoName: "repo",
-		Sidecars: []chunkd.SidecarState{
+		Sidecars: []smeltd.SidecarState{
 			{ID: "failed-then-synced", Verified: true, LastActivity: now},
 			{ID: "only-synced", Verified: true, LastActivity: now},
 			{ID: "passed", Verified: true, LastActivity: now},
@@ -979,15 +979,15 @@ func TestConvertSnapshot_resultComesFromTheLastValidateRun(t *testing.T) {
 
 func TestConvertSnapshot_carriesVerifiedAndRunningCommands(t *testing.T) {
 	now := time.Now()
-	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
+	snap := smeltd.Snapshot{Projects: []smeltd.ProjectSnapshot{{
 		Root: "/repo", Branch: "main", RepoName: "repo",
-		Sidecars: []chunkd.SidecarState{
+		Sidecars: []smeltd.SidecarState{
 			{ID: "busy", Verified: true, LastActivity: now},
 			{ID: "quiet", Verified: true, LastActivity: now},
 		},
 		// The event log has gone quiet, but the daemon is still streaming a
 		// command on busy, so busy is running.
-		Commands: []chunkd.CommandState{
+		Commands: []smeltd.CommandState{
 			{CommandID: "c1", SidecarID: "busy", Running: true},
 			{CommandID: "c2", SidecarID: "quiet", Running: false},
 		},
@@ -1005,7 +1005,7 @@ func TestConvertSnapshot_carriesVerifiedAndRunningCommands(t *testing.T) {
 
 // twoSessionSnapshot builds a daemon snapshot for one worktree driven by two
 // sessions. localAt, when non-zero, adds a local (non-sidecar) validate run.
-func twoSessionSnapshot(aAt, bAt, localAt time.Time) chunkd.Snapshot {
+func twoSessionSnapshot(aAt, bAt, localAt time.Time) smeltd.Snapshot {
 	ev := func(ts time.Time, sidecarID string) eventlog.Event {
 		return eventlog.Event{Ts: ts, SidecarID: sidecarID, Op: eventlog.OpValidate,
 			Level: levelDone, Msg: "1/1 passed"}
@@ -1014,11 +1014,11 @@ func twoSessionSnapshot(aAt, bAt, localAt time.Time) chunkd.Snapshot {
 	if !localAt.IsZero() {
 		events = append(events, ev(localAt, ""))
 	}
-	return chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
+	return smeltd.Snapshot{Projects: []smeltd.ProjectSnapshot{{
 		Root:     "/repo",
 		Branch:   "main",
 		RepoName: "repo",
-		Sidecars: []chunkd.SidecarState{
+		Sidecars: []smeltd.SidecarState{
 			{ID: "idA", Name: "repo-sessA", SessionID: "sessA", RepoName: "repo", LastActivity: aAt},
 			{ID: "idB", Name: "repo-sessB", SessionID: "sessB", RepoName: "repo", LastActivity: bAt},
 		},

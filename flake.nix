@@ -1,5 +1,5 @@
 {
-  description = "Chunk CLI (web3technologies fork): inner loop validation for AI coding agents";
+  description = "smelt: a self-hosted software factory for AI-built code";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -13,23 +13,23 @@
       in
       {
         packages = {
-          default = self.packages.${system}.chunk;
+          default = self.packages.${system}.smelt;
 
-          chunk = pkgs.callPackage ./pkgs/chunk { };
+          smelt = pkgs.callPackage ./pkgs/smelt { };
         };
 
         apps = {
-          default = self.apps.${system}.chunk;
+          default = self.apps.${system}.smelt;
 
-          chunk = {
+          smelt = {
             type = "app";
-            program = "${self.packages.${system}.chunk}/bin/chunk";
+            program = "${self.packages.${system}.smelt}/bin/smelt";
           };
         };
 
         # Development shell
         devShells.default = pkgs.mkShell {
-          buildInputs = [ self.packages.${system}.chunk ];
+          buildInputs = [ self.packages.${system}.smelt ];
         };
       }
     );

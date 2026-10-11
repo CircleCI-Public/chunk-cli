@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/changeset"
+	"github.com/smeltdev/smelt/internal/gitexec"
 )
 
 // SnapshotTree captures the whole working state at dir as a git tree object and
@@ -42,7 +43,7 @@ import (
 // HEAD.
 func SnapshotTree(dir string) (string, error) {
 	// The index must not exist yet: git rejects an empty file as a malformed one.
-	tmp, err := os.MkdirTemp("", "chunk-index-")
+	tmp, err := os.MkdirTemp("", brand.Command+"-index-")
 	if err != nil {
 		return "", fmt.Errorf("create temp index dir: %w", err)
 	}

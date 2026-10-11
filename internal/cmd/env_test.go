@@ -9,7 +9,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
+	"github.com/smeltdev/smelt/internal/secrets"
 )
 
 func TestSecretResolveErrorOpNotInstalled(t *testing.T) {

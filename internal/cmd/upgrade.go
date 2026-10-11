@@ -8,16 +8,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
-	"github.com/CircleCI-Public/chunk-cli/internal/version"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/upgrade"
+	"github.com/smeltdev/smelt/internal/version"
 )
 
 func newUpgradeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "upgrade",
-		Short: "Upgrade chunk to the latest version",
+		Short: "Upgrade smelt to the latest version",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)
 
@@ -28,7 +29,7 @@ func newUpgradeCmd() *cobra.Command {
 
 			// Not resolved through symlinks: Run needs to see one, because the
 			// symlink task dev-install makes marks a source build.
-			installPath := os.Getenv("CHUNK_INSTALL_PATH")
+			installPath := os.Getenv(brand.Env("INSTALL_PATH"))
 			if installPath == "" {
 				execPath, err := os.Executable()
 				if err != nil {
@@ -54,11 +55,11 @@ func newUpgradeCmd() *cobra.Command {
 func upgradeError(err error) error {
 	switch {
 	case errors.Is(err, upgrade.ErrSourceBuild):
-		return newUserError("This chunk is a source build, so there is no release to upgrade to.").
+		return newUserError("This smelt is a source build, so there is no release to upgrade to.").
 			withSuggestion("Update it with: git pull && task build").
 			wrap(err)
 	case errors.Is(err, upgrade.ErrHomebrewManaged):
-		return newUserError("This chunk was installed by Homebrew, which is not this project's build.").
+		return newUserError("This smelt was installed by Homebrew, which is not this project's build.").
 			withSuggestion("Install this project's release with: " + upgrade.InstallCommand).
 			wrap(err)
 	}

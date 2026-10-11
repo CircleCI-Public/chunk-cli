@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // Op identifies the kind of operation that generated an event.

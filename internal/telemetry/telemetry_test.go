@@ -54,7 +54,7 @@ func TestSender_Track(t *testing.T) {
 	assert.NilError(t, err)
 
 	assert.NilError(t, s.Track("command_invocation", map[string]any{
-		"command": "chunk config show",
+		"command": "smelt config show",
 		"flags":   "json",
 	}))
 
@@ -63,9 +63,9 @@ func TestSender_Track(t *testing.T) {
 	assert.Equal(t, tr.Event, "command_invocation")
 	assert.Equal(t, tr.AnonymousId, instanceID.String())
 	assert.Equal(t, tr.UserId, "")
-	assert.Equal(t, tr.Properties["command"], "chunk config show")
+	assert.Equal(t, tr.Properties["command"], "smelt config show")
 	assert.Equal(t, tr.Properties["flags"], "json")
-	assert.Equal(t, tr.Context.App.Name, "chunk-cli")
+	assert.Equal(t, tr.Context.App.Name, "smelt")
 	assert.Equal(t, tr.Context.App.Version, "1.2.3")
 	assert.Equal(t, tr.Context.Device.Id, instanceID.String())
 	assert.Equal(t, tr.Context.Device.Model, "x86_64")
@@ -171,7 +171,7 @@ func TestNewSender_SendWithoutBinaryErrors(t *testing.T) {
 func TestNewSender_EmptyWriteKeyIsNoop(t *testing.T) {
 	assert.Equal(t, WriteKey, "")
 
-	s, err := NewSender(Config{Send: true, Binary: "/nonexistent/chunk"})
+	s, err := NewSender(Config{Send: true, Binary: "/nonexistent/smelt"})
 	assert.NilError(t, err)
 	assert.NilError(t, s.Track("command_invocation", nil))
 
@@ -188,7 +188,7 @@ func TestRecordForSubcommands_TracksCommandInvocation(t *testing.T) {
 	s, err := NewSender(Config{TestDestination: fake})
 	assert.NilError(t, err)
 
-	root := &cobra.Command{Use: "chunk"}
+	root := &cobra.Command{Use: "smelt"}
 	child := &cobra.Command{
 		Use: "show",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -205,8 +205,8 @@ func TestRecordForSubcommands_TracksCommandInvocation(t *testing.T) {
 
 	assert.Equal(t, len(fake.tracks), 1)
 	assert.Equal(t, fake.tracks[0].Event, "command_invocation")
-	assert.Equal(t, fake.tracks[0].Context.App.Name, "chunk-cli")
-	assert.Equal(t, fake.tracks[0].Properties["command"], "chunk show")
+	assert.Equal(t, fake.tracks[0].Context.App.Name, "smelt")
+	assert.Equal(t, fake.tracks[0].Properties["command"], "smelt show")
 	assert.Equal(t, fake.tracks[0].Properties["flags"], "json")
 	assert.Equal(t, fake.tracks[0].Properties["outcome"], "success")
 	assert.Assert(t, fake.tracks[0].Properties["duration_ms"].(int64) >= 0)
@@ -219,7 +219,7 @@ func TestRecordForSubcommands_TracksErrorOnFailure(t *testing.T) {
 	s, err := NewSender(Config{TestDestination: fake})
 	assert.NilError(t, err)
 
-	root := &cobra.Command{Use: "chunk"}
+	root := &cobra.Command{Use: "smelt"}
 	child := &cobra.Command{
 		Use: "fail",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -248,7 +248,7 @@ func TestRecordForSubcommands_SkipsDisabledCommand(t *testing.T) {
 	s, err := NewSender(Config{TestDestination: fake})
 	assert.NilError(t, err)
 
-	root := &cobra.Command{Use: "chunk"}
+	root := &cobra.Command{Use: "smelt"}
 	child := &cobra.Command{
 		Use: "receive-telemetry",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -306,7 +306,7 @@ func TestSender_Identify_JoinsInstanceIDToUser(t *testing.T) {
 	id := fake.identifies[0]
 	assert.Equal(t, id.UserId, userID.String())
 	assert.Equal(t, id.AnonymousId, instanceID.String())
-	assert.Equal(t, id.Context.App.Name, "chunk-cli")
+	assert.Equal(t, id.Context.App.Name, "smelt")
 	assert.Assert(t, !id.Timestamp.IsZero())
 }
 
@@ -364,7 +364,7 @@ func TestIdentifyUser_SetsUserIDOnCommandInvocation(t *testing.T) {
 	})
 	assert.NilError(t, err)
 
-	root := &cobra.Command{Use: "chunk"}
+	root := &cobra.Command{Use: "smelt"}
 	login := &cobra.Command{
 		Use: "login",
 		RunE: func(cmd *cobra.Command, _ []string) error {

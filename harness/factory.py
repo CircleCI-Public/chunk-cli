@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adaptively evaluate `chunk factory build` against a pinned repository baseline."""
+"""Adaptively evaluate `smelt factory build` against a pinned repository baseline."""
 
 import argparse
 import contextlib
@@ -16,7 +16,7 @@ import anyio
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
 
 REPO_ROOT = Path(__file__).parent.parent
-BINARY = REPO_ROOT / "dist" / "chunk"
+BINARY = REPO_ROOT / "dist" / "smelt"
 DEFAULT_PROMPT = REPO_ROOT / "harness/factory-prompts/session-list-failed.md"
 DEFAULT_BASELINE = REPO_ROOT / "harness/factory-baseline.json"
 DEFAULT_CONFIG = REPO_ROOT / "harness/factory-experiment.json"
@@ -47,7 +47,7 @@ def load_baseline(path: Path, target_repo: Path) -> dict:
 
 @contextlib.contextmanager
 def baseline_checkout(target_repo: Path, revision: str) -> Iterator[Path]:
-    with tempfile.TemporaryDirectory(prefix="chunk-factory-eval-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="smelt-factory-eval-") as temp_dir:
         checkout = Path(temp_dir) / "repo"
         subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(checkout), revision],
                        cwd=target_repo, check=True)
@@ -72,7 +72,7 @@ def install_setup_files(project: Path, setup_files: list[dict]) -> list[str]:
 
 
 def install_reviews(project: Path, pass_dir: Path, review_paths: list[str]) -> list[str]:
-    target = project / ".chunk/factory-eval-reviews"
+    target = project / ".smelt/factory-eval-reviews"
     captured = pass_dir / "reviews"
     target.mkdir(parents=True)
     captured.mkdir()
@@ -92,7 +92,7 @@ def run_factory(binary: Path, prompt: str, pass_dir: Path, project: Path, profil
     # Popen is intentionally kept alive while stderr is streamed to two destinations.
     # pylint: disable=consider-using-with
     command = [str(binary), "factory", "build", "--max-attempts", str(profile["attempts"]), "--json", "--verbose",
-               "--log-file", str(pass_dir / 'factory.log'), "--reviews", ".chunk/factory-eval-reviews",
+               "--log-file", str(pass_dir / 'factory.log'), "--reviews", ".smelt/factory-eval-reviews",
                "--implementer-instructions", profile.get("implementer_instructions", "")]
     for key, flag in (("reviewers", "--reviewers"), ("model", "--model"),
                       ("implement_timeout", "--implement-timeout"), ("review_timeout", "--review-timeout")):
@@ -125,7 +125,7 @@ def capture_diff(result: dict, pass_dir: Path, target_repo: Path) -> str:
     diff = ""
     if baseline and branch:
         diff = subprocess.run(
-            ["git", "diff", baseline, branch, "--", ".", ":(exclude).chunk/factory-eval-reviews"],
+            ["git", "diff", baseline, branch, "--", ".", ":(exclude).smelt/factory-eval-reviews"],
             cwd=target_repo, capture_output=True, text=True, check=False,
         ).stdout
     (pass_dir / "diff.patch").write_text(diff, encoding="utf-8")
@@ -404,7 +404,7 @@ def main() -> int:
     except ValueError as error:
         parser.error(str(error))
     if not args.skip_build:
-        print("Building chunk...")
+        print("Building smelt...")
         build_binary(binary)
 
     for record in history:

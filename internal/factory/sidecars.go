@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // reviewHead tells each reviewer how the run's request and its reusable review
@@ -30,7 +30,7 @@ The change under review is the uncommitted work in this repository: run ` +
 const reviewTail = "## Review instructions\n\n%s"
 
 // PoolName names a run's sidecar pool. Each run has a pool of its own, rather
-// than one per project reused as `chunk review` does: every member is synced
+// than one per project reused as `smelt review` does: every member is synced
 // from the run's worktree and gets a baseline commit on top of it, which a
 // later run's sync does not expect. Two runs in one project must not share
 // sidecars either.

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Fails when a tracked file outside the allowlist references something
 # CircleCI owns: its GitHub repositories and packages, its API and sites, or the
-# Segment write key chunk used to ship with. CircleCI is an opt-in backend, so
+# Segment write key the upstream project used to ship with. CircleCI is an opt-in backend, so
 # these references belong only in the packages that implement it, in docs about
-# it, and in the license attribution. The Go module path
-# (github.com/CircleCI-Public/chunk-cli/...) is not a reference and is ignored.
+# it, and in the license attribution. The README credits the upstream project on
+# one line.
 #
 # Run from anywhere: task check:circleci
 set -euo pipefail
@@ -42,11 +42,11 @@ allow=(
 	'^internal/oauth/'
 	'^internal/keyring/'
 	'^internal/config/'
-	'^internal/chunkd/server/'
+	'^internal/smeltd/server/'
 	'^internal/cmd/(auth|authhelper|validate|org|task|sidecar|prune|mutate|root)\.go$'
 	'^internal/testing/'
 	# the CircleCI-specific skills and their copies
-	'^(skills|\.agents/skills|\.claude/skills)/chunk-sidecar'
+	'^(skills|\.agents/skills|\.claude/skills)/smelt-sidecar'
 	'^skills/debug-ci-failures/'
 	# license attribution
 	'^LICENSE$'
@@ -76,8 +76,6 @@ while IFS= read -r file; do
 	fi
 	# -I skips binaries. The Go module path is stripped before matching.
 	hits=$(grep -nIE "$active" "$file" \
-		| grep -vE 'github\.com/CircleCI-Public/chunk-cli/(internal|envbuilder|skills|acceptance|cmd)' \
-		| grep -vE '^[0-9]+:module github\.com/CircleCI-Public/chunk-cli$' \
 		| grep -v 'fork of \[CircleCI-Public' || true)
 	if [ -n "$hits" ]; then
 		echo "$hits" | sed "s|^|${file}:|"

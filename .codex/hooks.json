@@ -4,9 +4,9 @@
       {
         "hooks": [
           {
-            "command": "chunk validate",
+            "command": "smelt validate",
             "if": "Bash(git commit*)",
-            "statusMessage": "Running chunk validate if this is a commit",
+            "statusMessage": "Running smelt validate if this is a commit",
             "timeout": 600,
             "type": "command"
           }
@@ -18,8 +18,8 @@
       {
         "hooks": [
           {
-            "command": "chunk validate",
-            "statusMessage": "Running chunk validate",
+            "command": "smelt validate",
+            "statusMessage": "Running smelt validate",
             "timeout": 600,
             "type": "command"
           }

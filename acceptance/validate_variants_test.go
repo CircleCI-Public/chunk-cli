@@ -10,12 +10,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
-	"github.com/CircleCI-Public/chunk-cli/internal/variants"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/testing/recorder"
+	"github.com/smeltdev/smelt/internal/variants"
 )
 
 // writeVariantsFile writes a variants JSON file to dir and returns its path.
@@ -28,11 +28,11 @@ func writeVariantsFile(t *testing.T, dir string, vs []variants.Variant) string {
 	return path
 }
 
-// writeChunkConfig writes a minimal .chunk/config.json with one remote command.
-func writeChunkConfig(t *testing.T, dir string, extra map[string]interface{}) {
+// writeSmeltConfig writes a minimal .smelt/config.json with one remote command.
+func writeSmeltConfig(t *testing.T, dir string, extra map[string]interface{}) {
 	t.Helper()
-	chunkDir := filepath.Join(dir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(dir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := map[string]interface{}{
 		"factory": map[string]string{"backend": "circleci"},
 		"commands": []map[string]interface{}{
@@ -44,7 +44,7 @@ func writeChunkConfig(t *testing.T, dir string, extra map[string]interface{}) {
 	}
 	data, err := json.Marshal(cfg)
 	assert.NilError(t, err)
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), data, 0o644))
 }
 
 func filterVariantRequests(reqs []recorder.RecordedRequest, method, pathPrefix string) []recorder.RecordedRequest {
@@ -109,7 +109,7 @@ func TestValidateVariantsMissingToken(t *testing.T) {
 	env.CircleToken = ""
 
 	workDir := env.HomeDir
-	writeChunkConfig(t, workDir, nil)
+	writeSmeltConfig(t, workDir, nil)
 	path := writeVariantsFile(t, workDir, []variants.Variant{
 		{ID: "MUT-001", Description: "test"},
 	})
@@ -132,10 +132,10 @@ func TestValidateVariantsNoRemoteCommands(t *testing.T) {
 
 	workDir := env.HomeDir
 	// Write config with only explicitly local commands.
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"test","run":"go test ./...","local":true}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(cfg), 0o644))
 
 	path := writeVariantsFile(t, workDir, []variants.Variant{
 		{ID: "MUT-001"},
@@ -171,7 +171,7 @@ func TestValidateVariantsNamedCommand(t *testing.T) {
 	// A git repo with an origin remote, so the remote workspace resolves to the
 	// same <sidecarHome>/<repo> the rest of the CLI syncs into.
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	writeChunkConfig(t, workDir, nil)
+	writeSmeltConfig(t, workDir, nil)
 	path := writeVariantsFile(t, workDir, []variants.Variant{
 		{ID: "MUT-001"},
 	})
@@ -197,7 +197,7 @@ func TestValidateVariantsUnknownNamedCommand(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	workDir := env.HomeDir
-	writeChunkConfig(t, workDir, nil)
+	writeSmeltConfig(t, workDir, nil)
 	path := writeVariantsFile(t, workDir, []variants.Variant{
 		{ID: "MUT-001"},
 	})
@@ -220,7 +220,7 @@ func TestValidateVariantsCreatesAndDeletesSidecars(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	writeChunkConfig(t, workDir, nil)
+	writeSmeltConfig(t, workDir, nil)
 	path := writeVariantsFile(t, workDir, []variants.Variant{
 		{ID: "MUT-001"},
 		{ID: "MUT-002"},
@@ -257,7 +257,7 @@ func TestValidateVariantsImageFromConfig(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	writeChunkConfig(t, workDir, map[string]interface{}{
+	writeSmeltConfig(t, workDir, map[string]interface{}{
 		"validation": map[string]interface{}{
 			"sidecarImage": "snap-from-config",
 		},
@@ -305,7 +305,7 @@ func TestValidateVariantsWorkdirFlagOverridesDetection(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	workDir := t.TempDir()
-	writeChunkConfig(t, workDir, nil)
+	writeSmeltConfig(t, workDir, nil)
 	path := writeVariantsFile(t, workDir, []variants.Variant{
 		{ID: "MUT-001"},
 	})

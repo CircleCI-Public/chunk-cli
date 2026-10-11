@@ -5,7 +5,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
+	"github.com/smeltdev/smelt/internal/ui/watch"
 )
 
 // Paths given to a remote watch are paths on the daemon's host, so they are
@@ -20,16 +20,16 @@ func TestRemoteProjectsKeepsDaemonHostPathsVerbatim(t *testing.T) {
 }
 
 func TestRunRemoteWatchRequiresAToken(t *testing.T) {
-	t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", "127.0.0.1:1")
-	t.Setenv("CHUNK_DAEMON_TCP_TOKEN", "")
+	t.Setenv("SMELT_DAEMON_REMOTE_ADDR", "127.0.0.1:1")
+	t.Setenv("SMELT_DAEMON_TCP_TOKEN", "")
 
 	err := runRemoteWatch(newWatchCmd(), false, nil)
-	assert.ErrorContains(t, err, "CHUNK_DAEMON_TCP_TOKEN")
+	assert.ErrorContains(t, err, "SMELT_DAEMON_TCP_TOKEN")
 }
 
 func TestRunRemoteWatchFocusNeedsARemotePath(t *testing.T) {
-	t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", "127.0.0.1:1")
-	t.Setenv("CHUNK_DAEMON_TCP_TOKEN", "tok")
+	t.Setenv("SMELT_DAEMON_REMOTE_ADDR", "127.0.0.1:1")
+	t.Setenv("SMELT_DAEMON_TCP_TOKEN", "tok")
 
 	err := runRemoteWatch(newWatchCmd(), true, nil)
 	assert.ErrorContains(t, err, "--focus needs at least one path")

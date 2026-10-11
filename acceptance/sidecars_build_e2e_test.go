@@ -15,7 +15,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	"github.com/smeltdev/smelt/internal/testing/binary"
 )
 
 //go:embed repos.json
@@ -39,11 +39,11 @@ var knownRepos = func() []repoEntry {
 	return repos
 }()
 
-// resolveRepos parses CHUNK_SIDECAR_REPOS (comma-separated nicknames or Git
+// resolveRepos parses SMELT_SIDECAR_REPOS (comma-separated nicknames or Git
 // URLs). If unset, all knownRepos are returned.
 func resolveRepos(t *testing.T) []repoEntry {
 	t.Helper()
-	raw := os.Getenv("CHUNK_SIDECAR_REPOS")
+	raw := os.Getenv("SMELT_SIDECAR_REPOS")
 	if raw == "" {
 		return knownRepos
 	}
@@ -79,18 +79,18 @@ func resolveRepos(t *testing.T) []repoEntry {
 }
 
 // TestSidecarsBuildEndToEnd clones real open-source repos, runs
-// `chunk sidecars build` to generate a Dockerfile.test, builds the image,
+// `smelt sidecars build` to generate a Dockerfile.test, builds the image,
 // and runs the tests inside the container.
 //
-// Enable with: CHUNK_ENV_BUILDER_ACCEPTANCE=1
+// Enable with: SMELT_ENV_BUILDER_ACCEPTANCE=1
 // Requires: git and docker accessible without sudo.
 //
-// To run a specific subset, set CHUNK_SIDECAR_REPOS to a comma-separated list
+// To run a specific subset, set SMELT_SIDECAR_REPOS to a comma-separated list
 // of known nicknames (e.g. "flask,serde") or full Git URLs
 // (e.g. "https://github.com/owner/repo.git"), or a mix of both.
 func TestSidecarsBuildEndToEnd(t *testing.T) {
-	if os.Getenv("CHUNK_ENV_BUILDER_ACCEPTANCE") == "" {
-		t.Skip("set CHUNK_ENV_BUILDER_ACCEPTANCE=1 to run")
+	if os.Getenv("SMELT_ENV_BUILDER_ACCEPTANCE") == "" {
+		t.Skip("set SMELT_ENV_BUILDER_ACCEPTANCE=1 to run")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not found in PATH")
@@ -101,22 +101,22 @@ func TestSidecarsBuildEndToEnd(t *testing.T) {
 
 	repos := resolveRepos(t)
 
-	cacheDir := os.Getenv("CHUNK_SIDECAR_CACHE_DIR")
+	cacheDir := os.Getenv("SMELT_SIDECAR_CACHE_DIR")
 
 	for _, repo := range repos {
 		t.Run(repo.Name, func(t *testing.T) {
 			var cloneDir string
 			if cacheDir != "" {
-				cloneDir = cacheDir + "/chunk-sidecar-" + repo.Name
+				cloneDir = cacheDir + "/smelt-sidecar-" + repo.Name
 			} else {
 				cloneDir = t.TempDir()
 			}
 			e2eCloneRepo(t, repo.URL, repo.Ref, cloneDir)
 
-			t.Log("Running chunk sidecar env...")
+			t.Log("Running smelt sidecar env...")
 			envJSON, envStderr, exitCode := e2eRunEnv(t, cloneDir)
 			assert.Equal(t, exitCode, 0,
-				"chunk sidecar env failed\nstdout: %s\nstderr: %s", envJSON, envStderr)
+				"smelt sidecar env failed\nstdout: %s\nstderr: %s", envJSON, envStderr)
 			t.Log(envStderr)
 			t.Log(envJSON)
 
@@ -127,16 +127,16 @@ func TestSidecarsBuildEndToEnd(t *testing.T) {
 			)
 
 			// Env-only mode: stop here so the harness can decide whether to build.
-			if os.Getenv("CHUNK_SIDECAR_ENV_ONLY") == "1" {
+			if os.Getenv("SMELT_SIDECAR_ENV_ONLY") == "1" {
 				return
 			}
 
-			tag := "chunk-sidecar-" + repo.Name + "-test"
+			tag := "smelt-sidecar-" + repo.Name + "-test"
 
 			t.Log("Building Docker image...")
 			buildOutput, buildExitCode := e2eRunBuild(t, cloneDir, tag, envJSON)
 			assert.Equal(t, buildExitCode, 0,
-				"chunk sidecar build failed\n%s", lastLines(buildOutput, 30))
+				"smelt sidecar build failed\n%s", lastLines(buildOutput, 30))
 
 			_, err := os.Stat(cloneDir + "/Dockerfile.test")
 			assert.NilError(t, err, "Dockerfile.test not created")
@@ -201,7 +201,7 @@ func e2eRunEnv(t *testing.T, dir string) (stdout, stderr string, exitCode int) {
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
 		"NO_COLOR=1",
-		"CHUNK_NO_TELEMETRY=1",
+		"SMELT_NO_TELEMETRY=1",
 	}
 
 	var outBuf, errBuf bytes.Buffer
@@ -228,7 +228,7 @@ func e2eRunBuild(t *testing.T, dir, tag, envJSON string) (output string, exitCod
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
 		"NO_COLOR=1",
-		"CHUNK_NO_TELEMETRY=1",
+		"SMELT_NO_TELEMETRY=1",
 	}
 	cmd.Stdin = strings.NewReader(envJSON)
 	var outBuf bytes.Buffer

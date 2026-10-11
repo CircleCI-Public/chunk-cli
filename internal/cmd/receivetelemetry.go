@@ -3,11 +3,11 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry/receiver"
+	"github.com/smeltdev/smelt/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/telemetry/receiver"
 )
 
-// newReceiveTelemetryCmd builds the hidden receive-telemetry command. chunk
+// newReceiveTelemetryCmd builds the hidden receive-telemetry command. smelt
 // re-execs itself with this subcommand to deliver buffered telemetry events
 // out of process (see internal/telemetry/delegate.go): the parent serializes
 // events as JSON to this command's stdin, and this command forwards them to

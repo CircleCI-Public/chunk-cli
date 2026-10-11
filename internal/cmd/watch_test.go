@@ -8,11 +8,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
-// registerProject writes the project-root breadcrumb chunk drops for every
+// registerProject writes the project-root breadcrumb smelt drops for every
 // project it has seen, so AllProjectRoots discovers root. It returns the root as
 // AllProjectRoots reports it — canonical, symlinks resolved — which is not the
 // string passed in when the path runs through one (every darwin temp dir does).

@@ -17,12 +17,13 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // LabelSandbox marks built images with the repo slug, so a later clean can
 // find and prune old tags.
-const LabelSandbox = "com.circleci.chunk.sandbox"
+const LabelSandbox = brand.LabelPrefix + "sandbox"
 
 // logTailLines is how much of a failed build's log is kept for the error.
 const logTailLines = 150

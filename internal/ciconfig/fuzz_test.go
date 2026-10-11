@@ -8,7 +8,7 @@ import (
 
 // FuzzExtract checks that no config can make Extract panic. The file is
 // whatever the repo being initialised happens to contain, so a panic here
-// would take down `chunk init` on a repo the user cannot easily change.
+// would take down `smelt init` on a repo the user cannot easily change.
 //
 // Without -fuzz this still runs the seed corpus as a regression test.
 func FuzzExtract(f *testing.F) {

@@ -9,7 +9,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 func cfgWith(t *testing.T, body string) *config.ProjectConfig {
@@ -25,19 +25,19 @@ func TestResolveBuildSettingsBuildsOnlyDockerfileImages(t *testing.T) {
 	streams := discardStreams()
 
 	// A user-managed image passes through untouched, with no Docker involved.
-	cfg := cfgWith(t, `{"factory":{"backend":"docker","image":"chunk-sandbox:local","dockerfile":"Dockerfile.chunk"}}`)
+	cfg := cfgWith(t, `{"factory":{"backend":"docker","image":"smelt-sandbox:local","dockerfile":"Dockerfile.smelt"}}`)
 	got, err := resolveBuildSettings(context.Background(), streams, root, factorySettings{Attempts: 3}, factoryExplicit{}, cfg)
 	assert.NilError(t, err)
-	assert.Equal(t, got.Image, "chunk-sandbox:local")
+	assert.Equal(t, got.Image, "smelt-sandbox:local")
 	assert.Equal(t, got.ImageSource, imageFromConfig)
 
 	// A managed one is built, which needs its Dockerfile.
-	cfg = cfgWith(t, `{"factory":{"backend":"docker","dockerfile":"Dockerfile.chunk"}}`)
+	cfg = cfgWith(t, `{"factory":{"backend":"docker","dockerfile":"Dockerfile.smelt"}}`)
 	_, err = resolveBuildSettings(context.Background(), streams, root, factorySettings{Attempts: 3}, factoryExplicit{}, cfg)
-	assert.Equal(t, userMsg(err), "Could not read Dockerfile.chunk.")
+	assert.Equal(t, userMsg(err), "Could not read Dockerfile.smelt.")
 
 	// With the Dockerfile present it gets as far as Docker, which is unreachable here.
-	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.chunk"), []byte("FROM x\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(root, "Dockerfile.smelt"), []byte("FROM x\n"), 0o644))
 	_, err = resolveBuildSettings(context.Background(), streams, root, factorySettings{Attempts: 3}, factoryExplicit{}, cfg)
 	assert.Assert(t, err != nil)
 }
@@ -45,9 +45,9 @@ func TestResolveBuildSettingsBuildsOnlyDockerfileImages(t *testing.T) {
 func TestPrepareDockerfileKeepsAnExistingFile(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
 	root := t.TempDir()
-	path := filepath.Join(root, "Dockerfile.chunk")
+	path := filepath.Join(root, "Dockerfile.smelt")
 	assert.NilError(t, os.WriteFile(path, []byte("FROM mine\n"), 0o644))
-	assert.NilError(t, prepareDockerfile(context.Background(), discardStreams(), root, "Dockerfile.chunk", cfgWith(t, `{}`), false))
+	assert.NilError(t, prepareDockerfile(context.Background(), discardStreams(), root, "Dockerfile.smelt", cfgWith(t, `{}`), false))
 	got, err := os.ReadFile(path)
 	assert.NilError(t, err)
 	assert.Equal(t, string(got), "FROM mine\n")
@@ -56,9 +56,9 @@ func TestPrepareDockerfileKeepsAnExistingFile(t *testing.T) {
 func TestPrepareDockerfileRegenerateNeedsDocker(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:1")
 	root := t.TempDir()
-	path := filepath.Join(root, "Dockerfile.chunk")
+	path := filepath.Join(root, "Dockerfile.smelt")
 	assert.NilError(t, os.WriteFile(path, []byte("FROM mine\n"), 0o644))
-	err := prepareDockerfile(context.Background(), discardStreams(), root, "Dockerfile.chunk", cfgWith(t, `{}`), true)
+	err := prepareDockerfile(context.Background(), discardStreams(), root, "Dockerfile.smelt", cfgWith(t, `{}`), true)
 	assert.Assert(t, err != nil)
 	got, readErr := os.ReadFile(path)
 	assert.NilError(t, readErr)

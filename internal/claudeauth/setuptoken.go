@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // setupTimeout bounds the whole flow. It is a browser round trip with a human

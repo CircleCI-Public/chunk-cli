@@ -11,10 +11,10 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sandboximage"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sandboximage"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // withFakeGenerator replaces Docker-backed rendering for one test.
@@ -77,7 +77,7 @@ func TestInitManagedImageKeepsAnExistingDockerfile(t *testing.T) {
 func TestInitManagedImageLeavesAnExplicitImageAlone(t *testing.T) {
 	calls := withFakeGenerator(t, "FROM generated\n")
 	dir := pnpmRepo(t)
-	cfg := &config.ProjectConfig{Factory: &config.FactoryConfig{Backend: config.BackendDocker, Image: "chunk-sandbox:local"}}
+	cfg := &config.ProjectConfig{Factory: &config.FactoryConfig{Backend: config.BackendDocker, Image: "smelt-sandbox:local"}}
 
 	initManagedImage(context.Background(), dir, discardStreams(), cfg, initFactoryOptions{SkipImageBuild: true})
 

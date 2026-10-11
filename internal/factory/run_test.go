@@ -11,12 +11,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 // A run that fails before the implementer starts leaves nothing behind: its
@@ -118,7 +118,7 @@ func TestCommitWorkCommitsAfterACancelAndAFailedPull(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	assert.Assert(t, commitWork(cancelled, steps, wt, "chunk factory: add a flag", status))
+	assert.Assert(t, commitWork(cancelled, steps, wt, "smelt factory: add a flag", status))
 
 	assert.Equal(t, len(warnings), 1, "%v", warnings)
 	assert.Assert(t, strings.HasPrefix(warnings[0], "could not bring back the implementer's last changes"), warnings[0])
@@ -183,7 +183,7 @@ func TestRunSummary(t *testing.T) {
 		model     string
 		want      string
 	}{
-		{"all fields", "docker", "chunk-sandbox:local", 5, 2, "opus", "Factory run: backend=docker image=chunk-sandbox:local attempts=5 reviewers=2 model=opus"},
+		{"all fields", "docker", "smelt-sandbox:local", 5, 2, "opus", "Factory run: backend=docker image=smelt-sandbox:local attempts=5 reviewers=2 model=opus"},
 		{"empty image and model", "docker", "", 5, 2, "", "Factory run: backend=docker image=default attempts=5 reviewers=2 model=default"},
 		{"empty backend", "", "img", 1, 1, "m", "Factory run: backend=circleci image=img attempts=1 reviewers=1 model=m"},
 		{"zero reviewers", "docker", "img", 1, 0, "m", "Factory run: backend=docker image=img attempts=1 reviewers=0 model=m"},

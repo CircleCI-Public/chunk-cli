@@ -11,12 +11,13 @@ import (
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
-	"github.com/CircleCI-Public/chunk-cli/internal/version"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/session"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/upgrade"
+	"github.com/smeltdev/smelt/internal/version"
 )
 
 type updateCheckKey struct{}
@@ -25,7 +26,7 @@ func NewRootCmd(version string) *cobra.Command {
 	cobra.EnableTraverseRunHooks = true
 
 	rootCmd := &cobra.Command{
-		Use:           "chunk",
+		Use:           brand.Command,
 		Short:         "Generate AI review context and trigger AI coding tasks",
 		Version:       version,
 		SilenceErrors: true,
@@ -59,12 +60,12 @@ func NewRootCmd(version string) *cobra.Command {
 
 	rootCmd.SetHelpTemplate(rootCmd.HelpTemplate() + `
 Getting started:
-  chunk init                    Initialize project configuration
-  chunk auth login              Log in to CircleCI via browser (recommended)
-  chunk auth set <provider>     Store a credential manually (circleci, anthropic, github)
-  chunk build-prompt            Generate a review prompt from GitHub PR comments
-  chunk task config             Set up CircleCI task configuration
-  chunk task run --definition <name> --prompt "<task>"
+  smelt init                    Initialize project configuration
+  smelt auth login              Log in to CircleCI via browser (recommended)
+  smelt auth set <provider>     Store a credential manually (circleci, anthropic, github)
+  smelt build-prompt            Generate a review prompt from GitHub PR comments
+  smelt task config             Set up CircleCI task configuration
+  smelt task run --definition <name> --prompt "<task>"
                                 Trigger an AI coding task
 
 Environment Variables:
@@ -76,18 +77,18 @@ Environment Variables:
   CIRCLECI_BASE_URL               CircleCI API URL [default: https://circleci.com]
   ANTHROPIC_BASE_URL              Anthropic API URL [default: https://api.anthropic.com]
   GITHUB_API_URL                  GitHub API URL [default: https://api.github.com]
-  CHUNK_SESSION_ID                Agent session identity; keeps parallel sessions on separate sidecar pools
+  SMELT_SESSION_ID                Agent session identity; keeps parallel sessions on separate sidecar pools
                                   (read from CLAUDE_CODE_SESSION_ID when unset)
   NO_COLOR                        Disable colored output
   CI                              Disable interactive prompts (set by most CI systems); also disables telemetry
-  CHUNK_NO_TELEMETRY              Disable usage telemetry (any non-empty value)
+  SMELT_NO_TELEMETRY              Disable usage telemetry (any non-empty value)
   NO_ANALYTICS                    Disable usage telemetry (any non-empty value)
   DO_NOT_TRACK                    Disable usage telemetry (any non-empty value)
 
 Configuration:
-  ~/.config/chunk/config.json     User credentials and settings ($XDG_CONFIG_HOME/chunk/config.json)
-  .chunk/config.json              Project settings (per repository)
-  .chunk/run.json                 Task run configuration (chunk task config)
+  ~/.config/smelt/config.json     User credentials and settings ($XDG_CONFIG_HOME/smelt/config.json)
+  .smelt/config.json              Project settings (per repository)
+  .smelt/run.json                 Task run configuration (smelt task config)
 `)
 
 	rootCmd.AddCommand(newInitCmd())
@@ -118,8 +119,8 @@ Configuration:
 	rootCmd.PersistentFlags().Bool("insecure-storage", false, "do not use the system's secure storage for storing tokens")
 	_ = rootCmd.PersistentFlags().MarkHidden("insecure-storage")
 
-	rootCmd.PersistentFlags().Bool("daemon", false, "auto-launch the chunk daemon for this run even if autoLaunchDaemon is disabled")
-	rootCmd.PersistentFlags().Bool("no-daemon", false, "skip the chunk daemon for this run even if autoLaunchDaemon is enabled")
+	rootCmd.PersistentFlags().Bool("daemon", false, "auto-launch the smelt daemon for this run even if autoLaunchDaemon is disabled")
+	rootCmd.PersistentFlags().Bool("no-daemon", false, "skip the smelt daemon for this run even if autoLaunchDaemon is enabled")
 
 	telemetry.RecordForSubcommands(rootCmd)
 
@@ -194,7 +195,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 
 	executable, err := os.Executable()
 	if err != nil {
-		executable = "chunk"
+		executable = brand.Command
 	}
 
 	// Only gather host info when telemetry will actually be sent. Skipping
@@ -210,7 +211,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 
 	tc, err := telemetry.NewSender(telemetry.Config{
 		Send:     send,
-		Log:      optedIn && os.Getenv("CHUNK_TELEMETRY_LOG") != "",
+		Log:      optedIn && os.Getenv(brand.Env("TELEMETRY_LOG")) != "",
 		WriteKey: telemetry.WriteKey,
 		Binary:   executable,
 		Metadata: telemetry.Meta{
@@ -235,7 +236,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 
 // noUpdateCheckCommands are commands that must not run the update check.
 // Completion helpers run on every TAB press and receive-telemetry is re-execed
-// by every chunk invocation, so checking there would burn through GitHub's
+// by every smelt invocation, so checking there would burn through GitHub's
 // unauthenticated rate limit; upgrade would compare against the version it is
 // replacing; watch renders its own notice in the TUI footer; and the daemon
 // has no terminal to print one to.
@@ -246,7 +247,7 @@ var noUpdateCheckCommands = map[string]bool{
 	"receive-telemetry":             true,
 	"upgrade":                       true,
 	watchCmdName:                    true,
-	chunkd.DaemonSubcommand:         true,
+	smeltd.DaemonSubcommand:         true,
 }
 
 // skipUpdateCheck reports whether cmd, or any command it is nested under, is
@@ -282,10 +283,10 @@ var noAutoLaunchCommands = map[string]bool{
 	"completion":                    true,
 	"receive-telemetry":             true,
 	watchCmdName:                    true,
-	chunkd.DaemonSubcommand:         true,
+	smeltd.DaemonSubcommand:         true,
 }
 
-// shouldAutoLaunch reports whether the chunk daemon should be auto-launched
+// shouldAutoLaunch reports whether the smelt daemon should be auto-launched
 // for cmd. It checks (in order): the skip list, --no-daemon, --daemon, and
 // finally the autoLaunchDaemon user setting.
 func shouldAutoLaunch(cmd *cobra.Command) bool {
@@ -307,7 +308,7 @@ func shouldAutoLaunch(cmd *cobra.Command) bool {
 	return cfg.AutoLaunchDaemon
 }
 
-// maybeAutoLaunchDaemon starts the chunk daemon if autoLaunchDaemon is
+// maybeAutoLaunchDaemon starts the smelt daemon if autoLaunchDaemon is
 // configured (or --daemon is passed) and the command is not excluded. When
 // --daemon was passed explicitly, a startup failure is returned so the user
 // sees it; otherwise errors are silently ignored because the daemon is an
@@ -316,12 +317,12 @@ func maybeAutoLaunchDaemon(cmd *cobra.Command) error {
 	if !shouldAutoLaunch(cmd) {
 		return nil
 	}
-	err := chunkd.EnsureRunning()
+	err := smeltd.EnsureRunning()
 	if err == nil {
 		return nil
 	}
 	if daemon, flagErr := cmd.Flags().GetBool("daemon"); flagErr == nil && daemon {
-		return fmt.Errorf("start chunk daemon: %w", err)
+		return fmt.Errorf("start smelt daemon: %w", err)
 	}
 	return nil
 }
@@ -350,6 +351,6 @@ func printUpdateNotice(cmd *cobra.Command) {
 	// Release tags carry a "v" and the ldflags version does not, so the running
 	// version gets one to read as the same kind of thing as the tag beside it.
 	current := "v" + strings.TrimPrefix(version.Value, "v")
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of chunk is available: %s → %s\nRun: %s\nWhat's new: %s\n",
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of smelt is available: %s → %s\nRun: %s\nWhat's new: %s\n",
 		current, latest, upgrade.SelfUpgradeCommand(), upgrade.ReleaseURL(latest))
 }

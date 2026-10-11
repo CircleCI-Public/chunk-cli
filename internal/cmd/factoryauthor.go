@@ -8,11 +8,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func newFactoryAuthorCmd() *cobra.Command {
@@ -24,15 +24,15 @@ func newFactoryAuthorCmd() *cobra.Command {
 Those commits are the ones a published PR carries.
 
 With no argument, print the author runs in this repository use and where it
-comes from: factory.author in .chunk/config.json, else your git user.name and
-user.email, else chunk.
+comes from: factory.author in .smelt/config.json, else your git user.name and
+user.email, else smelt.
 
-With an argument, save it as factory.author. .chunk/config.json is committed,
+With an argument, save it as factory.author. .smelt/config.json is committed,
 so everyone who runs the factory in this repository then commits as that
 author. --unset removes it, so each person commits as themselves again.`,
-		Example: `  chunk factory author
-  chunk factory author "Ada Lovelace <ada@example.com>"
-  chunk factory author --unset`,
+		Example: `  smelt factory author
+  smelt factory author "Ada Lovelace <ada@example.com>"
+  smelt factory author --unset`,
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -43,7 +43,7 @@ author. --unset removes it, so each person commits as themselves again.`,
 	return cmd
 }
 
-// authorChange is what `chunk factory author` was asked to do to factory.author.
+// authorChange is what `smelt factory author` was asked to do to factory.author.
 type authorChange struct {
 	// Write is false when the command only shows the author.
 	Write bool
@@ -96,12 +96,12 @@ func runFactoryAuthor(ctx context.Context, streams iostream.Streams, args []stri
 	case errors.Is(err, os.ErrNotExist) && !change.Write:
 		cfg = &config.ProjectConfig{}
 	case errors.Is(err, os.ErrNotExist):
-		return newUserError("This repository has no .chunk/config.json yet.").
-			withSuggestion("Run chunk init first.").
+		return newUserError("This repository has no .smelt/config.json yet.").
+			withSuggestion("Run smelt init first.").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	default:
-		return &userError{msg: "Could not read .chunk/config.json.", err: err}
+		return &userError{msg: "Could not read .smelt/config.json.", err: err}
 	}
 
 	if change.Write {
@@ -117,7 +117,7 @@ func runFactoryAuthor(ctx context.Context, streams iostream.Streams, args []stri
 	configured, _ := cfg.Factory.CommitAuthor()
 	streams.Println(describeAuthor(factory.ResolveAuthor(ctx, root, configured)))
 	if change.Value != "" {
-		streams.ErrPrintln(ui.Dim("factory.author is in .chunk/config.json, which is committed: everyone who runs the factory here commits as this author."))
+		streams.ErrPrintln(ui.Dim("factory.author is in .smelt/config.json, which is committed: everyone who runs the factory here commits as this author."))
 	}
 	return nil
 }
@@ -127,7 +127,7 @@ func describeAuthor(r factory.ResolvedAuthor) string {
 	var source string
 	switch r.Source {
 	case factory.AuthorFromConfig:
-		source = "factory.author in .chunk/config.json"
+		source = "factory.author in .smelt/config.json"
 	case factory.AuthorFromGit:
 		source = "your git identity"
 	case factory.AuthorDefault:
@@ -141,7 +141,7 @@ func describeAuthor(r factory.ResolvedAuthor) string {
 // to save, "" to keep using the developer's own identity; ok is false when the
 // user cancelled or the prompt could not be shown.
 func askAuthor(streams iostream.Streams, developer factory.ResolvedAuthor) (value string, ok bool) {
-	current := "chunk (no git identity is set)"
+	current := "smelt (no git identity is set)"
 	if developer.Source == factory.AuthorFromGit {
 		current = "Me, from git: " + developer.String()
 	}
@@ -160,7 +160,7 @@ func askAuthor(streams iostream.Streams, developer factory.ResolvedAuthor) (valu
 	}
 	author, err := config.ParseCommitAuthor(answer)
 	if err != nil {
-		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Not saving the author: %v. Set it later with chunk factory author.", err)))
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Not saving the author: %v. Set it later with smelt factory author.", err)))
 		return "", false
 	}
 	return author.String(), true

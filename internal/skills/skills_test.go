@@ -7,8 +7,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/skills"
-	embeddedSkills "github.com/CircleCI-Public/chunk-cli/skills"
+	"github.com/smeltdev/smelt/internal/skills"
+	embeddedSkills "github.com/smeltdev/smelt/skills"
 )
 
 // skillNames is read off the registry rather than repeated, so adding a skill
@@ -100,14 +100,14 @@ func TestInstallDetectsOutdated(t *testing.T) {
 	skills.Install(skills.ScopeUser, home)
 
 	// Tamper with one skill file to make it outdated.
-	path := filepath.Join(home, ".claude", "skills", "chunk-review", "SKILL.md")
+	path := filepath.Join(home, ".claude", "skills", "smelt-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(path, []byte("old content"), 0o644))
 
 	results := skills.Install(skills.ScopeUser, home)
 	claude := results[0]
 	assert.Equal(t, len(claude.Installed), 0)
 	assert.Equal(t, len(claude.Updated), 1)
-	assert.Equal(t, claude.Updated[0], "chunk-review")
+	assert.Equal(t, claude.Updated[0], "smelt-review")
 }
 
 func TestInstallContentMatchesEmbedded(t *testing.T) {
@@ -211,7 +211,7 @@ func TestStatusOutdated(t *testing.T) {
 	skills.Install(skills.ScopeUser, home)
 
 	// Tamper with a skill.
-	path := filepath.Join(home, ".claude", "skills", "chunk-review", "SKILL.md")
+	path := filepath.Join(home, ".claude", "skills", "smelt-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(path, []byte("tampered"), 0o644))
 
 	statuses := skills.Status(skills.ScopeUser, home)
@@ -223,7 +223,7 @@ func TestStatusOutdated(t *testing.T) {
 	}
 
 	for _, s := range claude.Skills {
-		if s.Name == "chunk-review" {
+		if s.Name == "smelt-review" {
 			assert.Equal(t, s.State, skills.StateOutdated)
 		} else {
 			assert.Equal(t, s.State, skills.StateCurrent)
@@ -278,7 +278,7 @@ func TestStatusProjectScopeAlwaysAvailable(t *testing.T) {
 
 func TestSkillStateDetectsStates(t *testing.T) {
 	dir := t.TempDir()
-	s := skills.All[0] // chunk-testing-gaps
+	s := skills.All[0] // smelt-testing-gaps
 
 	// Missing: no file at all.
 	assert.Equal(t, skills.SkillState(dir, s), skills.StateMissing)

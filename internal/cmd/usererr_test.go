@@ -9,12 +9,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/telemetry"
 )
 
-// The API being behind this binary must not be reported as "upgrade chunk":
+// The API being behind this binary must not be reported as "upgrade smelt":
 // there is nothing newer to install, and that advice sends someone in exactly
 // the wrong direction.
 func TestOutdatedSidecarAPIPointsTheRightWay(t *testing.T) {
@@ -24,7 +24,7 @@ func TestOutdatedSidecarAPIPointsTheRightWay(t *testing.T) {
 	um, ok := err.(interface{ UserMessage() string })
 	assert.Assert(t, ok)
 	assert.Check(t, strings.Contains(um.UserMessage(), "needs a newer"), "got %q", um.UserMessage())
-	assert.Check(t, !strings.Contains(strings.ToLower(um.UserMessage()), "upgrade chunk"),
+	assert.Check(t, !strings.Contains(strings.ToLower(um.UserMessage()), "upgrade smelt"),
 		"the message must not tell someone to upgrade a binary that is already ahead: %q", um.UserMessage())
 
 	s, ok := err.(interface{ Suggestion() string })
@@ -44,15 +44,15 @@ func TestGoneErrorDistinguishesStaleSidecarFromStaleCLI(t *testing.T) {
 		err := GoneError(&circleci.StatusError{
 			Op:            "stream command output",
 			StatusCode:    http.StatusGone,
-			ServerMessage: "sidecar is out of date; delete and recreate with: chunk sidecar create",
+			ServerMessage: "sidecar is out of date; delete and recreate with: smelt sidecar create",
 		})
 		assert.Assert(t, err != nil)
 
 		um := err.(interface{ UserMessage() string }).UserMessage()
 		s := err.(interface{ Suggestion() string }).Suggestion()
 		assert.Check(t, strings.Contains(um, "sidecar is out of date"), "got %q", um)
-		assert.Check(t, strings.Contains(s, "chunk sidecar create"), "got %q", s)
-		assert.Check(t, !strings.Contains(s, "chunk upgrade"),
+		assert.Check(t, strings.Contains(s, "smelt sidecar create"), "got %q", s)
+		assert.Check(t, !strings.Contains(s, "smelt upgrade"),
 			"upgrading the CLI does not fix a stale sidecar: %q", s)
 
 		// The server's message states both the condition and the remedy, so
@@ -73,8 +73,8 @@ func TestGoneErrorDistinguishesStaleSidecarFromStaleCLI(t *testing.T) {
 		assert.Assert(t, err != nil)
 		um := err.(interface{ UserMessage() string }).UserMessage()
 		s := err.(interface{ Suggestion() string }).Suggestion()
-		assert.Check(t, strings.Contains(um, "chunk CLI is out of date"), "got %q", um)
-		assert.Check(t, strings.Contains(s, "chunk upgrade"), "got %q", s)
+		assert.Check(t, strings.Contains(um, "smelt CLI is out of date"), "got %q", um)
+		assert.Check(t, strings.Contains(s, "smelt upgrade"), "got %q", s)
 	})
 
 	t.Run("non-410 passes through", func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestSidecarUnavailableNamesTheSidecarAndTheRemedy(t *testing.T) {
 		var ue *userError
 		assert.Assert(t, errors.As(err, &ue), "expected *userError, got %T", err)
 		assert.Assert(t, strings.Contains(ue.UserMessage(), id), "the message must name the sidecar: %q", ue.UserMessage())
-		assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar list"))
+		assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt sidecar list"))
 		assert.Equal(t, ue.UserExitCode(), ExitNotFound)
 	})
 
@@ -111,7 +111,7 @@ func TestSidecarUnavailableNamesTheSidecarAndTheRemedy(t *testing.T) {
 		assert.Assert(t, strings.Contains(ue.UserMessage(), "paused"), "got %q", ue.UserMessage())
 		// No route resumes a sidecar, so a replacement is the only remedy the
 		// caller can act on.
-		assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar create"))
+		assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt sidecar create"))
 		assert.Equal(t, ue.UserExitCode(), ExitAPIError)
 	})
 
@@ -130,12 +130,12 @@ func TestSidecarUnavailableNamesTheSidecarAndTheRemedy(t *testing.T) {
 }
 
 // TestSSHSessionErrorEncryptedKey guards the gap a passphrase-protected
-// ~/.ssh/chunk_ai used to fall through. sshSessionError returned nil for it, so
-// "chunk sidecar ssh" printed a bare parse error with no suggestion, and
-// "chunk validate" attached its network-failure suggestion instead — advice
+// ~/.ssh/smelt_ai used to fall through. sshSessionError returned nil for it, so
+// "smelt sidecar ssh" printed a bare parse error with no suggestion, and
+// "smelt validate" attached its network-failure suggestion instead — advice
 // that sends someone to recreate sidecars forever.
 func TestSSHSessionErrorEncryptedKey(t *testing.T) {
-	keyPath := "/home/dev/.ssh/chunk_ai"
+	keyPath := "/home/dev/.ssh/smelt_ai"
 	err := sshSessionError(&sidecar.EncryptedKeyError{
 		Path: keyPath,
 		Err:  errors.New("ssh: this private key is passphrase protected"),

@@ -9,11 +9,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // Exit codes for specific failure modes. Commands should return errors that
@@ -64,9 +64,9 @@ func tokenSourceDetail(source string) string {
 //
 // The generic notAuthorized() says to check the token, which is the wrong lead
 // here: the token is usually fine and the org is the problem. An org ID reaches
-// Create from four places — a flag, an env var, .chunk/config.json, or a silent
+// Create from four places — a flag, an env var, .smelt/config.json, or a silent
 // auto-pick when the account has exactly one collaboration — and nothing on
-// screen says which one was used. Naming the org and its source makes "chunk
+// screen says which one was used. Naming the org and its source makes "smelt
 // tried the wrong org" a visible possibility rather than a guess.
 func cannotCreateSidecar(orgID, source string, err error) error {
 	if !errors.Is(err, circleci.ErrNotAuthorized) {
@@ -79,8 +79,8 @@ func cannotCreateSidecar(orgID, source string, err error) error {
 	return newUserError("Not authorized to create sidecars in this organization.").
 		withCode("sidecar.not_authorized").
 		withDetail(detail + ".").
-		withSuggestion("Confirm this is the right org: 'chunk org list' shows the ones you belong to, and " +
-			"'chunk config set orgID <id>' records the one this repo should use.\n" +
+		withSuggestion("Confirm this is the right org: 'smelt org list' shows the ones you belong to, and " +
+			"'smelt config set orgID <id>' records the one this repo should use.\n" +
 			"If the org is correct, it may not have sidecars enabled yet, or your token may lack access to it.").
 		withExitCode(ExitAuthError).
 		wrap(err)
@@ -90,10 +90,10 @@ func cannotCreateSidecar(orgID, source string, err error) error {
 // found or invalid, or returns nil for any other failure.
 //
 // Either the org or the snapshot image is the culprit, and both are often read
-// from .chunk/config.json rather than typed: a repo configured for one org,
+// from .smelt/config.json rather than typed: a repo configured for one org,
 // cloned by someone who belongs only to another, 404s with nothing on screen
 // saying where either value came from. Naming both sources points at the file
-// to fix. An empty imageSource means chunk picked the image itself, which the
+// to fix. An empty imageSource means smelt picked the image itself, which the
 // caller cannot have got wrong, so only the org is questioned.
 func sidecarCreateRejected(msg, orgID, orgSource, image, imageSource string, err error) error {
 	var se *circleci.StatusError
@@ -107,16 +107,16 @@ func sidecarCreateRejected(msg, orgID, orgSource, image, imageSource string, err
 	if image != "" && imageSource != "" {
 		detail += ", snapshot " + image + " (from " + imageSource + ")"
 	}
-	suggestion := "Confirm this is the right org: 'chunk org list' shows the ones you belong to, and " +
-		"'chunk config set orgID <id>' records the one this repo should use."
+	suggestion := "Confirm this is the right org: 'smelt org list' shows the ones you belong to, and " +
+		"'smelt config set orgID <id>' records the one this repo should use."
 	switch {
 	case image == "" || imageSource == "":
 	case imageSource == "--image":
-		suggestion += "\n--image requires a snapshot ID from this org. List them with 'chunk sidecar snapshot list', " +
-			"or create one with 'chunk sidecar snapshot create'."
+		suggestion += "\n--image requires a snapshot ID from this org. List them with 'smelt sidecar snapshot list', " +
+			"or create one with 'smelt sidecar snapshot create'."
 	default:
-		suggestion += "\nThe snapshot must belong to this org. List them with 'chunk sidecar snapshot list', " +
-			"and record one with 'chunk config set validation.sidecarImage <id>'."
+		suggestion += "\nThe snapshot must belong to this org. List them with 'smelt sidecar snapshot list', " +
+			"and record one with 'smelt config set validation.sidecarImage <id>'."
 	}
 	exitCode := ExitAPIError
 	if se.StatusCode == http.StatusNotFound {
@@ -132,16 +132,16 @@ func sidecarCreateRejected(msg, orgID, orgSource, image, imageSource string, err
 
 // outdatedSidecarAPI maps an unsupported output format to guidance that points
 // the right way. The API is behind this binary, not ahead of it, so telling
-// someone to upgrade chunk would send them in exactly the wrong direction —
+// someone to upgrade smelt would send them in exactly the wrong direction —
 // there is nothing newer to install, and installing it again would not help.
 func outdatedSidecarAPI(err error) error {
 	if !errors.Is(err, circleci.ErrOutputFormatUnsupported) {
 		return nil
 	}
-	return newUserError("This build of chunk needs a newer CircleCI sidecar API.").
+	return newUserError("This build of smelt needs a newer CircleCI sidecar API.").
 		withCode("sidecar.output_format_unsupported").
 		withDetail("The API streamed command output in a format this build no longer reads.").
-		withSuggestion("The API has not been updated yet. Install the latest release with 'chunk upgrade', " +
+		withSuggestion("The API has not been updated yet. Install the latest release with 'smelt upgrade', " +
 			"or if you built this from source, switch back to a released build until the API catches up.").
 		wrap(err)
 }
@@ -158,7 +158,7 @@ func sidecarUnavailable(sidecarID string, err error) error {
 	case circleci.SidecarGone(err):
 		return newUserError(fmt.Sprintf("Sidecar %s no longer exists.", sidecarID)).
 			withCode("sidecar.not_found").
-			withSuggestion("See what you have with: chunk sidecar list\nOr create a new one with: chunk sidecar create").
+			withSuggestion("See what you have with: smelt sidecar list\nOr create a new one with: smelt sidecar create").
 			withExitCode(ExitNotFound).
 			withoutDetail().
 			wrap(err)
@@ -166,7 +166,7 @@ func sidecarUnavailable(sidecarID string, err error) error {
 		return newUserError(fmt.Sprintf("Sidecar %s is paused.", sidecarID)).
 			withCode("sidecar.paused").
 			withSuggestion("Sidecars pause when left idle, and the API exposes no way to resume one. " +
-				"Create a replacement with: chunk sidecar create").
+				"Create a replacement with: smelt sidecar create").
 			withExitCode(ExitAPIError).
 			withoutDetail().
 			wrap(err)
@@ -178,7 +178,7 @@ func unreachableSidecar(sidecarID, commands string, err error) error {
 	return newUserError(fmt.Sprintf("Could not reach sidecar %s.", sidecarID)).
 		withCode("sidecar.unreachable").
 		withDetail(fmt.Sprintf("Did not run: %s. Remote commands are not run locally.", commands)).
-		withSuggestion("Check its state with 'chunk sidecar list', or provision a replacement with 'chunk sidecar create'.").
+		withSuggestion("Check its state with 'smelt sidecar list', or provision a replacement with 'smelt sidecar create'.").
 		withExitCode(ExitAPIError).
 		wrap(err)
 }
@@ -187,7 +187,7 @@ func missingWorkspace(sidecarID, dest, commands string, err error) error {
 	return newUserError(fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)).
 		withCode("sidecar.workspace_missing").
 		withDetail(fmt.Sprintf("Expected it at %q. Did not run: %s. Remote commands are not run locally.", dest, commands)).
-		withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
+		withSuggestion("Run 'smelt sidecar env build' to prepare the workspace.").
 		withExitCode(ExitNotFound).
 		wrap(err)
 }
@@ -196,7 +196,7 @@ func sshSessionError(err error) error {
 	if e, ok := errors.AsType[*sidecar.PublicKeyNotFoundError](err); ok {
 		return newUserError(fmt.Sprintf("SSH public key not found: %s", e.KeyPath)).
 			withCode("ssh.public_key_not_found").
-			withSuggestion(fmt.Sprintf("Delete %s* and chunk will regenerate the pair on the next run.", e.IdentityFile)).
+			withSuggestion(fmt.Sprintf("Delete %s* and smelt will regenerate the pair on the next run.", e.IdentityFile)).
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}
@@ -204,7 +204,7 @@ func sshSessionError(err error) error {
 		return newUserError(fmt.Sprintf("SSH key is passphrase protected: %s", e.Path)).
 			withCode("ssh.key_passphrase_protected").
 			withSuggestion(fmt.Sprintf(
-				"Remove the passphrase with: ssh-keygen -p -N \"\" -f %s (or delete %s* and chunk will regenerate an unprotected pair).",
+				"Remove the passphrase with: ssh-keygen -p -N \"\" -f %s (or delete %s* and smelt will regenerate an unprotected pair).",
 				e.Path, e.Path)).
 			withExitCode(ExitBadArgs).
 			wrap(err)
@@ -256,7 +256,7 @@ func (e *userError) withoutDetail() *userError { e.hideDetail = true; return e }
 
 // TelemetryOutcome satisfies telemetry.Classified. An error the user can fix
 // (bad arguments, auth, a missing resource, or a project that is not set up)
-// is a blocked run, not a chunk failure; API and unclassified errors stay
+// is a blocked run, not a smelt failure; API and unclassified errors stay
 // failures.
 func (e *userError) TelemetryOutcome() string {
 	switch {
@@ -363,7 +363,7 @@ func GoneError(err error) error {
 		// here, so including it says the same thing three times over.
 		return newUserError("This sidecar is out of date.").
 			withCode("sidecar.out_of_date").
-			withSuggestion("Recreate it with: chunk sidecar create").
+			withSuggestion("Recreate it with: smelt sidecar create").
 			withExitCode(ExitAPIError).
 			withoutDetail().
 			wrap(err)
@@ -371,12 +371,12 @@ func GoneError(err error) error {
 
 	detail := se.ServerMessage
 	if detail == "" {
-		detail = "This server no longer supports this version of chunk CLI."
+		detail = "This server no longer supports this version of smelt CLI."
 	}
-	return newUserError("chunk CLI is out of date.").
+	return newUserError("smelt CLI is out of date.").
 		withCode("cli.upgrade_required").
 		withDetail(detail).
-		withSuggestion("Run `chunk upgrade` to get the latest version.").
+		withSuggestion("Run `smelt upgrade` to get the latest version.").
 		withExitCode(ExitAPIError).
 		wrap(err)
 }

@@ -11,11 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/commandutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/commandutil"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/envctx"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/telemetry"
 )
 
 func formatElapsed(d time.Duration) string {
@@ -56,11 +57,11 @@ const DefaultTimeout = config.DefaultCommandTimeout
 
 // List prints all configured command names and their run strings, tagged with
 // where each one runs and any role that decides it. Without the tags there is no
-// way to see which commands `chunk validate --mark-remote` would change.
+// way to see which commands `smelt validate --mark-remote` would change.
 func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 	if !cfg.HasCommands() {
 		status(iostream.LevelInfo, "No commands configured.")
-		status(iostream.LevelInfo, "Add commands with: chunk validate <name> --cmd \"your command\" --save")
+		status(iostream.LevelInfo, "Add commands with: smelt validate <name> --cmd \"your command\" --save")
 		return nil
 	}
 	for _, c := range cfg.Commands {
@@ -312,7 +313,7 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 }
 
 // CheckFailedError reports a validate command that ran and exited non-zero:
-// the project's own check failing, not chunk.
+// the project's own check failing, not smelt.
 type CheckFailedError struct {
 	Name   string
 	Remote bool
@@ -342,16 +343,16 @@ func (e *HookExitError) ExitCode() int { return e.code }
 // NewHookExitError returns a HookExitError with the given exit code.
 func NewHookExitError(code int) error { return &HookExitError{code: code} }
 
-// HooksDisabled reports whether chunk validate hooks are currently suppressed.
-// envDisabled should be set by the caller from CHUNK_HOOKS_DISABLED; it returns
-// true when that flag is set or the sentinel file .chunk/hooks-disabled exists
+// HooksDisabled reports whether smelt validate hooks are currently suppressed.
+// envDisabled should be set by the caller from SMELT_HOOKS_DISABLED; it returns
+// true when that flag is set or the sentinel file .smelt/hooks-disabled exists
 // under workDir. On any error other than ErrNotExist the function fails open
 // (returns false) so hooks continue to run when the check is uncertain.
 func HooksDisabled(workDir string, envDisabled bool) bool {
 	if envDisabled {
 		return true
 	}
-	_, err := os.Stat(filepath.Join(workDir, ".chunk", "hooks-disabled"))
+	_, err := os.Stat(filepath.Join(workDir, brand.ProjectDir, "hooks-disabled"))
 	return err == nil
 }
 
@@ -366,7 +367,7 @@ func WrapHookResult(sessionID string, execErr error, maxAttempts int, warn io.Wr
 	}
 	n := TrackFailedAttempt(sessionID, warn)
 	if n >= maxAttempts {
-		_, _ = fmt.Fprintf(warn, "chunk validate: validation has failed %d time(s) in a row.\n", n)
+		_, _ = fmt.Fprintf(warn, "smelt validate: validation has failed %d time(s) in a row.\n", n)
 		_, _ = fmt.Fprintf(warn, "The failures above do not appear to be resolving automatically.\n")
 		_, _ = fmt.Fprintf(warn, "Stop attempting to fix this and ask the user for guidance instead.\n")
 		return nil

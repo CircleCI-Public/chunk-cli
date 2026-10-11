@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/smeltdev/smelt/internal/circleci"
 )
 
 // Prompts provides the interactive UI operations needed to collect run config.

@@ -12,11 +12,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/smeltd/server"
 )
 
 // fakeSessionConfig is a daemon setup with a Claude credential and nothing
@@ -33,7 +33,7 @@ func startSessionDaemon(t *testing.T, cfg server.ReviewConfig) {
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	t.Setenv("SMELT_DAEMON_DIR", dir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -48,7 +48,7 @@ func startSessionDaemon(t *testing.T, cfg server.ReviewConfig) {
 	})
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if chunkd.IsDaemonRunning() {
+		if smeltd.IsDaemonRunning() {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -69,7 +69,7 @@ func sessionProject(t *testing.T) string {
 	}
 	run("init", "-b", "main")
 	run("remote", "add", "origin", "https://github.com/acme/widgets.git")
-	prompts := filepath.Join(dir, ".chunk", "reviews")
+	prompts := filepath.Join(dir, ".smelt", "reviews")
 	assert.NilError(t, os.MkdirAll(prompts, 0o755))
 	assert.NilError(t, os.WriteFile(filepath.Join(prompts, "bugs.md"), []byte("find bugs"), 0o644))
 	assert.NilError(t, os.WriteFile(filepath.Join(prompts, "style.md"), []byte("check style"), 0o644))
@@ -100,7 +100,7 @@ func TestFactoryWithoutAnOriginRemoteFailsBeforeAnySandboxWork(t *testing.T) {
 // refused.
 func TestFactoryRefusesARemoteDaemon(t *testing.T) {
 	factoryProject(t)
-	t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", "127.0.0.1:1")
+	t.Setenv("SMELT_DAEMON_REMOTE_ADDR", "127.0.0.1:1")
 	_, _, err := runFactoryBuildCmd(t, "add a --verbose flag")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
@@ -109,7 +109,7 @@ func TestFactoryRefusesARemoteDaemon(t *testing.T) {
 
 // reportedLines follows a session through snapshots and returns what was
 // said, one string per line.
-func reportedLines(snapshots ...chunkd.SessionDetail) []string {
+func reportedLines(snapshots ...smeltd.SessionDetail) []string {
 	var lines []string
 	rep := newSessionReporter(func(_ iostream.Level, msg string) { lines = append(lines, msg) })
 	for _, d := range snapshots {
@@ -119,21 +119,21 @@ func reportedLines(snapshots ...chunkd.SessionDetail) []string {
 }
 
 func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
-	bug := chunkd.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
+	bug := smeltd.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
 	output := strings.Repeat("ok\n", 30) + "--- FAIL: TestFlag"
-	checking := chunkd.SessionDetail{Session: chunkd.Session{
-		Factory: &chunkd.FactoryRun{Attempts: 3},
-		Rounds: []chunkd.Round{{
+	checking := smeltd.SessionDetail{Session: smeltd.Session{
+		Factory: &smeltd.FactoryRun{Attempts: 3},
+		Rounds: []smeltd.Round{{
 			Number:  1,
-			State:   chunkd.RoundChecking,
-			Reviews: []chunkd.ReviewPrompt{{Name: "bugs", State: chunkd.PromptDone, DurationMS: 12000}},
-			Checks:  []chunkd.RoundCheck{{Name: "test", Status: "failed", DurationMS: 3000, Output: output}},
+			State:   smeltd.RoundChecking,
+			Reviews: []smeltd.ReviewPrompt{{Name: "bugs", State: smeltd.PromptDone, DurationMS: 12000}},
+			Checks:  []smeltd.RoundCheck{{Name: "test", Status: "failed", DurationMS: 3000, Output: output}},
 		}},
 	}}
 	done := checking
-	done.Rounds = []chunkd.Round{checking.Rounds[0]}
-	done.Rounds[0].State, done.Rounds[0].Note = chunkd.RoundDone, "0 of 2 checks passed"
-	done.Details = []chunkd.RoundDetail{{Number: 1, Results: []chunkd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []chunkd.Finding{bug}}}}}
+	done.Rounds = []smeltd.Round{checking.Rounds[0]}
+	done.Rounds[0].State, done.Rounds[0].Note = smeltd.RoundDone, "0 of 2 checks passed"
+	done.Details = []smeltd.RoundDetail{{Number: 1, Results: []smeltd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []smeltd.Finding{bug}}}}}
 
 	// The round is seen done twice; its findings are said once.
 	lines := reportedLines(checking, done, done)

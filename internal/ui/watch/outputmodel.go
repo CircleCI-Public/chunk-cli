@@ -10,8 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // clip cuts a line to at most width display columns, measuring with lipgloss so
@@ -44,14 +44,14 @@ func clip(s string, width int) string {
 // invocation other than the selected one would have matched against the wrong
 // sidecar and returned a confidently wrong command. Both callers pass the row
 // the group came from, and now they cannot do otherwise.
-func (m Model) commandForInvocation(sc sidecarInfo, g invocationGroup) *chunkd.CommandState {
+func (m Model) commandForInvocation(sc sidecarInfo, g invocationGroup) *smeltd.CommandState {
 	if len(g.events) == 0 || sc.projectIdx >= len(m.commands) {
 		return nil
 	}
 	start := g.events[0].Ts
 	end := invocEndTime(g)
 
-	var best *chunkd.CommandState
+	var best *smeltd.CommandState
 	for i := range m.commands[sc.projectIdx] {
 		cs := &m.commands[sc.projectIdx][i]
 		if cs.SidecarID != sc.id {
@@ -147,7 +147,7 @@ func (m Model) updateOutputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// withOutputChunk folds a fetched chunk into the open pane.
+// withOutputChunk folds a fetched piece into the open pane.
 func (m Model) withOutputChunk(msg outputMsg) (tea.Model, tea.Cmd) {
 	if m.output == nil || m.output.commandID != msg.commandID {
 		return m, nil // pane closed or switched while the request was in flight
@@ -156,25 +156,25 @@ func (m Model) withOutputChunk(msg outputMsg) (tea.Model, tea.Cmd) {
 		m.output.err = msg.err
 		return m, nil
 	}
-	if !msg.chunk.Found {
-		m.output.err = fmt.Errorf("the chunk daemon has no output for this command")
+	if !msg.piece.Found {
+		m.output.err = fmt.Errorf("the smelt daemon has no output for this command")
 		// Evicted buffers do not come back, so the tail has nothing left to wait
 		// for. Leaving running set would keep the chain polling for a command the
 		// daemon has already forgotten.
 		m.output.running = false
 		return m, nil
 	}
-	m.output.feed(msg.chunk.Data)
-	m.output.offset = msg.chunk.NextOffset
-	m.output.running = msg.chunk.Running
-	m.output.exitCode = msg.chunk.ExitCode
-	if msg.chunk.Truncated {
+	m.output.feed(msg.piece.Data)
+	m.output.offset = msg.piece.NextOffset
+	m.output.running = msg.piece.Running
+	m.output.exitCode = msg.piece.ExitCode
+	if msg.piece.Truncated {
 		m.output.truncated = true
 	}
 	// A stream that failed leaves real output behind but no exit code. Reporting
 	// why keeps an empty pane from reading as "this command printed nothing".
-	if msg.chunk.Error != "" {
-		m.output.err = errors.New(msg.chunk.Error)
+	if msg.piece.Error != "" {
+		m.output.err = errors.New(msg.piece.Error)
 	} else {
 		m.output.err = nil
 	}

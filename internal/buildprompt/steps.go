@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/closer"
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/smeltdev/smelt/internal/closer"
+	"github.com/smeltdev/smelt/internal/github"
+	"github.com/smeltdev/smelt/internal/gitremote"
 )
 
 // ErrReposRequired indicates --repos must be provided when --org is used.

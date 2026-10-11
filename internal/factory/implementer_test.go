@@ -13,9 +13,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // localExec runs scripts with sh on this machine, as a sidecar would, with
@@ -28,7 +28,7 @@ func localExec(home string) review.Execer {
 		for k, v := range env {
 			cmd.Env = append(cmd.Env, k+"="+v)
 		}
-		// The exec API streams one chunk at a time; serialise so the callback
+		// The exec API streams one piece at a time; serialise so the callback
 		// sees the same.
 		var mu sync.Mutex
 		emit := func(stream string) writerFn {

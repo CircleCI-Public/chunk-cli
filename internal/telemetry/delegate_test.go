@@ -19,7 +19,7 @@ import (
 	"gotest.tools/v3/poll"
 )
 
-// receiverBinPath is the path to a stub "chunk receive-telemetry" binary,
+// receiverBinPath is the path to a stub "smelt receive-telemetry" binary,
 // built once by TestMain from testdata/receiverbin. Pointing
 // delegateDestination.bin at it lets tests spawn a real subprocess and
 // assert on what it sends to Segment, without any risk of re-execing the
@@ -31,7 +31,7 @@ func TestMain(m *testing.M) {
 }
 
 func runTestMain(m *testing.M) int {
-	dir, err := os.MkdirTemp("", "chunk-telemetry-test")
+	dir, err := os.MkdirTemp("", "smelt-telemetry-test")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

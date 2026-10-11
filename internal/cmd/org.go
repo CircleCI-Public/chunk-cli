@@ -11,10 +11,10 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 func newOrgCmd() *cobra.Command {
@@ -35,7 +35,7 @@ func newOrgListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List CircleCI organizations",
-		Long:  "List CircleCI organizations the authenticated user belongs to.\n\nUseful for finding your org ID to pass as --org-id or store with 'chunk config set orgID <id>'.",
+		Long:  "List CircleCI organizations the authenticated user belongs to.\n\nUseful for finding your org ID to pass as --org-id or store with 'smelt config set orgID <id>'.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -83,7 +83,7 @@ func newOrgCreateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "create <name>",
 		Short: "Create a new standalone CircleCI organization",
-		Long:  "Create a new standalone CircleCI organization.\n\nRequires: CircleCI token (chunk auth login)",
+		Long:  "Create a new standalone CircleCI organization.\n\nRequires: CircleCI token (smelt auth login)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -120,7 +120,7 @@ func newOrgCreateCmd() *cobra.Command {
 	}
 }
 
-const suggestionNoOrgs = "Create one with `chunk org create <name>`, pass --org-id, or ask an admin to invite you to an existing organization."
+const suggestionNoOrgs = "Create one with `smelt org create <name>`, pass --org-id, or ask an admin to invite you to an existing organization."
 
 // promptOrgName asks for the name of a new organization. It returns
 // ui.ErrNoTTY without printing anything when there is no terminal to prompt
@@ -137,7 +137,7 @@ var promptOrgName = func(streams iostream.Streams) (string, error) {
 // createFirstOrg offers to create an organization for an account that belongs
 // to none, which is the state of every account straight after signup. It
 // returns the new organization's ID. Without a terminal it returns an error
-// pointing at `chunk org create`, which needs no prompt.
+// pointing at `smelt org create`, which needs no prompt.
 func createFirstOrg(ctx context.Context, client *circleci.Client, tokenSource string, streams iostream.Streams) (string, error) {
 	name, err := promptOrgName(streams)
 	switch {
@@ -193,10 +193,10 @@ func orgCreateFailed(name, tokenSource string, err error) error {
 	if errors.As(err, &se) {
 		switch se.StatusCode {
 		case http.StatusBadRequest, http.StatusConflict, http.StatusUnprocessableEntity:
-			return ue.withSuggestion("Check whether the name is already taken, or try another with `chunk org create <name>`.")
+			return ue.withSuggestion("Check whether the name is already taken, or try another with `smelt org create <name>`.")
 		}
 	}
-	return ue.withSuggestion("Try again, or create it later with `chunk org create <name>`.")
+	return ue.withSuggestion("Try again, or create it later with `smelt org create <name>`.")
 }
 
 // ensureOrgAfterSignup follows a signup by creating the new account's first

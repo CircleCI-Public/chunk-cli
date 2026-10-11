@@ -5,7 +5,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/notify"
+	"github.com/smeltdev/smelt/internal/notify"
 )
 
 // TestNotifyFn_closure verifies that a capturing closure passed as a notifyFn
@@ -22,10 +22,10 @@ func TestNotifyFn_closure(t *testing.T) {
 		calls++
 	}
 
-	fn("chunk validate passed", "3/3 checks passed · 1.2s")
+	fn("smelt validate passed", "3/3 checks passed · 1.2s")
 
 	assert.Equal(t, calls, 1)
-	assert.Equal(t, gotTitle, "chunk validate passed")
+	assert.Equal(t, gotTitle, "smelt validate passed")
 	assert.Equal(t, gotBody, "3/3 checks passed · 1.2s")
 }
 

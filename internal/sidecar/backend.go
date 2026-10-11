@@ -3,7 +3,7 @@ package sidecar
 import (
 	"context"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // Backend is the provider a pool runs its sidecars on: it creates, syncs,

@@ -9,8 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/promptrows"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/ui/promptrows"
 )
 
 func basePrompts() []review.Prompt {
@@ -98,7 +98,7 @@ func TestRenderShowsAllPrompts(t *testing.T) {
 	got := m.render()
 	assert.Assert(t, strings.Contains(got, "api-design"), "render: %s", got)
 	assert.Assert(t, strings.Contains(got, "error-handling"), "render: %s", got)
-	assert.Assert(t, strings.Contains(got, "chunk review"), "render: %s", got)
+	assert.Assert(t, strings.Contains(got, "smelt review"), "render: %s", got)
 }
 
 func TestRenderCountsInSummaryBar(t *testing.T) {

@@ -12,20 +12,20 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/reviewprogress"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/ui"
+	"github.com/smeltdev/smelt/internal/ui/reviewprogress"
 )
 
 func newReviewCmd() *cobra.Command {
 	var parallelism int
 	var destroyPool, jsonOut, detach bool
-	var orgID, image, model, chunkBinary string
+	var orgID, image, model, smeltBinary string
 	var timeout time.Duration
 
 	cmd := &cobra.Command{
@@ -33,21 +33,21 @@ func newReviewCmd() *cobra.Command {
 		Short: "Run a directory of review prompts on a sidecar pool",
 		Long: `Run each prompt file (.md or .txt) in a directory as an independent review,
 each on its own sidecar synced with the working tree. The directory defaults
-to .chunk/reviews in the project.
+to .smelt/reviews in the project.
 
 The sidecars form one pool that is reused across review passes and across
 runs; pass --destroy-pool to delete it when the run ends.
 
 With --detach the whole review runs on a primary sidecar instead of here, so
-you can close your laptop: the primary runs chunk review with its own pool, and
+you can close your laptop: the primary runs smelt review with its own pool, and
 the report is left in a run directory on it. --detach installs the latest
-released chunk on the primary; pass --chunk-binary with a Linux build to use
+released smelt on the primary; pass --smelt-binary with a Linux build to use
 that instead. With --detach, --image and --destroy-pool apply to the primary's
-reviewer sidecars; the primary itself is kept so that 'chunk review results' can
+reviewer sidecars; the primary itself is kept so that 'smelt review results' can
 read the report.
 
 A prompts directory named "results" must be passed as ./results, since
-'chunk review results' reads a detached review's report.`,
+'smelt review results' reads a detached review's report.`,
 		// Hidden until passes repeat and check for convergence.
 		Hidden:       true,
 		SilenceUsage: true,
@@ -57,7 +57,7 @@ A prompts directory named "results" must be passed as ./results, since
 			}
 			return newUserError("Pass at most one directory of review prompts.").
 				withCode("command.invalid_args").
-				withSuggestion(fmt.Sprintf("Omit it to use %s, or run: chunk review ./prompts", review.DefaultDir)).
+				withSuggestion(fmt.Sprintf("Omit it to use %s, or run: smelt review ./prompts", review.DefaultDir)).
 				withExitCode(ExitBadArgs).
 				withoutDetail()
 		},
@@ -135,7 +135,7 @@ A prompts directory named "results" must be passed as ./results, since
 			if detach {
 				return runReviewDetached(ctx, newDetachRequest(args, detachFlags{
 					client: client, streams: streams, workDir: workDir, orgID: resolvedOrgID,
-					image: image, destroyPool: destroyPool, chunkBinary: chunkBinary, rc: rc, cred: cred,
+					image: image, destroyPool: destroyPool, smeltBinary: smeltBinary, rc: rc, cred: cred,
 					parallelism: size, model: model, timeout: timeout, jsonOut: jsonOut,
 				}))
 			}
@@ -215,7 +215,7 @@ A prompts directory named "results" must be passed as ./results, since
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&detach, "detach", false, "run the review on a primary sidecar and return, so this machine can close")
 	cmd.AddCommand(newReviewResultsCmd())
-	cmd.Flags().StringVar(&chunkBinary, "chunk-binary", "", "Linux chunk build to upload with --detach (default: install the latest release)")
+	cmd.Flags().StringVar(&smeltBinary, "smelt-binary", "", "Linux smelt build to upload with --detach (default: install the latest release)")
 	return cmd
 }
 
@@ -255,7 +255,7 @@ func closePool(ctx context.Context, pool *sidecar.Pool, destroy bool, status ios
 func agentNotInstalled(where string, err error) error {
 	return &userError{
 		msg:        fmt.Sprintf("Claude Code is not installed on %s.", where),
-		suggestion: "Install it in the sidecar image (see 'chunk sidecar env build') and pass --image, or set validation.sidecarImage.",
+		suggestion: "Install it in the sidecar image (see 'smelt sidecar env build') and pass --image, or set validation.sidecarImage.",
 		hideDetail: true,
 		err:        err,
 	}
@@ -387,7 +387,7 @@ func reviewCredential(rc config.ResolvedConfig) (review.Credential, string, erro
 	}
 	return review.Credential{}, "", &userError{
 		msg:        "No Claude credential found; reviews run Claude on each sidecar.",
-		suggestion: "Run 'chunk auth refresh' to log in with your Claude subscription, or 'chunk auth set anthropic' for an API key.",
+		suggestion: "Run 'smelt auth refresh' to log in with your Claude subscription, or 'smelt auth set anthropic' for an API key.",
 		errMsg:     "no claude credential found",
 		hideDetail: true,
 	}
@@ -411,7 +411,7 @@ func credentialRejected(cred review.Credential, source, baseURL string, err erro
 	if source != keyring.SourceKeychain {
 		return &userError{
 			msg:        fmt.Sprintf("Anthropic rejected the API key in %s.", strings.ToLower(source[:1])+source[1:]),
-			suggestion: "Run 'chunk auth set anthropic --insecure-storage' to replace it, or 'chunk auth remove anthropic --insecure-storage' to remove it.",
+			suggestion: "Run 'smelt auth set anthropic --insecure-storage' to replace it, or 'smelt auth remove anthropic --insecure-storage' to remove it.",
 			exitCode:   ExitAuthError,
 			hideDetail: true,
 			err:        err,
@@ -419,10 +419,10 @@ func credentialRejected(cred review.Credential, source, baseURL string, err erro
 	}
 
 	service := keyring.ServiceAnthropic
-	suggestion := "Run 'chunk auth set anthropic' to store a new key, then run the review again."
+	suggestion := "Run 'smelt auth set anthropic' to store a new key, then run the review again."
 	if cred.EnvVar == config.EnvClaudeOAuthToken {
 		service = keyring.ServiceAnthropicOAuth
-		suggestion = "Run 'chunk auth set anthropic-oauth' to mint a new token, then run the review again."
+		suggestion = "Run 'smelt auth set anthropic-oauth' to mint a new token, then run the review again."
 	}
 	if delErr := keyring.Delete(service(baseURL)); delErr != nil {
 		return &userError{

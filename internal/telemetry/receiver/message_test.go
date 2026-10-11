@@ -43,7 +43,7 @@ func TestWrap_RejectsUnsupportedMessage(t *testing.T) {
 	assert.ErrorContains(t, err, "unsupported telemetry message type")
 }
 
-// A `chunk upgrade` can replace the binary between a CLI run starting and its
+// A `smelt upgrade` can replace the binary between a CLI run starting and its
 // detached delegate spawning, so a new receiver must still understand the
 // bare-track payload an older CLI writes.
 func TestDecode_AcceptsLegacyTrackArray(t *testing.T) {

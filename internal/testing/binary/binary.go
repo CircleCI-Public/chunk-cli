@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/brand"
+	"github.com/smeltdev/smelt/internal/testing/env"
 )
 
 var (
@@ -21,17 +22,17 @@ var (
 	buildErr   error
 )
 
-// BuildBinary compiles the chunk CLI binary once and returns its path.
+// BuildBinary compiles the smelt CLI binary once and returns its path.
 // Call from TestMain.
 func BuildBinary() (string, error) {
 	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "chunk-acceptance-*")
+		dir, err := os.MkdirTemp("", brand.Command+"-acceptance-*")
 		if err != nil {
 			buildErr = fmt.Errorf("create temp dir: %w", err)
 			return
 		}
 
-		binaryPath = filepath.Join(dir, "chunk")
+		binaryPath = filepath.Join(dir, "smelt")
 
 		// Find the repo root (parent of acceptance/)
 		repoRoot, err := filepath.Abs(filepath.Join("..", ""))
@@ -57,9 +58,9 @@ var (
 	versionedBinary = map[string]string{}
 )
 
-// BuildVersioned compiles the chunk CLI with a release version baked in, as
+// BuildVersioned compiles the smelt CLI with a release version baked in, as
 // goreleaser does, and returns its path. The default binary reports "dev", which
-// `chunk upgrade` and the update notice treat as a source build; tests of those
+// `smelt upgrade` and the update notice treat as a source build; tests of those
 // need a binary that looks like a release.
 func BuildVersioned(t *testing.T, version string) string {
 	t.Helper()
@@ -69,11 +70,11 @@ func BuildVersioned(t *testing.T, version string) string {
 		return path
 	}
 
-	dir, err := os.MkdirTemp("", "chunk-acceptance-"+version+"-*")
+	dir, err := os.MkdirTemp("", brand.Command+"-acceptance-"+version+"-*")
 	if err != nil {
 		t.Fatalf("create temp dir: %v", err)
 	}
-	path := filepath.Join(dir, "chunk")
+	path := filepath.Join(dir, "smelt")
 	repoRoot, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatalf("resolve repo root: %v", err)
@@ -99,13 +100,13 @@ type CLIResult struct {
 	ExitCode int
 }
 
-// RunCLI executes the chunk binary with the given args, env, and working directory.
+// RunCLI executes the smelt binary with the given args, env, and working directory.
 func RunCLI(t *testing.T, args []string, e *env.TestEnv, workDir string) CLIResult {
 	t.Helper()
 	return RunCLIWithStdin(t, args, e, workDir, nil)
 }
 
-// RunCLIWithStdin executes the chunk binary with the given args, env, working directory,
+// RunCLIWithStdin executes the smelt binary with the given args, env, working directory,
 // and optional stdin data.
 func RunCLIWithStdin(t *testing.T, args []string, e *env.TestEnv, workDir string, stdin []byte) CLIResult {
 	t.Helper()

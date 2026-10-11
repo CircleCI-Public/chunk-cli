@@ -8,7 +8,7 @@ import (
 )
 
 // loggingDestination writes track calls to stderr, gated behind
-// CHUNK_TELEMETRY_LOG so contributors can inspect event payloads without
+// SMELT_TELEMETRY_LOG so contributors can inspect event payloads without
 // sending anything to Segment.
 type loggingDestination struct{}
 

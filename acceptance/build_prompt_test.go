@@ -12,12 +12,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fixtures"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/fixtures"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/testing/recorder"
 )
 
 func TestBuildPromptHappyPath(t *testing.T) {
@@ -702,7 +702,7 @@ func TestBuildPromptTopZero(t *testing.T) {
 		"expected non-zero exit code for --top 0")
 }
 
-// default --output path is .chunk/context/review-prompt.md
+// default --output path is .smelt/context/review-prompt.md
 func TestBuildPromptDefaultOutputPath(t *testing.T) {
 	gh := fakes.NewFakeGitHub()
 	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
@@ -736,11 +736,11 @@ func TestBuildPromptDefaultOutputPath(t *testing.T) {
 			result.ExitCode, result.Stdout, result.Stderr)
 	}
 
-	// Default output is .chunk/context/review-prompt.md relative to workdir
-	assertFileExists(t, filepath.Join(workDir, ".chunk", "context"), "review-prompt.md")
-	assertFileExists(t, filepath.Join(workDir, ".chunk", "context"), "review-prompt-details.json")
-	assertFileExists(t, filepath.Join(workDir, ".chunk", "context"), "review-prompt-analysis.md")
-	assertFileExists(t, filepath.Join(workDir, ".chunk", "context"), "review-prompt-details-pr-rankings.csv")
+	// Default output is .smelt/context/review-prompt.md relative to workdir
+	assertFileExists(t, filepath.Join(workDir, ".smelt", "context"), "review-prompt.md")
+	assertFileExists(t, filepath.Join(workDir, ".smelt", "context"), "review-prompt-details.json")
+	assertFileExists(t, filepath.Join(workDir, ".smelt", "context"), "review-prompt-analysis.md")
+	assertFileExists(t, filepath.Join(workDir, ".smelt", "context"), "review-prompt-details-pr-rankings.csv")
 }
 
 // default --since is approximately 3 months before today

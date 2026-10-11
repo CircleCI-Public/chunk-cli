@@ -12,16 +12,16 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
-// readInitConfig is a helper that reads and parses .chunk/config.json from workDir.
+// readInitConfig is a helper that reads and parses .smelt/config.json from workDir.
 func readInitConfig(t *testing.T, workDir string) map[string]interface{} {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "config.json"))
-	assert.NilError(t, err, "expected .chunk/config.json to exist")
+	data, err := os.ReadFile(filepath.Join(workDir, ".smelt", "config.json"))
+	assert.NilError(t, err, "expected .smelt/config.json to exist")
 	var cfg map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &cfg))
 	return cfg
@@ -77,9 +77,9 @@ func TestInitWritesVCSConfig(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	configPath := filepath.Join(workDir, ".chunk", "config.json")
+	configPath := filepath.Join(workDir, ".smelt", "config.json")
 	data, err := os.ReadFile(configPath)
-	assert.NilError(t, err, "expected .chunk/config.json to exist")
+	assert.NilError(t, err, "expected .smelt/config.json to exist")
 
 	var cfg map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &cfg))
@@ -104,8 +104,8 @@ func TestInitGitignoresPoolState(t *testing.T) {
 
 	gitignore, err := os.ReadFile(filepath.Join(workDir, ".gitignore"))
 	assert.NilError(t, err, "expected .gitignore to exist")
-	assert.Assert(t, strings.Contains(string(gitignore), ".chunk/*-pool.json"),
-		"expected .chunk/*-pool.json in .gitignore, got: %s", string(gitignore))
+	assert.Assert(t, strings.Contains(string(gitignore), ".smelt/*-pool.json"),
+		"expected .smelt/*-pool.json in .gitignore, got: %s", string(gitignore))
 
 	// Re-run init when config already exists — still ensures the ignore entry.
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, ".gitignore"), []byte("node_modules/\n"), 0o644))
@@ -116,7 +116,7 @@ func TestInitGitignoresPoolState(t *testing.T) {
 
 	gitignore, err = os.ReadFile(filepath.Join(workDir, ".gitignore"))
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(gitignore), ".chunk/*-pool.json"),
+	assert.Assert(t, strings.Contains(string(gitignore), ".smelt/*-pool.json"),
 		"expected re-init to restore pool gitignore, got: %s", string(gitignore))
 }
 
@@ -133,9 +133,9 @@ func TestInitSkipAllWritesOnlyVCS(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	configPath := filepath.Join(workDir, ".chunk", "config.json")
+	configPath := filepath.Join(workDir, ".smelt", "config.json")
 	data, err := os.ReadFile(configPath)
-	assert.NilError(t, err, "expected .chunk/config.json to exist")
+	assert.NilError(t, err, "expected .smelt/config.json to exist")
 
 	var cfg map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &cfg))
@@ -186,10 +186,10 @@ func TestInitForcePreservesSkippedSections(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "new-org", "new-repo")
 
 	// Write existing config with VCS and Commands.
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(workDir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	existing := `{"vcs":{"org":"old-org","repo":"old-repo"},"commands":[{"name":"test","run":"echo test"}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(existing), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(existing), 0o644))
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
@@ -202,7 +202,7 @@ func TestInitForcePreservesSkippedSections(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	data, err := os.ReadFile(filepath.Join(chunkDir, "config.json"))
+	data, err := os.ReadFile(filepath.Join(smeltDir, "config.json"))
 	assert.NilError(t, err)
 
 	var cfg map[string]interface{}
@@ -627,7 +627,7 @@ func TestInitCreatesHookFiles(t *testing.T) {
 }
 
 // A repo initialized by the real binary ends up with a Stop hook that actually
-// fires chunk validate. Asserting the hooks key merely exists is not enough: a
+// fires smelt validate. Asserting the hooks key merely exists is not enough: a
 // repo can carry commit hooks and no Stop hook at all, which is how repos ended
 // up looking configured while nothing validated at session end.
 func TestInitWritesFiringStopHook(t *testing.T) {
@@ -655,8 +655,8 @@ func TestInitWritesFiringStopHook(t *testing.T) {
 	assert.Assert(t, len(commitCommands) > 0, "expected a PreToolUse commit hook, got: %s", data)
 
 	stopCommands := hookCommands(t, hooks["Stop"])
-	assert.Assert(t, slices.Contains(stopCommands, "chunk validate"),
-		"expected a Stop hook running chunk validate, got: %v", stopCommands)
+	assert.Assert(t, slices.Contains(stopCommands, "smelt validate"),
+		"expected a Stop hook running smelt validate, got: %v", stopCommands)
 }
 
 // hookCommands flattens the hook entry commands across every group of one hook
@@ -752,8 +752,8 @@ func TestInitHookExistingSettingsWritesExample(t *testing.T) {
 	assert.NilError(t, json.Unmarshal(exampleData, &example))
 	exampleHooks, ok := example["hooks"].(map[string]interface{})
 	assert.Assert(t, ok, "expected a hooks object in the example, got: %s", exampleData)
-	assert.Assert(t, slices.Contains(hookCommands(t, exampleHooks["Stop"]), "chunk validate"),
-		"expected the example to run chunk validate at session end, got: %s", exampleData)
+	assert.Assert(t, slices.Contains(hookCommands(t, exampleHooks["Stop"]), "smelt validate"),
+		"expected the example to run smelt validate at session end, got: %s", exampleData)
 }
 
 // --- init never touches CircleCI ---
@@ -907,7 +907,7 @@ func TestInitSkipsTestSuitesByDefault(t *testing.T) {
 	_, err := os.Stat(filepath.Join(workDir, ".circleci", "test-suites.yml"))
 	assert.Assert(t, os.IsNotExist(err), "expected default to skip write, err=%v", err)
 
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk-sidecar"),
+	assert.Assert(t, strings.Contains(result.Stderr, "smelt-sidecar"),
 		"expected sidecar hint in stderr, got: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stderr, "set up a sidecar"),
 		"expected hint to mention setting up a sidecar, got: %s", result.Stderr)
@@ -940,7 +940,7 @@ func TestInitOnTheDefaultBackendLeavesCircleCIOut(t *testing.T) {
 	_, hasOrg := cfg["orgID"]
 	assert.Assert(t, !hasOrg, "docker path recorded an org ID: %v", cfg)
 
-	for _, skill := range []string{"chunk-sidecar", "chunk-sidecar-setup"} {
+	for _, skill := range []string{"smelt-sidecar", "smelt-sidecar-setup"} {
 		_, err := os.Stat(filepath.Join(workDir, ".claude", "skills", skill))
 		assert.Assert(t, os.IsNotExist(err), "%s skill installed on the docker path", skill)
 	}

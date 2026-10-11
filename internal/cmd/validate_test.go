@@ -22,17 +22,17 @@ import (
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
-	"github.com/CircleCI-Public/chunk-cli/internal/validate"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/session"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/validate"
 )
 
 // hookPayload is the JSON Claude Code sends to Stop hooks via stdin.
@@ -99,7 +99,7 @@ func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testin
 	assert.Equal(t, ec.ExitCode(), 1)
 	assert.Assert(t, strings.Contains(stderr, "CircleCI auth is not configured"),
 		"expected auth message in stderr, got: %q", stderr)
-	assert.Assert(t, strings.Contains(stderr, "chunk auth login"),
+	assert.Assert(t, strings.Contains(stderr, "smelt auth login"),
 		"expected auth hint in stderr, got: %q", stderr)
 }
 
@@ -216,7 +216,7 @@ func TestValidationRepoPath(t *testing.T) {
 
 // TestSaveActivePoolStatePersistsEveryMember guards the fix that lets a pool
 // grown beyond one sidecar be fully reused later: without it, only the first
-// member chunk validate ever created was remembered, so every run needing
+// member smelt validate ever created was remembered, so every run needing
 // more than one sidecar recreated the rest from scratch and orphaned the
 // previous run's extras.
 // useLocalSidecar makes the fake sidecar run commands on this machine, so the
@@ -230,13 +230,13 @@ func useLocalSidecar(t *testing.T, sshSrv *fakes.SSHServer) {
 		}
 	}
 	sshSrv.RunLocally()
-	t.Setenv("CHUNK_SIDECAR_HOME", t.TempDir())
+	t.Setenv("SMELT_SIDECAR_HOME", t.TempDir())
 }
 
 func TestSaveActivePoolStatePersistsEveryMember(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv(config.EnvHome, homeDir)
-	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "smelt_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
 	useLocalSidecar(t, sshSrv)
 
@@ -289,9 +289,9 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Point the daemon socket at an empty dir. Without this the command
-	// registration would reach a chunk daemon actually running on the developer's
+	// registration would reach a smelt daemon actually running on the developer's
 	// machine, which is neither hermetic nor polite.
-	t.Setenv("CHUNK_DAEMON_DIR", t.TempDir())
+	t.Setenv("SMELT_DAEMON_DIR", t.TempDir())
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
@@ -330,10 +330,10 @@ func TestValidateNoConfigShowsSkillHint(t *testing.T) {
 	assert.Assert(t, err != nil, "expected error when no validate commands configured")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T: %v", err, err)
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk init"),
-		"expected suggestion to mention 'chunk init', got: %q", ue.Suggestion())
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk-sidecar"),
-		"expected suggestion to mention chunk-sidecar skill, got: %q", ue.Suggestion())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt init"),
+		"expected suggestion to mention 'smelt init', got: %q", ue.Suggestion())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt-sidecar"),
+		"expected suggestion to mention smelt-sidecar skill, got: %q", ue.Suggestion())
 }
 
 // TestValidateDefaultsToRemote confirms that on the circleci backend, running
@@ -422,7 +422,7 @@ func TestValidateLocalFlagOverridesRemoteConfig(t *testing.T) {
 }
 
 // A run with no sidecar is the only record of itself: nothing is streamed to the
-// chunk daemon, which reads this same on-disk log. Registering the project is
+// smelt daemon, which reads this same on-disk log. Registering the project is
 // what tells the daemon the log exists at all, so a run that skips it leaves
 // results nothing will ever show.
 func TestValidateLocalRunRegistersProjectForTheDaemon(t *testing.T) {
@@ -557,9 +557,9 @@ func TestValidateExplicitLocalCommandNeedsNoSidecar(t *testing.T) {
 func TestValidateRejectsConflictingCommandPlacement(t *testing.T) {
 	isolateConfig(t)
 	dir := t.TempDir()
-	chunkDir := filepath.Join(dir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(`{"commands":[{"name":"test","run":"true","local":true,"remote":true}]}`), 0o644))
+	smeltDir := filepath.Join(dir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(smeltDir, "config.json"), []byte(`{"commands":[{"name":"test","run":"true","local":true,"remote":true}]}`), 0o644))
 
 	var outBuf, errBuf bytes.Buffer
 	root := newTestRootCmd()
@@ -577,7 +577,7 @@ func TestValidateEnvFlagBadValue(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write a minimal project config so validate doesn't fail with "no commands".
-	cfgDir := filepath.Join(dir, ".chunk")
+	cfgDir := filepath.Join(dir, ".smelt")
 	assert.NilError(t, os.MkdirAll(cfgDir, 0o755))
 	assert.NilError(t, os.WriteFile(
 		filepath.Join(cfgDir, "config.json"),
@@ -646,7 +646,7 @@ func countingCommand(t *testing.T, code int) (run string, runs func() int) {
 }
 
 // hookProject sets up a git repo with one configured command. Saving the config
-// leaves .chunk/ untracked, so the tree is never clean and the hook reaches the
+// leaves .smelt/ untracked, so the tree is never clean and the hook reaches the
 // cache instead of short-circuiting on the clean-tree check.
 func hookProject(t *testing.T, run string) string {
 	t.Helper()
@@ -688,7 +688,7 @@ func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 	assert.Assert(t, strings.Contains(second, skipMsg), "second run must hit the cache, got: %q", second)
 	var response hookResponse
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Equal(t, response.SystemMessage, "chunk validate: skipped, nothing changed since the last pass",
+	assert.Equal(t, response.SystemMessage, "smelt validate: skipped, nothing changed since the last pass",
 		"cache hit must return a successful hook response that says nothing ran")
 
 	// The hit cleared the counter, so the next failure is attempt 1 again.
@@ -1128,7 +1128,7 @@ func TestValidateMarkRemoteNoCommandsConfigured(t *testing.T) {
 	assert.Assert(t, err != nil)
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T", err)
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk init"), "got: %q", ue.Suggestion())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "smelt init"), "got: %q", ue.Suggestion())
 }
 
 // A malformed config must not be overwritten: the commands it holds are
@@ -1136,10 +1136,10 @@ func TestValidateMarkRemoteNoCommandsConfigured(t *testing.T) {
 func TestValidateMarkRemoteRefusesMalformedConfig(t *testing.T) {
 	isolateConfig(t)
 	dir := t.TempDir()
-	chunkDir := filepath.Join(dir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	smeltDir := filepath.Join(dir, ".smelt")
+	assert.NilError(t, os.MkdirAll(smeltDir, 0o755))
 	original := `{"commands": [{"name": "test", "run": "task test"}`
-	path := filepath.Join(chunkDir, "config.json")
+	path := filepath.Join(smeltDir, "config.json")
 	assert.NilError(t, os.WriteFile(path, []byte(original), 0o644))
 
 	_, _, err := runMarkRemoteCLI(t, dir, "test")
@@ -1247,7 +1247,7 @@ func TestReportDelegatedValidateAnnouncesABackgroundRun(t *testing.T) {
 	var outBuf, errBuf bytes.Buffer
 	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
 
-	err := reportDelegatedValidate(chunkd.ValidateResponse{
+	err := reportDelegatedValidate(smeltd.ValidateResponse{
 		TaskID: "0192cf6e-1b9f-7c3e-8a11-2b3c4d5e6f70",
 		Reason: "small change, 42 lines",
 		// Ignored: a released run has not produced these, and a daemon that
@@ -1270,7 +1270,7 @@ func TestReportDelegatedValidateExplainsAHeldRun(t *testing.T) {
 	var outBuf, errBuf bytes.Buffer
 	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
 
-	err := reportDelegatedValidate(chunkd.ValidateResponse{
+	err := reportDelegatedValidate(smeltd.ValidateResponse{
 		Reason:   "large change, 912 lines, over the 500-line limit",
 		ExitCode: 2,
 		Stdout:   "on stdout",
@@ -1290,7 +1290,7 @@ func TestReportDelegatedValidateSaysNothingWhenThereWasNoDecision(t *testing.T) 
 	var outBuf, errBuf bytes.Buffer
 	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
 
-	assert.NilError(t, reportDelegatedValidate(chunkd.ValidateResponse{Stderr: "1/1 passed"}, nil, streams))
+	assert.NilError(t, reportDelegatedValidate(smeltd.ValidateResponse{Stderr: "1/1 passed"}, nil, streams))
 	assert.Equal(t, errBuf.String(), "1/1 passed")
 }
 
@@ -1332,18 +1332,18 @@ func TestDetectHookReadsTheEventName(t *testing.T) {
 // there is any.
 func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
 	var quiet bytes.Buffer
-	assert.NilError(t, reportDelegatedValidate(chunkd.ValidateResponse{
-		Risk: &chunkd.RiskSummary{Score: 12, Band: chunkd.BandLow, Parts: []string{"12 lines (1)"}},
+	assert.NilError(t, reportDelegatedValidate(smeltd.ValidateResponse{
+		Risk: &smeltd.RiskSummary{Score: 12, Band: smeltd.BandLow, Parts: []string{"12 lines (1)"}},
 	}, nil, iostream.Streams{Out: &quiet, Err: &quiet}))
 	assert.Equal(t, quiet.String(), "", "a low-risk change was narrated")
 
 	var loud bytes.Buffer
-	err := reportDelegatedValidate(chunkd.ValidateResponse{
+	err := reportDelegatedValidate(smeltd.ValidateResponse{
 		Reason:   "large change, 2000 lines, over the 500-line limit",
 		ExitCode: 1,
-		Risk: &chunkd.RiskSummary{
+		Risk: &smeltd.RiskSummary{
 			Score:  92,
-			Band:   chunkd.BandHigh,
+			Band:   smeltd.BandHigh,
 			Parts:  []string{"2000 lines (60)", "3 files (6)"},
 			Advice: "committing it in parts would get each piece checked sooner",
 		},
@@ -1457,7 +1457,7 @@ func TestValidateHookPassNamesTheCommands(t *testing.T) {
 	assert.NilError(t, err)
 	var response hookResponse
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Assert(t, strings.HasPrefix(response.SystemMessage, "chunk validate passed: test ("),
+	assert.Assert(t, strings.HasPrefix(response.SystemMessage, "smelt validate passed: test ("),
 		"got %q", response.SystemMessage)
 }
 
@@ -1506,28 +1506,28 @@ func TestDetectHookRecognisesCodex(t *testing.T) {
 
 // fakeValidateDaemon stands up a Unix socket answering /ping with build and
 // /validate with a pass, and returns a channel of the validate requests it got.
-func fakeValidateDaemon(t *testing.T, build string) <-chan chunkd.ValidateRequest {
+func fakeValidateDaemon(t *testing.T, build string) <-chan smeltd.ValidateRequest {
 	t.Helper()
 	// Not t.TempDir(): a unix socket path is capped at 104 bytes on darwin.
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_DAEMON_DIR", dir)
-	t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", "")
+	t.Setenv("SMELT_DAEMON_DIR", dir)
+	t.Setenv("SMELT_DAEMON_REMOTE_ADDR", "")
 
-	reqs := make(chan chunkd.ValidateRequest, 4)
+	reqs := make(chan smeltd.ValidateRequest, 4)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, build)
 	})
 	mux.HandleFunc("/validate", func(w http.ResponseWriter, r *http.Request) {
-		var req chunkd.ValidateRequest
+		var req smeltd.ValidateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		reqs <- req
-		_ = json.NewEncoder(w).Encode(chunkd.ValidateResponse{})
+		_ = json.NewEncoder(w).Encode(smeltd.ValidateResponse{})
 	})
 
 	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
@@ -1541,7 +1541,7 @@ func fakeValidateDaemon(t *testing.T, build string) <-chan chunkd.ValidateReques
 // The daemon boots the run's sidecar before the subprocess starts, so the image
 // a --no-daemon run would use has to travel in the request.
 func TestRunValidateViaDaemonForwardsSidecarImage(t *testing.T) {
-	reqs := fakeValidateDaemon(t, chunkd.BuildID())
+	reqs := fakeValidateDaemon(t, smeltd.BuildID())
 
 	var outBuf, errBuf bytes.Buffer
 	err := runValidateViaDaemon(t.TempDir(), []string{"validate", "test"}, "", "org-1", "snap-test", nil,
@@ -1565,7 +1565,7 @@ func TestRunValidateViaDaemonForwardsCodex(t *testing.T) {
 		"codex":  {hook: &hookContext{sessionID: "abc", event: hookEventStop, codex: true}, codex: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			reqs := fakeValidateDaemon(t, chunkd.BuildID())
+			reqs := fakeValidateDaemon(t, smeltd.BuildID())
 
 			var outBuf, errBuf bytes.Buffer
 			err := runValidateViaDaemon(t.TempDir(), []string{"validate"}, "", "", "", tc.hook,
@@ -1601,7 +1601,7 @@ func TestReportDelegatedValidateTellsTheHookAboutABackgroundRun(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var outBuf, errBuf bytes.Buffer
-			err := reportDelegatedValidate(chunkd.ValidateResponse{
+			err := reportDelegatedValidate(smeltd.ValidateResponse{
 				TaskID: "0192cf6e-1b9f-7c3e-8a11-2b3c4d5e6f70",
 				Reason: "small change, 42 lines",
 			}, hook, iostream.Streams{Out: &outBuf, Err: &errBuf})
@@ -1609,7 +1609,7 @@ func TestReportDelegatedValidateTellsTheHookAboutABackgroundRun(t *testing.T) {
 
 			var response hookResponse
 			assert.NilError(t, json.Unmarshal(outBuf.Bytes(), &response))
-			assert.Equal(t, response.SystemMessage, "chunk validate: running in the background (small change, 42 lines)")
+			assert.Equal(t, response.SystemMessage, "smelt validate: running in the background (small change, 42 lines)")
 		})
 	}
 }
@@ -1629,7 +1629,7 @@ func TestSkipsCommitGate(t *testing.T) {
 	}{
 		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"ls -la"}}`, true},
 		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"cd sub && git commit -m x"}}`, false},
-		// A command chunk cannot read runs the gate rather than risk missing a commit.
+		// A command smelt cannot read runs the gate rather than risk missing a commit.
 		{`{"session_id":"s","hook_event_name":"PreToolUse"}`, false},
 		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":42}}`, false},
 		// Only the commit gate is filtered; the Stop hook always runs.
@@ -1686,7 +1686,7 @@ func TestValidateCommitGateRunsOnlyForCommits(t *testing.T) {
 }
 
 // Codex runs hooks in the session's working directory, which may sit below the
-// project that holds .chunk/config.json.
+// project that holds .smelt/config.json.
 func TestHookProjectRoot(t *testing.T) {
 	root := t.TempDir()
 	gitSetup(t, root, "main")

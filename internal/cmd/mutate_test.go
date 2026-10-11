@@ -7,7 +7,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/mutate"
+	"github.com/smeltdev/smelt/internal/mutate"
 )
 
 func TestMutateParallelFlag(t *testing.T) {

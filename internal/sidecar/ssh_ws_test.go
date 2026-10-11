@@ -11,8 +11,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 // TestExecOverSSHViaWebSocket verifies the happy path: a command executes

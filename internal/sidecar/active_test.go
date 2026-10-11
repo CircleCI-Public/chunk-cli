@@ -11,8 +11,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/session"
 )
 
 func hashFor(sessionID, branch string) string {
@@ -29,9 +29,9 @@ func TestSaveActiveWritesToXDGDataPath(t *testing.T) {
 
 	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarIDs: []string{"sb-1"}}))
 
-	// Must not appear inside the project's .chunk directory.
-	_, err := os.Stat(filepath.Join(dir, ".chunk", "sidecar.json"))
-	assert.Assert(t, os.IsNotExist(err), "sidecar.json must not be written inside .chunk/")
+	// Must not appear inside the project's .smelt directory.
+	_, err := os.Stat(filepath.Join(dir, ".smelt", "sidecar.json"))
+	assert.Assert(t, os.IsNotExist(err), "sidecar.json must not be written inside .smelt/")
 
 	// Must appear at the deterministic XDG data path.
 	expected, err := saveDir()
@@ -284,7 +284,7 @@ func TestResolveWorkspaceSidecarHomeEnvVar(t *testing.T) {
 	t.Chdir(dir)
 	setupXDGData(t)
 
-	t.Setenv("CHUNK_SIDECAR_HOME", "/home/runner")
+	t.Setenv("SMELT_SIDECAR_HOME", "/home/runner")
 
 	got, err := ResolveWorkspace(context.Background(), "", "myrepo")
 	assert.NilError(t, err)
@@ -475,9 +475,9 @@ func TestRemoveActiveSidecar_ClearsWhenLastMemberRemoved(t *testing.T) {
 
 // One project must not read as two. ProjectDataDir keys a data directory by the
 // resolved path, so a symlinked spelling of a root and a real one share it — but
-// the chunk daemon keys projects by the breadcrumb string, and the writers
+// the smelt daemon keys projects by the breadcrumb string, and the writers
 // disagree about the spelling: a validate run passes the working directory it
-// was given, chunk watch passes git's top-level. Left as written, the two
+// was given, smelt watch passes git's top-level. Left as written, the two
 // spellings listed one log as two projects, which the dashboard drew as
 // duplicate rows.
 func TestProjectRootRegistrationCanonicalisesTheRoot(t *testing.T) {

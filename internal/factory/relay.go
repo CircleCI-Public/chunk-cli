@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // relayConcurrency caps concurrent pushes from the worktree. Each push
@@ -22,7 +22,7 @@ const relayConcurrency = 8
 // there to each reviewer the same way the developer's own tree is synced.
 //
 // A pull mirrors the implementer's files into the worktree with --delete, so
-// the directory must be one chunk owns. It leaves every .git alone, nested
+// the directory must be one smelt owns. It leaves every .git alone, nested
 // ones included: the worktree keeps its own, and the implementer's git config
 // and hooks never reach this machine, where git will run on the files.
 type Relay struct {

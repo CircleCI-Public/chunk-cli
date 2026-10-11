@@ -10,7 +10,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 func TestSidecarGone(t *testing.T) {

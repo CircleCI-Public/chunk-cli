@@ -14,9 +14,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
 
 func TestRelativePromptsDir(t *testing.T) {
@@ -53,7 +53,7 @@ func TestDetachedStateRoundTrip(t *testing.T) {
 	_, err := loadDetachedState(work)
 	assert.Assert(t, errors.Is(err, os.ErrNotExist), "got %v", err)
 
-	want := detachedState{SidecarID: "sc-1", RunDir: "/home/user/.chunk-review/r", StartedAt: time.Unix(1_700_000_000, 0).UTC()}
+	want := detachedState{SidecarID: "sc-1", RunDir: "/home/user/.smelt-review/r", StartedAt: time.Unix(1_700_000_000, 0).UTC()}
 	assert.NilError(t, saveDetachedState(work, want))
 
 	got, err := loadDetachedState(work)
@@ -68,8 +68,8 @@ func TestDetachedStateRoundTrip(t *testing.T) {
 }
 
 func TestLastLine(t *testing.T) {
-	assert.Equal(t, lastLine("/home/u/.chunk-review/r\n"), "/home/u/.chunk-review/r")
-	assert.Equal(t, lastLine("installing...\ndone\n/home/my user/.chunk-review/r\n"), "/home/my user/.chunk-review/r")
+	assert.Equal(t, lastLine("/home/u/.smelt-review/r\n"), "/home/u/.smelt-review/r")
+	assert.Equal(t, lastLine("installing...\ndone\n/home/my user/.smelt-review/r\n"), "/home/my user/.smelt-review/r")
 	assert.Equal(t, lastLine("\n\n"), "")
 	assert.Equal(t, lastLine(""), "")
 }
@@ -125,7 +125,7 @@ func TestCheckNoActiveRun(t *testing.T) {
 			work := t.TempDir()
 			if tt.saved {
 				assert.NilError(t, saveDetachedState(work, detachedState{
-					SidecarID: "sc-1", RunDir: "/home/user/.chunk-review/r", StartedAt: time.Now().Add(-time.Minute),
+					SidecarID: "sc-1", RunDir: "/home/user/.smelt-review/r", StartedAt: time.Now().Add(-time.Minute),
 				}))
 			}
 
@@ -137,7 +137,7 @@ func TestCheckNoActiveRun(t *testing.T) {
 			var ue *userError
 			assert.Assert(t, errors.As(err, &ue), "got %v", err)
 			assert.Assert(t, strings.Contains(ue.msg, "still running on sidecar sc-1"), ue.msg)
-			assert.Assert(t, strings.Contains(ue.suggestion, "chunk review results"), ue.suggestion)
+			assert.Assert(t, strings.Contains(ue.suggestion, "smelt review results"), ue.suggestion)
 		})
 	}
 }

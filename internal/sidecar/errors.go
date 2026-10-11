@@ -25,7 +25,7 @@ func (e *PublicKeyNotFoundError) Error() string {
 }
 
 // EncryptedKeyError indicates the SSH private key is passphrase protected.
-// chunk authenticates with the key material directly and has no way to prompt
+// smelt authenticates with the key material directly and has no way to prompt
 // for or cache a passphrase, so such a key cannot be used.
 type EncryptedKeyError struct {
 	Path string
@@ -51,7 +51,7 @@ func (e *NoOriginRemoteError) Unwrap() error { return e.Err }
 
 // RemoteExitError reports that a command or shell run over SSH exited
 // non-zero. Its output has already been written by the time this is returned,
-// so callers should exit with Code rather than print it as a failure of chunk.
+// so callers should exit with Code rather than print it as a failure of smelt.
 type RemoteExitError struct {
 	Code   int
 	Signal string // set when the remote process was killed by a signal

@@ -17,7 +17,7 @@ import (
 
 const (
 	// ClientID is the OAuth client identifier registered with CircleCI.
-	ClientID = "chunk-cli"
+	ClientID = "chunk-cli" // CircleCI API contract: do not rename
 	// CallbackTimeout is how long to wait for the browser callback before giving up.
 	CallbackTimeout = 5 * time.Minute
 	callbackPath    = "/callback"

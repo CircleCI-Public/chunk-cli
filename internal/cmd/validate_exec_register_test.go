@@ -16,14 +16,14 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/session"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/fakes"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 func TestPooledValidateRegistersSubmittedCommand(t *testing.T) {
@@ -147,7 +147,7 @@ func TestPooledValidateReportsMissingWorkspace(t *testing.T) {
 	assert.Equal(t, ue.ErrorCode(), "sidecar.workspace_missing")
 }
 
-// A project whose .chunk sits below the git root registers its commands under
+// A project whose .smelt sits below the git root registers its commands under
 // the git top-level, because that is the root the daemon discovers from the
 // project breadcrumb and buckets buffered output by. Registered under the cwd
 // instead, the watch TUI never shows the output marker and the pane for that
@@ -159,12 +159,12 @@ func TestValidateRegistersCommandUnderTheGitRoot(t *testing.T) {
 	t.Setenv(config.EnvHome, home)
 	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-	t.Setenv(config.EnvChunkSessionID, "")
+	t.Setenv(config.EnvSmeltSessionID, "")
 	t.Setenv(session.EnvClaudeSessionID, "")
 	t.Setenv(config.EnvAnthropicBaseURL, unroutableBaseURL)
 	t.Setenv(config.EnvGitHubAPIURL, unroutableBaseURL)
 
-	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(home, ".ssh", "chunk_ai"))
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(home, ".ssh", "smelt_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
 	useLocalSidecar(t, sshSrv)
 

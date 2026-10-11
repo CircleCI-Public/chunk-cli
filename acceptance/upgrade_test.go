@@ -16,18 +16,18 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
-	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
+	"github.com/smeltdev/smelt/internal/testing/binary"
+	testenv "github.com/smeltdev/smelt/internal/testing/env"
+	"github.com/smeltdev/smelt/internal/upgrade"
 )
 
 func makeFakeArchive(t *testing.T) []byte {
 	t.Helper()
-	content := []byte("#!/bin/sh\necho chunk updated\n")
+	content := []byte("#!/bin/sh\necho smelt updated\n")
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	hdr := &tar.Header{Name: "chunk", Mode: 0o755, Size: int64(len(content))}
+	hdr := &tar.Header{Name: "smelt", Mode: 0o755, Size: int64(len(content))}
 	if err := tw.WriteHeader(hdr); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func upgradeEnv(t *testing.T, srv *httptest.Server, installPath string) *testenv
 	env := testenv.NewTestEnv(t)
 	env.Binary = binary.BuildVersioned(t, "1.0.0")
 	env.GithubURL = srv.URL
-	env.Extra["CHUNK_INSTALL_PATH"] = installPath
+	env.Extra["SMELT_INSTALL_PATH"] = installPath
 	return env
 }
 
@@ -90,7 +90,7 @@ func TestUpgradeHappyPath(t *testing.T) {
 	srv := newUpgradeFakeServer(t, archive, "")
 
 	// Redirect the binary replacement to a temp file so we don't overwrite the test binary.
-	installPath := filepath.Join(t.TempDir(), "chunk")
+	installPath := filepath.Join(t.TempDir(), "smelt")
 	if err := os.WriteFile(installPath, []byte("placeholder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestUpgradeHappyPath(t *testing.T) {
 func TestUpgradeRejectsATamperedArchive(t *testing.T) {
 	srv := newUpgradeFakeServer(t, makeFakeArchive(t), strings.Repeat("0", 64)+"  "+upgrade.PlatformAssetName()+"\n")
 
-	installPath := filepath.Join(t.TempDir(), "chunk")
+	installPath := filepath.Join(t.TempDir(), "smelt")
 	assert.NilError(t, os.WriteFile(installPath, []byte("placeholder"), 0o755))
 
 	env := upgradeEnv(t, srv, installPath)
@@ -130,13 +130,13 @@ func TestUpgradeRejectsATamperedArchive(t *testing.T) {
 func TestUpgradeRefusesASourceBuild(t *testing.T) {
 	srv := newUpgradeFakeServer(t, makeFakeArchive(t), "")
 
-	installPath := filepath.Join(t.TempDir(), "chunk")
+	installPath := filepath.Join(t.TempDir(), "smelt")
 	assert.NilError(t, os.WriteFile(installPath, []byte("placeholder"), 0o755))
 
 	// The default test binary is a dev build.
 	env := testenv.NewTestEnv(t)
 	env.GithubURL = srv.URL
-	env.Extra["CHUNK_INSTALL_PATH"] = installPath
+	env.Extra["SMELT_INSTALL_PATH"] = installPath
 	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "stdout: %s, stderr: %s", result.Stdout, result.Stderr)
@@ -148,7 +148,7 @@ func TestUpgradeRefusesASourceBuild(t *testing.T) {
 
 func TestUpgradeBrewManaged(t *testing.T) {
 	env := testenv.NewTestEnv(t)
-	env.Extra["CHUNK_INSTALL_PATH"] = "/opt/homebrew/bin/chunk"
+	env.Extra["SMELT_INSTALL_PATH"] = "/opt/homebrew/bin/smelt"
 
 	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
 
@@ -164,7 +164,7 @@ func TestUpgradeAPIError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	installPath := filepath.Join(t.TempDir(), "chunk")
+	installPath := filepath.Join(t.TempDir(), "smelt")
 	assert.NilError(t, os.WriteFile(installPath, []byte("placeholder"), 0o755))
 	env := upgradeEnv(t, srv, installPath)
 

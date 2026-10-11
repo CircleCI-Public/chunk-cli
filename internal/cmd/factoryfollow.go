@@ -10,19 +10,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/gitremote"
+	"github.com/smeltdev/smelt/internal/gitutil"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
-// sessionPollInterval is how often `chunk factory build` asks the daemon how its
+// sessionPollInterval is how often `smelt factory build` asks the daemon how its
 // run is going.
 const sessionPollInterval = time.Second
 
 // maxSessionPollFailures is how many polls in a row may fail before
-// `chunk factory build` gives up following its run. The run is on the daemon and
+// `smelt factory build` gives up following its run. The run is on the daemon and
 // keeps going either way.
 const maxSessionPollFailures = 5
 
@@ -30,12 +30,12 @@ const maxSessionPollFailures = 5
 // daemon. A factory run works from files on this machine, so it belongs to the
 // local daemon; a remote daemon would be working on a different checkout.
 func requireLocalDaemon() error {
-	if chunkd.CurrentConnection().Remote == "" {
+	if smeltd.CurrentConnection().Remote == "" {
 		return nil
 	}
-	return newUserError("chunk factory build runs on the local chunk daemon, but CHUNK_DAEMON_REMOTE_ADDR is set.").
+	return newUserError("smelt factory build runs on the local smelt daemon, but SMELT_DAEMON_REMOTE_ADDR is set.").
 		withCode("command.invalid_args").
-		withSuggestion("Unset CHUNK_DAEMON_REMOTE_ADDR to use this command.").
+		withSuggestion("Unset SMELT_DAEMON_REMOTE_ADDR to use this command.").
 		withExitCode(ExitBadArgs).
 		withoutDetail()
 }
@@ -71,28 +71,28 @@ func sessionProjectRoot(ctx context.Context) (string, error) {
 
 // sessionError renders a failure talking to the session API.
 func sessionError(err error) error {
-	var refused *chunkd.SessionRefused
+	var refused *smeltd.SessionRefused
 	switch {
-	case errors.Is(err, chunkd.ErrDaemonUnavailable):
-		return newUserError("The chunk daemon is not reachable.").
-			withSuggestion("Start it with 'chunk watch'.").
+	case errors.Is(err, smeltd.ErrDaemonUnavailable):
+		return newUserError("The smelt daemon is not reachable.").
+			withSuggestion("Start it with 'smelt watch'.").
 			wrap(err)
 	case errors.As(err, &refused):
 		e := newUserError(refused.Message).withoutDetail()
 		switch refused.Status {
 		case http.StatusConflict:
-			e = e.withSuggestion("Follow the active one in 'chunk watch' (press r).")
+			e = e.withSuggestion("Follow the active one in 'smelt watch' (press r).")
 		case http.StatusNotFound:
 			e = e.withSuggestion("The daemon tracks projects it has seen; check the path or the session ID.")
 		}
 		return e
 	}
-	return fmt.Errorf("talk to the chunk daemon: %w", err)
+	return fmt.Errorf("talk to the smelt daemon: %w", err)
 }
 
 // printLostFactoryWork says where a factory run was working when its session
 // can no longer be followed. The daemon still commits the work as it stops.
-func printLostFactoryWork(streams iostream.Streams, f *chunkd.FactoryRun) {
+func printLostFactoryWork(streams iostream.Streams, f *smeltd.FactoryRun) {
 	if f == nil {
 		return
 	}
@@ -109,10 +109,10 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 	defer ticker.Stop()
 	// lastFactory is where a factory run's work was last seen, so it can still
 	// be pointed to if the daemon goes away: its record goes with it.
-	var lastFactory *chunkd.FactoryRun
+	var lastFactory *smeltd.FactoryRun
 	for {
-		detail, err := chunkd.FetchSession(id)
-		var refused *chunkd.SessionRefused
+		detail, err := smeltd.FetchSession(id)
+		var refused *smeltd.SessionRefused
 		switch {
 		case errors.As(err, &refused):
 			printLostFactoryWork(streams, lastFactory)
@@ -120,8 +120,8 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 		case err != nil:
 			if failures++; failures >= maxSessionPollFailures {
 				printLostFactoryWork(streams, lastFactory)
-				return newUserError("Lost contact with the chunk daemon.").
-					withSuggestion(fmt.Sprintf("Run %s may still be running on the daemon. Follow it in 'chunk watch' (press r).", id)).
+				return newUserError("Lost contact with the smelt daemon.").
+					withSuggestion(fmt.Sprintf("Run %s may still be running on the daemon. Follow it in 'smelt watch' (press r).", id)).
 					wrap(err)
 			}
 		default:
@@ -136,7 +136,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 		}
 		select {
 		case <-ctx.Done():
-			if err := chunkd.CancelSession(id); err != nil {
+			if err := smeltd.CancelSession(id); err != nil {
 				return sessionError(err)
 			}
 			streams.ErrPrintf("Stopping %s...\n", id)
@@ -148,7 +148,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 	}
 }
 
-func roundNote(r chunkd.Round) string {
+func roundNote(r smeltd.Round) string {
 	if r.Note == "" {
 		return ""
 	}
@@ -158,11 +158,11 @@ func roundNote(r chunkd.Round) string {
 // sessionReporter turns successive snapshots of a session into status lines.
 type sessionReporter struct {
 	status  iostream.StatusFunc
-	rounds  map[int]chunkd.RoundState
-	reviews map[string]chunkd.PromptRunState
+	rounds  map[int]smeltd.RoundState
+	reviews map[string]smeltd.PromptRunState
 	// implement and checks are what has been said of a factory round's
 	// implementer turn and how many of its validation commands.
-	implement map[int]chunkd.RoundImplement
+	implement map[int]smeltd.RoundImplement
 	checks    map[int]int
 	// progress counts the lines of the factory run's progress already said.
 	progress int
@@ -173,15 +173,15 @@ type sessionReporter struct {
 func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
 	return &sessionReporter{
 		status:    status,
-		rounds:    map[int]chunkd.RoundState{},
-		reviews:   map[string]chunkd.PromptRunState{},
-		implement: map[int]chunkd.RoundImplement{},
+		rounds:    map[int]smeltd.RoundState{},
+		reviews:   map[string]smeltd.PromptRunState{},
+		implement: map[int]smeltd.RoundImplement{},
 		checks:    map[int]int{},
 		checked:   map[int]bool{},
 	}
 }
 
-func (r *sessionReporter) report(d chunkd.SessionDetail) {
+func (r *sessionReporter) report(d smeltd.SessionDetail) {
 	s := d.Session
 	// A factory run's progress comes first: most of it is the setup before
 	// any round, which a snapshot caught up on all at once would otherwise
@@ -216,19 +216,19 @@ func (r *sessionReporter) report(d chunkd.SessionDetail) {
 			}
 			r.reviews[key] = p.State
 			switch p.State {
-			case chunkd.PromptRunning:
+			case smeltd.PromptRunning:
 				r.status(iostream.LevelInfo, fmt.Sprintf("reviewing %s on %s", p.Name, p.SidecarID))
-			case chunkd.PromptDone:
+			case smeltd.PromptDone:
 				r.status(iostream.LevelDone, fmt.Sprintf("%s reviewed in %s", p.Name, msDuration(p.DurationMS)))
-			case chunkd.PromptFailed:
+			case smeltd.PromptFailed:
 				r.status(iostream.LevelWarn, fmt.Sprintf("%s: %s", p.Name, p.Error))
-			case chunkd.PromptQueued:
+			case smeltd.PromptQueued:
 				// Nothing to say yet.
 			}
 		}
 		// A factory round's findings are recorded as it is checked, which is
 		// when it is done.
-		if round.State == chunkd.RoundDone && !r.checked[i] {
+		if round.State == smeltd.RoundDone && !r.checked[i] {
 			r.checked[i] = true
 			r.reportFindings(roundResults(d, round.Number))
 		}
@@ -237,21 +237,21 @@ func (r *sessionReporter) report(d chunkd.SessionDetail) {
 
 // reportImplement says how a factory round's implementer turn went, once it
 // has gone somewhere new.
-func (r *sessionReporter) reportImplement(i int, impl chunkd.RoundImplement) {
+func (r *sessionReporter) reportImplement(i int, impl smeltd.RoundImplement) {
 	prev := r.implement[i]
 	r.implement[i] = impl
 	if impl.State != prev.State {
 		switch impl.State {
-		case chunkd.ImplementApplied:
+		case smeltd.ImplementApplied:
 			r.status(iostream.LevelDone, fmt.Sprintf("implementer finished in %s ($%.2f)", msDuration(impl.DurationMS), impl.CostUSD))
 			if impl.Summary != "" {
 				r.status(iostream.LevelInfo, oneLineSummary(impl.Summary))
 			}
-		case chunkd.ImplementEmpty:
+		case smeltd.ImplementEmpty:
 			r.status(iostream.LevelWarn, "no changes")
-		case chunkd.ImplementFailed:
+		case smeltd.ImplementFailed:
 			r.status(iostream.LevelWarn, "implementer failed: "+impl.Error)
-		case chunkd.ImplementRunning:
+		case smeltd.ImplementRunning:
 			// The round's own state line says so.
 		}
 	}
@@ -261,7 +261,7 @@ func (r *sessionReporter) reportImplement(i int, impl chunkd.RoundImplement) {
 }
 
 // roundResults is the review results of the round numbered n.
-func roundResults(d chunkd.SessionDetail, n int) []chunkd.ReviewResult {
+func roundResults(d smeltd.SessionDetail, n int) []smeltd.ReviewResult {
 	for _, rd := range d.Details {
 		if rd.Number == n {
 			return rd.Results
@@ -272,14 +272,14 @@ func roundResults(d chunkd.SessionDetail, n int) []chunkd.ReviewResult {
 
 // reportFindings says what each of a factory round's reviews found: what the
 // implementer is asked to fix next, or what is left when the run ends.
-func (r *sessionReporter) reportFindings(results []chunkd.ReviewResult) {
+func (r *sessionReporter) reportFindings(results []smeltd.ReviewResult) {
 	for _, res := range results {
 		switch res.Status {
-		case chunkd.CheckPassed:
+		case smeltd.CheckPassed:
 			r.status(iostream.LevelDone, fmt.Sprintf("review %s: no findings worth changing", res.Prompt))
-		case chunkd.CheckFailed:
+		case smeltd.CheckFailed:
 			r.status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)", res.Prompt, len(res.Findings)))
-		case chunkd.CheckErrored:
+		case smeltd.CheckErrored:
 			r.status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", res.Prompt, res.Error))
 			continue
 		}
@@ -294,11 +294,11 @@ func (r *sessionReporter) reportFindings(results []chunkd.ReviewResult) {
 const failedOutputLines = 20
 
 // reportCheck says how a factory round's validation command came out.
-func (r *sessionReporter) reportCheck(c chunkd.RoundCheck) {
+func (r *sessionReporter) reportCheck(c smeltd.RoundCheck) {
 	switch c.Status {
-	case chunkd.CheckPassed:
+	case smeltd.CheckPassed:
 		r.status(iostream.LevelDone, fmt.Sprintf("  %s passed in %s", c.Name, msDuration(c.DurationMS)))
-	case chunkd.CheckFailed:
+	case smeltd.CheckFailed:
 		r.status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, msDuration(c.DurationMS)))
 		if c.Output == "" {
 			return
@@ -307,7 +307,7 @@ func (r *sessionReporter) reportCheck(c chunkd.RoundCheck) {
 		for _, l := range lines[max(len(lines)-failedOutputLines, 0):] {
 			r.status(iostream.LevelInfo, "    "+l)
 		}
-	case chunkd.CheckErrored:
+	case smeltd.CheckErrored:
 		r.status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
 	}
 }

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // DistributedJobResult reports the outcome of one remotely scheduled command.

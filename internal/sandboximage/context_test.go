@@ -54,17 +54,17 @@ func writeRepo(t *testing.T, files map[string]string) string {
 
 func TestContextTagAndTar(t *testing.T) {
 	files := map[string]string{
-		"Dockerfile.chunk": "FROM x\nCOPY go.mod go.sum /tmp/\n",
+		"Dockerfile.smelt": "FROM x\nCOPY go.mod go.sum /tmp/\n",
 		"go.mod":           "module a\n",
 		"go.sum":           "sum\n",
 		"main.go":          "package main\n",
 	}
 	dir := writeRepo(t, files)
-	c, err := ReadContext(dir, "Dockerfile.chunk")
+	c, err := ReadContext(dir, "Dockerfile.smelt")
 	assert.NilError(t, err)
 	tag, err := c.Tag("repo")
 	assert.NilError(t, err)
-	assert.Equal(t, len(tag), len("chunk-repo:")+12)
+	assert.Equal(t, len(tag), len("smelt-repo:")+12)
 
 	// Unrelated files do not change the tag; a copied file does.
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("changed"), 0o644))
@@ -88,7 +88,7 @@ func TestContextTagAndTar(t *testing.T) {
 		assert.NilError(t, err)
 		names = append(names, h.Name)
 	}
-	assert.DeepEqual(t, names, []string{"Dockerfile.chunk", "go.mod", "go.sum"})
+	assert.DeepEqual(t, names, []string{"Dockerfile.smelt", "go.mod", "go.sum"})
 }
 
 func TestSlug(t *testing.T) {

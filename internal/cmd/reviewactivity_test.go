@@ -12,11 +12,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/eventlog"
+	"github.com/smeltdev/smelt/internal/review"
+	"github.com/smeltdev/smelt/internal/sidecar"
+	"github.com/smeltdev/smelt/internal/testing/gitrepo"
 )
 
 // reviewEvents returns everything the activity wrote for one project root.
@@ -170,9 +170,9 @@ func TestReviewActivityFilesUnderTheGitRoot(t *testing.T) {
 // Reviews run concurrently, so every recorder shares one log and its mutex.
 func TestReviewActivityRecordsConcurrentReviews(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-	// submitted registers with the chunk daemon; without this the registrations
+	// submitted registers with the smelt daemon; without this the registrations
 	// would reach whichever one the developer running the tests has open.
-	t.Setenv("CHUNK_DAEMON_DIR", t.TempDir())
+	t.Setenv("SMELT_DAEMON_DIR", t.TempDir())
 	root := t.TempDir()
 
 	activity := newReviewActivity(context.Background(), root)

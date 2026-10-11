@@ -3,7 +3,7 @@ package anthropic
 import (
 	"context"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 // GenerateReviewPrompt uses Claude to generate a PR review prompt from analysis.

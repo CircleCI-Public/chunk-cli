@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
+	"github.com/smeltdev/smelt/internal/telemetry"
 )
 
 // flushRecordingDestination records whether the Sender was flushed, and what
@@ -34,7 +34,7 @@ func (d *flushRecordingDestination) Close() error {
 func rootWithSender(t *testing.T, dest *flushRecordingDestination, runErr error) *cobra.Command {
 	t.Helper()
 
-	root := &cobra.Command{Use: "chunk", SilenceErrors: true, SilenceUsage: true}
+	root := &cobra.Command{Use: "smelt", SilenceErrors: true, SilenceUsage: true}
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		sender, err := telemetry.NewSender(telemetry.Config{TestDestination: dest})
 		assert.NilError(t, err)

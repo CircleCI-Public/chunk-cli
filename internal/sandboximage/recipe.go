@@ -1,7 +1,7 @@
 // Package sandboximage builds the Docker image that factory runs execute in.
 //
-// A Recipe is derived deterministically from what chunk detects about the repo
-// and what its CI config says; Render turns it into a Dockerfile.chunk that is
+// A Recipe is derived deterministically from what smelt detects about the repo
+// and what its CI config says; Render turns it into a Dockerfile.smelt that is
 // committed to the repo; Builder builds it and Tag says whether the result is
 // still fresh.
 package sandboximage
@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/ciconfig"
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
+	"github.com/smeltdev/smelt/internal/ciconfig"
+	"github.com/smeltdev/smelt/internal/envspec"
 )
 
 // Where a Recipe's base image came from.
@@ -37,7 +37,7 @@ const (
 // fallbackBase is the base for a repo whose stack is not recognised.
 const fallbackBase = "debian:bookworm-slim"
 
-// Recipe is what rendering a Dockerfile.chunk needs.
+// Recipe is what rendering a Dockerfile.smelt needs.
 type Recipe struct {
 	Base     string // e.g. "cimg/node:24.21.0"
 	BaseFrom string // BaseFromCI, BaseFromDetected or BaseFromFallback

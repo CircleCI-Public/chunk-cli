@@ -11,10 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/smeltd"
+	"github.com/smeltdev/smelt/internal/ui"
 )
 
 // maxPromptWidth keeps the prompt column readable in a terminal.
@@ -98,12 +98,12 @@ func loadFactoryRuns(ctx context.Context) (string, []factory.RunEntry, error) {
 // activeRunIDs is the set of run IDs with a running daemon session.
 func activeRunIDs(root string) map[string]bool {
 	active := map[string]bool{}
-	sessions, err := chunkd.ListSessions(root)
+	sessions, err := smeltd.ListSessions(root)
 	if err != nil {
 		return active
 	}
 	for _, s := range sessions {
-		if s.State == chunkd.SessionRunning && s.Factory != nil && s.Factory.RunID != "" {
+		if s.State == smeltd.SessionRunning && s.Factory != nil && s.Factory.RunID != "" {
 			active[s.Factory.RunID] = true
 		}
 	}
@@ -174,14 +174,14 @@ func selectCleanRuns(entries []factory.RunEntry, args []string) ([]factory.RunEn
 		if i < 0 {
 			return nil, newUserError(fmt.Sprintf("No factory run %s in this project.", id)).
 				withCode("command.invalid_args").
-				withSuggestion("See the runs with: chunk factory list").
+				withSuggestion("See the runs with: smelt factory list").
 				withExitCode(ExitBadArgs).
 				withoutDetail()
 		}
 		if entries[i].State == factory.StateRunning {
 			return nil, newUserError(fmt.Sprintf("Factory run %s is still running.", id)).
 				withCode("command.invalid_args").
-				withSuggestion("Stop it in 'chunk watch' first.").
+				withSuggestion("Stop it in 'smelt watch' first.").
 				withExitCode(ExitBadArgs).
 				withoutDetail()
 		}

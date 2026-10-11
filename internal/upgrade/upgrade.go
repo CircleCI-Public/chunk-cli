@@ -16,17 +16,19 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
-// Where chunk's releases live. This is the one place that names the release
+// Where smelt's releases live. This is the one place that names the release
 // repository: the update check, the release link, the upgrade itself and the
 // installer script all derive from it.
 const (
 	// Repo is the GitHub "owner/name" releases are published to and downloaded from.
-	Repo = "web3technologies/chunk-cli"
+	Repo = "smeltdev/smelt"
 
 	// AssetPrefix is the goreleaser project name, which starts every archive name.
-	AssetPrefix = "chunk"
+	AssetPrefix = brand.Command
 
 	// ChecksumsAsset is the release asset listing every archive's SHA-256.
 	ChecksumsAsset = "checksums.txt"
@@ -79,12 +81,12 @@ func ReleaseURL(tag string) string {
 }
 
 // SelfUpgradeCommand returns the command that upgrades the running binary. A
-// Homebrew-managed chunk is not this project's build and must not be replaced
+// Homebrew-managed smelt is not this project's build and must not be replaced
 // in place, so it is pointed at the installer instead.
 func SelfUpgradeCommand() string {
 	execPath, err := os.Executable()
 	if err != nil {
-		return "chunk upgrade"
+		return brand.Command + " upgrade"
 	}
 	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
 		execPath = resolved
@@ -92,7 +94,7 @@ func SelfUpgradeCommand() string {
 	if isBrewManaged(execPath) {
 		return InstallCommand
 	}
-	return "chunk upgrade"
+	return brand.Command + " upgrade"
 }
 
 // Options configure Run.
@@ -116,7 +118,7 @@ var ErrSourceBuild = errors.New("source build")
 var ErrHomebrewManaged = errors.New("managed by Homebrew")
 
 func errSourceBuild(reason string) error {
-	return fmt.Errorf("this chunk is a source build (%s), so it has no release to upgrade to: update it with: git pull && task build: %w", reason, ErrSourceBuild)
+	return fmt.Errorf("this smelt is a source build (%s), so it has no release to upgrade to: update it with: git pull && task build: %w", reason, ErrSourceBuild)
 }
 
 // checkReplaceable reports why the binary at path must not be replaced with a
@@ -127,7 +129,7 @@ func checkReplaceable(path, version string) error {
 		resolved = path
 	}
 	if isBrewManaged(resolved) {
-		return fmt.Errorf("chunk at %s is managed by Homebrew, which installs a different build than this project's releases; install this one with: %s: %w", resolved, InstallCommand, ErrHomebrewManaged)
+		return fmt.Errorf("smelt at %s is managed by Homebrew, which installs a different build than this project's releases; install this one with: %s: %w", resolved, InstallCommand, ErrHomebrewManaged)
 	}
 	if version == "dev" {
 		return errSourceBuild("version is dev")
@@ -160,7 +162,7 @@ func Run(opts Options) error {
 		return fmt.Errorf("release %s has no %s, so the download cannot be verified", rel.TagName, ChecksumsAsset)
 	}
 
-	_, _ = fmt.Fprintf(opts.Out, "Downloading chunk %s...\n", rel.TagName)
+	_, _ = fmt.Fprintf(opts.Out, "Downloading smelt %s...\n", rel.TagName)
 	if err := downloadAndReplace(opts.Client, archiveURL, checksumsURL, assetName, opts.InstallPath); err != nil {
 		return fmt.Errorf("install update: %w", err)
 	}
@@ -298,13 +300,13 @@ func downloadAndReplace(client *http.Client, archiveURL, checksumsURL, name, ins
 			return fmt.Errorf("read tar: %w", err)
 		}
 		// Match the archive root exactly, not by base name: nothing stops the
-		// archive shipping a nested file called "chunk" ahead of the binary.
-		if hdr.Typeflag != tar.TypeReg || filepath.Clean(hdr.Name) != "chunk" {
+		// archive shipping a nested file called "smelt" ahead of the binary.
+		if hdr.Typeflag != tar.TypeReg || filepath.Clean(hdr.Name) != brand.Command {
 			continue
 		}
 
 		dir := filepath.Dir(installPath)
-		tmp, err := os.CreateTemp(dir, "chunk-*.tmp")
+		tmp, err := os.CreateTemp(dir, brand.Command+"-*.tmp")
 		if err != nil {
 			return fmt.Errorf("create temp file: %w", err)
 		}
@@ -329,5 +331,5 @@ func downloadAndReplace(client *http.Client, archiveURL, checksumsURL, name, ins
 		return nil
 	}
 
-	return fmt.Errorf("chunk binary not found in archive")
+	return fmt.Errorf("smelt binary not found in archive")
 }

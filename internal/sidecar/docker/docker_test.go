@@ -11,7 +11,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/smeltdev/smelt/internal/iostream"
 )
 
 // testImage is small and ships a POSIX sh, ls and cat, which is all these
@@ -47,7 +47,7 @@ func newLiveBackend(t *testing.T) *Provider {
 
 func TestExecStreamsOutputAndExitCode(t *testing.T) {
 	b := newLiveBackend(t)
-	inst, err := b.Create(context.Background(), "chunk-test-exec", "", repoPath)
+	inst, err := b.Create(context.Background(), "smelt-test-exec", "", repoPath)
 	assert.NilError(t, err)
 	defer func() { _ = b.Delete(context.Background(), inst.ID) }()
 
@@ -73,13 +73,13 @@ func TestExecStreamsOutputAndExitCode(t *testing.T) {
 
 func TestExecPassesEnv(t *testing.T) {
 	b := newLiveBackend(t)
-	inst, err := b.Create(context.Background(), "chunk-test-env", "", repoPath)
+	inst, err := b.Create(context.Background(), "smelt-test-env", "", repoPath)
 	assert.NilError(t, err)
 	defer func() { _ = b.Delete(context.Background(), inst.ID) }()
 
 	var stdout strings.Builder
-	code, err := b.Exec(context.Background(), inst.ID, `printf '%s' "$CHUNK_TEST_VAR"`,
-		map[string]string{"CHUNK_TEST_VAR": "hello-env"},
+	code, err := b.Exec(context.Background(), inst.ID, `printf '%s' "$SMELT_TEST_VAR"`,
+		map[string]string{"SMELT_TEST_VAR": "hello-env"},
 		func(stream string, data []byte) {
 			if stream == iostream.StreamStdout {
 				stdout.Write(data)
@@ -107,8 +107,8 @@ func TestSyncSnapshotCloneAndPull(t *testing.T) {
 	// The seed runs an explicit image while the provider's default is bogus:
 	// a clone must run the seed's image (recorded in the snapshot), and would
 	// fail to pull the default if it fell back to it.
-	b.baseImage = "chunk-test/does-not-exist:never"
-	seed, err := b.Create(ctx, "chunk-test-seed", testImage, repoPath)
+	b.baseImage = "smelt-test/does-not-exist:never"
+	seed, err := b.Create(ctx, "smelt-test-seed", testImage, repoPath)
 	assert.NilError(t, err)
 	defer func() { _ = b.Delete(ctx, seed.ID) }()
 
@@ -133,13 +133,13 @@ func TestSyncSnapshotCloneAndPull(t *testing.T) {
 	assert.Equal(t, catOut.String(), "package main\n")
 
 	// Snapshot the seed and clone from it: the clone's workspace has the files.
-	snap, err := b.Snapshot(ctx, seed.ID, "chunk-test-snap")
+	snap, err := b.Snapshot(ctx, seed.ID, "smelt-test-snap")
 	assert.NilError(t, err)
 	assert.Assert(t, strings.HasPrefix(snap, snapshotScheme))
 	snapDir := strings.TrimPrefix(snap, snapshotScheme)
 	assert.Equal(t, strings.TrimSpace(readFile(t, filepath.Join(snapDir, snapshotImageFile))), testImage)
 
-	clone, err := b.Create(ctx, "chunk-test-clone", snap, repoPath)
+	clone, err := b.Create(ctx, "smelt-test-clone", snap, repoPath)
 	assert.NilError(t, err)
 	defer func() { _ = b.Delete(ctx, clone.ID) }()
 	assert.Equal(t, readFile(t, filepath.Join(clone.HostDir, "main.go")), "package main\n")
@@ -157,10 +157,10 @@ func TestSyncSnapshotCloneAndPull(t *testing.T) {
 func TestCreateSameNameTwice(t *testing.T) {
 	b := newLiveBackend(t)
 	ctx := context.Background()
-	first, err := b.Create(ctx, "chunk-test-dup", "", repoPath)
+	first, err := b.Create(ctx, "smelt-test-dup", "", repoPath)
 	assert.NilError(t, err)
 	defer func() { _ = b.Delete(ctx, first.ID) }()
-	second, err := b.Create(ctx, "chunk-test-dup", "", repoPath)
+	second, err := b.Create(ctx, "smelt-test-dup", "", repoPath)
 	assert.NilError(t, err)
 	defer func() { _ = b.Delete(ctx, second.ID) }()
 	assert.Assert(t, first.ID != second.ID)
@@ -170,7 +170,7 @@ func TestCreateSameNameTwice(t *testing.T) {
 func TestDeleteRemovesWorkspace(t *testing.T) {
 	b := newLiveBackend(t)
 	ctx := context.Background()
-	inst, err := b.Create(ctx, "chunk-test-del", "", repoPath)
+	inst, err := b.Create(ctx, "smelt-test-del", "", repoPath)
 	assert.NilError(t, err)
 	assert.Assert(t, exists(inst.HostDir))
 	assert.NilError(t, b.Delete(ctx, inst.ID))

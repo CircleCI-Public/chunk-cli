@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
 // DefaultDir is where prompts are read from, relative to the project root,
 // when no directory is given.
-const DefaultDir = ".chunk/reviews"
+const DefaultDir = brand.ProjectDir + "/reviews"
 
 // promptExts are the file extensions read as prompts. Anything else in the
 // directory is ignored, so it can hold fixtures without them becoming reviews.

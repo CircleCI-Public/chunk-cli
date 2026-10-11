@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
 const (
@@ -19,7 +21,7 @@ var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 type RunDefinition struct {
 	DefinitionID       string  `json:"definition_id"`
 	Description        string  `json:"description,omitempty"`
-	ChunkEnvironmentID *string `json:"chunk_environment_id"`
+	ChunkEnvironmentID *string `json:"chunk_environment_id"` // CircleCI API contract: do not rename
 	DefaultBranch      string  `json:"default_branch"`
 }
 
@@ -36,7 +38,7 @@ type RunConfig struct {
 }
 
 func LoadRunConfig(workDir string) (*RunConfig, error) {
-	path := filepath.Join(workDir, ".chunk", "run.json")
+	path := filepath.Join(workDir, brand.ProjectDir, "run.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("could not read run.json configuration: %w", err)
@@ -49,7 +51,7 @@ func LoadRunConfig(workDir string) (*RunConfig, error) {
 }
 
 // GetDefinitionByNameOrID looks up a definition by name first, then checks
-// if the input is a raw UUID. Returns the definition ID, the chunk environment ID,
+// if the input is a raw UUID. Returns the definition ID, the smelt environment ID,
 // and the default branch.
 func GetDefinitionByNameOrID(cfg *RunConfig, nameOrID string) (string, *string, string, error) {
 	// Try name lookup first
@@ -65,11 +67,11 @@ func GetDefinitionByNameOrID(cfg *RunConfig, nameOrID string) (string, *string, 
 	return "", nil, "", fmt.Errorf("unknown definition %q, available: %s", nameOrID, availableDefinitions(cfg))
 }
 
-// SaveRunConfig writes run config to .chunk/run.json.
+// SaveRunConfig writes run config to .smelt/run.json.
 func SaveRunConfig(workDir string, cfg *RunConfig) error {
-	dir := filepath.Join(workDir, ".chunk")
+	dir := filepath.Join(workDir, brand.ProjectDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create .chunk directory: %w", err)
+		return fmt.Errorf("create .smelt directory: %w", err)
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -92,9 +94,9 @@ func MapVcsTypeToOrgType(vcsType string) string {
 	return orgTypeCircleCI
 }
 
-// ConfigExists checks whether .chunk/run.json exists at the given root directory.
+// ConfigExists checks whether .smelt/run.json exists at the given root directory.
 func ConfigExists(rootDir string) bool {
-	path := filepath.Join(rootDir, ".chunk", "run.json")
+	path := filepath.Join(rootDir, brand.ProjectDir, "run.json")
 	_, err := os.Stat(path)
 	return err == nil
 }

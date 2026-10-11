@@ -1,6 +1,6 @@
 // Package sse reads Server-Sent Events streams.
 //
-// It is a reader only — chunk consumes SSE, it never serves it. The server side
+// It is a reader only — smelt consumes SSE, it never serves it. The server side
 // of this contract lives in sandbox-provisioner; the two are separate modules,
 // so the framing is implemented on both sides rather than shared.
 package sse

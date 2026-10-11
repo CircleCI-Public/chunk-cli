@@ -1,18 +1,20 @@
 # AGENTS.md
 
-`chunk` is a Go CLI (built with cobra) for inner loop validation and a local software factory. By default everything runs on the developer's machine, with Docker for factory runs. Its optional **CircleCI backend** adds **sidecars** — ephemeral Linux environments on CircleCI that a developer's working tree is synced to so quality checks (test, lint, format) run there instead of locally, catching environment-specific failures before they reach CI.
+`smelt` is a Go CLI (built with cobra) for inner loop validation and a local software factory. By default everything runs on the developer's machine, with Docker for factory runs. Its optional **CircleCI backend** adds **sidecars** — ephemeral Linux environments on CircleCI that a developer's working tree is synced to so quality checks (test, lint, format) run there instead of locally, catching environment-specific failures before they reach CI.
 
-**CircleCI is opt-in.** chunk may contact a CircleCI-owned endpoint only when the user chose it: `factory.backend: circleci` in `.chunk/config.json` (`config.ProjectConfig.UsesCircleCI()` is the one place that asks), `--backend circleci`, or an explicitly CircleCI command (`auth`, `sidecar`, `task`, `org`, `prune`, ...). A CircleCI token on the machine is never consent. `internal/circleci` may be imported only by the packages listed in `.golangci.yml`, and `task check:circleci` fails on stray references to CircleCI's repositories, packages and endpoints.
+**CircleCI is opt-in.** smelt may contact a CircleCI-owned endpoint only when the user chose it: `factory.backend: circleci` in `.smelt/config.json` (`config.ProjectConfig.UsesCircleCI()` is the one place that asks), `--backend circleci`, or an explicitly CircleCI command (`auth`, `sidecar`, `task`, `org`, `prune`, ...). A CircleCI token on the machine is never consent. `internal/circleci` may be imported only by the packages listed in `.golangci.yml`, and `task check:circleci` fails on stray references to CircleCI's repositories, packages and endpoints.
 
-It also provides `build-prompt`, a secondary tool that mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to a team's review patterns. Generated context goes in `.chunk/context/` for AI coding agents to pick up automatically.
+It also provides `build-prompt`, a secondary tool that mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to a team's review patterns. Generated context goes in `.smelt/context/` for AI coding agents to pick up automatically.
+
+**The name lives in `internal/brand`.** The command, project and app folders, `SMELT_` environment prefix (`brand.Env`), keychain and label prefixes, factory branch prefix, Dockerfile name and image tag prefix are all derived there. smelt never reads or writes the locations of CircleCI's own CLI, which may be installed on the same machine; `task check:names` fails on the old name outside the license attribution and the CircleCI API-contract strings (marked `// CircleCI API contract: do not rename`).
 
 ## Common Commands
 
 ```bash
-task build              # Build binary → dist/chunk
+task build              # Build binary → dist/smelt
 task test               # Run all tests
 task acceptance-test    # Run acceptance tests
-task lint               # Run linters, shellcheck on install.sh and the CircleCI sweep (task check:circleci)
+task lint               # Run linters, shellcheck on install.sh, the CircleCI sweep (task check:circleci) and the name guard (task check:names)
 task fmt                # Format code
 ```
 
@@ -36,7 +38,7 @@ Read these when working in the relevant area:
 ## Code Standards
 
 These apply to every change, whoever writes it. On factory runs, the
-`maintainability` review in `.chunk/reviews/` checks the change against them.
+`maintainability` review in `.smelt/reviews/` checks the change against them.
 
 ### Reuse before you write (DRY)
 
@@ -46,7 +48,7 @@ These apply to every change, whoever writes it. On factory runs, the
   (user-facing errors in `cmd/`).
 - Give each piece of knowledge one home: a constant, a type or a function.
   Don't repeat a literal that means the same thing everywhere (use
-  `chunkd.BackendDocker`, not `"docker"`). Don't copy a block to tweak it:
+  `smeltd.BackendDocker`, not `"docker"`). Don't copy a block to tweak it:
   extract the shared part and pass in the difference.
 - Extract when *logic* repeats, not when two lines merely look alike. A shared
   helper that needs a flag to choose between its callers' behaviour is the

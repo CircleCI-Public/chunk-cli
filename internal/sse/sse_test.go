@@ -8,7 +8,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/sse"
+	"github.com/smeltdev/smelt/internal/sse"
 )
 
 func collect(t *testing.T, in string, maxFrame int) ([]sse.Frame, string, error) {

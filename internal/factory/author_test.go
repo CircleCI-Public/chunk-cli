@@ -7,13 +7,13 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/smeltdev/smelt/internal/config"
 )
 
 func TestChooseAuthor(t *testing.T) {
 	configured := config.CommitAuthor{Name: "Ada", Email: "ada@example.com"}
 	developer := config.CommitAuthor{Name: "Dev", Email: "dev@example.com"}
-	chunk := ResolvedAuthor{CommitAuthor: config.CommitAuthor{Name: defaultAuthorName, Email: defaultAuthorEmail}, Source: AuthorDefault}
+	piece := ResolvedAuthor{CommitAuthor: config.CommitAuthor{Name: defaultAuthorName, Email: defaultAuthorEmail}, Source: AuthorDefault}
 	tests := []struct {
 		name       string
 		configured config.CommitAuthor
@@ -22,8 +22,8 @@ func TestChooseAuthor(t *testing.T) {
 	}{
 		{"configured wins", configured, developer, ResolvedAuthor{configured, AuthorFromConfig}},
 		{"developer when nothing configured", config.CommitAuthor{}, developer, ResolvedAuthor{developer, AuthorFromGit}},
-		{"chunk when nobody is named", config.CommitAuthor{}, config.CommitAuthor{}, chunk},
-		{"an identity without an email is skipped", config.CommitAuthor{}, config.CommitAuthor{Name: "Dev"}, chunk},
+		{"smelt when nobody is named", config.CommitAuthor{}, config.CommitAuthor{}, piece},
+		{"an identity without an email is skipped", config.CommitAuthor{}, config.CommitAuthor{Name: "Dev"}, piece},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestWorktreeCommitsAsItsAuthor(t *testing.T) {
 	wt, err := CreateWorktree(ctx, WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag", Author: author})
 	assert.NilError(t, err)
 	// The baseline holds the developer's uncommitted work, so it is a commit
-	// chunk made, and it is published with the branch.
+	// smelt made, and it is published with the branch.
 	assert.Equal(t, gitOutput(t, wt.Path, "log", "-1", "--format=%an <%ae> / %cn <%ce>", wt.Baseline),
 		"Dev Eloper <dev@example.com> / Dev Eloper <dev@example.com>")
 

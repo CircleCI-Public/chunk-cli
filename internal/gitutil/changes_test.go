@@ -9,7 +9,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
+	"github.com/smeltdev/smelt/internal/changeset"
 )
 
 // changes asserts the tree could be measured and returns the measurement.

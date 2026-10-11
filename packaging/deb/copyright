@@ -1,12 +1,13 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: chunk
-Source: https://github.com/web3technologies/chunk-cli
+Upstream-Name: smelt
+Source: https://github.com/smeltdev/smelt
 Comment: A fork of the CircleCI-Public/chunk-cli project, whose license and
  copyright are retained below.
 
 Files: *
 Copyright: 2026 Circle Internet Services, Inc.
  2026 web3technologies
+ 2026 smeltdev
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal

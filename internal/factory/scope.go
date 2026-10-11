@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/smeltdev/smelt/internal/review"
 )
 
 // severityScope is the rubric added to every review. It says what may block a

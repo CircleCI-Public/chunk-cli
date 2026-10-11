@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/smeltdev/smelt/internal/brand"
 )
 
 // MutationPatch computes a unified diff for mutation m without modifying any
@@ -74,7 +76,7 @@ func mutateSrc(filename string, src []byte, m Mutation) ([]byte, error) {
 // diff exits with status 1 when differences are found, which is the success
 // case for mutation patches.
 func computePatch(file string, orig, mutated []byte) ([]byte, error) {
-	tmpA, err := os.CreateTemp("", "chunk-orig-*")
+	tmpA, err := os.CreateTemp("", brand.Command+"-orig-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp: %w", err)
 	}
@@ -88,7 +90,7 @@ func computePatch(file string, orig, mutated []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	tmpB, err := os.CreateTemp("", "chunk-mut-*")
+	tmpB, err := os.CreateTemp("", brand.Command+"-mut-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp: %w", err)
 	}
