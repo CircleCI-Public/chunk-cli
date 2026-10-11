@@ -58,11 +58,14 @@ const labelName = brand.LabelPrefix + "name"
 // image being absent. notFoundAttempts bounds lookups that answer "no such
 // image": Docker Desktop's API proxy answers that while the engine is still
 // starting after a Resource Saver shutdown, before its image store is loaded,
-// so one "not found" is not trusted. inspectBackoff is the base delay between
-// lookups, growing linearly. A variable so tests need not wait.
+// so one "not found" is not trusted. The engine can take half a minute to
+// come back, so the lookups are spread over about 45s: the delay between them
+// grows by inspectBackoff up to maxInspectBackoff. inspectBackoff is a
+// variable so tests need not wait.
 const (
-	inspectAttempts  = 5
-	notFoundAttempts = 3
+	inspectAttempts   = 12
+	notFoundAttempts  = 12
+	maxInspectBackoff = 5
 )
 
 var inspectBackoff = time.Second
@@ -251,7 +254,7 @@ func (b *Provider) ensureImage(ctx context.Context, ref string) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Duration(attempt) * inspectBackoff):
+		case <-time.After(time.Duration(min(attempt, maxInspectBackoff)) * inspectBackoff):
 		}
 	}
 	if !cerrdefs.IsNotFound(err) {
