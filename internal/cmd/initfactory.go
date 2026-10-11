@@ -7,14 +7,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/sandboximage"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
-
-// defaultFactoryImage is the Docker image offered by the init factory step.
-const defaultFactoryImage = "chunk-sandbox:local"
 
 // initFactoryOptions are the flags that steer the factory step of `chunk init`.
 type initFactoryOptions struct {
@@ -27,6 +26,9 @@ type initFactoryOptions struct {
 	Author string
 	// Skip is --skip-factory.
 	Skip bool
+	// SkipImageBuild is --skip-image-build: write Dockerfile.chunk but do not
+	// offer to build it.
+	SkipImageBuild bool
 }
 
 // flagsGiven reports whether either flag answered the step.
@@ -81,8 +83,11 @@ func checkFactoryBackend(backend string) error {
 
 func describeFactory(f *config.FactoryConfig) string {
 	backend := config.BackendOrDefault(f.Backend)
-	if f.Image != "" {
+	switch {
+	case f.Image != "":
 		return fmt.Sprintf("Factory runs: %s (%s)", backend, f.Image)
+	case f.Dockerfile != "":
+		return fmt.Sprintf("Factory runs: %s (built from %s)", backend, f.Dockerfile)
 	}
 	return "Factory runs: " + backend
 }
@@ -152,21 +157,18 @@ func initFactoryBackendStep(ctx context.Context, workDir string, streams iostrea
 			backend = config.BackendDocker // an image only makes sense for docker
 		}
 		applyFactory(cfg, streams, backend, opts.Image)
+		initManagedImage(ctx, workDir, streams, cfg, opts)
 		return true
 	case factoryAsk:
 		// Handled below: asking is the only action that needs the prompts.
 	}
 
-	backend, image, ok := askFactory(streams)
+	backend, ok := askFactory(streams)
 	if !ok {
 		return false
 	}
-	applyFactory(cfg, streams, backend, image)
-	if backend == config.BackendDocker {
-		if _, err := os.Stat(filepath.Join(workDir, "Dockerfile.local")); err == nil {
-			streams.ErrPrintln(ui.Dim(fmt.Sprintf("Build it with: docker build -t %s -f Dockerfile.local .", image)))
-		}
-	}
+	applyFactory(cfg, streams, backend, "")
+	initManagedImage(ctx, workDir, streams, cfg, opts)
 	if opts.Author == "" {
 		if author, ok := askAuthor(streams, factory.ResolveAuthor(ctx, workDir, config.CommitAuthor{})); ok && author != "" {
 			cfg.Factory.Author = author
@@ -176,27 +178,19 @@ func initFactoryBackendStep(ctx context.Context, workDir string, streams iostrea
 	return true
 }
 
-// askFactory asks where factory runs execute and, for docker, which image. ok is
-// false when the user cancelled or the prompt could not be shown.
-func askFactory(streams iostream.Streams) (backend, image string, ok bool) {
+// askFactory asks where factory runs execute. ok is false when the user
+// cancelled or the prompt could not be shown.
+func askFactory(streams iostream.Streams) (backend string, ok bool) {
 	items := []string{"docker (local containers)", "circleci (cloud sidecars)"}
 	idx, err := ui.SelectFromList("Where should factory runs execute?", items)
 	if err != nil {
 		warnPromptError(streams, err)
-		return "", "", false
+		return "", false
 	}
 	if idx != 0 {
-		return config.BackendCircleCI, "", true
+		return config.BackendCircleCI, true
 	}
-	image, err = ui.PromptText("Docker image for factory runs", defaultFactoryImage)
-	if err != nil {
-		warnPromptError(streams, err)
-		return "", "", false
-	}
-	if image == "" {
-		image = defaultFactoryImage
-	}
-	return config.BackendDocker, image, true
+	return config.BackendDocker, true
 }
 
 // warnPromptError reports a prompt that failed for a reason other than there
@@ -208,14 +202,14 @@ func warnPromptError(streams iostream.Streams, err error) {
 	streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not ask about factory runs: %v", err)))
 }
 
-// applyFactory records the backend and, for docker, the image, keeping any other
+// applyFactory records the backend and, when one was given, the image, keeping any other
 // factory settings already in the config, and says what it recorded.
 func applyFactory(cfg *config.ProjectConfig, streams iostream.Streams, backend, image string) {
 	if cfg.Factory == nil {
 		cfg.Factory = &config.FactoryConfig{}
 	}
 	cfg.Factory.Backend = backend
-	if backend == config.BackendDocker {
+	if image != "" {
 		cfg.Factory.Image = image
 	}
 	streams.ErrPrintln(describeFactory(cfg.Factory))
@@ -228,4 +222,105 @@ func initFactoryRerun(ctx context.Context, workDir string, streams iostream.Stre
 		return nil
 	}
 	return writeProjectConfig(workDir, cfg, streams)
+}
+
+// managesImage reports whether init should write and build a Dockerfile for the
+// docker backend: an explicit factory.image, from a flag or already saved,
+// stays the user's to manage.
+func managesImage(cfg *config.ProjectConfig) bool {
+	return cfg.Factory != nil && config.BackendOrDefault(cfg.Factory.Backend) == config.BackendDocker && cfg.Factory.Image == ""
+}
+
+// initManagedImage is the docker half of the factory step: it writes
+// Dockerfile.chunk unless one exists, records it as factory.dockerfile, and
+// offers to build the image.
+func initManagedImage(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig, opts initFactoryOptions) {
+	if !managesImage(cfg) {
+		return
+	}
+	dockerfile := sandboximage.DefaultDockerfile
+	saveDetectedEnvironment(ctx, workDir, streams, cfg)
+	if err := writeInitDockerfile(ctx, workDir, streams, cfg, dockerfile); err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(err.Error()))
+		streams.ErrPrintln(ui.Dim("Once Docker is running: chunk factory image"))
+		return
+	}
+	cfg.Factory.Dockerfile = dockerfile
+	streams.ErrPrintln(ui.Dim(dockerfile + " is yours to edit and commit; chunk rebuilds the image when it or a dependency lockfile changes."))
+
+	if opts.SkipImageBuild || !isInteractive() {
+		streams.ErrPrintln(ui.Dim("Build the factory image with: chunk factory image"))
+		return
+	}
+	build, err := ui.Confirm("Build the factory image now? (a few minutes the first time)", true)
+	if err != nil || !build {
+		warnPromptError(streams, err)
+		streams.ErrPrintln(ui.Dim("Build it later with: chunk factory image (chunk factory build also does it)"))
+		return
+	}
+	tag, err := readyImage(ctx, streams, workDir, dockerfile, cfg, false)
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(errorSummary(err)))
+		return
+	}
+	streams.ErrPrintln(ui.Success("Ready: " + tag + ". Try: chunk factory build --plan spec.md"))
+}
+
+// writeInitDockerfile writes dockerfile from detection, or keeps and says so
+// when it is already there.
+func writeInitDockerfile(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig, dockerfile string) error {
+	if _, err := os.Stat(filepath.Join(workDir, dockerfile)); err == nil {
+		streams.ErrPrintln("Keeping existing " + dockerfile)
+		return nil
+	}
+	gen, err := generateInitDockerfile(ctx, workDir, cfg)
+	if err != nil {
+		return err
+	}
+	r := gen.Recipe
+	streams.ErrPrintf("Detected: %s · %s (%s)\n", r.Env.Stack, r.Base, r.BaseFrom)
+	if r.Unknown() {
+		streams.ErrPrintln(ui.Warning("Stack not recognised: add your toolchain to " + dockerfile + "."))
+	}
+	if err := sandboximage.WriteDockerfile(workDir, dockerfile, gen.Dockerfile); err != nil {
+		return err
+	}
+	streams.ErrPrintln(ui.Success("Wrote " + dockerfile))
+	return nil
+}
+
+// errorSummary is an error's user-facing message plus its detail, if any.
+func errorSummary(err error) string {
+	var ue *userError
+	if !errors.As(err, &ue) {
+		return err.Error()
+	}
+	msg := ue.UserMessage()
+	if d := ue.Detail(); d != "" {
+		msg += "\n" + d
+	}
+	if sug := ue.Suggestion(); sug != "" {
+		msg += "\n" + sug
+	}
+	return msg
+}
+
+// generateInitDockerfile renders the Dockerfile for init. It is a variable so
+// tests can render without a Docker daemon, which is only needed to read the
+// base image's user.
+var generateInitDockerfile = generateDockerfile
+
+// saveDetectedEnvironment records the detected environment in cfg unless one is
+// already saved. The factory's per-sidecar install and the image check read
+// the install step from it; the image holds only the package manager's store.
+func saveDetectedEnvironment(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig) {
+	if cfg.Environment != nil {
+		return
+	}
+	env, err := envbuilder.DetectEnvironment(ctx, workDir)
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect the environment: %v", err)))
+		return
+	}
+	cfg.Environment = env.ForConfig()
 }

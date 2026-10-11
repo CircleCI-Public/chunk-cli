@@ -175,6 +175,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		OrgID:                   orgID,
 		Image:                   image,
 		Backend:                 backend,
+		Install:                 imageInstallCommand(req.Backend, cfg),
 		Author:                  author,
 		KeepSidecars:            req.KeepSidecars,
 		Credential:              d.rcfg.Credential,
@@ -448,4 +449,14 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 			round.Reviews = nil
 		}
 	}
+}
+
+// imageInstallCommand is the dependency install to run on each sidecar. Only
+// the docker backend needs it: its image bakes the package manager's store, not
+// an installed tree.
+func imageInstallCommand(backend string, cfg *config.ProjectConfig) string {
+	if backend != chunkd.BackendDocker {
+		return ""
+	}
+	return cfg.InstallCommand()
 }

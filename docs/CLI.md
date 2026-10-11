@@ -47,7 +47,8 @@ chunk
 │   --skip-auth                     # Skip the Claude login check
 │   --skip-factory                  # Skip the factory backend step
 │   --factory-backend <name>        # circleci or docker; skips the prompt
-│   --factory-image <image>         # Docker image for factory runs; skips the prompt
+│   --factory-image <image>         # Docker image for factory runs (user-managed, never auto-built); skips the prompt
+│   --skip-image-build              # Write Dockerfile.chunk for docker runs but don't offer to build the image
 │   --factory-author "Name <email>" # Who factory commits are attributed to (default: your git identity)
 │   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (default: true; pass =false to generate)
 │   --project-dir <path>            # Project directory (defaults to cwd)
@@ -193,8 +194,11 @@ chunk
 │   │   --yes                       # Remove without asking
 │   │   --force                     # Also remove worktrees with uncommitted changes, discarding them
 │   │   --dry-run                   # List what would be removed and stop
-│   └── author ["Name <email>"]     # Show or set who factory commits are attributed to (factory.author)
-│       --unset                     # Remove factory.author, so each person commits as themselves
+│   ├── author ["Name <email>"]     # Show or set who factory commits are attributed to (factory.author)
+│   │   --unset                     # Remove factory.author, so each person commits as themselves
+│   └── image                       # Build the Docker image factory runs execute in (factory.dockerfile)
+│       --rebuild                   # Build even when the image exists, without the layer cache
+│       --regenerate                # Render Dockerfile.chunk again, show the diff, confirm before writing
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
@@ -338,7 +342,29 @@ chunk
   (circleci, 3 attempts, no log). An explicit `--max-attempts 3` beats `factory.maxAttempts`. The docker
   backend uses `--image` or `factory.image` and never `validation.sidecarImage`, which is a CircleCI
   snapshot ID; with neither (and no `CHUNK_DOCKER_IMAGE`) the command fails before the run starts.
-  `chunk init` asks where factory runs execute and writes `factory.backend`/`factory.image`.
+  `chunk init` asks where factory runs execute and writes `factory.backend` (and, for docker,
+  `factory.dockerfile`).
+- **The docker backend's image is resolved, highest first, from `--image`, `factory.image`,
+  `factory.dockerfile`, then `CHUNK_DOCKER_IMAGE`.** `factory.image` is explicit and user-managed: it is
+  never built, so a repo with its own `docker build` flow keeps it. `factory.dockerfile` (a
+  repo-relative path, `Dockerfile.chunk` when `chunk init` wrote it) is managed: the image tag is
+  `chunk-<repo>:<12 hex of sha256(Dockerfile + each COPY source's path and content)>`, so a change to
+  the Dockerfile or a copied lockfile is a new tag, and `factory build` builds it first when it is
+  missing. The build context is exactly the Dockerfile's `COPY` sources (absolute paths, `..` and
+  wildcards are rejected), never the repo. A failed build is an error pointing at `chunk factory image`.
+- **`chunk init` and `chunk factory image` verify what they build.** The image runs in a throwaway
+  container over a copy of the repo: first the agent kit (`git`, `claude`, `sha256sum`, `pkill`), then the
+  install step, then the cheapest gate (lint, format, typecheck, test). If the build or a check fails in a
+  terminal with `claude` installed, chunk offers to let Claude edit `Dockerfile.chunk` (up to 3 attempts,
+  only that file may change) and prints the diff on success. `factory build` never verifies or repairs.
+- **The docker backend runs the install step once per sidecar** (the detected `install` setup step, else
+  the `install` command) after the first sync and before the agent starts, streaming its output into the
+  run log. Existing `pnpm install &&` prefixes in validation commands are left alone.
+- **`Dockerfile.chunk` is generated from detection, never overwritten silently.** The base image is the
+  one every CI gate job uses (`.circleci/config.yml`), else the detected stack's image. Dependencies
+  are baked as the package manager's store (pnpm, npm, yarn, uv, pip, Go, Cargo), not as an installed
+  tree, because the workspace is bind-mounted over the repo at run time. An unknown stack gets a
+  minimal Debian image with a comment to add a toolchain.
 - **The factory branch's commits are attributed to the developer.** They use `factory.author`
   (`"Name <email>"`) when set, else the repo's git `user.name`/`user.email`, else `chunk`. These are
   the commits a published PR carries. `.chunk/config.json` is committed, so `factory.author` applies to

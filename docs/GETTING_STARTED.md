@@ -542,6 +542,35 @@ The agent loads your team's prompt, diffs the changes, and returns filtered find
 
 ---
 
+## Use the factory in another repo
+
+The factory's docker backend runs in a Docker image built for your repo. `chunk init` writes the recipe
+for it, so you don't write a Dockerfile by hand:
+
+```
+$ chunk init
+Where should factory runs execute?  › docker (local containers)
+Detected: typescript · cimg/node:24.21.0 (circleci config)
+✓ Wrote Dockerfile.chunk
+Build the factory image now? (a few minutes the first time) [Y/n]
+$ chunk factory build --plan spec.md
+```
+
+- **Where the recipe comes from.** Detection of your stack, and the Docker image your CircleCI gate jobs
+  run in when they all share one (matching CI is the point). Nothing here uses an agent.
+- **`Dockerfile.chunk` is committed.** Review it, edit it, share it with the team. chunk never overwrites
+  it without asking; `chunk factory image --regenerate` shows a diff and confirms first.
+- **Dependencies are baked in as the package manager's cache** (for example `pnpm fetch`), so installs in
+  a run are offline and fast. The image is rebuilt when the Dockerfile or a lockfile it copies changes,
+  and `chunk factory build` does that for you before the run starts.
+- **Unknown stack?** You get a minimal Debian image plus the agent tools; add your toolchain where the
+  comment says.
+- **Build by hand** after editing, or after a failed build: `chunk factory image` (`--rebuild` to skip
+  the layer cache). Use `chunk init --skip-image-build` to write the file without building.
+- **Own image?** Set `factory.image` (or pass `--image`) and chunk uses it as is and never builds it.
+
+---
+
 ## Typical day-to-day workflow
 
 ```

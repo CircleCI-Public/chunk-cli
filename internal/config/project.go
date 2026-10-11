@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/mail"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -135,8 +136,12 @@ type ValidationConfig struct {
 
 // FactoryConfig holds project defaults for `chunk factory build`.
 type FactoryConfig struct {
-	Backend     string `json:"backend,omitempty"`     // "circleci" or "docker"
-	Image       string `json:"image,omitempty"`       // Docker image for the docker backend
+	Backend string `json:"backend,omitempty"` // "circleci" or "docker"
+	Image   string `json:"image,omitempty"`   // Docker image for the docker backend; user-managed, never auto-built
+	// Dockerfile is the repo-relative Dockerfile chunk builds the docker
+	// backend's image from. Unlike Image it is managed: the tag is computed
+	// from its content and the image is built when missing.
+	Dockerfile  string `json:"dockerfile,omitempty"`
 	MaxAttempts int    `json:"maxAttempts,omitempty"` // 0 means the built-in default
 	Log         bool   `json:"log,omitempty"`         // keep a run log by default
 	// Author is who the commits on a run's branch are attributed to, as
@@ -347,6 +352,9 @@ func (c *ProjectConfig) validate() error {
 		if !ValidBackend(f.Backend) {
 			return fmt.Errorf("factory.backend %q must be %q or %q", f.Backend, BackendCircleCI, BackendDocker)
 		}
+		if err := validateRepoRelative("factory.dockerfile", f.Dockerfile); err != nil {
+			return err
+		}
 		if f.MaxAttempts < 0 {
 			return fmt.Errorf("factory.maxAttempts must not be negative, got %d", f.MaxAttempts)
 		}
@@ -462,4 +470,37 @@ func SaveCommand(workDir, name, command string) error {
 	}
 
 	return SaveProjectConfig(workDir, cfg)
+}
+
+// validateRepoRelative reports a configured path that is not relative or that
+// leaves the repo. An empty path is unset and valid.
+func validateRepoRelative(key, p string) error {
+	if p == "" {
+		return nil
+	}
+	clean := path.Clean(filepath.ToSlash(p))
+	if path.IsAbs(clean) || filepath.IsAbs(p) || clean == ".." || strings.HasPrefix(clean, "../") {
+		return fmt.Errorf("%s %q must be a relative path inside the repo", key, p)
+	}
+	return nil
+}
+
+// InstallCommand is the command that installs the project's dependencies: the
+// detected install setup step, else the command named "install". Empty when
+// there is none.
+func (c *ProjectConfig) InstallCommand() string {
+	if c == nil {
+		return ""
+	}
+	if c.Environment != nil {
+		if cmd := c.Environment.SetupStep(CmdInstall); cmd != "" {
+			return cmd
+		}
+	}
+	for _, cmd := range c.Commands {
+		if cmd.Name == CmdInstall {
+			return cmd.Run
+		}
+	}
+	return ""
 }

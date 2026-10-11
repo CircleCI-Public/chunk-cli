@@ -18,7 +18,23 @@ type factorySettings struct {
 	Image    string
 	Attempts int
 	Log      bool
+	// Dockerfile is the repo-relative Dockerfile to build Image from, set only
+	// when ImageSource is imageFromDockerfile.
+	Dockerfile  string
+	ImageSource imageSource
 }
+
+// imageSource says where the resolved image came from, which decides whether
+// chunk may build it.
+type imageSource int
+
+const (
+	imageUnset          imageSource = iota
+	imageFromFlag                   // --image
+	imageFromConfig                 // factory.image: user-managed, never auto-built
+	imageFromDockerfile             // factory.dockerfile: managed, built when missing
+	imageFromEnv                    // CHUNK_DOCKER_IMAGE, read by the provider
+)
 
 // factoryExplicit says which factorySettings were set by a flag, as opposed to
 // holding the flag's default.
@@ -52,24 +68,37 @@ func resolveFactorySettings(flags factorySettings, set factoryExplicit, cfg *con
 		out.Log = fc.Log
 	}
 
-	if set.Image && flags.Image != "" {
-		out.Image = flags.Image
-	} else {
-		out.Image = ""
-		switch {
-		case out.Backend == config.BackendDocker:
-			out.Image = fc.Image
-		case cfg != nil && cfg.Validation != nil:
-			out.Image = cfg.Validation.SidecarImage
-		}
+	out.Image, out.Dockerfile, out.ImageSource = "", "", imageUnset
+	switch {
+	case set.Image && flags.Image != "":
+		out.Image, out.ImageSource = flags.Image, imageFromFlag
+	case out.Backend == config.BackendDocker:
+		out.Image, out.Dockerfile, out.ImageSource = dockerImageFromConfig(fc)
+	case cfg != nil && cfg.Validation != nil && cfg.Validation.SidecarImage != "":
+		out.Image, out.ImageSource = cfg.Validation.SidecarImage, imageFromConfig
+	}
+	if out.Backend == config.BackendDocker && out.ImageSource == imageUnset && os.Getenv(docker.EnvImage) != "" {
+		out.ImageSource = imageFromEnv
 	}
 
-	if out.Backend == config.BackendDocker && out.Image == "" && os.Getenv(docker.EnvImage) == "" {
+	if out.Backend == config.BackendDocker && out.ImageSource == imageUnset {
 		return out, newUserError("No Docker image is set for factory runs.").
 			withCode("command.invalid_args").
-			withSuggestion("Pass --image, or set factory.image in .chunk/config.json (chunk init can do this).").
+			withSuggestion("Pass --image, or run chunk init to write a Dockerfile.chunk (or set factory.image in .chunk/config.json).").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}
 	return out, nil
+}
+
+// dockerImageFromConfig picks the docker image from the factory section: an
+// explicit factory.image over a managed factory.dockerfile.
+func dockerImageFromConfig(fc config.FactoryConfig) (img, dockerfile string, src imageSource) {
+	switch {
+	case fc.Image != "":
+		return fc.Image, "", imageFromConfig
+	case fc.Dockerfile != "":
+		return "", fc.Dockerfile, imageFromDockerfile
+	}
+	return "", "", imageUnset
 }

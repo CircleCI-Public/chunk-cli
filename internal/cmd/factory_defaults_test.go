@@ -22,12 +22,12 @@ func TestResolveFactorySettings(t *testing.T) {
 
 	got, err := resolveFactorySettings(factorySettings{Attempts: 3}, factoryExplicit{}, fc)
 	assert.NilError(t, err)
-	assert.DeepEqual(t, got, factorySettings{Backend: "docker", Image: "cfg:img", Attempts: 5, Log: true})
+	assert.DeepEqual(t, got, factorySettings{Backend: "docker", Image: "cfg:img", Attempts: 5, Log: true, ImageSource: imageFromConfig})
 
 	got, err = resolveFactorySettings(factorySettings{Backend: "circleci", Image: "flag:img", Attempts: 2, Log: false},
 		factoryExplicit{Backend: true, Image: true, Attempts: true, Log: true}, fc)
 	assert.NilError(t, err)
-	assert.DeepEqual(t, got, factorySettings{Backend: "circleci", Image: "flag:img", Attempts: 2})
+	assert.DeepEqual(t, got, factorySettings{Backend: "circleci", Image: "flag:img", Attempts: 2, ImageSource: imageFromFlag})
 
 	// An explicit 3 beats config even though 3 is the default.
 	got, err = resolveFactorySettings(factorySettings{Attempts: 3}, factoryExplicit{Attempts: true}, fc)
@@ -54,6 +54,40 @@ func TestResolveFactorySettings(t *testing.T) {
 		&config.ProjectConfig{Validation: &config.ValidationConfig{SidecarImage: "snapshot-id"}})
 	assert.NilError(t, err)
 	assert.Equal(t, got.Image, "")
+	assert.Equal(t, got.ImageSource, imageFromEnv)
+}
+
+func TestResolveFactoryImageSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		flag       string
+		factory    config.FactoryConfig
+		env        string
+		wantImage  string
+		wantFile   string
+		wantSource imageSource
+	}{
+		{"flag beats everything", "flag:img", config.FactoryConfig{Image: "cfg:img", Dockerfile: "Dockerfile.chunk"}, "env:img", "flag:img", "", imageFromFlag},
+		{"factory.image beats dockerfile", "", config.FactoryConfig{Image: "chunk-sandbox:local", Dockerfile: "Dockerfile.chunk"}, "env:img", "chunk-sandbox:local", "", imageFromConfig},
+		{"dockerfile beats env", "", config.FactoryConfig{Dockerfile: "Dockerfile.chunk"}, "env:img", "", "Dockerfile.chunk", imageFromDockerfile},
+		{"env last", "", config.FactoryConfig{}, "env:img", "", "", imageFromEnv},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(docker.EnvImage, tt.env)
+			tt.factory.Backend = "docker"
+			got, err := resolveFactorySettings(factorySettings{Image: tt.flag, Attempts: 3}, factoryExplicit{Image: tt.flag != ""},
+				&config.ProjectConfig{Factory: &tt.factory})
+			assert.NilError(t, err)
+			assert.Equal(t, got.Image, tt.wantImage)
+			assert.Equal(t, got.Dockerfile, tt.wantFile)
+			assert.Equal(t, got.ImageSource, tt.wantSource)
+		})
+	}
+
+	t.Setenv(docker.EnvImage, "")
+	_, err := resolveFactorySettings(factorySettings{Attempts: 3}, factoryExplicit{}, &config.ProjectConfig{Factory: &config.FactoryConfig{Backend: "docker"}})
+	assert.Assert(t, strings.Contains(userMsg(err), "No Docker image is set"), userMsg(err))
 }
 
 func TestFactoryPromptPlan(t *testing.T) {
