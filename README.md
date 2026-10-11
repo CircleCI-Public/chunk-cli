@@ -1,165 +1,285 @@
 # chunk
 
-CLI for [Chunk](https://chunk.ai/) — inner loop validation for software teams building with AI agents.
+A self-hosted **software factory** for AI-built code. Give it a markdown spec;
+it builds the change with Claude Code on an isolated branch, reviews it with a
+panel of reviewer agents, runs your tests, lint and type checks, feeds every
+failure back until it all passes, then pushes a branch and opens a PR for a
+human to merge.
 
-**Chunk sidecars** are lightweight microVM environments that run alongside your AI agent and validate changes in the inner loop, before they reach CI.
+Everything runs **on your machine, in Docker**. No cloud sandboxes and no
+third-party CI account are needed.
 
-## Why chunk?
+```
+spec.md ──► implement ──► review ×N + validate ──► feedback ──► … ──► commit ──► push / PR
+             (Claude, in a      (parallel, each in      (high/medium findings
+              container)         its own container)      and failed checks)
+```
 
-As AI churns out more and more code, CI pipelines get flooded with commits that haven't been well validated. Failures surface late, forcing expensive re-prompting cycles and slowing delivery.
+> This is a fork of [CircleCI-Public/chunk-cli](https://github.com/CircleCI-Public/chunk-cli)
+> that adds a local Docker backend, per-repo sandbox images, push/PR publishing and
+> commit attribution. The original CircleCI cloud sidecars still work; see
+> [CircleCI cloud sidecars (optional)](#circleci-cloud-sidecars-optional).
 
-Chunk sidecars fix this by running lightweight microbuilds to validate inside the inner loop — while the agent is still working — ensuring basic checks pass before anything hits CI. Save the CI for the integration and release work that gets code to production.
+## How it works
+
+- **One run is one task.** `chunk factory build` runs in the local chunk daemon,
+  so it survives closing the terminal. Watch it live with `chunk watch`.
+- **Each agent gets its own container.** One implementer and one reviewer per
+  review prompt in `.chunk/reviews/`, all started from your repo's sandbox image.
+  Your working tree is copied in; the containers never talk to each other.
+- **Each round:**
+  1. The implementer makes the change.
+  2. The reviewers and your validation commands (tests, lint, typecheck…) check
+     it in parallel.
+  3. High and medium findings, and failed checks, go back to the implementer.
+  4. This repeats until everything passes or the attempts run out.
+- **Your checkout is never touched.** The work happens in a git worktree on its
+  own branch, `chunk/factory/<description>/<run id>`. It starts from your files
+  as they are, uncommitted changes included.
+- **It stops at the PR.** chunk never pushes to your default branch, never
+  force-pushes, and never merges.
 
 ## Requirements
 
-- **macOS** (arm64 or x86_64), **Linux** (arm64 or x86_64), or **Windows** (arm64 or x86_64)
+- **macOS or Linux** (the local backend uses `rsync` and bind mounts)
+- **Docker**: Docker Desktop or Docker Engine, running
+- **Go 1.26+** and **[Task](https://taskfile.dev/)**, to build chunk
+- **git** and **rsync**
+- **Claude Code** (`claude` on your `PATH`) and a Claude subscription
+- **GitHub CLI** (`gh`), logged in, if you want chunk to open PRs; without it,
+  chunk pushes the branch and prints a compare URL
 
-## Installation
+## Install
 
-### macOS / Linux
-
-```bash
-brew install CircleCI-Public/circleci/chunk
-```
-
-### Windows
-
-Download the latest `chunk-cli_Windows_x86_64.zip` or `chunk-cli_Windows_arm64.zip` from [GitHub Releases](https://github.com/CircleCI-Public/chunk-cli/releases), extract it, and put `chunk.exe` on your `PATH`.
-
-## Quick Start
-
-### Project Setup
-
-Initialize your project for hook automation and validation:
+Build from source. The Homebrew formula installs CircleCI's upstream release,
+which doesn't have the local Docker features.
 
 ```bash
-# Detect test commands, configure hooks, set up .claude/settings.json
-chunk init   # also offers to log in to Claude; run `chunk refresh` to log in again
-
-# Run configured validations
-chunk validate              # all commands
-chunk validate test         # specific command
-chunk validate --list       # list configured commands
+git clone git@github.com:web3technologies/chunk-cli.git
+cd chunk-cli
+task dev-install        # builds dist/chunk and links it to ~/.local/bin/chunk
 ```
 
-### Agent Onboarding for Sidecars (Preferred method)
-
-Chunk init will install skills for working with Chunk sidecars. After the init, start a claude session and run `/chunk-sidecar` and your agent will create a sidecar and configure it for use running tests and creating snapshots of good Chunk sidecars.
+Make sure `~/.local/bin` is on your `PATH`, then check:
 
 ```bash
-# Install or update the agent skills (Claude Code, Codex, Cursor)
-chunk skill install
+chunk --help
 ```
 
-### Manual setup
-
-#### Sidecar Environments
-
-Create and work in cloud sidecar environments. Sidecars are available to all CircleCI customers, including the free plans. Share feedback in the [CircleCI Discord](https://discord.gg/circleci).
+**Updating:** pull and rebuild, then stop the daemon so the next run starts it
+from the new binary. A running daemon keeps the code it started with.
 
 ```bash
-# Authenticate (browser OAuth — recommended)
-To create a new account:
-chunk auth signup
-or, to log in to an existing account:
-chunk auth login
-
-# Or set a token directly
-chunk auth set circleci
-
-# Create a sidecar (sets it as active automatically)
-chunk sidecar create --name my-sidecar
-
-# Sync local files and validate remotely
-chunk sidecar sync
-chunk validate --remote
-
-# SSH in interactively or run a one-off command
-chunk sidecar ssh
-chunk sidecar ssh -- make test
+git pull && task build && pkill -f 'chunk _daemon'
 ```
 
-##### Active sidecar
+## Set up a repository
 
-Most sidecar commands operate on the *active* sidecar so you don't have to pass `--sidecar-id` every time:
+Run `chunk init` in the repo you want the factory to work on. It walks you
+through everything:
 
 ```bash
-chunk sidecar use <id>      # set active sidecar
-chunk sidecar current       # show which sidecar is active
-chunk sidecar forget        # clear the active sidecar
+cd ~/code/my-app
+chunk init
 ```
 
-##### Environment Detection and Setup
+| Step | What it does |
+|---|---|
+| **Detect** | Finds your stack (Go, Node/TypeScript, Python, Rust, Java, Ruby and more) and your validation commands: test, lint, format, typecheck. It reads `.circleci/config.yml` when there is one. |
+| **Claude login** | Mints a long-lived token from your Claude subscription (`claude setup-token`) and stores it in the OS keychain, never in a file. |
+| **Factory backend** | Choose **docker (local containers)**. |
+| **Sandbox image** | Writes `Dockerfile.chunk`, then offers to build and verify it (details below). |
+| **Commit author** | Factory commits are attributed to your git identity, or to someone else you name. |
 
-Auto-detect your tech stack, install dependencies, and snapshot the result so future sidecars boot fast:
+**What `Dockerfile.chunk` contains:**
+- **Base image:** your CI image when there is one (e.g. `cimg/node:24.21.0`),
+  otherwise one matched to the detected stack.
+- **Dependencies:** your lockfiles' dependencies, baked into the package
+  manager's store.
+- **Agent kit:** git, the Claude Code CLI and a few coreutils.
+
+**How the image is checked:** after the build, chunk verifies the image by
+running the agent kit, your install step and your cheapest check inside it. If
+the build or that check fails, it offers to let Claude repair
+`Dockerfile.chunk`, up to 3 attempts.
+
+**Commit what init wrote:**
 
 ```bash
-# Detect environment, run install steps, and create a snapshot
-chunk sidecar setup --name my-sidecar
-
-# Or build a local Docker test image from the detected environment
-chunk sidecar env | chunk sidecar build --dir .
+git add .chunk/config.json Dockerfile.chunk
+git commit -m "Set up chunk factory"
 ```
 
-##### Snapshots
+`Dockerfile.chunk` is yours to edit. The image tag is a hash of the Dockerfile
+and the lockfiles it copies, so when either changes, the next
+`chunk factory build` rebuilds the image automatically.
 
-Capture a configured environment so future sidecars start from a known-good state:
+### Add review prompts (recommended)
 
-```bash
-chunk sidecar snapshot list
-chunk sidecar snapshot create --name checkpoint
-# Later:
-chunk sidecar create --name new-sidecar --image <snapshot-id>
+Each markdown file in `.chunk/reviews/` is one reviewer, and each reviewer gets
+its own container. Write them like instructions to a senior reviewer:
+
+```
+.chunk/reviews/
+├── correctness.md      # does it do what the spec asks, edge cases, error paths
+├── testing.md          # are the new behaviours tested
+└── maintainability.md  # duplication, abstractions, project conventions
 ```
 
-**Note:** `snapshot create` consumes the source sidecar — it is deleted once the snapshot is captured and cannot be reused. To resume work, launch a new sidecar from the snapshot with `chunk sidecar create --image <snapshot-id>`. Use `chunk sidecar snapshot list` to look up snapshot IDs for your org.
+Reviewers report findings as high, medium or low. High and medium findings go
+back to the implementer; low findings are only shown. With no review prompts,
+runs are gated on your validation commands alone. For examples, see this
+repository's own [`.chunk/reviews/`](.chunk/reviews/).
 
-## Factory runs
+## Build something
 
-`chunk factory build` has an implementer agent work on a prompt, then loops review and validation until the checks pass. `chunk init` records where runs execute in the `factory` section of `.chunk/config.json` (backend, Docker image, attempts, logging), so the command stays short:
+Write a spec, a markdown file describing the change, and hand it to the
+factory:
 
 ```bash
 chunk factory build --plan spec.md
 ```
 
-Flags override the config, e.g. `--backend docker --image chunk-sandbox:local --max-attempts 5 --log`. See [docs/CLI.md](docs/CLI.md) for details.
-
-## Also included: team review context
-
-An additional tool, independent of the sidecar workflow. `chunk build-prompt` mines PR review comments from your GitHub org and uses Claude to generate a context file tuned to your team's review standards, so the code agents write reflects those standards from the start.
+You'll see each round as it happens: the implementer's summary, every check and
+every finding. When it ends, the work is committed on its branch. In a
+terminal, chunk then offers to push the branch and open a PR into the branch
+you started from.
 
 ```bash
-# From inside a git repo — org and repos are auto-detected
-chunk build-prompt
-
-# Or specify explicitly
-chunk build-prompt --org myorg --repos api,backend --top 10
-
-# Output lands in .chunk/context/review-prompt.md
+chunk factory build --plan spec.md --pr            # push and open the PR without asking
+chunk factory build --plan spec.md --no-publish    # keep it local
+chunk factory build "fix the flaky retry test"     # a short prompt instead of a file
+chunk factory build --continue <run-id> "also handle the empty case"   # keep going on an earlier run
 ```
 
-See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md#team-review-context) for details.
+Useful flags:
+- `--max-attempts N`: the most rounds to run.
+- `--base BRANCH`, `--draft`, `--pr-title`, `--pr-body`: shape the PR.
+- `--log`, `--verbose`: keep a full log of the run.
+- `--model`: choose the Claude model.
 
-## Commands
+See [docs/CLI.md](docs/CLI.md) for every flag.
+
+### Managing runs
+
+```bash
+chunk watch                          # live dashboard of runs, rounds and containers
+chunk factory list                   # this repo's runs: state, result, age
+chunk factory clean [run-id]         # remove finished runs' worktrees, branches and records
+chunk factory image [--rebuild]      # build or rebuild and verify the sandbox image
+chunk factory image --regenerate     # re-detect and rewrite Dockerfile.chunk (asks first)
+chunk factory author ["Name <email>"]  # show or set who factory commits are attributed to
+chunk refresh                        # log in to Claude again (and restart the daemon)
+```
+
+## Configuration
+
+Factory settings live in the `factory` section of `.chunk/config.json`, which
+is committed and shared with your team:
+
+```json
+{
+  "factory": {
+    "backend": "docker",
+    "dockerfile": "Dockerfile.chunk",
+    "maxAttempts": 3,
+    "log": true
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `backend` | `docker` for local containers, or `circleci` for cloud sidecars |
+| `dockerfile` | The managed sandbox Dockerfile. chunk builds the image and keeps it up to date. |
+| `image` | An image you manage yourself. It takes precedence over `dockerfile` and is never built by chunk. |
+| `maxAttempts` | Default number of rounds (built-in: 3) |
+| `log` | Keep a run log by default |
+| `author` | `"Name <email>"` for factory commits. Leave it unset so everyone commits as their own git identity. |
+
+A flag always beats the config, and the config beats the built-in default.
+
+**Credentials:**
+- **Claude:** in the OS keychain, set by `chunk init` or `chunk refresh`.
+  `CLAUDE_CODE_OAUTH_TOKEN` overrides it.
+- **GitHub:** whatever `gh` is logged in as.
+- **CircleCI:** no credential is needed for local runs.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| A run behaves like an older version after you rebuilt chunk | The daemon is still running the old binary: `pkill -f 'chunk _daemon'` |
+| `Building … failed` or the image fails its checks | `chunk factory image`. Read the error, edit `Dockerfile.chunk` or accept the repair offer. The full build log is linked in the error. |
+| `No Docker image is set for factory runs` | Run `chunk init` and choose docker, or set `factory.dockerfile` or `factory.image` |
+| The first Docker call after a while says "no such image" | Docker Desktop's Resource Saver was waking the engine. chunk retries; if it persists, open Docker Desktop. |
+| A branch can't be deleted because it's checked out in a worktree | `chunk factory clean <run-id>` |
+| The git pre-commit hook asks for CircleCI authentication | Known gap: `chunk validate` doesn't use the Docker backend yet. Run your checks, then use `git commit --no-verify`. |
+
+## CircleCI cloud sidecars (optional)
+
+The original chunk runs the same factory, and `chunk validate`, on CircleCI
+microVM sidecars instead of local Docker. Everything below needs a CircleCI
+account (free plans included).
+
+```bash
+chunk auth login                              # or: chunk auth signup / chunk auth set circleci
+chunk factory build --backend circleci --plan spec.md
+
+chunk sidecar create --name my-sidecar        # create a sidecar; it becomes the active one
+chunk sidecar sync && chunk validate --remote # sync your tree and validate remotely
+chunk sidecar ssh [-- make test]              # shell in, or run one command
+chunk sidecar use|current|forget              # manage the active sidecar
+chunk sidecar setup --name my-sidecar         # detect env, install deps, snapshot
+chunk sidecar snapshot create|get|list        # reusable environments
+```
+
+`chunk skill install` adds agent skills (`/chunk-sidecar`) that let Claude Code,
+Codex or Cursor drive sidecars themselves. See
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for the full cloud walkthrough.
+
+## Other tools
+
+- **`chunk validate [name]`** runs your configured checks. `chunk init` also
+  installs Claude Code hooks and a git pre-commit hook that run them
+  ([docs/HOOKS.md](docs/HOOKS.md)).
+- **`chunk build-prompt`** mines your team's PR review comments and generates a
+  review-context prompt in `.chunk/context/`. It needs `ANTHROPIC_API_KEY` and
+  `GITHUB_TOKEN`.
+- **`chunk task config|run`** triggers AI coding tasks on CircleCI.
+- **`chunk mutate`** finds test coverage gaps with mutation testing.
+- **`chunk conflicts`** reports whether your branch still merges cleanly.
+
+## All commands
 
 ```
-chunk auth login|signup|set|status|remove  Authentication
-chunk org create                           Manage CircleCI organizations
-chunk sidecar list|create|exec|ssh         Manage cloud sidecar environments
-chunk sidecar sync|env|build               Sync files, detect env, build images
-chunk sidecar use|current|forget           Manage active sidecar
-chunk sidecar setup                        Detect env and install deps
-chunk sidecar snapshot create|get|list     Manage sidecar snapshots
-chunk init                                 Initialize project configuration
-chunk refresh [claude]                     Re-login to Claude and restart the daemon
-chunk validate [name]                      Run quality checks
-chunk factory build [--plan FILE]          Implement a prompt, then review and validate it
-chunk hook disable|enable|status           Manage hook execution
-chunk skill install|list                   Manage AI agent skills
-chunk task config|run                      Configure and trigger CI tasks
-chunk build-prompt                         Generate review context from PR comments
-chunk completion install|uninstall         Shell completions
-chunk upgrade                              Update CLI
+Local factory
+  chunk init                                 Set up a repo: detect, log in, sandbox image, author
+  chunk factory build [--plan FILE]          Implement a spec, review and validate it, publish a PR
+  chunk factory list|clean                   List and remove runs
+  chunk factory image                        Build and verify the sandbox image
+  chunk factory author                       Show or set the commit author
+  chunk watch                                Live dashboard
+  chunk refresh [claude]                     Log in to Claude again and restart the daemon
+
+Checks and hooks
+  chunk validate [name]                      Run quality checks
+  chunk hook disable|enable|status           Manage hook execution
+  chunk config show|set                      Show or change configuration
+
+CircleCI cloud (optional)
+  chunk auth login|signup|set|status|remove  Authentication
+  chunk org create                           Manage CircleCI organizations
+  chunk sidecar …                            Cloud sidecar environments and snapshots
+  chunk task config|run                      Trigger CI tasks
+  chunk prune                                Delete your sidecars
+
+Other
+  chunk build-prompt                         Review context from PR comments
+  chunk mutate                               Mutation testing
+  chunk conflicts                            Merge-conflict check
+  chunk skill install|list                   Agent skills
+  chunk completion install|uninstall         Shell completions
 ```
 
 See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
@@ -168,59 +288,25 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 
 | Doc | Purpose |
 |-----|---------|
-| [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Step-by-step guide: auth, init, sidecar setup, dev loop, skills |
-| [docs/SKILLS.md](docs/SKILLS.md) | Skills reference: installing, triggering, and troubleshooting agent skills |
 | [docs/CLI.md](docs/CLI.md) | Full command and flag reference |
+| [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Guide covering auth, init, sidecars, the dev loop and skills |
 | [docs/HOOKS.md](docs/HOOKS.md) | Pre-commit and Stop hook configuration |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal module layout and dependency rules |
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key (required for `build-prompt`; optional for `init`) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription token from `claude setup-token` (for `review`, when no API key is set) |
-| `GITHUB_TOKEN` | GitHub PAT with `repo` scope (for `build-prompt`) |
-| `CIRCLE_TOKEN` | CircleCI personal API token (for `sidecar` and `task`) |
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete environment variable reference.
-
-## Platform Support
-
-| Platform | Status |
-|----------|--------|
-| macOS (Apple Silicon) | Supported |
-| macOS (Intel) | Supported |
-| Linux (arm64) | Supported |
-| Linux (x86_64) | Supported |
-| Windows (arm64) | Supported |
-| Windows (x86_64) | Supported |
+| [docs/SKILLS.md](docs/SKILLS.md) | Agent skills reference |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module layout, dependency rules, environment variables |
 
 ## Development
 
-### Prerequisites
-
-- Go 1.26+
-- [Task](https://taskfile.dev/) (task runner)
-### Building
-
 ```bash
-task build              # Build binary -> dist/chunk
-task test               # Run tests
-task lint               # Run linters
-task acceptance-test    # Run acceptance tests
+task build              # build dist/chunk
+task test               # run tests (with -race)
+task lint               # golangci-lint
+task acceptance-test    # acceptance tests
+task dev-install        # build and link into ~/.local/bin
 ```
 
-To build and install from source into `~/.local/bin` (make sure it's on your `PATH`):
+Contributions follow the code standards in [AGENTS.md](AGENTS.md). chunk's own
+factory runs review against them with the `maintainability` reviewer.
 
-```bash
-task dev-install
-```
-
-Acceptance tests that clone repositories are skipped by default. Set `CHUNK_ENV_BUILDER_ACCEPTANCE=1` to enable them. To avoid re-cloning on repeated runs, set `CHUNK_SIDECAR_CACHE_DIR` to a persistent directory.
-
----
-
-See [AGENTS.md](AGENTS.md) for AI agent instructions.
+Acceptance tests that clone repositories are skipped by default. Set
+`CHUNK_ENV_BUILDER_ACCEPTANCE=1` to enable them, and `CHUNK_SIDECAR_CACHE_DIR`
+to reuse clones between runs.
