@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -115,6 +116,8 @@ Configuration:
 	rootCmd.AddCommand(newDaemonCmd())
 
 	rootCmd.AddCommand(newCommandsCmd())
+	rootCmd.InitDefaultHelpCmd()
+	rootCmd.SetHelpTemplate(rootCmd.HelpTemplate() + pluginsHelp(rootCmd, os.Getenv("PATH")))
 
 	rootCmd.PersistentFlags().Bool("insecure-storage", false, "do not use the system's secure storage for storing tokens")
 	_ = rootCmd.PersistentFlags().MarkHidden("insecure-storage")
@@ -148,6 +151,18 @@ func agentExtra() map[string]any {
 // once, on the run that logs in. If the command then fails, nothing re-sends
 // it and the anonymous half of the journey stays orphaned for good.
 func ExecuteRoot(rootCmd *cobra.Command) error {
+	args := os.Args[1:]
+	if ran, err := dispatchPlugin(rootCmd, args, os.Getenv("PATH")); ran {
+		return err
+	}
+	// A command that fails before its pre-run hook never started: cobra found
+	// the command line wrong.
+	started := false
+	preRun := rootCmd.PersistentPreRunE
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, a []string) error {
+		started = true
+		return preRun(cmd, a)
+	}
 	// The sender lives on the context of the command cobra actually resolved,
 	// which ExecuteC returns; rootCmd's own context does not carry it.
 	executed, err := rootCmd.ExecuteC()
@@ -156,6 +171,10 @@ func ExecuteRoot(rootCmd *cobra.Command) error {
 	}
 	if ctx := executed.Context(); ctx != nil {
 		_ = telemetry.FromContext(ctx).Close()
+	}
+	var ue *userError
+	if err != nil && !started && !errors.As(err, &ue) {
+		err = usageError(err, args)
 	}
 	return err
 }

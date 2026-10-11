@@ -37,7 +37,9 @@ const runIDLayout = "20060102-150405"
 // branch, found in a project.
 type RunEntry struct {
 	// RunIDs are the runs in the entry, oldest first.
-	RunIDs   []string `json:"run_ids"`
+	RunIDs []string `json:"run_ids"`
+	// RunID is the newest of RunIDs, for callers that do not parse the list.
+	RunID    string   `json:"run_id"`
 	Branch   string   `json:"branch,omitempty"`
 	Worktree string   `json:"worktree,omitempty"`
 	State    RunState `json:"state"`
@@ -267,6 +269,7 @@ func (g *group) entry(ctx context.Context, active map[string]bool) RunEntry {
 			e.State = StateRunning
 		}
 	}
+	e.RunID = e.ID()
 	if t, err := time.Parse(runIDLayout, e.ID()); err == nil {
 		e.StartedAt = t.UTC()
 	}

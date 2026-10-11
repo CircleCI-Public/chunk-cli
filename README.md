@@ -207,6 +207,9 @@ See [docs/CLI.md](docs/CLI.md) for every flag.
 ```bash
 smelt watch                          # live dashboard of runs, rounds and containers
 smelt factory list                   # this repo's runs: state, result, age
+smelt factory status [run-id]        # a run's state, rounds, result and cost (--json for tools)
+smelt factory stop <run-id>          # stop a running run; its work so far is committed
+smelt factory publish <run-id> --pr  # push a finished run's branch and open or update its PR
 smelt factory clean [run-id]         # remove finished runs' worktrees, branches and records
 smelt factory image [--rebuild]      # build or rebuild and verify the sandbox image
 smelt factory image --regenerate     # re-detect and rewrite Dockerfile.smelt (asks first)

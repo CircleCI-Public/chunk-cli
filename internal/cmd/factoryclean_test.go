@@ -177,5 +177,10 @@ func TestFactoryListShowsAFinishedRun(t *testing.T) {
 	assert.DeepEqual(t, entries[0].RunIDs, []string{"20261010-100000"})
 	assert.Equal(t, entries[0].State, factory.StateFinished)
 	assert.Equal(t, entries[0].Branch, wt.Branch)
+	// Callers read the newest run and state without parsing run_ids.
+	var raw []map[string]any
+	assert.NilError(t, json.Unmarshal([]byte(out), &raw))
+	assert.Equal(t, raw[0]["run_id"], "20261010-100000")
+	assert.Equal(t, raw[0]["state"], "finished")
 	assert.Assert(t, entries[0].WorktreeExists)
 }
