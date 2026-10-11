@@ -53,6 +53,9 @@ type RunOptions struct {
 	// the CircleCI backend built from Client and OrgID. Set it to run the loop
 	// on a different provider, such as local Docker.
 	Backend sidecar.Backend
+	// Install installs the project's dependencies on each sidecar before the
+	// run starts; empty skips it.
+	Install string
 	// KeepSidecars leaves the sidecars running when the run ends.
 	KeepSidecars bool
 
@@ -279,6 +282,10 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		},
 		Commands: opts.Commands,
 		OnCheck:  opts.OnCheck,
+		Install:  opts.Install,
+		OnInstallOutput: func(id, line string) {
+			status(iostream.LevelInfo, "install "+id+": "+line)
+		},
 	}
 	if opts.Verbose {
 		steps.OnReviewerTree = func(t ReviewerTree) { lg.reviewerTree(status, t) }

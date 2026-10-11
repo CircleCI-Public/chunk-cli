@@ -319,3 +319,34 @@ func TestKeepLongerTimeouts(t *testing.T) {
 	assert.Assert(t, !gone)
 	assert.Equal(t, detected[1].Timeout, DefaultLintTimeout, "the input is not modified")
 }
+
+func TestValidateFactoryDockerfile(t *testing.T) {
+	for _, tt := range []struct {
+		path    string
+		wantErr bool
+	}{
+		{"", false}, {"Dockerfile.chunk", false}, {"docker/Dockerfile.chunk", false},
+		{"/etc/Dockerfile", true}, {"../Dockerfile", true}, {"a/../../Dockerfile", true},
+	} {
+		cfg := &ProjectConfig{Factory: &FactoryConfig{Dockerfile: tt.path}}
+		err := cfg.Validate()
+		if tt.wantErr {
+			assert.ErrorContains(t, err, "factory.dockerfile")
+		} else {
+			assert.NilError(t, err)
+		}
+	}
+}
+
+func TestInstallCommand(t *testing.T) {
+	var nilCfg *ProjectConfig
+	assert.Equal(t, nilCfg.InstallCommand(), "")
+
+	cfg := &ProjectConfig{Commands: []Command{{Name: "test", Run: "go test"}, {Name: CmdInstall, Run: "pnpm install"}}}
+	assert.Equal(t, cfg.InstallCommand(), "pnpm install")
+
+	cfg.Environment = &envspec.Environment{Setup: []envspec.Step{{Name: "install", Command: "pnpm install --frozen-lockfile"}}}
+	assert.Equal(t, cfg.InstallCommand(), "pnpm install --frozen-lockfile")
+
+	assert.Equal(t, (&ProjectConfig{}).InstallCommand(), "")
+}

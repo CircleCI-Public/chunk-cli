@@ -87,7 +87,9 @@ func TestInventoryStates(t *testing.T) {
 	// Newest first.
 	assert.Equal(t, entries[0].ID(), "20261010-120000")
 	assert.Equal(t, entries[0].State, StateOrphaned)
-	assert.Equal(t, entries[0].Worktree, wt3)
+	// git reports an orphaned worktree by its resolved path: /private/var for
+	// /var on macOS.
+	assert.Assert(t, samePath(entries[0].Worktree, wt3), "%s is not %s", entries[0].Worktree, wt3)
 	assert.Equal(t, entries[1].State, StateAbandoned)
 	assert.Equal(t, entries[2].State, StateFinished)
 	assert.Equal(t, entries[2].Result, ResultPassed)

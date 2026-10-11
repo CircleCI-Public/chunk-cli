@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -74,6 +75,15 @@ type Sidecars struct {
 	Prompts  []review.Prompt
 	Review   review.Options
 	Commands []config.Command
+	// Install, when set, installs the project's dependencies once on every
+	// sidecar before the baseline commit. A prebuilt image holds only the
+	// package manager's store, since the workspace is mounted over the repo.
+	Install string
+	// InstallTimeout bounds Install on each sidecar; zero means
+	// config.DefaultInstallTimeout.
+	InstallTimeout time.Duration
+	// OnInstallOutput receives each sidecar's install output as it arrives.
+	OnInstallOutput func(sidecarID string, line string)
 	// OnCheck is called as each validation command finishes. Reviews report
 	// their progress through Review.ProgressFn.
 	OnCheck func(Check)
@@ -96,6 +106,9 @@ type Sidecars struct {
 // too: they are sent the implementer's files but never its .git, so `git diff
 // HEAD` on a reviewer needs a commit of the same tree to diff against.
 func (s *Sidecars) Prepare(ctx context.Context) error {
+	if err := s.installDependencies(ctx); err != nil {
+		return err
+	}
 	s.ws = workspace{exec: s.Exec, entry: s.Implementer.Entry}
 	if err := s.ws.commitBaseline(ctx); err != nil {
 		return err
@@ -303,4 +316,59 @@ func scopePrompts(request string, prompts []review.Prompt, history map[string][]
 		out[i] = review.Prompt{Name: p.Name, Body: b.String()}
 	}
 	return out
+}
+
+// installDependencies runs Install in every sidecar's workspace at once. What
+// it creates is gitignored, so later syncs leave it alone.
+func (s *Sidecars) installDependencies(ctx context.Context) error {
+	if s.Install == "" {
+		return nil
+	}
+	entries := append([]*sidecar.PoolEntry{s.Implementer.Entry}, s.Reviewers...)
+	errs := make([]error, len(entries))
+	var wg sync.WaitGroup
+	for i, e := range entries {
+		wg.Add(1)
+		go func(i int, e *sidecar.PoolEntry) {
+			defer wg.Done()
+			errs[i] = s.installOn(ctx, e)
+		}(i, e)
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("install dependencies: %w", err)
+	}
+	return nil
+}
+
+func (s *Sidecars) installOn(ctx context.Context, e *sidecar.PoolEntry) error {
+	timeout := s.InstallTimeout
+	if timeout <= 0 {
+		timeout = config.DefaultInstallTimeout * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var tail strings.Builder
+	code, err := s.Exec(ctx, e, inRepo(e, s.Install), nil, func(_ string, data []byte) {
+		if s.OnInstallOutput != nil {
+			for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+				s.OnInstallOutput(e.ID, line)
+			}
+		}
+		tail.Write(data)
+		if tail.Len() > 8192 {
+			rest := tail.String()[tail.Len()-4096:]
+			tail.Reset()
+			tail.WriteString(rest)
+		}
+	}, nil)
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return fmt.Errorf("%s: %q timed out after %s: %s", e.ID, s.Install, timeout, review.Tail(strings.TrimSpace(tail.String()), 2000))
+	case err != nil:
+		return fmt.Errorf("%s: %w", e.ID, err)
+	case code != 0:
+		return fmt.Errorf("%s: %q exited %d: %s", e.ID, s.Install, code, review.Tail(strings.TrimSpace(tail.String()), 2000))
+	}
+	return nil
 }

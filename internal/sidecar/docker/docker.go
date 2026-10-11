@@ -93,12 +93,23 @@ const (
 
 var _ sidecar.Backend = (*Provider)(nil)
 
-// New connects to the local Docker daemon using the standard environment
-// (DOCKER_HOST and friends), negotiating the API version with the daemon.
-func New() (*Provider, error) {
+// NewClient connects to the local Docker daemon using the standard environment
+// (DOCKER_HOST and friends), negotiating the API version with the daemon. It is
+// the one place a Docker client is constructed, shared with image builds.
+func NewClient() (*client.Client, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("docker: connect to daemon: %w", err)
+	}
+	return cli, nil
+}
+
+// New connects to the local Docker daemon using the standard environment
+// (DOCKER_HOST and friends), negotiating the API version with the daemon.
+func New() (*Provider, error) {
+	cli, err := NewClient()
+	if err != nil {
+		return nil, err
 	}
 	b := &Provider{cli: cli, baseImage: defaultBaseImage, members: map[string]member{}}
 	if img := os.Getenv(EnvImage); img != "" {

@@ -127,6 +127,32 @@ type Result struct {
 	// developer does not work on — a different miss from "the jobs ran but
 	// nothing in them classified".
 	GateJobs int
+
+	// Images is the primary Docker image of each gate job, in config order.
+	// Image is empty for a job with no image this package can read: a machine
+	// or macOS executor, an executor from an orb, or an image chosen by a
+	// parameter.
+	Images []JobImage
+}
+
+// JobImage is the primary Docker image of one gate job.
+type JobImage struct {
+	Job   string
+	Image string
+}
+
+// CommonImage returns the image every gate job runs in. It is empty when there
+// are no gate jobs, when any of them has no readable image, or when they
+// differ: a base that matches only some of the gates is not the CI environment.
+func (r *Result) CommonImage() string {
+	common := ""
+	for _, ji := range r.Images {
+		if ji.Image == "" || (common != "" && ji.Image != common) {
+			return ""
+		}
+		common = ji.Image
+	}
+	return common
 }
 
 // Extract reads workDir's CircleCI config and returns the run steps belonging
@@ -160,6 +186,7 @@ func Extract(workDir string) (*Result, error) {
 			e.noteOrb(wj.Name)
 			continue
 		}
+		res.Images = append(res.Images, JobImage{Job: wj.Name, Image: primaryImage(job, f.Executors)})
 		jc := jobCtx{name: wj.Name}
 		args := mergeArgs(job.Parameters, wj.Params)
 
@@ -544,6 +571,8 @@ type file struct {
 	Commands map[string]command `yaml:"commands"`
 	Jobs     map[string]job     `yaml:"jobs"`
 
+	Executors map[string]executor `yaml:"executors"`
+
 	// Parameters are the pipeline parameters the config declares. Their
 	// defaults are what a workflow-level when:/unless: resolves against.
 	Parameters map[string]parameter `yaml:"parameters"`
@@ -556,6 +585,43 @@ type file struct {
 type job struct {
 	Steps      []step               `yaml:"steps"`
 	Parameters map[string]parameter `yaml:"parameters"`
+	Docker     []dockerImage        `yaml:"docker"`
+	Executor   executorRef          `yaml:"executor"`
+}
+
+type dockerImage struct {
+	Image string `yaml:"image"`
+}
+
+// executor is the part of an executor definition that names an image. A
+// machine or macOS executor has no docker entries.
+type executor struct {
+	Docker []dockerImage `yaml:"docker"`
+}
+
+// executorRef is a job's `executor:`, either a name or a mapping with a name.
+type executorRef string
+
+func (r *executorRef) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		*r = executorRef(n.Value)
+		return nil
+	}
+	*r = executorRef(scalarParams(n)["name"])
+	return nil
+}
+
+// primaryImage returns the first docker image of a job, following a named
+// executor. An image that still carries an interpolation is unreadable.
+func primaryImage(j job, executors map[string]executor) string {
+	docker := j.Docker
+	if len(docker) == 0 && j.Executor != "" {
+		docker = executors[string(j.Executor)].Docker
+	}
+	if len(docker) == 0 || strings.Contains(docker[0].Image, "<<") {
+		return ""
+	}
+	return docker[0].Image
 }
 
 type command struct {

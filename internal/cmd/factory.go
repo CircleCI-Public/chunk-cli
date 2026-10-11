@@ -32,7 +32,7 @@ func newFactoryCmd() *cobra.Command {
 		Short: "Build and manage factory runs",
 		RunE:  groupRunE,
 	}
-	cmd.AddCommand(newFactoryBuildCmd(), newFactoryListCmd(), newFactoryCleanCmd(), newFactoryAuthorCmd())
+	cmd.AddCommand(newFactoryBuildCmd(), newFactoryListCmd(), newFactoryCleanCmd(), newFactoryAuthorCmd(), newFactoryImageCmd())
 	return cmd
 }
 
@@ -99,8 +99,9 @@ change, and also shows the log here as the run writes it; it implies --log.
 
 Defaults for --backend, --image, --max-attempts and --log come from the
 factory section of .chunk/config.json (chunk init sets it); a flag given on the
-command line wins. For the docker backend the image is --image or
-factory.image, never validation.sidecarImage (a CircleCI snapshot ID).`,
+command line wins. For the docker backend the image is --image,
+factory.image (used as is), or factory.dockerfile (built here when its image is
+missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
@@ -150,7 +151,7 @@ factory.image, never validation.sidecarImage (a CircleCI snapshot ID).`,
 				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err, blocked: true}
 			}
 			flags := cmd.Flags()
-			settings, err := resolveFactorySettings(
+			settings, err := resolveBuildSettings(ctx, streams, root,
 				factorySettings{Backend: backend, Image: image, Attempts: attempts, Log: logOn},
 				factoryExplicit{
 					Backend:  flags.Changed("backend"),

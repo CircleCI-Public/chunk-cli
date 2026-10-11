@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -319,4 +321,76 @@ func TestCheckReportsAReviewerWithOtherCode(t *testing.T) {
 	assert.Assert(t, !trees[1].Matches(), "a reviewer with other code matched: %+v", trees[1])
 	assert.NilError(t, trees[1].Err)
 	assert.Assert(t, trees[1].Fingerprint != "")
+}
+
+func TestInstallDependenciesRunsOnEverySidecar(t *testing.T) {
+	var mu sync.Mutex
+	ran := map[string]string{}
+	exec := func(_ context.Context, e *sidecar.PoolEntry, script string, _ map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
+		mu.Lock()
+		ran[e.ID] = script
+		mu.Unlock()
+		onOutput(iostream.StreamStdout, []byte("installed\n"))
+		return 0, nil
+	}
+	var lines []string
+	s := &Sidecars{
+		Exec:        exec,
+		Install:     "pnpm install --offline",
+		Implementer: &Implementer{Entry: &sidecar.PoolEntry{ID: "impl", RepoPath: "/work/repo"}},
+		Reviewers:   []*sidecar.PoolEntry{{ID: "r1", RepoPath: "/work/repo"}},
+		OnInstallOutput: func(id, line string) {
+			mu.Lock()
+			lines = append(lines, id+": "+line)
+			mu.Unlock()
+		},
+	}
+	assert.NilError(t, s.installDependencies(context.Background()))
+	assert.Equal(t, len(ran), 2)
+	assert.Assert(t, strings.Contains(ran["r1"], "pnpm install --offline"), ran["r1"])
+	assert.Equal(t, len(lines), 2)
+
+	// Nothing to install is not an error and runs nothing.
+	s.Install = ""
+	ran = map[string]string{}
+	assert.NilError(t, s.installDependencies(context.Background()))
+	assert.Equal(t, len(ran), 0)
+}
+
+func TestInstallDependenciesReportsAFailingSidecar(t *testing.T) {
+	exec := func(_ context.Context, e *sidecar.PoolEntry, _ string, _ map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
+		if e.ID == "r1" {
+			onOutput(iostream.StreamStderr, []byte("ERR_PNPM_NO_OFFLINE_TARBALL\n"))
+			return 1, nil
+		}
+		return 0, nil
+	}
+	s := &Sidecars{
+		Exec:        exec,
+		Install:     "pnpm install",
+		Implementer: &Implementer{Entry: &sidecar.PoolEntry{ID: "impl"}},
+		Reviewers:   []*sidecar.PoolEntry{{ID: "r1"}},
+	}
+	err := s.installDependencies(context.Background())
+	assert.ErrorContains(t, err, "r1")
+	assert.ErrorContains(t, err, "ERR_PNPM_NO_OFFLINE_TARBALL")
+}
+
+func TestInstallDependenciesTimesOut(t *testing.T) {
+	// A hung install fails setup once its timeout passes, rather than blocking
+	// the run until it is cancelled.
+	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
+		onOutput(iostream.StreamStdout, []byte("resolving...\n"))
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	s := &Sidecars{
+		Exec:           exec,
+		Install:        "pnpm install",
+		InstallTimeout: 50 * time.Millisecond,
+		Implementer:    &Implementer{Entry: &sidecar.PoolEntry{ID: "impl"}},
+	}
+	err := s.installDependencies(context.Background())
+	assert.ErrorContains(t, err, "timed out after 50ms")
+	assert.ErrorContains(t, err, "resolving...")
 }

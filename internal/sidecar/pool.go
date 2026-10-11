@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
@@ -138,11 +137,10 @@ func NewPool(
 		repoPath = state.RepoPath
 	}
 	if repoPath == "" {
-		_, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, opts.WorkDir)
-		if err != nil {
-			return nil, fmt.Errorf("pool: detect repo: %w", err)
+		var err error
+		if repoPath, err = RepoWorkspace(ctx, opts.WorkDir); err != nil {
+			return nil, fmt.Errorf("pool: %w", err)
 		}
-		repoPath = DefaultWorkspace(repo)
 	}
 	image := opts.Image
 	if image == "" && state != nil {

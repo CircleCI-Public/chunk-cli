@@ -599,7 +599,7 @@ func writeProjectConfig(workDir string, cfg *config.ProjectConfig, streams iostr
 }
 
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth, skipFactory bool
+	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth, skipFactory, skipImageBuild bool
 	var projectDir, factoryBackend, factoryImage, factoryAuthor string
 
 	cmd := &cobra.Command{
@@ -614,7 +614,7 @@ hook config files.`,
 			ctx := cmd.Context()
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 
-			factoryOpts := initFactoryOptions{Backend: factoryBackend, Image: factoryImage, Author: factoryAuthor, Skip: skipFactory}
+			factoryOpts := initFactoryOptions{Backend: factoryBackend, Image: factoryImage, Author: factoryAuthor, Skip: skipFactory, SkipImageBuild: skipImageBuild}
 			if err := factoryOpts.check(); err != nil {
 				return err
 			}
@@ -764,6 +764,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipOrgID, "skip-org-id", false, "Skip CircleCI org ID detection")
 	cmd.Flags().BoolVar(&skipAuth, "skip-auth", false, "Skip the Claude login check")
 	cmd.Flags().BoolVar(&skipFactory, "skip-factory", false, "Skip the factory backend step")
+	cmd.Flags().BoolVar(&skipImageBuild, "skip-image-build", false, "Write Dockerfile.chunk for docker factory runs but do not offer to build the image")
 	cmd.Flags().StringVar(&factoryBackend, "factory-backend", "", "Where factory runs execute: circleci or docker (skips the prompt)")
 	cmd.Flags().StringVar(&factoryImage, "factory-image", "", "Docker image for factory runs (skips the prompt)")
 	cmd.Flags().StringVar(&factoryAuthor, "factory-author", "", `Who factory commits are attributed to, as "Name <email>" (default: your git identity)`)
