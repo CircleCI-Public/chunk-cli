@@ -23,7 +23,7 @@ func finishedRun(t *testing.T) (root string, rec Record) {
 	writeFile(t, wt.Path, "main.go", "package main\n\nfunc main() {}\n")
 	writeFile(t, wt.Path, "flag.go", "package main\n")
 	assert.NilError(t, os.Remove(filepath.Join(wt.Path, "mine.go")))
-	_, err = wt.Commit(ctx, CommitMessage("add a flag", "run-1", Outcome{Result: ResultExhausted, Rounds: 3}))
+	_, err = wt.Commit(ctx, Notes{Title: "add a flag"}.CommitMessage("run-1", Outcome{Result: ResultExhausted, Rounds: 3}, ""))
 	assert.NilError(t, err)
 	return root, Record{
 		RunID: "run-1", Prompt: "add a flag",
@@ -128,8 +128,6 @@ func TestContinuationWithoutGuidanceChecksFirst(t *testing.T) {
 	assert.Assert(t, strings.Contains(c.prompt(), "It was asked:\n\nadd a flag\n\nwith tests"))
 	assert.Assert(t, strings.Contains(c.prompt(), "`git diff HEAD` shows it"))
 	assert.Assert(t, !strings.Contains(c.prompt(), "The developer adds"))
-	assert.Equal(t, c.commitMessage("run-2", Outcome{Result: ResultPassed, Rounds: 2}),
-		"add a flag\n\nWritten by smelt factory run run-2, continuing run run-1 (passed after 2 round(s)).\n")
 }
 
 func TestContinuationWithGuidanceImplementsFirst(t *testing.T) {
@@ -138,8 +136,6 @@ func TestContinuationWithGuidanceImplementsFirst(t *testing.T) {
 	assert.Assert(t, !c.checkFirst())
 	assert.Equal(t, c.request(), "add a flag\n\nFollow-up from the developer:\n\nyou may update the test")
 	assert.Assert(t, strings.HasSuffix(c.prompt(), "The developer adds:\n\nyou may update the test"))
-	assert.Equal(t, c.commitMessage("run-2", Outcome{Result: ResultExhausted, Rounds: 3}),
-		"add a flag\n\nyou may update the test\n\nWritten by smelt factory run run-2, continuing run run-1 (exhausted after 3 round(s)).\n")
 }
 
 func TestRecordRoundTrip(t *testing.T) {

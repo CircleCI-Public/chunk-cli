@@ -191,6 +191,8 @@ type FactoryRun struct {
 	// were no changes. StatError says why it could not be worked out instead.
 	Stat      string `json:"stat,omitempty"`
 	StatError string `json:"stat_error,omitempty"`
+	// Notes are the commit's and the PR's account of the change.
+	Notes *Notes `json:"notes,omitempty"`
 	// WorktreeRemoved reports that the run ended before the implementer started
 	// and its worktree, holding nothing, was removed.
 	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
@@ -201,6 +203,17 @@ type FactoryRun struct {
 	// Progress is what the run said as it went: its sidecars being made
 	// ready and synced, and anything that went wrong cleaning up.
 	Progress Feed `json:"progress,omitzero"`
+}
+
+// Notes is the human-readable account of a factory run's change; it mirrors
+// factory.Notes, which smeltd cannot import.
+type Notes struct {
+	Title string `json:"title"`
+	What  string `json:"what"`
+	Why   string `json:"why"`
+	How   string `json:"how"`
+	// Fallback says why the notes could not be written, when they could not.
+	Fallback string `json:"fallback,omitempty"`
 }
 
 // Why a factory run's loop stopped, as FactoryRun.Result.

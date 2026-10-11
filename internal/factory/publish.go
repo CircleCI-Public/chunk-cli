@@ -293,24 +293,8 @@ func (p Publication) CompareURL(ctx context.Context, t PublishTarget) string {
 	return fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s?expand=1", org, repo, t.Base, p.Head)
 }
 
-// PRTitle is the PR's default title: the request's first line.
+// PRTitle is the PR's default title when a run kept no notes: the request's
+// first line, without markdown heading markers.
 func PRTitle(prompt string) string {
-	subject, _, _ := strings.Cut(strings.TrimSpace(prompt), "\n")
-	return strings.TrimSpace(subject)
-}
-
-// PRBody is the PR's default description: the request and how the run ended.
-func PRBody(prompt, runID, result string, rounds int, stat string) string {
-	var b strings.Builder
-	b.WriteString(strings.TrimSpace(prompt))
-	b.WriteString("\n\n---\n")
-	fmt.Fprintf(&b, "Written by smelt factory run %s", runID)
-	if result != "" {
-		fmt.Fprintf(&b, ": %s after %d round(s)", result, rounds)
-	}
-	b.WriteString(".\n")
-	if stat != "" {
-		fmt.Fprintf(&b, "\n%s\n", stat)
-	}
-	return b.String()
+	return requestTitle(prompt)
 }

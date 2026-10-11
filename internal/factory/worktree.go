@@ -173,20 +173,22 @@ func (w Worktree) Stat(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// CommitMessage is the work's commit message: the prompt's first line as the
-// subject, the rest of the prompt below it, and how the run ended.
-func CommitMessage(prompt, runID string, o Outcome) string {
-	subject, rest, _ := strings.Cut(strings.TrimSpace(prompt), "\n")
-	subject = strings.TrimSuffix(subject, "\r")
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", subject)
-	if rest = strings.Trim(rest, "\r\n"); rest != "" {
-		fmt.Fprintf(&b, "%s\n\n", rest)
+// Amend rewrites the message of the work's commit, once the notes that make
+// it up are written.
+func (w Worktree) Amend(ctx context.Context, message string) error {
+	git := gitexec.Runner{Dir: w.Path, Env: commitEnv(w.Author)}
+	if out, err := git.CombinedOutput(ctx, "-c", "commit.gpgsign=false", "commit", "--amend", "--quiet", "--no-verify", "-m", message); err != nil {
+		return fmt.Errorf("rewrite the commit message: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	fmt.Fprintf(&b, "Written by smelt factory run %s", runID)
-	if o.Result != "" {
-		fmt.Fprintf(&b, " (%s after %d round(s))", o.Result, o.Rounds)
+	return nil
+}
+
+// DiffStat is git's per-file diff stat of the branch's work since the
+// baseline.
+func (w Worktree) DiffStat(ctx context.Context) (string, error) {
+	out, err := (gitexec.Runner{Dir: w.Path}).Output(ctx, "diff", "--stat", w.Baseline, "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("summarize the work: %w", err)
 	}
-	b.WriteString(".\n")
-	return b.String()
+	return strings.TrimSpace(string(out)), nil
 }

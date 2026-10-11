@@ -251,7 +251,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().BoolVar(&pub.none, "no-publish", false, "never offer to push or open a PR")
 	cmd.Flags().StringVar(&pub.base, "base", "", "branch the PR targets (default: the branch you started from, else the default branch)")
 	cmd.Flags().StringVar(&pub.title, "pr-title", "", "PR title (default: the prompt's first line)")
-	cmd.Flags().StringVar(&pub.body, "pr-body", "", "PR description (default: the prompt and how the run ended)")
+	cmd.Flags().StringVar(&pub.body, "pr-body", "", "PR description (default: the run's What / Why / How notes)")
 	cmd.Flags().BoolVar(&pub.draft, "draft", false, "open the PR as a draft")
 	cmd.SetFlagErrorFunc(factoryFlagError)
 	return cmd

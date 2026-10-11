@@ -11,13 +11,19 @@ import (
 
 // RunScript runs a bookkeeping script on a sidecar, such as reading a diff
 // back, and returns its stdout. No credential is sent: the script does not run
-// claude. It fails on a non-zero exit, carrying the tail of stderr, and on
+// claude (see RunScriptEnv for one that does). It fails on a non-zero exit, carrying the tail of stderr, and on
 // stdout larger than limit bytes, which is never truncated: a cut diff or
 // object name is worse than none.
 func RunScript(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, script string, limit int) (string, error) {
+	return RunScriptEnv(ctx, exec, entry, script, nil, limit)
+}
+
+// RunScriptEnv is RunScript with env set for the script, such as the
+// credential of a script that runs claude.
+func RunScriptEnv(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, script string, env map[string]string, limit int) (string, error) {
 	var stdout, stderr strings.Builder
 	tooBig := false
-	code, err := exec(ctx, entry, script, nil, func(stream string, data []byte) {
+	code, err := exec(ctx, entry, script, env, func(stream string, data []byte) {
 		if stream == iostream.StreamStderr {
 			if stderr.Len() < maxOutputBytes {
 				stderr.Write(data)

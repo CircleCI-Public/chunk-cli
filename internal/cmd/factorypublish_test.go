@@ -152,3 +152,32 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	assert.NilError(t, err, string(out))
 	return strings.TrimSpace(string(out))
 }
+
+func TestPublishRunBodyIsTheNotesNeverTheSpec(t *testing.T) {
+	notes := &smeltd.Notes{Title: "Add a flag", What: "- a flag", Why: "- asked", How: "- flag.go"}
+	tests := []struct {
+		name      string
+		notes     *smeltd.Notes
+		flags     publishFlags
+		wantTitle string
+		wantBody  string
+	}{
+		{name: "notes", notes: notes, wantTitle: "Add a flag", wantBody: "### What\n- a flag"},
+		{name: "fallback", wantTitle: "Big spec", wantBody: "could not write a summary"},
+		{name: "--pr-body wins", notes: notes, flags: publishFlags{body: "mine", bodySet: true, title: "T"}, wantTitle: "T", wantBody: "mine"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, _ := publishProject(t)
+			f.Prompt, f.Notes = "# Big spec\n\nsecond line of the spec", tt.notes
+			host := &fakePRHost{}
+			tt.flags.pr = true
+			err := publishRun(t.Context(), iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}, f, tt.flags, false, host)
+			assert.NilError(t, err)
+			assert.Equal(t, len(host.created), 1)
+			assert.Equal(t, host.created[0].Title, tt.wantTitle)
+			assert.Assert(t, strings.Contains(host.created[0].Body, tt.wantBody), host.created[0].Body)
+			assert.Assert(t, !strings.Contains(host.created[0].Body, "second line"))
+		})
+	}
+}

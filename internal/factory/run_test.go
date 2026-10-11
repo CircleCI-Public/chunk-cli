@@ -201,3 +201,103 @@ func TestRunOptionsSummaryNamesTheBackend(t *testing.T) {
 	got := (&RunOptions{Backend: sidecar.NewCircleCIBackend(nil, ""), Image: "img", Model: "m"}).summary()
 	assert.Equal(t, got, "Factory run: backend=docker image=img attempts=0 reviewers=0 model=m")
 }
+
+// concludeFixture is a worktree with committed-able work and sidecars whose
+// exec answers the notes call with answer, counting the calls.
+func concludeFixture(t *testing.T, change bool, answer func() (int, string)) (Worktree, *Sidecars, *int) {
+	t.Helper()
+	t.Setenv(config.EnvHome, t.TempDir())
+	root := newProject(t)
+	wt, err := CreateWorktree(context.Background(), WorktreeOptions{Root: root, Path: t.TempDir() + "/wt", RunID: "run-1", Prompt: "add a flag"})
+	assert.NilError(t, err)
+	if change {
+		writeFile(t, wt.Path, "flag.go", "package main\n")
+	}
+	calls := 0
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out iostream.OutputFn, _ func(string)) (int, error) {
+		calls++
+		code, stdout := answer()
+		out(iostream.StreamStdout, []byte(stdout))
+		return code, nil
+	}
+	api := httptest.NewServer(fakes.NewFakeCircleCI())
+	t.Cleanup(api.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
+	assert.NilError(t, err)
+	steps := &Sidecars{
+		Exec:        exec,
+		Implementer: &Implementer{Entry: &sidecar.PoolEntry{ID: "impl", RepoPath: "/workspace"}},
+		// The pull fails, which only warns; the work is already in the worktree.
+		Relay: NewRelay(sidecar.NewCircleCIBackend(client, ""), wt.Path, nil),
+	}
+	return wt, steps, &calls
+}
+
+func TestConcludeRunWritesNotesIntoTheCommit(t *testing.T) {
+	wt, steps, calls := concludeFixture(t, true, func() (int, string) { return 0, notesJSON })
+	rep := Report{RunID: "run-1", Outcome: Outcome{Result: ResultPassed, Rounds: 2}}
+	var warns []string
+	status := func(l iostream.Level, m string) {
+		if l == iostream.LevelWarn && !strings.Contains(m, "implementer's last changes") {
+			warns = append(warns, m)
+		}
+	}
+
+	concludeRun(context.Background(), steps, wt, &rep, NotesInput{Request: "# add a flag\n\nsecret spec"}, status)
+
+	assert.Equal(t, *calls, 1)
+	assert.Assert(t, rep.Committed)
+	assert.Assert(t, rep.Notes != nil && rep.Notes.Title == "Add a flag", "%+v", rep.Notes)
+	assert.Equal(t, len(warns), 0, "%v", warns)
+	msg := gitOutput(t, wt.Path, "log", "-1", "--format=%B", wt.Branch)
+	assert.Assert(t, strings.HasPrefix(msg, "Add a flag\n\nWhat:\n- a flag"), msg)
+	assert.Assert(t, strings.Contains(msg, "passed after 2 round(s)"), msg)
+	assert.Assert(t, !strings.Contains(msg, "secret"), msg)
+}
+
+func TestConcludeRunKeepsTheFallbackWhenNotesFail(t *testing.T) {
+	wt, steps, _ := concludeFixture(t, true, func() (int, string) { return 1, "" })
+	rep := Report{RunID: "run-1", Outcome: Outcome{Result: ResultPassed, Rounds: 1}}
+	var warns []string
+	status := func(l iostream.Level, m string) {
+		if l == iostream.LevelWarn {
+			warns = append(warns, m)
+		}
+	}
+
+	concludeRun(context.Background(), steps, wt, &rep, NotesInput{Request: "add a flag\n\nsecret spec"}, status)
+
+	assert.Assert(t, rep.Committed)
+	assert.Assert(t, rep.Notes != nil && rep.Notes.Fallback != "")
+	assert.Assert(t, strings.Contains(strings.Join(warns, "\n"), "PR notes were not generated"), "%v", warns)
+	msg := gitOutput(t, wt.Path, "log", "-1", "--format=%B", wt.Branch)
+	assert.Assert(t, strings.Contains(msg, "could not write a summary"), msg)
+	assert.Assert(t, !strings.Contains(msg, "secret"), msg)
+}
+
+func TestConcludeRunSkipsNotesForAnEmptyChange(t *testing.T) {
+	wt, steps, calls := concludeFixture(t, false, func() (int, string) { return 0, notesJSON })
+	rep := Report{RunID: "run-1"}
+
+	concludeRun(context.Background(), steps, wt, &rep, NotesInput{Request: "add a flag"}, func(iostream.Level, string) {})
+
+	assert.Equal(t, *calls, 0)
+	assert.Assert(t, rep.Notes == nil)
+}
+
+func TestKeepEndedRecordStoresTheOutcomeAndNotes(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	root := newProject(t)
+	dataDir, err := config.ProjectDataDir(root)
+	assert.NilError(t, err)
+	notes := &Notes{Title: "Add a flag", What: "- w", Why: "- y", How: "- h"}
+	rep := Report{Outcome: Outcome{Result: ResultPassed, Rounds: 2}, Notes: notes}
+
+	keepEndedRecord(dataDir, Record{RunID: "run-1", Prompt: "add a flag"}, rep, func(iostream.Level, string) {})
+
+	got, err := LoadRecord(root, "run-1")
+	assert.NilError(t, err)
+	assert.Equal(t, got.Result, ResultPassed)
+	assert.Equal(t, got.Rounds, 2)
+	assert.DeepEqual(t, got.Notes, notes)
+}

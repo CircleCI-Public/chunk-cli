@@ -177,7 +177,7 @@ smelt
 │       --no-publish               # Never offer to push or open a PR
 │       --base <branch>            # Branch the PR targets (default: branch you started from, else the default)
 │       --pr-title <t>             # PR title (default: the prompt's first line)
-│       --pr-body <b>              # PR description (default: prompt and run outcome)
+│       --pr-body <b>              # PR description (default: What / Why / How notes)
 │       --draft                    # Open the PR as a draft
 │       --org-id <id>               # Organization ID
 │       --image <id>                # Snapshot ID, or Docker image with --backend docker (default: validation.sidecarImage, or factory.image for docker)
