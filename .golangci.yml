@@ -23,6 +23,24 @@ linters:
           deny:
             - pkg: gotest.tools/assert
               desc: use gotest.tools/v3/assert instead
+        # CircleCI is an opt-in backend. Only the packages that implement it,
+        # or that serve the explicit CircleCI commands, may import its API
+        # client; anything else reaching for it needs a deliberate change here.
+        circleci:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/circleci/**"
+            - "!**/internal/sidecar/**"
+            - "!**/internal/task/**"
+            - "!**/internal/authprompt/**"
+            - "!**/internal/variants/**"
+            - "!**/internal/factory/**"
+            - "!**/internal/chunkd/server/**"
+            - "!**/internal/cmd/**"
+          deny:
+            - pkg: github.com/CircleCI-Public/chunk-cli/internal/circleci
+              desc: the CircleCI API client is opt-in; only the CircleCI backend packages and explicit CircleCI commands may import it (see .golangci.yml)
 
     govet:
       enable-all: true

@@ -22,6 +22,7 @@ func writeRemoteCommandConfig(t *testing.T, workDir string) {
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 	cfg := map[string]any{
+		"factory": map[string]string{"backend": "circleci"},
 		"commands": []map[string]any{
 			{"name": "test", "run": "echo test-output", "remote": true},
 		},

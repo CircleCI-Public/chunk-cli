@@ -324,8 +324,43 @@ func updateInitGitignore(workDir string, streams iostream.Streams) {
 	}
 }
 
-func installSkillsStep(workDir string, streams iostream.Streams) {
-	for _, r := range skills.InstallByName(skills.ScopeProject, workDir, "chunk-sidecar", "chunk-sidecar-setup", "chunk-validate-config") {
+// initPlan is which backend-dependent steps `chunk init` runs. Everything that
+// reaches CircleCI, or sets a project up for it, is gated on the circleci
+// backend the user chose, so the plan is decided from that choice alone.
+type initPlan struct {
+	DetectOrgID bool
+	TestSuites  bool // scaffold or hint at .circleci/test-suites.yml
+	RemoteHints bool // mention `chunk validate --remote` in the summary
+	Skills      []string
+}
+
+// Skills init installs. The sidecar ones describe CircleCI cloud sidecars, so
+// they only go in for a project that chose that backend.
+var (
+	genericInitSkills  = []string{"chunk-validate-config"}
+	circleCIInitSkills = []string{"chunk-sidecar", "chunk-sidecar-setup"}
+)
+
+// planInit decides the backend-dependent steps. The backend is chosen before
+// any of them runs.
+func planInit(circleCI bool) initPlan {
+	if !circleCI {
+		return initPlan{Skills: genericInitSkills}
+	}
+	return initPlan{
+		DetectOrgID: true,
+		TestSuites:  true,
+		RemoteHints: true,
+		Skills:      append(append([]string(nil), circleCIInitSkills...), genericInitSkills...),
+	}
+}
+
+func installSkillsStep(workDir string, streams iostream.Streams, names []string) {
+	if len(names) == 0 {
+		streams.ErrPrintln(ui.Dim("No agent skills apply to this backend; skipping skill installation"))
+		return
+	}
+	for _, r := range skills.InstallByName(skills.ScopeProject, workDir, names...) {
 		if r.Skipped {
 			continue
 		}
@@ -505,7 +540,7 @@ func printDetectionSource(det validate.Detection, streams iostream.Streams) {
 }
 
 // printInitSummary prints the discovered validation commands and next-step hints.
-func printInitSummary(commands []config.Command, streams iostream.Streams) {
+func printInitSummary(commands []config.Command, remoteHints bool, streams iostream.Streams) {
 	if len(commands) > 0 {
 		entries := make([]ui.CommandEntry, len(commands))
 		for i, c := range commands {
@@ -521,6 +556,9 @@ func printInitSummary(commands []config.Command, streams iostream.Streams) {
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("Run validation:"))
 	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("run all commands locally"))
+	if !remoteHints {
+		return
+	}
 	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate --remote"), ui.Dim("run all commands on a remote sidecar"))
 	for _, c := range commands {
 		if c.Name == "install" {
@@ -598,6 +636,35 @@ func writeProjectConfig(workDir string, cfg *config.ProjectConfig, streams iostr
 	return nil
 }
 
+// detectInitCommands detects the project's validation commands and records them
+// in cfg, keeping any timeout that was raised by hand.
+func detectInitCommands(ctx context.Context, workDir string, streams iostream.Streams, rc config.ResolvedConfig, cfg *config.ProjectConfig) {
+	claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
+	det, err := validate.DetectCommands(ctx, claude, workDir)
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", err)))
+		return
+	}
+	printDetectionSource(det, streams)
+	allCommands := []config.Command{}
+	// Detection may already have found an install command — a
+	// CircleCI config names one directly. Only fall back to
+	// guessing from the lock file when it did not.
+	if !hasInstallCommand(det.Commands) {
+		if pm := validate.DetectPackageManager(workDir); pm != nil {
+			streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
+			allCommands = append(allCommands, config.Command{Name: config.CmdInstall, Run: pm.InstallCommand})
+		}
+	}
+	allCommands = append(allCommands, det.Commands...)
+	// With --force, cfg still holds the previous commands: keep any
+	// timeout that was raised beyond what detection suggests.
+	cfg.Commands = config.KeepLongerTimeouts(allCommands, cfg.Commands)
+	for _, c := range det.Commands {
+		streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
+	}
+}
+
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth, skipFactory, skipImageBuild bool
 	var projectDir, factoryBackend, factoryImage, factoryAuthor string
@@ -659,6 +726,12 @@ hook config files.`,
 				cfg = existingCfg
 			}
 
+			// Step 0: where factory runs execute. Asked before anything else
+			// because it decides whether any CircleCI step below happens: an
+			// authenticated machine alone must never reach CircleCI.
+			factoryRes := initFactoryStep(ctx, workDir, streams, cfg, factoryOpts)
+			plan := planInit(cfg.UsesCircleCI())
+
 			// Step 1: VCS config from git remote
 			if err := detectVCS(ctx, workDir, streams, cfg); err != nil {
 				return err
@@ -671,40 +744,19 @@ hook config files.`,
 
 			// Step 2: Validate command detection
 			if !skipValidate {
-				claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
-				det, detectErr := validate.DetectCommands(ctx, claude, workDir)
-				if detectErr != nil {
-					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", detectErr)))
-				} else {
-					printDetectionSource(det, streams)
-					allCommands := []config.Command{}
-					// Detection may already have found an install command — a
-					// CircleCI config names one directly. Only fall back to
-					// guessing from the lock file when it did not.
-					if !hasInstallCommand(det.Commands) {
-						pm := validate.DetectPackageManager(workDir)
-						if pm != nil {
-							streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
-							allCommands = append(allCommands, config.Command{Name: config.CmdInstall, Run: pm.InstallCommand})
-						}
-					}
-					allCommands = append(allCommands, det.Commands...)
-					// With --force, cfg still holds the previous commands: keep any
-					// timeout that was raised beyond what detection suggests.
-					cfg.Commands = config.KeepLongerTimeouts(allCommands, cfg.Commands)
-					for _, c := range det.Commands {
-						streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
-					}
-				}
+				detectInitCommands(ctx, workDir, streams, rc, cfg)
 			}
 
-			// Step 3: CircleCI org ID
-			if !skipOrgID && cfg.OrgID == "" {
+			// Step 3: CircleCI org ID, for the circleci backend only
+			if plan.DetectOrgID && !skipOrgID && cfg.OrgID == "" {
 				detectOrgID(ctx, rc, streams, cfg)
 			}
 
-			// Step 3b: where factory runs execute
-			initFactoryStep(ctx, workDir, streams, cfg, factoryOpts)
+			// Step 3b: the docker image, now that the commands it is verified
+			// against are known
+			if factoryRes.BackendChosen {
+				initManagedImage(ctx, workDir, streams, cfg, factoryOpts)
+			}
 
 			if err := writeProjectConfig(workDir, cfg, streams); err != nil {
 				return err
@@ -729,18 +781,18 @@ hook config files.`,
 				maybeInstallCompletions(streams)
 			}
 
-			// Step 6: CircleCI Smarter Testing test-suites.yml
-			if skipTestSuites {
-				printTestSuitesHint(workDir, streams)
-			} else {
-				if err := writeTestSuites(workDir, streams); err != nil {
+			// Step 6: CircleCI Smarter Testing test-suites.yml, circleci only
+			if plan.TestSuites {
+				if skipTestSuites {
+					printTestSuitesHint(workDir, streams)
+				} else if err := writeTestSuites(workDir, streams); err != nil {
 					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not write .circleci/test-suites.yml: %v", err)))
 				}
 			}
 
 			// Step 7: Agent skills
 			if !skipSkills {
-				installSkillsStep(workDir, streams)
+				installSkillsStep(workDir, streams, plan.Skills)
 			}
 
 			// Step 8: Claude credential. Re-resolve: earlier steps may not have
@@ -749,7 +801,7 @@ hook config files.`,
 			claudeAuthStep(ctx, streams, authRC, insecureStorage, skipAuth, ui.Confirm)
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
-			printInitSummary(cfg.Commands, streams)
+			printInitSummary(cfg.Commands, plan.RemoteHints, streams)
 			return nil
 		},
 	}
@@ -760,12 +812,12 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&skipCompletions, "skip-completions", false, "Skip shell completion installation")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
-	cmd.Flags().BoolVar(&skipTestSuites, "skip-test-suites", true, "Skip CircleCI test-suites.yml generation (default: skip; pass =false to use built-in Go/pytest templates)")
-	cmd.Flags().BoolVar(&skipOrgID, "skip-org-id", false, "Skip CircleCI org ID detection")
+	cmd.Flags().BoolVar(&skipTestSuites, "skip-test-suites", true, "Skip CircleCI test-suites.yml generation (circleci backend only; default: skip; pass =false to use built-in Go/pytest templates)")
+	cmd.Flags().BoolVar(&skipOrgID, "skip-org-id", false, "Skip CircleCI org ID detection (circleci backend only)")
 	cmd.Flags().BoolVar(&skipAuth, "skip-auth", false, "Skip the Claude login check")
 	cmd.Flags().BoolVar(&skipFactory, "skip-factory", false, "Skip the factory backend step")
 	cmd.Flags().BoolVar(&skipImageBuild, "skip-image-build", false, "Write Dockerfile.chunk for docker factory runs but do not offer to build the image")
-	cmd.Flags().StringVar(&factoryBackend, "factory-backend", "", "Where factory runs execute: circleci or docker (skips the prompt)")
+	cmd.Flags().StringVar(&factoryBackend, "factory-backend", "", "Where factory runs execute: docker (default) or circleci (skips the prompt)")
 	cmd.Flags().StringVar(&factoryImage, "factory-image", "", "Docker image for factory runs (skips the prompt)")
 	cmd.Flags().StringVar(&factoryAuthor, "factory-author", "", `Who factory commits are attributed to, as "Name <email>" (default: your git identity)`)
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")

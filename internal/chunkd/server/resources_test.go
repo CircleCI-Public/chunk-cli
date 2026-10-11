@@ -157,7 +157,7 @@ func TestConsumeSamplesDerivesCPUAcrossFrames(t *testing.T) {
 }
 
 func TestResourceSamplerDoesNothingWhenNoDashboardAttached(t *testing.T) {
-	r := newResourceSampler(nil)
+	r := newResourceSampler()
 	// Never touched, so no dashboard has ever asked for a snapshot.
 	assert.Check(t, !r.attached())
 
@@ -170,7 +170,7 @@ func TestResourceSamplerDoesNothingWhenNoDashboardAttached(t *testing.T) {
 }
 
 func TestResourceSamplerStopsSamplersWhenSidecarLeaves(t *testing.T) {
-	r := newResourceSampler(nil)
+	r := newResourceSampler()
 	r.sample = blockingSampler(make(chan string, 4))
 	r.touch()
 	t.Cleanup(r.stopAll)
@@ -192,7 +192,7 @@ func TestResourceSamplerStopsSamplersWhenSidecarLeaves(t *testing.T) {
 }
 
 func TestResourceSamplerIgnoresLocalRunner(t *testing.T) {
-	r := newResourceSampler(nil)
+	r := newResourceSampler()
 	r.touch()
 	// The local runner has an empty ID and no sidecar to connect to.
 	r.reconcile([]chunkd.SidecarState{{ID: ""}})
@@ -203,7 +203,7 @@ func TestResourceSamplerIgnoresLocalRunner(t *testing.T) {
 }
 
 func TestResourceSamplerAnnotateAttachesLatest(t *testing.T) {
-	r := newResourceSampler(nil)
+	r := newResourceSampler()
 	r.sample = blockingSampler(make(chan string, 4))
 	r.touch()
 	t.Cleanup(r.stopAll)
@@ -276,7 +276,7 @@ func TestSidecarSamplerRetryIsClaimedOnce(t *testing.T) {
 
 func TestResourceSamplerRetriesAfterCooloff(t *testing.T) {
 	started := make(chan string, 4)
-	r := newResourceSampler(nil)
+	r := newResourceSampler()
 	r.sample = blockingSampler(started)
 	r.touch()
 	t.Cleanup(r.stopAll)
@@ -316,7 +316,7 @@ func TestResourceSamplerRetriesAfterCooloff(t *testing.T) {
 
 func TestResourceSamplerStopCancelsTheRunningSession(t *testing.T) {
 	started := make(chan string, 1)
-	r := newResourceSampler(nil)
+	r := newResourceSampler()
 	stopped := make(chan struct{})
 	r.sample = func(ctx context.Context, sc chunkd.SidecarState, _ *sidecarSampler) error {
 		started <- sc.ID
@@ -378,7 +378,7 @@ func TestReadFramesUnblocksWriterWhenScannerGivesUp(t *testing.T) {
 // briefly — but it pins the property that made that safe, which was incidental
 // then and is deliberate now.
 func TestSamplerGoroutineDoesNotWaitOnReconcile(t *testing.T) {
-	r := newResourceSampler(nil)
+	r := newResourceSampler()
 	reached := make(chan struct{})
 	r.sample = func(ctx context.Context, sc chunkd.SidecarState, _ *sidecarSampler) error {
 		// annotate takes r.mu, standing in for any sampling path that ever does.
@@ -424,7 +424,7 @@ func TestSamplerReportsWhyItGaveUp(t *testing.T) {
 
 	gaveUp := make(chan struct{})
 
-	r := newResourceSampler(nil)
+	r := newResourceSampler()
 	r.logf = func(format string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -463,6 +463,6 @@ func TestSamplerReportsWhyItGaveUp(t *testing.T) {
 // Nothing in the package may reach for the process logger directly: the daemon
 // decides where its output goes, and a test cannot read stderr.
 func TestResourceSamplerLogsThroughTheInjectedLogger(t *testing.T) {
-	r := newResourceSampler(nil)
+	r := newResourceSampler()
 	assert.Assert(t, r.logf != nil, "a nil logger would panic on the first failure")
 }

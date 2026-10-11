@@ -7,6 +7,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
 
 // PrimaryPoolName names the one-sidecar pool that hosts a detached review. It
@@ -29,7 +30,7 @@ const (
 // InstallRelease is the shell that installs the latest released chunk into
 // $HOME on a Linux sidecar. Used when no local binary is uploaded.
 const InstallRelease = `case "$(uname -m)" in aarch64|arm64) A=arm64;; *) A=x86_64;; esac
-curl -fsSL "https://github.com/CircleCI-Public/chunk-cli/releases/latest/download/chunk-cli_Linux_${A}.tar.gz" | tar -xz -C "$HOME" chunk`
+curl -fsSL "https://github.com/` + upgrade.Repo + `/releases/latest/download/` + upgrade.AssetPrefix + `_Linux_${A}.tar.gz" | tar -xz -C "$HOME" chunk`
 
 // UploadInstall is the shell that installs a binary streamed on stdin, gzipped,
 // as $HOME/chunk. It writes a new file and moves it into place, because writing

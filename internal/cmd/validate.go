@@ -275,6 +275,10 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 	}
 
 	changed, err := cfg.MarkCommandRemote(name)
+	// Asking for remote placement is choosing CircleCI; without the backend the
+	// mark would be ignored.
+	optedIn := !cfg.UsesCircleCI()
+	cfg.UseCircleCI()
 	if err != nil {
 		return &userError{
 			msg:        fmt.Sprintf("No command named %q in .chunk/config.json.", name),
@@ -282,7 +286,7 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 			err:        err,
 		}
 	}
-	if len(changed) == 0 {
+	if len(changed) == 0 && !optedIn {
 		streams.ErrPrintf("%s\n", ui.Dim("Nothing to change."))
 		reportSkippedAutofix(skipped, streams)
 		return nil
@@ -291,7 +295,12 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 		return &userError{msg: "Could not save project configuration.", suggestion: configFilePermHint, err: err}
 	}
 
-	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Recorded remote placement: %s", strings.Join(changed, ", "))))
+	if optedIn {
+		streams.ErrPrintf("%s\n", ui.Success("Set factory.backend to circleci"))
+	}
+	if len(changed) > 0 {
+		streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Recorded remote placement: %s", strings.Join(changed, ", "))))
+	}
 	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("runs these on the sidecar"))
 	reportSkippedAutofix(skipped, streams)
 	return nil
@@ -627,6 +636,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
+	if err := gateRemotePlacement(cfg, opts, name, statusFn); err != nil {
+		return err
+	}
+
 	// Hook: fail early when CircleCI auth is missing and remote commands need it.
 	// In non-hook context ensureCircleCIClient prompts interactively; hooks have
 	// no TTY so we surface a clear message here instead of a confusing fallback.
@@ -645,7 +658,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	image := resolveImage(name, cfg)
-	if done, err := delegateToDaemon(opts, hook, workDir, rc.CircleCIToken, cfg.OrgID, image, streams); done {
+	daemonToken, daemonOrg := daemonCircleCICredentials(cfg, rc)
+	if done, err := delegateToDaemon(opts, hook, workDir, daemonToken, daemonOrg, image, streams); done {
 		return err
 	}
 
@@ -707,20 +721,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	} else {
 		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, newPoolRecorders(recorder, pooled), statusFn, streams)
 	}
-	// Saved after the plan runs, not right after the pool is built: a pool
-	// grown beyond one sidecar finishes cloning in the background while
-	// RunDistributed's workers wait to acquire them, so only once the run has
-	// actually used them are they all guaranteed to be reflected in pool.IDs().
-	if validatePool != nil {
-		if err := saveActivePoolState(ctx, validatePool, opts.orgID); err != nil {
-			statusFn(iostream.LevelWarn, fmt.Sprintf("could not save active sidecar: %v", err))
-		}
-	}
-	if execErr == nil && resultCache != nil {
-		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
-			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
-		}
-	}
+	recordRunState(ctx, runState{pool: validatePool, orgID: opts.orgID, cache: resultCache, cacheKey: cacheKey, execErr: execErr}, statusFn, streams)
 	passed := fmt.Sprintf("chunk validate passed: %s (%s)", commandNames(slices.Concat(executionPlan.LocalCommands, executionPlan.RemoteCommands)), ui.FormatDuration(time.Since(start)))
 	return finishValidate(cmd, hook, execErr, start, cfg, result, passed, recorder, statusFn, streams, notifyFunc(rc.Notifications))
 }
@@ -746,10 +747,89 @@ func planValidationExecution(cfg *config.ProjectConfig, opts *validateOpts, name
 	switch {
 	case opts.remote:
 		placement = validate.PlacementRemote
-	case opts.local:
+	case opts.local, !cfg.UsesCircleCI():
 		placement = validate.PlacementLocal
 	}
 	return validate.PlanCommands(commands, placement, validateParallelism(opts.parallel, opts.sidecarID))
+}
+
+// gateRemotePlacement applies the rule that remote placement is CircleCI's: it
+// is only honoured for a project that chose the circleci backend, and everything
+// else runs here. Asking for it outright without the backend is an error rather
+// than a quiet fallback.
+func gateRemotePlacement(cfg *config.ProjectConfig, opts *validateOpts, name string, statusFn iostream.StatusFunc) error {
+	if opts.remote && !cfg.UsesCircleCI() {
+		return circleCIBackendRequired("--remote")
+	}
+	noteLocalFallback(cfg, opts, name, statusFn)
+	return nil
+}
+
+// daemonCircleCICredentials is the token and org a run hands the daemon. The
+// daemon provisions a sidecar when it is given an org and a token, so neither
+// goes along unless the project opted into CircleCI.
+func daemonCircleCICredentials(cfg *config.ProjectConfig, rc config.ResolvedConfig) (token, orgID string) {
+	if !cfg.UsesCircleCI() {
+		return "", ""
+	}
+	return rc.CircleCIToken, cfg.OrgID
+}
+
+// runState is what a finished run leaves behind to be recorded.
+type runState struct {
+	pool     *sidecar.Pool
+	orgID    string
+	cache    *filecache.FileCache[validate.CachedResult]
+	cacheKey string
+	execErr  error
+}
+
+// recordRunState saves the pool and caches a passing result.
+//
+// The pool is saved after the plan runs, not right after it is built: a pool
+// grown beyond one sidecar finishes cloning in the background while
+// RunDistributed's workers wait to acquire them, so only once the run has
+// actually used them are they all guaranteed to be reflected in pool.IDs().
+func recordRunState(ctx context.Context, s runState, statusFn iostream.StatusFunc, streams iostream.Streams) {
+	if s.pool != nil {
+		if err := saveActivePoolState(ctx, s.pool, s.orgID); err != nil {
+			statusFn(iostream.LevelWarn, fmt.Sprintf("could not save active sidecar: %v", err))
+		}
+	}
+	if s.execErr == nil && s.cache != nil {
+		if err := s.cache.Put(s.cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
+			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
+		}
+	}
+}
+
+// circleCIBackendRequired is the error for a request that only the CircleCI
+// backend can serve, made by a project that has not chosen it. It does not fall
+// back to running locally: the caller asked for something specific.
+func circleCIBackendRequired(what string) error {
+	return newUserError(what + " needs the circleci backend, and this project uses the default (local) one.").
+		withCode("validate.circleci_backend_required").
+		withSuggestion("Opt in with: chunk validate --mark-remote   (or add \"factory\": {\"backend\": \"circleci\"} to .chunk/config.json)").
+		withExitCode(ExitBadArgs).
+		withoutDetail()
+}
+
+// noteLocalFallback says, once per run, that commands marked remote run here
+// because the project did not opt into CircleCI.
+func noteLocalFallback(cfg *config.ProjectConfig, opts *validateOpts, name string, statusFn iostream.StatusFunc) {
+	if cfg.UsesCircleCI() || opts.local || opts.inlineCmd != "" {
+		return
+	}
+	var names []string
+	for _, c := range cfg.Commands {
+		if c.Remote && (name == "" || c.Name == name) {
+			names = append(names, c.Name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	statusFn(iostream.LevelInfo, fmt.Sprintf("running %s locally; remote validation needs the circleci backend", strings.Join(names, ", ")))
 }
 
 // defaultValidateParallelism caps how many sidecars a validate run uses at

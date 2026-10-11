@@ -116,12 +116,23 @@ func checkFactoryAuthor(author string) error {
 	return nil
 }
 
-// initFactoryStep runs the factory step against cfg and reports whether cfg
-// changed and needs saving. A cancelled prompt leaves cfg alone.
-func initFactoryStep(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig, opts initFactoryOptions) bool {
-	changed := initFactoryBackendStep(ctx, workDir, streams, cfg, opts)
+// initFactoryResult is what the factory step did to cfg.
+type initFactoryResult struct {
+	// Changed is whether cfg changed and needs saving.
+	Changed bool
+	// BackendChosen is whether the step recorded a backend, which is when the
+	// docker half (initManagedImage) is due. It runs after command detection,
+	// because verifying the image needs the project's install and gate commands.
+	BackendChosen bool
+}
+
+// initFactoryStep runs the factory step against cfg. A cancelled prompt leaves
+// cfg alone.
+func initFactoryStep(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig, opts initFactoryOptions) initFactoryResult {
+	chosen := initFactoryBackendStep(ctx, workDir, streams, cfg, opts)
+	res := initFactoryResult{Changed: chosen, BackendChosen: chosen}
 	if opts.Author == "" {
-		return changed
+		return res
 	}
 	if cfg.Factory == nil {
 		cfg.Factory = &config.FactoryConfig{}
@@ -130,11 +141,13 @@ func initFactoryStep(ctx context.Context, workDir string, streams iostream.Strea
 	author, _ := config.ParseCommitAuthor(opts.Author)
 	cfg.Factory.Author = author.String()
 	streams.ErrPrintln(describeAuthor(factory.ResolveAuthor(ctx, workDir, author)))
-	return true
+	res.Changed = true
+	return res
 }
 
 // initFactoryBackendStep is the factory step's questions: where runs execute
-// and, the first time, who their commits are attributed to.
+// and, the first time, who their commits are attributed to. It reports whether
+// it recorded a backend.
 func initFactoryBackendStep(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig, opts initFactoryOptions) bool {
 	switch decideInitFactory(initFactoryState{
 		Interactive: isInteractive(),
@@ -157,7 +170,6 @@ func initFactoryBackendStep(ctx context.Context, workDir string, streams iostrea
 			backend = config.BackendDocker // an image only makes sense for docker
 		}
 		applyFactory(cfg, streams, backend, opts.Image)
-		initManagedImage(ctx, workDir, streams, cfg, opts)
 		return true
 	case factoryAsk:
 		// Handled below: asking is the only action that needs the prompts.
@@ -168,7 +180,6 @@ func initFactoryBackendStep(ctx context.Context, workDir string, streams iostrea
 		return false
 	}
 	applyFactory(cfg, streams, backend, "")
-	initManagedImage(ctx, workDir, streams, cfg, opts)
 	if opts.Author == "" {
 		if author, ok := askAuthor(streams, factory.ResolveAuthor(ctx, workDir, config.CommitAuthor{})); ok && author != "" {
 			cfg.Factory.Author = author
@@ -218,7 +229,11 @@ func applyFactory(cfg *config.ProjectConfig, streams iostream.Streams, backend, 
 // initFactoryRerun runs the factory step for a project that already has a
 // config, saving it when the step changed it.
 func initFactoryRerun(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig, opts initFactoryOptions) error {
-	if !initFactoryStep(ctx, workDir, streams, cfg, opts) {
+	res := initFactoryStep(ctx, workDir, streams, cfg, opts)
+	if res.BackendChosen {
+		initManagedImage(ctx, workDir, streams, cfg, opts)
+	}
+	if !res.Changed {
 		return nil
 	}
 	return writeProjectConfig(workDir, cfg, streams)

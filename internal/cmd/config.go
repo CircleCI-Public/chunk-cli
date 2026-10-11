@@ -10,6 +10,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -111,7 +112,7 @@ func newConfigShowCmd() *cobra.Command {
 				io.Printf("%s %s\n", ui.Label("orgID:", w), ui.Dim("(not set)"))
 			}
 
-			io.Printf("%s %v\n", ui.Label("telemetry:", w), telemetryEnabled)
+			io.Printf("%s %v%s\n", ui.Label("telemetry:", w), telemetryEnabled, telemetryBuildNote())
 			io.Printf("%s %v\n", ui.Label("notifications:", w), userCfg.Notifications)
 			io.Printf("%s %v\n", ui.Label("autoLaunchDaemon:", w), userCfg.AutoLaunchDaemon)
 
@@ -290,4 +291,13 @@ func splitRuleList(value string) []string {
 		}
 	}
 	return rules
+}
+
+// telemetryBuildNote says when the preference has nothing to act on: a build
+// without a Segment write key never sends, whatever the preference is.
+func telemetryBuildNote() string {
+	if telemetry.WriteKey != "" {
+		return ""
+	}
+	return " " + ui.Dim("(this build has no telemetry endpoint; nothing is sent)")
 }

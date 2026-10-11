@@ -17,6 +17,8 @@ type TestEnv struct {
 	AnthropicKey string
 	CircleToken  string
 	Extra        map[string]string
+	// Binary, when set, is the chunk binary to run instead of the default build.
+	Binary string
 }
 
 // NewTestEnv creates a TestEnv with a fresh temp HOME directory.

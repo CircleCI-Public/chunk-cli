@@ -392,8 +392,8 @@ type FactoryRequest struct {
 	// OrgID and Image override the project's configured ones.
 	OrgID string `json:"org_id,omitempty"`
 	Image string `json:"image,omitempty"`
-	// Backend selects where the run's sidecars run: "" or BackendCircleCI for
-	// CircleCI microVMs, BackendDocker for local Docker containers.
+	// Backend selects where the run's sidecars run: "" or BackendDocker for
+	// local Docker containers, BackendCircleCI for CircleCI microVMs.
 	Backend string `json:"backend,omitempty"`
 	// Log is where the run keeps a plain-text log of its full context: an
 	// absolute path, factory.LogDefault, or empty for none. Verbose adds more

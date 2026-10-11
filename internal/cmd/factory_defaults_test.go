@@ -34,14 +34,22 @@ func TestResolveFactorySettings(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, got.Attempts, 3)
 
-	// Built-in defaults.
-	got, err = resolveFactorySettings(factorySettings{Attempts: 3}, factoryExplicit{}, &config.ProjectConfig{})
+	// Built-in defaults: docker, never circleci, which is opt-in.
+	got, err = resolveFactorySettings(factorySettings{Attempts: 3}, factoryExplicit{},
+		&config.ProjectConfig{Factory: &config.FactoryConfig{Image: "cfg:img"}})
 	assert.NilError(t, err)
-	assert.DeepEqual(t, got, factorySettings{Backend: "circleci", Attempts: 3})
+	assert.DeepEqual(t, got, factorySettings{Backend: "docker", Image: "cfg:img", Attempts: 3, ImageSource: imageFromConfig})
+
+	// With nothing configured the backend is still docker, which needs an image.
+	_, err = resolveFactorySettings(factorySettings{Attempts: 3}, factoryExplicit{}, &config.ProjectConfig{})
+	assert.Assert(t, strings.Contains(userMsg(err), "No Docker image is set"), userMsg(err))
 
 	// circleci takes validation.sidecarImage; docker never does.
 	got, err = resolveFactorySettings(factorySettings{Attempts: 3}, factoryExplicit{},
-		&config.ProjectConfig{Validation: &config.ValidationConfig{SidecarImage: "snapshot-id"}})
+		&config.ProjectConfig{
+			Factory:    &config.FactoryConfig{Backend: "circleci"},
+			Validation: &config.ValidationConfig{SidecarImage: "snapshot-id"},
+		})
 	assert.NilError(t, err)
 	assert.Equal(t, got.Image, "snapshot-id")
 

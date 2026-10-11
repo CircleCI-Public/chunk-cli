@@ -162,8 +162,23 @@ func TestSender_NilSenderIsSafe(t *testing.T) {
 }
 
 func TestNewSender_SendWithoutBinaryErrors(t *testing.T) {
-	_, err := NewSender(Config{Send: true})
+	_, err := NewSender(Config{Send: true, WriteKey: "k"})
 	assert.ErrorContains(t, err, "binary is required")
+}
+
+// With the default (empty) write key, Send is a no-op: no delegate is added,
+// so Close can never start a subprocess, even when the binary is unusable.
+func TestNewSender_EmptyWriteKeyIsNoop(t *testing.T) {
+	assert.Equal(t, WriteKey, "")
+
+	s, err := NewSender(Config{Send: true, Binary: "/nonexistent/chunk"})
+	assert.NilError(t, err)
+	assert.NilError(t, s.Track("command_invocation", nil))
+
+	multi, ok := s.dest.(*multiDestination)
+	assert.Assert(t, ok)
+	assert.Equal(t, len(multi.delegates), 0)
+	assert.NilError(t, s.Close())
 }
 
 // --- RecordForSubcommands ---

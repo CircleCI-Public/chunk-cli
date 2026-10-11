@@ -23,6 +23,10 @@ const (
 )
 
 type updateCache struct {
+	// Repo is the release repository the answer came from. A cache written for
+	// another repository (an earlier build checked upstream's) says nothing
+	// about this one's latest release.
+	Repo          string    `json:"repo,omitempty"`
 	CheckedAt     time.Time `json:"checked_at"`
 	LatestVersion string    `json:"latest_version"`
 }
@@ -78,7 +82,7 @@ func CheckForUpdate(cacheDir, apiBase, current string) string {
 	// off in a goroutine and may exit before the GitHub round trip finishes;
 	// using a retry window rather than the full 24 h means an aborted fetch
 	// is retried in a few minutes rather than suppressed until tomorrow.
-	_ = writeCache(cacheFile, updateCache{CheckedAt: time.Now().Add(-checkCacheTTL + checkRetryTTL)})
+	_ = writeCache(cacheFile, updateCache{Repo: Repo, CheckedAt: time.Now().Add(-checkCacheTTL + checkRetryTTL)})
 
 	client := &http.Client{Timeout: checkTimeout}
 	rel, err := fetchLatestRelease(client, apiBase)
@@ -87,6 +91,7 @@ func CheckForUpdate(cacheDir, apiBase, current string) string {
 	}
 
 	_ = writeCache(cacheFile, updateCache{
+		Repo:          Repo,
 		CheckedAt:     time.Now(),
 		LatestVersion: rel.TagName,
 	})
@@ -115,7 +120,7 @@ func readCache(path string) (updateCache, bool) {
 		return updateCache{}, false
 	}
 	var c updateCache
-	if err := json.Unmarshal(data, &c); err != nil {
+	if err := json.Unmarshal(data, &c); err != nil || c.Repo != Repo {
 		return updateCache{}, false
 	}
 	return c, true

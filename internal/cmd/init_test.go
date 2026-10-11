@@ -559,7 +559,7 @@ func TestInstallSkillsStepUsesProjectScope(t *testing.T) {
 	t.Setenv(config.EnvHome, home)
 
 	streams, _, _ := testStreams()
-	installSkillsStep(workDir, streams)
+	installSkillsStep(workDir, streams, planInit(true).Skills)
 
 	// Skills must appear in the project dir, not in $HOME.
 	skillPath := filepath.Join(workDir, ".claude", "skills", "chunk-sidecar", "SKILL.md")
@@ -579,7 +579,7 @@ func TestInstallSkillsStepInstallsSidecarSetup(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 
 	streams, _, _ := testStreams()
-	installSkillsStep(workDir, streams)
+	installSkillsStep(workDir, streams, planInit(true).Skills)
 
 	for _, name := range []string{"chunk-sidecar", "chunk-sidecar-setup"} {
 		skillPath := filepath.Join(workDir, ".claude", "skills", name, "SKILL.md")
@@ -597,7 +597,7 @@ func TestPrintInitSummaryWithCommands(t *testing.T) {
 		{Name: "lint", Run: "task lint"},
 	}
 	streams, _, errOut := testStreams()
-	printInitSummary(commands, streams)
+	printInitSummary(commands, true, streams)
 
 	out := errOut.String()
 	assert.Assert(t, strings.Contains(out, "Validation commands:"), "missing section header")
@@ -619,7 +619,7 @@ func TestPrintInitSummaryNoCommands(t *testing.T) {
 	defer ui.SetColorEnabled(true)
 
 	streams, _, errOut := testStreams()
-	printInitSummary(nil, streams)
+	printInitSummary(nil, true, streams)
 
 	out := errOut.String()
 	assert.Assert(t, !strings.Contains(out, "Validation commands:"), "should not show command table when none configured")

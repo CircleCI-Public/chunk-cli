@@ -97,7 +97,7 @@ func TestPrintUpdateNotice(t *testing.T) {
 
 		for _, want := range []string{
 			"v1.2.3 → v9.9.9",
-			"https://github.com/CircleCI-Public/chunk-cli/releases/tag/v9.9.9",
+			"https://github.com/web3technologies/chunk-cli/releases/tag/v9.9.9",
 		} {
 			if !strings.Contains(stderr.String(), want) {
 				t.Errorf("expected notice to contain %q, got %q", want, stderr.String())

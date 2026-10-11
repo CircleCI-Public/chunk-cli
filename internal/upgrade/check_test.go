@@ -39,11 +39,49 @@ func TestDisabled(t *testing.T) {
 }
 
 func TestCheckForUpdate(t *testing.T) {
-	t.Run("returns empty for dev version", func(t *testing.T) {
+	t.Run("returns empty for dev version without any request", func(t *testing.T) {
+		hits := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits++
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+
 		dir := t.TempDir()
-		got := CheckForUpdate(dir, "https://example.com", "dev")
+		got := CheckForUpdate(dir, srv.URL, "dev")
 		if got != "" {
 			t.Fatalf("expected empty, got %q", got)
+		}
+		if hits != 0 {
+			t.Fatalf("a dev build made %d request(s)", hits)
+		}
+		if _, err := os.Stat(filepath.Join(dir, cacheFileName)); err == nil {
+			t.Fatal("a dev build wrote an update cache")
+		}
+	})
+
+	t.Run("asks the fork for its latest release", func(t *testing.T) {
+		var path string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path = r.URL.Path
+			json.NewEncoder(w).Encode(ghRelease{TagName: "v2.0.0"})
+		}))
+		t.Cleanup(srv.Close)
+
+		CheckForUpdate(t.TempDir(), srv.URL, "v1.0.0")
+		if want := "/repos/web3technologies/chunk-cli/releases/latest"; path != want {
+			t.Fatalf("asked %q, want %q", path, want)
+		}
+	})
+
+	t.Run("ignores a cache written for another repository", func(t *testing.T) {
+		dir := t.TempDir()
+		data, _ := json.Marshal(updateCache{Repo: "CircleCI-Public/chunk-cli", CheckedAt: time.Now(), LatestVersion: "v9.0.0"})
+		_ = os.WriteFile(filepath.Join(dir, cacheFileName), data, 0o600)
+
+		srv := releaseServer(t, "v2.0.0")
+		if got := CheckForUpdate(dir, srv.URL, "v1.0.0"); got != "v2.0.0" {
+			t.Fatalf("expected the fork's v2.0.0, got %q", got)
 		}
 	})
 
@@ -69,6 +107,7 @@ func TestCheckForUpdate(t *testing.T) {
 		// Write a cache entry claiming v9.0.0 is latest; server would say v2.0.0
 		dir := t.TempDir()
 		cache := updateCache{
+			Repo:          Repo,
 			CheckedAt:     time.Now(),
 			LatestVersion: "v9.0.0",
 		}
@@ -94,6 +133,7 @@ func TestCheckForUpdate(t *testing.T) {
 	t.Run("re-fetches when cache is stale", func(t *testing.T) {
 		dir := t.TempDir()
 		cache := updateCache{
+			Repo:          Repo,
 			CheckedAt:     time.Now().Add(-25 * time.Hour),
 			LatestVersion: "v1.5.0",
 		}
@@ -225,7 +265,7 @@ func TestWriteCache_concurrentReadersNeverSeePartialFile(t *testing.T) {
 	path := filepath.Join(dir, cacheFileName)
 
 	// Seed one good record so readers have something to find from the start.
-	if err := writeCache(path, updateCache{CheckedAt: time.Now(), LatestVersion: "v1.0.0"}); err != nil {
+	if err := writeCache(path, updateCache{Repo: Repo, CheckedAt: time.Now(), LatestVersion: "v1.0.0"}); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 
@@ -245,7 +285,7 @@ func TestWriteCache_concurrentReadersNeverSeePartialFile(t *testing.T) {
 				// Vary the payload length so a torn write would be
 				// visible rather than overwritten byte-for-byte.
 				tag := fmt.Sprintf("v1.0.%d", i%100000)
-				if err := writeCache(path, updateCache{CheckedAt: time.Now(), LatestVersion: tag}); err != nil {
+				if err := writeCache(path, updateCache{Repo: Repo, CheckedAt: time.Now(), LatestVersion: tag}); err != nil {
 					t.Errorf("writeCache: %v", err)
 					return
 				}

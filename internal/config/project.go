@@ -33,7 +33,7 @@ const (
 )
 
 // ValidBackend reports whether name is a backend. Empty is valid: it means the
-// default, BackendCircleCI.
+// default, BackendDocker.
 func ValidBackend(name string) bool {
 	switch name {
 	case "", BackendCircleCI, BackendDocker:
@@ -42,12 +42,29 @@ func ValidBackend(name string) bool {
 	return false
 }
 
-// BackendOrDefault returns name, or BackendCircleCI when name is empty.
+// BackendOrDefault returns name, or BackendDocker when name is empty. CircleCI
+// is opt-in: nothing selects it except naming it.
 func BackendOrDefault(name string) string {
 	if name == "" {
-		return BackendCircleCI
+		return BackendDocker
 	}
 	return name
+}
+
+// UsesCircleCI reports whether the project opted into the CircleCI backend,
+// which it does only by setting factory.backend to "circleci". A CircleCI token
+// on the machine is not consent, so every gate that decides whether chunk may
+// reach CircleCI on a project's behalf asks this rather than deriving it.
+func (c *ProjectConfig) UsesCircleCI() bool {
+	return c != nil && c.Factory != nil && c.Factory.Backend == BackendCircleCI
+}
+
+// UseCircleCI records the project's opt-in to the CircleCI backend.
+func (c *ProjectConfig) UseCircleCI() {
+	if c.Factory == nil {
+		c.Factory = &FactoryConfig{}
+	}
+	c.Factory.Backend = BackendCircleCI
 }
 
 // Command timeouts, in seconds. DefaultCommandTimeout is what a command with no
@@ -141,7 +158,7 @@ type ValidationConfig struct {
 
 // FactoryConfig holds project defaults for `chunk factory build`.
 type FactoryConfig struct {
-	Backend string `json:"backend,omitempty"` // "circleci" or "docker"
+	Backend string `json:"backend,omitempty"` // "docker" (the default) or "circleci"
 	Image   string `json:"image,omitempty"`   // Docker image for the docker backend; user-managed, never auto-built
 	// Dockerfile is the repo-relative Dockerfile chunk builds the docker
 	// backend's image from. Unlike Image it is managed: the tag is computed

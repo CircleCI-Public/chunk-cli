@@ -49,7 +49,8 @@ type ReviewConfig struct {
 type Option func(*daemonOptions)
 
 type daemonOptions struct {
-	review ReviewConfig
+	review  ReviewConfig
+	resolve ClientResolver
 }
 
 // WithReview configures the daemon's review capability.
@@ -188,13 +189,13 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 	submit := d.rcfg.Submit
 	if submit == nil {
 		submit = func(ctx context.Context, pe *sidecar.PoolEntry, script string, env map[string]string) (string, error) {
-			return d.client.SubmitExec(ctx, pe.ID, "sh", []string{"-c", script}, env)
+			return d.circleCIClient().SubmitExec(ctx, pe.ID, "sh", []string{"-c", script}, env)
 		}
 	}
 	stream := d.rcfg.Stream
 	if stream == nil {
 		stream = func(ctx context.Context, _ *sidecar.PoolEntry, commandID string, onOutput iostream.OutputFn) (int, error) {
-			resp, err := d.client.StreamOutput(ctx, commandID, "", onOutput)
+			resp, err := d.circleCIClient().StreamOutput(ctx, commandID, "", onOutput)
 			if err != nil {
 				return 0, err
 			}
@@ -218,7 +219,7 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 				Op:          "review",
 				Name:        name,
 				SubmittedAt: time.Now(),
-			}, streamFor(d.client))
+			}, streamFor(d.circleCIClient()))
 		}
 		code, err := stream(ctx, pe, commandID, onOutput)
 		if err != nil {

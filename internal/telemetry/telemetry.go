@@ -2,7 +2,9 @@
 //
 // Telemetry is opt-out: it fires unless disabled via a well-known opt-out
 // environment variable or the persisted telemetry config preference (see
-// internal/config.IsTelemetry).
+// internal/config.IsTelemetry). It is also inert unless the binary was built
+// with a Segment write key (see WriteKey): a build without one never creates a
+// delegate and never starts a subprocess.
 // Only the command path, the names (never values) of flags the user set,
 // the outcome ("success"/"failure"), the wall-clock duration, the Go type and
 // message of any error, a per-install anonymous instance ID, the operating
@@ -33,6 +35,12 @@ import (
 	"github.com/segmentio/analytics-go/v3"
 )
 
+// WriteKey is the Segment write key events are sent with. It is set at build
+// time (-X .../internal/telemetry.WriteKey=...) and is empty by default, which
+// disables sending entirely. It is a var only because ldflags -X cannot set a
+// constant; nothing assigns it at run time.
+var WriteKey = ""
+
 // Sender tracks command-usage events. A nil *Sender is valid and
 // silently drops events, so callers never need to nil-check it.
 type Sender struct {
@@ -55,7 +63,8 @@ type destination interface {
 
 // Config configures a Sender.
 type Config struct {
-	// Send enables sending events to Segment via the delegate subprocess.
+	// Send enables sending events to Segment via the delegate subprocess. It
+	// has no effect while WriteKey is empty.
 	Send bool
 	// Log enables logging events to stderr for debugging.
 	Log bool
@@ -157,7 +166,9 @@ func NewSender(cfg Config) (*Sender, error) {
 		dest.Add(&loggingDestination{})
 	}
 
-	if cfg.Send {
+	// Without a write key there is nowhere to send to, so no delegate is
+	// created and no subprocess is ever started.
+	if cfg.Send && cfg.WriteKey != "" {
 		if cfg.Binary == "" {
 			return nil, errors.New("binary is required")
 		}

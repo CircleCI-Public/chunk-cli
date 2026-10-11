@@ -84,6 +84,7 @@ func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testin
 	// won't short-circuit on the clean-tree check.
 	dir := t.TempDir()
 	projCfg := &config.ProjectConfig{
+		Factory: &config.FactoryConfig{Backend: config.BackendCircleCI},
 		Commands: []config.Command{
 			{Name: "test", Run: "go test ./...", Remote: true},
 		},
@@ -109,6 +110,7 @@ func TestValidateHookExitsOneWhenCircleCITokenMissingAndSidecarImage(t *testing.
 
 	dir := t.TempDir()
 	projCfg := &config.ProjectConfig{
+		Factory: &config.FactoryConfig{Backend: config.BackendCircleCI},
 		Commands: []config.Command{
 			{Name: "test", Run: "npm test", Role: config.RoleGate},
 		},
@@ -128,8 +130,9 @@ func TestValidateHookExitsOneWhenCircleCITokenMissingAndSidecarImage(t *testing.
 		"expected auth message in stderr, got: %q", stderr)
 }
 
-// TestValidateHookRequiresAuthByDefault verifies that hook invocations always
-// require CircleCI auth, even when no commands are explicitly marked remote.
+// TestValidateHookRequiresAuthByDefault verifies that hook invocations for a
+// project on the circleci backend require CircleCI auth, even when no commands
+// are explicitly marked remote.
 func TestValidateHookRequiresAuthByDefault(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "")
@@ -137,6 +140,7 @@ func TestValidateHookRequiresAuthByDefault(t *testing.T) {
 
 	dir := t.TempDir()
 	projCfg := &config.ProjectConfig{
+		Factory: &config.FactoryConfig{Backend: config.BackendCircleCI},
 		Commands: []config.Command{
 			{Name: "lint", Run: "echo ok", Remote: false},
 		},
@@ -147,7 +151,7 @@ func TestValidateHookRequiresAuthByDefault(t *testing.T) {
 
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.Contains(stderr, "CircleCI auth is not configured"),
-		"auth check must fire because remote is the default, stderr: %q", stderr)
+		"auth check must fire because remote is the default on circleci, stderr: %q", stderr)
 }
 
 func TestRemoteExecEnv(t *testing.T) {
@@ -332,8 +336,9 @@ func TestValidateNoConfigShowsSkillHint(t *testing.T) {
 		"expected suggestion to mention chunk-sidecar skill, got: %q", ue.Suggestion())
 }
 
-// TestValidateDefaultsToRemote confirms that running without --local always
-// attempts remote execution, even when no commands are marked Remote:true.
+// TestValidateDefaultsToRemote confirms that on the circleci backend, running
+// without --local always attempts remote execution, even when no commands are
+// marked Remote:true.
 // Without a valid CircleCI token the attempt fails with an auth error — proving
 // it never silently fell back to running the commands locally.
 func TestValidateDefaultsToRemote(t *testing.T) {
@@ -343,6 +348,7 @@ func TestValidateDefaultsToRemote(t *testing.T) {
 
 	dir := t.TempDir()
 	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Factory: &config.FactoryConfig{Backend: config.BackendCircleCI},
 		Commands: []config.Command{
 			{Name: "test", Run: "echo should-not-run-locally"},
 		},
@@ -487,7 +493,7 @@ func TestValidateParallelism(t *testing.T) {
 // independent remote commands get more than one sidecar by default, and that
 // --parallel both raises and caps how many are used.
 func TestPlanValidationExecutionSpreadsMultipleRemoteCommands(t *testing.T) {
-	cfg := &config.ProjectConfig{Commands: []config.Command{
+	cfg := &config.ProjectConfig{Factory: &config.FactoryConfig{Backend: config.BackendCircleCI}, Commands: []config.Command{
 		{Name: "test", Run: "task test"},
 		{Name: "acceptance-test", Run: "task acceptance-test"},
 		{Name: "lint", Run: "task lint"},

@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +15,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"text/template"
+
+	"gopkg.in/yaml.v3"
 )
 
 // makeTarGz returns a .tar.gz laid out like a release archive, with the binary
@@ -59,49 +64,74 @@ func makeTarGz(t *testing.T, content []byte) []byte {
 	return buf.Bytes()
 }
 
+// releaseFixture controls what the fake release serves.
+type releaseFixture struct {
+	apiStatus int
+	archive   []byte // nil: the download 404s
+	// checksums is the body of checksums.txt; "" serves the correct one for
+	// archive, and noChecksums leaves the asset out of the release entirely.
+	checksums   string
+	noChecksums bool
+}
+
+func sha(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 // fakeServer sets up an httptest server that serves a GitHub-like release API
 // and a download endpoint. Returns the server and the install target path.
-func fakeServer(t *testing.T, apiStatus int, assetContent []byte) (*httptest.Server, string) {
+func fakeServer(t *testing.T, fx releaseFixture) (*httptest.Server, string) {
 	t.Helper()
 
 	installDir := t.TempDir()
 	installPath := filepath.Join(installDir, "chunk")
 
+	checksums := fx.checksums
+	if checksums == "" && fx.archive != nil {
+		checksums = sha(fx.archive) + "  " + PlatformAssetName() + "\n"
+	}
+
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
-			if apiStatus != http.StatusOK {
-				w.WriteHeader(apiStatus)
+		if r.URL.Path == "/repos/"+Repo+"/releases/latest" {
+			if fx.apiStatus != http.StatusOK {
+				w.WriteHeader(fx.apiStatus)
 				return
 			}
-			assetName := PlatformAssetName()
 			rel := ghRelease{
 				TagName: "v9.9.9",
 				Assets: []ghAsset{
-					{
-						Name:               assetName,
-						BrowserDownloadURL: srv.URL + "/download/" + assetName,
-					},
+					{Name: PlatformAssetName(), BrowserDownloadURL: srv.URL + "/download/" + PlatformAssetName()},
 				},
+			}
+			if !fx.noChecksums {
+				rel.Assets = append(rel.Assets, ghAsset{Name: ChecksumsAsset, BrowserDownloadURL: srv.URL + "/download/" + ChecksumsAsset})
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(rel)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/download/") {
-			if assetContent == nil {
+		switch r.URL.Path {
+		case "/download/" + ChecksumsAsset:
+			w.Write([]byte(checksums))
+		case "/download/" + PlatformAssetName():
+			if fx.archive == nil {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			w.WriteHeader(http.StatusOK)
-			w.Write(assetContent)
-			return
+			w.Write(fx.archive)
+		default:
+			w.WriteHeader(http.StatusNotFound)
 		}
-		w.WriteHeader(http.StatusNotFound)
 	}))
 	t.Cleanup(srv.Close)
 
 	return srv, installPath
+}
+
+func runOpts(srv *httptest.Server, installPath string) Options {
+	return Options{Out: io.Discard, Client: srv.Client(), APIBase: srv.URL, InstallPath: installPath, Version: "v1.0.0"}
 }
 
 func TestRun(t *testing.T) {
@@ -110,36 +140,58 @@ func TestRun(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		apiStatus   int
-		archive     []byte
+		fx          releaseFixture
 		wantErr     bool
 		errContains string
 	}{
 		{
-			name:      "success",
-			apiStatus: http.StatusOK,
-			archive:   archiveData,
+			name: "success",
+			fx:   releaseFixture{apiStatus: http.StatusOK, archive: archiveData},
 		},
 		{
 			name:        "API error",
-			apiStatus:   http.StatusInternalServerError,
+			fx:          releaseFixture{apiStatus: http.StatusInternalServerError},
 			wantErr:     true,
 			errContains: "fetch latest release",
 		},
 		{
 			name:        "download fails",
-			apiStatus:   http.StatusOK,
-			archive:     nil, // server returns 404 for download
+			fx:          releaseFixture{apiStatus: http.StatusOK, checksums: "x  y\n"}, // server returns 404 for download
 			wantErr:     true,
 			errContains: "install update",
+		},
+		{
+			name:        "checksum mismatch",
+			fx:          releaseFixture{apiStatus: http.StatusOK, archive: archiveData, checksums: strings.Repeat("0", 64) + "  " + PlatformAssetName() + "\n"},
+			wantErr:     true,
+			errContains: "checksum mismatch",
+		},
+		{
+			name:        "archive missing from checksums",
+			fx:          releaseFixture{apiStatus: http.StatusOK, archive: archiveData, checksums: sha(archiveData) + "  some-other-file.tar.gz\n"},
+			wantErr:     true,
+			errContains: "no checksum for " + PlatformAssetName(),
+		},
+		{
+			name:        "release without checksums.txt",
+			fx:          releaseFixture{apiStatus: http.StatusOK, archive: archiveData, noChecksums: true},
+			wantErr:     true,
+			errContains: "cannot be verified",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv, installPath := fakeServer(t, tt.apiStatus, tt.archive)
+			srv, installPath := fakeServer(t, tt.fx)
+			if err := os.WriteFile(installPath, []byte("old"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 
-			err := Run(io.Discard, srv.Client(), srv.URL, installPath)
+			err := Run(runOpts(srv, installPath))
+			got, readErr := os.ReadFile(installPath)
+			if readErr != nil {
+				t.Fatalf("read installed binary: %v", readErr)
+			}
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -147,21 +199,62 @@ func TestRun(t *testing.T) {
 				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Fatalf("expected error containing %q, got: %v", tt.errContains, err)
 				}
+				// A refused download must leave the installed binary alone.
+				if string(got) != "old" {
+					t.Fatalf("installed binary changed to %q", got)
+				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
-			}
-
-			got, err := os.ReadFile(installPath)
-			if err != nil {
-				t.Fatalf("read installed binary: %v", err)
 			}
 			if !bytes.Equal(got, fakeBinary) {
 				t.Fatalf("installed binary content mismatch: got %q, want %q", got, fakeBinary)
 			}
 		})
 	}
+}
+
+func TestChecksumFor(t *testing.T) {
+	body := []byte("aaa111  chunk_Linux_x86_64.tar.gz\nBBB222  chunk_Darwin_arm64.tar.gz\n")
+	got, err := checksumFor(body, "chunk_Darwin_arm64.tar.gz")
+	if err != nil || got != "bbb222" {
+		t.Fatalf("checksumFor = %q, %v", got, err)
+	}
+	if _, err := checksumFor(body, "chunk_Linux_arm64.tar.gz"); err == nil {
+		t.Fatal("expected an error for a name that is not listed")
+	}
+}
+
+func TestRunRefusesSourceBuilds(t *testing.T) {
+	archive := makeTarGz(t, []byte("new"))
+	srv, installPath := fakeServer(t, releaseFixture{apiStatus: http.StatusOK, archive: archive})
+	if err := os.WriteFile(installPath, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("dev version", func(t *testing.T) {
+		opts := runOpts(srv, installPath)
+		opts.Version = "dev"
+		err := Run(opts)
+		if err == nil || !strings.Contains(err.Error(), "git pull && task build") {
+			t.Fatalf("expected a source-build refusal, got %v", err)
+		}
+	})
+
+	t.Run("symlinked install", func(t *testing.T) {
+		link := filepath.Join(t.TempDir(), "chunk")
+		if err := os.Symlink(installPath, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		err := Run(runOpts(srv, link))
+		if err == nil || !strings.Contains(err.Error(), "git pull && task build") {
+			t.Fatalf("expected a source-build refusal, got %v", err)
+		}
+		if got, _ := os.ReadFile(installPath); string(got) != "old" {
+			t.Fatalf("the symlink's target was replaced: %q", got)
+		}
+	})
 }
 
 func TestIsBrewManaged(t *testing.T) {
@@ -190,8 +283,8 @@ func TestIsBrewManaged(t *testing.T) {
 
 func TestPlatformAssetName(t *testing.T) {
 	name := PlatformAssetName()
-	if !strings.HasPrefix(name, "chunk-cli_") {
-		t.Errorf("expected name to start with chunk-cli_, got %q", name)
+	if !strings.HasPrefix(name, "chunk_") {
+		t.Errorf("expected name to start with chunk_, got %q", name)
 	}
 	if !strings.HasSuffix(name, ".tar.gz") {
 		t.Errorf("expected name to end with .tar.gz, got %q", name)
@@ -209,15 +302,73 @@ func TestPlatformAssetName(t *testing.T) {
 	}
 }
 
+// The archive name is spelled in three places: .goreleaser.yaml produces it,
+// install.sh downloads it and this package expects it. Rendering the goreleaser
+// template here is what keeps them from drifting apart.
+func TestAssetNameMatchesGoreleaserTemplate(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		ProjectName string `yaml:"project_name"`
+		Archives    []struct {
+			NameTemplate string `yaml:"name_template"`
+		} `yaml:"archives"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProjectName != AssetPrefix {
+		t.Fatalf("project_name = %q, want %q", cfg.ProjectName, AssetPrefix)
+	}
+	if len(cfg.Archives) == 0 {
+		t.Fatal("no archives in .goreleaser.yaml")
+	}
+	title := func(s string) string { return strings.ToUpper(s[:1]) + s[1:] }
+	tmpl, err := template.New("name").Funcs(template.FuncMap{"title": title}).Parse(cfg.Archives[0].NameTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, goos := range []string{"linux", "darwin"} {
+		for _, goarch := range []string{"amd64", "arm64"} {
+			var buf bytes.Buffer
+			err := tmpl.Execute(&buf, map[string]string{"ProjectName": cfg.ProjectName, "Os": goos, "Arch": goarch, "Arm": ""})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := assetName(goos, goarch), buf.String()+".tar.gz"; got != want {
+				t.Errorf("assetName(%s, %s) = %q, goreleaser builds %q", goos, goarch, got, want)
+			}
+		}
+	}
+}
+
 func TestRunRefusesBrewInstall(t *testing.T) {
-	var out strings.Builder
-	err := Run(&out, http.DefaultClient, "https://example.invalid", "/opt/homebrew/Cellar/chunk/1.2.3/bin/chunk")
+	err := Run(Options{
+		Out: io.Discard, Client: http.DefaultClient, APIBase: "https://example.invalid",
+		InstallPath: "/opt/homebrew/Cellar/chunk/1.2.3/bin/chunk", Version: "v1.0.0",
+	})
 	if err == nil {
 		t.Fatal("expected Run to refuse to replace a Homebrew-managed binary")
 	}
-	// The formula is named "chunk" in .goreleaser.yaml; "brew upgrade
-	// chunk-cli" (the repo name) fails with "No available formula".
-	if !strings.Contains(err.Error(), "brew upgrade chunk") || strings.Contains(err.Error(), "chunk-cli") {
-		t.Errorf("expected suggestion of %q, got %q", "brew upgrade chunk", err.Error())
+	// Homebrew's chunk is another project's build; the way out is the installer,
+	// never a brew command.
+	if !strings.Contains(err.Error(), "Homebrew") || !strings.Contains(err.Error(), InstallCommand) || strings.Contains(err.Error(), "brew upgrade") {
+		t.Errorf("expected the installer to be suggested, got %q", err.Error())
+	}
+}
+
+// The release repository is named once; everything else derives from it.
+func TestReleaseRepoIsDefinedOnce(t *testing.T) {
+	if Repo != "web3technologies/chunk-cli" {
+		t.Fatalf("Repo = %q", Repo)
+	}
+	if got := ReleaseURL("v1.2.3"); got != "https://github.com/web3technologies/chunk-cli/releases/tag/v1.2.3" {
+		t.Errorf("ReleaseURL = %q", got)
+	}
+	if strings.Contains(InstallCommand, "CircleCI") {
+		t.Errorf("InstallCommand points at CircleCI: %q", InstallCommand)
 	}
 }

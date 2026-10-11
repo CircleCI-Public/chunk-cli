@@ -27,19 +27,21 @@ func newDaemonCmd() *cobra.Command {
 		Short:  "Run the chunk daemon (internal use only)",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Resolved here, once, rather than on demand inside the daemon:
-			// reading the keychain can be slow, and the daemon would otherwise
-			// be doing it behind a mutex on the path a hook is blocked on.
-			// Failing is not fatal — the daemon still records commands, and the
-			// dashboard reports why their output is missing.
+			// The CircleCI client is resolved lazily, the first time a request
+			// for a project that chose CircleCI needs it: a token on the machine
+			// is not consent to contact CircleCI. Reading the keychain can be
+			// slow, so it happens once, not on every request.
 			//
 			// This process is detached with no terminal, so resolution must not
 			// prompt. ResolveCircleCIClient returns ErrNeedsAuth instead of
 			// asking; prompting is `chunk watch`'s job, in the parent process.
-			var client *circleci.Client
-			rc, err := config.ResolveCircleCI(false)
-			if err == nil {
-				client, err = authprompt.ResolveCircleCIClient(rc, nil)
+			resolve := func() (*circleci.Client, string) {
+				rc, err := config.ResolveCircleCI(false)
+				if err != nil {
+					return nil, authMessage(err)
+				}
+				client, err := authprompt.ResolveCircleCIClient(rc, nil)
+				return client, authMessage(err)
 			}
 
 			// Resolve the GitHub client for PR monitoring. Failure is not fatal:
@@ -53,8 +55,9 @@ func newDaemonCmd() *cobra.Command {
 				})
 			}
 
-			return server.RunDaemon(cmd.Context(), client, authMessage(err), makeValidateRunner(), ghClient,
-				server.WithReview(daemonReviewConfig(fullRC, rcErr)))
+			return server.RunDaemon(cmd.Context(), nil, "", makeValidateRunner(), ghClient,
+				server.WithReview(daemonReviewConfig(fullRC, rcErr)),
+				server.WithClientResolver(resolve))
 		},
 	}
 }

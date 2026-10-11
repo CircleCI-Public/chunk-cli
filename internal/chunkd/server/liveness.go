@@ -77,10 +77,17 @@ func newLivenessChecker(list listFn) *livenessChecker {
 	}
 }
 
+// setList gives the checker a way to list sidecars once the daemon has a client.
+func (l *livenessChecker) setList(list listFn) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.list = list
+}
+
 // maybeRefresh starts a background fetch for each org that is due one. It is
 // called from the poll path and must not block.
 func (l *livenessChecker) maybeRefresh(ctx context.Context, sidecars []chunkd.SidecarState) {
-	if l == nil || l.list == nil {
+	if l == nil {
 		return
 	}
 	newest := map[string]time.Time{}
@@ -95,6 +102,9 @@ func (l *livenessChecker) maybeRefresh(ctx context.Context, sidecars []chunkd.Si
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.list == nil {
+		return
+	}
 	for org, mtime := range newest {
 		last := l.lastFetch[org]
 		if l.inflight[org] {
@@ -114,7 +124,10 @@ func (l *livenessChecker) fetch(ctx context.Context, org string) {
 	// Taken before the request, so a state file written while it is in flight
 	// is not judged against a list that may predate its sidecar.
 	started := time.Now()
-	ids, err := l.list(fctx, org)
+	l.mu.Lock()
+	list := l.list
+	l.mu.Unlock()
+	ids, err := list(fctx, org)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()

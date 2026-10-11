@@ -13,7 +13,7 @@ import (
 // stops to ask for one.
 const (
 	defaultAuthorName  = "chunk"
-	defaultAuthorEmail = "chunk@circleci.com"
+	defaultAuthorEmail = "chunk@users.noreply.github.com"
 )
 
 // AuthorSource is where a resolved author came from.

@@ -1,6 +1,6 @@
 # Getting Started with chunk
 
-`chunk` runs your quality checks (tests, lint, format) on a **sidecar** — a clean cloud environment on CircleCI — while your AI agent is still working. Failures surface in the inner loop instead of in CI, so you catch what only reproduces outside your machine before you ever push.
+`chunk` runs your quality checks (tests, lint, format) while your AI agent is still working. By default they run locally and factory runs use Docker; this guide covers the **optional CircleCI backend**, which runs them on a **sidecar** — a clean cloud environment on CircleCI. chunk only contacts CircleCI for a project that opts in with `"factory": {"backend": "circleci"}` in `.chunk/config.json` (`chunk init --factory-backend circleci` or `chunk sidecar setup` writes it) or when you run a CircleCI command such as `chunk auth` or `chunk sidecar`. Failures surface in the inner loop instead of in CI, so you catch what only reproduces outside your machine before you ever push.
 
 This guide sets that up: authenticate, initialize your project, create a sidecar, and run the dev loop against it.
 
@@ -11,8 +11,10 @@ It also covers **team review context** ([below](#team-review-context)) — an ad
 ## Installation
 
 ```bash
-brew install CircleCI-Public/circleci/chunk
+curl -fsSL https://raw.githubusercontent.com/web3technologies/chunk-cli/main/install.sh | bash
 ```
+
+See the [README](../README.md#install) for pinned versions, provenance and building from source.
 
 Verify:
 
@@ -28,7 +30,7 @@ chunk --version
 
 A **sidecar** is an ephemeral Linux environment running on CircleCI. Instead of running tests locally, you sync your working tree to a sidecar and run checks there. This catches failures caused by local environment differences (different OS, missing dependencies, port conflicts) before they reach CI.
 
-Sidecars are available to all CircleCI customers, including the free plans.
+Sidecars need a CircleCI account (free plans included).
 
 ### Skills
 

@@ -3,6 +3,10 @@
 
 version: 2
 
+# Archives are named chunk_<Os>_<arch>.tar.gz; install.sh and `chunk upgrade`
+# download exactly that, and internal/upgrade pins its name to this template.
+project_name: chunk
+
 before:
   hooks:
     - go run . completion bash --output share/bash-completion/completions/chunk
@@ -22,7 +26,8 @@ builds:
       - -trimpath
 
     ldflags:
-      - "-s -w -X main.version={{.Version}}"
+      # The version carries its "v" so `chunk --version` prints the tag.
+      - "-s -w -X main.version=v{{.Version}} -X github.com/CircleCI-Public/chunk-cli/internal/telemetry.WriteKey={{ envOrDefault \"CHUNK_TELEMETRY_WRITE_KEY\" \"\" }}"
 
     goos:
       - linux
@@ -80,9 +85,9 @@ changelog:
 nfpms:
   - package_name: chunk
     license: MIT
-    maintainer: CircleCI
-    homepage: https://github.com/CircleCI-Public/chunk-cli
-    description: Chunk CLI by CircleCI.
+    maintainer: web3technologies <noreply@github.com>
+    homepage: https://github.com/web3technologies/chunk-cli
+    description: Chunk CLI, inner loop validation for AI coding agents.
     recommends:
       - bash-completion
     contents:
@@ -118,166 +123,14 @@ notarize:
         key_id: '{{ envOrDefault "QUILL_NOTARY_KEY_ID" ""}}'
         key: '{{ envOrDefault "QUILL_NOTARY_KEY" ""}}'
 
-chocolateys:
-  - package_source_url: https://github.com/CircleCI-Public/chunk-cli
-    owners: CircleCI
-    title: Chunk CLI
-    authors: CircleCI
-    project_url: https://github.com/CircleCI-Public/chunk-cli
-    copyright: 2026 CircleCI Inc
-    license_url: https://raw.githubusercontent.com/CircleCI-Public/chunk-cli/main/LICENSE
-    require_license_acceptance: false
-    project_source_url: https://github.com/CircleCI-Public/chunk-cli
-    bug_tracker_url: https://github.com/CircleCI-Public/chunk-cli/issues
-    tags: "ci"
-    summary: Chunk CLI by CircleCI
-    description: |
-      `chunk` is CircleCI's inner loop validation tool. It runs quality checks
-      (test, lint, format) on ephemeral Linux environments on CircleCI so
-      environment-specific failures are caught before they reach CI.
-    api_key: "{{ .Env.CHOCO_API_KEY }}"
-    skip_publish: true
-
-winget:
-  - publisher: CircleCI
-    name: Chunk CLI
-    short_description: "CircleCI inner loop validation tool."
-    installation_notes: |
-      To enable PowerShell tab-completion, register the completions from your
-      PowerShell profile ($PROFILE). The first command ensures the profile's
-      parent directory exists (Add-Content creates the file but not the folder);
-      the second appends the registration line:
-
-        New-Item -ItemType Directory -Path (Split-Path $PROFILE) -Force | Out-Null
-        Add-Content -Path $PROFILE -Value 'chunk completion powershell | Out-String | Invoke-Expression'
-    description: |
-      `chunk` is CircleCI's inner loop validation tool. It runs quality checks
-      (test, lint, format) on ephemeral Linux environments on CircleCI so
-      environment-specific failures are caught before they reach CI.
-    license: "MIT"
-    license_url: "https://github.com/CircleCI-Public/chunk-cli/blob/HEAD/LICENSE"
-    tags:
-      - chunk
-      - circleci
-      - cli
-      - command-line-tool
-      - continuous-integration
-      - developer-tools
-      - devops
-      - golang
-    publisher_url: "https://github.com/CircleCI-Public"
-    publisher_support_url: "https://github.com/CircleCI-Public/chunk-cli/issues/new"
-    package_identifier: CircleCI.Chunk
-    url_template: "https://github.com/CircleCI-Public/chunk-cli/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
-    homepage: "https://circleci.com"
-    copyright: "Circle Internet Services, Inc."
-    skip_upload: true
-    release_notes: "{{.Changelog}}"
-    release_notes_url: "https://github.com/CircleCI-Public/chunk-cli/releases/tag/{{ .Tag }}"
-    repository:
-      owner: CircleCI-Public
-      name: winget-pkgs
-      branch: "chunk-cli-{{ .Tag }}"
-      pull_request:
-        base:
-          owner: microsoft
-          name: winget-pkgs
-          branch: master
-
-# To refresh the snapcraft credentials, run:
-# $ snapcraft export-login --snaps chunk --channels stable,candidate,edge,beta --acls package_push,package_release snapcraft-credentials.txt
-# Then paste the contents into the SNAPCRAFT_STORE_CREDENTIALS context secret.
-snapcrafts:
-  - id: chunk
-    name: chunk
-    title: Chunk CLI
-    summary: CircleCI inner loop validation tool
-    description: |
-      `chunk` is CircleCI's inner loop validation tool. It runs quality checks
-      (test, lint, format) on ephemeral Linux environments on CircleCI so
-      environment-specific failures are caught before they reach CI.
-    license: MIT
-    grade: devel
-    confinement: strict
-    # Build the snap but don't upload it until the `chunk` name is
-    # registered in the Snap Store and we decide to publish there.
-    publish: false
-    # devel-grade snaps can only be released to edge/beta, never
-    # candidate/stable. Pin the channels until grade becomes stable.
-    channel_templates:
-      - edge
-      - beta
-    apps:
-      chunk:
-        plugs:
-          - home
-          - network
-        command: chunk
-
-# Homebrew formula (stable)
-brews:
-  - name: chunk
-    repository:
-      owner: CircleCI-Public
-      name: homebrew-circleci
-    directory: Formula
-    homepage: https://github.com/CircleCI-Public/chunk-cli
-    description: "Chunk CLI by CircleCI"
-    license: "MIT"
-    test: |
-      system "#{bin}/chunk"
-    install: |
-      bin.install "chunk"
-      man1.install "share/man/man1/chunk.1"
-      bash_completion.install "share/bash-completion/completions/chunk"
-      zsh_completion.install "share/zsh/site-functions/_chunk"
-      fish_completion.install "share/fish/vendor_completions.d/chunk.fish"
-
-# Homebrew cask (preview builds)
-homebrew_casks:
-  - name: chunk@next
-    directory: Casks
-    repository:
-      owner: CircleCI-Public
-      name: homebrew-circleci
-      branch: main
-    homepage: "https://circleci.com"
-    description: "Chunk CLI by CircleCI (preview build)."
-    binaries:
-      - chunk
-    manpages:
-      - share/man/man1/chunk.1
-    completions:
-      bash: share/bash-completion/completions/chunk
-      zsh: share/zsh/site-functions/_chunk
-      fish: share/fish/vendor_completions.d/chunk.fish
-    caveats: |
-      This preview build installs a `chunk` binary that conflicts with the
-      stable `chunk` formula. If you have the formula installed, unlink it
-      first to avoid a clashing symlink:
-
-        brew unlink chunk
-
-# Nix package (for NUR - Nix User Repository)
-nix:
-  - name: chunk
-    repository:
-      owner: CircleCI-Public
-      name: nur-packages
-    # Generate locally, push manually in CircleCI
-    skip_upload: true
-    homepage: https://github.com/CircleCI-Public/chunk-cli
-    description: "Chunk CLI by CircleCI"
-    license: "mit"
-    path: pkgs/chunk/default.nix
-    install: |
-      mkdir -p $out/bin
-      cp chunk $out/bin/
-
 # Metadata for the release
 release:
   github:
-    owner: CircleCI-Public
+    owner: web3technologies
     name: chunk-cli
   draft: false
   prerelease: auto
+  # install.sh rides along with every release so the curl one-liner and a
+  # pinned VERSION come from the same place.
+  extra_files:
+    - glob: ./install.sh
