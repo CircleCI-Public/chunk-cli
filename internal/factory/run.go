@@ -178,10 +178,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if opts.OnStart != nil {
 		opts.OnStart(rep.RunID, wt)
 	}
-	rec := Record{
-		RunID: rep.RunID, Prompt: request,
-		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
-	}
+	rec := newRecord(rep.RunID, request, wt)
 	if cont != nil {
 		rec.Prompt, rec.ContinuesRunID = cont.From.Prompt, cont.From.RunID
 	}
@@ -215,6 +212,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		}()
 	}
 
+	status(iostream.LevelInfo, opts.summary())
 	status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", opts.Reviewers))
 	// One backend drives both the pool and the relay.
 	backend := opts.backend()
@@ -381,4 +379,27 @@ func closePool(ctx context.Context, pool *sidecar.Pool, keep bool, status iostre
 	ids := pool.IDs()
 	status(iostream.LevelInfo, "kept sidecars: "+strings.Join(ids, " "))
 	return ids
+}
+
+// summary describes the run's configuration; an explicit Backend means docker.
+func (o *RunOptions) summary() string {
+	backend := ""
+	if o.Backend != nil {
+		backend = config.BackendDocker
+	}
+	return runSummary(backend, o.Image, o.Attempts, o.Reviewers, o.Model)
+}
+
+// runSummary is the one-line description of a run's configuration. Empty
+// fields show a readable default, and nothing secret is included.
+func runSummary(backend, image string, attempts, reviewers int, model string) string {
+	return fmt.Sprintf("Factory run: backend=%s image=%s attempts=%d reviewers=%d model=%s",
+		orDefault(backend, "circleci"), orDefault(image, "default"), attempts, reviewers, orDefault(model, "default"))
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }

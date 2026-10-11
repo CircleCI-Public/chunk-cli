@@ -29,6 +29,11 @@ type Worktree struct {
 	// Head is the developer's HEAD when the run started. It differs from
 	// Baseline when their uncommitted work was committed as the baseline.
 	Head string
+	// BaseBranch is the branch the developer was on when the run started, ""
+	// for a detached HEAD. DefaultBranch is the repository's default branch,
+	// "" when none is recorded. Publishing reads both to pick the PR's base.
+	BaseBranch    string
+	DefaultBranch string
 }
 
 // commitEnv commits as chunk, so a run never stops to ask for an identity or
@@ -71,6 +76,15 @@ func CreateWorktree(ctx context.Context, root, path, runID, prompt string) (Work
 	}
 
 	w := Worktree{Path: path, Branch: branchName(prompt, runID), Baseline: start, Head: head}
+	// Both are routine to be missing: a detached HEAD has no branch, and a
+	// repository may record no default.
+	w.BaseBranch, _ = gitutil.CurrentBranchInCtx(ctx, root)
+	w.DefaultBranch, _ = gitutil.DefaultBranchIn(root)
+	// The guard runs before the worktree exists, so no implementer turn can
+	// ever happen on a branch that must not be published.
+	if err := CheckHeadBranch(w.Branch, w.DefaultBranch); err != nil {
+		return Worktree{}, err
+	}
 	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "-b", w.Branch, path, start); err != nil {
 		return Worktree{}, fmt.Errorf("create worktree: %w: %s", err, strings.TrimSpace(string(out)))
 	}

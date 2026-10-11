@@ -255,6 +255,7 @@ func (r *factoryRecorder) started(runID string, wt factory.Worktree) {
 	defer e.mu.Unlock()
 	f := e.s.Factory
 	f.RunID, f.Worktree, f.Branch, f.Baseline, f.Head = runID, wt.Path, wt.Branch, wt.Baseline, wt.Head
+	f.BaseBranch, f.DefaultBranch = wt.BaseBranch, wt.DefaultBranch
 	// The work is on the run's branch, not the one checked out.
 	e.s.Branch = wt.Branch
 }
