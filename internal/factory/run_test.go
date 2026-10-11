@@ -157,11 +157,13 @@ func TestRunKeepsItsLog(t *testing.T) {
 	for _, want := range []string{
 		"info  run " + rep.RunID + "\n",
 		"info  prompt:\n    add a --verbose flag\n",
+		"info  Factory run: backend=circleci image=default attempts=1 reviewers=0 model=default\n",
 		"step  Preparing an implementer sidecar and 0 reviewer sidecar(s)...\n",
 		"end   stopped: create the run's sidecars: ",
 	} {
 		assert.Assert(t, strings.Contains(got, want), "missing %q in:\n%s", want, got)
 	}
+	assert.Assert(t, strings.Index(got, "info  Factory run:") < strings.Index(got, "step  Preparing"), got)
 	// Every status line the caller saw is in the log.
 	for _, msg := range shown {
 		assert.Assert(t, strings.Contains(got, msg), "status %q is not in the log:\n%s", msg, got)
@@ -169,4 +171,33 @@ func TestRunKeepsItsLog(t *testing.T) {
 	// The end is the last thing written.
 	lines := strings.Split(strings.TrimSpace(got), "\n")
 	assert.Assert(t, strings.Contains(lines[len(lines)-1], " end "), got)
+}
+
+func TestRunSummary(t *testing.T) {
+	tests := []struct {
+		name      string
+		backend   string
+		image     string
+		attempts  int
+		reviewers int
+		model     string
+		want      string
+	}{
+		{"all fields", "docker", "chunk-sandbox:local", 5, 2, "opus", "Factory run: backend=docker image=chunk-sandbox:local attempts=5 reviewers=2 model=opus"},
+		{"empty image and model", "docker", "", 5, 2, "", "Factory run: backend=docker image=default attempts=5 reviewers=2 model=default"},
+		{"empty backend", "", "img", 1, 1, "m", "Factory run: backend=circleci image=img attempts=1 reviewers=1 model=m"},
+		{"zero reviewers", "docker", "img", 1, 0, "m", "Factory run: backend=docker image=img attempts=1 reviewers=0 model=m"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, runSummary(tc.backend, tc.image, tc.attempts, tc.reviewers, tc.model), tc.want)
+		})
+	}
+}
+
+func TestRunOptionsSummaryNamesTheBackend(t *testing.T) {
+	assert.Equal(t, (&RunOptions{Attempts: 3, Reviewers: 2}).summary(),
+		"Factory run: backend=circleci image=default attempts=3 reviewers=2 model=default")
+	got := (&RunOptions{Backend: sidecar.NewCircleCIBackend(nil, ""), Image: "img", Model: "m"}).summary()
+	assert.Equal(t, got, "Factory run: backend=docker image=img attempts=0 reviewers=0 model=m")
 }
