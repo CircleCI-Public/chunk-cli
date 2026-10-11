@@ -17,7 +17,9 @@ spec.md ──► implement ──► review ×N + validate ──► feedback �
 
 > This is a fork of [CircleCI-Public/chunk-cli](https://github.com/CircleCI-Public/chunk-cli)
 > that adds a local Docker backend, per-repo sandbox images, push/PR publishing and
-> commit attribution. The original CircleCI cloud sidecars still work; see
+> commit attribution. It is released and updated from this repository, and by
+> default never contacts CircleCI. The original CircleCI cloud sidecars still
+> work as an opt-in backend; see
 > [CircleCI cloud sidecars (optional)](#circleci-cloud-sidecars-optional).
 
 ## How it works
@@ -51,8 +53,38 @@ spec.md ──► implement ──► review ×N + validate ──► feedback �
 
 ## Install
 
-Build from source. The Homebrew formula installs CircleCI's upstream release,
-which doesn't have the local Docker features.
+One command installs the latest release to `~/.local/bin` (no sudo):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/web3technologies/chunk-cli/main/install.sh | bash
+```
+
+The script downloads the archive for your OS and architecture from this
+repository's [Releases](https://github.com/web3technologies/chunk-cli/releases),
+checks it against the release's `checksums.txt`, and only then replaces
+`chunk`. It prints the line to add to your shell's startup file if
+`~/.local/bin` isn't on your `PATH`.
+
+**Pin a version** (with or without the `v`), or choose another directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/web3technologies/chunk-cli/main/install.sh | VERSION=v1.0.0 bash
+curl -fsSL https://raw.githubusercontent.com/web3technologies/chunk-cli/main/install.sh | DESTDIR=/usr/local/bin bash   # uses sudo if needed
+```
+
+**Verify provenance.** Release archives carry build provenance attestations:
+
+```bash
+gh attestation verify chunk_Darwin_arm64.tar.gz --repo web3technologies/chunk-cli
+```
+
+Check the install:
+
+```bash
+chunk --version
+```
+
+**Build from source** (for contributors):
 
 ```bash
 git clone git@github.com:web3technologies/chunk-cli.git
@@ -60,17 +92,21 @@ cd chunk-cli
 task dev-install        # builds dist/chunk and links it to ~/.local/bin/chunk
 ```
 
-Make sure `~/.local/bin` is on your `PATH`, then check:
+`task dev-install` links `~/.local/bin/chunk` to your working tree's build, so
+`install.sh` refuses to replace it unless you set `CHUNK_FORCE=1`.
+
+**Updating:**
+- Release install: `chunk upgrade`. It downloads the latest release from this
+  repository and checks it against `checksums.txt` before replacing the binary.
+  `chunk` also tells you when a newer release exists; set
+  `CHUNK_NO_UPDATE_CHECK=1` to turn that off.
+- Source build: `git pull && task build`. `chunk upgrade` refuses on a source
+  build.
+- Either way, stop the daemon afterwards so the next run starts it from the new
+  binary. A running daemon keeps the code it started with:
 
 ```bash
-chunk --help
-```
-
-**Updating:** pull and rebuild, then stop the daemon so the next run starts it
-from the new binary. A running daemon keeps the code it started with.
-
-```bash
-git pull && task build && pkill -f 'chunk _daemon'
+pkill -f 'chunk _daemon'
 ```
 
 ## Set up a repository
@@ -190,7 +226,7 @@ is committed and shared with your team:
 
 | Key | Meaning |
 |---|---|
-| `backend` | `docker` for local containers, or `circleci` for cloud sidecars |
+| `backend` | `docker` for local containers (the default), or `circleci` for cloud sidecars. `circleci` is the one setting that lets chunk use CircleCI. |
 | `dockerfile` | The managed sandbox Dockerfile. chunk builds the image and keeps it up to date. |
 | `image` | An image you manage yourself. It takes precedence over `dockerfile` and is never built by chunk. |
 | `maxAttempts` | Default number of rounds (built-in: 3) |
@@ -203,24 +239,33 @@ A flag always beats the config, and the config beats the built-in default.
 - **Claude:** in the OS keychain, set by `chunk init` or `chunk refresh`.
   `CLAUDE_CODE_OAUTH_TOKEN` overrides it.
 - **GitHub:** whatever `gh` is logged in as.
-- **CircleCI:** no credential is needed for local runs.
+- **CircleCI:** not needed. Even if a CircleCI token is on your machine, chunk
+  doesn't use it unless the project opts into the `circleci` backend.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| A run behaves like an older version after you rebuilt chunk | The daemon is still running the old binary: `pkill -f 'chunk _daemon'` |
+| A run behaves like an older version after you upgraded or rebuilt chunk | The daemon is still running the old binary: `pkill -f 'chunk _daemon'` |
 | `Building … failed` or the image fails its checks | `chunk factory image`. Read the error, edit `Dockerfile.chunk` or accept the repair offer. The full build log is linked in the error. |
 | `No Docker image is set for factory runs` | Run `chunk init` and choose docker, or set `factory.dockerfile` or `factory.image` |
 | The first Docker call after a while says "no such image" | Docker Desktop's Resource Saver was waking the engine. chunk retries; if it persists, open Docker Desktop. |
 | A branch can't be deleted because it's checked out in a worktree | `chunk factory clean <run-id>` |
-| The git pre-commit hook asks for CircleCI authentication | Known gap: `chunk validate` doesn't use the Docker backend yet. Run your checks, then use `git commit --no-verify`. |
+| `chunk validate --remote` says it needs the circleci backend | Remote validation is a CircleCI feature. Opt in with `"factory": {"backend": "circleci"}` in `.chunk/config.json` (see below); otherwise `chunk validate` runs your checks locally. |
 
 ## CircleCI cloud sidecars (optional)
 
 The original chunk runs the same factory, and `chunk validate`, on CircleCI
 microVM sidecars instead of local Docker. Everything below needs a CircleCI
 account (free plans included).
+
+chunk only contacts CircleCI when you choose it: with
+`"factory": {"backend": "circleci"}` in `.chunk/config.json` (`chunk init
+--factory-backend circleci` or `chunk sidecar setup` writes it), with
+`--backend circleci`, or by running a CircleCI command (`chunk auth`,
+`chunk sidecar`, `chunk task`, `chunk org`, `chunk prune`). Without that,
+`chunk validate`, the git pre-commit hook and the agent hooks run your checks
+locally and ignore `remote: true`.
 
 ```bash
 chunk auth login                              # or: chunk auth signup / chunk auth set circleci
@@ -246,7 +291,7 @@ Codex or Cursor drive sidecars themselves. See
 - **`chunk build-prompt`** mines your team's PR review comments and generates a
   review-context prompt in `.chunk/context/`. It needs `ANTHROPIC_API_KEY` and
   `GITHUB_TOKEN`.
-- **`chunk task config|run`** triggers AI coding tasks on CircleCI.
+- **`chunk task config|run`** triggers AI coding tasks on CircleCI (needs a CircleCI account).
 - **`chunk mutate`** finds test coverage gaps with mutation testing.
 - **`chunk conflicts`** reports whether your branch still merges cleanly.
 
@@ -303,6 +348,14 @@ task lint               # golangci-lint
 task acceptance-test    # acceptance tests
 task dev-install        # build and link into ~/.local/bin
 ```
+
+**Releasing** (maintainers): `task release VERSION=1.0.0` tags `v1.0.0` and
+pushes the tag; the Release workflow (`.github/workflows/release.yml`) runs
+goreleaser, publishes the archives, `checksums.txt` and `install.sh`, and
+attests their provenance. This fork's versions start at `v1.0.0`; upstream's
+`v0.x` tags are ignored by `task tag`. Setting the optional
+`CHUNK_TELEMETRY_WRITE_KEY` Actions secret bakes a Segment write key into
+release builds; without it, telemetry never sends.
 
 Contributions follow the code standards in [AGENTS.md](AGENTS.md). chunk's own
 factory runs review against them with the `maintainability` reviewer.

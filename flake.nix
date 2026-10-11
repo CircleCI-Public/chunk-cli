@@ -1,5 +1,5 @@
 {
-  description = "Chunk CLI by CircleCI";
+  description = "Chunk CLI (web3technologies fork): inner loop validation for AI coding agents";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

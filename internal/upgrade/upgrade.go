@@ -2,7 +2,11 @@ package upgrade
 
 import (
 	"archive/tar"
+	"bufio"
+	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,10 +18,27 @@ import (
 	"strings"
 )
 
+// Where chunk's releases live. This is the one place that names the release
+// repository: the update check, the release link, the upgrade itself and the
+// installer script all derive from it.
 const (
-	repoOwner      = "CircleCI-Public"
-	repoName       = "chunk-cli"
-	maxArchiveSize = 100 << 20 // 100 MB
+	// Repo is the GitHub "owner/name" releases are published to and downloaded from.
+	Repo = "web3technologies/chunk-cli"
+
+	// AssetPrefix is the goreleaser project name, which starts every archive name.
+	AssetPrefix = "chunk"
+
+	// ChecksumsAsset is the release asset listing every archive's SHA-256.
+	ChecksumsAsset = "checksums.txt"
+
+	// InstallScriptURL installs the latest release.
+	InstallScriptURL = "https://raw.githubusercontent.com/" + Repo + "/main/install.sh"
+
+	// InstallCommand is the one-liner that installs the latest release.
+	InstallCommand = "curl -fsSL " + InstallScriptURL + " | bash"
+
+	maxArchiveSize   = 100 << 20 // 100 MB
+	maxChecksumsSize = 1 << 20   // 1 MB
 )
 
 type ghRelease struct {
@@ -43,10 +64,6 @@ var brewPathFragments = []string{
 	"/home/linuxbrew/.linuxbrew/", // Linuxbrew
 }
 
-// brewUpgradeCommand upgrades the Homebrew formula, which .goreleaser.yaml
-// names "chunk" (not "chunk-cli", the repo name).
-const brewUpgradeCommand = "brew upgrade chunk"
-
 func isBrewManaged(path string) bool {
 	for _, fragment := range brewPathFragments {
 		if strings.Contains(path, fragment) {
@@ -58,11 +75,12 @@ func isBrewManaged(path string) bool {
 
 // ReleaseURL returns the GitHub release page for tag, where its changelog lives.
 func ReleaseURL(tag string) string {
-	return fmt.Sprintf("https://github.com/%s/%s/releases/tag/%s", repoOwner, repoName, tag)
+	return fmt.Sprintf("https://github.com/%s/releases/tag/%s", Repo, tag)
 }
 
-// SelfUpgradeCommand returns the command that upgrades the running binary,
-// accounting for Homebrew installs, which must not be replaced in place.
+// SelfUpgradeCommand returns the command that upgrades the running binary. A
+// Homebrew-managed chunk is not this project's build and must not be replaced
+// in place, so it is pointed at the installer instead.
 func SelfUpgradeCommand() string {
 	execPath, err := os.Executable()
 	if err != nil {
@@ -72,44 +90,96 @@ func SelfUpgradeCommand() string {
 		execPath = resolved
 	}
 	if isBrewManaged(execPath) {
-		return brewUpgradeCommand
+		return InstallCommand
 	}
 	return "chunk upgrade"
 }
 
-func Run(out io.Writer, client *http.Client, apiBase, installPath string) error {
-	if isBrewManaged(installPath) {
-		return fmt.Errorf("chunk is managed by Homebrew — upgrade with: %s", brewUpgradeCommand)
+// Options configure Run.
+type Options struct {
+	Out    io.Writer
+	Client *http.Client
+	// APIBase is the GitHub API root.
+	APIBase string
+	// InstallPath is the binary to replace, as invoked: a symlink is not
+	// resolved, because one marks a source build.
+	InstallPath string
+	// Version is the running version; "dev" marks a source build.
+	Version string
+}
+
+// ErrSourceBuild is the refusal for a binary that came from `task build`.
+var ErrSourceBuild = errors.New("source build")
+
+// ErrHomebrewManaged is the refusal for a binary Homebrew installed, which is
+// CircleCI's build rather than this project's.
+var ErrHomebrewManaged = errors.New("managed by Homebrew")
+
+func errSourceBuild(reason string) error {
+	return fmt.Errorf("this chunk is a source build (%s), so it has no release to upgrade to: update it with: git pull && task build: %w", reason, ErrSourceBuild)
+}
+
+// checkReplaceable reports why the binary at path must not be replaced with a
+// release, or nil when it may be.
+func checkReplaceable(path, version string) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		resolved = path
+	}
+	if isBrewManaged(resolved) {
+		return fmt.Errorf("chunk at %s is managed by Homebrew, which installs a different build than this project's releases; install this one with: %s: %w", resolved, InstallCommand, ErrHomebrewManaged)
+	}
+	if version == "dev" {
+		return errSourceBuild("version is dev")
+	}
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return errSourceBuild(path + " is a symlink, as task dev-install makes")
+	}
+	return nil
+}
+
+// Run replaces the binary at opts.InstallPath with the latest release, after
+// checking the archive against the release's checksums.txt.
+func Run(opts Options) error {
+	if err := checkReplaceable(opts.InstallPath, opts.Version); err != nil {
+		return err
 	}
 
-	rel, err := fetchLatestRelease(client, apiBase)
+	rel, err := fetchLatestRelease(opts.Client, opts.APIBase)
 	if err != nil {
 		return fmt.Errorf("fetch latest release: %w", err)
 	}
 
 	assetName := PlatformAssetName()
-	var downloadURL string
-	for _, a := range rel.Assets {
-		if a.Name == assetName {
-			downloadURL = a.BrowserDownloadURL
-			break
-		}
-	}
-	if downloadURL == "" {
+	archiveURL := rel.assetURL(assetName)
+	if archiveURL == "" {
 		return fmt.Errorf("no release asset found for platform (%s)", assetName)
 	}
+	checksumsURL := rel.assetURL(ChecksumsAsset)
+	if checksumsURL == "" {
+		return fmt.Errorf("release %s has no %s, so the download cannot be verified", rel.TagName, ChecksumsAsset)
+	}
 
-	_, _ = fmt.Fprintf(out, "Downloading chunk %s...\n", rel.TagName)
-	if err := downloadAndReplace(client, downloadURL, installPath); err != nil {
+	_, _ = fmt.Fprintf(opts.Out, "Downloading chunk %s...\n", rel.TagName)
+	if err := downloadAndReplace(opts.Client, archiveURL, checksumsURL, assetName, opts.InstallPath); err != nil {
 		return fmt.Errorf("install update: %w", err)
 	}
 
-	_, _ = fmt.Fprintf(out, "Updated to %s\n", rel.TagName)
+	_, _ = fmt.Fprintf(opts.Out, "Updated to %s\n", rel.TagName)
 	return nil
 }
 
+func (r *ghRelease) assetURL(name string) string {
+	for _, a := range r.Assets {
+		if a.Name == name {
+			return a.BrowserDownloadURL
+		}
+	}
+	return ""
+}
+
 func fetchLatestRelease(client *http.Client, apiBase string) (*ghRelease, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", apiBase, repoOwner, repoName)
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", apiBase, Repo)
 	req, err := http.NewRequest(http.MethodGet, url, nil) //nolint:gosec // URL comes from trusted config (GITHUB_API_URL env var)
 	if err != nil {
 		return nil, err
@@ -133,30 +203,86 @@ func fetchLatestRelease(client *http.Client, apiBase string) (*ghRelease, error)
 	return &rel, nil
 }
 
+// PlatformAssetName is the release archive for the running platform.
 func PlatformAssetName() string {
-	osName := runtime.GOOS
+	return assetName(runtime.GOOS, runtime.GOARCH)
+}
+
+// assetName mirrors the archives.name_template in .goreleaser.yaml, which a
+// test pins it to, and the name install.sh downloads.
+func assetName(goos, goarch string) string {
+	osName := goos
 	if len(osName) > 0 {
 		osName = strings.ToUpper(osName[:1]) + osName[1:]
 	}
-	archName := runtime.GOARCH
-	if archName == "amd64" {
-		archName = "x86_64"
+	if goarch == "amd64" {
+		goarch = "x86_64"
 	}
-	return fmt.Sprintf("chunk-cli_%s_%s.tar.gz", osName, archName)
+	return fmt.Sprintf("%s_%s_%s.tar.gz", AssetPrefix, osName, goarch)
 }
 
-func downloadAndReplace(client *http.Client, url, installPath string) error {
-	resp, err := client.Get(url) //nolint:gosec // URL comes from GitHub release API response for a known repo
+// get fetches url and returns at most limit bytes, failing when there are more.
+func get(client *http.Client, url string, limit int64) ([]byte, error) {
+	resp, err := client.Get(url) //nolint:gosec // URL comes from the GitHub release API response for a known repo
 	if err != nil {
-		return fmt.Errorf("download: %w", err)
+		return nil, fmt.Errorf("download: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned %d", resp.StatusCode)
+		return nil, fmt.Errorf("download returned %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("download: %w", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("download exceeds %d bytes", limit)
+	}
+	return data, nil
+}
+
+// checksumFor finds name's SHA-256 in a checksums.txt body ("<hex>  <name>").
+func checksumFor(checksums []byte, name string) (string, error) {
+	sc := bufio.NewScanner(bytes.NewReader(checksums))
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == name {
+			return strings.ToLower(fields[0]), nil
+		}
+	}
+	return "", fmt.Errorf("no checksum for %s in %s", name, ChecksumsAsset)
+}
+
+// verifiedArchive downloads the archive and returns it only if it matches the
+// release's checksums.txt.
+func verifiedArchive(client *http.Client, archiveURL, checksumsURL, name string) ([]byte, error) {
+	checksums, err := get(client, checksumsURL, maxChecksumsSize)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", ChecksumsAsset, err)
+	}
+	want, err := checksumFor(checksums, name)
+	if err != nil {
+		return nil, err
+	}
+	archive, err := get(client, archiveURL, maxArchiveSize)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(archive)
+	if got := hex.EncodeToString(sum[:]); got != want {
+		return nil, fmt.Errorf("checksum mismatch for %s (expected %s, got %s)", name, want, got)
+	}
+	return archive, nil
+}
+
+func downloadAndReplace(client *http.Client, archiveURL, checksumsURL, name, installPath string) error {
+	archive, err := verifiedArchive(client, archiveURL, checksumsURL, name)
+	if err != nil {
+		return err
 	}
 
-	gz, err := gzip.NewReader(resp.Body)
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return fmt.Errorf("gzip: %w", err)
 	}

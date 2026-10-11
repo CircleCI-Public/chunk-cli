@@ -67,12 +67,12 @@ func TestRunValidateNowUsesConfiguredSidecarImage(t *testing.T) {
 	}{
 		{
 			name:   "snapshot configured",
-			config: `{"validation":{"sidecarImage":"snap-123"}}`,
+			config: `{"factory":{"backend":"circleci"},"validation":{"sidecarImage":"snap-123"}}`,
 			want:   "snap-123",
 		},
 		{
 			name:   "no snapshot configured",
-			config: `{}`,
+			config: `{"factory":{"backend":"circleci"}}`,
 			want:   "",
 		},
 	}
@@ -110,7 +110,7 @@ func TestRunValidateNowReadsSidecarImageFromWorkDir(t *testing.T) {
 
 	root := t.TempDir()
 	workDir := filepath.Join(root, "sub")
-	writeProjectConfig(t, workDir, `{"validation":{"sidecarImage":"snap-sub"}}`)
+	writeProjectConfig(t, workDir, `{"factory":{"backend":"circleci"},"validation":{"sidecarImage":"snap-sub"}}`)
 
 	d := newTestDaemon()
 	d.prov = newProvisioner(newTestClient(t, srv.URL))
@@ -152,9 +152,9 @@ func runnerNeverCalled(t *testing.T) func(context.Context, string, string, []str
 	}
 }
 
-// A config that exists but cannot be loaded must not quietly become the bare
-// image: the run would fail later for want of a toolchain with no explanation.
-func TestRunValidateNowFailsOnUnreadableProjectConfig(t *testing.T) {
+// A config that cannot be loaded has not opted into CircleCI, so the daemon
+// provisions nothing for it; the run itself reports the broken config.
+func TestRunValidateNowDoesNotProvisionForAnUnreadableProjectConfig(t *testing.T) {
 	rec := &imageRecorder{next: fakes.NewFakeCircleCI()}
 	srv := httptest.NewServer(rec)
 	defer srv.Close()
@@ -164,7 +164,7 @@ func TestRunValidateNowFailsOnUnreadableProjectConfig(t *testing.T) {
 
 	d := newTestDaemon()
 	d.prov = newProvisioner(newTestClient(t, srv.URL))
-	d.runner = runnerNeverCalled(t)
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
 
 	resp := d.runValidateNow(context.Background(), chunkd.ValidateRequest{
 		Args:        []string{"validate", "--remote"},
@@ -172,29 +172,47 @@ func TestRunValidateNowFailsOnUnreadableProjectConfig(t *testing.T) {
 		ProjectRoot: root,
 	}, nil)
 
-	assert.Check(t, cmp.Equal(resp.ExitCode, 1))
-	assert.Check(t, cmp.Contains(resp.Stderr, "load project config"))
+	assert.Check(t, cmp.Equal(resp.ExitCode, 0))
 	assert.Check(t, cmp.Len(rec.created(), 0))
 }
 
-// A project with no config file has no snapshot, which is not an error.
-func TestRunValidateNowWithoutProjectConfigUsesTheDefaultImage(t *testing.T) {
-	rec := &imageRecorder{next: fakes.NewFakeCircleCI()}
-	srv := httptest.NewServer(rec)
-	defer srv.Close()
+// An org ID and a token are not consent: a project that did not choose the
+// circleci backend never gets a sidecar from the daemon.
+func TestRunValidateNowDoesNotProvisionForAProjectThatDidNotChooseCircleCI(t *testing.T) {
+	for name, content := range map[string]string{
+		"no config":       "",
+		"default backend": `{"orgID":"org-1","validation":{"sidecarImage":"snap-1"}}`,
+		"docker backend":  `{"orgID":"org-1","factory":{"backend":"docker"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &imageRecorder{next: fakes.NewFakeCircleCI()}
+			srv := httptest.NewServer(rec)
+			defer srv.Close()
 
-	d := newTestDaemon()
-	d.prov = newProvisioner(newTestClient(t, srv.URL))
-	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+			root := t.TempDir()
+			if content != "" {
+				writeProjectConfig(t, root, content)
+			}
 
-	resp := d.runValidateNow(context.Background(), chunkd.ValidateRequest{
-		Args:        []string{"validate", "--remote"},
-		OrgID:       "org-1",
-		ProjectRoot: t.TempDir(),
-	}, nil)
+			d := newTestDaemon()
+			d.prov = newProvisioner(newTestClient(t, srv.URL))
+			ran := false
+			d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int {
+				ran = true
+				return 0
+			}
 
-	assert.Check(t, cmp.Equal(resp.ExitCode, 0))
-	assert.Check(t, cmp.DeepEqual(rec.created(), []string{""}))
+			resp := d.runValidateNow(context.Background(), chunkd.ValidateRequest{
+				Args:        []string{"validate"},
+				OrgID:       "org-1",
+				ProjectRoot: root,
+			}, nil)
+
+			assert.Check(t, cmp.Equal(resp.ExitCode, 0))
+			assert.Check(t, ran)
+			assert.Check(t, cmp.Len(rec.created(), 0))
+		})
+	}
 }
 
 // A request that names no directory must not pick up the config of whatever
@@ -205,7 +223,7 @@ func TestRunValidateNowIgnoresTheDaemonsWorkingDirectory(t *testing.T) {
 	defer srv.Close()
 
 	elsewhere := t.TempDir()
-	writeProjectConfig(t, elsewhere, `{"validation":{"sidecarImage":"snap-other-project"}}`)
+	writeProjectConfig(t, elsewhere, `{"factory":{"backend":"circleci"},"validation":{"sidecarImage":"snap-other-project"}}`)
 	t.Chdir(elsewhere)
 
 	d := newTestDaemon()
@@ -217,7 +235,8 @@ func TestRunValidateNowIgnoresTheDaemonsWorkingDirectory(t *testing.T) {
 		OrgID: "org-1",
 	}, nil)
 
-	assert.Check(t, cmp.DeepEqual(rec.created(), []string{""}))
+	// No directory means no project, and no project has not chosen CircleCI.
+	assert.Check(t, cmp.Len(rec.created(), 0))
 }
 
 // WorkDir wins over ProjectRoot when both hold a config.
@@ -228,8 +247,8 @@ func TestRunValidateNowPrefersWorkDirOverProjectRoot(t *testing.T) {
 
 	root := t.TempDir()
 	workDir := filepath.Join(root, "sub")
-	writeProjectConfig(t, root, `{"validation":{"sidecarImage":"snap-root"}}`)
-	writeProjectConfig(t, workDir, `{"validation":{"sidecarImage":"snap-sub"}}`)
+	writeProjectConfig(t, root, `{"factory":{"backend":"circleci"},"validation":{"sidecarImage":"snap-root"}}`)
+	writeProjectConfig(t, workDir, `{"factory":{"backend":"circleci"},"validation":{"sidecarImage":"snap-sub"}}`)
 
 	d := newTestDaemon()
 	d.prov = newProvisioner(newTestClient(t, srv.URL))
@@ -254,7 +273,7 @@ func TestRunValidateNowPrefersTheRequestedImage(t *testing.T) {
 	defer srv.Close()
 
 	root := t.TempDir()
-	writeProjectConfig(t, root, `{"validation":{"sidecarImage":"snap-project"}}`)
+	writeProjectConfig(t, root, `{"factory":{"backend":"circleci"},"validation":{"sidecarImage":"snap-project"}}`)
 
 	d := newTestDaemon()
 	d.prov = newProvisioner(newTestClient(t, srv.URL))
@@ -277,7 +296,7 @@ func TestRunValidateNowExplainsARejectedSnapshot(t *testing.T) {
 	defer srv.Close()
 
 	root := t.TempDir()
-	writeProjectConfig(t, root, `{"validation":{"sidecarImage":"snap-gone"}}`)
+	writeProjectConfig(t, root, `{"factory":{"backend":"circleci"},"validation":{"sidecarImage":"snap-gone"}}`)
 
 	d := newTestDaemon()
 	d.prov = newProvisioner(newTestClient(t, srv.URL))

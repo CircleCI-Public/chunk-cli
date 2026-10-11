@@ -46,11 +46,11 @@ chunk
 │   --skip-skills                   # Skip agent skill installation
 │   --skip-auth                     # Skip the Claude login check
 │   --skip-factory                  # Skip the factory backend step
-│   --factory-backend <name>        # circleci or docker; skips the prompt
+│   --factory-backend <name>        # docker (default) or circleci; skips the prompt. Asked first: the circleci path alone detects the org ID, installs the chunk-sidecar skills and offers test-suites.yml
 │   --factory-image <image>         # Docker image for factory runs (user-managed, never auto-built); skips the prompt
 │   --skip-image-build              # Write Dockerfile.chunk for docker runs but don't offer to build the image
 │   --factory-author "Name <email>" # Who factory commits are attributed to (default: your git identity)
-│   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (default: true; pass =false to generate)
+│   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (circleci backend only; default: true; pass =false to generate)
 │   --project-dir <path>            # Project directory (defaults to cwd)
 │
 ├── task
@@ -165,7 +165,7 @@ chunk
 ├── factory                         # Build and manage factory runs
 │   ├── build [prompt|-]            # Implement a prompt on a sidecar, then review and validate it until it passes
 │       --plan <file>               # Read the prompt from a file (usually a markdown spec)
-│       --backend <name>            # circleci or docker (default: factory.backend, else circleci)
+│       --backend <name>            # docker or circleci (default: factory.backend, else docker)
 │       --max-attempts <n>          # Maximum rounds of review and validation (default: factory.maxAttempts, else 3)
 │       --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
 │       --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
@@ -218,7 +218,7 @@ chunk
 │   ├── install                     # Install zsh completion
 │   └── uninstall                   # Remove zsh completion
 │
-└── upgrade                         # Update to latest version
+└── upgrade                         # Update a release install to the latest release (see Behavior Decisions)
 ```
 
 ## Behavior Decisions
@@ -239,9 +239,27 @@ chunk
   to disable.
 - `config set` user keys: `model`, `telemetry`, `notifications`. Project keys (`.chunk/config.json`):
   `orgID`, `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
-- Validation commands run remotely by default. Set `local: true` on a command to
-  run it in the local working tree. `remote: true` remains an explicit,
-  backwards-compatible annotation; setting both fields is invalid.
+- **CircleCI is opt-in, and a CircleCI token is not consent.** chunk contacts
+  CircleCI only for a project with `"factory": {"backend": "circleci"}` in
+  `.chunk/config.json` (or a request that names `--backend circleci`), and for
+  the explicitly CircleCI commands: `auth`, `sidecar`, `task`, `org`, `prune`,
+  `build-prompt`'s CircleCI parts, `review`, `mutate`. An empty backend means
+  `docker`. Having `CIRCLE_TOKEN`, a keychain entry or an `orgID` in the config
+  never causes traffic by itself.
+- Without the circleci backend, every validation command runs in the local
+  working tree, `remote: true` is ignored, and `chunk validate`, the git
+  pre-commit hook, the agent hooks and the daemon's background validation never
+  create, sync to or exec on a CircleCI sidecar. A dim note ("running lint
+  locally; remote validation needs the circleci backend") is printed once per
+  run for commands marked remote. `validate --remote`, `validate variants` and
+  `--mark-remote` are the exceptions: `--remote` and `variants` fail with an
+  error explaining the opt-in rather than silently falling back, and
+  `--mark-remote` (like `chunk sidecar setup`) opts the project in by setting
+  `factory.backend` to `circleci`.
+- On the circleci backend, validation commands run remotely by default. Set
+  `local: true` on a command to run it in the local working tree. `remote: true`
+  remains an explicit, backwards-compatible annotation; setting both fields is
+  invalid.
 - `validate --mark-remote` sets `remote: true` and clears `local: true` on commands
   in `.chunk/config.json`, then exits. With a `[name]` it marks that one command;
   without it every configured command **except `role: autofix`** ones, which it
@@ -251,7 +269,7 @@ chunk
   change. `chunk sidecar setup` marks install and gate commands automatically, so
   `--mark-remote` is for the rest: a sidecar set up by hand, or a command whose
   role does not qualify. Unmarking is still a hand edit of the config.
-- Command placement is independent of `validation.sidecarImage`: explicit local
+- On the circleci backend, command placement is independent of `validation.sidecarImage`: explicit local
   commands stay local, while unspecified and explicitly remote commands use the
   managed sidecar pool. `--local` remains the whole-run local override.
 - A run of several commands starts with the local `role: autofix` ones, then the
@@ -281,7 +299,21 @@ chunk
   guessing the wrong prepared environment produces failures that look like the
   repo's own. Selection never fails a run: an unreachable snapshot API is
   warned about and treated as no match.
-- Telemetry is opt-out. Events are anonymous until you authenticate with
+- **`upgrade` follows this fork's releases.** It reads the latest release of
+  `web3technologies/chunk-cli` (the one place the repository is named is
+  `internal/upgrade`), downloads `chunk_<Os>_<arch>.tar.gz` and verifies it
+  against that release's `checksums.txt` before replacing the binary; a missing
+  or mismatched checksum aborts with the installed binary untouched. It refuses
+  on a source build (`version` is `dev`, or the binary is a symlink as
+  `task dev-install` makes) and says to `git pull && task build`, and on a
+  Homebrew-managed binary (that is CircleCI's build) and points at the install
+  script. Stop the daemon afterwards. The update notice and `chunk watch`'s
+  footer use the same source and are silent for `dev` builds.
+- Telemetry is opt-out, and off unless the binary was built with a Segment
+  write key (`-X .../internal/telemetry.WriteKey=...`; release builds set it
+  only if the `CHUNK_TELEMETRY_WRITE_KEY` secret exists). Without a key nothing
+  is created or sent whatever the preference says, and `chunk config show` says
+  so. When a key is present: events are anonymous until you authenticate with
   CircleCI; after that they include your CircleCI user ID, and earlier
   anonymous events from the same install are linked to it. They never include
   flag values, argument values, names or email addresses. It's disabled by the
@@ -643,10 +675,11 @@ chunk
   `receive-telemetry`, `upgrade`, and shell-completion requests, which either run
   on every keypress or report versions themselves. `watch` runs its own check and
   renders the notice in the TUI footer instead.
-- The notice suggests `brew upgrade chunk` when the running binary resolves into
-  a Homebrew prefix, and `chunk upgrade` otherwise. `chunk upgrade` refuses to
-  replace a Homebrew-managed binary in place.
-- The notice names both versions (`v0.7.180 → v0.7.186`) and links the new
+- The notice suggests the install script when the running binary resolves into
+  a Homebrew prefix (that is CircleCI's build, not this project's), and
+  `chunk upgrade` otherwise. `chunk upgrade` refuses to replace a
+  Homebrew-managed binary in place. No notice is shown for `dev` builds.
+- The notice names both versions (`v1.0.0 → v1.0.1`) and links the new
   release's GitHub page, so the reason to upgrade is one click away. The `watch`
   footer keeps its one-line form: it has no room for a URL.
 
@@ -655,7 +688,7 @@ chunk
 | Key | Scope | Description |
 |-----|-------|-------------|
 | `model` | user config (`~/.config/chunk/config.json`) | Claude model override |
-| `telemetry` | user config (`~/.config/chunk/config.json`) | Usage telemetry, tied to your CircleCI user ID once authenticated (`true`/`false`, default: `true`) |
+| `telemetry` | user config (`~/.config/chunk/config.json`) | Usage telemetry preference (`true`/`false`, default: `true`); only matters to a build that has a telemetry write key, which default builds do not |
 | `notifications` | user config (`~/.config/chunk/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
 | `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
 | `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |

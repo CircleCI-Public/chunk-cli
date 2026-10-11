@@ -409,7 +409,7 @@ func (o *RunOptions) summary() string {
 // fields show a readable default, and nothing secret is included.
 func runSummary(backend, image string, attempts, reviewers int, model string) string {
 	return fmt.Sprintf("Factory run: backend=%s image=%s attempts=%d reviewers=%d model=%s",
-		orDefault(backend, "circleci"), orDefault(image, "default"), attempts, reviewers, orDefault(model, "default"))
+		orDefault(backend, config.BackendCircleCI), orDefault(image, "default"), attempts, reviewers, orDefault(model, "default"))
 }
 
 func orDefault(s, def string) string {

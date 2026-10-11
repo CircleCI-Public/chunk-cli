@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -37,39 +39,55 @@ func makeFakeArchive(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-func newUpgradeFakeServer(t *testing.T, archive []byte) *httptest.Server {
+// newUpgradeFakeServer serves a release of the fork: the archive, and the
+// checksums.txt that vouches for it (checksums, when non-empty, replaces the
+// correct body).
+func newUpgradeFakeServer(t *testing.T, archive []byte, checksums string) *httptest.Server {
 	t.Helper()
+	if checksums == "" {
+		sum := sha256.Sum256(archive)
+		checksums = hex.EncodeToString(sum[:]) + "  " + upgrade.PlatformAssetName() + "\n"
+	}
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+		switch {
+		case r.URL.Path == "/repos/"+upgrade.Repo+"/releases/latest":
 			assetName := upgrade.PlatformAssetName()
 			release := map[string]any{
 				"tag_name": "v9.9.9",
 				"assets": []map[string]any{
-					{
-						"name":                 assetName,
-						"browser_download_url": srv.URL + "/download/" + assetName,
-					},
+					{"name": assetName, "browser_download_url": srv.URL + "/download/" + assetName},
+					{"name": upgrade.ChecksumsAsset, "browser_download_url": srv.URL + "/download/" + upgrade.ChecksumsAsset},
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(release)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/download/") {
-			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/download/"+upgrade.ChecksumsAsset:
+			w.Write([]byte(checksums))
+		case strings.HasPrefix(r.URL.Path, "/download/"):
 			w.Write(archive)
-			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
 		}
-		w.WriteHeader(http.StatusNotFound)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
 }
 
+// upgradeEnv is an environment whose binary looks like a release, since a dev
+// build refuses to upgrade.
+func upgradeEnv(t *testing.T, srv *httptest.Server, installPath string) *testenv.TestEnv {
+	t.Helper()
+	env := testenv.NewTestEnv(t)
+	env.Binary = binary.BuildVersioned(t, "1.0.0")
+	env.GithubURL = srv.URL
+	env.Extra["CHUNK_INSTALL_PATH"] = installPath
+	return env
+}
+
 func TestUpgradeHappyPath(t *testing.T) {
 	archive := makeFakeArchive(t)
-	srv := newUpgradeFakeServer(t, archive)
+	srv := newUpgradeFakeServer(t, archive, "")
 
 	// Redirect the binary replacement to a temp file so we don't overwrite the test binary.
 	installPath := filepath.Join(t.TempDir(), "chunk")
@@ -77,10 +95,7 @@ func TestUpgradeHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := testenv.NewTestEnv(t)
-	env.GithubURL = srv.URL
-	env.Extra["CHUNK_INSTALL_PATH"] = installPath
-
+	env := upgradeEnv(t, srv, installPath)
 	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0,
@@ -94,6 +109,41 @@ func TestUpgradeHappyPath(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, !bytes.Equal(got, []byte("placeholder")),
 		"expected install path to be overwritten")
+}
+
+func TestUpgradeRejectsATamperedArchive(t *testing.T) {
+	srv := newUpgradeFakeServer(t, makeFakeArchive(t), strings.Repeat("0", 64)+"  "+upgrade.PlatformAssetName()+"\n")
+
+	installPath := filepath.Join(t.TempDir(), "chunk")
+	assert.NilError(t, os.WriteFile(installPath, []byte("placeholder"), 0o755))
+
+	env := upgradeEnv(t, srv, installPath)
+	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected a checksum failure, stdout: %s, stderr: %s", result.Stdout, result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout+result.Stderr, "checksum mismatch"), result.Stdout+result.Stderr)
+	got, err := os.ReadFile(installPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "placeholder")
+}
+
+func TestUpgradeRefusesASourceBuild(t *testing.T) {
+	srv := newUpgradeFakeServer(t, makeFakeArchive(t), "")
+
+	installPath := filepath.Join(t.TempDir(), "chunk")
+	assert.NilError(t, os.WriteFile(installPath, []byte("placeholder"), 0o755))
+
+	// The default test binary is a dev build.
+	env := testenv.NewTestEnv(t)
+	env.GithubURL = srv.URL
+	env.Extra["CHUNK_INSTALL_PATH"] = installPath
+	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "stdout: %s, stderr: %s", result.Stdout, result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout+result.Stderr, "git pull && task build"), result.Stdout+result.Stderr)
+	got, err := os.ReadFile(installPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "placeholder")
 }
 
 func TestUpgradeBrewManaged(t *testing.T) {
@@ -114,8 +164,9 @@ func TestUpgradeAPIError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	env := testenv.NewTestEnv(t)
-	env.GithubURL = srv.URL
+	installPath := filepath.Join(t.TempDir(), "chunk")
+	assert.NilError(t, os.WriteFile(installPath, []byte("placeholder"), 0o755))
+	env := upgradeEnv(t, srv, installPath)
 
 	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
 

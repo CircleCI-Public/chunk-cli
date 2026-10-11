@@ -56,14 +56,10 @@ type daemon struct {
 	validateMu sync.Mutex               // serializes concurrent /validate requests
 	runner     ValidateRunner
 
-	// client streams command output. Nil when the daemon started without
-	// credentials, in which case commands are still recorded but no output is
-	// streamed for them.
-	client *circleci.Client
-	// authError explains an absent client to the user, or "" when there is
-	// nothing to explain. Written once at construction and never again, so
-	// snapshot reads it without a lock.
-	authError string
+	// cci holds the CircleCI client, resolved on first use. A daemon that is
+	// never asked to do CircleCI work never resolves one, so having a token on
+	// the machine causes no traffic by itself.
+	cci cciClient
 	// out buffers command output. Streamers run as their own goroutines and
 	// never execute on the poll path, so a hung stream cannot stall the
 	// dashboard for every other project.
@@ -82,9 +78,9 @@ type daemon struct {
 	// prm monitors open PRs for each project's current branch. Nil when no
 	// GitHub credentials are available.
 	prm *prMonitor
-	// prov creates and tracks sidecars owned by this daemon instance. Nil when
-	// the daemon has no client (unauthenticated), in which case POST /sidecar
-	// returns 503.
+	// prov creates and tracks sidecars owned by this daemon instance. It is
+	// created with the CircleCI client, so it is nil until one resolves, and
+	// POST /sidecar returns 503 while it is.
 	prov *provisioner
 	// claims tracks which sessions are actively validating which paths, for
 	// advisory cross-agent coordination.
@@ -170,27 +166,24 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
-	var prov *provisioner
-	if client != nil {
-		prov = newProvisioner(client)
-	}
-
 	d := &daemon{
-		projects:  make(map[string]*projectState),
-		runner:    runner,
-		client:    client,
-		authError: authMessage,
-		out:       newOutputStore(ctx),
-		res:       newResourceSampler(client),
-		tasks:     newTaskStore(ctx),
-		risk:      newRiskMemory(),
-		hist:      newRiskHistory(),
-		prm:       newPRMonitor(ghClient),
-		prov:      prov,
-		claims:    newClaimStore(),
-		live:      newLivenessChecker(listFor(client)),
-		sessions:  newSessionStore(ctx),
-		rcfg:      dopts.review,
+		projects: make(map[string]*projectState),
+		runner:   runner,
+		out:      newOutputStore(ctx),
+		res:      newResourceSampler(),
+		tasks:    newTaskStore(ctx),
+		risk:     newRiskMemory(),
+		hist:     newRiskHistory(),
+		prm:      newPRMonitor(ghClient),
+		claims:   newClaimStore(),
+		live:     newLivenessChecker(nil),
+		sessions: newSessionStore(ctx),
+		rcfg:     dopts.review,
+	}
+	d.cci.resolve = dopts.resolve
+	// A client or an auth message handed in is the caller's resolution, final.
+	if client != nil || authMessage != "" {
+		d.adoptClient(client, authMessage)
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.
@@ -202,9 +195,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	defer d.res.stopAll()
 	defer d.tasks.stopAll()
 	defer d.sessions.stopAll()
-	if prov != nil {
-		defer prov.stopAll(context.Background())
-	}
+	defer d.stopProvisioner()
 
 	// Poll once before accepting connections so the first request has data.
 	d.poll()
@@ -284,6 +275,11 @@ func (d *daemon) poll() {
 		if ps := d.initProject(root); ps != nil {
 			newProjects[root] = ps
 			work = append(work, ps)
+			// A project that chose CircleCI gets its sidecars verified and
+			// sampled; one that did not never causes a client to be built.
+			if projectUsesCircleCI(root) {
+				go d.circleCIClient()
+			}
 		}
 	}
 
@@ -448,7 +444,7 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 		// Map iteration is random; sort by root so project rows stay stable
 		// between polls when watchAll mode requests all projects.
 		sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-		return chunkd.Snapshot{Projects: projects, AuthError: d.authError, ReviewAuthError: d.factoryAuthError("")}
+		return chunkd.Snapshot{Projects: projects, AuthError: d.cci.authMessage(), ReviewAuthError: d.factoryAuthError("")}
 	}
 
 	ordered := make([]chunkd.ProjectSnapshot, 0, len(roots))
@@ -463,7 +459,7 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 			break
 		}
 	}
-	return chunkd.Snapshot{Projects: ordered, AuthError: d.authError, ReviewAuthError: d.factoryAuthError("")}
+	return chunkd.Snapshot{Projects: ordered, AuthError: d.cci.authMessage(), ReviewAuthError: d.factoryAuthError("")}
 }
 
 // withSessions attaches the project's sessions to a snapshot. It is done when a

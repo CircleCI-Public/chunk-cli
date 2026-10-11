@@ -31,7 +31,7 @@ func newTestDaemon() *daemon {
 		out:      newOutputStore(context.Background()),
 		// No client: these tests never attach a dashboard, so nothing is sampled
 		// and the sampler only has to be non-nil to annotate.
-		res: newResourceSampler(nil),
+		res: newResourceSampler(),
 		// No GitHub client: PR monitoring is skipped when client is nil.
 		prm:      newPRMonitor(nil),
 		tasks:    newTaskStore(context.Background()),

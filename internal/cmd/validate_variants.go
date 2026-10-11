@@ -64,6 +64,10 @@ func newValidateVariantsCmd() *cobra.Command {
 				}
 			}
 
+			if !cfg.UsesCircleCI() {
+				return circleCIBackendRequired("validate variants")
+			}
+
 			var cmds []config.Command
 			if name != "" {
 				c := cfg.FindCommand(name)

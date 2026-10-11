@@ -55,7 +55,7 @@ func newServer(d *daemon) *http.Server {
 		if reg.SubmittedAt.IsZero() {
 			reg.SubmittedAt = time.Now()
 		}
-		d.out.register(reg, streamFor(d.client))
+		d.out.register(reg, streamFor(d.circleCIClient()))
 		w.WriteHeader(http.StatusAccepted)
 	})
 
@@ -131,10 +131,6 @@ func (d *daemon) handleSidecar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if d.prov == nil {
-		http.Error(w, "daemon has no credentials; cannot provision sidecars", http.StatusServiceUnavailable)
-		return
-	}
 	var req chunkd.ProvisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
@@ -148,7 +144,12 @@ func (d *daemon) handleSidecar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	id, err := d.prov.create(r.Context(), req.OrgID, req.Name, req.Image)
+	prov := d.provisioner()
+	if prov == nil {
+		http.Error(w, "daemon has no credentials; cannot provision sidecars", http.StatusServiceUnavailable)
+		return
+	}
+	id, err := prov.create(r.Context(), req.OrgID, req.Name, req.Image)
 	if err != nil {
 		http.Error(w, "provision sidecar: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -163,7 +164,8 @@ func (d *daemon) handleSidecarByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if d.prov == nil {
+	prov := d.currentProvisioner()
+	if prov == nil {
 		http.Error(w, "daemon has no credentials", http.StatusServiceUnavailable)
 		return
 	}
@@ -172,7 +174,7 @@ func (d *daemon) handleSidecarByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sidecar id required", http.StatusBadRequest)
 		return
 	}
-	if err := d.prov.delete(r.Context(), id); err != nil {
+	if err := prov.delete(r.Context(), id); err != nil {
 		http.Error(w, "delete sidecar: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

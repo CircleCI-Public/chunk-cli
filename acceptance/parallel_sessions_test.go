@@ -38,7 +38,7 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	cfg := `{"commands":[{"name":"test","run":"echo test","remote":true}]}`
+	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"test","run":"echo test","remote":true}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
 
 	// One HOME across both runs, so they share the state directory the way two

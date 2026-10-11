@@ -98,7 +98,7 @@ func waitForSessionEnd(t *testing.T, d *daemon, id string) chunkd.SessionDetail 
 
 func TestSessionSnapshotHasStateButNeitherTextNorCredential(t *testing.T) {
 	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
-	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	sess, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
 	assert.NilError(t, err)
 	waitForSessionEnd(t, d, sess.ID)
 	d.poll()
@@ -124,11 +124,11 @@ func TestFactoryRefusesRequestsItCannotStart(t *testing.T) {
 		req    chunkd.FactoryRequest
 		status int
 	}{
-		"unknown project":  {chunkd.FactoryRequest{ProjectRoot: t.TempDir(), Prompt: "x"}, http.StatusNotFound},
-		"no prompt":        {chunkd.FactoryRequest{ProjectRoot: root, Prompt: "  "}, http.StatusBadRequest},
-		"absolute reviews": {chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x", ReviewsDir: "/etc"}, http.StatusBadRequest},
-		"escaping reviews": {chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x", ReviewsDir: "../elsewhere"}, http.StatusBadRequest},
-		"relative log":     {chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x", Log: "run.log"}, http.StatusBadRequest},
+		"unknown project":  {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: t.TempDir(), Prompt: "x"}, http.StatusNotFound},
+		"no prompt":        {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "  "}, http.StatusBadRequest},
+		"absolute reviews": {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "x", ReviewsDir: "/etc"}, http.StatusBadRequest},
+		"escaping reviews": {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "x", ReviewsDir: "../elsewhere"}, http.StatusBadRequest},
+		"relative log":     {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "x", Log: "run.log"}, http.StatusBadRequest},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestFactoryRefusesRequestsItCannotStart(t *testing.T) {
 	// Without a credential no session starts, and the reason is the daemon's own.
 	d.rcfg.Credential = review.Credential{}
 	d.rcfg.AuthError = "no Claude credential — run: chunk auth set anthropic-oauth"
-	_, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x"})
+	_, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "x"})
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae))
 	assert.Equal(t, ae.status, http.StatusServiceUnavailable)
@@ -168,7 +168,7 @@ func TestSessionAPIRoundTripOverTheSocket(t *testing.T) {
 	rcfg.RunFactory = scriptedRun(factory.ResultPassed)
 	startTestDaemonWithReview(t, rcfg)
 
-	id, err := chunkd.StartFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	id, err := chunkd.StartFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
 	assert.NilError(t, err)
 	var detail chunkd.SessionDetail
 	waitUntil(t, "session to end", func() bool {
@@ -182,7 +182,7 @@ func TestSessionAPIRoundTripOverTheSocket(t *testing.T) {
 	assert.Equal(t, len(all), 1)
 
 	// A refusal is a readable answer, not "daemon unavailable".
-	_, err = chunkd.StartFactory(chunkd.FactoryRequest{ProjectRoot: t.TempDir(), Prompt: "add a flag"})
+	_, err = chunkd.StartFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: t.TempDir(), Prompt: "add a flag"})
 	var refused *chunkd.SessionRefused
 	assert.Assert(t, errors.As(err, &refused), "got %v", err)
 	assert.Equal(t, refused.Status, http.StatusNotFound)

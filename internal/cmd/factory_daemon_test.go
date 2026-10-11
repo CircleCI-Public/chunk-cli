@@ -66,7 +66,7 @@ func factoryProject(t *testing.T) string {
 	isolateConfig(t)
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	project := sessionProject(t)
-	cfg := `{"orgID":"org-1","commands":[{"name":"test","run":"go test ./..."}]}`
+	cfg := `{"orgID":"org-1","factory":{"backend":"circleci"},"commands":[{"name":"test","run":"go test ./..."}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(project, ".chunk", "config.json"), []byte(cfg), 0o644))
 	t.Chdir(project)
 	return project

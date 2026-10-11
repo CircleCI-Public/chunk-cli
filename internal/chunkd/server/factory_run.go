@@ -33,10 +33,10 @@ func (d *daemon) factoryAuthError(backend string) string {
 		}
 		return "no Claude credential configured for the chunk daemon — factory runs unavailable"
 	}
-	if backend == chunkd.BackendDocker {
+	if config.BackendOrDefault(backend) == chunkd.BackendDocker {
 		return ""
 	}
-	if d.rcfg.RunFactory == nil && d.client == nil {
+	if d.rcfg.RunFactory == nil && d.circleCIClient() == nil {
 		return "not authenticated to CircleCI — factory runs unavailable (run: chunk auth login)"
 	}
 	return ""
@@ -92,6 +92,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		return chunkd.Session{}, apiErr(http.StatusBadRequest, "unknown backend %q (want %s or %s)",
 			req.Backend, chunkd.BackendCircleCI, chunkd.BackendDocker)
 	}
+	req.Backend = config.BackendOrDefault(req.Backend)
 	if msg := d.factoryAuthError(req.Backend); msg != "" {
 		return chunkd.Session{}, apiErr(http.StatusServiceUnavailable, "%s", msg)
 	}
@@ -171,7 +172,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		Reviewers:               factory.ReviewerCount(req.Reviewers, prompts),
 		Prompts:                 prompts,
 		Commands:                commands,
-		Client:                  d.client,
+		Client:                  d.factoryClient(req.Backend),
 		OrgID:                   orgID,
 		Image:                   image,
 		Backend:                 backend,

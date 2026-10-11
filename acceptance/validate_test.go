@@ -43,7 +43,7 @@ func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string
 		commands = append(commands, command{Name: "test", Run: testCmd})
 	}
 
-	config := map[string]interface{}{"commands": commands}
+	config := map[string]interface{}{"commands": commands, "factory": map[string]string{"backend": "circleci"}}
 	data, err := json.Marshal(config)
 	assert.NilError(t, err)
 	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644)
@@ -462,6 +462,7 @@ func TestValidateSidecarImageNoActiveSidecarAutoCreates(t *testing.T) {
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 	cfg := map[string]interface{}{
+		"factory": map[string]string{"backend": "circleci"},
 		"commands": []map[string]interface{}{
 			{"name": "test", "run": "echo test-output", "remote": true},
 		},
@@ -518,6 +519,7 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 	cfg := map[string]interface{}{
+		"factory": map[string]string{"backend": "circleci"},
 		"commands": []map[string]interface{}{
 			{"name": "install", "run": "echo install"},
 			{"name": "test", "run": "echo test", "role": "gate"},
@@ -609,7 +611,7 @@ func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	cfg := `{"commands":[{"name":"remote","run":"true"},{"name":"local","run":"printf local > local-result","local":true}]}`
+	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"remote","run":"true"},{"name":"local","run":"printf local > local-result","local":true}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
 
 	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
@@ -646,7 +648,7 @@ func writeRemoteProjectConfig(t *testing.T, workDir string) {
 	t.Helper()
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	cfg := `{"commands":[{"name":"test","run":"true","remote":true}]}`
+	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"test","run":"true","remote":true}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
 }
 
@@ -708,7 +710,7 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	cfg := `{"commands":[{"name":"test","run":"true","remote":true}]}`
+	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"test","run":"true","remote":true}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
 	// Dirty tree ensures the hook actually runs.
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "dirty.txt"), []byte("x"), 0o644))

@@ -119,7 +119,7 @@ func TestManagesImage(t *testing.T) {
 		{"docker, no image", &config.FactoryConfig{Backend: "docker"}, true},
 		{"docker, explicit image", &config.FactoryConfig{Backend: "docker", Image: "x:1"}, false},
 		{"circleci", &config.FactoryConfig{Backend: "circleci"}, false},
-		{"default backend is circleci", &config.FactoryConfig{}, false},
+		{"default backend is docker", &config.FactoryConfig{}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -46,7 +46,8 @@ chunk-cli/
     ├── testing/recorder/      # HTTP recorder for tests
     ├── tui/                   # Terminal UI components (confirm, input, select)
     ├── ui/                    # Colors, formatting, spinner
-    ├── upgrade/               # CLI self-upgrade
+    ├── upgrade/               # CLI self-upgrade and update check; names the release repo (web3technologies/chunk-cli) once, verifies checksums.txt
+    ├── installscript/         # End-to-end tests for install.sh (fake release server)
     ├── validate/              # Validation command logic
     └── chunkd/                # The daemon's API: wire types, client, paths, lifecycle
         └── server/            # The daemon itself: poll loop, stores, handlers, factory runs
@@ -220,11 +221,16 @@ in `config.Resolve` and makes clients testable.
 
 ## Telemetry (`internal/telemetry/`)
 
-Modeled on circleci-cli's `internal/telemetry` package. Every command reports
+Modeled on circleci-cli's `internal/telemetry` package. The write key is a
+build-time variable (`telemetry.WriteKey`, set with `-X` in `.goreleaser.yaml`
+from the `CHUNK_TELEMETRY_WRITE_KEY` secret) and is empty by default: with no
+key, `NewSender` adds no delegate, nothing is buffered for delivery and no
+`receive-telemetry` subprocess is ever started. The opt-out variables and
+`chunk config set telemetry` still apply to a build that has a key. When a key
+is present, every command reports
 a single `command_invocation` event containing the command path and the names
 (never values) of flags the user set — no flag values, argument values, file
-paths, or other PII. chunk-cli and circleci-cli share the same Segment write key/workspace; events
-are distinguished by `context_app_name` (`chunk-cli` vs `circleci-cli`). The
+paths, or other PII. Events are tagged with `context_app_name` (`chunk-cli`). The
 install UUID is sent as `AnonymousId` (not `UserId`) to avoid mixing machine
 identifiers with real user IDs in shared event counts. When the user has
 authenticated, their CircleCI user UUID is also sent as `UserId`.
@@ -280,12 +286,10 @@ known agent is found, the common case for a human running `chunk` directly.
 - `CHUNK_TELEMETRY_LOG=1` logs event payloads to stderr instead of (or
   alongside) sending them — useful for verifying what a command reports
   without touching the network.
-- The Segment write key (`cmd.writeKey`) is a hardcoded constant, like
-  circleci-cli's — write keys are not secret, they can only send events, not
-  read data, so checking one into git is safe. Events sent with it are
-  tagged as chunk-cli invocations via `Context.App.Name` ("chunk-cli") in
-  `Meta.toContext` (`internal/telemetry/telemetry.go`), keeping them
-  distinguishable from circleci-cli's own telemetry. `CHUNK_TELEMETRY_LOG`
+- The Segment write key is `telemetry.WriteKey`, injected at build time and
+  empty in source: this repository carries no key. Events are tagged as
+  chunk-cli invocations via `Context.App.Name` ("chunk-cli") in
+  `Meta.toContext` (`internal/telemetry/telemetry.go`). `CHUNK_TELEMETRY_LOG`
   still works without touching the network, independent of the write key.
 - `setupTelemetry` also checks `testing.Testing()` before sending, so a real
   write key committed to source still can't trigger sends (or the recursive

@@ -269,14 +269,22 @@ type resourceSampler struct {
 	lastSeen time.Time                  // last snapshot request
 }
 
-func newResourceSampler(client *circleci.Client) *resourceSampler {
+// newResourceSampler returns a sampler with no client, which setClient supplies
+// once the daemon has one.
+func newResourceSampler() *resourceSampler {
 	r := &resourceSampler{
-		client:   client,
 		logf:     log.Printf,
 		samplers: make(map[string]*sidecarSampler),
 	}
 	r.sample = r.sampleOnce
 	return r
+}
+
+// setClient gives the sampler the CircleCI client once the daemon has one.
+func (r *resourceSampler) setClient(client *circleci.Client) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.client = client
 }
 
 // touch records that a dashboard asked for a snapshot.
@@ -455,7 +463,9 @@ func (r *resourceSampler) run(ctx context.Context, sc chunkd.SidecarState, s *si
 // resumable. That also removes the handshake-per-sample problem outright, with no
 // persistent connection for the daemon to supervise.
 func (r *resourceSampler) sampleOnce(ctx context.Context, sc chunkd.SidecarState, s *sidecarSampler) error {
+	r.mu.Lock()
 	client := r.client
+	r.mu.Unlock()
 	if client == nil {
 		return errNoClient
 	}

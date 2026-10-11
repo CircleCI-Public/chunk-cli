@@ -1,6 +1,8 @@
 # AGENTS.md
 
-`chunk` is a Go CLI (built with cobra) for inner loop validation. Its primary capability is **sidecars** — ephemeral Linux environments on CircleCI that a developer's working tree is synced to so quality checks (test, lint, format) run there instead of locally, catching environment-specific failures before they reach CI.
+`chunk` is a Go CLI (built with cobra) for inner loop validation and a local software factory. By default everything runs on the developer's machine, with Docker for factory runs. Its optional **CircleCI backend** adds **sidecars** — ephemeral Linux environments on CircleCI that a developer's working tree is synced to so quality checks (test, lint, format) run there instead of locally, catching environment-specific failures before they reach CI.
+
+**CircleCI is opt-in.** chunk may contact a CircleCI-owned endpoint only when the user chose it: `factory.backend: circleci` in `.chunk/config.json` (`config.ProjectConfig.UsesCircleCI()` is the one place that asks), `--backend circleci`, or an explicitly CircleCI command (`auth`, `sidecar`, `task`, `org`, `prune`, ...). A CircleCI token on the machine is never consent. `internal/circleci` may be imported only by the packages listed in `.golangci.yml`, and `task check:circleci` fails on stray references to CircleCI's repositories, packages and endpoints.
 
 It also provides `build-prompt`, a secondary tool that mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to a team's review patterns. Generated context goes in `.chunk/context/` for AI coding agents to pick up automatically.
 
@@ -10,7 +12,7 @@ It also provides `build-prompt`, a secondary tool that mines PR review comments 
 task build              # Build binary → dist/chunk
 task test               # Run all tests
 task acceptance-test    # Run acceptance tests
-task lint               # Run linters
+task lint               # Run linters, shellcheck on install.sh and the CircleCI sweep (task check:circleci)
 task fmt                # Format code
 ```
 
@@ -22,6 +24,7 @@ Read these when working in the relevant area:
 - **[docs/SKILLS.md](docs/SKILLS.md)** — skills reference: installing and using agent skills
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — module layering, dependency rules, data flow, environment variables
 - **[docs/CLI.md](docs/CLI.md)** — complete command tree, flag conventions, behavior decisions
+- **[install.sh](install.sh)** — the curl installer; `internal/installscript` tests it end to end, `internal/upgrade` shares its archive naming and checksums
 - **[docs/HOOKS.md](docs/HOOKS.md)** — pre-commit hooks: runs fmt, lint, test before commits via `.claude/settings.json`
 
 ## Key Architectural Constraints

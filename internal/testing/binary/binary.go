@@ -52,6 +52,41 @@ func BuildBinary() (string, error) {
 	return binaryPath, buildErr
 }
 
+var (
+	versionedMu     sync.Mutex
+	versionedBinary = map[string]string{}
+)
+
+// BuildVersioned compiles the chunk CLI with a release version baked in, as
+// goreleaser does, and returns its path. The default binary reports "dev", which
+// `chunk upgrade` and the update notice treat as a source build; tests of those
+// need a binary that looks like a release.
+func BuildVersioned(t *testing.T, version string) string {
+	t.Helper()
+	versionedMu.Lock()
+	defer versionedMu.Unlock()
+	if path, ok := versionedBinary[version]; ok {
+		return path
+	}
+
+	dir, err := os.MkdirTemp("", "chunk-acceptance-"+version+"-*")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	path := filepath.Join(dir, "chunk")
+	repoRoot, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	cmd := exec.Command("go", "build", "-ldflags", "-X main.version="+version, "-o", path, ".")
+	cmd.Dir = repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, out)
+	}
+	versionedBinary[version] = path
+	return path
+}
+
 // Path returns the path to the compiled binary. Must call BuildBinary first.
 func Path() string {
 	return binaryPath
@@ -80,7 +115,11 @@ func RunCLIWithStdin(t *testing.T, args []string, e *env.TestEnv, workDir string
 
 	// Prepend --insecure-storage so acceptance tests never touch the system keychain.
 	allArgs := append([]string{"--insecure-storage"}, args...)
-	cmd := exec.CommandContext(ctx, binaryPath, allArgs...)
+	bin := binaryPath
+	if e.Binary != "" {
+		bin = e.Binary
+	}
+	cmd := exec.CommandContext(ctx, bin, allArgs...)
 	cmd.Dir = workDir
 	cmd.Env = e.Environ()
 

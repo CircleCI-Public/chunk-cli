@@ -1,0 +1,42 @@
+name: Release
+
+# Pushing a vX.Y.Z tag publishes a GitHub Release with the archives,
+# checksums.txt, install.sh and build provenance attestations. `task release
+# VERSION=X.Y.Z` creates and pushes the tag.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: with no secret set the key is empty and telemetry never sends.
+          CHUNK_TELEMETRY_WRITE_KEY: ${{ secrets.CHUNK_TELEMETRY_WRITE_KEY }}
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt

@@ -384,6 +384,24 @@ func provisionFailure(err error, orgID, image string) string {
 		"'chunk config set validation.sidecarImage <id>' records one", msg, image, orgID)
 }
 
+// validateProvisioner returns the provisioner to create the run's sidecar with,
+// or nil when the run executes without one. Only a project that opted into the
+// CircleCI backend gets a sidecar: an org ID in its config, or a token on the
+// machine, is not consent to upload its working tree.
+func (d *daemon) validateProvisioner(req chunkd.ValidateRequest) *provisioner {
+	if req.OrgID == "" {
+		return nil
+	}
+	dir := req.WorkDir
+	if dir == "" {
+		dir = req.ProjectRoot
+	}
+	if !projectUsesCircleCI(dir) {
+		return nil
+	}
+	return d.provisioner()
+}
+
 // runValidateNow runs req to completion while the caller waits.
 func (d *daemon) runValidateNow(ctx context.Context, req chunkd.ValidateRequest, risk *chunkd.RiskSummary) chunkd.ValidateResponse {
 	before := d.snapshotState(req.ProjectRoot)
@@ -392,17 +410,17 @@ func (d *daemon) runValidateNow(ctx context.Context, req chunkd.ValidateRequest,
 	defer d.validateMu.Unlock()
 
 	args := validateRunArgs(req)
-	if d.prov != nil && req.OrgID != "" {
+	if prov := d.validateProvisioner(req); prov != nil {
 		name := fmt.Sprintf("validate-%x", time.Now().UnixNano())
 		image, err := validateSidecarImage(req)
 		if err != nil {
 			return chunkd.ValidateResponse{ExitCode: 1, Stderr: err.Error()}
 		}
-		id, err := d.prov.create(ctx, req.OrgID, name, image)
+		id, err := prov.create(ctx, req.OrgID, name, image)
 		if err != nil {
 			return chunkd.ValidateResponse{ExitCode: 1, Stderr: provisionFailure(err, req.OrgID, image)}
 		}
-		defer func() { _ = d.prov.delete(context.Background(), id) }()
+		defer func() { _ = prov.delete(context.Background(), id) }()
 		args = append(append([]string(nil), args...), "--sidecar-id", id)
 	}
 

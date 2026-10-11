@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 Circle Internet Services, Inc.
+# Copyright (c) 2026 web3technologies
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -20,20 +21,28 @@
 # SOFTWARE.
 #
 # SPDX-License-Identifier: MIT
-
 #
 # Install the Chunk CLI.
-# https://github.com/CircleCI-Public/chunk-cli
+# https://github.com/web3technologies/chunk-cli
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/CircleCI-Public/chunk-cli/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/web3technologies/chunk-cli/main/install.sh | bash
 #
 # Environment overrides:
-#   VERSION   Specific version to install (e.g. 1.2.3), without a leading "v".
+#   VERSION   Specific version to install (e.g. 1.2.3 or v1.2.3).
 #             Defaults to the latest non-prerelease. Preview/prerelease builds
-#             are NOT resolved automatically — set VERSION explicitly for those.
-#   DESTDIR   Install directory for the `chunk` binary. Default: /usr/local/bin.
-#   REPO      GitHub "owner/name". Default: CircleCI-Public/chunk-cli.
+#             are NOT resolved automatically; set VERSION explicitly for those.
+#   DESTDIR   Install directory for the `chunk` binary. Default: $HOME/.local/bin,
+#             which needs no sudo. sudo is used only for a DESTDIR you name that
+#             is not writable.
+#   REPO      GitHub "owner/name". Default: web3technologies/chunk-cli.
+#   CHUNK_DOWNLOAD_BASE
+#             Where releases are fetched from. Default: https://github.com/${REPO}.
+#             Used for the /releases/latest redirect and the downloads; mainly
+#             for tests.
+#   CHUNK_FORCE=1
+#             Replace DESTDIR/chunk even if it is a symlink (e.g. from
+#             `task dev-install`).
 #
 # Dependencies: curl, tar, grep, install, and one of sha256sum / shasum.
 
@@ -45,9 +54,11 @@ set -o pipefail
 # line. If the download to a pipe (curl | bash) is truncated, bash never
 # reaches the call and nothing executes half-way.
 install_cli() {
-	REPO="${REPO:-CircleCI-Public/chunk-cli}"
-	GITHUB_BASE_URL="https://github.com/${REPO}"
-	DESTDIR="${DESTDIR:-/usr/local/bin}"
+	REPO="${REPO:-web3technologies/chunk-cli}"
+	DOWNLOAD_BASE="${CHUNK_DOWNLOAD_BASE:-https://github.com/${REPO}}"
+	DEFAULT_DESTDIR="${HOME:-}/.local/bin"
+	DESTDIR_SET="${DESTDIR:-}"
+	DESTDIR="${DESTDIR:-${DEFAULT_DESTDIR}}"
 
 	# --- colours (only when stderr is a TTY and NO_COLOR is unset) ---------
 	if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -56,8 +67,10 @@ install_cli() {
 		BOLD=""; DIM=""; RESET=""
 	fi
 	info()  { echo "${DIM}==>${RESET} $*" >&2; }
+	warn()  { echo "${BOLD}warning:${RESET} $*" >&2; }
 	fail()  { echo "${BOLD}error:${RESET} $*" >&2; exit 1; }
 
+	[ -n "${HOME:-}" ] || [ -n "$DESTDIR_SET" ] || fail "HOME is not set; set DESTDIR to choose where to install."
 	command -v curl >/dev/null 2>&1 || fail "curl is required but was not found in PATH."
 	command -v tar  >/dev/null 2>&1 || fail "tar is required but was not found in PATH."
 
@@ -65,22 +78,31 @@ install_cli() {
 	case "$(uname -s)" in
 		Linux)  OS=Linux  ;;
 		Darwin) OS=Darwin ;;
-		*)      fail "Unsupported operating system: $(uname -s). Use Homebrew or Snap instead." ;;
+		*)      fail "Unsupported operating system: $(uname -s). See https://github.com/${REPO}/releases for other builds." ;;
 	esac
 
 	case "$(uname -m)" in
 		x86_64 | amd64)  ARCH=x86_64 ;;
 		aarch64 | arm64) ARCH=arm64  ;;
-		*)               fail "Unsupported architecture: $(uname -m)." ;;
+		*)               fail "Unsupported architecture: $(uname -m). See https://github.com/${REPO}/releases for other builds." ;;
 	esac
 
+	# --- refuse to clobber a dev symlink ------------------------------------
+	# `task dev-install` symlinks DESTDIR/chunk to a working-tree build so hooks
+	# pick up each `task build`. Replacing it would silently break that setup.
+	if [ -L "${DESTDIR}/chunk" ] && [ "${CHUNK_FORCE:-}" != "1" ]; then
+		fail "${DESTDIR}/chunk is a symlink (to $(readlink "${DESTDIR}/chunk" 2>/dev/null || echo "somewhere")), probably from 'task dev-install'. Not replacing it. Run 'task dev-uninstall' first, or re-run with CHUNK_FORCE=1 to replace the symlink."
+	fi
+
 	# --- resolve version ----------------------------------------------------
-	if [ -z "${VERSION:-}" ]; then
+	VERSION="${VERSION:-}"
+	VERSION="${VERSION#v}"
+	if [ -z "$VERSION" ]; then
 		info "Resolving latest release"
 		# Follow the redirect from /releases/latest to /releases/tag/vX.Y.Z and
 		# keep the final path segment. Avoids a jq dependency on the API JSON.
-		effective_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${GITHUB_BASE_URL}/releases/latest") \
-			|| fail "Could not reach GitHub to determine the latest version."
+		effective_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${DOWNLOAD_BASE}/releases/latest") \
+			|| fail "Could not reach ${DOWNLOAD_BASE} to determine the latest version (does the repository have a release yet?)."
 		tag="${effective_url##*/}"
 		VERSION="${tag#v}"
 		if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
@@ -91,19 +113,27 @@ install_cli() {
 
 	ARCHIVE="chunk_${OS}_${ARCH}.tar.gz"
 	CHECKSUMS="checksums.txt"
-	DL_BASE="${GITHUB_BASE_URL}/releases/download/v${VERSION}"
+	DL_BASE="${DOWNLOAD_BASE}/releases/download/v${VERSION}"
 
-	# --- scratch dir; keep it on failure for debugging ----------------------
+	# --- scratch dir, removed on every exit ----------------------------------
 	SCRATCH=$(mktemp -d 2>/dev/null || mktemp -d -t chunk)
-	keep_scratch() {
-		echo "${BOLD}error:${RESET} installation failed. Files left in ${SCRATCH} for debugging." >&2
+	STAGED=""
+	STAGED_WITH_SUDO=""
+	cleanup() {
+		rm -rf "${SCRATCH}"
+		[ -n "${STAGED}" ] || return 0
+		if [ -n "${STAGED_WITH_SUDO}" ]; then
+			sudo rm -f "${STAGED}" 2>/dev/null || true
+		else
+			rm -f "${STAGED}" 2>/dev/null || true
+		fi
 	}
-	trap keep_scratch ERR
+	trap cleanup EXIT
 
 	# --- download archive + checksums ---------------------------------------
 	info "Downloading ${ARCHIVE}"
 	curl -fsSL --retry 3 -o "${SCRATCH}/${ARCHIVE}"   "${DL_BASE}/${ARCHIVE}" \
-		|| fail "Download failed: ${DL_BASE}/${ARCHIVE} (does v${VERSION} have a ${OS}/${ARCH} build?)"
+		|| fail "Download failed: ${DL_BASE}/${ARCHIVE} (does v${VERSION} exist, with a ${OS}/${ARCH} build?)"
 	curl -fsSL --retry 3 -o "${SCRATCH}/${CHECKSUMS}" "${DL_BASE}/${CHECKSUMS}" \
 		|| fail "Could not download checksums: ${DL_BASE}/${CHECKSUMS}"
 
@@ -120,33 +150,88 @@ install_cli() {
 		fail "Need sha256sum or shasum to verify the download."
 	fi
 	[ "$expected" = "$actual" ] \
-		|| fail "Checksum mismatch for ${ARCHIVE} (expected ${expected}, got ${actual})."
+		|| fail "Checksum mismatch for ${ARCHIVE} (expected ${expected}, got ${actual}). Nothing was installed."
 
 	# --- unpack -------------------------------------------------------------
 	tar -xzf "${SCRATCH}/${ARCHIVE}" -C "${SCRATCH}" chunk \
 		|| fail "Could not extract 'chunk' from ${ARCHIVE}."
 	[ -f "${SCRATCH}/chunk" ] || fail "'chunk' binary not found after extracting ${ARCHIVE}."
 
-	# --- install, escalating with sudo only if needed -----------------------
+	# --- install: stage next to the target, then rename over it -------------
+	# The rename is atomic, so a chunk that is running (or a failure half-way)
+	# never leaves a partial binary at DESTDIR/chunk.
 	info "Installing to ${BOLD}${DESTDIR}${RESET}"
-	if [ -w "${DESTDIR}" ] || { [ ! -e "${DESTDIR}" ] && mkdir -p "${DESTDIR}" 2>/dev/null; }; then
-		install "${SCRATCH}/chunk" "${DESTDIR}/chunk"
-	elif command -v sudo >/dev/null 2>&1; then
+	staging="${DESTDIR}/.chunk.tmp.$$"
+	if { [ -d "${DESTDIR}" ] || mkdir -p "${DESTDIR}" 2>/dev/null; } && [ -w "${DESTDIR}" ]; then
+		STAGED="${staging}"
+		install -m 0755 "${SCRATCH}/chunk" "${STAGED}"
+		mv -f "${STAGED}" "${DESTDIR}/chunk"
+	elif [ -n "${DESTDIR_SET}" ] && command -v sudo >/dev/null 2>&1; then
 		info "${DESTDIR} is not writable; using sudo"
-		sudo install "${SCRATCH}/chunk" "${DESTDIR}/chunk"
+		sudo mkdir -p "${DESTDIR}"
+		STAGED="${staging}"
+		STAGED_WITH_SUDO=1
+		sudo install -m 0755 "${SCRATCH}/chunk" "${STAGED}"
+		sudo mv -f "${STAGED}" "${DESTDIR}/chunk"
 	else
-		fail "${DESTDIR} is not writable and sudo is unavailable. Re-run with DESTDIR set to a writable dir."
+		fail "${DESTDIR} is not writable. Re-run with DESTDIR set to a writable directory."
 	fi
+	STAGED=""
 
-	trap - ERR
-	rm -rf "${SCRATCH}"
+	info "Installed: ${BOLD}v${VERSION}${RESET} at ${DESTDIR}/chunk"
+	print_path_hint
+	check_prerequisites
+	echo >&2
+	info "Next: ${BOLD}cd your-repo && chunk init${RESET}"
+}
 
-	installed="${DESTDIR}/chunk"
-	info "Installed: ${BOLD}v${VERSION}${RESET}"
+# print_path_hint says how to put DESTDIR on PATH, in the user's own shell's
+# syntax, when it is not there already.
+print_path_hint() {
 	case ":${PATH}:" in
-		*":${DESTDIR}:"*) command -v chunk >/dev/null 2>&1 || true ;;
-		*) info "Note: ${DESTDIR} is not on your PATH. Add it, or run ${installed} directly." ;;
+		*":${DESTDIR}:"*) return 0 ;;
 	esac
+	# Show $HOME rather than its expansion, as it would be written in an rc file.
+	shown="${DESTDIR}"
+	if [ -n "${HOME:-}" ] && [ "${DESTDIR#"${HOME}"/}" != "${DESTDIR}" ]; then
+		shown="\$HOME/${DESTDIR#"${HOME}"/}"
+	fi
+	echo >&2
+	warn "${DESTDIR} is not on your PATH. Add it with:"
+	case "$(basename "${SHELL:-sh}")" in
+		zsh)  echo "  echo 'export PATH=\"${shown}:\$PATH\"' >> ~/.zshrc && source ~/.zshrc" >&2 ;;
+		bash)
+			rc=".bashrc"
+			[ "$(uname -s)" != "Darwin" ] || rc=".bash_profile"
+			echo "  echo 'export PATH=\"${shown}:\$PATH\"' >> ~/${rc} && source ~/${rc}" >&2 ;;
+		fish) echo "  fish_add_path ${shown}" >&2 ;;
+		*)    echo "  export PATH=\"${shown}:\$PATH\"   # add this to your shell's startup file" >&2 ;;
+	esac
+	echo "Or run ${DESTDIR}/chunk directly." >&2
+}
+
+# check_prerequisites warns about tools chunk uses that are missing. Nothing
+# here fails the install: chunk is useful without some of them.
+check_prerequisites() {
+	missing=0
+	check_tool() {
+		command -v "$1" >/dev/null 2>&1 && return 0
+		if [ "$missing" -eq 0 ]; then
+			echo >&2
+			warn "Some tools chunk works with were not found:"
+		fi
+		missing=1
+		echo "  - $1: $2" >&2
+	}
+	check_tool git    "https://git-scm.com/downloads"
+	check_tool docker "https://docs.docker.com/get-docker/ (the Docker daemon must be running for factory runs)"
+	check_tool rsync  "install with your package manager (brew install rsync / apt-get install rsync)"
+	check_tool claude "https://docs.claude.com/en/docs/claude-code/setup"
+	if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
+		echo >&2
+		warn "docker is installed but its daemon is not reachable; start it before running factory runs."
+	fi
+	return 0
 }
 
 install_cli

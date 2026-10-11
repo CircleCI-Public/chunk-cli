@@ -34,6 +34,7 @@ func writeChunkConfig(t *testing.T, dir string, extra map[string]interface{}) {
 	chunkDir := filepath.Join(dir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 	cfg := map[string]interface{}{
+		"factory": map[string]string{"backend": "circleci"},
 		"commands": []map[string]interface{}{
 			{"name": "test", "run": "go test ./...", "remote": true},
 		},
@@ -133,7 +134,7 @@ func TestValidateVariantsNoRemoteCommands(t *testing.T) {
 	// Write config with only explicitly local commands.
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	cfg := `{"commands":[{"name":"test","run":"go test ./...","local":true}]}`
+	cfg := `{"factory":{"backend":"circleci"},"commands":[{"name":"test","run":"go test ./...","local":true}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
 
 	path := writeVariantsFile(t, workDir, []variants.Variant{

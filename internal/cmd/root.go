@@ -21,16 +21,6 @@ import (
 
 type updateCheckKey struct{}
 
-// writeKey is the Segment write key for chunk-cli's usage telemetry. Segment write keys are not secret; they only allow sending
-// events, not reading data, so checking it into git, as circleci-cli does
-// (see internal/cmd/root/root.go there), is safe.
-//
-// Events sent with this key are tagged as chunk-cli invocations via
-// Meta.toContext's App.Name ("chunk-cli") in internal/telemetry/telemetry.go,
-// so they stay distinguishable from circleci-cli's own telemetry even if
-// both ever land in the same Segment workspace.
-const writeKey = "AbgkrgN4cbRhAVEwlzMkHbwvrXnxHh35"
-
 func NewRootCmd(version string) *cobra.Command {
 	cobra.EnableTraverseRunHooks = true
 
@@ -188,7 +178,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 	// binary: that binary has no such subcommand, so it silently re-runs its
 	// entire test suite instead, which can itself trigger more sends and
 	// spawn runaway recursive subprocesses.
-	send := optedIn && writeKey != "" && !testing.Testing()
+	send := optedIn && telemetry.WriteKey != "" && !testing.Testing()
 
 	var instanceID uuid.UUID
 	var sessionTrackingID uuid.UUID
@@ -221,7 +211,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 	tc, err := telemetry.NewSender(telemetry.Config{
 		Send:     send,
 		Log:      optedIn && os.Getenv("CHUNK_TELEMETRY_LOG") != "",
-		WriteKey: writeKey,
+		WriteKey: telemetry.WriteKey,
 		Binary:   executable,
 		Metadata: telemetry.Meta{
 			Version:           version,

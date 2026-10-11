@@ -86,7 +86,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	})
 
 	sess, err := d.startFactory(chunkd.FactoryRequest{
-		ProjectRoot: root, Prompt: "  add a --verbose flag  ", Reviewers: 1,
+		Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "  add a --verbose flag  ", Reviewers: 1,
 		ImplementerInstructions: "keep the change small",
 	})
 	assert.NilError(t, err)
@@ -157,7 +157,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 func TestFactorySessionWhoseChecksStillFailIsDoneWithItsStageFailed(t *testing.T) {
 	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultExhausted))
 
-	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag", Attempts: 1})
+	sess, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag", Attempts: 1})
 	assert.NilError(t, err)
 	detail := waitForSessionEnd(t, d, sess.ID)
 
@@ -183,7 +183,7 @@ func TestFactorySessionThatGetsStuckClosesItsUncheckedRound(t *testing.T) {
 		return rep, nil
 	})
 
-	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	sess, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
 	assert.NilError(t, err)
 	detail := waitForSessionEnd(t, d, sess.ID)
 
@@ -203,7 +203,7 @@ func TestFactorySessionThatCannotStartSaysWhichStepFailed(t *testing.T) {
 		return factory.Report{}, fmt.Errorf("create the run's sidecars: %w", errors.New("quota exceeded"))
 	})
 
-	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	sess, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
 	assert.NilError(t, err)
 	detail := waitForSessionEnd(t, d, sess.ID)
 
@@ -219,7 +219,7 @@ func TestFactorySessionWhoseImplementerFailsRecordsTheTurnFailed(t *testing.T) {
 		return factory.Report{Started: true}, errors.New("round 1: implement: implementer: claude exited 1")
 	})
 
-	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	sess, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
 	assert.NilError(t, err)
 	detail := waitForSessionEnd(t, d, sess.ID)
 
@@ -236,7 +236,7 @@ func TestFactorySessionCanBeCancelled(t *testing.T) {
 		return factory.Report{}, ctx.Err()
 	})
 
-	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	sess, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
 	assert.NilError(t, err)
 	found, active := d.sessions.cancelSession(sess.ID)
 	assert.Assert(t, found && active)
@@ -264,7 +264,7 @@ func TestFactorySessionKeepsItsLog(t *testing.T) {
 		return rep, err
 	})
 
-	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag", Log: "/logs/run-1.log", Verbose: true})
+	sess, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag", Log: "/logs/run-1.log", Verbose: true})
 	assert.NilError(t, err)
 	detail := waitForSessionEnd(t, d, sess.ID)
 
@@ -281,13 +281,13 @@ func TestStartFactoryRefusesABadRequest(t *testing.T) {
 		status int
 		msg    string
 	}{
-		"no prompt":       {chunkd.FactoryRequest{ProjectRoot: root, Prompt: "  "}, http.StatusBadRequest, "prompt required"},
-		"unknown project": {chunkd.FactoryRequest{ProjectRoot: "/nowhere", Prompt: "x"}, http.StatusNotFound, "not tracking"},
-		"escaping dir":    {chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x", ReviewsDir: "../elsewhere"}, http.StatusBadRequest, "inside the project"},
-		"missing dir":     {chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x", ReviewsDir: "nope"}, http.StatusBadRequest, "nope"},
-		"relative log":    {chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x", Log: "run.log"}, http.StatusBadRequest, "absolute path"},
+		"no prompt":       {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "  "}, http.StatusBadRequest, "prompt required"},
+		"unknown project": {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: "/nowhere", Prompt: "x"}, http.StatusNotFound, "not tracking"},
+		"escaping dir":    {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "x", ReviewsDir: "../elsewhere"}, http.StatusBadRequest, "inside the project"},
+		"missing dir":     {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "x", ReviewsDir: "nope"}, http.StatusBadRequest, "nope"},
+		"relative log":    {chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "x", Log: "run.log"}, http.StatusBadRequest, "absolute path"},
 		"reviews alone": {
-			chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x", ReviewsDir: ".chunk/reviews", NoValidate: true},
+			chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "x", ReviewsDir: ".chunk/reviews", NoValidate: true},
 			0, "",
 		},
 	} {
@@ -307,7 +307,7 @@ func TestStartFactoryRefusesABadRequest(t *testing.T) {
 
 	// Neither reviews nor validation commands: the loop would pass anything.
 	assert.NilError(t, os.RemoveAll(filepath.Join(root, ".chunk", "reviews")))
-	_, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "x", NoValidate: true})
+	_, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "x", NoValidate: true})
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae), "got %v", err)
 	assert.ErrorContains(t, ae, "nothing to check")
@@ -361,7 +361,7 @@ func TestStartFactoryAdoptsAnUnregisteredRepository(t *testing.T) {
 	root, err := filepath.EvalSymlinks(other)
 	assert.NilError(t, err)
 
-	s, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	s, err := d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
 	assert.NilError(t, err)
 	assert.Equal(t, s.ProjectRoot, root)
 
@@ -372,7 +372,7 @@ func TestStartFactoryAdoptsAnUnregisteredRepository(t *testing.T) {
 	// A directory inside the repository is not the project, and is not adopted.
 	sub := filepath.Join(root, "sub")
 	assert.NilError(t, os.MkdirAll(sub, 0o755))
-	_, err = d.startFactory(chunkd.FactoryRequest{ProjectRoot: sub, Prompt: "add a flag"})
+	_, err = d.startFactory(chunkd.FactoryRequest{Backend: chunkd.BackendCircleCI, ProjectRoot: sub, Prompt: "add a flag"})
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae), "got %v", err)
 	assert.Equal(t, ae.status, http.StatusNotFound)

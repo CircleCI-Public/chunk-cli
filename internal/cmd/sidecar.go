@@ -1123,12 +1123,14 @@ Example:
 					return err
 				}
 
-				if cfg.MarkRemoteCommandsForSidecarSetup() {
-					if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
-						streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
-					} else {
-						streams.ErrPrintf("Marked install and gate commands as remote in .chunk/config.json\n")
-					}
+				// Setting up a sidecar is choosing CircleCI; without the backend the
+				// remote marks below would be ignored.
+				cfg.UseCircleCI()
+				cfg.MarkRemoteCommandsForSidecarSetup()
+				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
+					streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
+				} else {
+					streams.ErrPrintf("Selected the circleci backend and marked install and gate commands as remote in .chunk/config.json\n")
 				}
 
 				streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it:\n")
