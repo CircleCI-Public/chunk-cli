@@ -157,10 +157,33 @@ type ValidationConfig struct {
 	SidecarImage string `json:"sidecarImage,omitempty"`
 }
 
+// Coding agents a factory run can use. The harness package names them with
+// these, so the config and the registry agree.
+const (
+	HarnessClaude = "claude"
+	HarnessCodex  = "codex"
+)
+
+// ValidHarness reports whether name is a coding agent. Empty is valid: it
+// means none is chosen.
+func ValidHarness(name string) bool {
+	switch name {
+	case "", HarnessClaude, HarnessCodex:
+		return true
+	}
+	return false
+}
+
 // FactoryConfig holds project defaults for `smelt factory build`.
 type FactoryConfig struct {
-	Backend string `json:"backend,omitempty"` // "docker" (the default) or "circleci"
-	Image   string `json:"image,omitempty"`   // Docker image for the docker backend; user-managed, never auto-built
+	// Harness is the coding agent runs use: "claude" or "codex". Empty means
+	// ask, or fail when there is no terminal.
+	Harness string `json:"harness,omitempty"`
+	// Models maps a harness to the model it uses when --model is not given, so
+	// switching harness does not carry a name the other CLI rejects.
+	Models  map[string]string `json:"models,omitempty"`
+	Backend string            `json:"backend,omitempty"` // "docker" (the default) or "circleci"
+	Image   string            `json:"image,omitempty"`   // Docker image for the docker backend; user-managed, never auto-built
 	// Dockerfile is the repo-relative Dockerfile smelt builds the docker
 	// backend's image from. Unlike Image it is managed: the tag is computed
 	// from its content and the image is built when missing.
@@ -375,6 +398,14 @@ func (c *ProjectConfig) validate() error {
 		if !ValidBackend(f.Backend) {
 			return fmt.Errorf("factory.backend %q must be %q or %q", f.Backend, BackendCircleCI, BackendDocker)
 		}
+		if !ValidHarness(f.Harness) {
+			return fmt.Errorf("factory.harness %q must be %q or %q", f.Harness, HarnessClaude, HarnessCodex)
+		}
+		for name := range f.Models {
+			if name == "" || !ValidHarness(name) {
+				return fmt.Errorf("factory.models.%s: unknown harness (want %q or %q)", name, HarnessClaude, HarnessCodex)
+			}
+		}
 		if err := validateRepoRelative("factory.dockerfile", f.Dockerfile); err != nil {
 			return err
 		}
@@ -526,4 +557,12 @@ func (c *ProjectConfig) InstallCommand() string {
 		}
 	}
 	return ""
+}
+
+// ModelFor is the model configured for harness, or "" when none is.
+func (f *FactoryConfig) ModelFor(harness string) string {
+	if f == nil {
+		return ""
+	}
+	return f.Models[harness]
 }

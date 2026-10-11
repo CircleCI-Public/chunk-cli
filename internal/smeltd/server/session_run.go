@@ -29,6 +29,9 @@ type StreamFunc func(ctx context.Context, entry *sidecar.PoolEntry, commandID st
 // credential is resolved once by the caller at daemon start; it is only ever
 // placed in the environment of a Claude command, and never logged or put in a
 // snapshot.
+//
+// The fields up to Codex are Claude Code's; Codex has its own HarnessAuth. A
+// run needs only the credential of the harness it uses.
 type ReviewConfig struct {
 	Credential review.Credential
 	// BaseURL is forwarded to claude when it is not Anthropic's own.
@@ -36,6 +39,8 @@ type ReviewConfig struct {
 	// AuthError explains a missing Credential, reported in the snapshot so an
 	// absent capability is explained rather than silent.
 	AuthError string
+	// Codex is the credential for OpenAI Codex runs.
+	Codex HarnessAuth
 
 	// The fields below are test seams. Left nil, the daemon talks to the
 	// sandbox through the pool entry's own client.
@@ -43,6 +48,17 @@ type ReviewConfig struct {
 	Stream StreamFunc
 	// RunFactory runs a factory session; factory.Run when nil.
 	RunFactory func(ctx context.Context, opts factory.RunOptions) (factory.Report, error)
+}
+
+// HarnessAuth is the credential one harness runs with.
+type HarnessAuth struct {
+	Credential review.Credential
+	BaseURL    string
+	// AuthError explains a missing Credential.
+	AuthError string
+	// Refresh, when set, is asked for the credential at the start of each run,
+	// so a login that is close to expiry is renewed before it is used.
+	Refresh func(ctx context.Context) (review.Credential, error)
 }
 
 // Option customizes RunDaemon.

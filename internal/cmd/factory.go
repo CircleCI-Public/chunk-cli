@@ -40,7 +40,7 @@ func newFactoryCmd() *cobra.Command {
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, jsonOut, logOn, verbose, detach bool
-	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan string
+	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag string
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
 
@@ -97,6 +97,11 @@ when it failed. --log-file FILE keeps the log in FILE instead, and on its own
 turns the log on. --verbose adds the review prompts, the output of commands
 that passed, and a check each round that every reviewer has the implementer's
 change, and also shows the log here as the run writes it; it implies --log.
+
+--harness claude|codex picks the coding agent for the implementer and the
+reviewers. Without it, factory.harness from the config is used; with neither,
+a terminal is asked (and offered to save the answer) and anything else fails.
+factory.models.<harness> sets the model when --model is not given.
 
 Defaults for --backend, --image, --max-attempts and --log come from the
 factory section of .smelt/config.json (smelt init sets it); a flag given on the
@@ -158,6 +163,12 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 			if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
 				return err
 			}
+			agent, err := resolveHarness(ctx, streams, harnessChoice{
+				Root: root, Cfg: cfg, Flag: harnessFlag, Image: settings.dockerImage(), CanPrompt: canPrompt(cmd.InOrStdin(), jsonOut),
+			})
+			if err != nil {
+				return err
+			}
 			if continueRun != "" {
 				if err := checkFactoryContinue(root, continueRun); err != nil {
 					return err
@@ -192,6 +203,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 				Attempts:                settings.Attempts,
 				Reviewers:               reviewers,
 				Model:                   model,
+				Harness:                 agent,
 				ImplementerInstructions: implementerInstructions,
 				ImplementTimeoutSeconds: int(implementTimeout / time.Second),
 				ReviewTimeoutSeconds:    int(reviewTimeout / time.Second),
@@ -232,7 +244,8 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().StringVar(&orgID, "org-id", "", "CircleCI organization ID (only with the circleci backend)")
 	cmd.Flags().StringVar(&image, "image", "", "image: a Docker image (default: factory.image or factory.dockerfile), or a CircleCI snapshot ID with --backend circleci (default: validation.sidecarImage)")
 	cmd.Flags().StringVar(&backend, "backend", "", "where sidecars run: circleci or docker (local containers) (default: factory.backend from config, else docker)")
-	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
+	cmd.Flags().StringVar(&harnessFlag, "harness", "", "coding agent: claude or codex (default: factory.harness from config, else ask)")
+	cmd.Flags().StringVar(&model, "model", "", "model for the chosen agent (default: factory.models.<harness> from config, else the agent's own default)")
 	cmd.Flags().StringVar(&implementerInstructions, "implementer-instructions", "", "extra instructions for the implementer")
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
 	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")

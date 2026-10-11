@@ -25,6 +25,9 @@ import (
 // find and prune old tags.
 const LabelSandbox = brand.LabelPrefix + "sandbox"
 
+// LabelHarnesses lists the agent CLIs an image carries, comma-separated.
+const LabelHarnesses = brand.LabelPrefix + "harnesses"
+
 // logTailLines is how much of a failed build's log is kept for the error.
 const logTailLines = 150
 
@@ -178,3 +181,19 @@ func (t *tail) add(line string) {
 }
 
 func (t *tail) String() string { return strings.Join(t.lines, "\n") }
+
+// Harnesses lists the agent CLIs the image tag carries, from its
+// LabelHarnesses label. An image without the label, or one that is not on this
+// host, reports none.
+func (b *Builder) Harnesses(ctx context.Context, tag string) ([]string, error) {
+	info, err := b.cli.ImageInspect(ctx, tag)
+	switch {
+	case cerrdefs.IsNotFound(err):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("look up image %s: %w", tag, err)
+	case info.Config == nil || info.Config.Labels[LabelHarnesses] == "":
+		return nil, nil
+	}
+	return strings.Split(info.Config.Labels[LabelHarnesses], ","), nil
+}

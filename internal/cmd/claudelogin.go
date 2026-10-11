@@ -121,6 +121,18 @@ var isInteractive = func() bool {
 	return !nonInteractive() && ui.RequireStdoutTTY() == nil
 }
 
+// agentAuthStep makes sure the user has a credential for the project's coding
+// agent: the Codex branch for codex, the Claude branch otherwise. Never fatal.
+func agentAuthStep(ctx context.Context, streams iostream.Streams, rc config.ResolvedConfig, cfg *config.ProjectConfig, insecureStorage, skip bool, confirm confirmFunc) {
+	if cfg != nil && cfg.Factory != nil && cfg.Factory.Harness == config.HarnessCodex {
+		if !skip {
+			codexAuthStep(ctx, streams, confirm)
+		}
+		return
+	}
+	claudeAuthStep(ctx, streams, rc, insecureStorage, skip, confirm)
+}
+
 // claudeAuthStep makes sure the user has a Claude credential. Never fatal.
 func claudeAuthStep(ctx context.Context, streams iostream.Streams, rc config.ResolvedConfig, insecureStorage, skip bool, confirm confirmFunc) {
 	desc, has := describeCredential(rc)
@@ -157,15 +169,17 @@ func claudeAuthStep(ctx context.Context, streams iostream.Streams, rc config.Res
 	}
 }
 
-// Refresh providers. Adding codex later is one more entry here.
+// Refresh providers.
 const providerClaude = "claude"
 
-var refreshProviders = []string{providerClaude, providerAnthropicOAuth}
+var refreshProviders = []string{providerClaude, providerAnthropicOAuth, providerCodex}
 
 func parseRefreshProvider(arg string) (string, error) {
 	switch arg {
 	case "", providerClaude, providerAnthropicOAuth:
 		return providerClaude, nil
+	case providerCodex:
+		return providerCodex, nil
 	}
 	return "", &userError{
 		msg:    fmt.Sprintf("Unknown provider %q.", arg),
@@ -182,7 +196,7 @@ func newRefreshCmd(use string) *cobra.Command {
 	return &cobra.Command{
 		Use:       use,
 		Short:     "Log in again and replace the stored credential",
-		Long:      "Re-mint the Claude subscription token with 'claude setup-token' and replace the stored one. A running smelt daemon is restarted to pick it up.",
+		Long:      "Re-mint the Claude subscription token with 'claude setup-token' and replace the stored one. A running smelt daemon is restarted to pick it up.\n\nWith codex, sign in to Codex again with your ChatGPT account and replace the stored login (a one-minute browser login).",
 		Args:      cobra.MaximumNArgs(1),
 		ValidArgs: refreshProviders,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -197,11 +211,10 @@ func newRefreshCmd(use string) *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			// One case per provider; add codex here.
-			if provider == providerClaude {
-				return refreshClaude(cmd.Context(), io, rc, insecureStorage)
+			if provider == providerCodex {
+				return refreshCodex(cmd.Context(), io, false)
 			}
-			return nil
+			return refreshClaude(cmd.Context(), io, rc, insecureStorage)
 		},
 	}
 }

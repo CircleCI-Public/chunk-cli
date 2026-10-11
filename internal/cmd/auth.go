@@ -45,12 +45,26 @@ func newAuthCmd() *cobra.Command {
 }
 
 func newAuthLoginCmd() *cobra.Command {
-	var noBrowser bool
+	var noBrowser, deviceAuth bool
 	cmd := &cobra.Command{
-		Use:   "login",
-		Short: "Log in to CircleCI via browser (recommended)",
-		Long:  "Authenticate with CircleCI using OAuth. Opens your browser for a secure login flow.",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Use:   "login [codex]",
+		Short: "Log in to CircleCI via browser (recommended), or to Codex",
+		Long: `Authenticate with CircleCI using OAuth. Opens your browser for a secure login flow.
+
+With "codex", sign in to OpenAI Codex with your ChatGPT account instead. smelt runs
+'codex login' in a private directory, so ~/.codex is never touched, and keeps the
+resulting login in the system keychain. --device-auth signs in with a code, for
+machines without a browser; it needs device-code sign-in turned on in ChatGPT →
+Settings → Security.`,
+		Args:      cobra.MaximumNArgs(1),
+		ValidArgs: []string{providerCodex},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				if args[0] != providerCodex {
+					return unknownProvider(args[0], providerCodex)
+				}
+				return codexLogin(cmd.Context(), iostream.FromCmd(cmd), deviceAuth)
+			}
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)
 			io := iostream.FromCmd(cmd)
@@ -58,7 +72,17 @@ func newAuthLoginCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the login URL instead of opening a browser")
+	cmd.Flags().BoolVar(&deviceAuth, "device-auth", false, "With codex: sign in with a device code instead of a browser")
 	return cmd
+}
+
+// unknownProvider is the error for a provider name that is not one of valid.
+func unknownProvider(name string, valid ...string) error {
+	return &userError{
+		msg:    fmt.Sprintf("Unknown provider %q.", name),
+		detail: "Valid providers: " + strings.Join(valid, ", ") + ".",
+		errMsg: fmt.Sprintf("unknown provider %q", name),
+	}
 }
 
 func newAuthSignupCmd() *cobra.Command {
@@ -122,7 +146,7 @@ func newAuthSetCmd() *cobra.Command {
 		Use:       "set <provider>",
 		Short:     "Store credentials for a provider",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{providerCircleCI, providerAnthropic, providerAnthropicOAuth, providerGitHub},
+		ValidArgs: []string{providerCircleCI, providerAnthropic, providerAnthropicOAuth, providerGitHub, providerCodex},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -141,12 +165,10 @@ func newAuthSetCmd() *cobra.Command {
 			case providerGitHub:
 				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
 				return authSetGitHub(cmd.Context(), io, rc.GitHubAPIURL, envSet, force, insecureStorage)
+			case providerCodex:
+				return authSetCodex(io, force)
 			default:
-				return &userError{
-					msg:    fmt.Sprintf("Unknown provider %q.", provider),
-					detail: "Valid providers: circleci, anthropic, anthropic-oauth, github.",
-					errMsg: fmt.Sprintf("unknown provider %q", provider),
-				}
+				return unknownProvider(provider, "circleci", "anthropic", "anthropic-oauth", "github", "codex")
 			}
 		},
 	}
@@ -491,6 +513,8 @@ func newAuthStatusCmd() *cobra.Command {
 			}
 			io.Println("")
 
+			codexStatus(cmd.Context(), io)
+
 			// GitHub section
 			io.Println(ui.Bold("GitHub"))
 			if rc.GitHubToken == "" {
@@ -533,7 +557,7 @@ func newAuthRemoveCmd() *cobra.Command {
 		Use:       "remove <provider>",
 		Short:     "Remove stored credentials",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{providerCircleCI, providerAnthropic, providerAnthropicOAuth, providerGitHub},
+		ValidArgs: []string{providerCircleCI, providerAnthropic, providerAnthropicOAuth, providerGitHub, providerCodex},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -552,12 +576,10 @@ func newAuthRemoveCmd() *cobra.Command {
 			case providerGitHub:
 				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
 				return authRemoveGitHub(io, envSet, force, insecureStorage)
+			case providerCodex:
+				return authRemoveCodex(io, force)
 			default:
-				return &userError{
-					msg:    fmt.Sprintf("Unknown provider %q.", provider),
-					detail: "Valid providers: circleci, anthropic, anthropic-oauth, github.",
-					errMsg: fmt.Sprintf("unknown provider %q", provider),
-				}
+				return unknownProvider(provider, "circleci", "anthropic", "anthropic-oauth", "github", "codex")
 			}
 		},
 	}

@@ -18,6 +18,15 @@ task lint               # Run linters, shellcheck on install.sh, the CircleCI sw
 task fmt                # Format code
 ```
 
+## Coding agents (harnesses)
+
+The agent a factory run drives is behind `harness.Harness` (`internal/harness`):
+`internal/harness/claude` and `internal/harness/codex` build the scripts and parse
+the output, `internal/harness/all` is the registry, `internal/codexauth` holds the
+Codex login, and `internal/harness/status` backs `smelt harness status`. Add an
+agent by implementing the interface, not by branching on a name in the factory.
+Choosing between agents is not smelt's job; it provides the mechanism and the data.
+
 ## Documentation Map
 
 Read these when working in the relevant area:

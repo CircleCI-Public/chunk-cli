@@ -173,6 +173,10 @@ type FactoryRun struct {
 	Guidance string `json:"guidance,omitempty"`
 	// ContinuesRunID is the run whose work this one picked up, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
+	// Harness and Model are the coding agent the run uses and the model it was
+	// asked for; Model is "" for the agent's own default.
+	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model,omitempty"`
 	// Attempts is the most rounds the run checks.
 	Attempts int    `json:"attempts,omitempty"`
 	RunID    string `json:"run_id,omitempty"`
@@ -338,6 +342,8 @@ type ReviewResult struct {
 	// Status is how a factory review came out as a check, one of the Check
 	// values.
 	Status string `json:"status,omitempty"`
+	// Harness is the agent that ran the review.
+	Harness string `json:"harness,omitempty"`
 }
 
 // Finding is one problem a review reported.
@@ -404,8 +410,11 @@ type FactoryRequest struct {
 	Attempts int `json:"attempts,omitempty"`
 	// Reviewers is how many reviewer sidecars to run; zero means one per
 	// review prompt.
-	Reviewers               int    `json:"reviewers,omitempty"`
-	Model                   string `json:"model,omitempty"`
+	Reviewers int    `json:"reviewers,omitempty"`
+	Model     string `json:"model,omitempty"`
+	// Harness is the coding agent for the run: "claude" or "codex"; empty
+	// means Claude Code.
+	Harness                 string `json:"harness,omitempty"`
 	ImplementerInstructions string `json:"implementer_instructions,omitempty"`
 	// Zero timeouts mean the factory's defaults.
 	ImplementTimeoutSeconds int  `json:"implement_timeout_seconds,omitempty"`

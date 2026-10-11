@@ -20,7 +20,7 @@ const (
 )
 
 // kitCheck proves the tools the factory's own scripts and agent need exist.
-const kitCheck = "git --version && claude --version && sha256sum --version && pkill -V"
+const kitCheck = "git --version && claude --version && codex --version && sha256sum --version && pkill -V"
 
 // outputTailBytes bounds the output kept from a failed step.
 const outputTailBytes = 4000

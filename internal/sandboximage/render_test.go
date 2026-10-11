@@ -1,9 +1,11 @@
 package sandboximage
 
 import (
+	"os"
 	"testing"
 
 	"gotest.tools/v3/assert"
+	cmp "gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/golden"
 
 	"github.com/smeltdev/smelt/internal/envspec"
@@ -47,4 +49,18 @@ func TestRenderGolden(t *testing.T) {
 			assert.NilError(t, err)
 		})
 	}
+}
+
+func TestKitInstallsBothAgentsAndLabelsTheImage(t *testing.T) {
+	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
+	assert.Check(t, cmp.Contains(got, KitCodex))
+	assert.Check(t, cmp.Contains(got, "LABEL "+LabelHarnesses+"=claude,codex"))
+	assert.Check(t, cmp.Contains(got, "claude.ai/install.sh"))
+}
+
+func TestDockerfileLocalCarriesTheKitsCodexBlock(t *testing.T) {
+	local, err := os.ReadFile("../../Dockerfile.local")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Contains(string(local), KitCodex))
+	assert.Check(t, cmp.Contains(string(local), "LABEL "+LabelHarnesses+"=claude,codex"))
 }

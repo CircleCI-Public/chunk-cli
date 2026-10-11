@@ -66,7 +66,7 @@ func factoryProject(t *testing.T) string {
 	isolateConfig(t)
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	project := sessionProject(t)
-	cfg := `{"orgID":"org-1","factory":{"backend":"circleci"},"commands":[{"name":"test","run":"go test ./..."}]}`
+	cfg := `{"orgID":"org-1","factory":{"backend":"circleci","harness":"claude"},"commands":[{"name":"test","run":"go test ./..."}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(project, ".smelt", "config.json"), []byte(cfg), 0o644))
 	t.Chdir(project)
 	return project
@@ -452,7 +452,7 @@ func TestFactoryContinueRefusesAnUnknownRun(t *testing.T) {
 func TestFactoryBuildTakesDefaultsFromTheProjectConfigAndPlan(t *testing.T) {
 	cfg := `{"orgID":"org-1","commands":[{"name":"test","run":"go test ./..."}],` +
 		`"validation":{"sidecarImage":"snapshot-id"},` +
-		`"factory":{"backend":"docker","image":"smelt-sandbox:local","maxAttempts":5,"log":true}}`
+		`"factory":{"backend":"docker","harness":"claude","image":"smelt-sandbox:local","maxAttempts":5,"log":true}}`
 	newPlan := func(t *testing.T, body string) string {
 		plan := filepath.Join(t.TempDir(), "spec.md")
 		assert.NilError(t, os.WriteFile(plan, []byte("# Spec\n\n"+body+"\n"), 0o644))

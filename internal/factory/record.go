@@ -34,6 +34,10 @@ type Record struct {
 	DefaultBranch string `json:"default_branch,omitempty"`
 	// ContinuesRunID is the run this one continued, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
+	// Harness and Model are the coding agent the run used and the model it was
+	// asked for ("" for the agent's own default).
+	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model,omitempty"`
 	// Result and Rounds are how the run ended, once it has.
 	Result Result `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`

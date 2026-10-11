@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,8 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"gotest.tools/v3/assert"
+
+	"github.com/smeltdev/smelt/internal/envspec"
 )
 
 func TestReadBuildStream(t *testing.T) {
@@ -144,4 +147,34 @@ func TestBuildLive(t *testing.T) {
 	exists, err := b.Exists(context.Background(), plan.Tag)
 	assert.NilError(t, err)
 	assert.Assert(t, exists)
+}
+
+// TestKitLive builds the agent kit on a real daemon and finds both agent CLIs
+// in the image. It skips without Docker, and with -short: it downloads both.
+func TestKitLive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("downloads both agent CLIs")
+	}
+	b, err := Connect()
+	if err != nil {
+		t.Skipf("no docker: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+	if _, err := b.Exists(context.Background(), "smelt-live-probe:none"); err != nil {
+		t.Skipf("docker daemon unreachable: %v", err)
+	}
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("no docker CLI to run the image with")
+	}
+	dir := writeRepo(t, map[string]string{
+		"Dockerfile.smelt": Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil)),
+	})
+	plan, err := NewPlan(dir, "Dockerfile.smelt")
+	assert.NilError(t, err)
+	_, err = b.Ensure(context.Background(), plan, EnsureOptions{})
+	assert.NilError(t, err)
+	out, err := exec.Command(docker, "run", "--rm", plan.Tag, "sh", "-c", "codex --version && claude --version").CombinedOutput()
+	assert.NilError(t, err, string(out))
+	assert.Assert(t, strings.Contains(string(out), "codex"), string(out))
 }

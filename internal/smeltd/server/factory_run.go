@@ -12,6 +12,9 @@ import (
 
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/factory"
+	"github.com/smeltdev/smelt/internal/harness"
+	"github.com/smeltdev/smelt/internal/harness/all"
+	"github.com/smeltdev/smelt/internal/harness/status"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -23,15 +26,24 @@ import (
 // request does not say.
 const DefaultAttempts = 3
 
-// factoryAuthError explains why a factory session on the given backend cannot
-// run, or "" when it can. Every backend needs the Claude credential; only the
-// CircleCI backend needs a CircleCI client.
-func (d *daemon) factoryAuthError(backend string) string {
-	if d.rcfg.Credential.Value == "" {
-		if d.rcfg.AuthError != "" {
-			return d.rcfg.AuthError
+// harnessAuth is the credential setup of the named harness.
+func (d *daemon) harnessAuth(name harness.Name) HarnessAuth {
+	if name == harness.Codex {
+		return d.rcfg.Codex
+	}
+	return HarnessAuth{Credential: d.rcfg.Credential, BaseURL: d.rcfg.BaseURL, AuthError: d.rcfg.AuthError}
+}
+
+// factoryAuthError explains why a factory session on the given backend with the
+// named harness cannot run, or "" when it can. Every backend needs the
+// harness's credential; only the CircleCI backend needs a CircleCI client.
+func (d *daemon) factoryAuthError(backend string, name harness.Name) string {
+	auth := d.harnessAuth(name)
+	if auth.Credential.Value == "" && auth.Refresh == nil {
+		if auth.AuthError != "" {
+			return auth.AuthError
 		}
-		return "no Claude credential configured for the smelt daemon — factory runs unavailable"
+		return fmt.Sprintf("no %s credential configured for the smelt daemon — factory runs unavailable (run: smelt auth login %s)", name, name)
 	}
 	if config.BackendOrDefault(backend) == smeltd.BackendDocker {
 		return ""
@@ -40,6 +52,22 @@ func (d *daemon) factoryAuthError(backend string) string {
 		return "not authenticated to CircleCI — factory runs unavailable (run: smelt auth login)"
 	}
 	return ""
+}
+
+// anyFactoryAuthError is what the snapshot reports: empty when some harness can
+// run, otherwise why the first, Claude, cannot.
+func (d *daemon) anyFactoryAuthError(backend string) string {
+	first := ""
+	for _, h := range all.All() {
+		msg := d.factoryAuthError(backend, h.Name())
+		if msg == "" {
+			return ""
+		}
+		if first == "" {
+			first = msg
+		}
+	}
+	return first
 }
 
 // factoryTarget is the org and image a factory request's sidecars use: the
@@ -93,8 +121,21 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 			req.Backend, smeltd.BackendCircleCI, smeltd.BackendDocker)
 	}
 	req.Backend = config.BackendOrDefault(req.Backend)
-	if msg := d.factoryAuthError(req.Backend); msg != "" {
+	if req.Harness == "" {
+		req.Harness = config.HarnessClaude
+	}
+	agent, err := all.ByName(harness.Name(req.Harness))
+	if err != nil {
+		return smeltd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
+	}
+	if msg := d.factoryAuthError(req.Backend, agent.Name()); msg != "" {
 		return smeltd.Session{}, apiErr(http.StatusServiceUnavailable, "%s", msg)
+	}
+	auth := d.harnessAuth(agent.Name())
+	if auth.Refresh != nil {
+		if auth.Credential, err = auth.Refresh(context.Background()); err != nil {
+			return smeltd.Session{}, apiErr(http.StatusServiceUnavailable, "%v", err)
+		}
 	}
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" && req.Continue == "" {
@@ -154,6 +195,11 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		attempts = DefaultAttempts
 	}
 	record.Attempts = attempts
+	model := req.Model
+	if model == "" {
+		model = cfg.Factory.ModelFor(string(agent.Name()))
+	}
+	record.Harness, record.Model = string(agent.Name()), model
 
 	entry, ctx, busy := d.sessions.add(smeltd.Session{
 		ProjectRoot: ps.root,
@@ -179,9 +225,10 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Install:                 imageInstallCommand(req.Backend, cfg),
 		Author:                  author,
 		KeepSidecars:            req.KeepSidecars,
-		Credential:              d.rcfg.Credential,
-		BaseURL:                 d.rcfg.BaseURL,
-		Model:                   req.Model,
+		Harness:                 agent,
+		Credential:              auth.Credential,
+		BaseURL:                 auth.BaseURL,
+		Model:                   model,
 		ImplementerInstructions: req.ImplementerInstructions,
 		ImplementTimeout:        time.Duration(req.ImplementTimeoutSeconds) * time.Second,
 		ReviewTimeout:           time.Duration(req.ReviewTimeoutSeconds) * time.Second,
@@ -198,7 +245,7 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	defer close(entry.done)
 	defer entry.cancel()
 
-	rec := &factoryRecorder{entry: entry, prompts: opts.Prompts, rounds: map[int]int{}}
+	rec := &factoryRecorder{entry: entry, prompts: opts.Prompts, rounds: map[int]int{}, harness: opts.Harness.Name()}
 	root := opts.Root
 	opts.Status = func(level iostream.Level, msg string) {
 		log.Printf("smeltd: factory (%s): %s", root, msg)
@@ -254,6 +301,9 @@ type factoryRecorder struct {
 	// attribute reads cur through the entry's lock.
 	rounds map[int]int
 	cur    int
+
+	// harness is the agent the run uses.
+	harness harness.Name
 }
 
 func (r *factoryRecorder) started(runID string, wt factory.Worktree) {
@@ -308,6 +358,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 			impl.Harness, impl.Model = string(ev.Turn.Harness), ev.Turn.Model
 			impl.InputTokens, impl.CachedTokens, impl.OutputTokens = ev.Turn.InputTokens, ev.Turn.CachedTokens, ev.Turn.OutputTokens
 			impl.RateLimit = ev.Turn.RateLimit
+			r.recordRateLimit(ev.Turn.RateLimit)
 			impl.Summary = ev.Turn.Summary
 		}
 	case factory.EventCollected:
@@ -343,7 +394,7 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 		if c.Kind != factory.KindReview {
 			continue
 		}
-		res := smeltd.ReviewResult{Prompt: c.Name, SidecarID: c.SidecarID, Error: c.Error, DurationMS: c.Duration.Milliseconds(), Status: string(c.Status)}
+		res := smeltd.ReviewResult{Prompt: c.Name, SidecarID: c.SidecarID, Error: c.Error, DurationMS: c.Duration.Milliseconds(), Status: string(c.Status), Harness: string(r.harness)}
 		for i, f := range c.Findings {
 			f.Prompt = c.Name
 			f.ID = fmt.Sprintf("%s-%d", c.Name, i+1)
@@ -467,4 +518,15 @@ func imageInstallCommand(backend string, cfg *config.ProjectConfig) string {
 		return ""
 	}
 	return cfg.InstallCommand()
+}
+
+// recordRateLimit keeps the run's last rate-limit signal where `smelt harness
+// status` finds it. The status is best effort, so a failure is not the run's.
+func (r *factoryRecorder) recordRateLimit(rl *harness.RateLimit) {
+	if rl == nil {
+		return
+	}
+	if dir, err := status.Dir(); err == nil {
+		status.RecordSignal(dir, r.harness, *rl, time.Now())
+	}
 }

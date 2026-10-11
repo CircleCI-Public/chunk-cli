@@ -24,6 +24,15 @@ type factorySettings struct {
 	ImageSource imageSource
 }
 
+// dockerImage is the image the run's containers use, or "" for any other
+// backend.
+func (s factorySettings) dockerImage() string {
+	if s.Backend != config.BackendDocker {
+		return ""
+	}
+	return s.Image
+}
+
 // imageSource says where the resolved image came from, which decides whether
 // smelt may build it.
 type imageSource int

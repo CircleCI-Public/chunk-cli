@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
@@ -23,8 +24,8 @@ type Name string
 
 // The harnesses smelt can drive.
 const (
-	Claude Name = "claude"
-	Codex  Name = "codex"
+	Claude Name = config.HarnessClaude
+	Codex  Name = config.HarnessCodex
 )
 
 // MissingExitCode is the exit code a script uses for its CLI not being on PATH,
@@ -229,4 +230,32 @@ func (l *Lines) Flush() {
 		l.Handle(l.buf)
 	}
 	l.buf, l.overflow = nil, false
+}
+
+// Window is one usage window of a harness, as `smelt harness status` reports it.
+type Window struct {
+	// Window names the span: "5h", "7d", "30d", "7d:<model>", or "<n>m".
+	Window      string     `json:"window"`
+	UsedPercent *float64   `json:"used_percent"`
+	ResetsAt    *time.Time `json:"resets_at,omitempty"`
+	// Status is "allowed", "warning" or "limited" when the figure came from a
+	// run's rate-limit signal.
+	Status string `json:"status,omitempty"`
+	// Source is where the figure came from: "app-server", "oauth-usage" or "run".
+	Source string     `json:"source"`
+	SeenAt *time.Time `json:"seen_at,omitempty"`
+}
+
+// WindowName names a window by its length, so a plan's windows are named by
+// what they are rather than by which slot the CLI put them in.
+func WindowName(minutes int) string {
+	switch minutes {
+	case 300:
+		return "5h"
+	case 10080:
+		return "7d"
+	case 43200:
+		return "30d"
+	}
+	return fmt.Sprintf("%dm", minutes)
 }

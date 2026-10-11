@@ -36,6 +36,14 @@ func ServiceAnthropicOAuth(baseURL string) string {
 	return servicePrefix + "anthropic-oauth:" + strings.TrimRight(baseURL, "/")
 }
 
+// Keychain services for the two ways to sign in to Codex.
+const (
+	// ServiceCodexChatGPT holds the contents of auth.json from a ChatGPT login.
+	ServiceCodexChatGPT = servicePrefix + "codex:chatgpt"
+	// ServiceCodexAPIKey holds an OpenAI API key for Codex.
+	ServiceCodexAPIKey = servicePrefix + "codex:api-key"
+)
+
 // ServiceGitHub returns the keychain service key for the given GitHub API URL.
 func ServiceGitHub(baseURL string) string {
 	return servicePrefix + "github:" + strings.TrimRight(baseURL, "/")
