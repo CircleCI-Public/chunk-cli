@@ -32,7 +32,7 @@ func newFactoryCmd() *cobra.Command {
 		Short: "Build and manage factory runs",
 		RunE:  groupRunE,
 	}
-	cmd.AddCommand(newFactoryBuildCmd())
+	cmd.AddCommand(newFactoryBuildCmd(), newFactoryListCmd(), newFactoryCleanCmd())
 	return cmd
 }
 
@@ -436,7 +436,7 @@ func printFactoryWork(f *chunkd.FactoryRun, status iostream.StatusFunc, streams 
 		return
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Committed %s to %s", f.Stat, f.Branch))
-	streams.ErrPrintf("  Worktree: %s\n  %s\n", f.Worktree, keepWorkHint(f))
+	streams.ErrPrintf("  Worktree: %s\n  %s\n  When you're done with it: chunk factory clean %s\n", f.Worktree, keepWorkHint(f), factory.ParseRunID(f.Branch))
 }
 
 // keepWorkHint says how to bring the run's work into the developer's checkout.
