@@ -3,9 +3,9 @@ package factory
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 )
@@ -34,14 +34,21 @@ type Worktree struct {
 	// "" when none is recorded. Publishing reads both to pick the PR's base.
 	BaseBranch    string
 	DefaultBranch string
+	// Author is who the branch's commits are attributed to; an incomplete one
+	// means chunk.
+	Author config.CommitAuthor
 }
 
-// commitEnv commits as chunk, so a run never stops to ask for an identity or
-// depends on the developer having one set.
-func commitEnv() []string {
-	return append(os.Environ(),
-		"GIT_AUTHOR_NAME=chunk", "GIT_AUTHOR_EMAIL=chunk@circleci.com",
-		"GIT_COMMITTER_NAME=chunk", "GIT_COMMITTER_EMAIL=chunk@circleci.com")
+// WorktreeOptions describes the worktree CreateWorktree makes.
+type WorktreeOptions struct {
+	// Root is the developer's repository; Path is where the worktree goes.
+	Root string
+	Path string
+	// RunID and Prompt name the branch.
+	RunID  string
+	Prompt string
+	// Author is who the branch's commits are attributed to; see ResolveAuthor.
+	Author config.CommitAuthor
 }
 
 // CreateWorktree checks out a new worktree of the repository at root into path,
@@ -49,7 +56,8 @@ func commitEnv() []string {
 // developer's files as they are now: uncommitted work, untracked files included,
 // is committed on the branch first, so it is the baseline and not part of the
 // change under review.
-func CreateWorktree(ctx context.Context, root, path, runID, prompt string) (Worktree, error) {
+func CreateWorktree(ctx context.Context, o WorktreeOptions) (Worktree, error) {
+	root, runID := o.Root, o.RunID
 	git := gitexec.Runner{Dir: root}
 	headOut, err := git.Output(ctx, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
@@ -67,7 +75,7 @@ func CreateWorktree(ctx context.Context, root, path, runID, prompt string) (Work
 
 	start := head
 	if tree != strings.TrimSpace(string(headTree)) {
-		out, err := (gitexec.Runner{Dir: root, Env: commitEnv()}).Output(ctx, "commit-tree", tree, "-p", head,
+		out, err := (gitexec.Runner{Dir: root, Env: commitEnv(o.Author)}).Output(ctx, "commit-tree", tree, "-p", head,
 			"-m", "chunk factory baseline: uncommitted changes when run "+runID+" started")
 		if err != nil {
 			return Worktree{}, fmt.Errorf("commit your uncommitted changes as the baseline: %w", err)
@@ -75,7 +83,7 @@ func CreateWorktree(ctx context.Context, root, path, runID, prompt string) (Work
 		start = strings.TrimSpace(string(out))
 	}
 
-	w := Worktree{Path: path, Branch: branchName(prompt, runID), Baseline: start, Head: head}
+	w := Worktree{Path: o.Path, Branch: branchName(o.Prompt, runID), Baseline: start, Head: head, Author: o.Author}
 	// Both are routine to be missing: a detached HEAD has no branch, and a
 	// repository may record no default.
 	w.BaseBranch, _ = gitutil.CurrentBranchInCtx(ctx, root)
@@ -85,7 +93,7 @@ func CreateWorktree(ctx context.Context, root, path, runID, prompt string) (Work
 	if err := CheckHeadBranch(w.Branch, w.DefaultBranch); err != nil {
 		return Worktree{}, err
 	}
-	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "-b", w.Branch, path, start); err != nil {
+	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "-b", w.Branch, o.Path, start); err != nil {
 		return Worktree{}, fmt.Errorf("create worktree: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return w, nil
@@ -137,7 +145,7 @@ func (w Worktree) Remove(ctx context.Context, root string) error {
 // developer to carry on in. Hooks and signing are skipped: the run cannot
 // answer a prompt, and the work has already been checked.
 func (w Worktree) Commit(ctx context.Context, message string) (string, error) {
-	git := gitexec.Runner{Dir: w.Path, Env: commitEnv()}
+	git := gitexec.Runner{Dir: w.Path, Env: commitEnv(w.Author)}
 	if out, err := git.CombinedOutput(ctx, "add", "-A"); err != nil {
 		return "", fmt.Errorf("stage the work: %w: %s", err, strings.TrimSpace(string(out)))
 	}

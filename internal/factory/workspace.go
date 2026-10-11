@@ -35,7 +35,7 @@ func (c Change) Empty() bool {
 
 // gitIdentity commits as chunk whatever the sidecar image's git config says:
 // an image may have no identity set, require signed commits, or install hooks.
-const gitIdentity = "git -c user.name=chunk -c user.email=chunk@circleci.com -c commit.gpgsign=false"
+const gitIdentity = "git -c user.name=" + defaultAuthorName + " -c user.email=" + defaultAuthorEmail + " -c commit.gpgsign=false"
 
 // commitBaseline commits whatever the developer's synced tree holds, so their
 // own uncommitted work is part of the baseline rather than of the change the

@@ -31,7 +31,7 @@ func TestCreateWorktreeStartsFromTheDevelopersFiles(t *testing.T) {
 	before := gitOutput(t, root, "status", "--porcelain")
 	branch := gitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD")
 
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "Add a --verbose flag")
+	wt, err := CreateWorktree(ctx, WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "Add a --verbose flag"})
 	assert.NilError(t, err)
 
 	assert.Equal(t, wt.Branch, "chunk/factory/add-a-verbose-flag/run-1")
@@ -55,7 +55,7 @@ func TestCreateWorktreeFromACleanTreeStartsAtHEAD(t *testing.T) {
 	gitrepo.AddFile(t, root, "main.go")
 	gitOutput(t, root, "commit", "-m", "base")
 
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
+	wt, err := CreateWorktree(ctx, WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag"})
 	assert.NilError(t, err)
 	assert.Equal(t, wt.Baseline, gitOutput(t, root, "rev-parse", "HEAD"))
 	assert.Equal(t, wt.Head, wt.Baseline)
@@ -64,7 +64,7 @@ func TestCreateWorktreeFromACleanTreeStartsAtHEAD(t *testing.T) {
 func TestWorktreeCommitKeepsTheWorktree(t *testing.T) {
 	ctx := context.Background()
 	root := newProject(t)
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
+	wt, err := CreateWorktree(ctx, WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag"})
 	assert.NilError(t, err)
 
 	commit, err := wt.Commit(ctx, "nothing")
@@ -90,7 +90,7 @@ func TestWorktreeCommitKeepsTheWorktree(t *testing.T) {
 func TestWorktreeRemove(t *testing.T) {
 	ctx := context.Background()
 	root := newProject(t)
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
+	wt, err := CreateWorktree(ctx, WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag"})
 	assert.NilError(t, err)
 
 	assert.NilError(t, wt.Remove(ctx, root))

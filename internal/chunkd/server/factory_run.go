@@ -139,6 +139,10 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusServiceUnavailable, "%v", err)
 	}
+	author, err := cfg.Factory.CommitAuthor()
+	if err != nil {
+		return chunkd.Session{}, apiErr(http.StatusBadRequest, "factory.author: %v", err)
+	}
 	// The daemon's working directory is not the caller's, so a relative path
 	// would put the log somewhere the caller did not mean.
 	if req.Log != "" && req.Log != factory.LogDefault && !filepath.IsAbs(req.Log) {
@@ -171,6 +175,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		OrgID:                   orgID,
 		Image:                   image,
 		Backend:                 backend,
+		Author:                  author,
 		KeepSidecars:            req.KeepSidecars,
 		Credential:              d.rcfg.Credential,
 		BaseURL:                 d.rcfg.BaseURL,

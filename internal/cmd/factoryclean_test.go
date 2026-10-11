@@ -24,7 +24,7 @@ func finishedRun(t *testing.T, project, runID string) factory.Worktree {
 	t.Helper()
 	dataDir, err := config.ProjectDataDir(config.CanonicalProjectRoot(project))
 	assert.NilError(t, err)
-	wt, err := factory.CreateWorktree(context.Background(), project, filepath.Join(dataDir, "factory", runID), runID, "do the thing")
+	wt, err := factory.CreateWorktree(context.Background(), factory.WorktreeOptions{Root: project, Path: filepath.Join(dataDir, "factory", runID), RunID: runID, Prompt: "do the thing"})
 	assert.NilError(t, err)
 	rec, err := json.Marshal(factory.Record{RunID: runID, Prompt: "do the thing", Worktree: wt.Path, Branch: wt.Branch, Result: factory.ResultPassed, Rounds: 2})
 	assert.NilError(t, err)

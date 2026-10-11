@@ -73,7 +73,7 @@ func remoteProject(t *testing.T) (Publication, string) {
 	gitOutput(t, root, "remote", "set-url", "origin", origin)
 	gitOutput(t, root, "push", "origin", "HEAD:refs/heads/main")
 	gitOutput(t, root, "fetch", "origin")
-	wt, err := CreateWorktree(context.Background(), root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
+	wt, err := CreateWorktree(context.Background(), WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag"})
 	assert.NilError(t, err)
 	return Publication{
 		Dir: wt.Path, Remote: "origin", Head: wt.Branch,
@@ -128,7 +128,7 @@ func TestPublicationBaseFallsBackToDefaultWhenNotOnRemote(t *testing.T) {
 
 func TestCreateWorktreeRecordsBranches(t *testing.T) {
 	root := newProject(t)
-	wt, err := CreateWorktree(context.Background(), root, filepath.Join(t.TempDir(), "wt"), "run-1", "x")
+	wt, err := CreateWorktree(context.Background(), WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "x"})
 	assert.NilError(t, err)
 	assert.Equal(t, wt.BaseBranch, gitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD"))
 }

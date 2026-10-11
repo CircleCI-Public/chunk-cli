@@ -30,7 +30,7 @@ import (
 func fakeFactoryConfig(t *testing.T, result factory.Result) server.ReviewConfig {
 	cfg := fakeSessionConfig()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
-		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1", opts.Prompt)
+		wt, err := factory.CreateWorktree(ctx, factory.WorktreeOptions{Root: opts.Root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: opts.Prompt})
 		if err != nil {
 			return factory.Report{}, fmt.Errorf("create the run's worktree: %w", err)
 		}
@@ -202,7 +202,7 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 	started := make(chan struct{})
 	cfg := fakeSessionConfig()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
-		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1", opts.Prompt)
+		wt, err := factory.CreateWorktree(ctx, factory.WorktreeOptions{Root: opts.Root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: opts.Prompt})
 		if err != nil {
 			return factory.Report{}, fmt.Errorf("create the run's worktree: %w", err)
 		}

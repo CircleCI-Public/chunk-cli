@@ -48,6 +48,7 @@ chunk
 │   --skip-factory                  # Skip the factory backend step
 │   --factory-backend <name>        # circleci or docker; skips the prompt
 │   --factory-image <image>         # Docker image for factory runs; skips the prompt
+│   --factory-author "Name <email>" # Who factory commits are attributed to (default: your git identity)
 │   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (default: true; pass =false to generate)
 │   --project-dir <path>            # Project directory (defaults to cwd)
 │
@@ -188,10 +189,12 @@ chunk
 │       --json                      # Output as JSON
 │   ├── list                        # List the project's factory runs and their worktrees
 │   │   --json                      # Output as JSON
-│   └── clean [run...]              # Remove runs' worktrees, branches and records (default: every run not running)
-│       --yes                       # Remove without asking
-│       --force                     # Also remove worktrees with uncommitted changes, discarding them
-│       --dry-run                   # List what would be removed and stop
+│   ├── clean [run...]              # Remove runs' worktrees, branches and records (default: every run not running)
+│   │   --yes                       # Remove without asking
+│   │   --force                     # Also remove worktrees with uncommitted changes, discarding them
+│   │   --dry-run                   # List what would be removed and stop
+│   └── author ["Name <email>"]     # Show or set who factory commits are attributed to (factory.author)
+│       --unset                     # Remove factory.author, so each person commits as themselves
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
@@ -336,6 +339,12 @@ chunk
   backend uses `--image` or `factory.image` and never `validation.sidecarImage`, which is a CircleCI
   snapshot ID; with neither (and no `CHUNK_DOCKER_IMAGE`) the command fails before the run starts.
   `chunk init` asks where factory runs execute and writes `factory.backend`/`factory.image`.
+- **The factory branch's commits are attributed to the developer.** They use `factory.author`
+  (`"Name <email>"`) when set, else the repo's git `user.name`/`user.email`, else `chunk`. These are
+  the commits a published PR carries. `.chunk/config.json` is committed, so `factory.author` applies to
+  everyone in the repo: `chunk init` writes it only when you choose someone other than your git
+  identity. `chunk factory author` shows the author and its source; with an argument it sets
+  `factory.author`, and `--unset` removes it.
 - **`factory build --plan FILE` reads the prompt from a file**, as if piped on stdin. It cannot be combined
   with a prompt argument or redirected stdin; with `--continue` it is optional guidance, like an argument.
 - **`factory build` runs on the local daemon, in the background.** `chunk factory build "<prompt>"` (or

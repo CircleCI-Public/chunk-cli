@@ -61,7 +61,7 @@ func publishProject(t *testing.T) (*chunkd.FactoryRun, string) {
 	runGit(t, root, "remote", "set-url", "origin", origin)
 	runGit(t, root, "push", "origin", "HEAD:refs/heads/main")
 	runGit(t, root, "fetch", "origin")
-	wt, err := factory.CreateWorktree(context.Background(), root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
+	wt, err := factory.CreateWorktree(context.Background(), factory.WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag"})
 	assert.NilError(t, err)
 	return &chunkd.FactoryRun{
 		Prompt: "add a flag", RunID: "run-1", Worktree: wt.Path, Branch: wt.Branch,

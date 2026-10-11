@@ -18,7 +18,7 @@ func finishedRun(t *testing.T) (root string, rec Record) {
 	t.Helper()
 	ctx := context.Background()
 	root = newProject(t)
-	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1", "add a flag")
+	wt, err := CreateWorktree(ctx, WorktreeOptions{Root: root, Path: filepath.Join(t.TempDir(), "wt"), RunID: "run-1", Prompt: "add a flag"})
 	assert.NilError(t, err)
 	writeFile(t, wt.Path, "main.go", "package main\n\nfunc main() {}\n")
 	writeFile(t, wt.Path, "flag.go", "package main\n")
@@ -42,7 +42,7 @@ func TestNewRecordKeepsTheBranches(t *testing.T) {
 // A continued run publishes against the original run's branches.
 func TestOpenWorktreeKeepsTheRunsBranches(t *testing.T) {
 	root, rec := finishedRun(t)
-	wt, err := openWorktree(context.Background(), root, rec, "run-2")
+	wt, err := openWorktree(context.Background(), root, rec, "run-2", config.CommitAuthor{})
 	assert.NilError(t, err)
 	assert.Equal(t, wt.BaseBranch, rec.BaseBranch)
 	assert.Equal(t, wt.DefaultBranch, "main")
@@ -55,7 +55,7 @@ func TestOpenWorktreeCommitsEditsMadeSinceTheRun(t *testing.T) {
 	root, rec := finishedRun(t)
 	writeFile(t, rec.Worktree, "by-hand.go", "package main\n")
 
-	wt, err := openWorktree(ctx, root, rec, "run-2")
+	wt, err := openWorktree(ctx, root, rec, "run-2", config.CommitAuthor{})
 	assert.NilError(t, err)
 
 	assert.Equal(t, wt.Baseline, rec.Baseline, "the work is still measured from the original baseline")
@@ -72,7 +72,7 @@ func TestOpenWorktreeAddsARemovedWorktreeBack(t *testing.T) {
 	root, rec := finishedRun(t)
 	assert.NilError(t, os.RemoveAll(rec.Worktree))
 
-	wt, err := openWorktree(ctx, root, rec, "run-2")
+	wt, err := openWorktree(ctx, root, rec, "run-2", config.CommitAuthor{})
 	assert.NilError(t, err)
 	assert.Equal(t, readFile(t, wt.Path, "flag.go"), "package main\n")
 }
@@ -82,7 +82,7 @@ func TestOpenWorktreeRefusesAMissingBranch(t *testing.T) {
 	root, rec := finishedRun(t)
 	rec.Branch = "chunk/factory/gone"
 
-	_, err := openWorktree(ctx, root, rec, "run-2")
+	_, err := openWorktree(ctx, root, rec, "run-2", config.CommitAuthor{})
 	assert.ErrorContains(t, err, "the run's branch chunk/factory/gone is gone")
 }
 
@@ -92,7 +92,7 @@ func TestOpenWorktreeRefusesABranchThatLeftItsBaseline(t *testing.T) {
 	rec.Baseline = gitOutput(t, root, "rev-parse", rec.Branch)
 	gitOutput(t, rec.Worktree, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--amend", "-m", "rewritten")
 
-	_, err := openWorktree(ctx, root, rec, "run-2")
+	_, err := openWorktree(ctx, root, rec, "run-2", config.CommitAuthor{})
 	assert.ErrorContains(t, err, "no longer starts from the run's baseline")
 }
 
@@ -101,7 +101,7 @@ func TestOpenWorktreeRefusesABranchThatLeftItsBaseline(t *testing.T) {
 func TestShowBaselineThenRestoreWork(t *testing.T) {
 	ctx := context.Background()
 	root, rec := finishedRun(t)
-	wt, err := openWorktree(ctx, root, rec, "run-2")
+	wt, err := openWorktree(ctx, root, rec, "run-2", config.CommitAuthor{})
 	assert.NilError(t, err)
 	tip := gitOutput(t, wt.Path, "rev-parse", "HEAD")
 

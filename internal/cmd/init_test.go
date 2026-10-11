@@ -790,3 +790,22 @@ func TestInitRerunWithoutForceHandlesFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, cfg.Factory, &config.FactoryConfig{Backend: "docker", Image: "img:1"})
 }
+
+func TestInitFactoryAuthorFlag(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv("CI", "1")
+	dir := initGitRepo(t)
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}))
+
+	// Saved in canonical form, on its own, without touching the backend.
+	stderr, err := runInitCmd(t, dir, "--factory-author", `"Ada Lovelace"  <ada@example.com>`)
+	assert.NilError(t, err, stderr)
+	assert.Assert(t, strings.Contains(stderr, "Factory commits as: Ada Lovelace <ada@example.com> (factory.author"), stderr)
+	cfg, err := config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cfg.Factory, &config.FactoryConfig{Author: "Ada Lovelace <ada@example.com>"})
+
+	_, err = runInitCmd(t, dir, "--factory-author", "ada@example.com")
+	assert.Assert(t, err != nil)
+	assert.Assert(t, strings.Contains(userMsg(err), "--factory-author"))
+}

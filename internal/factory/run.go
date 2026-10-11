@@ -42,6 +42,10 @@ type RunOptions struct {
 	Prompts   []review.Prompt
 	Commands  []config.Command
 
+	// Author is the configured author of the branch's commits (factory.author);
+	// when it is empty, ResolveAuthor falls back to the developer's identity.
+	Author config.CommitAuthor
+
 	Client *circleci.Client
 	OrgID  string
 	Image  string
@@ -161,15 +165,19 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if err != nil {
 		return rep, fmt.Errorf("find chunk's data directory for the project: %w", err)
 	}
+	author := ResolveAuthor(ctx, opts.Root, opts.Author).CommitAuthor
 	var wt Worktree
 	if cont == nil {
-		wt, err = CreateWorktree(ctx, opts.Root, filepath.Join(dataDir, "factory", rep.RunID), rep.RunID, opts.Prompt)
+		wt, err = CreateWorktree(ctx, WorktreeOptions{
+			Root: opts.Root, Path: filepath.Join(dataDir, "factory", rep.RunID),
+			RunID: rep.RunID, Prompt: opts.Prompt, Author: author,
+		})
 		if err != nil {
 			return rep, fmt.Errorf("create the run's worktree: %w", err)
 		}
 	} else {
 		status(iostream.LevelInfo, fmt.Sprintf("Continuing run %s on %s", cont.From.RunID, cont.From.Branch))
-		wt, err = openWorktree(ctx, opts.Root, cont.From, rep.RunID)
+		wt, err = openWorktree(ctx, opts.Root, cont.From, rep.RunID, author)
 		if err != nil {
 			return rep, fmt.Errorf("open the worktree of run %s: %w", cont.From.RunID, err)
 		}

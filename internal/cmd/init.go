@@ -600,7 +600,7 @@ func writeProjectConfig(workDir string, cfg *config.ProjectConfig, streams iostr
 
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth, skipFactory bool
-	var projectDir, factoryBackend, factoryImage string
+	var projectDir, factoryBackend, factoryImage, factoryAuthor string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -614,10 +614,10 @@ hook config files.`,
 			ctx := cmd.Context()
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 
-			if err := checkFactoryBackend(factoryBackend); err != nil {
+			factoryOpts := initFactoryOptions{Backend: factoryBackend, Image: factoryImage, Author: factoryAuthor, Skip: skipFactory}
+			if err := factoryOpts.check(); err != nil {
 				return err
 			}
-			factoryOpts := initFactoryOptions{Backend: factoryBackend, Image: factoryImage, Skip: skipFactory}
 
 			workDir := projectDir
 			if workDir == "" {
@@ -640,7 +640,7 @@ hook config files.`,
 				if hasData {
 					streams.ErrPrintln("Config already exists at .chunk/config.json")
 					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
-					if err := initFactoryRerun(workDir, streams, existingCfg, factoryOpts); err != nil {
+					if err := initFactoryRerun(ctx, workDir, streams, existingCfg, factoryOpts); err != nil {
 						return err
 					}
 					// Still ensure pool state is gitignored for projects
@@ -704,7 +704,7 @@ hook config files.`,
 			}
 
 			// Step 3b: where factory runs execute
-			initFactoryStep(workDir, streams, cfg, factoryOpts)
+			initFactoryStep(ctx, workDir, streams, cfg, factoryOpts)
 
 			if err := writeProjectConfig(workDir, cfg, streams); err != nil {
 				return err
@@ -766,6 +766,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipFactory, "skip-factory", false, "Skip the factory backend step")
 	cmd.Flags().StringVar(&factoryBackend, "factory-backend", "", "Where factory runs execute: circleci or docker (skips the prompt)")
 	cmd.Flags().StringVar(&factoryImage, "factory-image", "", "Docker image for factory runs (skips the prompt)")
+	cmd.Flags().StringVar(&factoryAuthor, "factory-author", "", `Who factory commits are attributed to, as "Name <email>" (default: your git identity)`)
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 
 	return cmd

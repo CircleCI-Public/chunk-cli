@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"slices"
@@ -138,6 +139,41 @@ type FactoryConfig struct {
 	Image       string `json:"image,omitempty"`       // Docker image for the docker backend
 	MaxAttempts int    `json:"maxAttempts,omitempty"` // 0 means the built-in default
 	Log         bool   `json:"log,omitempty"`         // keep a run log by default
+	// Author is who the commits on a run's branch are attributed to, as
+	// "Name <email>". Empty means the developer's own git identity.
+	Author string `json:"author,omitempty"`
+}
+
+// CommitAuthor is a git identity that commits are attributed to.
+type CommitAuthor struct {
+	Name  string
+	Email string
+}
+
+// Complete reports whether both the name and the email are set.
+func (a CommitAuthor) Complete() bool { return a.Name != "" && a.Email != "" }
+
+// String writes the author as "Name <email>", the form ParseCommitAuthor reads.
+func (a CommitAuthor) String() string { return a.Name + " <" + a.Email + ">" }
+
+// ParseCommitAuthor reads an author written as "Name <email>".
+func ParseCommitAuthor(s string) (CommitAuthor, error) {
+	addr, err := mail.ParseAddress(s)
+	if err != nil {
+		return CommitAuthor{}, fmt.Errorf("parse author %q: %w", s, err)
+	}
+	if addr.Name == "" {
+		return CommitAuthor{}, fmt.Errorf("author %q has no name", s)
+	}
+	return CommitAuthor{Name: addr.Name, Email: addr.Address}, nil
+}
+
+// CommitAuthor is the configured author, the zero value when none is set.
+func (f *FactoryConfig) CommitAuthor() (CommitAuthor, error) {
+	if f == nil || f.Author == "" {
+		return CommitAuthor{}, nil
+	}
+	return ParseCommitAuthor(f.Author)
 }
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
@@ -313,6 +349,9 @@ func (c *ProjectConfig) validate() error {
 		}
 		if f.MaxAttempts < 0 {
 			return fmt.Errorf("factory.maxAttempts must not be negative, got %d", f.MaxAttempts)
+		}
+		if _, err := f.CommitAuthor(); err != nil {
+			return fmt.Errorf("factory.author must look like \"Name <email>\": %w", err)
 		}
 	}
 	// Trimmed before the checks below rather than after, so the entry validated

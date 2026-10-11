@@ -257,6 +257,22 @@ func TestFactoryConfigValidation(t *testing.T) {
 	assert.ErrorContains(t, err, "maxAttempts")
 }
 
+func TestFactoryConfigAuthor(t *testing.T) {
+	var unset *FactoryConfig
+	author, err := unset.CommitAuthor()
+	assert.NilError(t, err)
+	assert.Equal(t, author, CommitAuthor{})
+
+	author, err = (&FactoryConfig{Author: "Ada Lovelace <ada@example.com>"}).CommitAuthor()
+	assert.NilError(t, err)
+	assert.Equal(t, author, CommitAuthor{Name: "Ada Lovelace", Email: "ada@example.com"})
+
+	for _, bad := range []string{"ada@example.com", "Ada", "Ada <not an email>"} {
+		err := (&ProjectConfig{Factory: &FactoryConfig{Author: bad}}).Validate()
+		assert.ErrorContains(t, err, "factory.author", bad)
+	}
+}
+
 func TestFactoryConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	want := &FactoryConfig{Backend: "docker", Image: "chunk-sandbox:local", MaxAttempts: 5, Log: true}
