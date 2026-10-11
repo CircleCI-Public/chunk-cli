@@ -180,8 +180,10 @@ func TestValidateRegistersCommandUnderTheGitRoot(t *testing.T) {
 	workDir := filepath.Join(gitRoot, "sub")
 	assert.NilError(t, os.MkdirAll(workDir, 0o755))
 	t.Chdir(workDir)
+	// Remote validation runs only for a project that opted into CircleCI.
 	assert.NilError(t, config.SaveProjectConfig(workDir, &config.ProjectConfig{
 		OrgID:    "org-1",
+		Factory:  &config.FactoryConfig{Backend: config.BackendCircleCI},
 		Commands: []config.Command{{Name: "test", Run: "true", Remote: true}},
 	}))
 

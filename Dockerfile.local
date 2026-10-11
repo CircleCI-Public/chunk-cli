@@ -17,8 +17,8 @@
 #
 # The repo is NOT copied in at build time — the Docker backend bind-mounts a
 # fresh copy of your working tree into the container at run time. So this image
-# only needs tools, never your source. (No rsync/ssh here: the file transport
-# is host-side.)
+# only needs tools, never your source. (The file transport is host-side; the
+# rsync and ssh below are only for chunk-cli's own tests.)
 
 FROM debian:bookworm-slim
 
@@ -30,8 +30,9 @@ ENV HOME=/root \
 
 # Base tools: the loop's own scripts (git, sha256sum/base64 from coreutils,
 # pkill from procps), curl/ca-certificates for installers, python3 for the
-# harness lint step, and gcc + libc6-dev because `task test` runs with -race,
-# which needs cgo.
+# harness lint step, gcc + libc6-dev because `task test` runs with -race,
+# which needs cgo, and rsync + openssh-client because the pooled-validation
+# tests skip themselves without them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git \
       coreutils \
@@ -42,6 +43,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 \
       gcc \
       libc6-dev \
+      rsync \
+      openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Go — matches go.mod's version, architecture-detected so the image builds on
