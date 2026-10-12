@@ -14,6 +14,8 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/harness"
+	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
@@ -331,6 +333,15 @@ func TestRunPassProgressFn(t *testing.T) {
 	}
 	assert.Equal(t, terminal["pass"], StateDone)
 	assert.Equal(t, terminal["fail"], StateFailed)
+}
+
+// claudeScriptWithTools is the script of a Claude review with an explicit tool set.
+func claudeScriptWithTools(repoPath, prompt, model string, tools []string, structured bool) string {
+	in := harness.ReviewInput{RepoPath: repoPath, Prompt: prompt, Model: model, Tools: tools}
+	if structured {
+		in.Schema = FindingsSchema
+	}
+	return claude.Harness{}.ReviewScript(in)
 }
 
 func TestClaudeScript(t *testing.T) {

@@ -668,7 +668,7 @@ func detectInitCommands(ctx context.Context, workDir string, streams iostream.St
 
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID, skipAuth, skipFactory, skipImageBuild bool
-	var projectDir, factoryBackend, factoryImage, factoryAuthor string
+	var projectDir, factoryBackend, factoryImage, factoryAuthor, harnessFlag string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -682,7 +682,7 @@ hook config files.`,
 			ctx := cmd.Context()
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 
-			factoryOpts := initFactoryOptions{Backend: factoryBackend, Image: factoryImage, Author: factoryAuthor, Skip: skipFactory, SkipImageBuild: skipImageBuild}
+			factoryOpts := initFactoryOptions{Backend: factoryBackend, Image: factoryImage, Author: factoryAuthor, Harness: harnessFlag, Skip: skipFactory, SkipImageBuild: skipImageBuild}
 			if err := factoryOpts.check(); err != nil {
 				return err
 			}
@@ -716,7 +716,7 @@ hook config files.`,
 					updateInitGitignore(workDir, streams)
 					// Credentials are per user, so ensure the login anyway.
 					earlyRC, _ := config.Resolve("", "", insecureStorage)
-					claudeAuthStep(ctx, streams, earlyRC, insecureStorage, skipAuth, ui.Confirm)
+					agentAuthStep(ctx, streams, earlyRC, existingCfg, insecureStorage, skipAuth, ui.Confirm)
 					return nil
 				}
 			}
@@ -796,10 +796,10 @@ hook config files.`,
 				installSkillsStep(workDir, streams, plan.Skills)
 			}
 
-			// Step 8: Claude credential. Re-resolve: earlier steps may not have
+			// Step 8: the coding agent's credential. Re-resolve: earlier steps may not have
 			// changed it, but this keeps the report accurate.
 			authRC, _ := config.Resolve("", "", insecureStorage)
-			claudeAuthStep(ctx, streams, authRC, insecureStorage, skipAuth, ui.Confirm)
+			agentAuthStep(ctx, streams, authRC, cfg, insecureStorage, skipAuth, ui.Confirm)
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
 			printInitSummary(cfg.Commands, plan.RemoteHints, streams)
@@ -815,10 +815,11 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	cmd.Flags().BoolVar(&skipTestSuites, "skip-test-suites", true, "Skip CircleCI test-suites.yml generation (circleci backend only; default: skip; pass =false to use built-in Go/pytest templates)")
 	cmd.Flags().BoolVar(&skipOrgID, "skip-org-id", false, "Skip CircleCI org ID detection (circleci backend only)")
-	cmd.Flags().BoolVar(&skipAuth, "skip-auth", false, "Skip the Claude login check")
+	cmd.Flags().BoolVar(&skipAuth, "skip-auth", false, "Skip the coding agent login check")
 	cmd.Flags().BoolVar(&skipFactory, "skip-factory", false, "Skip the factory backend step")
 	cmd.Flags().BoolVar(&skipImageBuild, "skip-image-build", false, "Write Dockerfile.smelt for docker factory runs but do not offer to build the image")
 	cmd.Flags().StringVar(&factoryBackend, "factory-backend", "", "Where factory runs execute: docker (default) or circleci (skips the prompt)")
+	cmd.Flags().StringVar(&harnessFlag, "harness", "", "Default coding agent for factory runs: claude or codex (skips the prompt)")
 	cmd.Flags().StringVar(&factoryImage, "factory-image", "", "Docker image for factory runs (skips the prompt)")
 	cmd.Flags().StringVar(&factoryAuthor, "factory-author", "", `Who factory commits are attributed to, as "Name <email>" (default: your git identity)`)
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")

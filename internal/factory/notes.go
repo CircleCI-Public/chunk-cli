@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/review"
 )
 
@@ -84,16 +85,13 @@ func (s *Sidecars) writeNotes(ctx context.Context, in NotesInput) (Notes, error)
 	if in.Log != nil {
 		in.Log("notes prompt", prompt)
 	}
-	args := []string{
-		"claude", "-p", "--output-format", "json", "--json-schema", NotesSchema,
-		"--allowedTools", strings.Join(notesTools, ","),
-	}
-	if im.Model != "" {
-		args = append(args, "--model", im.Model)
-	}
+	h := im.agent()
+	script := h.ReviewScript(harness.ReviewInput{
+		RepoPath: im.Entry.RepoPath, Prompt: prompt, Model: im.Model, Schema: NotesSchema, Tools: notesTools,
+	})
 	ctx, cancel := context.WithTimeout(ctx, notesTimeout)
 	defer cancel()
-	out, err := review.RunScriptEnv(ctx, s.Exec, im.Entry, review.ClaudeScript(im.Entry.RepoPath, prompt, args), review.Env(im.Credential, im.BaseURL), maxNotesOutputBytes)
+	out, err := review.RunScriptEnv(ctx, s.Exec, im.Entry, script, h.Env(im.Credential, im.BaseURL), maxNotesOutputBytes)
 	if ctx.Err() == context.DeadlineExceeded {
 		return Notes{}, fmt.Errorf("timed out after %s", notesTimeout)
 	}
@@ -102,6 +100,9 @@ func (s *Sidecars) writeNotes(ctx context.Context, in NotesInput) (Notes, error)
 	}
 	if in.Log != nil {
 		in.Log("notes response", out)
+	}
+	if h.Name() != harness.Claude {
+		return parseNotesMessage(out)
 	}
 	return ParseNotes(out)
 }
@@ -145,6 +146,16 @@ type notesResult struct {
 	StructuredOutput *Notes `json:"structured_output"`
 }
 
+// parseNotesMessage reads the notes out of an agent's last message, which the
+// schema made the notes object itself rather than claude's JSON result.
+func parseNotesMessage(msg string) (Notes, error) {
+	var n Notes
+	if err := json.Unmarshal([]byte(strings.TrimSpace(msg)), &n); err != nil {
+		return Notes{}, fmt.Errorf("read the notes: %w", err)
+	}
+	return validNotes(n)
+}
+
 // ParseNotes reads the notes out of claude's JSON result. Every field must be
 // present, and the title is cut to fit a commit subject.
 func ParseNotes(output string) (Notes, error) {
@@ -156,7 +167,11 @@ func ParseNotes(output string) (Notes, error) {
 		return Notes{}, fmt.Errorf("claude gave no structured notes (%s): %s",
 			res.Subtype, review.Tail(strings.TrimSpace(res.Result), 500))
 	}
-	n := *res.StructuredOutput
+	return validNotes(*res.StructuredOutput)
+}
+
+// validNotes cleans n and checks that every field is present.
+func validNotes(n Notes) (Notes, error) {
 	n.Fallback = ""
 	n.Title, n.What, n.Why, n.How = cleanTitle(n.Title), strings.TrimSpace(n.What), strings.TrimSpace(n.Why), strings.TrimSpace(n.How)
 	for field, v := range map[string]string{"title": n.Title, "what": n.What, "why": n.Why, "how": n.How} {

@@ -198,7 +198,8 @@ Useful flags:
 - `--max-attempts N`: the most rounds to run.
 - `--base BRANCH`, `--draft`, `--pr-title`, `--pr-body`: shape the PR.
 - `--log`, `--verbose`: keep a full log of the run.
-- `--model`: choose the Claude model.
+- `--harness claude|codex`: choose the coding agent (see [Coding agents](#coding-agents)).
+- `--model`: choose the model (default: `factory.models.<harness>`, else the agent's own).
 
 See [docs/CLI.md](docs/CLI.md) for every flag.
 
@@ -215,7 +216,62 @@ smelt factory image [--rebuild]      # build or rebuild and verify the sandbox i
 smelt factory image --regenerate     # re-detect and rewrite Dockerfile.smelt (asks first)
 smelt factory author ["Name <email>"]  # show or set who factory commits are attributed to
 smelt refresh                        # log in to Claude again (and restart the daemon)
+smelt refresh codex                  # log in to Codex again
+smelt harness status [--json]        # which agents are installed and logged in, and their usage limits
 ```
+
+## Coding agents
+
+smelt drives two coding agents, each as the implementer and as the reviewers of
+a run: **Claude Code** and **OpenAI Codex**. Choose one per run:
+
+```bash
+smelt factory build --plan spec.md --harness codex
+smelt factory build --plan spec.md                 # uses factory.harness, or asks
+```
+
+Precedence, highest first: `--harness`, then `factory.harness` in
+`.smelt/config.json`, then a question in a terminal (it offers to save your
+answer). With none of these and no terminal, the command fails and lists the
+options. There is no silent default. `smelt init` has a "Coding agent" step that
+sets `factory.harness` and offers the login (`--harness` answers it).
+
+`factory.models.claude` and `factory.models.codex` set the model each agent uses
+when `--model` is not given, so switching agents never carries a model name the
+other one rejects.
+
+**Logging in to Codex:**
+
+```bash
+smelt auth login codex               # ChatGPT subscription: for your own machine
+smelt auth login codex --device-auth # no browser; needs device-code sign-in enabled in ChatGPT → Settings → Security
+smelt auth set codex                 # OpenAI API key: for a shared or unattended runner
+smelt auth status                    # kind of login, plan, and whether it still works
+```
+
+`auth login codex` runs `codex login` in a private directory, so `~/.codex` is
+untouched, and keeps the login in the OS keychain. A container never gets your
+refresh token: its copy of `auth.json` has `refresh_token` blanked, and it lives
+in a private directory of the container only. The access token lasts about ten
+days. Under 24 hours before it expires, `factory build` first tries to renew it
+on your machine; if that does not work it stops and asks you to run
+`smelt refresh codex` (a one-minute browser login). `SMELT_CODEX_AUTH_JSON`
+(the base64 of `auth.json`) or `CODEX_API_KEY` override the keychain.
+
+**What a run reports:** `smelt factory status --json` shows, per implementer
+turn, the `harness`, the `model`, `input_tokens`, `cached_tokens`,
+`output_tokens` and the last `rate_limit` signal the agent emitted. Codex
+reports tokens, not dollars, so `cost_usd` stays 0 for it.
+
+**`smelt harness status`** shows both agents: installed on this machine and in
+the sandbox image, whether the login works, the plan and the usage windows:
+real figures for Codex (from its own `app-server`), and for Claude the
+undocumented `/api/oauth/usage` endpoint, read with Claude Code's own login from
+the macOS keychain (read-only). Anthropic has said third-party tools should not
+call that endpoint and it can change without notice. Turn the probe off with
+`{"harness": {"claude": {"usage_probe": false}}}` in `~/.config/smelt/config.json`;
+without it, or when it fails, the last rate-limit signal a run saw is shown.
+smelt reports; choosing between agents is up to whatever drives it.
 
 ## Configuration
 
@@ -238,6 +294,8 @@ is committed and shared with your team:
 | `backend` | `docker` for local containers (the default), or `circleci` for cloud sidecars. `circleci` is the one setting that lets smelt use CircleCI. |
 | `dockerfile` | The managed sandbox Dockerfile. smelt builds the image and keeps it up to date. |
 | `image` | An image you manage yourself. It takes precedence over `dockerfile` and is never built by smelt. |
+| `harness` | `claude` or `codex`: the coding agent runs use. Unset means ask (and fail without a terminal). |
+| `models` | Per-agent default model, e.g. `{"claude": "opus", "codex": "gpt-5-codex"}`, used when `--model` is not given |
 | `maxAttempts` | Default number of rounds (built-in: 3) |
 | `log` | Keep a run log by default |
 | `author` | `"Name <email>"` for factory commits. Leave it unset so everyone commits as their own git identity. |
@@ -247,6 +305,9 @@ A flag always beats the config, and the config beats the built-in default.
 **Credentials:**
 - **Claude:** in the OS keychain, set by `smelt init` or `smelt refresh`.
   `CLAUDE_CODE_OAUTH_TOKEN` overrides it.
+- **Codex:** in the OS keychain, set by `smelt auth login codex` (ChatGPT) or
+  `smelt auth set codex` (API key). A run needs only the credential of the agent
+  it uses. See [Coding agents](#coding-agents).
 - **GitHub:** whatever `gh` is logged in as.
 - **CircleCI:** not needed. Even if a CircleCI token is on your machine, smelt
   doesn't use it unless the project opts into the `circleci` backend.
@@ -314,7 +375,8 @@ Local factory
   smelt factory image                        Build and verify the sandbox image
   smelt factory author                       Show or set the commit author
   smelt watch                                Live dashboard
-  smelt refresh [claude]                     Log in to Claude again and restart the daemon
+  smelt refresh [claude|codex]               Log in to an agent again (restarts the daemon for Claude)
+  smelt harness status                       Installed agents, logins and usage limits
 
 Checks and hooks
   smelt validate [name]                      Run quality checks
@@ -322,7 +384,7 @@ Checks and hooks
   smelt config show|set                      Show or change configuration
 
 CircleCI cloud (optional)
-  smelt auth login|signup|set|status|remove  Authentication
+  smelt auth login|signup|set|status|remove  Authentication (login/set/remove also take codex)
   smelt org create                           Manage CircleCI organizations
   smelt sidecar …                            Cloud sidecar environments and snapshots
   smelt task config|run                      Trigger CI tasks

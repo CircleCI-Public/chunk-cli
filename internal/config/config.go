@@ -139,10 +139,28 @@ type UserConfig struct {
 	// the daemon must be started explicitly with `smelt watch`.
 	AutoLaunchDaemon bool `json:"autoLaunchDaemon,omitempty"`
 
+	// Harness holds per-harness preferences, such as harness.claude.usage_probe.
+	Harness HarnessSettings `json:"harness,omitzero"`
+
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into
 	// AnthropicAPIKey by Load and dropped on the next Save (omitempty).
 	LegacyAPIKey string `json:"apiKey,omitempty"`
+}
+
+// HarnessSettings are the user's per-harness preferences.
+type HarnessSettings struct {
+	Claude struct {
+		// UsageProbe turns the Claude usage probe of `smelt harness status`
+		// on or off; nil means on.
+		UsageProbe *bool `json:"usage_probe,omitempty"`
+	} `json:"claude,omitzero"`
+}
+
+// ClaudeUsageProbe reports whether `smelt harness status` may call Claude's
+// usage endpoint. It is on unless the user turned it off.
+func (u UserConfig) ClaudeUsageProbe() bool {
+	return u.Harness.Claude.UsageProbe == nil || *u.Harness.Claude.UsageProbe
 }
 
 // ResolvedConfig holds the final resolved values with their sources.

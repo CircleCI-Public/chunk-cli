@@ -108,7 +108,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.Equal(t, detail.Stages[0].Note, "all checks passed after 1 round(s)")
 	assert.Equal(t, detail.Branch, "smelt/run-1")
 	assert.DeepEqual(t, *detail.Factory, smeltd.FactoryRun{
-		Prompt: "add a --verbose flag", Attempts: DefaultAttempts, RunID: "run-1",
+		Prompt: "add a --verbose flag", Harness: "claude", Attempts: DefaultAttempts, RunID: "run-1",
 		Worktree: "/data/factory/run-1", Branch: "smelt/run-1", Baseline: "base", Head: "head",
 		BaseBranch: "feature", DefaultBranch: "main",
 		Result: "passed", Rounds: 1, Committed: true,

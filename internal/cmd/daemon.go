@@ -62,20 +62,25 @@ func newDaemonCmd() *cobra.Command {
 	}
 }
 
-// daemonReviewConfig resolves the Claude credential factory runs use, once, at
-// daemon start. The daemon has no terminal, so a missing credential is reported
-// through the snapshot rather than prompted for, and the credential itself goes
-// no further than the environment of a Claude command: it is never logged and
+// daemonReviewConfig resolves the credentials factory runs use, once, at daemon
+// start. The daemon has no terminal, so a missing credential is reported
+// through the snapshot rather than prompted for, and a credential itself goes
+// no further than the environment of an agent command: it is never logged and
 // never part of any response.
 func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) server.ReviewConfig {
+	refresh, codexErr := codexDaemonAuth(codexHost)
+	cfg := server.ReviewConfig{Codex: server.HarnessAuth{Refresh: refresh, AuthError: codexErr}}
 	if rcErr != nil {
-		return server.ReviewConfig{AuthError: "could not read configuration — factory runs unavailable: " + rcErr.Error()}
+		cfg.AuthError = "could not read configuration — factory runs unavailable: " + rcErr.Error()
+		return cfg
 	}
 	cred, _, credErr := reviewCredential(rc)
 	if credErr != nil {
-		return server.ReviewConfig{AuthError: "no Claude credential — factory runs unavailable (run: smelt auth refresh)"}
+		cfg.AuthError = "no Claude credential — factory runs unavailable (run: smelt auth refresh)"
+		return cfg
 	}
-	return server.ReviewConfig{Credential: cred, BaseURL: rc.AnthropicBaseURL}
+	cfg.Credential, cfg.BaseURL = cred, rc.AnthropicBaseURL
+	return cfg
 }
 
 // authMessage renders a credential-resolution failure for the dashboard. An

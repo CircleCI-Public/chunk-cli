@@ -17,4 +17,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/* \
  && git config --system safe.directory '*'
 RUN curl -fsSL https://claude.ai/install.sh | bash && test -x "$HOME/.local/bin/claude"
+RUN set -e; \
+    case "$(uname -m)" in \
+      x86_64) arch=x86_64; sum=8daf67f6261161aa5939d8d42a516032d760406216779d7ce6040f242140ff73 ;; \
+      aarch64|arm64) arch=aarch64; sum=15162a9b59edf8e512b27414ec0b7db22e6424a1262b0eee8666643e0d295c2f ;; \
+      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    name="codex-${arch}-unknown-linux-musl"; \
+    curl -fsSL -o "/tmp/${name}.tar.gz" "https://github.com/openai/codex/releases/download/rust-v0.162.0/${name}.tar.gz"; \
+    echo "${sum}  /tmp/${name}.tar.gz" | sha256sum -c -; \
+    mkdir -p "$HOME/.local/bin"; \
+    tar -xzf "/tmp/${name}.tar.gz" -C /tmp; \
+    mv "/tmp/${name}" "$HOME/.local/bin/codex"; \
+    rm -f "/tmp/${name}.tar.gz"; \
+    test -x "$HOME/.local/bin/codex"
+LABEL smelt.harnesses=claude,codex
 CMD ["sleep", "infinity"]

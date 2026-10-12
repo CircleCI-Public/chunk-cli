@@ -53,10 +53,13 @@ func TestParseRefreshProvider(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Equal(t, p, providerClaude)
 	}
-	_, err := parseRefreshProvider("codex")
+	p, err := parseRefreshProvider("codex")
+	assert.NilError(t, err)
+	assert.Equal(t, p, providerCodex)
+	_, err = parseRefreshProvider("gemini")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
-	assert.Assert(t, strings.Contains(ue.Detail(), "claude, anthropic-oauth"), ue.Detail())
+	assert.Assert(t, strings.Contains(ue.Detail(), "claude, anthropic-oauth, codex"), ue.Detail())
 }
 
 func stubMint(t *testing.T, token string, err error) *int {
@@ -190,8 +193,8 @@ func TestRefreshClaude_WarnsAndReportsRestart(t *testing.T) {
 
 func TestRefreshProviderRejectedViaCommand(t *testing.T) {
 	isolateConfig(t)
-	_, err := runRoot(t, "auth", "refresh", "codex")
-	assert.ErrorContains(t, err, "codex")
+	_, err := runRoot(t, "auth", "refresh", "gemini")
+	assert.ErrorContains(t, err, "gemini")
 }
 
 func TestAuthSetAndRemoveAnthropicOAuth_StopDaemon(t *testing.T) {

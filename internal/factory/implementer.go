@@ -3,7 +3,6 @@ package factory
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/smeltdev/smelt/internal/harness"
+	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -36,31 +37,31 @@ func implementerSystemPrompt(instructions string) string {
 	return baseImplementerSystemPrompt + "\n\nRun-specific instructions:\n" + strings.TrimSpace(instructions)
 }
 
-// disallowedGit are the git commands that would move the implementer's work
-// out of the working tree the loop collects it from.
-var disallowedGit = []string{
-	"Bash(git commit:*)", "Bash(git stash:*)", "Bash(git reset:*)",
-	"Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git rebase:*)",
-}
-
 // Activity is one thing the implementer did, for display.
-type Activity struct {
-	// Tool is the tool used, or "" for text the implementer wrote.
-	Tool string
-	// Detail is the tool's target (a file, a command) or the text.
-	Detail string
-}
+type Activity = harness.Activity
 
 // Turn is the outcome of one implementer turn.
 type Turn struct {
 	Summary  string
 	Duration time.Duration
 	CostUSD  float64
+	// Harness and Model are what ran the turn; Model is "" when the CLI's own
+	// default was used.
+	Harness      harness.Name
+	Model        string
+	InputTokens  int
+	CachedTokens int
+	OutputTokens int
+	// RateLimit is the last rate-limit signal the agent emitted, if any.
+	RateLimit *harness.RateLimit
 }
 
-// Implementer runs Claude Code on a sidecar to write code. Every turn resumes
-// the same session, so feedback arrives with the context of the work so far.
+// Implementer runs a coding agent on a sidecar to write code. Every turn
+// resumes the same session, so feedback arrives with the context of the work so
+// far.
 type Implementer struct {
+	// Harness is the agent; Claude Code when nil.
+	Harness      harness.Harness
 	Exec         review.Execer
 	Entry        *sidecar.PoolEntry
 	Credential   review.Credential
@@ -72,6 +73,14 @@ type Implementer struct {
 
 	sessionID string
 	started   bool
+}
+
+// agent is the harness that runs the turns.
+func (im *Implementer) agent() harness.Harness {
+	if im.Harness == nil {
+		return claude.Harness{}
+	}
+	return im.Harness
 }
 
 // Run sends prompt to the implementer and waits for its turn to end.
@@ -86,171 +95,54 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	h := im.agent()
 	start := time.Now()
-	s := &streamParser{onActivity: im.OnActivity}
+	parser := h.NewImplementParser(im.OnActivity)
 	var stderr bytes.Buffer
-	env := review.Env(im.Credential, im.BaseURL)
-	// The sidecar is a sandbox, which is what lets claude skip permission
-	// prompts there even when the image runs it as root.
-	env["IS_SANDBOX"] = "1"
-	code, err := im.Exec(ctx, im.Entry, im.script(prompt), env, func(stream string, data []byte) {
+	script := h.ImplementScript(harness.ImplementInput{
+		RepoPath: im.Entry.RepoPath, Prompt: prompt, SystemPrompt: implementerSystemPrompt(im.Instructions),
+		Model: im.Model, SessionID: im.sessionID, Resume: im.started,
+	})
+	code, err := im.Exec(ctx, im.Entry, script, h.Env(im.Credential, im.BaseURL), func(stream string, data []byte) {
 		if stream == iostream.StreamStderr {
 			if stderr.Len() < outputTail {
 				stderr.Write(data)
 			}
 			return
 		}
-		s.write(data)
+		parser.Write(data)
 	}, nil)
-	s.flush()
-	// The session exists once claude has started it, even if this turn failed,
-	// so the next turn must resume it rather than try to create it again.
-	if s.sessionID != "" {
+	parser.Flush()
+	out := parser.Outcome()
+	// The session exists once the agent has started it, even if this turn
+	// failed, so the next turn must resume it rather than try to create it
+	// again.
+	if out.Turn.SessionID != "" {
 		im.started = true
+		im.sessionID = out.Turn.SessionID
 	}
-	turn := Turn{Summary: s.result.Result, Duration: time.Since(start), CostUSD: s.result.TotalCostUSD}
+	turn := Turn{
+		Summary: out.Turn.Summary, Duration: time.Since(start), CostUSD: out.Turn.CostUSD,
+		Harness: h.Name(), Model: im.Model, InputTokens: out.Turn.InputTokens,
+		CachedTokens: out.Turn.CachedTokens, OutputTokens: out.Turn.OutputTokens, RateLimit: out.Turn.RateLimit,
+	}
 
-	// claude puts why a turn failed in its result, so that explains a failed
+	// The agent puts why a turn failed in its result, so that explains a failed
 	// exit before stderr does.
-	explain := s.result.Result
+	explain := out.Message
 	if strings.TrimSpace(explain) == "" {
 		explain = stderr.String()
 	}
 	// explain stands in for stderr, so stderr goes in with the result for the
 	// credential check: a 401 there must not hide behind a result that says
 	// something else.
-	switch err := review.ClaudeRunError(ctx, timeout, code, err, s.result.Result+"\n"+stderr.String(), explain); {
+	switch err := h.RunError(ctx, timeout, code, err, out.Message+"\n"+stderr.String(), explain); {
 	case err != nil:
 		return turn, fmt.Errorf("implementer: %w", err)
-	case s.result.IsError:
+	case out.Failed:
 		return turn, fmt.Errorf("implementer: %s", review.Tail(strings.TrimSpace(explain), 2000))
-	case !s.sawResult:
+	case !out.Done:
 		return turn, errors.New("implementer ended without a result")
 	}
 	return turn, nil
-}
-
-// script builds the shell script for one turn.
-func (im *Implementer) script(prompt string) string {
-	args := []string{
-		"claude", "-p", "--output-format", "stream-json", "--verbose",
-		"--dangerously-skip-permissions",
-		"--disallowedTools", strings.Join(disallowedGit, ","),
-		"--append-system-prompt", implementerSystemPrompt(im.Instructions),
-	}
-	if im.started {
-		args = append(args, "--resume", im.sessionID)
-	} else {
-		args = append(args, "--session-id", im.sessionID)
-	}
-	if im.Model != "" {
-		args = append(args, "--model", im.Model)
-	}
-	return review.ClaudeScript(im.Entry.RepoPath, prompt, args)
-}
-
-// streamEvent is the part of one stream-json line the implementer reads.
-type streamEvent struct {
-	Type      string `json:"type"`
-	SessionID string `json:"session_id"`
-	Message   struct {
-		Content []struct {
-			Type  string          `json:"type"`
-			Text  string          `json:"text"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
-		} `json:"content"`
-	} `json:"message"`
-	IsError      bool    `json:"is_error"`
-	Result       string  `json:"result"`
-	TotalCostUSD float64 `json:"total_cost_usd"`
-}
-
-// maxLineBytes caps one buffered stream-json line. A tool result echoing a
-// large file can be long; a line past this is dropped rather than buffered.
-const maxLineBytes = 1 << 20
-
-// streamParser splits claude's stream-json output into lines as it arrives,
-// which can be mid-line, and reports what the implementer does.
-type streamParser struct {
-	onActivity func(Activity)
-	buf        []byte
-	overflow   bool
-	sessionID  string
-	result     streamEvent
-	sawResult  bool
-}
-
-func (s *streamParser) write(data []byte) {
-	for len(data) > 0 {
-		i := bytes.IndexByte(data, '\n')
-		if i < 0 {
-			s.appendPartial(data)
-			return
-		}
-		s.appendPartial(data[:i])
-		if !s.overflow {
-			s.line(s.buf)
-		}
-		s.buf, s.overflow = s.buf[:0], false
-		data = data[i+1:]
-	}
-}
-
-func (s *streamParser) appendPartial(data []byte) {
-	if s.overflow || len(s.buf)+len(data) > maxLineBytes {
-		s.overflow = true
-		return
-	}
-	s.buf = append(s.buf, data...)
-}
-
-// flush handles a last line that had no trailing newline.
-func (s *streamParser) flush() {
-	if len(s.buf) > 0 && !s.overflow {
-		s.line(s.buf)
-	}
-	s.buf, s.overflow = nil, false
-}
-
-func (s *streamParser) line(b []byte) {
-	var e streamEvent
-	if json.Unmarshal(b, &e) != nil {
-		return
-	}
-	if e.SessionID != "" {
-		s.sessionID = e.SessionID
-	}
-	switch e.Type {
-	case "result":
-		s.result, s.sawResult = e, true
-	case "assistant":
-		if s.onActivity == nil {
-			return
-		}
-		for _, c := range e.Message.Content {
-			switch c.Type {
-			case "text":
-				if t := strings.TrimSpace(c.Text); t != "" {
-					s.onActivity(Activity{Detail: t})
-				}
-			case "tool_use":
-				s.onActivity(Activity{Tool: c.Name, Detail: toolDetail(c.Input)})
-			}
-		}
-	}
-}
-
-// toolDetail picks the field of a tool's input that says what it acted on.
-func toolDetail(input json.RawMessage) string {
-	var in map[string]any
-	if json.Unmarshal(input, &in) != nil {
-		return ""
-	}
-	for _, key := range []string{"file_path", "command", "pattern", "path", "description"} {
-		if v, ok := in[key].(string); ok && v != "" {
-			return v
-		}
-	}
-	return ""
 }

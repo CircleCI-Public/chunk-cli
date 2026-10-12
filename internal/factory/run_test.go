@@ -157,7 +157,7 @@ func TestRunKeepsItsLog(t *testing.T) {
 	for _, want := range []string{
 		"info  run " + rep.RunID + "\n",
 		"info  prompt:\n    add a --verbose flag\n",
-		"info  Factory run: backend=circleci image=default attempts=1 reviewers=0 model=default\n",
+		"info  Factory run: backend=circleci image=default attempts=1 reviewers=0 harness=claude model=default\n",
 		"step  Preparing an implementer sidecar and 0 reviewer sidecar(s)...\n",
 		"end   stopped: create the run's sidecars: ",
 	} {
@@ -181,25 +181,26 @@ func TestRunSummary(t *testing.T) {
 		attempts  int
 		reviewers int
 		model     string
+		harness   string
 		want      string
 	}{
-		{"all fields", "docker", "smelt-sandbox:local", 5, 2, "opus", "Factory run: backend=docker image=smelt-sandbox:local attempts=5 reviewers=2 model=opus"},
-		{"empty image and model", "docker", "", 5, 2, "", "Factory run: backend=docker image=default attempts=5 reviewers=2 model=default"},
-		{"empty backend", "", "img", 1, 1, "m", "Factory run: backend=circleci image=img attempts=1 reviewers=1 model=m"},
-		{"zero reviewers", "docker", "img", 1, 0, "m", "Factory run: backend=docker image=img attempts=1 reviewers=0 model=m"},
+		{"all fields", "docker", "smelt-sandbox:local", 5, 2, "opus", "codex", "Factory run: backend=docker image=smelt-sandbox:local attempts=5 reviewers=2 harness=codex model=opus"},
+		{"empty image and model", "docker", "", 5, 2, "", "", "Factory run: backend=docker image=default attempts=5 reviewers=2 harness=claude model=default"},
+		{"empty backend", "", "img", 1, 1, "m", "claude", "Factory run: backend=circleci image=img attempts=1 reviewers=1 harness=claude model=m"},
+		{"zero reviewers", "docker", "img", 1, 0, "m", "claude", "Factory run: backend=docker image=img attempts=1 reviewers=0 harness=claude model=m"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, runSummary(tc.backend, tc.image, tc.attempts, tc.reviewers, tc.model), tc.want)
+			assert.Equal(t, runSummary(summaryFields{Backend: tc.backend, Image: tc.image, Harness: tc.harness, Model: tc.model, Attempts: tc.attempts, Reviewers: tc.reviewers}), tc.want)
 		})
 	}
 }
 
 func TestRunOptionsSummaryNamesTheBackend(t *testing.T) {
 	assert.Equal(t, (&RunOptions{Attempts: 3, Reviewers: 2}).summary(),
-		"Factory run: backend=circleci image=default attempts=3 reviewers=2 model=default")
+		"Factory run: backend=circleci image=default attempts=3 reviewers=2 harness=claude model=default")
 	got := (&RunOptions{Backend: sidecar.NewCircleCIBackend(nil, ""), Image: "img", Model: "m"}).summary()
-	assert.Equal(t, got, "Factory run: backend=docker image=img attempts=0 reviewers=0 model=m")
+	assert.Equal(t, got, "Factory run: backend=docker image=img attempts=0 reviewers=0 harness=claude model=m")
 }
 
 // concludeFixture is a worktree with committed-able work and sidecars whose

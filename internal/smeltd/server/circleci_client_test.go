@@ -7,6 +7,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
@@ -28,8 +29,8 @@ func TestDaemonResolvesTheCircleCIClientOnlyForCircleCIProjects(t *testing.T) {
 		d := newDaemon()
 
 		// What every dashboard snapshot asks.
-		assert.Equal(t, d.factoryAuthError(""), "no Claude credential configured for the smelt daemon — factory runs unavailable")
-		_ = d.factoryAuthError(smeltd.BackendDocker)
+		assert.Equal(t, d.factoryAuthError("", harness.Claude), "no claude credential configured for the smelt daemon — factory runs unavailable (run: smelt auth login claude)")
+		_ = d.factoryAuthError(smeltd.BackendDocker, harness.Claude)
 		assert.Assert(t, d.factoryClient("") == nil)
 		assert.Assert(t, d.factoryClient(smeltd.BackendDocker) == nil)
 
@@ -65,7 +66,7 @@ func TestDaemonResolvesTheCircleCIClientOnlyForCircleCIProjects(t *testing.T) {
 		d := newDaemon()
 		d.rcfg.Credential.Value = "cred"
 
-		assert.Check(t, d.factoryAuthError(smeltd.BackendCircleCI) != "")
+		assert.Check(t, d.factoryAuthError(smeltd.BackendCircleCI, harness.Claude) != "")
 		assert.Equal(t, resolved.Load(), int32(1))
 	})
 }

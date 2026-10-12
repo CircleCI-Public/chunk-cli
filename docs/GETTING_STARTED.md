@@ -571,6 +571,14 @@ $ smelt factory build --plan spec.md
   the layer cache). Use `smelt init --skip-image-build` to write the file without building.
 - **Own image?** Set `factory.image` (or pass `--image`) and smelt uses it as is and never builds it.
 
+### Choose the coding agent
+
+Factory runs can use Claude Code or OpenAI Codex. `smelt init` asks which and saves it as
+`factory.harness`; `--harness claude|codex` on `smelt factory build` overrides it for one run. Codex logs in
+with `smelt auth login codex` (your ChatGPT account) or `smelt auth set codex` (an API key), and
+`smelt harness status` shows what is installed, logged in and how much of each plan's limits is used. See
+the "Coding agents" section of the README.
+
 ---
 
 ## Typical day-to-day workflow

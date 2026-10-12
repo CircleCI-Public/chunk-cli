@@ -25,8 +25,38 @@ const (
 `
 	kitClaude = `RUN curl -fsSL https://claude.ai/install.sh | bash && test -x "$HOME/.local/bin/claude"
 `
-	kitCmd = "CMD [\"sleep\", \"infinity\"]\n"
+	// kitHarnessLabel tells `smelt harness status` which agent CLIs the image has.
+	kitHarnessLabel = "LABEL " + LabelHarnesses + "=claude,codex\n"
+	kitCmd          = "CMD [\"sleep\", \"infinity\"]\n"
 )
+
+// Codex is installed from its GitHub release, which needs no Node. The version
+// and the checksums of the two Linux archives are pinned together: change them
+// together, and Dockerfile.local with them (a test keeps the two in step).
+const (
+	CodexVersion        = "0.162.0"
+	codexSumX86         = "8daf67f6261161aa5939d8d42a516032d760406216779d7ce6040f242140ff73"
+	codexSumARM         = "15162a9b59edf8e512b27414ec0b7db22e6424a1262b0eee8666643e0d295c2f"
+	codexReleaseURLBase = "https://github.com/openai/codex/releases/download/rust-v"
+)
+
+// KitCodex is the Dockerfile block that installs the Codex CLI to
+// ~/.local/bin/codex, for the architecture the image is built on.
+const KitCodex = `RUN set -e; \
+    case "$(uname -m)" in \
+      x86_64) arch=x86_64; sum=` + codexSumX86 + ` ;; \
+      aarch64|arm64) arch=aarch64; sum=` + codexSumARM + ` ;; \
+      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    name="codex-${arch}-unknown-linux-musl"; \
+    curl -fsSL -o "/tmp/${name}.tar.gz" "` + codexReleaseURLBase + CodexVersion + `/${name}.tar.gz"; \
+    echo "${sum}  /tmp/${name}.tar.gz" | sha256sum -c -; \
+    mkdir -p "$HOME/.local/bin"; \
+    tar -xzf "/tmp/${name}.tar.gz" -C /tmp; \
+    mv "/tmp/${name}" "$HOME/.local/bin/codex"; \
+    rm -f "/tmp/${name}.tar.gz"; \
+    test -x "$HOME/.local/bin/codex"
+`
 
 // Render writes the Dockerfile for r. It is pure.
 func Render(r Recipe) string {
@@ -60,6 +90,8 @@ func Render(r Recipe) string {
 	b.WriteString("\n# --- smelt agent kit -------------------------------------------------------\n")
 	b.WriteString(asUser("root", r.User, kitPackages))
 	b.WriteString(kitClaude)
+	b.WriteString(KitCodex)
+	b.WriteString(kitHarnessLabel)
 	b.WriteString(kitCmd)
 	return b.String()
 }

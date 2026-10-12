@@ -24,6 +24,9 @@ type initFactoryOptions struct {
 	// Author is --factory-author: who factory commits are attributed to, saved
 	// as factory.author whatever else the step does.
 	Author string
+	// Harness is --harness: the default coding agent, which answers its step
+	// without a prompt.
+	Harness string
 	// Skip is --skip-factory.
 	Skip bool
 	// SkipImageBuild is --skip-image-build: write Dockerfile.smelt but do not
@@ -98,6 +101,9 @@ func (o initFactoryOptions) check() error {
 	if err := checkFactoryBackend(o.Backend); err != nil {
 		return err
 	}
+	if !config.ValidHarness(o.Harness) {
+		return unknownHarnessError(o.Harness)
+	}
 	return checkFactoryAuthor(o.Author)
 }
 
@@ -131,6 +137,9 @@ type initFactoryResult struct {
 func initFactoryStep(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig, opts initFactoryOptions) initFactoryResult {
 	chosen := initFactoryBackendStep(ctx, workDir, streams, cfg, opts)
 	res := initFactoryResult{Changed: chosen, BackendChosen: chosen}
+	if initHarnessStep(streams, cfg, opts) {
+		res.Changed = true
+	}
 	if opts.Author == "" {
 		return res
 	}
@@ -338,4 +347,82 @@ func saveDetectedEnvironment(ctx context.Context, workDir string, streams iostre
 		return
 	}
 	cfg.Environment = env.ForConfig()
+}
+
+// initHarnessAction is what the coding agent step of `smelt init` does.
+type initHarnessAction int
+
+const (
+	harnessStepSkipped  initHarnessAction = iota // nothing to do
+	harnessStepFromFlag                          // save the agent the flag gave
+	harnessStepReport                            // describe the saved agent
+	harnessStepAsk                               // ask which agent
+)
+
+// initHarnessState is what the coding agent step decides on.
+type initHarnessState struct {
+	Interactive bool
+	Skip        bool
+	Flag        string
+	Saved       string
+}
+
+// decideInitHarness picks what the coding agent step does. The flag wins in
+// any mode; a saved agent is only described, and the question is only asked
+// in an interactive session.
+func decideInitHarness(s initHarnessState) initHarnessAction {
+	switch {
+	case s.Skip:
+		return harnessStepSkipped
+	case s.Flag != "":
+		return harnessStepFromFlag
+	case s.Saved != "":
+		return harnessStepReport
+	case !s.Interactive:
+		return harnessStepSkipped
+	}
+	return harnessStepAsk
+}
+
+// initHarnessStep is the "Coding agent" step: which agent runs by default. It
+// reports whether it changed cfg.
+func initHarnessStep(streams iostream.Streams, cfg *config.ProjectConfig, opts initFactoryOptions) bool {
+	saved := ""
+	if cfg.Factory != nil {
+		saved = cfg.Factory.Harness
+	}
+	var name string
+	switch decideInitHarness(initHarnessState{Interactive: isInteractive(), Skip: opts.Skip, Flag: opts.Harness, Saved: saved}) {
+	case harnessStepSkipped:
+		return false
+	case harnessStepReport:
+		streams.ErrPrintln("Coding agent: " + saved)
+		return false
+	case harnessStepFromFlag:
+		name = opts.Harness
+	case harnessStepAsk:
+		var ok bool
+		if name, ok = askInitHarness(streams); !ok {
+			return false
+		}
+	}
+	if cfg.Factory == nil {
+		cfg.Factory = &config.FactoryConfig{}
+	}
+	changed := cfg.Factory.Harness != name
+	cfg.Factory.Harness = name
+	streams.ErrPrintln("Coding agent: " + name)
+	return changed
+}
+
+// askInitHarness asks which agent runs by default. ok is false when the user
+// cancelled or the prompt could not be shown.
+func askInitHarness(streams iostream.Streams) (string, bool) {
+	names := harnessNames()
+	idx, err := ui.SelectFromList("Which coding agent should factory runs use?", names)
+	if err != nil {
+		warnPromptError(streams, err)
+		return "", false
+	}
+	return names[idx], true
 }

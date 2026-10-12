@@ -33,6 +33,12 @@ smelt/
     ├── gitexec/               # Low-level local Git process execution
     ├── gitremote/             # Git remote URL parsing for org/repo detection
     ├── gitutil/               # Git utility helpers, working-tree fingerprints
+    ├── codexauth/             # Codex login: auth.json container copy (no refresh token), expiry and host renewal, keychain, app-server probe
+    ├── harness/               # The coding-agent seam: Harness interface, scripts, parsers, shared helpers
+    │   ├── all/               # Registry: All(), ByName()
+    │   ├── claude/            # Claude Code harness and the usage probe
+    │   ├── codex/             # Codex harness: exec scripts, git guard, JSONL parser
+    │   └── status/            # `harness status`: installed, login, usage windows, last rate-limit signal
     ├── hashutil/              # Collision-free digests of string parts (cache keys)
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
@@ -199,6 +205,8 @@ in `config.Resolve` and makes clients testable.
 | `ANTHROPIC_API_KEY` | anthropic, config, validate | Anthropic authentication |
 | `ANTHROPIC_BASE_URL` | anthropic, review, validate | API endpoint override |
 | `CLAUDE_CODE_OAUTH_TOKEN` | config, review | Claude subscription authentication for reviews |
+| `SMELT_CODEX_AUTH_JSON` | codexauth | Base64 of a Codex `auth.json`; overrides the keychain. On a sidecar it is only in the one-time setup's environment |
+| `CODEX_API_KEY` | codexauth, harness/codex | OpenAI API key for Codex; overrides the keychain, and is what a sidecar's Codex turns get for an API-key login |
 | `GITHUB_TOKEN` | github | GitHub authentication |
 | `GITHUB_API_URL` | github, upgrade | GitHub API endpoint override (also used by the update check) |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |

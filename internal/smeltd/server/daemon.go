@@ -444,7 +444,7 @@ func (d *daemon) snapshot(roots []string) smeltd.Snapshot {
 		// Map iteration is random; sort by root so project rows stay stable
 		// between polls when watchAll mode requests all projects.
 		sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-		return smeltd.Snapshot{Projects: projects, AuthError: d.cci.authMessage(), ReviewAuthError: d.factoryAuthError("")}
+		return smeltd.Snapshot{Projects: projects, AuthError: d.cci.authMessage(), ReviewAuthError: d.anyFactoryAuthError("")}
 	}
 
 	ordered := make([]smeltd.ProjectSnapshot, 0, len(roots))
@@ -459,7 +459,7 @@ func (d *daemon) snapshot(roots []string) smeltd.Snapshot {
 			break
 		}
 	}
-	return smeltd.Snapshot{Projects: ordered, AuthError: d.cci.authMessage(), ReviewAuthError: d.factoryAuthError("")}
+	return smeltd.Snapshot{Projects: ordered, AuthError: d.cci.authMessage(), ReviewAuthError: d.anyFactoryAuthError("")}
 }
 
 // withSessions attaches the project's sessions to a snapshot. It is done when a

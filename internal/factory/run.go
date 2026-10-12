@@ -9,6 +9,7 @@ import (
 
 	"github.com/smeltdev/smelt/internal/circleci"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
@@ -59,6 +60,9 @@ type RunOptions struct {
 	// KeepSidecars leaves the sidecars running when the run ends.
 	KeepSidecars bool
 
+	// Harness is the coding agent for the implementer and the reviewers; Claude
+	// Code when nil. Credential is its credential.
+	Harness                 harness.Harness
 	Credential              review.Credential
 	BaseURL                 string
 	Model                   string
@@ -193,6 +197,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		opts.OnStart(rep.RunID, wt)
 	}
 	rec := newRecord(rep.RunID, request, wt)
+	rec.Harness, rec.Model = opts.harnessName(), opts.Model
 	if cont != nil {
 		rec.Prompt, rec.ContinuesRunID = cont.From.Prompt, cont.From.RunID
 	}
@@ -267,7 +272,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	steps := &Sidecars{
 		Exec: exec,
 		Implementer: &Implementer{
-			Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
+			Harness: opts.Harness, Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
 			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions,
 			OnActivity: opts.OnActivity,
 		},
@@ -278,7 +283,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Request:   request,
 		Prompts:   opts.Prompts,
 		Review: review.Options{
-			Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
+			Harness: opts.Harness, Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
 			StructuredFindings: true,
 			ProgressFn:         opts.OnReviewProgress,
 		},
@@ -452,20 +457,36 @@ func closePool(ctx context.Context, pool *sidecar.Pool, keep bool, status iostre
 	return ids
 }
 
+// harnessName is the agent the run uses, Claude Code when none is set.
+func (o *RunOptions) harnessName() string {
+	if o.Harness == nil {
+		return config.HarnessClaude
+	}
+	return string(o.Harness.Name())
+}
+
 // summary describes the run's configuration; an explicit Backend means docker.
 func (o *RunOptions) summary() string {
-	backend := ""
+	f := summaryFields{Image: o.Image, Attempts: o.Attempts, Reviewers: o.Reviewers, Model: o.Model}
 	if o.Backend != nil {
-		backend = config.BackendDocker
+		f.Backend = config.BackendDocker
 	}
-	return runSummary(backend, o.Image, o.Attempts, o.Reviewers, o.Model)
+	f.Harness = o.harnessName()
+	return runSummary(f)
+}
+
+// summaryFields are what runSummary describes.
+type summaryFields struct {
+	Backend, Image, Harness, Model string
+	Attempts, Reviewers            int
 }
 
 // runSummary is the one-line description of a run's configuration. Empty
 // fields show a readable default, and nothing secret is included.
-func runSummary(backend, image string, attempts, reviewers int, model string) string {
-	return fmt.Sprintf("Factory run: backend=%s image=%s attempts=%d reviewers=%d model=%s",
-		orDefault(backend, config.BackendCircleCI), orDefault(image, "default"), attempts, reviewers, orDefault(model, "default"))
+func runSummary(f summaryFields) string {
+	return fmt.Sprintf("Factory run: backend=%s image=%s attempts=%d reviewers=%d harness=%s model=%s",
+		orDefault(f.Backend, config.BackendCircleCI), orDefault(f.Image, "default"), f.Attempts, f.Reviewers,
+		orDefault(f.Harness, config.HarnessClaude), orDefault(f.Model, "default"))
 }
 
 func orDefault(s, def string) string {

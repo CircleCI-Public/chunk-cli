@@ -7,14 +7,15 @@ Complete command reference for the `smelt` CLI.
 ```
 smelt
 ├── auth
-│   ├── login                       # Log in to CircleCI via browser (recommended)
+│   ├── login [codex]               # Log in to CircleCI via browser (recommended), or to Codex with your ChatGPT account
 │   │   --no-browser                # Print the login URL instead of opening a browser
+│   │   --device-auth               # With codex: sign in with a device code instead of a browser
 │   ├── signup                      # Sign up for a new CircleCI account via browser
 │   │   --no-browser                # Print the signup URL instead of opening a browser
-│   ├── set <provider>               # Store credential (circleci | anthropic | anthropic-oauth | github)
-│   ├── refresh [provider]          # Re-mint the Claude subscription token (claude | anthropic-oauth; default claude) and restart a running daemon
-│   ├── status                      # Check authentication status (CircleCI, Anthropic, GitHub)
-│   └── remove <provider>           # Remove stored credential (circleci | anthropic | anthropic-oauth | github)
+│   ├── set <provider>               # Store credential (circleci | anthropic | anthropic-oauth | github | codex)
+│   ├── refresh [provider]          # Re-mint the Claude subscription token (claude | anthropic-oauth; default claude) and restart a running daemon, or log in to Codex again (codex)
+│   ├── status                      # Check authentication status (CircleCI, Anthropic, Codex, GitHub)
+│   └── remove <provider>           # Remove stored credential (circleci | anthropic | anthropic-oauth | github | codex)
 │
 ├── refresh [provider]              # Same as `auth refresh`
 │
@@ -44,7 +45,8 @@ smelt
 │   --skip-validate                 # Skip validate command detection
 │   --skip-completions              # Skip shell completion installation
 │   --skip-skills                   # Skip agent skill installation
-│   --skip-auth                     # Skip the Claude login check
+│   --skip-auth                     # Skip the coding agent login check
+│   --harness <name>                 # Default coding agent for factory runs: claude or codex; skips the "Coding agent" prompt
 │   --skip-factory                  # Skip the factory backend step
 │   --factory-backend <name>        # docker (default) or circleci; skips the prompt. Asked first: the circleci path alone detects the org ID, installs the smelt-sidecar skills and offers test-suites.yml
 │   --factory-image <image>         # Docker image for factory runs (user-managed, never auto-built); skips the prompt
@@ -63,6 +65,10 @@ smelt
 │   │   --json                      # Output as JSON
 │   └── config                      # Set up .smelt/run.json for this repository
 │       --force                     # Overwrite existing configuration without confirmation
+│
+├── harness
+│   └── status                      # Per agent: installed here and in the image, login state, plan and usage windows
+│       --json                      # Output as JSON
 │
 ├── skill
 │   ├── install                     # Install all skills
@@ -181,7 +187,8 @@ smelt
 │       --draft                    # Open the PR as a draft
 │       --org-id <id>               # Organization ID
 │       --image <id>                # Snapshot ID, or Docker image with --backend docker (default: validation.sidecarImage, or factory.image for docker)
-│       --model <name>              # Claude model (default: Claude Code's default)
+│       --harness <name>            # Coding agent for the implementer and reviewers: claude or codex (default: factory.harness, else ask in a terminal; fails without one)
+│       --model <name>              # Model for the chosen agent (default: factory.models.<harness>, else the agent's own default)
 │       --implement-timeout <duration> # Max time for each implementer turn
 │       --review-timeout <duration> # Max time for each review
 │       --log                       # Keep a log of the run's full context in ~/.smelt/factory/run-<start time>.log
@@ -386,6 +393,39 @@ smelt
   snapshot ID; with neither (and no `SMELT_DOCKER_IMAGE`) the command fails before the run starts.
   `smelt init` asks where factory runs execute and writes `factory.backend` (and, for docker,
   `factory.dockerfile`).
+- **`factory build` needs a coding agent.** `--harness claude|codex`, then `factory.harness`, then (in a
+  terminal) a question that marks the agents that are logged in and in the image and offers to save the
+  answer as `factory.harness`. With none of them and no terminal it fails with a `userError` listing the
+  options and the config key; there is no silent default. `factory.models.<harness>` fills `--model`
+  when it is not given. The daemon refuses a harness with no credential before starting anything, with
+  the login hint, and a run needs only its own harness's credential. The run-start line shows
+  `harness=… model=…`. An image labelled `smelt.harnesses` that lacks the chosen agent is refused with a
+  pointer to `smelt factory image --regenerate`; an image without the label is not checked.
+- **Codex credentials never carry a refresh token into a container.** `auth login codex` runs
+  `codex login` with `CODEX_HOME` set to a private temp directory (so `~/.codex` is untouched), keeps the
+  whole `auth.json` in the keychain (`smelt:codex:chatgpt`), and deletes the directory. A run gets a copy
+  with `tokens.refresh_token` set to `""` (the field must stay; codex rejects the file without it), passed
+  base64 in the exec environment of the one-time setup script only, and written to
+  `/tmp/smelt-codex/auth.json` (directory 700, file 600). The access token lasts about ten days; with under
+  24 hours left, a run first tries to renew it on the host (one `codex exec` turn against a temp
+  `CODEX_HOME` holding the full file) and stores the result; if the token did not change it stops with
+  "Your Codex login expires soon; run `smelt refresh codex`". `auth set codex` stores an API key
+  (`smelt:codex:api-key`), which sidecars get as `CODEX_API_KEY` and `OPENAI_API_KEY`. The environment
+  overrides the keychain: `SMELT_CODEX_AUTH_JSON` (base64 of `auth.json`), then `CODEX_API_KEY`.
+  Unverified: the host renewal path could not be exercised with fresh tokens, so it is defensive until a
+  stored token first gets within 24 hours of expiry.
+- **`harness status` reports, it does not choose.** Codex: `account/read` and `account/rateLimits/read`
+  over `codex app-server`, with the stored login's refresh token blanked in a temp `CODEX_HOME`; windows
+  are named from `windowDurationMins` (300 → `5h`, 10080 → `7d`, 43200 → `30d`, else `<n>m`). Claude:
+  `claude auth status --json` for login and plan, and by default a `GET /api/oauth/usage` with Claude
+  Code's own login (macOS keychain item `Claude Code-credentials`, read-only, never refreshed; smelt's
+  `setup-token` token is rejected by that endpoint). `limits` is parsed first (`session` → `5h`,
+  `weekly_all` → `7d`, `weekly_scoped` → `7d:<model>`), then `five_hour` and `seven_day`. Results are
+  cached 60 seconds in `~/.local/share/smelt/harness/claude.json`, a 429 backs off 5 minutes, and any
+  failure falls back to the last reading plus the last rate-limit signal a run saw (`source: "run"`).
+  Anthropic has said third-party tools should not call the endpoint and it can change without notice;
+  `harness.claude.usage_probe: false` in `~/.config/smelt/config.json` turns it off. `installed_image`
+  comes from the image label `smelt.harnesses`.
 - **The docker backend's image is resolved, highest first, from `--image`, `factory.image`,
   `factory.dockerfile`, then `SMELT_DOCKER_IMAGE`.** `factory.image` is explicit and user-managed: it is
   never built, so a repo with its own `docker build` flow keeps it. `factory.dockerfile` (a
@@ -697,6 +737,9 @@ smelt
 
 | Key | Scope | Description |
 |-----|-------|-------------|
+| `harness.claude.usage_probe` | user config (`~/.config/smelt/config.json`) | Whether `harness status` may call Claude's usage endpoint (`true`/`false`, default: `true`) |
+| `factory.harness` | `.smelt/config.json` | The coding agent runs use: `claude` or `codex` |
+| `factory.models.<harness>` | `.smelt/config.json` | The model that agent uses when `--model` is not given |
 | `model` | user config (`~/.config/smelt/config.json`) | Claude model override |
 | `telemetry` | user config (`~/.config/smelt/config.json`) | Usage telemetry preference (`true`/`false`, default: `true`); only matters to a build that has a telemetry write key, which default builds do not |
 | `notifications` | user config (`~/.config/smelt/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
