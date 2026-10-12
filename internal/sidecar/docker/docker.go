@@ -193,7 +193,10 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 		containerImage = image
 	}
 
-	if err := b.ensureImage(ctx, containerImage); err != nil {
+	// Containers are created from the resolved reference, which is the image's
+	// ID when Docker cannot inspect it by name; snapshots record it too.
+	containerImage, err = b.resolveImage(ctx, containerImage, nil)
+	if err != nil {
 		_ = os.RemoveAll(hostDir)
 		return sidecar.Instance{}, err
 	}
