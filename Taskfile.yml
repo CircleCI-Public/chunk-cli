@@ -7,9 +7,15 @@ vars:
 
 tasks:
   build:
-    desc: Build the smelt binary
+    desc: Build the smelt binary, then restart the daemon if no factory run is active
     cmds:
       - go build -o dist/smelt .
+      - ./scripts/restart-daemon.sh
+
+  daemon:restart:
+    desc: Stop the smelt daemon so it restarts from the current build (cancels active runs)
+    cmds:
+      - ./scripts/restart-daemon.sh --force
 
   test:
     desc: Run the tests
