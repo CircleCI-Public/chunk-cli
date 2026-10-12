@@ -82,7 +82,7 @@ func harnessStatusDeps(ctx context.Context) status.Deps {
 	return projectDeps(ctx, d)
 }
 
-// projectDeps fills in the default agent and the image's agents from the
+// projectDeps fills in the default agent and the image to look the agents up in from the
 // project in the working directory, if there is one.
 func projectDeps(ctx context.Context, d status.Deps) status.Deps {
 	dir, err := os.Getwd()
@@ -98,8 +98,34 @@ func projectDeps(ctx context.Context, d status.Deps) status.Deps {
 		return d
 	}
 	d.Default = cfg.Factory.Harness
-	d.ImageHarnesses = imageHarnesses(ctx, factoryImageTag(root, cfg.Factory))
+	d.ImageTag = factoryImageTag(root, cfg.Factory)
+	if d.ImageTag == "" {
+		return d
+	}
+	d.Images = dockerImages{}
 	return d
+}
+
+// dockerImages is the local Docker daemon as status.ImageSource. It connects
+// per call, so no client outlives the command.
+type dockerImages struct{}
+
+func (dockerImages) InspectImage(ctx context.Context, tag string) (sandboximage.ImageInfo, error) {
+	b, err := sandboximage.Connect()
+	if err != nil {
+		return sandboximage.ImageInfo{}, err
+	}
+	defer func() { _ = b.Close() }()
+	return b.InspectImage(ctx, tag)
+}
+
+func (dockerImages) RunProbe(ctx context.Context, tag string) ([]string, error) {
+	b, err := sandboximage.Connect()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = b.Close() }()
+	return b.RunProbe(ctx, tag)
 }
 
 // factoryImageTag is the docker image the project's factory runs use, "" when
@@ -118,7 +144,17 @@ func factoryImageTag(root string, f *config.FactoryConfig) string {
 
 func printHarnessStatus(streams iostream.Streams, rep status.Report) {
 	if rep.Default != "" {
-		streams.Printf("Default agent: %s\n\n", rep.Default)
+		streams.Printf("Default agent: %s\n", rep.Default)
+	}
+	if rep.Image != nil {
+		names := make([]string, len(rep.Harnesses))
+		for i, e := range rep.Harnesses {
+			names[i] = string(e.Name)
+		}
+		streams.Printf("image: %s\n", rep.Image.Describe(names))
+	}
+	if rep.Default != "" || rep.Image != nil {
+		streams.Println("")
 	}
 	for _, e := range rep.Harnesses {
 		streams.Println(ui.Bold(string(e.Name)))

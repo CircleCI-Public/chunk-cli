@@ -203,6 +203,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		model = cfg.Factory.ModelFor(string(agent.Name()))
 	}
 	record.Harness, record.Model = string(agent.Name()), model
+	record.KitOutdated = req.KitWarning != ""
 
 	entry, ctx, busy := d.sessions.add(smeltd.Session{
 		ProjectRoot: ps.root,
@@ -235,6 +236,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		ImplementerInstructions: req.ImplementerInstructions,
 		ImplementTimeout:        time.Duration(req.ImplementTimeoutSeconds) * time.Second,
 		ReviewTimeout:           time.Duration(req.ReviewTimeoutSeconds) * time.Second,
+		Warnings:                warnings(req),
 		Log:                     req.Log,
 		Verbose:                 req.Verbose,
 	}
@@ -538,4 +540,12 @@ func (r *factoryRecorder) recordRateLimit(rl *harness.RateLimit) {
 	if dir, err := status.Dir(); err == nil {
 		status.RecordSignal(dir, r.harness, *rl, time.Now())
 	}
+}
+
+// warnings are what the client flagged about the run's setup, for its log.
+func warnings(req smeltd.FactoryRequest) []string {
+	if req.KitWarning == "" {
+		return nil
+	}
+	return []string{req.KitWarning}
 }

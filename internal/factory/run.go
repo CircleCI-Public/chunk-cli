@@ -73,6 +73,10 @@ type RunOptions struct {
 	// Exec runs commands on the sidecars; review.ClientExec when nil.
 	Exec review.Execer
 
+	// Warnings are problems with the run's setup that did not stop it; they go
+	// in the log.
+	Warnings []string
+
 	// Log is where to keep a plain-text log of the run, with its full context
 	// whatever a display of it filters out: a path, LogDefault for
 	// DefaultLogPath, or "" for none.

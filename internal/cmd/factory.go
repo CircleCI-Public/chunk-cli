@@ -211,6 +211,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 				OrgID:                   orgID,
 				Image:                   settings.Image,
 				Backend:                 settings.Backend,
+				KitWarning:              settings.KitWarning,
 				Log:                     logArg,
 				Verbose:                 verbose,
 			})

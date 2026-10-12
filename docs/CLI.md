@@ -216,6 +216,8 @@ smelt
 │   └── image                       # Build the Docker image factory runs execute in (factory.dockerfile)
 │       --rebuild                   # Build even when the image exists, without the layer cache
 │       --regenerate                # Render Dockerfile.smelt again, show the diff, confirm before writing
+│       --update-kit                # Replace only the agent-kit section with the current one (exclusive with --regenerate)
+│       --yes                       # With --update-kit, write without asking
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
@@ -400,7 +402,7 @@ smelt
   when it is not given. The daemon refuses a harness with no credential before starting anything, with
   the login hint, and a run needs only its own harness's credential. The run-start line shows
   `harness=… model=…`. An image labelled `smelt.harnesses` that lacks the chosen agent is refused with a
-  pointer to `smelt factory image --regenerate`; an image without the label is not checked.
+  pointer to `smelt factory image --update-kit`; an image without the label is not checked.
 - **Codex credentials never carry a refresh token into a container.** `auth login codex` runs
   `codex login` with `CODEX_HOME` set to a private temp directory (so `~/.codex` is untouched), keeps the
   whole `auth.json` in the keychain (`smelt:codex:chatgpt`), and deletes the directory. A run gets a copy
@@ -425,7 +427,14 @@ smelt
   failure falls back to the last reading plus the last rate-limit signal a run saw (`source: "run"`).
   Anthropic has said third-party tools should not call the endpoint and it can change without notice;
   `harness.claude.usage_probe: false` in `~/.config/smelt/config.json` turns it off. `installed_image`
-  comes from the image label `smelt.harnesses`.
+  comes from the image label `smelt.harnesses`, and stays a bool. Each harness also has `image_status`:
+  `labeled` (label present), `unlabeled` (the image exists without the label: built with agent kit v1)
+  or `no_image` (not on the host; `installed_image` is false, with a note to run `smelt factory image`).
+  An unlabeled image is run once (`sh -c 'command -v claude …'`, `--rm`, no network, 20 s timeout) and
+  the answer cached per image ID in `~/.local/share/smelt/harness/images.json`; the note says `image has
+  no smelt.harnesses label (agent kit v1); checked by running it` and points at `--update-kit`. A probe
+  that fails or times out gives `installed_image: false` and a note saying so. The human output has an
+  `image:` line, e.g. `image: smelt-x:f81c… (kit v1, unlabeled; claude found, codex not)`.
 - **The docker backend's image is resolved, highest first, from `--image`, `factory.image`,
   `factory.dockerfile`, then `SMELT_DOCKER_IMAGE`.** `factory.image` is explicit and user-managed: it is
   never built, so a repo with its own `docker build` flow keeps it. `factory.dockerfile` (a
@@ -442,6 +451,19 @@ smelt
 - **The docker backend runs the install step once per sidecar** (the detected `install` setup step, else
   the `install` command) after the first sync and before the agent starts, streaming its output into the
   run log. Existing `pnpm install &&` prefixes in validation commands are left alone.
+- **The agent kit is versioned (`sandboximage.KitVersion`).** The kit section of `Dockerfile.smelt` opens
+  with `# --- smelt agent kit (vN) ---` and ends with `LABEL smelt.harnesses=… smelt.kit=N`; a file
+  without the marker is v1. `factory build` (for a `factory.dockerfile` image) and `factory image` print
+  one warning when the file's kit is older than the binary's, never block, record it in the run log and
+  as `kit_outdated: true` in the `factory` section of `smelt factory status --json`. `factory build`
+  prints it at most once a day per project (a stamp in the project's data dir); `factory image` always.
+  A newer kit than the binary's is not outdated.
+- **`smelt factory image --update-kit` replaces only the kit section** (from the marker to the end of the
+  file), keeps everything above it, shows the diff, asks (`--yes` skips), writes, then builds and
+  verifies as `factory image` does. It is exclusive with `--regenerate`. A Dockerfile with no marker
+  (hand-written) is refused with a pointer to `--regenerate`. <a id="updating-the-agent-kit"></a>To add
+  the kit to such a file by hand, copy the section from a freshly generated `Dockerfile.smelt`
+  (`smelt factory image --regenerate` in a scratch checkout, or any project initialised by this smelt).
 - **`Dockerfile.smelt` is generated from detection, never overwritten silently.** The base image is the
   one every CI gate job uses (`.circleci/config.yml`), else the detected stack's image. Dependencies
   are baked as the package manager's store (pnpm, npm, yarn, uv, pip, Go, Cargo), not as an installed

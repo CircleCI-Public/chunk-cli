@@ -225,3 +225,13 @@ func TestLogVerboseShowsTheReviewersRequest(t *testing.T) {
 	assert.Assert(t, strings.Contains(review, "Follow-up from the developer:"), got)
 	assert.Assert(t, !strings.Contains(review, "You are continuing a change"), got)
 }
+
+func TestLogStartRecordsSetupWarnings(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	lg.start("run-1", RunOptions{Attempts: 1, Warnings: []string{"kit is old\nupdate it"}}, "request")
+	assert.Assert(t, strings.Contains(readLog(t, path), "warn  kit is old\n    update it"), readLog(t, path))
+
+	lg, path = newTestLog(t, false)
+	lg.start("run-1", RunOptions{Attempts: 1}, "request")
+	assert.Assert(t, !strings.Contains(readLog(t, path), "warn"))
+}

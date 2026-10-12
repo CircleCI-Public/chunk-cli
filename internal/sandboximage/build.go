@@ -14,8 +14,11 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/build"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/iostream"
@@ -28,6 +31,9 @@ const LabelSandbox = brand.LabelPrefix + "sandbox"
 // LabelHarnesses lists the agent CLIs an image carries, comma-separated.
 const LabelHarnesses = brand.LabelPrefix + "harnesses"
 
+// LabelKit records the agent-kit version the image was built from.
+const LabelKit = brand.LabelPrefix + "kit"
+
 // logTailLines is how much of a failed build's log is kept for the error.
 const logTailLines = 150
 
@@ -36,6 +42,11 @@ type dockerAPI interface {
 	ImageBuild(ctx context.Context, buildContext io.Reader, options build.ImageBuildOptions) (build.ImageBuildResponse, error)
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
 	ImagePull(ctx context.Context, refStr string, options image.PullOptions) (io.ReadCloser, error)
+	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
+	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
+	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
+	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
 }
 
 // Builder builds sandbox images on the local Docker daemon.
@@ -181,19 +192,3 @@ func (t *tail) add(line string) {
 }
 
 func (t *tail) String() string { return strings.Join(t.lines, "\n") }
-
-// Harnesses lists the agent CLIs the image tag carries, from its
-// LabelHarnesses label. An image without the label, or one that is not on this
-// host, reports none.
-func (b *Builder) Harnesses(ctx context.Context, tag string) ([]string, error) {
-	info, err := b.cli.ImageInspect(ctx, tag)
-	switch {
-	case cerrdefs.IsNotFound(err):
-		return nil, nil
-	case err != nil:
-		return nil, fmt.Errorf("look up image %s: %w", tag, err)
-	case info.Config == nil || info.Config.Labels[LabelHarnesses] == "":
-		return nil, nil
-	}
-	return strings.Split(info.Config.Labels[LabelHarnesses], ","), nil
-}

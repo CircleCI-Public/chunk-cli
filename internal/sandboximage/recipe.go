@@ -58,7 +58,10 @@ func (r Recipe) Home() string {
 }
 
 // nonRoot reports whether the base image runs as a user other than root.
-func (r Recipe) nonRoot() bool { return r.User != "" && r.User != "root" }
+// rootUser is the name of the superuser.
+const rootUser = "root"
+
+func (r Recipe) nonRoot() bool { return r.User != "" && r.User != rootUser }
 
 // Unknown reports whether the recipe is the minimal one for an unrecognised stack.
 func (r Recipe) Unknown() bool { return r.BaseFrom == BaseFromFallback }
