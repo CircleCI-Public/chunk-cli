@@ -92,14 +92,17 @@ func (b *Provider) pause(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// checkEngine asks the engine once whether it has finished starting.
-func (b *Provider) checkEngine(ctx context.Context) (bool, string) {
+// checkEngine asks the engine once whether it has finished starting, and
+// returns the images it listed.
+func (b *Provider) checkEngine(ctx context.Context) (ready bool, reason string, images []image.Summary) {
 	info, err := b.cli.Info(ctx)
 	if err != nil {
-		return engineState(info, nil, err)
+		ready, reason = engineState(info, nil, err)
+		return ready, reason, nil
 	}
-	images, err := b.cli.ImageList(ctx, image.ListOptions{})
-	return engineState(info, images, err)
+	images, err = b.cli.ImageList(ctx, image.ListOptions{})
+	ready, reason = engineState(info, images, err)
+	return ready, reason, images
 }
 
 // WaitEngine blocks until the engine is ready, reporting progress, for at most
@@ -110,7 +113,7 @@ func (b *Provider) WaitEngine(ctx context.Context, status iostream.StatusFunc) e
 	var lastStatus time.Duration
 	waited := false
 	for attempt := 1; ; attempt++ {
-		ready, reason := b.checkEngine(ctx)
+		ready, reason, _ := b.checkEngine(ctx)
 		elapsed := b.clock().Sub(start)
 		log.Printf("docker: readiness check %d after %s: ready=%t (%s)", attempt, elapsed.Round(time.Millisecond), ready, reason)
 		if ready {
@@ -154,32 +157,115 @@ func (b *Provider) Ready(ctx context.Context, image string, status iostream.Stat
 	if strings.HasPrefix(image, snapshotScheme) {
 		return nil
 	}
-	return b.ensureImage(ctx, image)
+	_, err := b.resolveImage(ctx, image, status)
+	return err
 }
 
-// ensureImage makes sure ref is on the Docker host with a single lookup; it
-// does not wait for a starting engine (Ready does). A missing image that smelt
-// builds locally is reported with the command that builds it, since no
-// registry has it; any other missing image is pulled. Other lookup errors are
-// reported as themselves rather than turned into a misleading pull.
-func (b *Provider) ensureImage(ctx context.Context, ref string) error {
+// canonicalRef normalises an image reference for comparison: the implicit
+// docker.io/library/ prefix is dropped and a missing tag becomes :latest.
+func canonicalRef(ref string) string {
+	ref = strings.TrimPrefix(ref, "docker.io/library/")
+	ref = strings.TrimPrefix(ref, "library/")
+	if i := strings.LastIndex(ref, ":"); i <= strings.LastIndex(ref, "/") && !strings.Contains(ref, "@") {
+		ref += ":latest"
+	}
+	return ref
+}
+
+// listedImageID finds ref among the listed images' tags and returns its ID.
+func listedImageID(ref string, images []image.Summary) (string, bool) {
+	want := canonicalRef(ref)
+	for _, img := range images {
+		for _, tag := range img.RepoTags {
+			if canonicalRef(tag) == want {
+				return img.ID, true
+			}
+		}
+	}
+	return "", false
+}
+
+// imageDecision is what a presence check concluded.
+type imageDecision int
+
+const (
+	imagePresent  imageDecision = iota // inspect found it by name
+	imageByID                          // listed, but only inspectable by ID
+	imageMissing                       // engine ready and the image not listed
+	imageNotReady                      // engine not ready; wait and ask again
+)
+
+func (d imageDecision) String() string {
+	return [...]string{"present", "present-by-id", "missing", "wait"}[d]
+}
+
+// decideImage is the presence decision after ImageInspect(ref) was not found.
+// Docker Desktop's containerd image store can answer 404 by name for a listed
+// image indefinitely, so the list is the source of truth and the listed ID,
+// which inspects and runs reliably, is what containers are created from.
+func decideImage(ref string, engineReady bool, images []image.Summary) (imageDecision, string) {
+	if !engineReady {
+		return imageNotReady, ""
+	}
+	if id, ok := listedImageID(ref, images); ok {
+		return imageByID, id
+	}
+	return imageMissing, ""
+}
+
+func shortID(id string) string {
+	return strings.TrimPrefix(id, "sha256:")[:min(12, len(strings.TrimPrefix(id, "sha256:")))]
+}
+
+// resolveImage makes sure ref is on the Docker host and returns the reference
+// to create containers from: ref itself, or the image's ID when Docker lists
+// the image but cannot inspect it by name. A missing image that smelt builds
+// locally is reported with the command that builds it, since no registry has
+// it; any other missing image is pulled. A starting engine is waited for as
+// WaitEngine does. Other lookup errors are reported as themselves rather than
+// turned into a misleading pull.
+func (b *Provider) resolveImage(ctx context.Context, ref string, status iostream.StatusFunc) (string, error) {
+	if status == nil {
+		status = func(iostream.Level, string) {}
+	}
+	start := b.clock()
 	_, err := b.cli.ImageInspect(ctx, ref)
 	switch {
 	case err == nil:
-		return nil
+		log.Printf("docker image check: ref=%s inspect=200 decision=%s elapsed=%s", ref, imagePresent, b.clock().Sub(start).Round(time.Millisecond))
+		return ref, nil
 	case !cerrdefs.IsNotFound(err):
-		return fmt.Errorf("docker: look up image %s: %w", ref, err)
-	case localOnly(ref):
-		return b.missingLocalImage(ref)
+		return "", fmt.Errorf("docker: look up image %s: %w", ref, err)
+	}
+	for {
+		ready, reason, images := b.checkEngine(ctx)
+		decision, id := decideImage(ref, ready, images)
+		_, listed := listedImageID(ref, images)
+		log.Printf("docker image check: ref=%s inspect=404 listed=%t id=%s decision=%s elapsed=%s (%s)",
+			ref, listed, shortID(id), decision, b.clock().Sub(start).Round(time.Millisecond), reason)
+		if decision == imageNotReady {
+			if err := b.WaitEngine(ctx, status); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if decision == imageByID {
+			log.Printf("docker: %s is listed but not inspectable by name; using its ID %s", ref, shortID(id))
+			return id, nil
+		}
+		break
+	}
+	if localOnly(ref) {
+		return "", b.missingLocalImage(ref)
 	}
 	rc, err := b.cli.ImagePull(ctx, ref, image.PullOptions{})
 	if err != nil {
-		return fmt.Errorf("docker: pull image %s: %w", ref, err)
+		return "", fmt.Errorf("docker: pull image %s: %w", ref, err)
 	}
 	defer func() { _ = rc.Close() }()
 	// Draining the stream is what waits for the pull to finish.
 	if _, err := io.Copy(io.Discard, rc); err != nil {
-		return fmt.Errorf("docker: pull image %s: %w", ref, err)
+		return "", fmt.Errorf("docker: pull image %s: %w", ref, err)
 	}
-	return nil
+	return ref, nil
 }
