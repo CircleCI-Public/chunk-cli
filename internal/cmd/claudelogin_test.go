@@ -8,13 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/claudeauth"
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/keyring/keyringtest"
 	"github.com/smeltdev/smelt/internal/ui"
 )
 
@@ -64,7 +64,7 @@ func TestParseRefreshProvider(t *testing.T) {
 
 func stubMint(t *testing.T, token string, err error) *int {
 	t.Helper()
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	stops := 0
 	origMint, origStop := mintClaudeToken, stopDaemonForCredentialChange
 	mintClaudeToken = func(context.Context, iostream.Streams, func(string) (string, error)) (string, error) {

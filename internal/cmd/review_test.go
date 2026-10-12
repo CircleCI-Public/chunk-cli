@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/keyring/keyringtest"
 	"github.com/smeltdev/smelt/internal/review"
 )
 
@@ -17,7 +17,7 @@ const reviewBaseURL = "https://api.anthropic.com"
 
 func storeBothClaudeCredentials(t *testing.T) {
 	t.Helper()
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	assert.NilError(t, keyring.Set(keyring.ServiceAnthropic(reviewBaseURL), "sk-ant-api"))
 	assert.NilError(t, keyring.Set(keyring.ServiceAnthropicOAuth(reviewBaseURL), "sk-ant-oat01-tok"))
 }

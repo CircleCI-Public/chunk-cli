@@ -122,8 +122,11 @@ type UserConfig struct {
 	CircleCIToken   string `json:"circleCIToken,omitempty"`
 	CircleCIUserID  string `json:"circleCIUserID,omitempty"`
 	GitHubToken     string `json:"gitHubToken,omitempty"`
-	Model           string `json:"model,omitempty"`
-	InstanceID      string `json:"instanceID,omitempty"`
+	// CodexAuthJSON is a Codex ChatGPT login (auth.json), stored here only with
+	// --insecure-storage.
+	CodexAuthJSON string `json:"codexAuthJSON,omitempty"`
+	Model         string `json:"model,omitempty"`
+	InstanceID    string `json:"instanceID,omitempty"`
 
 	// Telemetry is the persisted telemetry preference: true enables it,
 	// false disables it. nil means no preference has been set, in which

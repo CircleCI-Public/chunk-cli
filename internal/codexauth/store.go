@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/codex"
 	"github.com/smeltdev/smelt/internal/keyring"
@@ -37,6 +38,9 @@ type Login struct {
 	// FromEnv reports that the login came from the environment, so it cannot
 	// be stored back after a renewal.
 	FromEnv bool
+	// InConfig reports that the login is in the user config file, where
+	// --insecure-storage put it, so a renewal goes back there.
+	InConfig bool
 }
 
 // Find looks for a credential: the environment first, then the keychain. A
@@ -52,8 +56,11 @@ func Find() (Login, error) {
 	if v := os.Getenv(codex.EnvAPIKey); v != "" {
 		return Login{Kind: KindAPIKey, APIKey: v, FromEnv: true}, nil
 	}
-	if v, err := keyring.Get(keyring.ServiceCodexChatGPT); err == nil && v != "" {
+	if v, err := keyring.GetLarge(keyring.ServiceCodexChatGPT); err == nil && v != "" {
 		return Login{Kind: KindChatGPT, Auth: []byte(v)}, nil
+	}
+	if cfg, err := config.Load(); err == nil && cfg.CodexAuthJSON != "" {
+		return Login{Kind: KindChatGPT, Auth: []byte(cfg.CodexAuthJSON), InConfig: true}, nil
 	}
 	if v, err := keyring.Get(keyring.ServiceCodexAPIKey); err == nil && v != "" {
 		return Login{Kind: KindAPIKey, APIKey: v}, nil
@@ -74,12 +81,38 @@ func (l Login) Credential() (harness.Credential, error) {
 	return harness.Credential{EnvVar: codex.EnvAuthJSON, Value: base64.StdEncoding.EncodeToString(cp)}, nil
 }
 
-// StoreChatGPT keeps the contents of auth.json in the keychain.
+// msgKeychainSaveFailed is a user-facing sentence, so it starts with the
+// product name's capital.
+const msgKeychainSaveFailed = "Codex login succeeded, but smelt could not save it in the keychain"
+
+// StoreChatGPT keeps the contents of auth.json in the keychain, in parts when
+// it is too big for one entry. The error says that the login itself worked.
 func StoreChatGPT(raw []byte) error {
 	if _, err := Expiry(raw); err != nil {
 		return err
 	}
-	return keyring.Set(keyring.ServiceCodexChatGPT, string(raw))
+	if err := keyring.SetLarge(keyring.ServiceCodexChatGPT, string(raw)); err != nil {
+		return fmt.Errorf("%s: %w", msgKeychainSaveFailed, err)
+	}
+	return nil
+}
+
+// StoreChatGPTInConfig keeps the contents of auth.json in the user config file
+// (mode 0600), for --insecure-storage, and drops any copy in the keychain so
+// the two cannot disagree.
+func StoreChatGPTInConfig(raw []byte) error {
+	if _, err := Expiry(raw); err != nil {
+		return err
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	cfg.CodexAuthJSON = string(raw)
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("save Codex login: %w", err)
+	}
+	return keyring.DeleteLarge(keyring.ServiceCodexChatGPT)
 }
 
 // StoreAPIKey keeps an OpenAI API key in the keychain.
@@ -90,9 +123,15 @@ func StoreAPIKey(key string) error {
 	return keyring.Set(keyring.ServiceCodexAPIKey, strings.TrimSpace(key))
 }
 
-// Remove deletes both stored Codex credentials.
+// Remove deletes every stored Codex credential, including the parts of a
+// chunked login and a copy in the config file.
 func Remove() error {
-	return errors.Join(keyring.Delete(keyring.ServiceCodexChatGPT), keyring.Delete(keyring.ServiceCodexAPIKey))
+	errs := []error{keyring.DeleteLarge(keyring.ServiceCodexChatGPT), keyring.Delete(keyring.ServiceCodexAPIKey)}
+	if cfg, err := config.Load(); err == nil && cfg.CodexAuthJSON != "" {
+		cfg.CodexAuthJSON = ""
+		errs = append(errs, config.Save(cfg))
+	}
+	return errors.Join(errs...)
 }
 
 // ForRun finds the credential for a run and makes sure a ChatGPT login lasts
@@ -109,7 +148,11 @@ func ForRun(ctx context.Context, host Host, now time.Time) (harness.Credential, 
 			return harness.Credential{}, err
 		}
 		if renewed && !l.FromEnv {
-			if err := StoreChatGPT(raw); err != nil {
+			store := StoreChatGPT
+			if l.InConfig {
+				store = StoreChatGPTInConfig
+			}
+			if err := store(raw); err != nil {
 				return harness.Credential{}, fmt.Errorf("store the renewed login: %w", err)
 			}
 		}

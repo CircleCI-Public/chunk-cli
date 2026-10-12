@@ -35,7 +35,7 @@ func codexOnPath() bool {
 // codexLogin signs in to Codex in a private CODEX_HOME and keeps the resulting
 // auth.json in the keychain. The user's ~/.codex is never touched. A running
 // daemon is stopped so that its next launch sees the new login.
-func codexLogin(ctx context.Context, streams iostream.Streams, deviceAuth bool) error {
+func codexLogin(ctx context.Context, streams iostream.Streams, opts codexLoginOptions) error {
 	if !isInteractive() {
 		return newUserError("Cannot log in to Codex without an interactive terminal.").
 			withCode("auth.codex_login_required").
@@ -57,20 +57,40 @@ func codexLogin(ctx context.Context, streams iostream.Streams, deviceAuth bool) 
 	streams.Println("")
 
 	raw, err := codexHost.Login(ctx, codexauth.LoginOptions{
-		DeviceAuth: deviceAuth, Stdin: os.Stdin, Stdout: streams.Out, Stderr: streams.Err,
+		DeviceAuth: opts.deviceAuth, Stdin: os.Stdin, Stdout: streams.Out, Stderr: streams.Err,
 	})
 	if err != nil {
 		return &userError{msg: "Codex login failed.", suggestion: hintCodexLogin, exitCode: ExitAuthError, err: err}
 	}
-	if err := codexauth.StoreChatGPT(raw); err != nil {
-		return &userError{msg: msgCouldNotSaveCredentials, err: err}
+	if err := storeCodexLogin(raw, opts.insecureStorage); err != nil {
+		return &userError{
+			msg:        msgCouldNotSaveCredentials,
+			suggestion: "Run it again with --insecure-storage to keep the login in the config file instead.",
+			exitCode:   ExitAuthError,
+			err:        err,
+		}
 	}
 	stopDaemonForCredentialChange()
-	printSaved(streams, "Codex login", false)
+	printSaved(streams, "Codex login", opts.insecureStorage)
 	if exp, err := codexauth.Expiry(raw); err == nil {
 		streams.Println(ui.Dim("It lasts until " + exp.Format("2006-01-02") + "; then run 'smelt refresh codex'."))
 	}
 	return nil
+}
+
+// codexLoginOptions are the choices of a Codex login.
+type codexLoginOptions struct {
+	deviceAuth      bool
+	insecureStorage bool
+}
+
+// storeCodexLogin keeps a login in the keychain, or in the config file when
+// the user asked for insecure storage.
+func storeCodexLogin(raw []byte, insecureStorage bool) error {
+	if insecureStorage {
+		return codexauth.StoreChatGPTInConfig(raw)
+	}
+	return codexauth.StoreChatGPT(raw)
 }
 
 // codexEnvHint names the variables that stand in for a stored Codex login.
@@ -119,9 +139,8 @@ func authSetCodex(streams iostream.Streams, force bool) error {
 
 // authRemoveCodex deletes the stored Codex credentials.
 func authRemoveCodex(streams iostream.Streams, force bool) error {
-	_, chatErr := keyring.Get(keyring.ServiceCodexChatGPT)
 	_, keyErr := keyring.Get(keyring.ServiceCodexAPIKey)
-	if chatErr != nil && keyErr != nil {
+	if _, err := codexauth.Find(); err != nil && keyErr != nil {
 		streams.Println(ui.Warning("No Codex credential stored."))
 		return nil
 	}
@@ -149,13 +168,13 @@ func authRemoveCodex(streams iostream.Streams, force bool) error {
 // refreshCodex logs in to Codex again and replaces the stored login: the
 // one-minute browser login that `smelt factory build` asks for when the stored
 // access token is about to expire.
-func refreshCodex(ctx context.Context, streams iostream.Streams, deviceAuth bool) error {
+func refreshCodex(ctx context.Context, streams iostream.Streams, opts codexLoginOptions) error {
 	if l, err := codexauth.Find(); err == nil && l.Kind == codexauth.KindChatGPT {
 		if exp, err := codexauth.Expiry(l.Auth); err == nil {
 			streams.Println("Current Codex login expires " + exp.Format(time.RFC3339) + ".")
 		}
 	}
-	return codexLogin(ctx, streams, deviceAuth)
+	return codexLogin(ctx, streams, opts)
 }
 
 // codexStatus prints the Codex section of `smelt auth status`: the kind of
@@ -209,7 +228,7 @@ func codexAuthStep(ctx context.Context, streams iostream.Streams, confirm confir
 		streams.ErrPrintln(ui.Dim(hintCodexLogin))
 		return
 	}
-	if err := codexLogin(ctx, streams, false); err != nil {
+	if err := codexLogin(ctx, streams, codexLoginOptions{}); err != nil {
 		warnUserError(streams, "Codex login failed: ", err)
 		streams.ErrPrintln(ui.Dim(hintCodexLogin))
 	}

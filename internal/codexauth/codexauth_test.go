@@ -11,11 +11,12 @@ import (
 	"testing"
 	"time"
 
-	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/smeltdev/smelt/internal/harness/codex"
+	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/keyring/keyringtest"
 )
 
 var now = time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
@@ -159,7 +160,7 @@ func TestLoginExplainsADisabledDeviceCode(t *testing.T) {
 }
 
 func TestKeychainRoundTripForBothKinds(t *testing.T) {
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	t.Setenv(codex.EnvAuthJSON, "")
 	t.Setenv(codex.EnvAPIKey, "")
 
@@ -196,7 +197,7 @@ func TestKeychainRoundTripForBothKinds(t *testing.T) {
 }
 
 func TestEnvironmentOverridesTheKeychain(t *testing.T) {
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	assert.NilError(t, StoreAPIKey("stored"))
 	t.Setenv(codex.EnvAuthJSON, base64.StdEncoding.EncodeToString(authJSON(now.Add(240*time.Hour))))
 	l, err := Find()
@@ -212,7 +213,7 @@ func TestEnvironmentOverridesTheKeychain(t *testing.T) {
 }
 
 func TestForRunRenewsAndStoresALoginThatExpiresSoon(t *testing.T) {
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	t.Setenv(codex.EnvAuthJSON, "")
 	t.Setenv(codex.EnvAPIKey, "")
 	soon := authJSON(time.Now().Add(time.Hour))
@@ -300,3 +301,53 @@ func TestProbeDoesNotWaitForAServerThatStaysOpen(t *testing.T) {
 		t.Fatal("Probe waited for the server instead of returning once both replies arrived")
 	}
 }
+
+// realisticAuthJSON is an auth.json the size of a real one: three JWT-sized
+// tokens, 5–6 KB in all. It is built here; never commit a real one.
+func realisticAuthJSON(t *testing.T) []byte {
+	t.Helper()
+	enc := base64.RawURLEncoding.EncodeToString
+	payload, _ := json.Marshal(map[string]any{"exp": time.Now().Add(240 * time.Hour).Unix()})
+	jwt := func(pad int) string {
+		return enc([]byte(`{"alg":"RS256"}`)) + "." + enc(payload) + "." + strings.Repeat("s", pad)
+	}
+	b, err := json.Marshal(map[string]any{
+		"auth_mode": "chatgpt",
+		"tokens": map[string]any{
+			"access_token": jwt(1800), "id_token": jwt(1800), "refresh_token": jwt(1800),
+		},
+	})
+	assert.NilError(t, err)
+	assert.Assert(t, len(b) > 5000 && len(b) < 7000, len(b))
+	return b
+}
+
+func TestStoreChatGPTHandlesARealisticAuthJSON(t *testing.T) {
+	fake := keyringtest.Install(t)
+	t.Setenv("SMELT_CODEX_AUTH_JSON", "")
+	t.Setenv("CODEX_API_KEY", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	raw := realisticAuthJSON(t)
+	assert.NilError(t, StoreChatGPT(raw))
+	assert.Assert(t, len(fake.Services()) > 1, "stored in parts")
+	l, err := Find()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, l.Auth, raw)
+
+	assert.NilError(t, Remove())
+	assert.Equal(t, len(fake.Services()), 0)
+}
+
+func TestStoreChatGPTSaysTheLoginSucceeded(t *testing.T) {
+	keyringtest.Install(t)
+	restore := keyring.SetBackend(failingBackend{})
+	defer restore()
+	err := StoreChatGPT(realisticAuthJSON(t))
+	assert.ErrorContains(t, err, "Codex login succeeded, but smelt could not save it in the keychain")
+}
+
+type failingBackend struct{}
+
+func (failingBackend) Set(string, string, string) error   { return errors.New("locked") }
+func (failingBackend) Get(string, string) (string, error) { return "", errors.New("locked") }
+func (failingBackend) Delete(string, string) error        { return errors.New("locked") }

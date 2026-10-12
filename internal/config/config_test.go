@@ -8,15 +8,15 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/keyring/keyringtest"
 )
 
 func setupTempConfig(t *testing.T) string {
 	t.Helper()
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	dir := t.TempDir()
 	t.Setenv(EnvXDGConfigHome, dir)
 	t.Setenv(EnvCircleToken, "")
