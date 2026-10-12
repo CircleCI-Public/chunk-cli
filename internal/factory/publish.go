@@ -47,12 +47,18 @@ const (
 
 // PublishFacts is what deciding whether to publish depends on.
 type PublishFacts struct {
-	Mode        PublishMode
-	Committed   bool
-	Passed      bool
-	HasRemote   bool
-	HasPR       bool
-	Interactive bool
+	Mode      PublishMode
+	Committed bool
+	Passed    bool
+	// Result is how the run ended, for saying why a run that did not pass was
+	// not published.
+	Result Result
+	// PublishFailed publishes a run that did not pass, as a draft: the user
+	// asked for this run, or for failed runs, explicitly.
+	PublishFailed bool
+	HasRemote     bool
+	HasPR         bool
+	Interactive   bool
 }
 
 // PublishDecision is what to do about publishing. Reason says why nothing is
@@ -62,10 +68,22 @@ type PublishDecision struct {
 	// Ask reports that the user is asked before the action is taken.
 	Ask    bool
 	Reason string
+	// Unpassed reports that the run was not published only because it did not
+	// pass, so the user can be told how to publish it anyway.
+	Unpassed bool
+	// Draft reports that the PR is opened as a draft, because the run did not
+	// pass.
+	Draft bool
+}
+
+// FailedRunWarning is the first line of the PR body of a run that did not pass.
+func FailedRunWarning(result Result, rounds int) string {
+	return fmt.Sprintf("⚠ This run did not pass (%s after %d rounds). Review before merging.", result, rounds)
 }
 
 // DecidePublish settles whether and how to publish. An explicit mode wins over
-// the prompt, which is only for a passed run in a terminal; anything else
+// the prompt, which is only for a passed run in a terminal, but publishes a
+// run that did not pass only when PublishFailed says to, and then as a draft; anything else
 // leaves the branch local.
 func DecidePublish(f PublishFacts) PublishDecision {
 	switch {
@@ -77,13 +95,19 @@ func DecidePublish(f PublishFacts) PublishDecision {
 		return PublishDecision{Reason: "the repository has no " + DefaultRemote + " remote, so the work stays on its local branch"}
 	}
 	switch f.Mode {
-	case PublishPush:
-		return PublishDecision{Action: ActionPush}
-	case PublishPR:
-		if f.HasPR {
-			return PublishDecision{Action: ActionUpdatePR}
+	case PublishPush, PublishPR:
+		if !f.Passed && !f.PublishFailed {
+			return PublishDecision{Reason: fmt.Sprintf("the run did not pass (%s)", f.Result), Unpassed: true}
 		}
-		return PublishDecision{Action: ActionOpenPR}
+		d := PublishDecision{Action: ActionPush}
+		if f.Mode == PublishPR {
+			d.Action = ActionOpenPR
+			if f.HasPR {
+				d.Action = ActionUpdatePR
+			}
+		}
+		d.Draft = !f.Passed && d.Action == ActionOpenPR
+		return d
 	case PublishPrompt, PublishOff:
 	}
 	if !f.Passed {

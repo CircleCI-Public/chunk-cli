@@ -412,3 +412,25 @@ func TestFactoryRecorderFinishKeepsTheNotes(t *testing.T) {
 	assert.Assert(t, got != nil)
 	assert.DeepEqual(t, *got, smeltd.Notes{Title: "Add a flag", What: "- w", Why: "- y", How: "- h"})
 }
+
+func TestFactorySessionRecordsBlockedAndIncompleteWork(t *testing.T) {
+	run := scriptedRun(factory.ResultBlocked)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		rep, err := run(ctx, opts)
+		rep.Outcome.Blocked = "needs a credential"
+		rep.Outcome.Checks = []factory.Check{{
+			Name: "adversarial", Kind: factory.KindReview, Status: factory.StatusFailed,
+			Findings: []review.Finding{{File: "a.go", Severity: "medium", Body: "The CLI is missing. Nothing selects a harness."}},
+		}}
+		return rep, err
+	})
+
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+
+	assert.Equal(t, detail.Factory.Result, smeltd.ResultBlocked)
+	assert.Equal(t, detail.Factory.Blocked, "needs a credential")
+	assert.DeepEqual(t, detail.Factory.Incomplete, []string{"The CLI is missing"})
+	assert.Equal(t, detail.Stages[0].Note, "the implementer is blocked: needs a credential")
+}

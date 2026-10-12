@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -97,7 +98,8 @@ func TestPublishRun(t *testing.T) {
 		{name: "--pr with a PR does not create another", flags: publishFlags{pr: true}, pr: existing, wantPushed: true},
 		{name: "--no-publish does nothing", flags: publishFlags{none: true}, prompt: true},
 		{name: "failed run is not offered", prompt: true, mutate: func(f *smeltd.FactoryRun) { f.Result = smeltd.ResultExhausted }},
-		{name: "failed run with --pr is published", flags: publishFlags{pr: true}, mutate: func(f *smeltd.FactoryRun) { f.Result = smeltd.ResultExhausted }, wantPushed: true, wantCreated: 1},
+		{name: "failed run with --pr is not published", flags: publishFlags{pr: true}, mutate: func(f *smeltd.FactoryRun) { f.Result = smeltd.ResultStuck }},
+		{name: "failed run with --pr --publish-failed is published", flags: publishFlags{pr: true, failed: true}, mutate: func(f *smeltd.FactoryRun) { f.Result = smeltd.ResultExhausted }, wantPushed: true, wantCreated: 1},
 		{name: "uncommitted run is not published", flags: publishFlags{pr: true}, mutate: func(f *smeltd.FactoryRun) { f.Committed = false }},
 	}
 	for _, tt := range tests {
@@ -180,4 +182,53 @@ func TestPublishRunBodyIsTheNotesNeverTheSpec(t *testing.T) {
 			assert.Assert(t, !strings.Contains(host.created[0].Body, "second line"))
 		})
 	}
+}
+
+func TestPublishRunOpensAFailedRunAsADraftWithAWarning(t *testing.T) {
+	f, _ := publishProject(t)
+	f.Result, f.Rounds = smeltd.ResultStuck, 3
+	host := &fakePRHost{}
+	err := publishRun(t.Context(), iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}, f, publishFlags{pr: true, failed: true}, false, host)
+	assert.NilError(t, err)
+	assert.Equal(t, len(host.created), 1)
+	assert.Assert(t, host.created[0].Draft)
+	assert.Assert(t, strings.HasPrefix(host.created[0].Body, "⚠ This run did not pass (stuck after 3 rounds). Review before merging.\n"), host.created[0].Body)
+}
+
+func TestPublishRunOpensAPassedRunReady(t *testing.T) {
+	f, _ := publishProject(t)
+	host := &fakePRHost{}
+	err := publishRun(t.Context(), iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}, f, publishFlags{pr: true, failed: true}, false, host)
+	assert.NilError(t, err)
+	assert.Equal(t, len(host.created), 1)
+	assert.Assert(t, !host.created[0].Draft)
+	assert.Assert(t, !strings.Contains(host.created[0].Body, "did not pass"), host.created[0].Body)
+}
+
+func TestPublishRunSaysHowToPublishAStuckRun(t *testing.T) {
+	f, _ := publishProject(t)
+	f.Result = smeltd.ResultStuck
+	var errOut bytes.Buffer
+	err := publishRun(t.Context(), iostream.Streams{Out: &bytes.Buffer{}, Err: &errOut}, f, publishFlags{pr: true}, false, &fakePRHost{})
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(errOut.String(), "Not published: the run did not pass (stuck). Publish anyway with: smelt factory publish run-1 --pr"), errOut.String())
+}
+
+func TestPrintFactoryPartialNamesUnimplementedWork(t *testing.T) {
+	collect := func(f *smeltd.FactoryRun) []string {
+		var said []string
+		printFactoryPartial(f, func(_ iostream.Level, msg string) { said = append(said, msg) })
+		return said
+	}
+	got := collect(&smeltd.FactoryRun{Result: smeltd.ResultStuck, Incomplete: []string{"the CLI is missing"}})
+	assert.DeepEqual(t, got, []string{"The run ended with part of the request unimplemented: the CLI is missing"})
+	assert.Equal(t, len(collect(&smeltd.FactoryRun{Result: smeltd.ResultPassed, Incomplete: []string{"x"}})), 0)
+}
+
+func TestReportOutcomeBlocked(t *testing.T) {
+	err := reportOutcome(func(iostream.Level, string) {}, smeltd.ResultBlocked, 2, "needs a token")
+	assert.ErrorContains(t, err, "blocked")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue))
+	assert.Assert(t, strings.Contains(ue.msg, "needs a token"), ue.msg)
 }

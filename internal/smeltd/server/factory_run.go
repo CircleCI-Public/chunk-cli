@@ -284,6 +284,8 @@ func factoryResultNote(o factory.Outcome) string {
 		return fmt.Sprintf("all checks passed after %d round(s)", o.Rounds)
 	case factory.ResultNoChange:
 		return "the implementer made no changes"
+	case factory.ResultBlocked:
+		return "the implementer is blocked: " + o.Blocked
 	case factory.ResultStuck:
 		return fmt.Sprintf("the implementer stopped changing the code after round %d, with checks still failing", o.Rounds)
 	case factory.ResultExhausted:
@@ -489,6 +491,10 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 	if rep.Started {
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds
+		f.Blocked = rep.Outcome.Blocked
+		for _, fd := range rep.Outcome.Incomplete() {
+			f.Incomplete = append(f.Incomplete, factory.FindingTitle(fd))
+		}
 	}
 	if err == nil {
 		e.loopNote = factoryResultNote(rep.Outcome)

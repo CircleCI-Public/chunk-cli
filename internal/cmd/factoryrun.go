@@ -289,6 +289,8 @@ is pushed and a compare URL is printed.`,
 				return err
 			}
 			pub.bodySet = cmd.Flags().Changed("pr-body")
+			// Asking for this run is asking for it whatever its result.
+			pub.failed = true
 			return publishRun(ctx, streams, f, pub, prompt, hostFor(f.Worktree))
 		},
 	}

@@ -26,7 +26,26 @@ const DefaultImplementTimeout = 30 * time.Minute
 // commit, so a commit, reset or branch switch would hide the work from them.
 const baseImplementerSystemPrompt = `You are working in a disposable copy of the repository on a remote machine.
 Make the requested change by editing files. Leave your changes uncommitted: do not run git commit, git stash, git reset, git checkout, git switch or git rebase. Your changes are collected from the working tree and reviewed.
+Implement everything the request asks for in this run, including every phase, test and acceptance item. Do not stop after part of it, and do not defer parts to a later change.
+A review finding that says part of the request is missing or incomplete is required work, not a matter of scope.
+If something truly cannot be done here (a credential, a manual step, a decision the request leaves open), finish everything else, then end your summary with a line "BLOCKED: <what and why>".
 When you finish, reply with a short summary of what you changed.`
+
+// blockedMarker starts the line an implementer ends its summary with when
+// something in the request cannot be done in the run.
+const blockedMarker = "BLOCKED:"
+
+// BlockedReason is what the implementer's summary says it is blocked on, or
+// "" when it has no BLOCKED: line.
+func BlockedReason(summary string) string {
+	for _, line := range strings.Split(summary, "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "*_>- "))
+		if rest, ok := strings.CutPrefix(line, blockedMarker); ok {
+			return strings.TrimSpace(strings.Trim(rest, "*_ "))
+		}
+	}
+	return ""
+}
 
 // implementerSystemPrompt returns the base system prompt, followed by the
 // run's own instructions when there are any.

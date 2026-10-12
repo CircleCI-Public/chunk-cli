@@ -402,6 +402,8 @@ func runOutcome(s smeltd.Session) string {
 			return "still failing"
 		case smeltd.ResultStuck:
 			return "stuck"
+		case smeltd.ResultBlocked:
+			return "blocked"
 		case smeltd.ResultNoChange:
 			return "no change"
 		}

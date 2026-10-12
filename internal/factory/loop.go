@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/smeltdev/smelt/internal/review"
 )
 
 // Steps are the operations one round of the loop is made of. Sidecars
@@ -32,6 +34,9 @@ const (
 	// ResultNoChange means the implementer's work is empty: it changed
 	// nothing, or reverted everything it had changed.
 	ResultNoChange Result = "no_change"
+	// ResultBlocked means the implementer finished what it could and ended its
+	// summary with a BLOCKED: line saying what it could not do.
+	ResultBlocked Result = "blocked"
 )
 
 // Outcome is the end state of a loop.
@@ -42,6 +47,15 @@ type Outcome struct {
 	Change Change
 	// Checks are the last round's checks.
 	Checks []Check
+	// Blocked is the reason the implementer's last summary gave after
+	// BLOCKED:, or "".
+	Blocked string
+}
+
+// Incomplete is the findings of the last round's checks that say requested
+// work is missing.
+func (o Outcome) Incomplete() []review.Finding {
+	return MissingWork(o.Checks)
 }
 
 // EventKind identifies a step of the loop for display.
@@ -84,6 +98,16 @@ type Loop struct {
 // out. The returned error is for a step that could not run, not for checks
 // that failed; the outcome so far is returned with it.
 func (l Loop) Run(ctx context.Context, steps Steps, prompt string) (Outcome, error) {
+	out, err := l.run(ctx, steps, prompt)
+	// A block outranks why the loop stopped: the implementer said what it
+	// cannot do, which no further round changes.
+	if out.Blocked != "" && out.Result != "" && out.Result != ResultNoChange {
+		out.Result = ResultBlocked
+	}
+	return out, err
+}
+
+func (l Loop) run(ctx context.Context, steps Steps, prompt string) (Outcome, error) {
 	if l.Attempts < 1 {
 		return Outcome{}, errors.New("attempts must be at least 1")
 	}
@@ -122,6 +146,7 @@ func (l Loop) Run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 				return out, fmt.Errorf("round %d: implement: %w", round, err)
 			}
 			emit(Event{Kind: EventImplemented, Round: round, Turn: turn})
+			out.Blocked = BlockedReason(turn.Summary)
 
 			change, err := steps.Collect(ctx)
 			if err != nil {

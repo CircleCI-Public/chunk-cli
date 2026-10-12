@@ -199,6 +199,11 @@ type FactoryRun struct {
 	// and Rounds how many rounds were checked.
 	Result string `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
+	// Blocked is what the implementer said it could not do, for ResultBlocked.
+	Blocked string `json:"blocked,omitempty"`
+	// Incomplete are the titles of the last round's findings that say part of
+	// the request is missing.
+	Incomplete []string `json:"incomplete,omitempty"`
 	// Committed reports whether the work was committed on Branch.
 	Committed bool `json:"committed,omitempty"`
 	// Stat is the committed work's diff stat against Baseline, "" when there
@@ -241,6 +246,9 @@ const (
 	ResultStuck = "stuck"
 	// ResultNoChange means the implementer's work is empty.
 	ResultNoChange = "no_change"
+	// ResultBlocked means the implementer ended its summary with a BLOCKED:
+	// line; FactoryRun.Blocked says why.
+	ResultBlocked = "blocked"
 )
 
 // How a check came out, as ReviewResult.Status and RoundCheck.Status.
