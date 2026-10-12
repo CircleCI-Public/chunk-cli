@@ -48,3 +48,12 @@ type Instance struct {
 	HostDir  string
 	RepoPath string
 }
+
+// Preparer is implemented by a backend that has to check its host before the
+// first sidecar is created, such as waiting for a starting Docker engine. A run
+// calls Ready once, so a pool of sidecars does not each repeat the wait.
+type Preparer interface {
+	// Ready blocks until sidecars can be created from image (empty for the
+	// backend's default), reporting progress through status.
+	Ready(ctx context.Context, image string, status iostream.StatusFunc) error
+}

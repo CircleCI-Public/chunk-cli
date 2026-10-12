@@ -32,6 +32,7 @@
     "sidecarImage": "4c46e935-5727-461b-9c73-d6806ecbdf36"
   },
   "factory": {
+    "harness": "claude",
     "backend": "docker",
     "image": "smelt-sandbox:local"
   },

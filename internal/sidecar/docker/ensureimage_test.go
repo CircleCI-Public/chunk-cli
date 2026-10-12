@@ -6,35 +6,61 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
 	"gotest.tools/v3/assert"
 )
 
-// fakeImages stands in for the Docker daemon's image API. Embedding the
-// interface satisfies the rest of client.APIClient; ensureImage only calls
-// these two methods.
-type fakeImages struct {
+// fakeDocker stands in for the Docker daemon's image and info APIs. Embedding
+// the interface satisfies the rest of client.APIClient; the provider's image
+// checks only call these methods. Time is fake: the provider's sleeper
+// advances it, and the daemon is "ready" once readyAt has passed.
+type fakeDocker struct {
 	client.APIClient
-	inspectErrs []error // returned by successive inspects; nil once exhausted
-	inspects    int
-	pulls       []string
-	pullErr     error
+	clock    time.Time
+	readyAt  time.Duration // engine answers like a starting one before this
+	start    time.Time
+	hasImage bool
+	inspects int
+	pulls    []string
+	pullErr  error
+	inspErr  error // returned by ImageInspect instead of not-found
 }
 
-func (f *fakeImages) ImageInspect(context.Context, string, ...client.ImageInspectOption) (image.InspectResponse, error) {
+func newFakeDocker() *fakeDocker {
+	t := time.Unix(1_700_000_000, 0)
+	return &fakeDocker{clock: t, start: t, hasImage: true}
+}
+
+func (f *fakeDocker) ready() bool { return f.clock.Sub(f.start) >= f.readyAt }
+
+func (f *fakeDocker) Info(context.Context) (system.Info, error) {
+	if !f.ready() {
+		return system.Info{}, errors.New("starting")
+	}
+	return system.Info{ID: "id", ServerVersion: "27", Images: 1}, nil
+}
+
+func (f *fakeDocker) ImageList(context.Context, image.ListOptions) ([]image.Summary, error) {
+	return []image.Summary{{ID: "sha256:x"}}, nil
+}
+
+func (f *fakeDocker) ImageInspect(context.Context, string, ...client.ImageInspectOption) (image.InspectResponse, error) {
 	f.inspects++
-	if len(f.inspectErrs) == 0 {
+	switch {
+	case f.inspErr != nil:
+		return image.InspectResponse{}, f.inspErr
+	case f.hasImage && f.ready():
 		return image.InspectResponse{}, nil
 	}
-	err := f.inspectErrs[0]
-	f.inspectErrs = f.inspectErrs[1:]
-	return image.InspectResponse{}, err
+	return image.InspectResponse{}, errNoSuchImage
 }
 
-func (f *fakeImages) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io.ReadCloser, error) {
+func (f *fakeDocker) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io.ReadCloser, error) {
 	f.pulls = append(f.pulls, ref)
 	if f.pullErr != nil {
 		return nil, f.pullErr
@@ -42,77 +68,54 @@ func (f *fakeImages) ImagePull(_ context.Context, ref string, _ image.PullOption
 	return io.NopCloser(strings.NewReader("{}")), nil
 }
 
-func noBackoff(t *testing.T) {
-	t.Helper()
-	old := inspectBackoff
-	inspectBackoff = 0
-	t.Cleanup(func() { inspectBackoff = old })
+// provider returns a Provider on f whose sleeps advance f's clock instantly.
+func (f *fakeDocker) provider() *Provider {
+	p := NewWithClient(f, "smelt-sandbox:local", "")
+	p.now = func() time.Time { return f.clock }
+	p.sleep = func(ctx context.Context, d time.Duration) error {
+		f.clock = f.clock.Add(d)
+		return ctx.Err()
+	}
+	return p
 }
 
 var errNoSuchImage = errors.Join(errors.New("no such image"), cerrdefs.ErrNotFound)
 
 func TestEnsureImagePresentDoesNotPull(t *testing.T) {
-	f := &fakeImages{}
-	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local"))
+	f := newFakeDocker()
+	assert.NilError(t, f.provider().ensureImage(context.Background(), "smelt-sandbox:local"))
 	assert.Equal(t, len(f.pulls), 0)
 }
 
-// notFoundEvery returns enough "no such image" answers to exhaust the retries.
-func notFoundEvery() []error {
-	errs := make([]error, notFoundAttempts)
-	for i := range errs {
-		errs[i] = errNoSuchImage
-	}
-	return errs
-}
-
-func TestEnsureImageMissingPulls(t *testing.T) {
-	noBackoff(t)
-	f := &fakeImages{inspectErrs: notFoundEvery()}
-	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "alpine:3.20"))
+func TestEnsureImageMissingPublicImagePulls(t *testing.T) {
+	f := newFakeDocker()
+	f.hasImage = false
+	assert.NilError(t, f.provider().ensureImage(context.Background(), "alpine:3.20"))
 	assert.DeepEqual(t, f.pulls, []string{"alpine:3.20"})
-	assert.Equal(t, f.inspects, notFoundAttempts, "a persistent not-found is checked a few times, then pulled")
+	assert.Equal(t, f.inspects, 1, "a ready engine's not-found is trusted at once")
 }
 
-// TestEnsureImageNotFoundWhileDockerStarts covers Docker Desktop waking from a
-// Resource Saver shutdown: its API proxy answers "no such image" until the
-// engine has loaded its image store. A locally built image must not be pulled.
-func TestEnsureImageNotFoundWhileDockerStarts(t *testing.T) {
-	noBackoff(t)
-	f := &fakeImages{inspectErrs: []error{errNoSuchImage}}
-	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local"))
-	assert.Equal(t, f.inspects, 2)
-	assert.Equal(t, len(f.pulls), 0, "an image that appears on recheck must not be pulled")
-}
-
-func TestEnsureImageRetriesTransientLookupError(t *testing.T) {
-	noBackoff(t)
-	f := &fakeImages{inspectErrs: []error{errors.New("EOF")}}
-	assert.NilError(t, NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local"))
-	assert.Equal(t, f.inspects, 2)
-	assert.Equal(t, len(f.pulls), 0, "a transient lookup error must not trigger a pull")
-}
-
-func TestEnsureImagePersistentLookupErrorIsReportedNotPulled(t *testing.T) {
-	noBackoff(t)
+func TestEnsureImageLookupErrorIsReportedNotPulled(t *testing.T) {
 	boom := errors.New("daemon unavailable")
-	f := &fakeImages{}
-	for range inspectAttempts {
-		f.inspectErrs = append(f.inspectErrs, boom)
-	}
-	err := NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local")
+	f := newFakeDocker()
+	f.inspErr = boom
+	err := f.provider().ensureImage(context.Background(), "smelt-sandbox:local")
 	assert.ErrorIs(t, err, boom)
 	assert.ErrorContains(t, err, "look up image smelt-sandbox:local")
-	assert.Equal(t, f.inspects, inspectAttempts)
 	assert.Equal(t, len(f.pulls), 0)
 }
 
-func TestEnsureImageMissingLocalImageExplainsBuild(t *testing.T) {
-	denied := errors.New("pull access denied for smelt-sandbox")
-	noBackoff(t)
-	f := &fakeImages{inspectErrs: notFoundEvery(), pullErr: denied}
-	err := NewWithClient(f, "", "").ensureImage(context.Background(), "smelt-sandbox:local")
-	assert.ErrorIs(t, err, denied)
-	assert.ErrorContains(t, err, "not on this Docker host")
-	assert.ErrorContains(t, err, "docker build -t smelt-sandbox:local -f Dockerfile.local .")
+func TestLocalOnly(t *testing.T) {
+	for ref, want := range map[string]bool{
+		"smelt-sandbox:local":          true,
+		"smelt-myrepo:3f9a":            true,
+		"mine:local":                   true,
+		"alpine:3.20":                  false,
+		"cimg/node:24.21.0":            false,
+		"localhost:5000/team/app":      false,
+		"localhost:5000/team/app:v1":   false,
+		"registry.example/x/smelt-a:1": false,
+	} {
+		assert.Equal(t, localOnly(ref), want, ref)
+	}
 }

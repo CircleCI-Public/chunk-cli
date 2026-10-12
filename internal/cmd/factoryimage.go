@@ -39,6 +39,16 @@ func buildSandboxImage(ctx context.Context, streams iostream.Streams, root, dock
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}
+	// Wait out a starting engine first: it would answer the build's image
+	// lookup with "no such image" and trigger a needless rebuild.
+	provider, err := docker.New()
+	if err != nil {
+		return "", dockerUnreachable(err)
+	}
+	defer func() { _ = provider.Close() }()
+	if err := provider.WaitEngine(ctx, func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) }); err != nil {
+		return "", dockerUnreachable(err)
+	}
 	builder, err := sandboximage.Connect()
 	if err != nil {
 		return "", dockerUnreachable(err)
@@ -224,9 +234,14 @@ func attemptImage(ctx context.Context, streams iostream.Streams, root, dockerfil
 		return imageAttempt{}, dockerUnreachable(err)
 	}
 	defer func() { _ = provider.Close() }()
+	provider.ManagedDockerfile = dockerfile
+	status := func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) }
+	if err := provider.Ready(ctx, tag, status); err != nil {
+		return imageAttempt{}, dockerUnreachable(err)
+	}
 	res, err := sandboximage.Verify(ctx, provider, sandboximage.VerifyOptions{
 		Dir: root, Image: tag, Install: cfg.InstallCommand(), Gate: sandboximage.PickGate(cfg.Commands),
-		Progress: func(_ iostream.Level, msg string) { streams.ErrPrintln(ui.Dim("  ▸ " + msg)) },
+		Progress: status,
 	})
 	if err != nil {
 		return imageAttempt{}, &userError{msg: "Could not verify the factory image.", suggestion: suggestionFactoryImage, err: err}
