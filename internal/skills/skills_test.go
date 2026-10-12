@@ -26,6 +26,7 @@ var skillNames = func() []string {
 var agentConfigDirs = []string{".claude", ".agents", filepath.Join(".config", "opencode")}
 
 func TestInstallAllAgents(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
 	home := t.TempDir()
 
 	// Create all agent config dirs.
@@ -55,6 +56,7 @@ func TestInstallAllAgents(t *testing.T) {
 }
 
 func TestInstallSkipsAgentWithoutConfigDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
 	home := t.TempDir()
 
 	// Only create .claude, not .agents or .config/opencode.
@@ -90,6 +92,7 @@ func TestInstallSkipsAgentWithoutConfigDir(t *testing.T) {
 }
 
 func TestInstallOpencodeUserScopePath(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
 	home := t.TempDir()
 
 	// Only opencode's user-level config dir exists.
@@ -117,6 +120,34 @@ func TestInstallOpencodeUserScopePath(t *testing.T) {
 		assert.NilError(t, err, "expected %s to exist", path)
 		assert.Assert(t, info.Size() > 0, "expected %s to be non-empty", path)
 	}
+}
+
+func TestInstallOpencodeUserScopeHonoursXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	// opencode's config dir exists only under XDG_CONFIG_HOME, not ~/.config.
+	opencodeDir := filepath.Join(xdg, "opencode")
+	assert.NilError(t, os.MkdirAll(opencodeDir, 0o755))
+
+	results := skills.Install(skills.ScopeUser, home)
+
+	var opencode skills.AgentInstallResult
+	for _, r := range results {
+		if r.Agent == "opencode" {
+			opencode = r
+		}
+	}
+	assert.Assert(t, !opencode.Skipped)
+	assert.Equal(t, len(opencode.Installed), len(skillNames))
+
+	for _, name := range skillNames {
+		_, err := os.Stat(filepath.Join(opencodeDir, "skills", name, "SKILL.md"))
+		assert.NilError(t, err)
+	}
+	_, err := os.Stat(filepath.Join(home, ".config", "opencode"))
+	assert.Assert(t, os.IsNotExist(err), "should not write under ~/.config when XDG_CONFIG_HOME is set")
 }
 
 func TestInstallOpencodeProjectScopePath(t *testing.T) {

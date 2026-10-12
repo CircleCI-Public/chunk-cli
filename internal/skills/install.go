@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/skills"
 )
 
@@ -12,7 +13,7 @@ import (
 type Scope string
 
 const (
-	// ScopeUser installs into the user's agent config directories (~/.claude, ~/.agents, ~/.config/opencode).
+	// ScopeUser installs into the user's agent config directories (~/.claude, ~/.agents, $XDG_CONFIG_HOME/opencode or ~/.config/opencode).
 	// Agents whose config directories do not exist are skipped.
 	ScopeUser Scope = "user"
 	// ScopeProject installs into the project's agent config directories (.claude, .agents, .opencode).
@@ -78,10 +79,14 @@ type Agent struct {
 func agents(scope Scope, baseDir string) []Agent {
 	skipIfAbsent := scope == ScopeUser
 	// opencode's config dir differs per scope: ~/.config/opencode at user
-	// level, .opencode at project level.
+	// level (honouring XDG_CONFIG_HOME), .opencode at project level.
 	opencodeConfigDir := filepath.Join(baseDir, ".opencode")
 	if scope == ScopeUser {
-		opencodeConfigDir = filepath.Join(baseDir, ".config", "opencode")
+		configHome := filepath.Join(baseDir, ".config")
+		if v := os.Getenv(config.EnvXDGConfigHome); v != "" {
+			configHome = v
+		}
+		opencodeConfigDir = filepath.Join(configHome, "opencode")
 	}
 	return []Agent{
 		{
