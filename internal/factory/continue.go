@@ -43,6 +43,11 @@ func (c *Continuation) prompt() string {
 		b.WriteString("\n\nThe developer adds:\n\n")
 		b.WriteString(g)
 	}
+	if len(c.From.Conflicts) > 0 {
+		base := ChooseBase("", c.From.BaseBranch, c.From.DefaultBranch)
+		fmt.Fprintf(&b, "\n\nThe branch was merged with `%s`; these files contain conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`): %s. "+
+			"Resolve each conflict so both sides' intent is kept, then remove the markers.", base, strings.Join(c.From.Conflicts, ", "))
+	}
 	return b.String()
 }
 

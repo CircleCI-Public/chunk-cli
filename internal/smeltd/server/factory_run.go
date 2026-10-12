@@ -210,7 +210,7 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Branch:      currentBranch(ps.root),
 		HeadSHA:     headRef(ps.root),
 		Factory:     record,
-	})
+	}, cfg.Factory.ConcurrentRuns())
 	if busy != "" {
 		return smeltd.Session{}, apiErr(http.StatusConflict, "%s", busy)
 	}

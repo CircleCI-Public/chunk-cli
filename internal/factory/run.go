@@ -245,6 +245,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	defer func() {
 		if rep.Started {
 			keepEndedRecord(dataDir, rec, rep, status)
+			cont.resolved(dataDir, status)
 		}
 	}()
 	// A continued run's sidecars are synced from the baseline's files, and
@@ -407,6 +408,18 @@ func keepRecord(dataDir string, rec Record, status iostream.StatusFunc) {
 func keepEndedRecord(dataDir string, rec Record, rep Report, status iostream.StatusFunc) {
 	rec.Result, rec.Rounds, rec.Notes = rep.Outcome.Result, rep.Outcome.Rounds, rep.Notes
 	keepRecord(dataDir, rec, status)
+}
+
+// resolved forgets the conflicts a continued run was asked to resolve in the
+// record it continued, now that the run has ended. It is a no-op on a nil
+// Continuation.
+func (c *Continuation) resolved(dataDir string, status iostream.StatusFunc) {
+	if c == nil || len(c.From.Conflicts) == 0 {
+		return
+	}
+	from := c.From
+	from.Conflicts = nil
+	keepRecord(dataDir, from, status)
 }
 
 // restoreWorktree puts the work's files back in a continued run's worktree

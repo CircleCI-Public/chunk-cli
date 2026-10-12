@@ -41,6 +41,9 @@ type Record struct {
 	// Result and Rounds are how the run ended, once it has.
 	Result Result `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
+	// Conflicts are the files `smelt factory update` committed with conflict
+	// markers in them, until a continued run ends having resolved them.
+	Conflicts []string `json:"conflicts,omitempty"`
 	// Notes are the written account of the branch's change, once the run
 	// that committed it has written them.
 	Notes *Notes `json:"notes,omitempty"`

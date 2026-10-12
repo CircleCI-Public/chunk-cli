@@ -98,7 +98,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.Equal(t, got.Reviewers, 1)
 	assert.Equal(t, got.OrgID, "org-1")
 	assert.Equal(t, len(got.Prompts), 2)
-	assert.Equal(t, len(got.Commands), 1)
+	assert.Equal(t, len(got.Commands), 2) // the project's command and the markers gate
 	assert.Equal(t, got.Credential.Value, testSecret)
 	assert.Equal(t, got.ImplementerInstructions, "keep the change small")
 
@@ -246,9 +246,9 @@ func TestFactorySessionCanBeCancelled(t *testing.T) {
 // One session at a time per project.
 func TestFactorySessionsTakeTurns(t *testing.T) {
 	s := newSessionStore(context.Background())
-	_, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}})
+	_, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
 	assert.Equal(t, busy, "")
-	_, _, busy = s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}})
+	_, _, busy = s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
 	assert.Assert(t, busy != "", "two factory runs ran at once")
 }
 
@@ -423,7 +423,7 @@ func TestFactoryTargetDockerIgnoresSidecarImage(t *testing.T) {
 // them from.
 func TestFactoryRecorderFinishKeepsTheNotes(t *testing.T) {
 	s := newSessionStore(context.Background())
-	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}})
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
 	assert.Equal(t, busy, "")
 	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
 

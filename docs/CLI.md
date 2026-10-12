@@ -207,6 +207,10 @@ smelt
 │   │   --pr-title <title>          # PR title
 │   │   --pr-body <text>            # PR description
 │   │   --draft                     # Open the PR as a draft
+│   ├── update <run-id>             # Merge the run's base branch into its branch (conflicts are committed with their markers)
+│   │   --base <branch>             # Branch to merge (default: the run's base, else the default branch)
+│   │   --push                      # Push the branch after a clean update
+│   │   --json                      # {"run_id","branch","base","result","merged_commits","conflicts"}
 │   ├── clean [run...]              # Remove runs' worktrees, branches and records (default: every run not running)
 │   │   --yes                       # Remove without asking
 │   │   --force                     # Also remove worktrees with uncommitted changes, discarding them
@@ -393,6 +397,14 @@ smelt
   (circleci, 3 attempts, no log). An explicit `--max-attempts 3` beats `factory.maxAttempts`. The docker
   backend uses `--image` or `factory.image` and never `validation.sidecarImage`, which is a CircleCI
   snapshot ID; with neither (and no `SMELT_DOCKER_IMAGE`) the command fails before the run starts.
+- **`factory.maxConcurrent` allows several active runs per project.** The default, and `0` or a
+  missing value, is 1: a second `factory build` is refused with `project already has N active run(s)
+  (limit N; raise factory.maxConcurrent)`. Negative values are rejected. A continued run (`--continue`)
+  counts as one active run. Each run has its own worktree and container pool, so runs share no state, but
+  each is one implementer container plus one reviewer container per review prompt: cap the reviewers
+  with `--reviewers N` when running several at once. `factory status` with no run ID still shows the
+  newest run; `factory list` and `smelt watch` show every active one. Finished runs are kept until
+  more than `maxConcurrent + 8` sessions are retained, and active ones are never evicted.
   `smelt init` asks where factory runs execute and writes `factory.backend` (and, for docker,
   `factory.dockerfile`).
 - **`factory build` needs a coding agent.** `--harness claude|codex`, then `factory.harness`, then (in a
@@ -802,6 +814,29 @@ are accepted as the full ID or the branch's final segment. `publish` applies the
 end-of-run guards: only `smelt/` branches, never forced, never the default
 branch. A run the daemon no longer knows, after a restart, is reported from its
 record, with `"state":"done"`.
+
+### Keeping a run mergeable: `factory update`
+
+Runs started together all branch from the same `main`, so once one PR merges the others
+may conflict. `smelt factory update <run-id> [--base BRANCH] [--push] [--json]` fetches
+`origin/<base>` (the run's base branch, else the default branch) and merges it into the
+run's branch, in the run's worktree, as the run's commit author. The implementer cannot do
+this itself: its container has no `main` to merge against. It refuses a run that is still
+active.
+
+- **Clean merge:** the merge commit lands on the branch (`result: "clean"`); an
+  already-merged base reports `"up-to-date"` and adds no commit. Nothing is pushed unless
+  `--push` is given, which pushes only after a clean result, only a `smelt/` branch, never
+  forced.
+- **Conflicts:** the conflicted files are committed with their markers in place
+  (`Merge <base> into <branch> (conflicts to resolve: a.go, b.go)`), listed in the run's
+  record as `conflicts`, and reported (`"result":"conflicts"`). The worktree is left clean,
+  so `smelt factory build --continue <run-id> "Resolve the merge conflict markers in …"` works.
+  That run's prompt names the files and asks for the markers to be removed; the record's
+  `conflicts` are cleared when it ends.
+- **The `markers` check** runs in every factory run: it fails while any tracked file has a
+  conflict marker line (`git grep -nE '^(<<<<<<<|=======|>>>>>>>)( |$)'`), so a
+  half-resolved merge never passes.
 
 Usage errors (an unknown command, the wrong number of arguments) exit with
 `ExitBadArgs` and cobra's own message.
