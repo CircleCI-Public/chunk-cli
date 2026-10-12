@@ -255,6 +255,15 @@ func TestFactoryConfigValidation(t *testing.T) {
 	assert.ErrorContains(t, err, "factory.backend")
 	err = (&ProjectConfig{Factory: &FactoryConfig{MaxAttempts: -1}}).Validate()
 	assert.ErrorContains(t, err, "maxAttempts")
+	err = (&ProjectConfig{Factory: &FactoryConfig{MaxConcurrent: -1}}).Validate()
+	assert.ErrorContains(t, err, "maxConcurrent")
+}
+
+func TestFactoryConfigConcurrentRuns(t *testing.T) {
+	var unset *FactoryConfig
+	assert.Equal(t, unset.ConcurrentRuns(), 1)
+	assert.Equal(t, (&FactoryConfig{}).ConcurrentRuns(), 1)
+	assert.Equal(t, (&FactoryConfig{MaxConcurrent: 3}).ConcurrentRuns(), 3)
 }
 
 func TestFactoryConfigAuthor(t *testing.T) {

@@ -28,7 +28,7 @@ func TestFactoryChecksOnlyToleratesMissingDefaultReviews(t *testing.T) {
 	prompts, commands, err := factoryChecks(workDir, "", cfg, false)
 	assert.NilError(t, err, "a missing default directory is fine when there are commands")
 	assert.Equal(t, len(prompts), 0)
-	assert.Equal(t, len(commands), 1)
+	assert.Equal(t, len(commands), 2, "the project's command and the markers gate")
 
 	_, _, err = factoryChecks(workDir, filepath.Join(workDir, "reviws"), cfg, false)
 	assert.ErrorContains(t, err, "reviws")

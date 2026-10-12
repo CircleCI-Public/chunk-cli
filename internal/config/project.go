@@ -190,6 +190,9 @@ type FactoryConfig struct {
 	Dockerfile  string `json:"dockerfile,omitempty"`
 	MaxAttempts int    `json:"maxAttempts,omitempty"` // 0 means the built-in default
 	Log         bool   `json:"log,omitempty"`         // keep a run log by default
+	// MaxConcurrent is how many factory runs may be active in the project at
+	// once. 0 means 1.
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
 	// Author is who the commits on a run's branch are attributed to, as
 	// "Name <email>". Empty means the developer's own git identity.
 	Author string `json:"author,omitempty"`
@@ -217,6 +220,15 @@ func ParseCommitAuthor(s string) (CommitAuthor, error) {
 		return CommitAuthor{}, fmt.Errorf("author %q has no name", s)
 	}
 	return CommitAuthor{Name: addr.Name, Email: addr.Address}, nil
+}
+
+// ConcurrentRuns is how many runs may be active at once: MaxConcurrent, at
+// least 1.
+func (f *FactoryConfig) ConcurrentRuns() int {
+	if f == nil {
+		return 1
+	}
+	return max(f.MaxConcurrent, 1)
 }
 
 // CommitAuthor is the configured author, the zero value when none is set.
@@ -411,6 +423,9 @@ func (c *ProjectConfig) validate() error {
 		}
 		if f.MaxAttempts < 0 {
 			return fmt.Errorf("factory.maxAttempts must not be negative, got %d", f.MaxAttempts)
+		}
+		if f.MaxConcurrent < 0 {
+			return fmt.Errorf("factory.maxConcurrent must not be negative, got %d", f.MaxConcurrent)
 		}
 		if _, err := f.CommitAuthor(); err != nil {
 			return fmt.Errorf("factory.author must look like \"Name <email>\": %w", err)

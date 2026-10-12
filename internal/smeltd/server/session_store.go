@@ -12,9 +12,20 @@ import (
 	"github.com/smeltdev/smelt/internal/smeltd"
 )
 
-// MaxSessionsPerProject caps retained sessions per project. Only finished ones
-// are evicted, so a live session is never lost.
+// MaxSessionsPerProject caps retained sessions per project when few runs may
+// be active at once. Only finished ones are evicted, so a live session is never
+// lost.
 const MaxSessionsPerProject = 10
+
+// finishedSessionsKept is how many finished sessions a project keeps on top of
+// its active ones, so a busy project does not evict runs as they finish.
+const finishedSessionsKept = 8
+
+// retainedSessions is the per-project cap for a project that may run limit
+// sessions at once.
+func retainedSessions(limit int) int {
+	return max(MaxSessionsPerProject, limit+finishedSessionsKept)
+}
 
 // sessionEntry is one session and the machinery that owns it.
 type sessionEntry struct {
@@ -122,15 +133,20 @@ func newSessionStore(parent context.Context) *sessionStore {
 	}
 }
 
-// add creates a running entry for s. If the project already has a session that
-// has not ended it creates nothing and says why. One at a time per project.
-func (s *sessionStore) add(sess smeltd.Session) (*sessionEntry, context.Context, string) {
+// add creates a running entry for s. If the project already has limit sessions
+// that have not ended it creates nothing and says why.
+func (s *sessionStore) add(sess smeltd.Session, limit int) (*sessionEntry, context.Context, string) {
+	limit = max(limit, 1)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	active := 0
 	for _, id := range s.byProject[sess.ProjectRoot] {
 		if other := s.sessions[id]; other != nil && !other.snapshot().State.Finished() {
-			return nil, nil, fmt.Sprintf("a session is already active for this project (session %s)", id)
+			active++
 		}
+	}
+	if active >= limit {
+		return nil, nil, fmt.Sprintf("project already has %d active run(s) (limit %d; raise factory.maxConcurrent)", active, limit)
 	}
 	sess.ID = uuid.NewString()
 	sess.State = smeltd.SessionRunning
@@ -144,15 +160,15 @@ func (s *sessionStore) add(sess smeltd.Session) (*sessionEntry, context.Context,
 	}
 	s.sessions[sess.ID] = entry
 	s.byProject[sess.ProjectRoot] = append(s.byProject[sess.ProjectRoot], sess.ID)
-	s.evictLocked(sess.ProjectRoot)
+	s.evictLocked(sess.ProjectRoot, retainedSessions(limit))
 	return entry, ctx, ""
 }
 
 // evictLocked drops the oldest finished sessions until the project is within
 // the cap.
-func (s *sessionStore) evictLocked(root string) {
+func (s *sessionStore) evictLocked(root string, keep int) {
 	ids := s.byProject[root]
-	for len(ids) > MaxSessionsPerProject {
+	for len(ids) > keep {
 		dropped := false
 		for i, id := range ids {
 			if e := s.sessions[id]; e != nil && !e.snapshot().State.Finished() {

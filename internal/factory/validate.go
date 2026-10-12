@@ -59,8 +59,19 @@ func LoadChecks(dir string, optional bool, cfg *config.ProjectConfig, noValidate
 	if len(prompts) == 0 && len(commands) == 0 {
 		return nil, nil, ErrNothingToCheck
 	}
-	return prompts, commands, nil
+	return prompts, append(commands, MarkersGate), nil
 }
+
+// MarkersGate is the check every run has: it fails while a tracked file
+// contains a merge conflict marker line, so a half-resolved merge never
+// passes. git grep exits 1 when nothing matches, which is the pass.
+var MarkersGate = config.Command{
+	Name: "markers",
+	Run:  `git grep -nE '` + conflictMarkerPattern + `'; test $? -eq 1`,
+}
+
+// conflictMarkerPattern matches the lines git writes around a conflict.
+const conflictMarkerPattern = `^(<<<<<<<|=======|>>>>>>>)( |$)`
 
 // runValidation runs each command in turn in the implementer's workspace, where
 // the code under review already is, and returns one check per command. They
