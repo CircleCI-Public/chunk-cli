@@ -7,17 +7,17 @@ import (
 	"testing"
 	"time"
 
-	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/status"
+	"github.com/smeltdev/smelt/internal/keyring/keyringtest"
 )
 
 func TestHarnessStatusJSONReflectsThePersistedSignal(t *testing.T) {
 	isolateConfig(t)
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	t.Setenv("SMELT_CODEX_AUTH_JSON", "")
 	t.Setenv("CODEX_API_KEY", "")

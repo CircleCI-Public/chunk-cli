@@ -10,11 +10,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/segmentio/analytics-go/v3"
-	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/keyring"
+	"github.com/smeltdev/smelt/internal/keyring/keyringtest"
 	"github.com/smeltdev/smelt/internal/telemetry"
 	"github.com/smeltdev/smelt/internal/testing/fakes"
 )
@@ -149,7 +149,7 @@ func TestAuthRemoveCircleCI_KeepsUserIDWhileEnvTokenAuthenticates(t *testing.T) 
 
 func TestAuthRemoveCircleCI_InsecureStorageKeepsUserIDWhileKeychainTokenAuthenticates(t *testing.T) {
 	isolateConfig(t)
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	t.Setenv(config.EnvCircleToken, "")
 	t.Setenv(config.EnvCircleCIToken, "")
 

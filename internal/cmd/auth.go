@@ -63,7 +63,7 @@ Settings → Security.`,
 				if args[0] != providerCodex {
 					return unknownProvider(args[0], providerCodex)
 				}
-				return codexLogin(cmd.Context(), iostream.FromCmd(cmd), deviceAuth)
+				return codexLogin(cmd.Context(), iostream.FromCmd(cmd), codexLoginOptions{deviceAuth: deviceAuth, insecureStorage: insecureStorageFlag(cmd)})
 			}
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)

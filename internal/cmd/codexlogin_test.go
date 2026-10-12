@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/codexauth"
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/iostream"
+	"github.com/smeltdev/smelt/internal/keyring/keyringtest"
 )
 
 func testAuthJSON(t *testing.T) []byte {
@@ -25,7 +25,7 @@ func testAuthJSON(t *testing.T) []byte {
 	b, err := json.Marshal(map[string]any{
 		"auth_mode": "chatgpt",
 		"tokens": map[string]any{
-			"access_token": enc([]byte(`{}`)) + "." + enc(payload) + ".sig", "refresh_token": "refresh-secret", "id_token": "id-secret",
+			"access_token": enc([]byte(`{}`)) + "." + enc(payload) + ".sig", "refresh_token": "refresh-secret" + strings.Repeat("r", 2000), "id_token": "id-secret" + strings.Repeat("i", 2000),
 		},
 	})
 	assert.NilError(t, err)
@@ -43,7 +43,7 @@ func stubCodex(t *testing.T, body string) {
 
 func TestAuthLoginCodexStoresTheLoginInTheKeychainOnly(t *testing.T) {
 	isolateConfig(t)
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	t.Setenv("SMELT_CODEX_AUTH_JSON", "")
 	t.Setenv("CODEX_API_KEY", "")
 	raw := testAuthJSON(t)
@@ -88,7 +88,7 @@ func TestAuthLoginCodexNeedsATerminal(t *testing.T) {
 
 func TestAuthStatusAndRemoveCodex(t *testing.T) {
 	isolateConfig(t)
-	gokeyring.MockInit()
+	keyringtest.Install(t)
 	t.Setenv("SMELT_CODEX_AUTH_JSON", "")
 	t.Setenv("CODEX_API_KEY", "")
 	assert.NilError(t, codexauth.StoreChatGPT(testAuthJSON(t)))
@@ -134,4 +134,32 @@ func TestInitHarnessStepSavesTheFlagAndKeepsOtherSettings(t *testing.T) {
 	assert.Equal(t, cfg.Factory.Harness, "codex")
 	assert.Equal(t, cfg.Factory.Backend, "docker")
 	assert.Assert(t, !initHarnessStep(iostream.Streams{Out: &out, Err: &out}, cfg, initFactoryOptions{Harness: "codex"}), "unchanged")
+}
+
+func TestAuthLoginCodexInsecureStorageKeepsTheLoginInTheConfigFile(t *testing.T) {
+	isolateConfig(t)
+	fake := keyringtest.Install(t)
+	t.Setenv("SMELT_CODEX_AUTH_JSON", "")
+	t.Setenv("CODEX_API_KEY", "")
+	raw := testAuthJSON(t)
+	src := filepath.Join(t.TempDir(), "auth.json")
+	assert.NilError(t, os.WriteFile(src, raw, 0o600))
+	stubCodex(t, `cp `+src+` "$CODEX_HOME/auth.json"`)
+	oldInteractive := isInteractive
+	isInteractive = func() bool { return true }
+	t.Cleanup(func() { isInteractive = oldInteractive })
+	oldStop := stopDaemonForCredentialChange
+	stopDaemonForCredentialChange = func() bool { return false }
+	t.Cleanup(func() { stopDaemonForCredentialChange = oldStop })
+
+	out, err := runRoot(t, "auth", "login", "codex", "--insecure-storage")
+	assert.NilError(t, err, out)
+	assert.Equal(t, len(fake.Services()), 0)
+	l, err := codexauth.Find()
+	assert.NilError(t, err)
+	assert.Assert(t, l.InConfig)
+	assert.DeepEqual(t, l.Auth, raw)
+	assert.NilError(t, codexauth.Remove())
+	_, err = codexauth.Find()
+	assert.ErrorIs(t, err, codexauth.ErrNone)
 }

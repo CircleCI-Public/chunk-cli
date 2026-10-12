@@ -212,7 +212,7 @@ func newRefreshCmd(use string) *cobra.Command {
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
 			if provider == providerCodex {
-				return refreshCodex(cmd.Context(), io, false)
+				return refreshCodex(cmd.Context(), io, codexLoginOptions{insecureStorage: insecureStorage})
 			}
 			return refreshClaude(cmd.Context(), io, rc, insecureStorage)
 		},
