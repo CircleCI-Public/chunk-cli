@@ -12,8 +12,11 @@ import (
 
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/build"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/envspec"
@@ -177,4 +180,24 @@ func TestKitLive(t *testing.T) {
 	out, err := exec.Command(docker, "run", "--rm", plan.Tag, "sh", "-c", "codex --version && claude --version").CombinedOutput()
 	assert.NilError(t, err, string(out))
 	assert.Assert(t, strings.Contains(string(out), "codex"), string(out))
+}
+
+func (f *fakeDocker) ContainerCreate(context.Context, *container.Config, *container.HostConfig, *network.NetworkingConfig, *ocispec.Platform, string) (container.CreateResponse, error) {
+	return container.CreateResponse{}, errors.New("no containers")
+}
+
+func (f *fakeDocker) ContainerStart(context.Context, string, container.StartOptions) error {
+	return errors.New("no containers")
+}
+
+func (f *fakeDocker) ContainerWait(context.Context, string, container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+	return nil, nil
+}
+
+func (f *fakeDocker) ContainerLogs(context.Context, string, container.LogsOptions) (io.ReadCloser, error) {
+	return nil, errors.New("no containers")
+}
+
+func (f *fakeDocker) ContainerRemove(context.Context, string, container.RemoveOptions) error {
+	return nil
 }

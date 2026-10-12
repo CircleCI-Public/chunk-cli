@@ -25,9 +25,7 @@ const (
 `
 	kitClaude = `RUN curl -fsSL https://claude.ai/install.sh | bash && test -x "$HOME/.local/bin/claude"
 `
-	// kitHarnessLabel tells `smelt harness status` which agent CLIs the image has.
-	kitHarnessLabel = "LABEL " + LabelHarnesses + "=claude,codex\n"
-	kitCmd          = "CMD [\"sleep\", \"infinity\"]\n"
+	kitCmd = "CMD [\"sleep\", \"infinity\"]\n"
 )
 
 // Codex is installed from its GitHub release, which needs no Node. The version
@@ -79,7 +77,7 @@ func Render(r Recipe) string {
 		b.WriteString("# runtimes, system libraries) so the validation commands can run.\n")
 	} else if sys := r.Env.SetupStep("system"); sys != "" && r.BaseFrom == BaseFromDetected {
 		b.WriteString("\n# --- toolchain -------------------------------------------------------------\n")
-		b.WriteString(asUser("root", r.User, "RUN "+sys+"\n"))
+		b.WriteString(asUser(rootUser, r.User, "RUN "+sys+"\n"))
 	}
 
 	if r.Deps != nil && len(r.Manifests) > 0 {
@@ -87,13 +85,22 @@ func Render(r Recipe) string {
 		b.WriteString(r.depsLayer())
 	}
 
-	b.WriteString("\n# --- smelt agent kit -------------------------------------------------------\n")
-	b.WriteString(asUser("root", r.User, kitPackages))
-	b.WriteString(kitClaude)
-	b.WriteString(KitCodex)
-	b.WriteString(kitHarnessLabel)
-	b.WriteString(kitCmd)
+	b.WriteString("\n" + kitSection(r.User))
 	return b.String()
+}
+
+// kitHarnessLabel tells `smelt harness status` which agent CLIs the image has
+// and which kit built it.
+func kitHarnessLabel() string {
+	return "LABEL " + LabelHarnesses + "=claude,codex " + LabelKit + "=" + kitVersionString() + "\n"
+}
+
+// kitSection is the agent kit from its marker to the end of the Dockerfile.
+// user is the base image's user.
+func kitSection(user string) string {
+	return kitMarker() +
+		asUser(rootUser, user, kitPackages) +
+		kitClaude + KitCodex + kitHarnessLabel() + kitCmd
 }
 
 // asUser runs block as user, then restores the base image's user. A root base

@@ -9,7 +9,7 @@ ENV PATH=/root/.local/bin:$PATH
 # smelt did not recognise this repo's stack. Add its toolchain here (compilers,
 # runtimes, system libraries) so the validation commands can run.
 
-# --- smelt agent kit -------------------------------------------------------
+# --- smelt agent kit (v2) -------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git coreutils procps ca-certificates curl bash \
  && rm -rf /var/lib/apt/lists/* \
@@ -29,5 +29,5 @@ RUN set -e; \
     mv "/tmp/${name}" "$HOME/.local/bin/codex"; \
     rm -f "/tmp/${name}.tar.gz"; \
     test -x "$HOME/.local/bin/codex"
-LABEL smelt.harnesses=claude,codex
+LABEL smelt.harnesses=claude,codex smelt.kit=2
 CMD ["sleep", "infinity"]

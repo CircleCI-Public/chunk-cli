@@ -117,6 +117,9 @@ func (l *runLog) start(runID string, opts RunOptions, request string) {
 		cmds[i] = c.Name + ": " + c.Run
 	}
 	l.line("info", fmt.Sprintf("validation commands: %s", orNone(strings.Join(cmds, "; "))))
+	for _, w := range opts.Warnings {
+		l.line("warn", strings.ReplaceAll(w, "\n", "\n    "))
+	}
 	if !l.verbose {
 		return
 	}

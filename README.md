@@ -138,7 +138,8 @@ smelt init
   otherwise one matched to the detected stack.
 - **Dependencies:** your lockfiles' dependencies, baked into the package
   manager's store.
-- **Agent kit:** git, the Claude Code CLI and a few coreutils.
+- **Agent kit:** git, the Claude Code CLI, the Codex CLI and a few coreutils,
+  in a section marked `# --- smelt agent kit (vN) ---`.
 
 **How the image is checked:** after the build, smelt verifies the image by
 running the agent kit, your install step and your cheapest check inside it. If
@@ -155,6 +156,21 @@ git commit -m "Set up smelt factory"
 `Dockerfile.smelt` is yours to edit. The image tag is a hash of the Dockerfile
 and the lockfiles it copies, so when either changes, the next
 `smelt factory build` rebuilds the image automatically.
+
+**When smelt updates its agent kit:** `Dockerfile.smelt` is written once and
+never changed behind your back, so a Dockerfile from an older smelt keeps its
+older kit. `smelt factory build` and `smelt factory image` compare the kit
+version in the marker with the current one and, when it is older, warn (at most
+once a day for `factory build`) and carry on. To update it:
+
+```bash
+smelt factory image --update-kit    # replace only the agent-kit section, show the diff, ask
+```
+
+It keeps everything above the marker as you wrote it, then builds and verifies
+the image. Pass `--yes` to skip the question. `--regenerate` instead re-runs
+detection and rewrites the whole file. A Dockerfile without the marker cannot be
+updated this way.
 
 ### Add review prompts (recommended)
 
@@ -214,6 +230,7 @@ smelt factory publish <run-id> --pr  # push a finished run's branch and open or 
 smelt factory clean [run-id]         # remove finished runs' worktrees, branches and records
 smelt factory image [--rebuild]      # build or rebuild and verify the sandbox image
 smelt factory image --regenerate     # re-detect and rewrite Dockerfile.smelt (asks first)
+smelt factory image --update-kit     # replace only the agent-kit section of Dockerfile.smelt (asks first)
 smelt factory author ["Name <email>"]  # show or set who factory commits are attributed to
 smelt refresh                        # log in to Claude again (and restart the daemon)
 smelt refresh codex                  # log in to Codex again
@@ -271,6 +288,10 @@ the macOS keychain (read-only). Anthropic has said third-party tools should not
 call that endpoint and it can change without notice. Turn the probe off with
 `{"harness": {"claude": {"usage_probe": false}}}` in `~/.config/smelt/config.json`;
 without it, or when it fails, the last rate-limit signal a run saw is shown.
+An image built from an older Dockerfile (agent kit v1) has no
+`smelt.harnesses` label; smelt then runs the image once to see which agents it
+has, and remembers the answer per image. `image_status` says `labeled`,
+`unlabeled` or `no_image`.
 smelt reports; choosing between agents is up to whatever drives it.
 
 ## Configuration

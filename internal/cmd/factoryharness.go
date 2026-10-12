@@ -111,7 +111,7 @@ func resolveHarness(ctx context.Context, streams iostream.Streams, c harnessChoi
 	if len(inImage) > 0 && !slices.Contains(inImage, name) {
 		return "", newUserError(fmt.Sprintf("The sandbox image does not have %s.", name)).
 			withCode("factory.harness_not_in_image").
-			withSuggestion("Rebuild it with the current agent kit: smelt factory image --regenerate").
+			withSuggestion("Update the Dockerfile's agent kit: smelt factory image --update-kit").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}

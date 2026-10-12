@@ -17,6 +17,7 @@ import (
 	"github.com/smeltdev/smelt/internal/codexauth"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/claude"
+	"github.com/smeltdev/smelt/internal/sandboximage"
 )
 
 var now = time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
@@ -130,12 +131,93 @@ func TestClaudeFallsBackToThePersistedRunSignal(t *testing.T) {
 	assert.Assert(t, strings.Contains(e.Note, "no Claude Code login"), e.Note)
 }
 
-func TestImageLabelsDecideInstalledImage(t *testing.T) {
+// fakeImages is a Docker host with one image.
+type fakeImages struct {
+	info    sandboximage.ImageInfo
+	probe   func(ctx context.Context) ([]string, error)
+	probes  int
+	inspect int
+}
+
+func (f *fakeImages) InspectImage(context.Context, string) (sandboximage.ImageInfo, error) {
+	f.inspect++
+	return f.info, nil
+}
+
+func (f *fakeImages) RunProbe(ctx context.Context, _ string) ([]string, error) {
+	f.probes++
+	return f.probe(ctx)
+}
+
+func imageDeps(t *testing.T, f *fakeImages) Deps {
 	d := baseDeps(t)
-	d.ImageHarnesses = []string{"claude"}
+	d.ImageTag, d.Images = "smelt-x:abc", f
+	return d
+}
+
+func TestLabeledImageIsReadFromItsLabelWithoutRunningIt(t *testing.T) {
+	f := &fakeImages{info: sandboximage.ImageInfo{Status: sandboximage.ImageLabeled, ID: "sha256:1", Harnesses: []string{"claude"}, Kit: 2}}
+	rep := Build(t.Context(), imageDeps(t, f))
+	assert.Equal(t, f.probes, 0)
+	c, x := entry(t, rep, harness.Claude), entry(t, rep, harness.Codex)
+	assert.Assert(t, c.InstalledImage)
+	assert.Assert(t, !x.InstalledImage)
+	assert.Equal(t, c.ImageStatus, sandboximage.ImageLabeled)
+	assert.Equal(t, c.Note, "")
+}
+
+func TestUnlabeledImageIsRunOnceAndTheAnswerCached(t *testing.T) {
+	f := &fakeImages{
+		info:  sandboximage.ImageInfo{Status: sandboximage.ImageUnlabeled, ID: "sha256:1", Kit: 1},
+		probe: func(context.Context) ([]string, error) { return []string{"claude"}, nil },
+	}
+	d := imageDeps(t, f)
 	rep := Build(t.Context(), d)
+	assert.Equal(t, f.probes, 1)
+	c, x := entry(t, rep, harness.Claude), entry(t, rep, harness.Codex)
+	assert.Assert(t, c.InstalledImage)
+	assert.Assert(t, !x.InstalledImage)
+	assert.Equal(t, c.ImageStatus, sandboximage.ImageUnlabeled)
+	assert.Assert(t, strings.Contains(c.Note, "image has no smelt.harnesses label (agent kit v1); checked by running it"), c.Note)
+	assert.Assert(t, strings.Contains(c.Note, "--update-kit"), c.Note)
+	assert.Equal(t, rep.Image.Describe([]string{"claude", "codex"}), "smelt-x:abc (kit v1, unlabeled; claude found, codex not)")
+
+	// The second call finds the answer in the cache.
+	rep = Build(t.Context(), d)
+	assert.Equal(t, f.probes, 1)
 	assert.Assert(t, entry(t, rep, harness.Claude).InstalledImage)
-	assert.Assert(t, !entry(t, rep, harness.Codex).InstalledImage)
+
+	// A rebuilt image has another ID and is run again.
+	f.info.ID = "sha256:2"
+	Build(t.Context(), d)
+	assert.Equal(t, f.probes, 2)
+}
+
+func TestUnlabeledImageProbeThatTimesOutIsNotInstalled(t *testing.T) {
+	f := &fakeImages{
+		info:  sandboximage.ImageInfo{Status: sandboximage.ImageUnlabeled, ID: "sha256:1", Kit: 1},
+		probe: func(ctx context.Context) ([]string, error) { <-ctx.Done(); return nil, ctx.Err() },
+	}
+	d := imageDeps(t, f)
+	d.ProbeTimeout = 20 * time.Millisecond
+	rep := Build(t.Context(), d)
+	c := entry(t, rep, harness.Claude)
+	assert.Assert(t, !c.InstalledImage)
+	assert.Assert(t, strings.Contains(c.Note, "failed: timed out"), c.Note)
+
+	// A failed check is not remembered.
+	Build(t.Context(), d)
+	assert.Equal(t, f.probes, 2)
+}
+
+func TestMissingImageIsNoImage(t *testing.T) {
+	f := &fakeImages{info: sandboximage.ImageInfo{Status: sandboximage.ImageMissing}}
+	rep := Build(t.Context(), imageDeps(t, f))
+	c := entry(t, rep, harness.Claude)
+	assert.Assert(t, !c.InstalledImage)
+	assert.Equal(t, c.ImageStatus, sandboximage.ImageMissing)
+	assert.Equal(t, c.Note, "sandbox image smelt-x:abc is not built; run smelt factory image")
+	assert.Equal(t, f.probes, 0)
 }
 
 func TestReportJSONHasTheDocumentedShapeAndNoSecrets(t *testing.T) {

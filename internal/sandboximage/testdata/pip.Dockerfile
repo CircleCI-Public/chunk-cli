@@ -9,7 +9,7 @@ ENV PATH=/home/circleci/.local/bin:$PATH
 COPY --chown=circleci requirements.txt /tmp/smelt-deps/
 RUN cd /tmp/smelt-deps && pip install -r requirements.txt && rm -rf /tmp/smelt-deps
 
-# --- smelt agent kit -------------------------------------------------------
+# --- smelt agent kit (v2) -------------------------------------------------
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git coreutils procps ca-certificates curl bash \
@@ -31,5 +31,5 @@ RUN set -e; \
     mv "/tmp/${name}" "$HOME/.local/bin/codex"; \
     rm -f "/tmp/${name}.tar.gz"; \
     test -x "$HOME/.local/bin/codex"
-LABEL smelt.harnesses=claude,codex
+LABEL smelt.harnesses=claude,codex smelt.kit=2
 CMD ["sleep", "infinity"]

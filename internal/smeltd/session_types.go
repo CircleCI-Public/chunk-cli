@@ -204,6 +204,9 @@ type FactoryRun struct {
 	// Incomplete are the titles of the last round's findings that say part of
 	// the request is missing.
 	Incomplete []string `json:"incomplete,omitempty"`
+	// KitOutdated reports that the sandbox Dockerfile has an older agent kit
+	// than this smelt's.
+	KitOutdated bool `json:"kit_outdated,omitempty"`
 	// Committed reports whether the work was committed on Branch.
 	Committed bool `json:"committed,omitempty"`
 	// Stat is the committed work's diff stat against Baseline, "" when there
@@ -434,6 +437,9 @@ type FactoryRequest struct {
 	// Backend selects where the run's sidecars run: "" or BackendDocker for
 	// local Docker containers, BackendCircleCI for CircleCI microVMs.
 	Backend string `json:"backend,omitempty"`
+	// KitWarning is set by the client when the project's Dockerfile has an older
+	// agent kit than this smelt's; the run records and logs it.
+	KitWarning string `json:"kit_warning,omitempty"`
 	// Log is where the run keeps a plain-text log of its full context: an
 	// absolute path, factory.LogDefault, or empty for none. Verbose adds more
 	// to it and implies it; see factory.RunOptions.

@@ -99,7 +99,7 @@ func (b *Builder) imageUser(ctx context.Context, ref string) (string, error) {
 		return "", fmt.Errorf("inspect base image %s: %w", ref, err)
 	}
 	user, _, _ := strings.Cut(info.Config.User, ":")
-	if user == "root" || user == "0" {
+	if user == rootUser || user == "0" {
 		return "", nil
 	}
 	return user, nil

@@ -273,6 +273,27 @@ func TestFactorySessionKeepsItsLog(t *testing.T) {
 	assert.Equal(t, detail.Factory.Log, "/logs/run-1.log")
 }
 
+func TestFactorySessionRecordsAnOutdatedKit(t *testing.T) {
+	var got factory.RunOptions
+	run := scriptedRun(factory.ResultPassed)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		return run(ctx, opts)
+	})
+
+	sess, err := d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag", KitWarning: "kit is old"})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+	assert.DeepEqual(t, got.Warnings, []string{"kit is old"})
+	assert.Assert(t, detail.Factory.KitOutdated)
+
+	sess, err = d.startFactory(smeltd.FactoryRequest{Backend: smeltd.BackendCircleCI, ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	detail = waitForSessionEnd(t, d, sess.ID)
+	assert.Equal(t, len(got.Warnings), 0)
+	assert.Assert(t, !detail.Factory.KitOutdated)
+}
+
 func TestStartFactoryRefusesABadRequest(t *testing.T) {
 	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
 

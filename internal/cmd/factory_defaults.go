@@ -22,6 +22,9 @@ type factorySettings struct {
 	// when ImageSource is imageFromDockerfile.
 	Dockerfile  string
 	ImageSource imageSource
+	// KitWarning is the outdated-agent-kit warning for Dockerfile, "" when its
+	// kit is current. The run records it.
+	KitWarning string
 }
 
 // dockerImage is the image the run's containers use, or "" for any other

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -92,12 +93,13 @@ func resolveBuildSettings(ctx context.Context, streams iostream.Streams, root st
 	if err != nil || s.ImageSource != imageFromDockerfile {
 		return s, err
 	}
+	s.KitWarning = noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: s.Dockerfile, Now: time.Now()})
 	s.Image, err = buildSandboxImage(ctx, streams, root, s.Dockerfile, s.Dockerfile+" changed", false)
 	return s, err
 }
 
 func newFactoryImageCmd() *cobra.Command {
-	var rebuild, regenerate bool
+	var rebuild, regenerate, updateKitFlag, yes bool
 	cmd := &cobra.Command{
 		Use:   "image",
 		Short: "Build the Docker image factory runs execute in",
@@ -115,10 +117,21 @@ generated from detection and the CI config.
 
 --rebuild builds even when the tag exists, without the layer cache.
 --regenerate renders Dockerfile.smelt again, shows the diff and asks before
-writing it.`,
+writing it. It re-runs detection, so hand edits are lost.
+--update-kit replaces only the agent-kit section of Dockerfile.smelt (from its
+"# --- smelt agent kit" line to the end) with the current one, keeps everything
+above it, shows the diff and asks before writing; --yes skips the question.
+The two are mutually exclusive.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if regenerate && updateKitFlag {
+				return newUserError("--regenerate and --update-kit cannot be used together.").
+					withCode("command.invalid_args").
+					withSuggestion("Use --update-kit to replace only the agent kit, or --regenerate to render the whole Dockerfile again.").
+					withExitCode(ExitBadArgs).
+					withoutDetail()
+			}
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
 			root, err := sessionProjectRoot(ctx)
@@ -133,9 +146,15 @@ writing it.`,
 			if cfg.Factory != nil && cfg.Factory.Dockerfile != "" {
 				dockerfile = cfg.Factory.Dockerfile
 			}
-			if err := prepareDockerfile(ctx, streams, root, dockerfile, cfg, regenerate); err != nil {
+			if updateKitFlag {
+				err = updateKit(ctx, streams, kitUpdate{Root: root, Dockerfile: dockerfile, Yes: yes})
+			} else {
+				err = prepareDockerfile(ctx, streams, root, dockerfile, cfg, regenerate)
+			}
+			if err != nil {
 				return err
 			}
+			noteKitOutdated(streams, kitNotice{Root: root, Dockerfile: dockerfile, Now: time.Now(), EveryTime: true})
 			tag, err := readyImage(ctx, streams, root, dockerfile, cfg, rebuild)
 			if err != nil {
 				return err
@@ -146,6 +165,8 @@ writing it.`,
 	}
 	cmd.Flags().BoolVar(&rebuild, "rebuild", false, "build even when the image exists, without the layer cache")
 	cmd.Flags().BoolVar(&regenerate, "regenerate", false, "render the Dockerfile again from detection, show the diff and confirm before writing")
+	cmd.Flags().BoolVar(&updateKitFlag, "update-kit", false, "replace only the agent-kit section of the Dockerfile with the current one, show the diff and confirm before writing")
+	cmd.Flags().BoolVar(&yes, "yes", false, "with --update-kit, write without asking")
 	return cmd
 }
 

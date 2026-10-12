@@ -17,6 +17,7 @@ import (
 	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/claude"
+	"github.com/smeltdev/smelt/internal/sandboximage"
 )
 
 // The values of Entry.Auth beyond codexauth's.
@@ -32,17 +33,35 @@ type Report struct {
 	// Default is factory.harness from the project config, if any.
 	Default   string  `json:"default"`
 	Harnesses []Entry `json:"harnesses"`
+	// Image is the sandbox image the agents were looked up in, nil outside a
+	// project that has one.
+	Image *ImageReport `json:"image,omitempty"`
+}
+
+// ImageReport is what is known about the sandbox image.
+type ImageReport struct {
+	Tag    string                   `json:"tag"`
+	ID     string                   `json:"id,omitempty"`
+	Status sandboximage.ImageStatus `json:"status"`
+	Kit    int                      `json:"kit,omitempty"`
+	// Found are the agents in the image, from the label or from running it.
+	Found []string `json:"found,omitempty"`
+	// Probed reports that the image was run to find them, or the cache of that.
+	Probed bool `json:"probed,omitempty"`
 }
 
 // Entry is one harness.
 type Entry struct {
-	Name           harness.Name     `json:"name"`
-	InstalledHost  bool             `json:"installed_host"`
-	InstalledImage bool             `json:"installed_image"`
-	Auth           string           `json:"auth"`
-	AuthKind       string           `json:"auth_kind,omitempty"`
-	Plan           string           `json:"plan,omitempty"`
-	RateLimits     []harness.Window `json:"rate_limits"`
+	Name           harness.Name `json:"name"`
+	InstalledHost  bool         `json:"installed_host"`
+	InstalledImage bool         `json:"installed_image"`
+	// ImageStatus is labeled, unlabeled or no_image; empty when there is no
+	// image to ask about.
+	ImageStatus sandboximage.ImageStatus `json:"image_status,omitempty"`
+	Auth        string                   `json:"auth"`
+	AuthKind    string                   `json:"auth_kind,omitempty"`
+	Plan        string                   `json:"plan,omitempty"`
+	RateLimits  []harness.Window         `json:"rate_limits"`
 	// Note says why something above is missing or stale.
 	Note string `json:"note,omitempty"`
 }
@@ -52,8 +71,12 @@ type Entry struct {
 type Deps struct {
 	// Default is factory.harness.
 	Default string
-	// ImageHarnesses are the agents the sandbox image carries, from its label.
-	ImageHarnesses []string
+	// ImageTag is the sandbox image to look the agents up in; empty skips it.
+	ImageTag string
+	// Images inspects and, for an unlabeled image, runs it; nil skips the image.
+	Images ImageSource
+	// ProbeTimeout bounds running an unlabeled image; DefaultProbeTimeout when zero.
+	ProbeTimeout time.Duration
 	// Dir holds the last rate-limit signal of each harness.
 	Dir string
 	// UsageProbe is the Claude probe; nil turns it off.
@@ -66,6 +89,9 @@ type Deps struct {
 	// CodexLogin finds the stored Codex credential; codexauth.Find when nil.
 	CodexLogin func() (codexauth.Login, error)
 	Now        func() time.Time
+
+	// image is the outcome of checkImage, read by base.
+	image imageCheck
 }
 
 // ClaudeLogin is what `claude auth status --json` says.
@@ -84,7 +110,9 @@ func Build(ctx context.Context, d Deps) Report {
 	if d.LookPath == nil {
 		d.LookPath = exec.LookPath
 	}
-	rep := Report{Default: d.Default, Harnesses: make([]Entry, 2)}
+	img := d.checkImage(ctx)
+	rep := Report{Default: d.Default, Harnesses: make([]Entry, 2), Image: img.report}
+	d.image = img
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -97,11 +125,13 @@ func Build(ctx context.Context, d Deps) Report {
 
 func (d Deps) base(name harness.Name, binary string) Entry {
 	_, err := d.LookPath(binary)
-	return Entry{
-		Name: name, InstalledHost: err == nil,
-		InstalledImage: slices.Contains(d.ImageHarnesses, string(name)),
-		RateLimits:     []harness.Window{},
+	e := Entry{Name: name, InstalledHost: err == nil, RateLimits: []harness.Window{}}
+	if d.image.report != nil {
+		e.ImageStatus = d.image.report.Status
+		e.InstalledImage = slices.Contains(d.image.report.Found, string(name))
+		e.Note = d.image.note
 	}
+	return e
 }
 
 func (d Deps) claude(ctx context.Context) Entry {
@@ -109,7 +139,7 @@ func (d Deps) claude(ctx context.Context) Entry {
 	login, err := d.claudeLogin(ctx, e.InstalledHost)
 	switch {
 	case err != nil:
-		e.Auth, e.Note = codexauth.AuthError, err.Error()
+		e.Auth, e.Note = codexauth.AuthError, joinNotes(e.Note, err.Error())
 	case login.LoggedIn:
 		e.Auth, e.Plan = codexauth.AuthOK, login.SubscriptionType
 		e.AuthKind = login.AuthMethod
@@ -159,10 +189,11 @@ func (d Deps) codex(ctx context.Context) Entry {
 		e.Auth, e.AuthKind = codexauth.AuthOK, string(codexauth.KindAPIKey)
 	case !e.InstalledHost:
 		e.Auth, e.AuthKind = codexauth.AuthOK, string(codexauth.KindChatGPT)
-		e.Note = "codex is not installed here, so its login was not checked"
+		e.Note = joinNotes(e.Note, "codex is not installed here, so its login was not checked")
 	default:
 		acct := d.Codex.Probe(ctx, login.Auth, d.Now())
-		e.Auth, e.AuthKind, e.Plan, e.Note = acct.Auth, string(codexauth.KindChatGPT), acct.Plan, acct.Err
+		e.Auth, e.AuthKind, e.Plan = acct.Auth, string(codexauth.KindChatGPT), acct.Plan
+		e.Note = joinNotes(e.Note, acct.Err)
 		e.RateLimits = append(e.RateLimits, acct.Windows...)
 	}
 	e.RateLimits = d.withRunSignal(e.RateLimits, harness.Codex)
