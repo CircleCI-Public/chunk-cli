@@ -2,6 +2,7 @@ package factory
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -117,9 +118,54 @@ func Feedback(checks []Check) string {
 	if b.Len() == 0 {
 		return ""
 	}
-	return "Your changes were reviewed and validated, and these checks failed. " +
+	intro := "Your changes were reviewed and validated, and these checks failed. " +
 		"Fix the problems they describe in the code. A review finding you judge to be wrong " +
-		"may be left alone; say why in your final message.\n" + b.String()
+		"may be left alone; say why in your final message.\n"
+	if len(MissingWork(checks)) > 0 {
+		intro += "These findings say the request is not complete. Implement the missing parts this round.\n"
+	}
+	return intro + b.String()
+}
+
+// completenessReviews are the reviews that judge the change against the whole
+// request.
+var completenessReviews = []string{"requirements", "adversarial"}
+
+// missingPhrases are what a finding says when requested work is absent.
+var missingPhrases = []string{
+	"missing", "not implemented", "unimplemented", "incomplete", "not wired", "unwired",
+	"not built", "not done", "not yet", "never implemented", "not addressed", "left out",
+	"omitted", "nothing outside", "not covered", "not provided",
+}
+
+// MissingWork is the findings of the failed requirements and adversarial
+// reviews that say part of the request is missing.
+func MissingWork(checks []Check) []review.Finding {
+	var out []review.Finding
+	for _, c := range checks {
+		if c.Status != StatusFailed || c.Kind != KindReview || !slices.Contains(completenessReviews, c.Name) {
+			continue
+		}
+		for _, f := range c.Findings {
+			body := strings.ToLower(f.Body)
+			if f.WorthChanging() && slices.ContainsFunc(missingPhrases, func(p string) bool { return strings.Contains(body, p) }) {
+				out = append(out, f)
+			}
+		}
+	}
+	return out
+}
+
+// FindingTitle is the first sentence of a finding, short enough for one line.
+func FindingTitle(f review.Finding) string {
+	t := strings.Join(strings.Fields(f.Body), " ")
+	if i := strings.Index(t, ". "); i >= 0 {
+		t = t[:i]
+	}
+	if len(t) > 120 {
+		t = t[:117] + "..."
+	}
+	return t
 }
 
 // Passed reports whether every check passed. An errored check is not a pass:

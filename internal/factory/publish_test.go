@@ -26,18 +26,39 @@ func TestDecidePublish(t *testing.T) {
 		{"failed run is skipped by default", with(func(f *PublishFacts) { f.Passed = false }), ActionNone, false, true},
 		{"headless never prompts", with(func(f *PublishFacts) { f.Interactive = false }), ActionNone, false, false},
 		{"off leaves it local", with(func(f *PublishFacts) { f.Mode = PublishOff }), ActionNone, false, false},
-		{"--push pushes unasked, even a failed run", with(func(f *PublishFacts) { f.Mode = PublishPush; f.Passed = false; f.Interactive = false }), ActionPush, false, false},
+		{"--push pushes a passed run unasked", with(func(f *PublishFacts) { f.Mode = PublishPush; f.Interactive = false }), ActionPush, false, false},
+		{"--push skips a stuck run", with(func(f *PublishFacts) { f.Mode = PublishPush; f.Passed = false; f.Result = ResultStuck }), ActionNone, false, true},
+		{"--pr skips an exhausted run", with(func(f *PublishFacts) { f.Mode = PublishPR; f.Passed = false; f.Result = ResultExhausted }), ActionNone, false, true},
+		{"--pr skips a blocked run", with(func(f *PublishFacts) { f.Mode = PublishPR; f.Passed = false; f.Result = ResultBlocked }), ActionNone, false, true},
+		{"--pr skips a no_change run", with(func(f *PublishFacts) { f.Mode = PublishPR; f.Passed = false; f.Result = ResultNoChange }), ActionNone, false, true},
 		{"--pr opens unasked", with(func(f *PublishFacts) { f.Mode = PublishPR; f.Interactive = false }), ActionOpenPR, false, false},
 		{"--pr with a PR updates it", with(func(f *PublishFacts) { f.Mode = PublishPR; f.HasPR = true }), ActionUpdatePR, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := DecidePublish(tt.facts)
+			assert.Equal(t, d.Unpassed, !tt.facts.Passed && tt.facts.Mode != PublishPrompt && tt.facts.Mode != PublishOff && tt.facts.Committed && tt.facts.HasRemote)
 			assert.Equal(t, d.Action, tt.action)
 			assert.Equal(t, d.Ask, tt.ask)
 			assert.Equal(t, d.Reason != "", tt.reason)
 		})
 	}
+}
+
+func TestDecidePublishFailedRun(t *testing.T) {
+	failed := PublishFacts{Mode: PublishPR, Committed: true, HasRemote: true, Result: ResultStuck, PublishFailed: true}
+	d := DecidePublish(failed)
+	assert.Equal(t, d.Action, ActionOpenPR)
+	assert.Assert(t, d.Draft, "a failed run is opened as a draft")
+	failed.HasPR = true
+	d = DecidePublish(failed)
+	assert.Equal(t, d.Action, ActionUpdatePR)
+	assert.Assert(t, !d.Draft)
+	failed.Mode = PublishPush
+	assert.Equal(t, DecidePublish(failed).Action, ActionPush)
+	failed.Mode, failed.Passed, failed.HasPR = PublishPR, true, false
+	assert.Assert(t, !DecidePublish(failed).Draft, "a passed run is not a draft")
+	assert.Equal(t, FailedRunWarning(ResultStuck, 3), "⚠ This run did not pass (stuck after 3 rounds). Review before merging.")
 }
 
 func TestCheckHeadBranch(t *testing.T) {

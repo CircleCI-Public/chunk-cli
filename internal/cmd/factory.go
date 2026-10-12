@@ -261,6 +261,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().StringVar(&pub.title, "pr-title", "", "PR title (default: the prompt's first line)")
 	cmd.Flags().StringVar(&pub.body, "pr-body", "", "PR description (default: the run's What / Why / How notes)")
 	cmd.Flags().BoolVar(&pub.draft, "draft", false, "open the PR as a draft")
+	cmd.Flags().BoolVar(&pub.failed, "publish-failed", false, "with --push or --pr, publish a run that did not pass too (a PR is opened as a draft)")
 	cmd.SetFlagErrorFunc(factoryFlagError)
 	return cmd
 }
@@ -645,6 +646,7 @@ func finishFactory(streams iostream.Streams, detail smeltd.SessionDetail, jsonOu
 		status = func(iostream.Level, string) {}
 	} else {
 		printFactoryLeftovers(f, status, streams)
+		printFactoryPartial(f, status)
 		printFactoryContinueHint(f, status)
 	}
 	printFactoryTotals(detail, status)
@@ -655,7 +657,7 @@ func finishFactory(streams iostream.Streams, detail smeltd.SessionDetail, jsonOu
 		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
 	case smeltd.SessionRunning, smeltd.SessionDone:
 	}
-	return reportOutcome(status, f.Result, f.Rounds)
+	return reportOutcome(status, f.Result, f.Rounds, f.Blocked)
 }
 
 // printFactoryTotals says how long the run took and what the implementer's
@@ -694,11 +696,21 @@ func printFactoryLeftovers(f *smeltd.FactoryRun, status iostream.StatusFunc, str
 	}
 }
 
+// printFactoryPartial names the requested work a run ended without.
+func printFactoryPartial(f *smeltd.FactoryRun, status iostream.StatusFunc) {
+	if f.Result == smeltd.ResultPassed {
+		return
+	}
+	for _, title := range f.Incomplete {
+		status(iostream.LevelWarn, "The run ended with part of the request unimplemented: "+title)
+	}
+}
+
 // printFactoryContinueHint says how to carry on a run whose committed work
 // still fails its checks. The branch names the run whose record a continued
 // run reads, the first in a chain of them.
 func printFactoryContinueHint(f *smeltd.FactoryRun, status iostream.StatusFunc) {
-	failing := f.Result == string(factory.ResultExhausted) || f.Result == string(factory.ResultStuck)
+	failing := f.Result == string(factory.ResultExhausted) || f.Result == string(factory.ResultStuck) || f.Result == string(factory.ResultBlocked)
 	if !failing || !f.Committed || f.Branch == "" {
 		return
 	}
@@ -707,13 +719,15 @@ func printFactoryContinueHint(f *smeltd.FactoryRun, status iostream.StatusFunc) 
 
 // reportOutcome says why the loop stopped and returns an error unless every
 // check passed. How each round's checks came out was said as it was checked.
-func reportOutcome(status iostream.StatusFunc, result string, rounds int) error {
+func reportOutcome(status iostream.StatusFunc, result string, rounds int, blocked string) error {
 	switch result {
 	case smeltd.ResultPassed:
 		status(iostream.LevelDone, fmt.Sprintf("All checks passed after %d round(s).", rounds))
 		return nil
 	case smeltd.ResultNoChange:
 		return &userError{msg: "The implementer made no changes.", hideDetail: true, errMsg: "no changes"}
+	case smeltd.ResultBlocked:
+		return &userError{msg: "The implementer is blocked: " + blocked, hideDetail: true, errMsg: "blocked"}
 	case smeltd.ResultStuck:
 		return &userError{msg: fmt.Sprintf("The implementer stopped changing the code after round %d, with checks still failing.", rounds), hideDetail: true, errMsg: "stuck"}
 	case smeltd.ResultExhausted:

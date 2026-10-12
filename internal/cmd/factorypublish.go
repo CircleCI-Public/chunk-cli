@@ -22,6 +22,8 @@ type publishFlags struct {
 	base, title, body string
 	draft             bool
 	bodySet           bool
+	// failed publishes a run that did not pass, as a draft.
+	failed bool
 }
 
 // mode is how the run is published, or an error for flags that contradict.
@@ -111,11 +113,12 @@ func publishRun(ctx context.Context, streams iostream.Streams, f *smeltd.Factory
 	_, remoteErr := gitremote.URL(ctx, f.Worktree, pub.Remote)
 	facts := factory.PublishFacts{
 		Mode: mode, Committed: f.Committed, Passed: f.Result == smeltd.ResultPassed,
+		Result: factory.Result(f.Result), PublishFailed: flags.failed,
 		HasRemote: remoteErr == nil, Interactive: prompt,
 	}
 	// Nothing to do needs neither the guard nor the PR lookup.
 	if d := factory.DecidePublish(facts); d.Action == factory.ActionNone {
-		explainNoPublish(streams, pub, d)
+		explainNoPublish(streams, pub, d, f.RunID)
 		return nil
 	}
 	target, err := pub.Resolve(ctx)
@@ -127,6 +130,10 @@ func publishRun(ctx context.Context, streams iostream.Streams, f *smeltd.Factory
 	}
 	facts.HasPR = target.Existing != nil
 	d := factory.DecidePublish(facts)
+	if d.Draft {
+		pub.Draft = true
+		pub.Body = factory.FailedRunWarning(factory.Result(f.Result), f.Rounds) + "\n\n" + pub.Body
+	}
 	if d.Ask {
 		ok, err := confirmPublish(publishQuestion(d.Action, f.Branch, target), true)
 		switch {
@@ -141,7 +148,11 @@ func publishRun(ctx context.Context, streams iostream.Streams, f *smeltd.Factory
 }
 
 // explainNoPublish says why a run's branch was left local, and how to push it.
-func explainNoPublish(streams iostream.Streams, pub factory.Publication, d factory.PublishDecision) {
+func explainNoPublish(streams iostream.Streams, pub factory.Publication, d factory.PublishDecision, runID string) {
+	if d.Unpassed {
+		streams.ErrPrintf("Not published: %s. Publish anyway with: smelt factory publish %s --pr\n", d.Reason, runID)
+		return
+	}
 	if d.Reason == "" {
 		return
 	}

@@ -19,6 +19,7 @@ type fakeSteps struct {
 	checked int
 	current Change
 	implErr error
+	summary string
 }
 
 func (f *fakeSteps) Implement(_ context.Context, prompt string) (Turn, error) {
@@ -28,6 +29,9 @@ func (f *fakeSteps) Implement(_ context.Context, prompt string) (Turn, error) {
 	}
 	f.current = f.changes[0]
 	f.changes = f.changes[1:]
+	if f.summary != "" {
+		return Turn{Summary: f.summary}, nil
+	}
 	return Turn{Summary: "done"}, nil
 }
 
