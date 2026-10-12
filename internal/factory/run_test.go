@@ -2,11 +2,13 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -301,4 +303,68 @@ func TestKeepEndedRecordStoresTheOutcomeAndNotes(t *testing.T) {
 	assert.Equal(t, got.Result, ResultPassed)
 	assert.Equal(t, got.Rounds, 2)
 	assert.DeepEqual(t, got.Notes, notes)
+}
+
+// preparingBackend records the order of Ready and Create. Embedding the
+// interface leaves every other Backend method unimplemented; a run that stops
+// at Create never reaches them.
+type preparingBackend struct {
+	sidecar.Backend
+	mu       sync.Mutex
+	events   []string
+	readyErr error
+}
+
+func (b *preparingBackend) record(e string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.events = append(b.events, e)
+}
+
+func (b *preparingBackend) Ready(_ context.Context, image string, _ iostream.StatusFunc) error {
+	b.record("ready:" + image)
+	return b.readyErr
+}
+
+func (b *preparingBackend) Create(context.Context, string, string, string) (sidecar.Instance, error) {
+	b.record("create")
+	return sidecar.Instance{}, errors.New("no docker here")
+}
+
+func runWithBackend(t *testing.T, b *preparingBackend) error {
+	t.Helper()
+	t.Setenv(config.EnvHome, t.TempDir())
+	_, err := Run(context.Background(), RunOptions{
+		Root:     newProject(t),
+		Prompt:   "add a --verbose flag",
+		Attempts: 1,
+		Backend:  b,
+		Image:    "smelt-sandbox:local",
+		Status:   func(iostream.Level, string) {},
+	})
+	return err
+}
+
+// The backend is prepared once, before the pool creates the first sidecar, so
+// five sidecars do not each wait for a starting Docker engine.
+func TestRunReadiesTheBackendOnceBeforeCreatingSidecars(t *testing.T) {
+	b := &preparingBackend{}
+	err := runWithBackend(t, b)
+	assert.ErrorContains(t, err, "create the run's sidecars: ")
+	assert.Assert(t, len(b.events) >= 2, "%v", b.events)
+	assert.Equal(t, b.events[0], "ready:smelt-sandbox:local")
+	readies := 0
+	for _, e := range b.events {
+		if strings.HasPrefix(e, "ready:") {
+			readies++
+		}
+	}
+	assert.Equal(t, readies, 1, "%v", b.events)
+}
+
+func TestRunStopsBeforeCreatingSidecarsWhenTheBackendIsNotReady(t *testing.T) {
+	b := &preparingBackend{readyErr: errors.New("Docker did not finish starting")}
+	err := runWithBackend(t, b)
+	assert.ErrorContains(t, err, "create the run's sidecars: Docker did not finish starting")
+	assert.DeepEqual(t, b.events, []string{"ready:smelt-sandbox:local"})
 }

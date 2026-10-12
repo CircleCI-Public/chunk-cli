@@ -319,7 +319,8 @@ A flag always beats the config, and the config beats the built-in default.
 | A run behaves like an older version after you upgraded or rebuilt smelt | The daemon is still running the old binary: `pkill -f 'smelt _daemon'` |
 | `Building … failed` or the image fails its checks | `smelt factory image`. Read the error, edit `Dockerfile.smelt` or accept the repair offer. The full build log is linked in the error. |
 | `No Docker image is set for factory runs` | Run `smelt init` and choose docker, or set `factory.dockerfile` or `factory.image` |
-| The first Docker call after a while says "no such image" | Docker Desktop's Resource Saver was waking the engine. smelt retries; if it persists, open Docker Desktop. |
+| The first Docker call after a while is slow and prints "Waiting for Docker to finish starting" | Docker Desktop's Resource Saver stopped the engine. smelt waits up to 3 minutes for it; turn Resource Saver off in Docker Desktop to avoid the wait. |
+| `Image smelt-… is missing` | smelt's own images are never pulled. Run `smelt factory image` (or the `docker build` command in the message). |
 | A branch can't be deleted because it's checked out in a worktree | `smelt factory clean <run-id>` |
 | `smelt validate --remote` says it needs the circleci backend | Remote validation is a CircleCI feature. Opt in with `"factory": {"backend": "circleci"}` in `.smelt/config.json` (see below); otherwise `smelt validate` runs your checks locally. |
 

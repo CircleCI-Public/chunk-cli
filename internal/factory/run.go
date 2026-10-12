@@ -129,6 +129,35 @@ func (o *RunOptions) backend() sidecar.Backend {
 	return sidecar.NewCircleCIBackend(o.Client, o.OrgID)
 }
 
+// prepareBackend lets a backend that needs it check its host once, before the
+// pool creates any sidecar.
+func prepareBackend(ctx context.Context, backend sidecar.Backend, image string, status iostream.StatusFunc) error {
+	p, ok := backend.(sidecar.Preparer)
+	if !ok {
+		return nil
+	}
+	return p.Ready(ctx, image, status)
+}
+
+// createPool readies the backend, then creates the run's sidecars from the
+// worktree.
+func createPool(ctx context.Context, opts RunOptions, backend sidecar.Backend, runID string, wt Worktree, status iostream.StatusFunc) (*sidecar.Pool, error) {
+	if err := prepareBackend(ctx, backend, opts.Image, status); err != nil {
+		return nil, err
+	}
+	return sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{
+		Size:    PoolSize(opts.Reviewers),
+		Name:    PoolName(runID),
+		OrgID:   opts.OrgID,
+		Image:   opts.Image,
+		Backend: backend,
+		// The sidecars start from the worktree, and its state stays in the
+		// project, where the dashboard finds it.
+		WorkDir:  wt.Path,
+		StateDir: opts.Root,
+	}, status)
+}
+
 // ReviewerCount is how many reviewer sidecars a run with prompts needs when
 // asked for requested: one per prompt unless fewer are asked for, and none
 // without prompts.
@@ -234,17 +263,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", opts.Reviewers))
 	// One backend drives both the pool and the relay.
 	backend := opts.backend()
-	pool, err := sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{
-		Size:    PoolSize(opts.Reviewers),
-		Name:    PoolName(rep.RunID),
-		OrgID:   opts.OrgID,
-		Image:   opts.Image,
-		Backend: backend,
-		// The sidecars start from the worktree, and its state stays in the
-		// project, where the dashboard finds it.
-		WorkDir:  wt.Path,
-		StateDir: opts.Root,
-	}, status)
+	pool, err := createPool(ctx, opts, backend, rep.RunID, wt, status)
 	if err != nil {
 		return rep, fmt.Errorf("create the run's sidecars: %w", err)
 	}

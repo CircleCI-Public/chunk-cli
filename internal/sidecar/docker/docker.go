@@ -14,7 +14,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +23,6 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 
@@ -54,28 +52,19 @@ const label = brand.LabelPrefix + "factory"
 // own name has a uniqueness suffix appended.
 const labelName = brand.LabelPrefix + "name"
 
-// inspectAttempts bounds image lookups that fail for a reason other than the
-// image being absent. notFoundAttempts bounds lookups that answer "no such
-// image": Docker Desktop's API proxy answers that while the engine is still
-// starting after a Resource Saver shutdown, before its image store is loaded,
-// so one "not found" is not trusted. The engine can take half a minute to
-// come back, so the lookups are spread over about 45s: the delay between them
-// grows by inspectBackoff up to maxInspectBackoff. inspectBackoff is a
-// variable so tests need not wait.
-const (
-	inspectAttempts   = 12
-	notFoundAttempts  = 12
-	maxInspectBackoff = 5
-)
-
-var inspectBackoff = time.Second
-
 // Provider runs sidecars as local Docker containers with bind-mounted workspaces.
 type Provider struct {
 	cli       client.APIClient
 	baseImage string
 	// workRoot is where per-member workspace directories and snapshots live.
 	workRoot string
+	// ManagedDockerfile is the project's factory.dockerfile, empty when the
+	// project has none. It only changes the hint for a missing local image.
+	ManagedDockerfile string
+
+	// now and sleep are test seams for the readiness wait; nil means real time.
+	now   func() time.Time
+	sleep func(context.Context, time.Duration) error
 
 	mu      sync.Mutex
 	members map[string]member // by container ID
@@ -229,50 +218,6 @@ func (b *Provider) Create(ctx context.Context, name, image, repoPath string) (si
 
 	b.remember(created.ID, member{hostDir: hostDir, image: containerImage})
 	return sidecar.Instance{ID: created.ID, HostDir: hostDir, RepoPath: repoPath}, nil
-}
-
-// ensureImage makes sure ref is on the Docker host, pulling it only when the
-// host keeps saying it has no such image. Lookups are retried briefly first:
-// Docker Desktop can answer the first request after a Resource Saver shutdown
-// with an error, or with "no such image" while its engine is still starting.
-// Any other error is reported as itself, rather than turned into a pull that
-// would bury it under a misleading registry error for a locally built image.
-func (b *Provider) ensureImage(ctx context.Context, ref string) error {
-	var err error
-	for attempt := 1; ; attempt++ {
-		_, err = b.cli.ImageInspect(ctx, ref)
-		if err == nil {
-			return nil
-		}
-		limit := inspectAttempts
-		if cerrdefs.IsNotFound(err) {
-			limit = notFoundAttempts
-		}
-		if attempt >= limit {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Duration(min(attempt, maxInspectBackoff)) * inspectBackoff):
-		}
-	}
-	if !cerrdefs.IsNotFound(err) {
-		// Not "no such image": pulling would only bury the real error under a
-		// registry failure for an image that may exist only locally.
-		return fmt.Errorf("docker: look up image %s: %w", ref, err)
-	}
-	rc, err := b.cli.ImagePull(ctx, ref, image.PullOptions{})
-	if err != nil {
-		return fmt.Errorf("docker: image %s is not on this Docker host and could not be pulled; "+
-			"if it is a local image, build it first (docker build -t %s -f Dockerfile.local .): %w", ref, ref, err)
-	}
-	defer func() { _ = rc.Close() }()
-	// Draining the stream is what waits for the pull to finish.
-	if _, err := io.Copy(io.Discard, rc); err != nil {
-		return fmt.Errorf("docker: pull image %s: %w", ref, err)
-	}
-	return nil
 }
 
 // Delete removes the container and its host workspace directory. Removing one
