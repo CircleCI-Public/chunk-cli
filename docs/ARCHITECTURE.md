@@ -87,7 +87,8 @@ is printed. Both exit with code 1.
 1. History           gitremote/ → owner/repo of origin
                      → reviewhistory.Fetch() → github/ FetchReviewActivity()
                      → top reviewers by comment count, newest comments each
-                     (skipped with --no-history, no GitHub token, or a non-GitHub origin)
+                     (skipped with --no-history or no GitHub token; a non-GitHub
+                     origin fails the command before any sidecar starts)
 
 2. Sidecar           sidecar/ pool "factory-bootstrap" on the Claude image
                      → sidecar.WriteFile() puts History.Markdown() at

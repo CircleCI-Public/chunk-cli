@@ -85,14 +85,15 @@ little for Claude to read yet.`,
 			if err != nil {
 				return &userError{msg: msgValidateNotConfigured, blocked: true, suggestion: suggestionRunInit, err: err}
 			}
-			historyOpts := reviewhistory.Options{Top: top}
-			if since != "" {
-				if historyOpts.Since, err = time.Parse(time.DateOnly, since); err != nil {
-					return &userError{msg: fmt.Sprintf("--since must be a date such as 2026-01-31, not %q.", since), err: err}
-				}
+			historyOpts, err := historyOptions(since, top)
+			if err != nil {
+				return err
 			}
-			if top < 1 {
-				return &userError{msg: fmt.Sprintf("--top must be at least 1, not %d.", top), errMsg: "invalid --top"}
+			// Checked before any prompt or sidecar, so a project without a
+			// GitHub origin costs nothing.
+			owner, repo, err := bootstrapOrigin(ctx, workDir)
+			if err != nil {
+				return err
 			}
 
 			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
@@ -126,7 +127,7 @@ little for Claude to read yet.`,
 			// nothing.
 			var history *reviewhistory.History
 			if !noHistory {
-				if history, err = fetchReviewHistory(ctx, rc, workDir, historyOpts, statusFn); err != nil {
+				if history, err = fetchReviewHistory(ctx, rc, owner, repo, historyOpts, statusFn); err != nil {
 					return err
 				}
 			}
@@ -227,11 +228,17 @@ little for Claude to read yet.`,
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().StringVar(&template, "template", "", "Write a standard set of prompts instead ("+strings.Join(factory.Templates(), ", ")+")")
 	// A template is written locally, so the sidecar, Claude and history flags do
-	// nothing.
-	for _, f := range []string{"org-id", "image", "model", "timeout", "no-history", "since", "top"} {
-		cmd.MarkFlagsMutuallyExclusive("template", f)
-	}
+	// nothing with it.
+	markExclusiveWith(cmd, "template", "org-id", "image", "model", "timeout", "no-history", "since", "top")
 	return cmd
+}
+
+// markExclusiveWith makes flag exclusive with each of others, which stay
+// usable together.
+func markExclusiveWith(cmd *cobra.Command, flag string, others ...string) {
+	for _, f := range others {
+		cmd.MarkFlagsMutuallyExclusive(flag, f)
+	}
 }
 
 // writeTemplate writes the named standard set of review prompts to dir.
@@ -268,11 +275,42 @@ func writeTemplate(streams iostream.Streams, workDir, dir, name string, jsonOut 
 	return nil
 }
 
+// historyOptions checks the --since and --top flags.
+func historyOptions(since string, top int) (reviewhistory.Options, error) {
+	opts := reviewhistory.Options{Top: top}
+	if since != "" {
+		var err error
+		if opts.Since, err = time.Parse(time.DateOnly, since); err != nil {
+			return opts, &userError{msg: fmt.Sprintf("--since must be a date such as 2026-01-31, not %q.", since), err: err}
+		}
+	}
+	if top < 1 {
+		return opts, &userError{msg: fmt.Sprintf("--top must be at least 1, not %d.", top), errMsg: "invalid --top"}
+	}
+	return opts, nil
+}
+
+// bootstrapOrigin returns the owner and name of the project's GitHub
+// repository. The sidecar's copy of the repository is named from origin, so
+// bootstrap needs a GitHub origin even without history.
+func bootstrapOrigin(ctx context.Context, workDir string) (owner, repo string, err error) {
+	owner, repo, err = gitremote.DetectOrgAndRepoCtx(ctx, workDir)
+	if err != nil {
+		return "", "", &userError{
+			msg:        "chunk factory bootstrap needs a GitHub origin.",
+			suggestion: "Point the origin remote at the project's GitHub repository.",
+			blocked:    true,
+			err:        err,
+		}
+	}
+	return owner, repo, nil
+}
+
 // fetchReviewHistory gathers the review comments on the project's GitHub
-// repository. Without a GitHub token or a GitHub origin there is no history to
-// fetch, which is not an error: bootstrap says so and goes on without it. A
-// failed fetch is, since the user asked for history by having a token.
-func fetchReviewHistory(ctx context.Context, rc config.ResolvedConfig, workDir string, opts reviewhistory.Options, statusFn iostream.StatusFunc) (*reviewhistory.History, error) {
+// repository. Without a GitHub token there is no history to fetch, which is
+// not an error: bootstrap says so and goes on without it. A failed fetch is,
+// since the user asked for history by having a token.
+func fetchReviewHistory(ctx context.Context, rc config.ResolvedConfig, owner, repo string, opts reviewhistory.Options, statusFn iostream.StatusFunc) (*reviewhistory.History, error) {
 	client, err := authprompt.ResolveGitHubClient(rc, func(msg string) { statusFn(iostream.LevelInfo, msg) })
 	if errors.Is(err, authprompt.ErrNeedsAuth) {
 		statusFn(iostream.LevelWarn, "No GitHub token, so the team's review comments are left out. Run 'chunk auth set github' to include them, or pass --no-history.")
@@ -280,11 +318,6 @@ func fetchReviewHistory(ctx context.Context, rc config.ResolvedConfig, workDir s
 	}
 	if err != nil {
 		return nil, &userError{msg: "Could not set up the GitHub client.", err: err}
-	}
-	owner, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, workDir)
-	if err != nil {
-		statusFn(iostream.LevelWarn, "origin is not a GitHub repository, so the team's review comments are left out.")
-		return nil, nil
 	}
 	statusFn(iostream.LevelStep, fmt.Sprintf("Fetching review comments on %s/%s...", owner, repo))
 	history, err := reviewhistory.Fetch(ctx, client, owner, repo, opts)

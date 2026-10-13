@@ -376,8 +376,10 @@ chunk
   default 5) left on its pull requests since `--since` (default 90 days ago),
   keeping each one's 200 newest. That happens before any sidecar starts, so a
   failed fetch costs nothing; it fails the command, with `--no-history` as the
-  way out. No token or a non-GitHub origin is not an error: bootstrap warns and
-  goes on from the code alone. The comments go to the sidecar as
+  way out. No token is not an error: bootstrap warns and goes on from the code
+  alone. Bootstrap needs a GitHub `origin` either way, since the sidecar's copy
+  of the repository is named from it; without one it fails before any sidecar
+  starts. The comments go to the sidecar as
   `.chunk/review-history.md` in its copy of the repository, over SSH rather than
   in the request, so their size is not bounded by the request's, and Claude is
   told to read them as data and make recurring pushback into rules. `--json`

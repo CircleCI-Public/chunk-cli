@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -376,6 +377,27 @@ func TestFactoryBootstrapTemplateLeavesExistingPromptsAlone(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stderr, "already has review prompts"), "stderr: %s", result.Stderr)
 	_, err := os.Stat(filepath.Join(workDir, ".chunk", "reviews", "correctness.md"))
 	assert.Assert(t, os.IsNotExist(err), "correctness.md: %v", err)
+}
+
+// The sidecar's copy of the repository is named from origin, so a non-GitHub
+// origin fails before any sidecar boots, with or without history.
+func TestFactoryBootstrapNeedsAGitHubOrigin(t *testing.T) {
+	for _, args := range [][]string{{"factory", "bootstrap"}, {"factory", "bootstrap", "--no-history"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			env, cci, workDir := setupReviewProject(t, nil)
+			git := exec.Command("git", "remote", "set-url", "origin", "https://gitlab.com/test-org/test-repo.git")
+			git.Dir = workDir
+			git.Env = gitrepo.GitEnv(workDir)
+			out, err := git.CombinedOutput()
+			assert.NilError(t, err, string(out))
+
+			result := binary.RunCLI(t, args, env, workDir)
+
+			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+			assert.Assert(t, strings.Contains(result.Stderr, "needs a GitHub origin"), "stderr: %s", result.Stderr)
+			assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+		})
+	}
 }
 
 // A project that has review prompts keeps them, and no sidecar boots to find
