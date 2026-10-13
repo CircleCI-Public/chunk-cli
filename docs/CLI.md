@@ -396,7 +396,12 @@ chunk
   counted. It never overwrites: a target directory that already has `.md` or
   `.txt` prompts is refused before any sidecar starts, and each file is created
   exclusively. `--output` writes elsewhere. `factory` with nothing to check
-  points at it.
+  points at it. `--template <name>` writes a standard set embedded in the binary
+  instead (`generic`, `go-service`, `node-service`, `python`, `react`, `rust`),
+  for a new project with little for Claude to read: no sidecar starts, no
+  credential is needed, and the same overwrite refusal applies. An unknown name
+  is refused with the list of sets. It cannot be combined with `--org-id`,
+  `--image`, `--model` or `--timeout`.
 - **`watch` is organized around runs.** Factory runs are listed at the top of
   the left pane, live ones first, then up to five that ended in the last day;
   sidecars are listed below them, and `↑/↓` moves through both as one list. The
