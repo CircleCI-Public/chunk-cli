@@ -34,7 +34,8 @@
   "factory": {
     "harness": "claude",
     "backend": "docker",
-    "image": "smelt-sandbox:local"
+    "image": "smelt-sandbox:local",
+    "log": true
   },
   "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
   "environment": {
