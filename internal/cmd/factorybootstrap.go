@@ -72,6 +72,13 @@ little for Claude to read yet.`,
 			if dir == "" {
 				dir = filepath.Join(workDir, review.DefaultDir)
 			}
+			// Flags are checked before anything that can fail on the project,
+			// so a bad flag is reported as one rather than behind whatever the
+			// project happens to be missing.
+			historyOpts, err := historyOptions(since, top)
+			if err != nil {
+				return err
+			}
 			// Checked before any sidecar boots, so a project that has prompts
 			// costs nothing.
 			if err := factory.CheckPromptsDir(dir); err != nil {
@@ -84,10 +91,6 @@ little for Claude to read yet.`,
 			cfg, err := config.LoadProjectConfig(workDir)
 			if err != nil {
 				return &userError{msg: msgValidateNotConfigured, blocked: true, suggestion: suggestionRunInit, err: err}
-			}
-			historyOpts, err := historyOptions(since, top)
-			if err != nil {
-				return err
 			}
 			// Checked before any prompt or sidecar, so a project without a
 			// GitHub origin costs nothing.
