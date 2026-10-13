@@ -125,7 +125,9 @@ func TestLoadSidecars_readsFactoryRunPoolState(t *testing.T) {
 	repoDataDir := t.TempDir()
 	runsDir := filepath.Join(repoDataDir, "factory")
 	assert.NilError(t, os.Mkdir(runsDir, 0o755))
-	writeSidecarJSON(t, runsDir, "20261009-010000.pool.json", `{"sidecar_ids":["id1"]}`)
+	// Written where factory.Run writes it, so the two can't drift apart.
+	statePath := factory.PoolStatePath(repoDataDir, "20261009-010000")
+	writeSidecarJSON(t, filepath.Dir(statePath), filepath.Base(statePath), `{"sidecar_ids":["id1"]}`)
 	writeSidecarJSON(t, runsDir, "20261009-010000.json", `{"run_id":"20261009-010000"}`)
 
 	result, pools := loadSidecarsAndPools(dataDir, repoDataDir, t.TempDir(), "")
