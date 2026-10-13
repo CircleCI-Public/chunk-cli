@@ -26,7 +26,7 @@ validation commands, which run on every change. Do not report them.
   `context.Background()`, honors cancellation, and does not keep using a context after its request
   ends.
 - **Concurrency**: shared state is guarded or owned by one goroutine; every goroutine can exit on
-  error and cancellation; channels are not sent to after close; loop variables captured correctly.
+  error and cancellation; channels are not sent to after close.
 - **Resources**: `resp.Body`, rows, files and transactions are closed or rolled back on every path,
   including errors. `defer` inside a loop holds resources until the function returns.
 - **Data**: database writes that must happen together are in one transaction; retries do not repeat

@@ -68,7 +68,7 @@ little for Claude to read yet.`,
 			if err := factory.CheckPromptsDir(dir); err != nil {
 				return promptsExistError(dir, err)
 			}
-			if template != "" {
+			if cmd.Flags().Changed("template") {
 				return writeTemplate(streams, workDir, dir, template, jsonOut)
 			}
 

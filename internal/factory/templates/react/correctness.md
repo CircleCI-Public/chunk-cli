@@ -12,7 +12,7 @@ Before reviewing, read what the project says about itself, where it exists: `AGE
 mined from past review comments. Where they set a rule for this area, the rule wins over the defaults
 below.
 
-Formatting, lint findings (including the rules of hooks), type errors, build failures and failing
+Formatting, lint findings (including hooks called conditionally), type errors, build failures and failing
 tests are caught by the project's validation commands, which run on every change. Do not report
 them.
 
