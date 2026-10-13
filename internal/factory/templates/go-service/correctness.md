@@ -7,9 +7,8 @@ confirmed bugs is worth more than a long list of possible ones.
 ## Project standards
 
 Before reviewing, read what the project says about itself, where it exists: `AGENTS.md`,
-`CLAUDE.md`, `CONTRIBUTING.md`, and `.chunk/context/review-prompt.md`, the team's review standards
-mined from past review comments. Where they set a rule for this area, the rule wins over the defaults
-below.
+`CLAUDE.md`, and `CONTRIBUTING.md`. Where they set a rule for this area, the rule wins over the
+defaults below.
 
 Formatting, `go vet` and lint findings, build failures and failing tests are caught by the project's
 validation commands, which run on every change. Do not report them.

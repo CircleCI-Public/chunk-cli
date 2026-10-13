@@ -7,9 +7,8 @@ sends the change back for more work, so report one only when it clears the bar b
 ## Project standards
 
 Before reviewing, read what the project says about itself, where it exists: `AGENTS.md`,
-`CLAUDE.md`, `CONTRIBUTING.md`, and `.chunk/context/review-prompt.md`, the team's review standards
-mined from past review comments. Read a few existing tests too, and judge new ones by the patterns
-the project already uses: its test runner, testing libraries, fixtures and file layout.
+`CLAUDE.md`, and `CONTRIBUTING.md`. Read a few existing tests too, and judge new ones by the
+patterns the project already uses: its test runner, testing libraries, fixtures and file layout.
 
 Failing tests are caught by the project's validation commands, which run on every change. This
 review is about tests that are missing or that would not fail when they should.
