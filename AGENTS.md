@@ -125,4 +125,5 @@ These apply to every change, whoever writes it. On factory runs, the
 - **Fakes over mocks**: Use fake HTTP servers instead of mocking libraries
 - **Test isolation**: Each test creates its own temp directory and cleans up
 - **Race detector**: Always run tests with `-race`
+- **Pool tests**: create pools only through `assembleTestPool`/`newTestPool` (they close the pool before temp dirs are removed); run `task test:stress` after changing `pool.go`
 - Acceptance tests live in `acceptance/`

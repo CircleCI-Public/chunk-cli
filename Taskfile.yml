@@ -24,6 +24,11 @@ tasks:
     cmds:
       - go tool gotestsum -- -race {{.ARGS}}
 
+  test:stress:
+    desc: Stress the sidecar pool tests (run after changing internal/sidecar/pool.go)
+    cmds:
+      - go test -race -count=10 -cpu 1,2 -timeout 30m -run "TestAssemblePool|TestPool|TestNewPool" ./internal/sidecar/
+
   lint:
     desc: Run `golangci-lint run` to lint the code
     summary: Lint the project with golangci-lint

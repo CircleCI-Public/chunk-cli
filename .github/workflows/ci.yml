@@ -28,3 +28,5 @@ jobs:
         run: task lint
       - name: Test
         run: task test
+      - name: Stress sidecar pool tests
+        run: task test:stress
