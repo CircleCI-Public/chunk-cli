@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // sessionID returns a unique session ID for each test to prevent state leakage.
@@ -100,12 +102,21 @@ func TestHooksDisabled_EnvVar(t *testing.T) {
 }
 
 func TestHooksDisabled_SentinelFile(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	dir := t.TempDir()
-	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".chunk", "hooks-disabled"), []byte{}, 0o644))
-	assert.Equal(t, HooksDisabled(dir, false), true)
+	paths, err := HooksDisabledPaths(dir)
+	assert.NilError(t, err)
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+			assert.NilError(t, os.WriteFile(p, []byte{}, 0o644))
+			t.Cleanup(func() { _ = os.Remove(p) })
+			assert.Equal(t, HooksDisabled(dir, false), true)
+		})
+	}
 }
 
 func TestHooksDisabled_Neither(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	assert.Equal(t, HooksDisabled(t.TempDir(), false), false)
 }

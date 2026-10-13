@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -264,7 +265,17 @@ type detachedState struct {
 	StartedAt time.Time `json:"started_at"`
 }
 
-func detachedStatePath(workDir string) string {
+func detachedStatePath(workDir string) (string, error) {
+	dir, err := config.ProjectDataDir(workDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve detached run path: %w", err)
+	}
+	return filepath.Join(dir, "review-run.json"), nil
+}
+
+// legacyDetachedStatePath is where older versions kept the record, inside the
+// repo, where it synced to sidecars and could be committed.
+func legacyDetachedStatePath(workDir string) string {
 	return filepath.Join(workDir, ".chunk", "review-run.json")
 }
 
@@ -273,24 +284,38 @@ func saveDetachedState(workDir string, st detachedState) error {
 	if err != nil {
 		return fmt.Errorf("marshal detached run: %w", err)
 	}
-	path := detachedStatePath(workDir)
+	path, err := detachedStatePath(workDir)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write detached run: %w", err)
 	}
+	// The new record shadows the legacy one from here on, so it is only clutter
+	// in the repo. chunk init does not gitignore it.
+	_ = os.Remove(legacyDetachedStatePath(workDir))
 	return nil
 }
 
 func loadDetachedState(workDir string) (detachedState, error) {
 	var st detachedState
-	data, err := os.ReadFile(detachedStatePath(workDir))
+	path, err := detachedStatePath(workDir)
+	if err != nil {
+		return st, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		path = legacyDetachedStatePath(workDir)
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return st, err
 	}
 	if err := json.Unmarshal(data, &st); err != nil {
-		return st, fmt.Errorf("parse %s: %w", detachedStatePath(workDir), err)
+		return st, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return st, nil
 }

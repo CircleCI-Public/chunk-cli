@@ -58,9 +58,13 @@ func newHookDisableCmd(projectDir *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("resolve hook root: %w", err)
 			}
-			p := filepath.Join(root, ".chunk", "hooks-disabled")
-			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-				return fmt.Errorf("create .chunk directory: %w", err)
+			paths, err := validate.HooksDisabledPaths(root)
+			if err != nil {
+				return fmt.Errorf("resolve hooks-disabled sentinel: %w", err)
+			}
+			p := paths[0]
+			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+				return fmt.Errorf("create project data directory: %w", err)
 			}
 			if err := os.WriteFile(p, []byte{}, 0o644); err != nil {
 				return fmt.Errorf("create hooks-disabled sentinel: %w", err)
@@ -82,9 +86,15 @@ func newHookEnableCmd(projectDir *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("resolve hook root: %w", err)
 			}
-			p := filepath.Join(root, ".chunk", "hooks-disabled")
-			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("remove hooks-disabled sentinel: %w", err)
+			paths, err := validate.HooksDisabledPaths(root)
+			if err != nil {
+				return fmt.Errorf("resolve hooks-disabled sentinel: %w", err)
+			}
+			// Either sentinel disables hooks, so both must go.
+			for _, p := range paths {
+				if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("remove hooks-disabled sentinel: %w", err)
+				}
 			}
 			streams := iostream.FromCmd(cmd)
 			streams.ErrPrintln("Hooks enabled.")
