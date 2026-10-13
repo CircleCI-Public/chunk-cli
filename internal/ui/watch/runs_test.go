@@ -483,3 +483,34 @@ func TestFactoryReviewRowsSayWhetherTheReviewPassed(t *testing.T) {
 }
 
 func stripANSI(s string) string { return regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(s, "") }
+
+func TestCheckRowShowsFailureTail(t *testing.T) {
+	st := newWatchStyles(false)
+	row := checkRow(st, chunkd.RoundCheck{
+		Name:   "test",
+		Status: chunkd.CheckFailed,
+		Output: "ok  pkg/a\n\n--- FAIL: TestX\n    x_test.go:9: want 3, got 4\nFAIL\n",
+	})
+	assert.Equal(t, len(row.extra), failTailLines)
+	assert.Assert(t, strings.Contains(row.extra[len(row.extra)-1], "FAIL"))
+
+	passed := checkRow(st, chunkd.RoundCheck{Name: "lint", Status: chunkd.CheckPassed, Output: "noise"})
+	assert.Equal(t, len(passed.extra), 0)
+}
+
+func TestItemFailureReport(t *testing.T) {
+	s := chunkd.Session{Rounds: []chunkd.Round{{
+		Number: 2,
+		Checks: []chunkd.RoundCheck{
+			{Name: "lint", Status: chunkd.CheckPassed, Output: "noise"},
+			{Name: "test", Status: chunkd.CheckFailed, Output: "--- FAIL: TestX\nFAIL\n"},
+		},
+	}}}
+	items := runItems(s)
+
+	assert.Equal(t, itemFailureReport(s, items[0]), "")
+
+	got := itemFailureReport(s, items[1])
+	assert.Assert(t, strings.HasPrefix(got, "Round 2 check: test failed"), got)
+	assert.Assert(t, strings.Contains(got, "```\n--- FAIL: TestX\nFAIL\n```"), got)
+}

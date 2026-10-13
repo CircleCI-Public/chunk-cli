@@ -304,6 +304,80 @@ func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cm
 	return m, nil
 }
 
+// copyRunFailure puts a report of the selected row's failure on the clipboard,
+// ready to paste to an agent. A row that did not fail falls back to every
+// failure in the run. The copy travels as an OSC 52 escape sequence, so it
+// reaches the user's clipboard over SSH, though a terminal that ignores OSC 52
+// drops it silently.
+func (m Model) copyRunFailure(run *sessionInfo) (tea.Model, tea.Cmd) {
+	if run == nil {
+		return m, nil
+	}
+	items := runItems(run.s)
+	var parts []string
+	if m.runItem < len(items) {
+		if r := itemFailureReport(run.s, items[m.runItem]); r != "" {
+			parts = append(parts, r)
+		}
+	}
+	if len(parts) == 0 {
+		for _, it := range items {
+			if r := itemFailureReport(run.s, it); r != "" {
+				parts = append(parts, r)
+			}
+		}
+	}
+	if len(parts) == 0 && run.s.Error != "" {
+		parts = append(parts, "Error: "+run.s.Error)
+	}
+	if len(parts) == 0 {
+		m.runNote = "nothing failed in this run"
+		return m, nil
+	}
+	head := fmt.Sprintf("chunk factory run failed (%s)\n", sessionTitle(*run))
+	m.runNote = "copied failure to clipboard"
+	return m, tea.SetClipboard(head + "\n" + strings.Join(parts, "\n\n"))
+}
+
+// itemFailureReport describes why a run row failed, in text to paste to an
+// agent, or "" when the row did not fail.
+func itemFailureReport(s chunkd.Session, it runItem) string {
+	r := s.Rounds[it.round]
+	var title, reason, output string
+	switch it.kind {
+	case itemCheck:
+		c := r.Checks[it.idx]
+		if c.Status != chunkd.CheckFailed && c.Status != chunkd.CheckErrored {
+			return ""
+		}
+		title, reason, output = "check: "+c.Name, c.Error, strings.TrimRight(c.Output, "\n")
+	case itemReview:
+		p := r.Reviews[it.idx]
+		switch {
+		case p.State == chunkd.PromptFailed || p.Status == chunkd.CheckErrored:
+			reason = p.Error
+		case p.Status == chunkd.CheckFailed:
+			reason = fmt.Sprintf("%d finding%s worth changing", p.Worth, plural(p.Worth))
+		default:
+			return ""
+		}
+		title = "review: " + p.Name
+	case itemImplement:
+		if r.Implement == nil || r.Implement.State != chunkd.ImplementFailed {
+			return ""
+		}
+		title, reason = "implementer", r.Implement.Error
+	}
+	out := fmt.Sprintf("Round %d %s failed", r.Number, title)
+	if reason = strings.TrimSpace(reason); reason != "" {
+		out += ": " + reason
+	}
+	if output != "" {
+		out += "\n\n```\n" + output + "\n```"
+	}
+	return out
+}
+
 func (m Model) openOutput(commandID, name string, running bool) (tea.Model, tea.Cmd) {
 	m.output = &outputPane{commandID: commandID, name: name, pinned: true, running: running}
 	m.outputSeq++
@@ -633,12 +707,30 @@ func checkRow(st watchStyles, c chunkd.RoundCheck) runRow {
 		row.icon, row.detail = st.success(ui.IconOK), st.dim(dur)
 	case chunkd.CheckFailed:
 		row.icon, row.detail = st.err(ui.IconFail), st.dim(dur)+"  "+st.err("failed")
+		for _, l := range tailLines(c.Output, failTailLines) {
+			row.extra = append(row.extra, "        "+st.muted(truncate(l, 120)))
+		}
 	case chunkd.CheckErrored:
 		row.icon, row.detail = st.err(ui.IconFail), st.err(truncate(strings.Join(strings.Fields(c.Error), " "), 80))
 	default:
 		row.icon, row.detail = st.vdim("·"), st.muted(c.Status)
 	}
 	return row
+}
+
+// failTailLines is how many of a failed check's last output lines the run pane
+// shows under its row, enough to see why it failed without opening the output.
+const failTailLines = 3
+
+// tailLines returns the last n non-blank lines of output, trimmed.
+func tailLines(output string, n int) []string {
+	var lines []string
+	for _, l := range strings.Split(output, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines[max(len(lines)-n, 0):]
 }
 
 func (m Model) reviewRow(st watchStyles, p chunkd.ReviewPrompt) runRow {
