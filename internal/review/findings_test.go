@@ -143,10 +143,9 @@ func TestFindingsSchemaNamesTheFieldsParseFindingsReads(t *testing.T) {
 	item := schema.Properties["findings"].Items
 	assert.Assert(t, item != nil)
 	assert.DeepEqual(t, keys(item.Properties), jsonNames(reflect.TypeFor[rawFinding]()))
-	for _, name := range item.Required {
-		_, ok := item.Properties[name]
-		assert.Assert(t, ok, "required %q is not a property", name)
-	}
+	// OpenAI's strict output schemas require every property to be listed.
+	assert.DeepEqual(t, slices.Sorted(slices.Values(item.Required)), keys(item.Properties))
+	assert.DeepEqual(t, slices.Sorted(slices.Values(schema.Required)), keys(schema.Properties))
 }
 
 func TestWorthChangingIsHighAndMediumOnly(t *testing.T) {

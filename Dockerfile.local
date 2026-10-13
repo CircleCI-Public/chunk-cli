@@ -108,7 +108,7 @@ RUN set -e; \
     rm -f "/tmp/${name}.tar.gz"; \
     test -x "$HOME/.local/bin/codex-code-mode-host"
 
-LABEL smelt.harnesses=claude,codex
+LABEL smelt.harnesses=claude,codex smelt.kit=3
 
 # The factory keeps the container alive and execs commands into it.
 CMD ["sleep", "infinity"]

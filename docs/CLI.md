@@ -438,7 +438,7 @@ smelt
   whole `auth.json` in the keychain (`smelt:codex:chatgpt`), and deletes the directory. A run gets a copy
   with `tokens.refresh_token` set to `""` (the field must stay; codex rejects the file without it), passed
   base64 in the exec environment of the one-time setup script only, and written to
-  `/tmp/smelt-codex/auth.json` (directory 700, file 600). The access token lasts about ten days; with under
+  `/home/circleci/.smelt-codex/auth.json` (directory 700, file 600). The access token lasts about ten days; with under
   24 hours left, a run first tries to renew it on the host (one `codex exec` turn against a temp
   `CODEX_HOME` holding the full file) and stores the result; if the token did not change it stops with
   "Your Codex login expires soon; run `smelt refresh codex`". `auth set codex` stores an API key
@@ -502,8 +502,8 @@ smelt
   bubblewrap and user namespaces on Linux, which containers often lack, so the review script uses
   `--dangerously-bypass-approvals-and-sandbox` like the implementer, keeps the git guard on `PATH`, and
   compares `git status --porcelain` and `git diff HEAD` before and after: a review that changed the tree
-  exits non-zero and its answer is dropped. This was chosen by design, not measured in a Docker Desktop
-  container; if read-only is shown to work in the image it can be restored.
+  exits non-zero and its answer is dropped. Verified on 2026-10-13: a review in the sandbox image runs in
+  bypass mode with the git guard (`--sandbox read-only` is not used).
 - **`smelt factory image --update-kit` replaces only the kit section** (from the marker to the end of the
   file), keeps everything above it, shows the diff, asks (`--yes` skips), writes, then builds and
   verifies as `factory image` does. It is exclusive with `--regenerate`. A Dockerfile with no marker

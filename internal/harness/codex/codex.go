@@ -38,7 +38,9 @@ const (
 	// EnvAPIKey is the variable codex reads an API key from.
 	EnvAPIKey = "CODEX_API_KEY" //nolint:gosec // the name of a variable, not a credential
 
-	codexHome = "/tmp/smelt-codex"
+	// codexHome is under the sandbox user's home: Codex refuses helper
+	// binaries that live under /tmp.
+	codexHome = "/home/circleci/.smelt-codex"
 	guardDir  = "/tmp/smelt-guard"
 )
 
