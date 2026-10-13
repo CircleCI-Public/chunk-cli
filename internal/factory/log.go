@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
@@ -16,14 +17,15 @@ import (
 // LogDefault is the RunOptions.Log that puts the run's log at DefaultLogPath.
 const LogDefault = "default"
 
-// DefaultLogPath is where a run's log goes when no path is given. The run ID
-// is already the run's start time, so it alone names the file.
-func DefaultLogPath(runID string) (string, error) {
-	home, err := os.UserHomeDir()
+// DefaultLogPath is where a run's log goes when no path is given: beside the
+// run's record in the repository at root. The run ID is already the run's
+// start time, so it alone names the file.
+func DefaultLogPath(root, runID string) (string, error) {
+	dataDir, err := config.RepoDataDir(root)
 	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
+		return "", fmt.Errorf("find chunk's data directory for the repository: %w", err)
 	}
-	return filepath.Join(home, ".chunk", "factory", "run-"+runID+".log"), nil
+	return filepath.Join(dataDir, "factory", runID+".log"), nil
 }
 
 // runLog is a plain-text record of a factory run that outlives it, written for
@@ -46,13 +48,13 @@ type runLog struct {
 
 // openLog creates the log at path, LogDefault for DefaultLogPath, or returns
 // nil when path is "".
-func openLog(path, runID string, verbose bool) (*runLog, error) {
+func openLog(path, root, runID string, verbose bool) (*runLog, error) {
 	if path == "" {
 		return nil, nil
 	}
 	if path == LogDefault {
 		var err error
-		if path, err = DefaultLogPath(runID); err != nil {
+		if path, err = DefaultLogPath(root, runID); err != nil {
 			return nil, err
 		}
 	}

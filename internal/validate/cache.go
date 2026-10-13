@@ -44,10 +44,16 @@ type CacheKeyInputs struct {
 	// mutable state outside the repo, so it has to participate in the key — a
 	// working tree validated against one sidecar says nothing about another.
 	Target string
+	// Project is the project's directory relative to the repository root. The
+	// cache is shared by the whole repository and the fingerprint covers the
+	// whole tree, so without it two subprojects with identical configs would
+	// hand each other their passes.
+	Project string
 }
 
 // BuildCacheKey constructs the cache key for a validate run from the working-tree
-// fingerprint, the serialized project config, and the execution target.
+// fingerprint, the serialized project config, the execution target, and the
+// project's place in the repository.
 //
 // The second return value is false when the fingerprint is the zero Worktree —
 // gitutil.Fingerprint could not establish the tree's state — or the config cannot
@@ -63,5 +69,5 @@ func BuildCacheKey(in CacheKeyInputs) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return cacheKey(in.CommandName, string(cfgBytes), in.Target, in.Worktree.Head, in.Worktree.Digest), true
+	return cacheKey(in.CommandName, string(cfgBytes), in.Target, in.Worktree.Head, in.Worktree.Digest, in.Project), true
 }

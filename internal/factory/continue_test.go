@@ -128,8 +128,9 @@ func TestContinuationWithGuidanceImplementsFirst(t *testing.T) {
 
 func TestRecordRoundTrip(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	root := newProject(t)
-	dataDir, err := config.ProjectDataDir(root)
+	dataDir, err := config.RepoDataDir(root)
 	assert.NilError(t, err)
 	want := Record{RunID: "run-2", Prompt: "add a flag", Worktree: "/wt", Branch: "chunk/factory/run-1",
 		Baseline: "abc", Head: "def", ContinuesRunID: "run-1", Result: ResultPassed, Rounds: 2}
@@ -141,6 +142,33 @@ func TestRecordRoundTrip(t *testing.T) {
 
 	_, err = LoadRecord(root, "nope")
 	assert.ErrorIs(t, err, ErrNoRecord)
+
+	// Every checkout of the repository sees the run.
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitOutput(t, root, "worktree", "add", wt)
+	got, err = LoadRecord(wt, "run-2")
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, want)
+}
+
+func TestLoadRecordFallsBackToTheCheckoutsDataDir(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := newProject(t)
+	legacyDir, err := config.ProjectDataDir(root)
+	assert.NilError(t, err)
+	assert.NilError(t, saveRecord(legacyDir, Record{RunID: "run-1", Prompt: "old"}))
+
+	got, err := LoadRecord(root, "run-1")
+	assert.NilError(t, err)
+	assert.Equal(t, got.Prompt, "old")
+
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+	assert.NilError(t, saveRecord(dataDir, Record{RunID: "run-1", Prompt: "new"}))
+	got, err = LoadRecord(root, "run-1")
+	assert.NilError(t, err)
+	assert.Equal(t, got.Prompt, "new")
 }
 
 func TestParseRunID(t *testing.T) {

@@ -86,6 +86,17 @@ func TopLevelCtx(ctx context.Context, dir string) string {
 	return trimNewline(out)
 }
 
+// Prefix returns dir's path relative to the root of its working tree, with a
+// trailing slash, or "" at the root or outside a git repo. It names the same
+// directory in every worktree of a repository.
+func Prefix(dir string) string {
+	out, err := (gitexec.Runner{Dir: dir}).Output(context.Background(), "rev-parse", "--show-prefix")
+	if err != nil {
+		return ""
+	}
+	return trimNewline(out)
+}
+
 func trimNewline(b []byte) string {
 	s := string(b)
 	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {

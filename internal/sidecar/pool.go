@@ -36,11 +36,15 @@ type Pool struct {
 	entries  []*PoolEntry
 	client   *circleci.Client
 	workDir  string
-	stateDir string
 	orgID    string
 	image    string
 	name     string
 	repoPath string
+
+	// statePath is where the pool's state is kept; legacyStatePath, when set,
+	// is read when it has nothing.
+	statePath       string
+	legacyStatePath string
 
 	mu             sync.Mutex
 	stateMu        sync.Mutex
@@ -69,10 +73,9 @@ type PoolOptions struct {
 	Image string
 	// WorkDir is the tree synced to every member.
 	WorkDir string
-	// StateDir is the project root the pool's state is keyed by; WorkDir
-	// when empty. It differs when the synced tree is not the project the
-	// pool belongs to, such as a factory worktree.
-	StateDir    string
+	// StatePath is the pool's state file, for a pool that belongs to
+	// something other than a project. When empty, state is keyed by WorkDir.
+	StatePath   string
 	RepoPath    string
 	ExistingIDs []string
 	FreshIDs    []string
@@ -92,14 +95,10 @@ func legacyPoolStatePath(stateDir, name string) string {
 	return filepath.Join(stateDir, ".chunk", name+"-pool.json")
 }
 
-func loadPoolState(stateDir, name string) (*poolState, error) {
-	path, err := poolStatePath(stateDir, name)
-	if err != nil {
-		return nil, err
-	}
+func loadPoolState(path, legacy string) (*poolState, error) {
 	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		data, err = os.ReadFile(legacyPoolStatePath(stateDir, name))
+	if errors.Is(err, os.ErrNotExist) && legacy != "" {
+		data, err = os.ReadFile(legacy)
 	}
 	if err != nil {
 		return nil, err
@@ -108,14 +107,10 @@ func loadPoolState(stateDir, name string) (*poolState, error) {
 	return &state, json.Unmarshal(data, &state)
 }
 
-func savePoolState(stateDir, name string, state *poolState) error {
+func savePoolState(path string, state *poolState) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshal pool state: %w", err)
-	}
-	path, err := poolStatePath(stateDir, name)
-	if err != nil {
-		return fmt.Errorf("resolve pool state path: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create pool state directory: %w", err)
@@ -128,11 +123,11 @@ func savePoolState(stateDir, name string, state *poolState) error {
 
 // clearPoolState also removes the legacy file, or the next load would fall
 // back to it and resurrect sidecars that were just deleted.
-func clearPoolState(stateDir, name string) {
-	if path, err := poolStatePath(stateDir, name); err == nil {
-		_ = os.Remove(path)
+func clearPoolState(path, legacy string) {
+	_ = os.Remove(path)
+	if legacy != "" {
+		_ = os.Remove(legacy)
 	}
-	_ = os.Remove(legacyPoolStatePath(stateDir, name))
 }
 
 func NewPool(
@@ -144,11 +139,15 @@ func NewPool(
 	if opts.Size < 1 {
 		return nil, errors.New("pool size must be positive")
 	}
-	stateDir := opts.StateDir
-	if stateDir == "" {
-		stateDir = opts.WorkDir
+	statePath, legacyStatePath := opts.StatePath, ""
+	if statePath == "" {
+		var err error
+		if statePath, err = poolStatePath(opts.WorkDir, opts.Name); err != nil {
+			return nil, fmt.Errorf("pool: resolve state path: %w", err)
+		}
+		legacyStatePath = legacyPoolStatePath(opts.WorkDir, opts.Name)
 	}
-	state, _ := loadPoolState(stateDir, opts.Name)
+	state, _ := loadPoolState(statePath, legacyStatePath)
 	repoPath := opts.RepoPath
 	if repoPath == "" && state != nil {
 		repoPath = state.RepoPath
@@ -186,14 +185,14 @@ func NewPool(
 	for _, id := range opts.FreshIDs {
 		freshIDs[id] = true
 	}
-	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, stateDir, existingIDs, freshIDs, status)
+	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, statePath, legacyStatePath, existingIDs, freshIDs, status)
 }
 
 func assemblePool(
 	ctx context.Context,
 	client *circleci.Client,
 	n int,
-	name, orgID, image, repoPath, workDir, stateDir string,
+	name, orgID, image, repoPath, workDir, statePath, legacyStatePath string,
 	existingIDs []string,
 	freshIDs map[string]bool,
 	status iostream.StatusFunc,
@@ -295,19 +294,20 @@ func assemblePool(
 		free <- entry
 	}
 	pool := &Pool{
-		free:           free,
-		updates:        make(chan struct{}, 1),
-		ids:            allIDs,
-		entries:        entries,
-		client:         client,
-		workDir:        workDir,
-		stateDir:       stateDir,
-		orgID:          orgID,
-		image:          image,
-		name:           name,
-		repoPath:       repoPath,
-		pendingSyncs:   len(aliveExisting),
-		pendingCreates: pendingCreates,
+		free:            free,
+		updates:         make(chan struct{}, 1),
+		ids:             allIDs,
+		entries:         entries,
+		client:          client,
+		workDir:         workDir,
+		statePath:       statePath,
+		legacyStatePath: legacyStatePath,
+		orgID:           orgID,
+		image:           image,
+		name:            name,
+		repoPath:        repoPath,
+		pendingSyncs:    len(aliveExisting),
+		pendingCreates:  pendingCreates,
 	}
 
 	if err := pool.persistState(); err != nil {
@@ -381,7 +381,7 @@ func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.Sta
 	p.notifyUpdate()
 
 	if err := p.persistState(); err != nil {
-		clearPoolState(p.stateDir, p.name)
+		clearPoolState(p.statePath, p.legacyStatePath)
 		status(iostream.LevelWarn, fmt.Sprintf("could not save pool state: %v", err))
 	}
 	status(iostream.LevelInfo, fmt.Sprintf("replacement sidecar: %s", replacement.ID))
@@ -515,7 +515,7 @@ func (p *Pool) persistState() error {
 	}
 	p.mu.Unlock()
 
-	stored, err := loadPoolState(p.stateDir, p.name)
+	stored, err := loadPoolState(p.statePath, p.legacyStatePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -530,7 +530,7 @@ func (p *Pool) persistState() error {
 			state.Image = stored.Image
 		}
 	}
-	return savePoolState(p.stateDir, p.name, state)
+	return savePoolState(p.statePath, state)
 }
 
 func (p *Pool) Acquire(ctx context.Context) (*PoolEntry, error) {
@@ -613,7 +613,7 @@ func (p *Pool) Destroy(ctx context.Context) error {
 	failed := deleteSidecarsConcurrently(ctx, p.client, ids)
 	p.notifyUpdate()
 	if len(failed) == 0 {
-		clearPoolState(p.stateDir, p.name)
+		clearPoolState(p.statePath, p.legacyStatePath)
 		return nil
 	}
 

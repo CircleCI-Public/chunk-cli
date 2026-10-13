@@ -76,10 +76,10 @@ implementer is sent what failed, in a round that counts toward
 Enter skips it.
 
 With --log, the run keeps a plain-text log in
-~/.chunk/factory/run-<start time>.log, with its full context whatever the
-display leaves out: every prompt the implementer is sent and what it did and
-said, each review's findings in full, and each validation command's output
-when it failed. --log-file FILE keeps the log in FILE instead, and on its own
+~/.local/share/chunk/repo-<id>/factory/<start time>.log, beside the run's
+record, with its full context whatever the display leaves out: every prompt
+the implementer is sent and what it did and said, each review's findings in
+full, and each validation command's output when it failed. --log-file FILE keeps the log in FILE instead, and on its own
 turns the log on. --verbose adds the review prompts, the output of commands
 that passed, and a check each round that every reviewer has the implementer's
 change, and also shows the log here as the run writes it; it implies --log.`,
@@ -110,7 +110,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "" {
 				return newUserError("--log-file needs a file.").
 					withCode("command.invalid_flags").
-					withSuggestion("Write --log-file FILE, or --log to log to ~/.chunk/factory.").
+					withSuggestion("Write --log-file FILE, or --log for the default log.").
 					withExitCode(ExitBadArgs).
 					withoutDetail()
 			}
@@ -150,7 +150,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return err
 			}
-			logArg, err := factoryLogPath(logFile, logOn || verbose, time.Now())
+			logArg, err := factoryLogPath(root, logFile, logOn || verbose, time.Now())
 			if err != nil {
 				return err
 			}
@@ -208,7 +208,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
 	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
-	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log")
+	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.local/share/chunk/repo-<id>/factory/<start time>.log")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
 	cmd.SetFlagErrorFunc(factoryFlagError)
@@ -513,13 +513,14 @@ func plainText(b []byte) []byte {
 // when --log-file names one, else the default when on, as --log and --verbose
 // turn it. It is absolute, since the daemon does not share this process's
 // working directory, and settled here, so this command knows where the log is
-// to show it. A default log is named for now, the run's start.
-func factoryLogPath(path string, on bool, now time.Time) (string, error) {
+// to show it. A default log is named for now, the run's start, in the
+// repository at root.
+func factoryLogPath(root, path string, on bool, now time.Time) (string, error) {
 	switch {
 	case path == "" && !on:
 		return "", nil
 	case path == "":
-		return factory.DefaultLogPath(now.UTC().Format("20060102-150405"))
+		return factory.DefaultLogPath(root, now.UTC().Format("20060102-150405"))
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {

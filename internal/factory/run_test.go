@@ -23,6 +23,7 @@ import (
 // worktree and branch are removed, and the developer's checkout is untouched.
 func TestRunThatFailsBeforeTheImplementerLeavesNothingBehind(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	root := newProject(t)
 	before := gitOutput(t, root, "status", "--porcelain")
 
@@ -57,6 +58,7 @@ func TestRunThatFailsBeforeTheImplementerLeavesNothingBehind(t *testing.T) {
 // run's worktree, with the work's files back in it, and its branch.
 func TestContinuedRunThatFailsBeforeTheImplementerKeepsTheWork(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	root, rec := finishedRun(t)
 	tip := gitOutput(t, root, "rev-parse", rec.Branch)
 
@@ -95,6 +97,7 @@ func TestReviewerCount(t *testing.T) {
 // what earlier rounds brought back is still kept on the run's branch.
 func TestCommitWorkCommitsAfterACancelAndAFailedPull(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	root := newProject(t)
 	ctx := context.Background()
 	wt, err := CreateWorktree(ctx, root, t.TempDir()+"/wt", "run-1", "add a flag")
@@ -129,6 +132,7 @@ func TestCommitWorkCommitsAfterACancelAndAFailedPull(t *testing.T) {
 // open until its cleanup has reported too.
 func TestRunKeepsItsLog(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	root := newProject(t)
 	cci := fakes.NewFakeCircleCI()
 	cci.CreateStatusCode = http.StatusInternalServerError

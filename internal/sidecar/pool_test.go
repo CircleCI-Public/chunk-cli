@@ -22,6 +22,13 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
+func projectPoolStatePath(t *testing.T, stateDir, name string) string {
+	t.Helper()
+	path, err := poolStatePath(stateDir, name)
+	assert.NilError(t, err)
+	return path
+}
+
 func TestPoolStatePath(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	dataDir, err := config.ProjectDataDir("/my/project")
@@ -41,9 +48,10 @@ func TestPoolStateRoundTrip(t *testing.T) {
 		RepoPath:   "/home/user/myrepo",
 		Image:      "snapshot-1",
 	}
-	assert.NilError(t, savePoolState(dir, "validate", want))
+	path := projectPoolStatePath(t, dir, "validate")
+	assert.NilError(t, savePoolState(path, want))
 
-	got, err := loadPoolState(dir, "validate")
+	got, err := loadPoolState(path, "")
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got.SidecarIDs, want.SidecarIDs)
 	assert.Equal(t, got.RepoPath, want.RepoPath)
@@ -57,21 +65,22 @@ func TestLoadPoolStateFallsBackToLegacyPath(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(filepath.Dir(legacy), 0o700))
 	assert.NilError(t, os.WriteFile(legacy, []byte(`{"sidecar_ids":["sb-old"]}`), 0o600))
 
-	got, err := loadPoolState(dir, "validate")
+	path := projectPoolStatePath(t, dir, "validate")
+	got, err := loadPoolState(path, legacy)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got.SidecarIDs, []string{"sb-old"})
 
 	// The new path wins once written, and the legacy file is left alone.
-	assert.NilError(t, savePoolState(dir, "validate", &poolState{SidecarIDs: []string{"sb-new"}}))
-	got, err = loadPoolState(dir, "validate")
+	assert.NilError(t, savePoolState(path, &poolState{SidecarIDs: []string{"sb-new"}}))
+	got, err = loadPoolState(path, legacy)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got.SidecarIDs, []string{"sb-new"})
 	_, err = os.Stat(legacy)
 	assert.NilError(t, err)
 
 	// Clearing removes both, so the legacy state cannot come back.
-	clearPoolState(dir, "validate")
-	_, err = loadPoolState(dir, "validate")
+	clearPoolState(path, legacy)
+	_, err = loadPoolState(path, legacy)
 	assert.Assert(t, errors.Is(err, os.ErrNotExist))
 }
 
@@ -83,7 +92,7 @@ func TestSavePoolStateReturnsWriteError(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(dataDir, 0o700))
 	assert.NilError(t, os.WriteFile(filepath.Join(dataDir, "pools"), nil, 0o600))
 
-	err = savePoolState(dir, "validate", &poolState{SidecarIDs: []string{"sb-1"}})
+	err = savePoolState(projectPoolStatePath(t, dir, "validate"), &poolState{SidecarIDs: []string{"sb-1"}})
 	assert.Assert(t, err != nil)
 }
 
@@ -145,13 +154,12 @@ func TestPoolStateMarshalFormat(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	dir := t.TempDir()
 
-	assert.NilError(t, savePoolState(dir, "validate", &poolState{
+	path := projectPoolStatePath(t, dir, "validate")
+	assert.NilError(t, savePoolState(path, &poolState{
 		SidecarIDs: []string{"sb-1"},
 		RepoPath:   "/home/user/repo",
 	}))
 
-	path, err := poolStatePath(dir, "validate")
-	assert.NilError(t, err)
 	raw, err := os.ReadFile(path)
 	assert.NilError(t, err)
 
@@ -163,22 +171,22 @@ func TestPoolStateMarshalFormat(t *testing.T) {
 
 func TestPoolPersistStatePreservesStoredMetadata(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-	dir := t.TempDir()
-	assert.NilError(t, savePoolState(dir, "validate", &poolState{
+	path := projectPoolStatePath(t, t.TempDir(), "validate")
+	assert.NilError(t, savePoolState(path, &poolState{
 		SidecarIDs: []string{"old"},
 		RepoPath:   "/workspace/repo",
 		Image:      "snapshot-1",
 	}))
 	pool := &Pool{
-		ids:      []string{"new"},
-		workDir:  t.TempDir(),
-		stateDir: dir,
-		name:     "validate",
+		ids:       []string{"new"},
+		workDir:   t.TempDir(),
+		statePath: path,
+		name:      "validate",
 	}
 
 	// State is kept in the state directory, not in the tree that is synced.
 	assert.NilError(t, pool.persistState())
-	state, err := loadPoolState(dir, "validate")
+	state, err := loadPoolState(path, "")
 	assert.NilError(t, err)
 	assert.DeepEqual(t, state.SidecarIDs, []string{"new"})
 	assert.Equal(t, state.RepoPath, "/workspace/repo")
@@ -186,9 +194,10 @@ func TestPoolPersistStatePreservesStoredMetadata(t *testing.T) {
 }
 
 type poolTestEnv struct {
-	cl      *circleci.Client
-	cci     *fakes.FakeCircleCI
-	workDir string
+	cl        *circleci.Client
+	cci       *fakes.FakeCircleCI
+	workDir   string
+	statePath string
 }
 
 // TestMain stands in for rsync, which cannot run against the fake SSH server:
@@ -232,7 +241,7 @@ func setupPoolTest(t *testing.T) poolTestEnv {
 	assert.NilError(t, err)
 
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	return poolTestEnv{cl: cl, cci: cci, workDir: workDir}
+	return poolTestEnv{cl: cl, cci: cci, workDir: workDir, statePath: filepath.Join(t.TempDir(), "pool.json")}
 }
 
 func countPoolRequests(cci *fakes.FakeCircleCI, method, path string) int {
@@ -274,7 +283,7 @@ func TestAssemblePool_CreatesAndSyncsAll(t *testing.T) {
 	t.Chdir(env.workDir)
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 
 	a, err := pool.Acquire(context.Background())
@@ -299,7 +308,7 @@ func TestPoolIDs_ReflectsClonedMembersOnceAcquirable(t *testing.T) {
 	t.Chdir(env.workDir)
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 
 	a, err := pool.Acquire(context.Background())
@@ -320,7 +329,7 @@ func TestAssemblePool_CreateFailure_ReturnsError(t *testing.T) {
 	env.cci.CreateStatusCode = 500
 
 	_, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, countPoolDeletes(env.cci), 0)
 }
@@ -331,7 +340,7 @@ func TestAssemblePool_AllCloneCreatesFail(t *testing.T) {
 	env.cci.CreateErrorAfter = 1
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	_, err = pool.Acquire(context.Background())
 	assert.ErrorContains(t, err, "create sidecar")
@@ -344,7 +353,7 @@ func TestAssemblePool_PartialCloneFailureKeepsSuccessfulClone(t *testing.T) {
 	env.cci.CreateErrorAfter = 2
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entry, err := pool.Acquire(context.Background())
 	assert.NilError(t, err)
@@ -375,7 +384,7 @@ func TestAssemblePool_CloneIsAvailableBeforeAllCreatesFinish(t *testing.T) {
 	})
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	t.Cleanup(func() { pool.Close(context.Background()) })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -399,7 +408,7 @@ func TestPoolCloseKeepsClonesThatFinishWhileWaiting(t *testing.T) {
 	env.cci.CreateWait = map[int]<-chan struct{}{2: blocked, 3: blocked}
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -413,7 +422,7 @@ func TestPoolCloseKeepsClonesThatFinishWhileWaiting(t *testing.T) {
 
 	assert.NilError(t, ctx.Err())
 	assert.Equal(t, countPoolDeletes(env.cci), 1, "only the seed is deleted")
-	state, err := loadPoolState(env.workDir, "validate")
+	state, err := loadPoolState(env.statePath, "")
 	assert.NilError(t, err)
 	assert.Equal(t, len(state.SidecarIDs), 2, "clones are kept for reuse")
 }
@@ -426,7 +435,7 @@ func TestPoolCloseCancelsCreatesWhenContextEnds(t *testing.T) {
 	t.Cleanup(func() { close(blocked) })
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -448,7 +457,7 @@ func TestPoolDestroyWaitsForCloneCreationBeforeReturning(t *testing.T) {
 	t.Cleanup(func() { close(blocked) })
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -461,7 +470,7 @@ func TestPoolDestroyWaitsForCloneCreationBeforeReturning(t *testing.T) {
 	// The seed and the finished clone are deleted before Destroy returns, so
 	// nothing is left behind when the process exits straight afterwards.
 	assert.Equal(t, countPoolDeletes(env.cci), 2)
-	_, err = loadPoolState(env.workDir, "validate")
+	_, err = loadPoolState(env.statePath, "")
 	assert.Assert(t, errors.Is(err, os.ErrNotExist))
 }
 
@@ -470,14 +479,14 @@ func TestPoolDestroyKeepsUndeletedSidecarsInState(t *testing.T) {
 	t.Chdir(env.workDir)
 
 	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	env.cci.DeleteStatusCode = 500
 
 	err = pool.Destroy(context.Background())
 
 	assert.ErrorContains(t, err, "delete 1 sidecar(s)")
-	state, err := loadPoolState(env.workDir, "validate")
+	state, err := loadPoolState(env.statePath, "")
 	assert.NilError(t, err)
 	assert.DeepEqual(t, state.SidecarIDs, pool.ids)
 }
@@ -488,7 +497,7 @@ func TestAssemblePool_SyncFailure_CleansUp(t *testing.T) {
 	env.cci.AddKeyStatusCode = 500
 
 	_, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, countPoolDeletes(env.cci), 1)
 	assert.Equal(t, len(env.cci.Sidecars), 0)
@@ -500,7 +509,7 @@ func TestAssemblePool_StaleExisting_ReplacedAutomatically(t *testing.T) {
 	env.cci.StaleIDs = map[string]bool{"stale-sb-1": true, "stale-sb-2": true}
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"stale-sb-1", "stale-sb-2"}, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", []string{"stale-sb-1", "stale-sb-2"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entries := drainPoolEntries(context.Background(), t, pool, 2)
 	releasePoolEntries(pool, entries)
@@ -522,7 +531,7 @@ func TestAssemblePool_OutdatedExisting_ReplacedAutomatically(t *testing.T) {
 	}))
 
 	pool, err := assemblePool(ctx, env.cl, 1, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"outdated-sb-1"}, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", []string{"outdated-sb-1"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entry, err := pool.Acquire(ctx)
 	assert.NilError(t, err)
@@ -567,7 +576,7 @@ func TestAssemblePool_SidecarGoneDuringSync_ReplacedAutomatically(t *testing.T) 
 	}))
 
 	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"existing-sb-1"}, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", []string{"existing-sb-1"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entry, err := pool.Acquire(context.Background())
 	assert.NilError(t, err)
@@ -589,7 +598,7 @@ func TestAssemblePool_OrdinaryExistingSyncFailureDoesNotReplace(t *testing.T) {
 	env.cci.AddKeyStatusCode = 500
 
 	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"existing-sb-1"}, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", []string{"existing-sb-1"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	_, err = pool.Acquire(context.Background())
 	assert.Assert(t, err != nil)
@@ -603,7 +612,7 @@ func TestAssemblePool_ReuseExisting_OnlyCreatesGap(t *testing.T) {
 	t.Chdir(env.workDir)
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"existing-sb-1"}, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", []string{"existing-sb-1"}, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	assert.Equal(t, len(pool.ids), 2)
 	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 1)
@@ -615,7 +624,7 @@ func TestAssemblePool_FreshExistingSkipsStaleProbe(t *testing.T) {
 	t.Chdir(env.workDir)
 
 	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"fresh-sb-1"}, map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", []string{"fresh-sb-1"}, map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	entry, err := pool.Acquire(context.Background())
 	assert.NilError(t, err)
@@ -630,7 +639,7 @@ func TestAssemblePool_FreshExistingRetriesProvisioningLag(t *testing.T) {
 	env.cci.NotFoundBeforeAddKey = map[string]int{"fresh-sb-1": 1}
 
 	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "snapshot-1",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"fresh-sb-1"}, map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", []string{"fresh-sb-1"}, map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	t.Cleanup(func() { pool.Close(context.Background()) })
 	entry, err := pool.Acquire(context.Background())
@@ -646,7 +655,7 @@ func TestAssemblePool_FreshExistingRetriesProvisioningLag(t *testing.T) {
 func TestNewPoolRestoresCreationContext(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
-	assert.NilError(t, savePoolState(env.workDir, "validate", &poolState{
+	assert.NilError(t, savePoolState(projectPoolStatePath(t, env.workDir, "validate"), &poolState{
 		SidecarIDs: []string{"existing-sb-1"},
 		RepoPath:   "/saved/workspace",
 		Image:      "snapshot-1",
@@ -667,10 +676,66 @@ func TestNewPoolRestoresCreationContext(t *testing.T) {
 	assert.Equal(t, entry.RepoPath, "/saved/workspace")
 }
 
+func TestNewPoolKeepsStateAtStatePath(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	assert.NilError(t, savePoolState(env.statePath, &poolState{
+		SidecarIDs: []string{"existing-sb-1"},
+		Image:      "snapshot-1",
+	}))
+
+	pool, err := NewPool(context.Background(), env.cl, PoolOptions{
+		Size:      1,
+		Name:      "validate",
+		OrgID:     "org-1",
+		WorkDir:   env.workDir,
+		StatePath: env.statePath,
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Equal(t, pool.image, "snapshot-1")
+	assert.DeepEqual(t, pool.ids, []string{"existing-sb-1"})
+}
+
+// TestNewPoolAtStatePathLeavesTheProjectsStateAlone covers a pool that belongs
+// to something other than the project, such as a factory run: a project pool of
+// the same name is someone else's, so it must neither be adopted nor cleared.
+func TestNewPoolAtStatePathLeavesTheProjectsStateAlone(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	assert.NilError(t, savePoolState(env.statePath, &poolState{SidecarIDs: []string{"existing-sb-1"}}))
+	project := projectPoolStatePath(t, env.workDir, "validate")
+	legacy := legacyPoolStatePath(env.workDir, "validate")
+	for _, path := range []string{project, legacy} {
+		assert.NilError(t, savePoolState(path, &poolState{SidecarIDs: []string{"project-sb"}}))
+	}
+
+	pool, err := NewPool(context.Background(), env.cl, PoolOptions{
+		Size:      1,
+		Name:      "validate",
+		OrgID:     "org-1",
+		WorkDir:   env.workDir,
+		StatePath: env.statePath,
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, pool.ids, []string{"existing-sb-1"})
+
+	assert.NilError(t, pool.Destroy(context.Background()))
+	_, err = os.Stat(env.statePath)
+	assert.Assert(t, os.IsNotExist(err), "the pool's own state should be cleared")
+	for _, path := range []string{project, legacy} {
+		_, err := os.Stat(path)
+		assert.NilError(t, err, "%s should survive", path)
+	}
+}
+
 func TestNewPoolDeletesSurplusSidecarsFromState(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
-	assert.NilError(t, savePoolState(env.workDir, "mutate", &poolState{
+	assert.NilError(t, savePoolState(projectPoolStatePath(t, env.workDir, "mutate"), &poolState{
 		SidecarIDs: []string{"existing-sb-1", "existing-sb-2", "existing-sb-3"},
 		Image:      "ubuntu:22.04",
 	}))
@@ -766,7 +831,7 @@ func TestPool_100Sidecars_NoGoroutineLeak(t *testing.T) {
 	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
 
 	pool, err := assemblePool(ctx, env.cl, n, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, noopStatus)
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, noopStatus)
 	assert.NilError(t, err)
 	entries := drainPoolEntries(ctx, t, pool, n)
 	assert.Equal(t, len(pool.ids), n)
@@ -777,7 +842,7 @@ func TestPool_100Sidecars_NoGoroutineLeak(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
 	pool2, err := assemblePool(ctx, env.cl, n, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, pool.ids, nil, noopStatus)
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", pool.ids, nil, noopStatus)
 	assert.NilError(t, err)
 	assert.Equal(t, len(pool2.ids), n)
 	releasePoolEntries(pool2, drainPoolEntries(ctx, t, pool2, n))
@@ -805,7 +870,7 @@ func TestPoolWaitSyncedReportsBeforeReturning(t *testing.T) {
 		msgs = append(msgs, msg)
 	}
 	pool, err := assemblePool(context.Background(), env.cl, 2, "review", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, []string{"existing-sb-1", "existing-sb-2"}, nil, status)
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", []string{"existing-sb-1", "existing-sb-2"}, nil, status)
 	assert.NilError(t, err)
 
 	a, err := pool.Acquire(t.Context())
@@ -838,7 +903,7 @@ func TestPoolWaitSyncedReportsPartialFailure(t *testing.T) {
 	env.cci.CreateErrorAfter = 2
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "review", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, env.workDir, nil, nil, func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, env.statePath, "", nil, nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	t.Cleanup(func() { pool.Close(context.Background()) })
 

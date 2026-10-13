@@ -20,7 +20,7 @@ import (
 func newTestLog(t *testing.T, verbose bool) (*runLog, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "nested", "run.log")
-	lg, err := openLog(path, "20261002-150405", verbose)
+	lg, err := openLog(path, "", "20261002-150405", verbose)
 	assert.NilError(t, err)
 	lg.now = func() time.Time { return time.Date(2026, 10, 2, 15, 4, 5, 0, time.UTC) }
 	return lg, path
@@ -184,18 +184,21 @@ func TestLogReviewerTree(t *testing.T) {
 }
 
 func TestLogDefaultPath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	lg, err := openLog(LogDefault, "20261002-150405", false)
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := newProject(t)
+	lg, err := openLog(LogDefault, root, "20261002-150405", false)
 	assert.NilError(t, err)
 	lg.close(Report{}, nil)
-	assert.Equal(t, lg.path, filepath.Join(home, ".chunk", "factory", "run-20261002-150405.log"))
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+	assert.Equal(t, lg.path, filepath.Join(dataDir, "factory", "20261002-150405.log"))
 }
 
 // TestLogOffRecordsNothing guards the nil log: with no --log, the run's hooks
 // are its caller's, untouched.
 func TestLogOffRecordsNothing(t *testing.T) {
-	lg, err := openLog("", "20261002-150405", false)
+	lg, err := openLog("", "", "20261002-150405", false)
 	assert.NilError(t, err)
 	assert.Assert(t, lg == nil)
 

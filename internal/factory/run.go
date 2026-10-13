@@ -131,7 +131,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if opts.Verbose && opts.Log == "" {
 		opts.Log = LogDefault
 	}
-	lg, err := openLog(opts.Log, rep.RunID, opts.Verbose)
+	lg, err := openLog(opts.Log, opts.Root, rep.RunID, opts.Verbose)
 	if err != nil {
 		return rep, fmt.Errorf("open the run's log: %w", err)
 	}
@@ -145,9 +145,10 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	status := opts.Status
 	lg.start(rep.RunID, opts, request)
 
-	dataDir, err := config.ProjectDataDir(opts.Root)
+	// Runs belong to the repository, so every checkout of it sees them.
+	dataDir, err := config.RepoDataDir(opts.Root)
 	if err != nil {
-		return rep, fmt.Errorf("find chunk's data directory for the project: %w", err)
+		return rep, fmt.Errorf("find chunk's data directory for the repository: %w", err)
 	}
 	var wt Worktree
 	if cont == nil {
@@ -209,10 +210,10 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Name:  PoolName(rep.RunID),
 		OrgID: opts.OrgID,
 		Image: opts.Image,
-		// The sidecars start from the worktree, and its state stays in the
-		// project, where the dashboard finds it.
-		WorkDir:  wt.Path,
-		StateDir: opts.Root,
+		// The sidecars start from the worktree, and their state is kept
+		// beside the run's record, where the dashboard finds it.
+		WorkDir:   wt.Path,
+		StatePath: PoolStatePath(dataDir, rep.RunID),
 	}, status)
 	if err != nil {
 		return rep, fmt.Errorf("create the run's sidecars: %w", err)

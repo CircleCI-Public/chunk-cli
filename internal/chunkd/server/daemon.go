@@ -31,10 +31,13 @@ type projectState struct {
 	// outside the lock, because resolving it touches the filesystem.
 	canonRoot string
 	dataDir   string
-	log       *eventlog.Log
-	offset    int64
-	events    []eventlog.Event
-	snap      chunkd.ProjectSnapshot
+	// repoDataDir is the data directory of root's git repository, where
+	// factory runs are kept, or "" outside git.
+	repoDataDir string
+	log         *eventlog.Log
+	offset      int64
+	events      []eventlog.Event
+	snap        chunkd.ProjectSnapshot
 	// sidecarPools maps sidecar ID to the persisted pool that owns it. It stays
 	// server-side; snapshots attach the IDs directly to their factory run.
 	sidecarPools map[string]string
@@ -344,7 +347,8 @@ func (d *daemon) initProject(root string) *projectState {
 		log.Printf("chunkd: event log for %s: %v", root, err)
 		return nil
 	}
-	ps := &projectState{root: root, canonRoot: canonicalRoot(root), dataDir: dataDir, log: el}
+	repoDataDir, _ := config.RepoDataDir(root)
+	ps := &projectState{root: root, canonRoot: canonicalRoot(root), dataDir: dataDir, repoDataDir: repoDataDir, log: el}
 	// Resolve org/repo once for PR monitoring. Failure is silently ignored:
 	// the project may not be on GitHub, or the remote may not be reachable.
 	if org, repo, err := gitremote.DetectOrgAndRepo(root); err == nil {
@@ -396,7 +400,7 @@ func (d *daemon) updateProject(ps *projectState) {
 		ps.offset = newOff
 	}
 
-	sidecars, sidecarPools := loadSidecarsAndPools(ps.dataDir, ps.root, snapName)
+	sidecars, sidecarPools := loadSidecarsAndPools(ps.dataDir, ps.repoDataDir, ps.root, snapName)
 	inferredOrg := fillMissingOrg(sidecars, ps.root)
 	// Same background context as the PR fetch below: the list must survive this
 	// poll returning.
