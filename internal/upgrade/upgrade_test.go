@@ -233,3 +233,12 @@ func TestFormatChangelog(t *testing.T) {
 		t.Fatal("expected empty changelog")
 	}
 }
+
+// A release body is free text, so an entry can carry escape sequences that
+// would rewrite the terminal around the notice.
+func TestFormatChangelogStripsControlCharacters(t *testing.T) {
+	body := "* d12ac9bd638e1939d5608c31d3d2cf4487649aba Fix\x1b[2K\rthe\x07 thing\n"
+	if got := formatChangelog(body, 15); got != "  - Fix[2Kthe thing" {
+		t.Fatalf("got %q", got)
+	}
+}

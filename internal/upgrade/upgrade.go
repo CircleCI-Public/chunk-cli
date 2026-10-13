@@ -135,13 +135,25 @@ func formatChangelog(body string, limit int) string {
 		}
 		total++
 		if total <= limit {
-			lines = append(lines, "  - "+entry)
+			lines = append(lines, "  - "+stripControl(entry))
 		}
 	}
 	if total > limit {
 		lines = append(lines, fmt.Sprintf("  ...and %d more", total-limit))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// stripControl drops control characters from a release body entry. The body is
+// free text that lands in the user's terminal, where an escape sequence could
+// rewrite what is already on screen.
+func stripControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\t' || (r >= 0x20 && r != 0x7f) {
+			return r
+		}
+		return -1
+	}, s)
 }
 
 func isHexSHA(s string) bool {

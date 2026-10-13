@@ -361,7 +361,7 @@ func printUpdateNotice(cmd *cobra.Command) {
 	current := "v" + strings.TrimPrefix(version.Value, "v")
 	w := cmd.ErrOrStderr()
 	_, _ = fmt.Fprintf(w, "\nA new version of chunk is available: %s → %s\n", current, latest)
-	if notes := upgrade.NoticeChangelog(); notes != "" {
+	if notes := upgrade.NoticeChangelog(latest); notes != "" {
 		_, _ = fmt.Fprintf(w, "\nWhat's new:\n%s\n", notes)
 	}
 	_, _ = fmt.Fprintf(w, "\nRun: %s\nFull changelog: %s\n", upgrade.SelfUpgradeCommand(), upgrade.ReleaseURL(latest))

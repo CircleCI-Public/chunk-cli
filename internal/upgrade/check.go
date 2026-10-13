@@ -96,15 +96,20 @@ func CheckForUpdate(cacheDir, apiBase, current string) string {
 	return newerTag(rel.TagName, current)
 }
 
-// NoticeChangelog returns a short changelog for the release CheckForUpdate
-// last reported, from the same cache, or "" if there is none. It makes no
-// request, so it is safe to call right after Check returns a tag.
-func NoticeChangelog() string {
+// NoticeChangelog returns the short changelog cached for the latest tag, or
+// "" when there is none. It makes no request, so it is safe to call right
+// after Check returns a tag. The tag is checked against the cache because any
+// other chunk process may rewrite it in between, and entries for one release
+// printed under another's heading would be worse than none.
+func NoticeChangelog(latest string) string {
 	stateDir, err := config.AppState()
 	if err != nil {
 		return ""
 	}
 	cached, _ := readCache(filepath.Join(stateDir, cacheFileName))
+	if cached.LatestVersion != latest {
+		return ""
+	}
 	return cached.Changelog
 }
 
