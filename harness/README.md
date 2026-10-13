@@ -68,7 +68,7 @@ A job is `results/<job>/`:
   `verifier/*.log`, the factory log and result, and `judge.json`.
 
 Re-run `run` with the same `--job-dir` to resume: completed trials are skipped and
-errored ones retried. A job has its own watch daemon (`CHUNK_WATCHD_DIR`) started
+errored ones retried. A job has its own watch daemon (`CHUNK_DAEMON_DIR`) started
 from its binary, so it never replaces your daemon or evaluates a different build.
 
 `reward.json` holds:

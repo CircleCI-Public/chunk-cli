@@ -53,7 +53,7 @@ def job_env(job_dir: Path, echo: bool) -> dict:
     started from its own binary: factory runs on the daemon, and a daemon from
     another build would otherwise be replaced, or be what is evaluated."""
     digest = hashlib.sha256(str(job_dir).encode()).hexdigest()[:10]
-    env = {**os.environ, "CHUNK_WATCHD_DIR": f"/tmp/chunk-eval-{digest}",
+    env = {**os.environ, "CHUNK_DAEMON_DIR": f"/tmp/chunk-eval-{digest}",
            "CHUNK_EVAL_BINARY": str(job_dir / "chunk")}
     if echo:
         env["CHUNK_EVAL_ECHO"] = "1"
@@ -61,7 +61,7 @@ def job_env(job_dir: Path, echo: bool) -> dict:
 
 
 def stop_daemon(env: dict) -> None:
-    pid_file = Path(env["CHUNK_WATCHD_DIR"]) / "watchd.pid"
+    pid_file = Path(env["CHUNK_DAEMON_DIR"]) / "daemon.pid"
     try:
         os.kill(int(pid_file.read_text(encoding="utf-8").strip()), signal.SIGTERM)
     except (OSError, ValueError):
