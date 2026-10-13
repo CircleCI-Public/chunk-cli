@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -92,8 +94,18 @@ func loadSidecarsAndPools(dataDir, root, snapshotName string) ([]chunkd.SidecarS
 		}
 	}
 
-	poolMatches, _ := filepath.Glob(filepath.Join(root, ".chunk", "*-pool.json"))
-	for _, path := range poolMatches {
+	// A pool in the data dir supersedes a legacy one of the same name.
+	poolFiles := map[string]string{}
+	legacy, _ := filepath.Glob(filepath.Join(root, ".chunk", "*-pool.json"))
+	for _, path := range legacy {
+		poolFiles[strings.TrimSuffix(filepath.Base(path), "-pool.json")] = path
+	}
+	current, _ := filepath.Glob(filepath.Join(dataDir, "pools", "*.json"))
+	for _, path := range current {
+		poolFiles[strings.TrimSuffix(filepath.Base(path), ".json")] = path
+	}
+	for _, name := range slices.Sorted(maps.Keys(poolFiles)) {
+		path := poolFiles[name]
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -110,7 +122,6 @@ func loadSidecarsAndPools(dataDir, root, snapshotName string) ([]chunkd.SidecarS
 		if fi, err := os.Stat(path); err == nil {
 			mtime = fi.ModTime()
 		}
-		name := strings.TrimSuffix(filepath.Base(path), "-pool.json")
 		for i, id := range pool.SidecarIDs {
 			pools[id] = name
 			if at, exists := idx[id]; exists {

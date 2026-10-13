@@ -11,8 +11,8 @@ import (
 )
 
 // PrimaryPoolName names the one-sidecar pool that hosts a detached review. It
-// differs from PoolName so the primary's own pool of reviewers, which lives in
-// the primary's checkout, never collides with the laptop's state.
+// differs from PoolName so the primary's own pool of reviewers, kept in the
+// primary's data dir under PoolName, never collides with the laptop's state.
 const PrimaryPoolName = "review-primary"
 
 // RunsDir is where detached runs keep their files on the primary, relative to

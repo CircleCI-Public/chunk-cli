@@ -104,7 +104,7 @@ func TestReviewRunsEachPromptOnPool(t *testing.T) {
 	}
 	assert.Equal(t, reviews, 3)
 
-	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "review-pool.json"))
+	data, err := os.ReadFile(filepath.Join(projectDataDir(t, env, workDir), "pools", "review.json"))
 	assert.NilError(t, err)
 	var state struct {
 		SidecarIDs []string `json:"sidecar_ids"`

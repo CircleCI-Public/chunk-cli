@@ -23,11 +23,17 @@ import (
 )
 
 func TestPoolStatePath(t *testing.T) {
-	assert.Equal(t, poolStatePath("/my/project", "validate"), "/my/project/.chunk/validate-pool.json")
-	assert.Equal(t, poolStatePath("/my/project", "mutate"), "/my/project/.chunk/mutate-pool.json")
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	dataDir, err := config.ProjectDataDir("/my/project")
+	assert.NilError(t, err)
+
+	got, err := poolStatePath("/my/project", "validate")
+	assert.NilError(t, err)
+	assert.Equal(t, got, filepath.Join(dataDir, "pools", "validate.json"))
 }
 
 func TestPoolStateRoundTrip(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	dir := t.TempDir()
 
 	want := &poolState{
@@ -44,11 +50,40 @@ func TestPoolStateRoundTrip(t *testing.T) {
 	assert.Equal(t, got.Image, want.Image)
 }
 
-func TestSavePoolStateReturnsWriteError(t *testing.T) {
+func TestLoadPoolStateFallsBackToLegacyPath(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	dir := t.TempDir()
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".chunk"), nil, 0o600))
+	legacy := legacyPoolStatePath(dir, "validate")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(legacy), 0o700))
+	assert.NilError(t, os.WriteFile(legacy, []byte(`{"sidecar_ids":["sb-old"]}`), 0o600))
 
-	err := savePoolState(dir, "validate", &poolState{SidecarIDs: []string{"sb-1"}})
+	got, err := loadPoolState(dir, "validate")
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got.SidecarIDs, []string{"sb-old"})
+
+	// The new path wins once written, and the legacy file is left alone.
+	assert.NilError(t, savePoolState(dir, "validate", &poolState{SidecarIDs: []string{"sb-new"}}))
+	got, err = loadPoolState(dir, "validate")
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got.SidecarIDs, []string{"sb-new"})
+	_, err = os.Stat(legacy)
+	assert.NilError(t, err)
+
+	// Clearing removes both, so the legacy state cannot come back.
+	clearPoolState(dir, "validate")
+	_, err = loadPoolState(dir, "validate")
+	assert.Assert(t, errors.Is(err, os.ErrNotExist))
+}
+
+func TestSavePoolStateReturnsWriteError(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	dir := t.TempDir()
+	dataDir, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	assert.NilError(t, os.MkdirAll(dataDir, 0o700))
+	assert.NilError(t, os.WriteFile(filepath.Join(dataDir, "pools"), nil, 0o600))
+
+	err = savePoolState(dir, "validate", &poolState{SidecarIDs: []string{"sb-1"}})
 	assert.Assert(t, err != nil)
 }
 
@@ -107,6 +142,7 @@ func TestPoolAcquireTerminalSyncErrorWhenNothingAvailable(t *testing.T) {
 }
 
 func TestPoolStateMarshalFormat(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	dir := t.TempDir()
 
 	assert.NilError(t, savePoolState(dir, "validate", &poolState{
@@ -114,7 +150,9 @@ func TestPoolStateMarshalFormat(t *testing.T) {
 		RepoPath:   "/home/user/repo",
 	}))
 
-	raw, err := os.ReadFile(poolStatePath(dir, "validate"))
+	path, err := poolStatePath(dir, "validate")
+	assert.NilError(t, err)
+	raw, err := os.ReadFile(path)
 	assert.NilError(t, err)
 
 	var m map[string]json.RawMessage
@@ -124,6 +162,7 @@ func TestPoolStateMarshalFormat(t *testing.T) {
 }
 
 func TestPoolPersistStatePreservesStoredMetadata(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	dir := t.TempDir()
 	assert.NilError(t, savePoolState(dir, "validate", &poolState{
 		SidecarIDs: []string{"old"},
@@ -162,7 +201,18 @@ func TestMain(m *testing.M) {
 		_, err := OpenSession(ctx, client, sidecarID, retryOn404)
 		return err
 	}
-	os.Exit(m.Run())
+	// Pool state lives in the project data dir, which XDG_DATA_HOME overrides
+	// ahead of HOME. Pin it for the whole run, not per test, so neither a test
+	// that only isolates HOME nor a background sync that outlives its test
+	// writes into the developer's real data dir.
+	dataHome, err := os.MkdirTemp("", "chunk-pool-test-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv(config.EnvXDGDataHome, dataHome)
+	code := m.Run()
+	_ = os.RemoveAll(dataHome)
+	os.Exit(code)
 }
 
 func setupPoolTest(t *testing.T) poolTestEnv {

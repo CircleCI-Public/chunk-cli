@@ -88,9 +88,9 @@ func TestLoadSidecarsExpandsActivePoolMembers(t *testing.T) {
 func TestLoadSidecars_readsPoolState(t *testing.T) {
 	dataDir := t.TempDir()
 	root := t.TempDir()
-	chunkDir := filepath.Join(root, ".chunk")
-	assert.NilError(t, os.Mkdir(chunkDir, 0o755))
-	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["id1","id2"]}`)
+	poolsDir := filepath.Join(dataDir, "pools")
+	assert.NilError(t, os.Mkdir(poolsDir, 0o755))
+	writeSidecarJSON(t, poolsDir, "validate.json", `{"sidecar_ids":["id1","id2"]}`)
 
 	result, pools := loadSidecarsAndPools(dataDir, root, "")
 	assert.Equal(t, len(result), 2)
@@ -100,12 +100,31 @@ func TestLoadSidecars_readsPoolState(t *testing.T) {
 	assert.Equal(t, pools["id2"], "validate")
 }
 
-func TestLoadSidecars_readsPoolOrg(t *testing.T) {
+func TestLoadSidecars_readsLegacyPoolState(t *testing.T) {
 	dataDir := t.TempDir()
 	root := t.TempDir()
 	chunkDir := filepath.Join(root, ".chunk")
 	assert.NilError(t, os.Mkdir(chunkDir, 0o755))
-	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["id1"],"org_id":"pool-org"}`)
+	poolsDir := filepath.Join(dataDir, "pools")
+	assert.NilError(t, os.Mkdir(poolsDir, 0o755))
+	writeSidecarJSON(t, chunkDir, "mutate-pool.json", `{"sidecar_ids":["id1"]}`)
+	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["stale"]}`)
+	writeSidecarJSON(t, poolsDir, "validate.json", `{"sidecar_ids":["id2"]}`)
+
+	result, pools := loadSidecarsAndPools(dataDir, root, "")
+	assert.Equal(t, len(result), 2)
+	assert.Equal(t, pools["id1"], "mutate")
+	assert.Equal(t, pools["id2"], "validate")
+	_, hasStale := pools["stale"]
+	assert.Assert(t, !hasStale, "legacy file is skipped when the data dir has the same pool")
+}
+
+func TestLoadSidecars_readsPoolOrg(t *testing.T) {
+	dataDir := t.TempDir()
+	root := t.TempDir()
+	poolsDir := filepath.Join(dataDir, "pools")
+	assert.NilError(t, os.Mkdir(poolsDir, 0o755))
+	writeSidecarJSON(t, poolsDir, "validate.json", `{"sidecar_ids":["id1"],"org_id":"pool-org"}`)
 
 	result := loadSidecars(dataDir, root, "")
 	assert.Equal(t, len(result), 1)
@@ -115,13 +134,13 @@ func TestLoadSidecars_readsPoolOrg(t *testing.T) {
 func TestLoadSidecars_deduplicatesActiveAndPoolState(t *testing.T) {
 	dataDir := t.TempDir()
 	root := t.TempDir()
-	chunkDir := filepath.Join(root, ".chunk")
-	assert.NilError(t, os.Mkdir(chunkDir, 0o755))
+	poolsDir := filepath.Join(dataDir, "pools")
+	assert.NilError(t, os.Mkdir(poolsDir, 0o755))
 
 	writeSidecarJSON(t, dataDir, "sidecar.json", `{"sidecar_ids":["id1","id2"],"name":"active","session_id":"session-1","workspace":"/active/workspace"}`)
-	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["id2","id3"],"repo_path":"/pool/workspace"}`)
+	writeSidecarJSON(t, poolsDir, "validate.json", `{"sidecar_ids":["id2","id3"],"repo_path":"/pool/workspace"}`)
 	newer := time.Now().Add(time.Hour)
-	assert.NilError(t, os.Chtimes(filepath.Join(chunkDir, "validate-pool.json"), newer, newer))
+	assert.NilError(t, os.Chtimes(filepath.Join(poolsDir, "validate.json"), newer, newer))
 
 	result, pools := loadSidecarsAndPools(dataDir, root, "")
 	assert.Equal(t, len(result), 3)
