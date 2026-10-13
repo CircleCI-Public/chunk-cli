@@ -81,6 +81,47 @@ func TestScoreGivesEachProblemItsOwnFinding(t *testing.T) {
 	assert.Equal(t, got.Repeats(), 0)
 }
 
+func TestScorePairsAsManyProblemsAsItCan(t *testing.T) {
+	// Taking the first finding about each problem in turn would leave one
+	// problem missed in every case here, though each has a finding of its own.
+	for _, tc := range []struct {
+		name   string
+		expect []Expected
+		lines  []int
+		want   []string
+	}{
+		{
+			name:   "a finding about the whole file",
+			expect: []Expected{{File: "a.go", Lines: []int{105, 105}}, {File: "a.go", Lines: []int{61, 68}}},
+			lines:  []int{0, 105},
+			want:   []string{"expected a.go:105 x", "expected a.go x"},
+		},
+		{
+			name:   "a problem anywhere in the file",
+			expect: []Expected{{File: "a.go"}, {File: "a.go", Lines: []int{61, 68}}},
+			lines:  []int{64, 200},
+			want:   []string{"expected a.go:200 x", "expected a.go:64 x"},
+		},
+		{
+			name:   "overlapping lines",
+			expect: []Expected{{File: "a.go", Lines: []int{10, 20}}, {File: "a.go", Lines: []int{18, 25}}},
+			lines:  []int{19, 12},
+			want:   []string{"expected a.go:12 x", "expected a.go:19 x"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var fs []review.Finding
+			for _, l := range tc.lines {
+				fs = append(fs, finding("a.go", l, review.SeverityHigh))
+			}
+			got := Score(Case{Name: "c", Expect: tc.expect}, 1, []review.Result{reviewed("x", fs...)})
+			assert.DeepEqual(t, where(got.Problems), tc.want)
+			assert.Equal(t, got.Caught(), 2)
+			assert.Equal(t, len(got.Missed), 0)
+		})
+	}
+}
+
 func TestScoreKeepsUnlistedProblemsApartByLine(t *testing.T) {
 	got := Score(Case{Name: "clean"}, 1, []review.Result{
 		reviewed("x", finding("a.go", 10, review.SeverityHigh), finding("a.go", 20, review.SeverityHigh)),

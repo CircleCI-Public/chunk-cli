@@ -111,45 +111,83 @@ func Score(c Case, run int, results []review.Result) CaseResult {
 		}
 	}
 
-	// Each expected problem first takes the first finding about it that no
-	// other has taken, so two problems in one file are caught by two findings
-	// rather than both by one.
-	used := make([]bool, len(blocking))
+	// Each expected problem first takes a finding about it of its own, so two
+	// problems in one file are caught by two findings rather than both by one.
+	owner := matchExpected(c.Expect, blocking)
+	var members [][]int // per problem, its findings' indexes in blocking
 	for i := range c.Expect {
-		e := &c.Expect[i]
-		j := -1
-		for k, f := range blocking {
-			if !used[k] && matches(*e, f) {
-				j = k
-				break
-			}
-		}
+		j := slices.Index(owner, i)
 		if j < 0 {
-			out.Missed = append(out.Missed, *e)
+			out.Missed = append(out.Missed, c.Expect[i])
 			continue
 		}
-		used[j] = true
-		out.Problems = append(out.Problems, Problem{Expected: e, Findings: []review.Finding{blocking[j]}})
+		out.Problems = append(out.Problems, Problem{Expected: &c.Expect[i]})
+		members = append(members, []int{j})
 	}
 	// The rest join the expected problem they are about, or the unlisted
 	// problem an earlier finding near them reported, or report a new one.
 	for j, f := range blocking {
-		if used[j] {
+		if owner[j] >= 0 {
 			continue
 		}
-		i := slices.IndexFunc(out.Problems, func(p Problem) bool {
-			if p.Expected != nil {
-				return matches(*p.Expected, f)
+		i := -1
+		for k, p := range out.Problems {
+			if p.Expected != nil && matches(*p.Expected, f) || p.Expected == nil && sameProblem(blocking[members[k][0]], f) {
+				i = k
+				break
 			}
-			return sameProblem(p.Findings[0], f)
-		})
-		if i < 0 {
-			out.Problems = append(out.Problems, Problem{Findings: []review.Finding{f}})
-			continue
 		}
-		out.Problems[i].Findings = append(out.Problems[i].Findings, f)
+		if i < 0 {
+			out.Problems = append(out.Problems, Problem{})
+			members = append(members, nil)
+			i = len(members) - 1
+		}
+		members[i] = append(members[i], j)
+	}
+	for i, m := range members {
+		slices.Sort(m)
+		for _, j := range m {
+			out.Problems[i].Findings = append(out.Problems[i].Findings, blocking[j])
+		}
 	}
 	return out
+}
+
+// matchExpected pairs expected problems with blocking findings about them, one
+// finding each, pairing as many as can be. Each takes the first finding no
+// other has; only when none is left does an earlier problem give up its
+// finding for another it can take. It returns, for each
+// finding, the index of the expected problem it is paired with, or -1.
+func matchExpected(expect []Expected, findings []review.Finding) []int {
+	owner := make([]int, len(findings))
+	for k := range owner {
+		owner[k] = -1
+	}
+	var assign func(i int, seen []bool) bool
+	assign = func(i int, seen []bool) bool {
+		for k, f := range findings {
+			if owner[k] < 0 && !seen[k] && matches(expect[i], f) {
+				seen[k] = true
+				owner[k] = i
+				return true
+			}
+		}
+		for k, f := range findings {
+			if seen[k] || !matches(expect[i], f) {
+				continue
+			}
+			seen[k] = true
+			if assign(owner[k], seen) {
+				owner[k] = i
+				return true
+			}
+		}
+		return false
+	}
+	for i := range expect {
+		assign(i, make([]bool, len(findings)))
+	}
+	return owner
 }
 
 // matches reports whether f is about e: the same file, and a line within e's
