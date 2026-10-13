@@ -116,7 +116,7 @@ func (c *Case) check(dir string, seen map[string]bool) error {
 	if strings.TrimSpace(c.Request) == "" {
 		return fmt.Errorf("case %s: no request", c.Name)
 	}
-	if c.Patch == "" || filepath.IsAbs(c.Patch) {
+	if !filepath.IsLocal(c.Patch) {
 		return fmt.Errorf("case %s: patch must be a path inside the suite directory", c.Name)
 	}
 	patch, err := os.ReadFile(filepath.Join(dir, c.Patch))
@@ -168,10 +168,10 @@ func checkApplies(ctx context.Context, root string, c Case) error {
 
 	git := gitexec.Runner{Dir: root, Env: append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(scratch, "index"))}
 	if out, err := git.CombinedOutput(ctx, "read-tree", c.Revision+"^{tree}"); err != nil {
-		return fmt.Errorf("revision %s is not in this repository: %s", c.Revision, strings.TrimSpace(string(out)))
+		return fmt.Errorf("revision %s is not in this repository: %w: %s", c.Revision, err, strings.TrimSpace(string(out)))
 	}
 	if out, err := git.CombinedOutput(ctx, "apply", "--cached", "--check", patch); err != nil {
-		return fmt.Errorf("patch %s does not apply to %s: %s", c.Patch, c.Revision, strings.TrimSpace(string(out)))
+		return fmt.Errorf("patch %s does not apply to %s: %w: %s", c.Patch, c.Revision, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

@@ -95,6 +95,7 @@ func TestLoadSuiteRejectsBadCases(t *testing.T) {
 		{"no revision", func(c *Case) { c.Revision = "" }, "no revision"},
 		{"no request", func(c *Case) { c.Request = " " }, "no request"},
 		{"absolute patch", func(c *Case) { c.Patch = "/etc/passwd" }, "inside the suite directory"},
+		{"escaping patch", func(c *Case) { c.Patch = "../patches/ok.patch" }, "inside the suite directory"},
 		{"missing patch", func(c *Case) { c.Patch = "patches/nope.patch" }, "read patch"},
 		{"empty patch", func(c *Case) { c.Patch = "patches/empty.patch" }, "patch is empty"},
 		{"no file", func(c *Case) { c.Expect = []Expected{{About: "x"}} }, "names no file"},
