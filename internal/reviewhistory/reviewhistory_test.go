@@ -75,6 +75,13 @@ func TestFetchDefaultsToTheLastNinetyDays(t *testing.T) {
 	assert.Assert(t, !h.Since.Before(before) && h.Since.Before(time.Now()), "since %s", h.Since)
 }
 
+func TestFetchLeavesOutCommentsBeforeSince(t *testing.T) {
+	h, err := fetchFromFake(t, fixtures.MultiReviewerResponse(), Options{Since: time.Now().Add(24 * time.Hour)})
+
+	assert.NilError(t, err)
+	assert.Equal(t, h.Comments(), 0)
+}
+
 func TestFetchNamesTheRepoWhenGitHubCannotFindIt(t *testing.T) {
 	gh := fakes.NewFakeGitHub()
 	gh.SetRepoError("test-repo", fixtures.RepoNotFoundError("test-org", "test-repo"))

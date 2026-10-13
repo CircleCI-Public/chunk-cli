@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -239,6 +240,69 @@ func TestFactoryBootstrapUsesTheTeamsReviewHistory(t *testing.T) {
 	data, err := os.ReadFile(files[0])
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(data), "> Consider using early return here to reduce nesting"), string(data))
+}
+
+// --top keeps only the most active reviewers' comments.
+func TestFactoryBootstrapKeepsTheTopReviewers(t *testing.T) {
+	env, _, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	gh := fakes.NewFakeGitHub()
+	gh.SetReviewActivity("test-repo", fixtures.MultiReviewerResponse())
+	ghSrv := httptest.NewServer(gh)
+	t.Cleanup(ghSrv.Close)
+	env.GithubURL = ghSrv.URL
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--json", "--top", "1"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	var report struct {
+		ReviewComments int `json:"review_comments"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
+	assert.Equal(t, report.ReviewComments, 3)
+}
+
+// --since leaves out the comments made before it.
+func TestFactoryBootstrapOnlyUsesCommentsSinceTheGivenDate(t *testing.T) {
+	env, _, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	gh := fakes.NewFakeGitHub()
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+	ghSrv := httptest.NewServer(gh)
+	t.Cleanup(ghSrv.Close)
+	env.GithubURL = ghSrv.URL
+	since := time.Now().AddDate(0, 0, -10).Format(time.DateOnly)
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--json", "--since", since}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "since "+since), "stderr: %s", result.Stderr)
+	var report struct {
+		ReviewComments int `json:"review_comments"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
+	assert.Equal(t, report.ReviewComments, 0)
+}
+
+// A bad --since or --top fails before any sidecar boots.
+func TestFactoryBootstrapRejectsBadHistoryFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "since", args: []string{"--since", "31/01/2026"}, want: "--since must be a date"},
+		{name: "top", args: []string{"--top", "0"}, want: "--top must be at least 1, not 0."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env, cci, workDir := setupReviewProject(t, nil)
+
+			result := binary.RunCLI(t, append([]string{"factory", "bootstrap"}, tt.args...), env, workDir)
+
+			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+			assert.Assert(t, strings.Contains(result.Stderr, tt.want), "stderr: %s", result.Stderr)
+			assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+		})
+	}
 }
 
 // Without a GitHub token there is no history to fetch, and bootstrap goes on
