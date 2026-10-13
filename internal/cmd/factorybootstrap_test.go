@@ -31,3 +31,10 @@ func TestFactoryBootstrapEmptyTemplateIsUnknown(t *testing.T) {
 
 	assert.ErrorIs(t, err, factory.ErrUnknownTemplate)
 }
+
+func TestFactoryEvalIsRegisteredUnderFactoryAndHidden(t *testing.T) {
+	cmd, _, err := newFactoryCmd().Find([]string{"eval"})
+	assert.NilError(t, err)
+	assert.Equal(t, cmd.Name(), "eval")
+	assert.Assert(t, cmd.Hidden)
+}

@@ -415,3 +415,21 @@ func TestFactoryBootstrapLeavesExistingPromptsAlone(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), "review mine")
 }
+
+// A suite that cannot run here is refused before any sidecar starts: no
+// CircleCI is configured, so getting further would fail differently.
+func TestFactoryEvalRefusesCasesThatCannotRun(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	suite := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(suite, "case.patch"), []byte("diff --git a/x b/x\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(suite, "suite.json"), []byte(`{"cases": [
+		{"name": "gone", "revision": "0000000000000000000000000000000000000000", "request": "r", "patch": "case.patch"}
+	]}`), 0o644))
+
+	result := binary.RunCLI(t, []string{"factory", "eval", "--suite", suite}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "Some cases cannot run in this repository."), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "case gone: revision 0000000000000000000000000000000000000000 is not in this repository"), "stderr: %s", result.Stderr)
+}

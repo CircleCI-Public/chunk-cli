@@ -158,15 +158,25 @@ chunk
 │   │   --log-file <path>           # Keep the log in this file instead (implies --log)
 │   │   --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │   │   --json                      # Output as JSON
-│   └── bootstrap                   # Write a first set of review prompts for this project
-│       --output <dir>              # Directory to write them to (default: .chunk/reviews)
+│   ├── bootstrap                   # Write a first set of review prompts for this project
+│   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
+│   │   --org-id <id>               # Organization ID
+│   │   --image <id>                # Sidecar image with Claude Code (default: cimg-base:2026.09-claude)
+│   │   --model <name>              # Claude model (default: Claude Code's default)
+│   │   --timeout <duration>        # Max time for writing the prompts (default: 30m)
+│   │   --no-history                # Leave out the team's review comments from GitHub
+│   │   --since <YYYY-MM-DD>        # Use review comments from this date on (default: 90 days ago)
+│   │   --top <n>                   # Use review comments from this many reviewers (default: 5)
+│   │   --json                      # Output as JSON
+│   └── eval [prompts-dir]          # (hidden) Score review prompts against a suite of changes with known problems
+│       --suite <dir>               # Directory with suite.json and its patches (required)
+│       --runs <n>                  # Times to review each case (default: 1)
+│       --parallelism <n>           # Maximum number of sidecars (0: one per prompt)
+│       --output <path>             # Also write the full report as JSON to this file
 │       --org-id <id>               # Organization ID
-│       --image <id>                # Sidecar image with Claude Code (default: cimg-base:2026.09-claude)
-│       --model <name>              # Claude model (default: Claude Code's default)
-│       --timeout <duration>        # Max time for writing the prompts (default: 30m)
-│       --no-history                # Leave out the team's review comments from GitHub
-│       --since <YYYY-MM-DD>        # Use review comments from this date on (default: 90 days ago)
-│       --top <n>                   # Use review comments from this many reviewers (default: 5)
+│       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
+│       --model <name>              # Claude model for reviews (default: Claude Code's default)
+│       --timeout <duration>        # Max time for each review
 │       --json                      # Output as JSON
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
@@ -399,6 +409,29 @@ chunk
   credential is needed, and the same overwrite refusal applies. An unknown name
   is refused with the list of sets. It cannot be combined with `--org-id`,
   `--image`, `--model` or `--timeout`.
+- **`factory eval` scores review prompts, and is hidden.** It is for tuning
+  prompts and what writes them, such as bootstrap, not for everyday use. A suite
+  is a directory with a `suite.json` of cases, each a patch to the repository at
+  a pinned `revision`, the `request` it answers, and the problems a review should
+  find (`expect`: a `file`, optional `lines` as `[first, last]`, and `about`). A
+  case with no `expect` is clean. Every case's revision and patch are checked
+  against the repository before any sidecar starts. Each case is put on every
+  sidecar of its own pool (`factory-eval`, destroyed when it ends) as factory
+  leaves a reviewer: the revision's tree committed as the baseline, the patch
+  uncommitted on top. The prompts are sent as factory's first round sends them,
+  with no implementer. Only high and medium findings count, grouped into the
+  problems they are about, so a problem several prompts report counts once. A
+  finding is about an expected problem when it names the same file and, if the
+  problem has lines, a line within three of them; each expected problem takes a
+  finding of its own first. Other findings are about the same problem as an
+  earlier one in the same file within three lines, or about the file as a whole.
+  Problems the suite does not list are unexpected: on a clean case they would
+  send sound work back, and on another they may be real, so precision, the share
+  of reported problems the suite lists, is a floor. Each prompt's row counts
+  every problem it reported, and how many of those another prompt reported too. A
+  case whose setup or any review fails is reported and left out of the totals
+  rather than scored on the reviews that ran. A missing Claude Code or a rejected
+  credential stops the suite.
 - **`watch` is organized around runs.** Factory runs are listed at the top of
   the left pane, live ones first, then up to five that ended in the last day;
   sidecars are listed below them, and `↑/↓` moves through both as one list. The

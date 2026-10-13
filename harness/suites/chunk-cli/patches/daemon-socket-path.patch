@@ -1,0 +1,98 @@
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index d39ac363..c615892a 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -312,7 +312,7 @@ JSON over a Unix socket at `~/.chunk/watchd/watchd.sock`
+ 
+ | Variable | Default | Purpose |
+ |---|---|---|
+-| `CHUNK_WATCHD_DIR` | `~/.chunk/watchd/` | Override the directory for the socket, pid file and log |
++| `CHUNK_WATCHD_DIR` | `~/.chunk/watchd/` | Override the directory for the socket, pid file and log. The socket path (`<dir>/watchd.sock`) must fit the OS limit (104 bytes on macOS, 108 on Linux); a longer one is refused up front with this variable named as the fix |
+ | `CHUNK_WATCHD_TCP_ADDR` | _(disabled)_ | Bind a TCP listener on this address in addition to the Unix socket (e.g. `127.0.0.1:7777`); requires `CHUNK_WATCHD_TCP_TOKEN` |
+ | `CHUNK_WATCHD_REMOTE_ADDR` | _(local socket)_ | Connect to a remote daemon at this TCP address instead of the local socket (e.g. `127.0.0.1:7777` via an SSH tunnel) |
+ | `CHUNK_WATCHD_TCP_TOKEN` | _(required when TCP is enabled)_ | Bearer token required on every TCP request; set the same value on the daemon and all clients. TCP traffic is not encrypted — use an SSH tunnel (`ssh -L`) when the daemon is not on loopback. |
+diff --git a/internal/watchd/ipc_test.go b/internal/watchd/ipc_test.go
+index a63fcfcf..c6b0f555 100644
+--- a/internal/watchd/ipc_test.go
++++ b/internal/watchd/ipc_test.go
+@@ -11,6 +11,7 @@ import (
+ 	neturl "net/url"
+ 	"os"
+ 	"path/filepath"
++	"strings"
+ 	"syscall"
+ 	"testing"
+ 	"time"
+@@ -660,3 +661,21 @@ func TestConflictReportIsKnownWithNoAnswerBeforeTheFirstCheck(t *testing.T) {
+ 	assert.Check(t, cmp.Equal(ConflictNotice(report), ""))
+ 	assert.Check(t, cmp.Contains(ConflictStatus(report), "No conflict check has completed"))
+ }
++
++func TestSocketPathTooLongIsReportedUpFront(t *testing.T) {
++	long := filepath.Join(t.TempDir(), strings.Repeat("d", maxSocketPath()))
++	t.Setenv("CHUNK_WATCHD_DIR", long)
++
++	_, err := SocketPath()
++	assert.ErrorContains(t, err, "too long")
++	assert.ErrorContains(t, err, "CHUNK_WATCHD_DIR")
++	assert.ErrorContains(t, err, long)
++
++	// The launch path fails the same way, before any daemon is spawned.
++	err = EnsureRunning([]string{"unused"})
++	assert.ErrorContains(t, err, "CHUNK_WATCHD_DIR")
++
++	t.Setenv("CHUNK_WATCHD_DIR", socketDir(t))
++	_, err = SocketPath()
++	assert.NilError(t, err)
++}
+diff --git a/internal/watchd/paths.go b/internal/watchd/paths.go
+index 2603c1f0..dfe598fc 100644
+--- a/internal/watchd/paths.go
++++ b/internal/watchd/paths.go
+@@ -4,8 +4,33 @@ import (
+ 	"fmt"
+ 	"os"
+ 	"path/filepath"
++	"runtime"
+ )
+ 
++// maxSocketPath returns the size of the kernel's Unix socket path buffer: 104
++// bytes on macOS and the BSDs, 108 on Linux. The path and its terminating NUL
++// must fit, so a path of that many bytes or more cannot be bound.
++func maxSocketPath() int {
++	switch runtime.GOOS {
++	case "darwin", "freebsd", "netbsd", "openbsd", "dragonfly":
++		return 104
++	}
++	return 108
++}
++
++// checkSocketPath fails with an actionable message when path is too long to bind
++// as a Unix socket. Without this the daemon dies with "bind: invalid argument"
++// in its own log and the CLI can only report that the daemon did not start.
++func checkSocketPath(path string) error {
++	limit := maxSocketPath()
++	if len(path) < limit {
++		return nil
++	}
++	return fmt.Errorf("the watch daemon's socket path is too long (%d bytes, the limit is %d): %s\n"+
++		"set CHUNK_WATCHD_DIR to a shorter directory, for example CHUNK_WATCHD_DIR=/tmp/chunk-watchd",
++		len(path), limit-1, path)
++}
++
+ func watchdDir() (string, error) {
+ 	if override := os.Getenv("CHUNK_WATCHD_DIR"); override != "" {
+ 		return override, nil
+@@ -41,7 +66,11 @@ func SocketPath() (string, error) {
+ 	if err != nil {
+ 		return "", err
+ 	}
+-	return filepath.Join(d, "watchd.sock"), nil
++	sock := filepath.Join(d, "watchd.sock")
++	if err := checkSocketPath(sock); err != nil {
++		return "", err
++	}
++	return sock, nil
+ }
+ 
+ // LogPath returns the path to the daemon log file.
