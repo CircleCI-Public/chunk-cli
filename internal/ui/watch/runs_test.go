@@ -126,12 +126,15 @@ func TestSplitRunSidecarsDoesNotMixRunsWithTheSameFactoryID(t *testing.T) {
 	assert.Equal(t, byRun["session-b"][0].id, "sidecar-b")
 }
 
-// The factory run's pane shows the work a round did, each check and review,
-// where the work is, and fits the screen however short it is.
+// The factory run's pane says where the run stands, shows the round that
+// matters in full and the finished ones in a line, keeps the infrastructure
+// folded until asked for, and fits the screen however short it is.
 func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	ended := time.Now()
 	r.s.Rounds = []chunkd.Round{{
-		Number: 1, State: chunkd.RoundDone, Note: "1 of 3 checks passed",
+		Number: 1, State: chunkd.RoundDone, Note: "1 of 3 checks passed", Findings: 2, Worth: 1,
+		StartedAt: ended.Add(-time.Minute), EndedAt: &ended,
 		Implement: &chunkd.RoundImplement{State: chunkd.ImplementApplied, DurationMS: 4000, CostUSD: 0.41, Stat: "3 files changed"},
 		Checks: []chunkd.RoundCheck{
 			{Name: "test", Status: "passed", DurationMS: 1000},
@@ -154,13 +157,120 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 			continue
 		}
 		for _, want := range []string{
-			"Add a --verbose flag", "round 2/3", "/tmp/wt/abc", "Round 1", "Round 2",
-			"implement", "$0.41", "3 files changed", "test", "lint", "review: bugs", "2 findings",
-			"1 of 3 checks passed", "syncing the implementer",
+			"Add a --verbose flag", "Round 2 (max 3) · implementing", "$0.41",
+			"Round 1", "1 of 3 checks passed", "2 findings, 1 worth changing", "Round 2", "implement", "▸ infra",
 		} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 		}
-		assert.Assert(t, !strings.Contains(out, "not built yet"), "stages nothing runs are not shown:\n%s", out)
+		// The finished round is a line; infrastructure is folded.
+		for _, absent := range []string{"review: bugs", "lint", "/tmp/wt/abc", "syncing the implementer", "not built yet"} {
+			assert.Assert(t, !strings.Contains(out, absent), "unexpected %q:\n%s", absent, out)
+		}
+
+		m, _ = press(m, 'i')
+		out = m.render()
+		for _, want := range []string{"▾ infra", "/tmp/wt/abc", "syncing the implementer"} {
+			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A finished round opens and closes on Space, from its header or from a row
+// inside it, and the selection stays on the header.
+func TestRoundsOpenAndCloseAndKeepTheSelectionOnTheHeader(t *testing.T) {
+	r := failedRun()
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+	run := m.selectedRun()
+	// The ended run opens its failing round, 2, and no other.
+	assert.Assert(t, !m.roundOpen(run.s, 0) && m.roundOpen(run.s, 1) && !m.roundOpen(run.s, 2))
+	assert.Equal(t, len(m.runItems(run.s)), 3+3, "three headers and round 2's implementer and two checks")
+
+	m, _ = press(m, ' ')
+	assert.Assert(t, m.roundOpen(m.selectedRun().s, 0), "space on the first header opens it")
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "▾ Round 1") && strings.Contains(out, "unit tests"), out)
+
+	// From a row inside round 2: space closes the round and selects its header.
+	m, _ = press(m, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown) // header 1 → implement, lint(round 1), test, header 2... walk to a row of round 2
+	items := m.runItems(m.selectedRun().s)
+	for items[m.runItem].round != 1 || items[m.runItem].kind != itemCheck {
+		m, _ = press(m, tea.KeyDown)
+	}
+	m, _ = press(m, ' ')
+	items = m.runItems(m.selectedRun().s)
+	assert.Assert(t, !m.roundOpen(m.selectedRun().s, 1))
+	assert.Equal(t, items[m.runItem].kind, itemRound)
+	assert.Equal(t, items[m.runItem].round, 1)
+
+	// Enter on a header toggles too.
+	m, _ = press(m, tea.KeyEnter)
+	assert.Assert(t, m.roundOpen(m.selectedRun().s, 1))
+}
+
+func failedRun() sessionInfo {
+	r := factoryRun("abc", chunkd.SessionDone, time.Now().Add(-time.Hour))
+	ended := time.Now()
+	r.s.EndedAt = &ended
+	r.s.Stages[0].State, r.s.Stages[0].Note = chunkd.StageFailed, "checks still failed after 3 round(s)"
+	r.s.Factory.Result, r.s.Factory.Committed = "exhausted", true
+	r.s.Factory.Branch, r.s.Factory.Log = "chunk/factory/abc", "/tmp/run.log"
+	round := func(n int, lint string) chunkd.Round {
+		return chunkd.Round{
+			Number: n, State: chunkd.RoundDone,
+			Implement: &chunkd.RoundImplement{State: chunkd.ImplementApplied, CostUSD: 0.5},
+			Checks:    []chunkd.RoundCheck{{Name: "lint", Status: lint}, {Name: "unit tests", Status: "passed"}},
+		}
+	}
+	r.s.Rounds = []chunkd.Round{round(1, "passed"), round(2, "failed"), round(3, "passed")}
+	return r
+}
+
+// An ended run that did not pass says what stopped it, opens the round that
+// failed rather than the last, and says how to carry on.
+func TestEndedFailedRunNamesTheBlockerAndTheNextStep(t *testing.T) {
+	m := sessModel(failedRun())
+	m.selRun = "abc"
+	out := stripANSI(m.render())
+	for _, want := range []string{
+		"checks still failed after 3 round(s) · blocked by lint", "$1.50",
+		"▾ Round 2", "▸ Round 1", "▸ Round 3",
+		"branch", "chunk/factory/abc", "next", "chunk factory build --continue abc",
+	} {
+		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+	}
+	assert.Assert(t, !strings.Contains(out, "/tmp/run.log"), "the log is infrastructure:\n%s", out)
+}
+
+// The title, status and outcome hold their place on a short terminal while the
+// rounds between them give way.
+func TestShortTerminalKeepsStatusAndOutcomeInView(t *testing.T) {
+	m := sessModel(failedRun())
+	m.selRun = "abc"
+	m.height = 16
+	out := m.render()
+	assert.Assert(t, strings.Count(out, "\n") <= 16, out)
+	for _, want := range []string{"blocked by lint", "chunk factory build --continue abc"} {
+		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+	}
+}
+
+// A long prompt wraps onto a few lines instead of being cut to one, and no line
+// of the pane runs past the terminal.
+func TestLongPromptWrapsAndPaneStaysWithinTheTerminal(t *testing.T) {
+	r := failedRun()
+	r.s.Factory.Prompt = strings.Repeat("refactor the helper so that ", 12)
+	for _, width := range []int{70, 110, 160} {
+		m := sessModel(r)
+		m.selRun = "abc"
+		m.width = width
+		out := m.render()
+		assert.Assert(t, strings.Count(out, "refactor the helper") > 1, "the prompt is wrapped over lines:\n%s", out)
+		assert.Assert(t, strings.Contains(out, "…"), "a prompt past three lines is cut with an ellipsis:\n%s", out)
+		for i, line := range strings.Split(out, "\n") {
+			assert.Assert(t, lipgloss.Width(line) <= width, "width %d line %d is %d columns", width, i, lipgloss.Width(line))
+		}
 	}
 }
 
@@ -176,9 +286,11 @@ func TestEndedFactoryRunSaysWhereItsWorkIs(t *testing.T) {
 	m := sessModel(r)
 	m.selRun = "abc"
 	out := m.render()
-	for _, want := range []string{"still failing", "checks still failed after 3 round(s)", "chunk/factory/abc", "committed · 2 files changed, 10 insertions(+)", "/tmp/run.log"} {
+	for _, want := range []string{"still failing", "checks still failed after 3 round(s)", "chunk/factory/abc", "committed · 2 files changed, 10 insertions(+)", "chunk factory build --continue abc"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 	}
+	m, _ = press(m, 'i')
+	assert.Assert(t, strings.Contains(m.render(), "/tmp/run.log"), "the log is under infra:\n%s", m.render())
 }
 
 func TestNoRunsLeavesTheSidecarPaneAsItWas(t *testing.T) {
@@ -242,7 +354,7 @@ func TestRunItemsOpenTheirOutput(t *testing.T) {
 	}}
 	m := sessModel(r)
 	m.selRun = "abc"
-	m, _ = press(m, tea.KeyRight)
+	m, _ = press(m, tea.KeyRight, tea.KeyDown) // past the round's header
 
 	// The implementer's turn and a failed check open what the snapshot holds.
 	m, cmd := press(m, tea.KeyEnter)

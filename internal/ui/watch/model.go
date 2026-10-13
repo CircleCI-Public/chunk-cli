@@ -234,6 +234,11 @@ type Model struct {
 	runItem    int
 	runConfirm string
 	runNote    string
+	// runOpen is the rounds of each run (by run ID) the user opened or closed,
+	// over the default of showing only the round that matters. runDetails shows
+	// the infrastructure under a run: its worktree, sidecars and setup log.
+	runOpen    map[string]map[int]bool
+	runDetails bool
 	// spinning is true while a spinner tick chain is in flight, so a poll that
 	// finds something running after a quiet spell can start one without doubling
 	// up on a chain that never stopped.
@@ -318,7 +323,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m = m.moveSelection(run, -1)
 	case key.Matches(msg, k.Open):
 		if run != nil {
-			return m.openRunItem(run, runItems(run.s))
+			return m.openRunItem(run, m.runItems(run.s))
 		}
 		// Enter opens output when the invocation has any; otherwise it falls
 		// back to expand/collapse, so the key never feels dead.
@@ -327,7 +332,13 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m = m.toggleSelectedInvoc()
 	case key.Matches(msg, k.Toggle):
+		if run != nil {
+			m = m.toggleRound(run)
+			break
+		}
 		m = m.toggleSelectedInvoc()
+	case key.Matches(msg, k.Details):
+		m.runDetails = !m.runDetails
 	}
 	return m, nil
 }
@@ -339,7 +350,7 @@ func (m Model) moveSelection(run *sessionInfo, delta int) Model {
 	case m.focusedPane == paneLeft:
 		return m.moveLeftSelection(delta)
 	case run != nil:
-		m.runItem = min(max(m.runItem+delta, 0), max(len(runItems(run.s))-1, 0))
+		m.runItem = min(max(m.runItem+delta, 0), max(len(m.runItems(run.s))-1, 0))
 	default:
 		m.rightSelectedIdx = max(m.rightSelectedIdx+delta, 0)
 	}
@@ -422,7 +433,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reviewAuthErr = msg.reviewAuthErr
 		m = m.reselectRun()
 		if run := m.selectedRun(); run != nil {
-			m.runItem = min(m.runItem, max(len(runItems(run.s))-1, 0))
+			m.runItem = min(m.runItem, max(len(m.runItems(run.s))-1, 0))
 		}
 		// Sidecars are re-sorted by recency each poll, so track the selection
 		// by id. An unknown id (first poll, or the sidecar aged out) falls back

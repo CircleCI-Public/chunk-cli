@@ -14,6 +14,7 @@ type keyMap struct {
 	Left, Right key.Binding
 	Open        key.Binding
 	Toggle      key.Binding
+	Details     key.Binding
 	Cancel      key.Binding
 	// Back is Esc: back to the list from the right pane, and quit from the
 	// list. It goes unlisted, since q and ← already say both.
@@ -34,6 +35,7 @@ func (m Model) keys() keyMap {
 		Right:     key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "details")),
 		Open:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
 		Toggle:    key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
+		Details:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "infra")),
 		Cancel:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
 		Back:      key.NewBinding(key.WithKeys("esc")),
 		Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
@@ -42,8 +44,12 @@ func (m Model) keys() keyMap {
 	k.Left.SetEnabled(right)
 	k.Right.SetEnabled(!right)
 	k.Open.SetEnabled(right)
-	k.Toggle.SetEnabled(right && run == nil)
+	k.Toggle.SetEnabled(right)
+	k.Details.SetEnabled(run != nil)
 	k.Cancel.SetEnabled(run != nil && !run.s.State.Finished())
+	if run != nil {
+		k.Toggle.SetHelp("Space", "expand/collapse")
+	}
 	if run == nil {
 		k.Right.SetHelp("→", "activity")
 		if right {
@@ -55,7 +61,7 @@ func (m Model) keys() keyMap {
 
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Right, k.Open, k.Toggle, k.Cancel, k.Left, k.Quit}
+	return []key.Binding{k.Up, k.Right, k.Open, k.Toggle, k.Details, k.Cancel, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

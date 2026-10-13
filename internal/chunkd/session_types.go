@@ -2,6 +2,7 @@ package chunkd
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -210,6 +211,23 @@ const (
 	// ResultNoChange means the implementer's work is empty.
 	ResultNoChange = "no_change"
 )
+
+// Continuable reports whether the run stopped with committed work whose
+// checks still fail, which a later run can pick up.
+func (f *FactoryRun) Continuable() bool {
+	failing := f.Result == ResultExhausted || f.Result == ResultStuck
+	return failing && f.Committed && f.Branch != ""
+}
+
+// ContinueCommand is the command that carries the run on. The branch ends in
+// the run's ID, which names the record a continued run reads.
+func (f *FactoryRun) ContinueCommand() string {
+	id := f.Branch
+	if i := strings.LastIndexByte(id, '/'); i >= 0 {
+		id = id[i+1:]
+	}
+	return "chunk factory build --continue " + id
+}
 
 // How a check came out, as ReviewResult.Status and RoundCheck.Status.
 const (

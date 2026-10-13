@@ -233,30 +233,15 @@ const (
 	itemImplement runItemKind = iota
 	itemCheck
 	itemReview
+	itemRound
 )
 
-// runItem is one selectable row of the run pane.
+// runItem is one selectable row of the run pane: a round, which opens and
+// closes, or a row inside an open one.
 type runItem struct {
 	kind  runItemKind
 	round int // index into Session.Rounds
 	idx   int // index into the round's Checks or Reviews
-}
-
-// runItems lists a run's selectable rows in the order the pane draws them.
-func runItems(s chunkd.Session) []runItem {
-	var items []runItem
-	for ri, r := range s.Rounds {
-		if r.Implement != nil {
-			items = append(items, runItem{kind: itemImplement, round: ri})
-		}
-		for i := range r.Checks {
-			items = append(items, runItem{kind: itemCheck, round: ri, idx: i})
-		}
-		for i := range r.Reviews {
-			items = append(items, runItem{kind: itemReview, round: ri, idx: i})
-		}
-	}
-	return items
 }
 
 // openRunItem opens the output behind the selected row: a review's buffered
@@ -269,6 +254,8 @@ func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cm
 	it := items[m.runItem]
 	r := run.s.Rounds[it.round]
 	switch it.kind {
+	case itemRound:
+		return m.toggleRound(run), nil
 	case itemReview:
 		rv := r.Reviews[it.idx]
 		if rv.CommandID == "" {
@@ -442,140 +429,6 @@ func sessionElapsed(s chunkd.Session) time.Duration {
 	return time.Since(s.StartedAt)
 }
 
-// runHeadline says where a run stands, for the top of its pane.
-func runHeadline(st watchStyles, s chunkd.Session) string {
-	note := ""
-	if len(s.Stages) > 0 {
-		note = strings.Join(strings.Fields(s.Stages[0].Note), " ")
-	}
-	switch s.State {
-	case chunkd.SessionRunning:
-		if f := s.Factory; f != nil && f.Attempts > 0 {
-			return st.running(fmt.Sprintf("running · round %d of at most %d", max(len(s.Rounds), 1), f.Attempts))
-		}
-		return st.running("running")
-	case chunkd.SessionCancelled:
-		return st.warning("cancelled")
-	case chunkd.SessionFailed:
-		return st.err("failed")
-	case chunkd.SessionDone:
-	}
-	if note == "" {
-		note = runOutcome(s)
-	}
-	if loopFailed(s) {
-		return st.err(note)
-	}
-	return st.success(note)
-}
-
-// ---- right pane: the selected run ----------------------------------------------
-
-// renderRunPane draws the selected run: where it stands and where its work
-// is, then each round's implementer turn, checks and reviews, then the
-// run's latest progress and its sidecars. It is windowed so the selected row
-// stays on screen.
-func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []string {
-	s := run.s
-	title := st.vdim("run")
-	if m.focusedPane == paneRight {
-		title = st.emphasis("run")
-	}
-	title += "  " + st.muted(sessionTitle(run))
-	head := make([]string, 0, maxLines)
-	head = append(head, title, "")
-
-	body := []string{"  " + m.runIcon(st, s) + " " + runHeadline(st, s) + "  " + st.dim(ui.FormatDuration(sessionElapsed(s).Truncate(time.Second)))}
-	if f := s.Factory; f != nil {
-		body = append(body, "  "+st.muted(truncate(strings.Join(strings.Fields(f.Prompt), " "), 200)))
-		if f.Worktree != "" && !f.WorktreeRemoved {
-			body = append(body, "  "+st.vdim("worktree ")+st.dim(f.Worktree))
-		}
-	}
-	if s.Error != "" {
-		body = append(body, "  "+st.err(truncate(strings.Join(strings.Fields(s.Error), " "), 200)))
-	}
-
-	focused := m.focusedPane == paneRight
-	selStart, selEnd := -1, -1
-	item := 0
-	for ri, r := range s.Rounds {
-		body = append(body, "")
-		rows, at := m.renderRunRound(st, r, item, m.runItem, focused)
-		if at >= 0 {
-			selStart, selEnd = len(body)+at, len(body)+at+1
-		}
-		body = append(body, rows...)
-		item += len(runItems(chunkd.Session{Rounds: s.Rounds[ri : ri+1]}))
-	}
-	body = append(body, m.runFooterLines(st, run)...)
-
-	room := maxLines - len(head)
-	if len(body) > room && room > 0 {
-		first := 0
-		if selEnd > room {
-			first = min(selStart, selEnd-room)
-		}
-		body = body[first:min(first+room, len(body))]
-	}
-	return append(head, body...)
-}
-
-// sessionTitle is the run's project, branch and starting commit.
-func sessionTitle(info sessionInfo) string {
-	parts := []string{info.label}
-	if info.s.Branch != "" {
-		parts = append(parts, info.s.Branch)
-	}
-	if info.s.HeadSHA != "" {
-		parts = append(parts, info.s.HeadSHA[:min(7, len(info.s.HeadSHA))])
-	}
-	return strings.Join(parts, " · ")
-}
-
-// runRow is one selectable row as the run pane draws it.
-type runRow struct {
-	icon, name, detail string
-	extra              []string // lines under the row, not selectable
-}
-
-// renderRunRound draws one round's header and rows. first is the run-wide
-// index of the round's first row; at is the line within the returned rows of
-// the selected one, -1 when it is in another round.
-func (m Model) renderRunRound(st watchStyles, r chunkd.Round, first, sel int, focused bool) (lines []string, at int) {
-	head := fmt.Sprintf("  Round %d  %s", r.Number, roundStateText(st, r))
-	if len(r.Reviews) > 0 && (r.Findings > 0 || r.State == chunkd.RoundDone) {
-		head += st.dim(fmt.Sprintf("  ·  %d finding%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
-	}
-	lines = []string{head}
-
-	rows := m.roundRows(st, r)
-	width := 0
-	for _, row := range rows {
-		width = max(width, len(row.name))
-	}
-	at = -1
-	for i, row := range rows {
-		prefix := "    "
-		if first+i == sel {
-			at = len(lines)
-			if focused {
-				prefix = "  " + st.success("›") + " "
-			}
-		}
-		line := prefix + row.icon + "  " + fmt.Sprintf("%-*s", width, row.name)
-		if row.detail != "" {
-			line += "   " + row.detail
-		}
-		lines = append(lines, line)
-		lines = append(lines, row.extra...)
-	}
-	if r.Note != "" {
-		lines = append(lines, "      "+st.vdim(r.Note))
-	}
-	return lines, at
-}
-
 // roundRows builds a round's rows in runItems order.
 func (m Model) roundRows(st watchStyles, r chunkd.Round) []runRow {
 	var rows []runRow
@@ -690,59 +543,14 @@ func roundStateText(st watchStyles, r chunkd.Round) string {
 	case chunkd.RoundChecking:
 		return st.running("reviewing and validating")
 	case chunkd.RoundDone:
+		if len(failedNames(r)) > 0 {
+			return st.err("checks failed")
+		}
 		return st.muted("done")
 	case chunkd.RoundFailed:
 		return st.err("failed")
 	}
 	return string(r.State)
-}
-
-// runFooterLines are the lines under a run's rounds: while it runs, what it
-// last said; once it ends, where its work is; and its sidecars.
-func (m Model) runFooterLines(st watchStyles, run sessionInfo) []string {
-	s := run.s
-	var lines []string
-	if f := s.Factory; f != nil {
-		if s.State.Finished() {
-			lines = append(lines, "", "  "+st.emphasis("work"))
-			if f.Branch != "" {
-				what := "nothing committed"
-				switch {
-				case f.Committed && f.Stat != "":
-					what = "committed · " + f.Stat
-				case f.Committed:
-					what = "committed"
-				}
-				lines = append(lines, "    "+st.vdim("branch   ")+st.muted(f.Branch)+"  "+st.dim(what))
-			}
-			if f.Log != "" {
-				lines = append(lines, "    "+st.vdim("log      ")+st.dim(f.Log))
-			}
-			if len(f.KeptSidecars) > 0 {
-				lines = append(lines, "    "+st.vdim("kept     ")+st.dim(strings.Join(f.KeptSidecars, ", ")))
-			}
-		} else if feed := f.Progress.Lines; len(feed) > 0 {
-			lines = append(lines, "", "  "+st.emphasis("progress"))
-			for _, l := range feed[max(len(feed)-3, 0):] {
-				lines = append(lines, "    "+feedText(st, l))
-			}
-		}
-	}
-	if scs := m.runSidecars[s.ID]; len(scs) > 0 {
-		lines = append(lines, "", "  "+st.emphasis("sidecars"))
-		for _, sc := range scs {
-			name := sc.name
-			if name == "" {
-				name = sc.id
-			}
-			line := "    " + st.muted(name) + "  " + st.vdim(shortUUID(sc.id)) + "  " + m.rowStatus(st, sc)
-			if res := renderResources(st, sc.resources); res != "" {
-				line += "  " + res
-			}
-			lines = append(lines, line)
-		}
-	}
-	return lines
 }
 
 func feedText(st watchStyles, l chunkd.FeedLine) string {
