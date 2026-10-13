@@ -13,7 +13,6 @@ chunk-cli/
     ├── cmd/                   # Cobra command definitions (thin wrappers)
     │   ├── root.go            # Root command, registers all subcommands
     │   ├── auth.go            # auth set, auth status, auth remove
-    │   ├── buildprompt.go     # build-prompt
     │   ├── completion.go      # completion install/uninstall/zsh
     │   ├── config.go          # config show/set
     │   ├── init.go            # init (project setup, settings.json generation)
@@ -24,7 +23,6 @@ chunk-cli/
     │   ├── upgrade.go         # upgrade
     │   └── validate.go        # validate
     ├── anthropic/             # Anthropic Messages API client
-    ├── buildprompt/           # Three-step pipeline: discover → analyze → generate
     ├── circleci/              # CircleCI REST API client
     ├── claudecode/            # Runs claude -p on a sidecar and explains how the run ended
     ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
@@ -36,6 +34,7 @@ chunk-cli/
     ├── hashutil/              # Collision-free digests of string parts (cache keys)
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
+    ├── reviewhistory/         # A repo's top reviewers' PR review comments, for factory bootstrap
     ├── sidecar/               # CircleCI sidecar operations
     ├── skills/                # Skill definitions (go:embed) and installation
     ├── task/                  # Task run config and CircleCI trigger
@@ -63,7 +62,7 @@ main.go → internal/cmd/ → internal/{business packages} → internal/httpcl/
 
 - `main.go` creates the root command and handles top-level errors
 - `internal/cmd/` contains thin cobra wrappers that parse flags and delegate
-- Business packages (`buildprompt/`, `task/`, etc.) contain the logic
+- Business packages (`factory/`, `task/`, etc.) contain the logic
 - `internal/httpcl/` is an independent library — no imports are allowed to other `internal/` packages
 - `config/` is a leaf — no imports from other `internal/` packages
 - `hashutil/` is a leaf too: stdlib only, so any package can share its digest
@@ -82,35 +81,25 @@ Errors are caught in `main()`. If the error is a `usererr.Error`, only the
 user-facing message is printed (no stack trace). Otherwise the raw error
 is printed. Both exit with code 1.
 
-## Data Flow: `build-prompt`
-
-Three-step pipeline orchestrated by `buildprompt.Run()`:
+## Data Flow: `factory bootstrap`
 
 ```
-1. Discover          github/ → FetchReviewActivity() per repo
-                     → AggregateActivity() → TopN reviewers
-                     → FilterDetailsByReviewers()
-                     → writes details.json, details-pr-rankings.csv
+1. History           gitremote/ → owner/repo of origin
+                     → reviewhistory.Fetch() → github/ FetchReviewActivity()
+                     → top reviewers by comment count, newest comments each
+                     (skipped with --no-history, no GitHub token, or a non-GitHub origin)
 
-2. Analyze           GroupByReviewer(comments)
-                     → anthropic/ → AnalyzeReviews() → Claude
-                     → writes analysis.md
+2. Sidecar           sidecar/ pool "factory-bootstrap" on the Claude image
+                     → sidecar.WriteFile() puts History.Markdown() at
+                       .chunk/review-history.md in the sidecar's repo, over SSH stdin
 
-3. Generate          Read analysis.md
-                     → anthropic/ → GenerateReviewPrompt() → Claude
-                     → writes review-prompt.md
+3. Write prompts     factory.RunBootstrap() → claudecode/ claude -p, read-only tools,
+                     --json-schema → validated prompts → .chunk/reviews/<name>.md
 ```
 
-### Org and repo resolution
-
-- If `--org` is provided, `--repos` is required
-- If neither is provided, both are auto-detected from the git remote
-
-### Model defaults
-
-- Analysis step: `claude-sonnet-4-6`
-- Generation step: `claude-opus-4-6`
-- Overridable via `--analyze-model` / `--prompt-model` flags
+The history is a file rather than part of the request so a busy repository's
+comments are not bounded by the size of one request, and Claude reads it a
+part at a time.
 
 ## Configuration and Environment Variables
 

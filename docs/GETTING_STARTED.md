@@ -4,7 +4,7 @@
 
 This guide sets that up: authenticate, initialize your project, create a sidecar, and run the dev loop against it.
 
-It also covers **team review context** ([below](#team-review-context)) — an additional tool that mines your PR review history into a prompt file your agents read automatically. Useful, but independent of the sidecar workflow; skip it until the loop above is working.
+It also covers **review prompts** ([below](#review-prompts)) — prompts written from your code and your team's PR review history, which `chunk review`, `chunk factory` and the `chunk-review` skill review changes against. Useful, but independent of the sidecar workflow; skip it until the loop above is working.
 
 ---
 
@@ -36,13 +36,13 @@ Sidecars are available to all CircleCI customers, including the free plans.
 
 ### .chunk/ directory
 
-The `.chunk/` directory lives at the root of your project and holds configuration that should be version-controlled. After `chunk init` it holds your validation commands; `chunk build-prompt` adds the review context file if you generate one:
+The `.chunk/` directory lives at the root of your project and holds configuration that should be version-controlled. After `chunk init` it holds your validation commands; `chunk factory bootstrap` adds review prompts if you generate them:
 
 ```
 .chunk/
 ├── config.json              # Configured validation commands
-└── context/
-    └── review-prompt.md     # Generated team review standards (optional)
+└── reviews/
+    └── <area>.md            # One review prompt per area, such as testing.md (optional)
 ```
 
 ---
@@ -59,8 +59,8 @@ chunk auth signup          # new CircleCI account
 # Or set a personal API token directly:
 chunk auth set circleci
 
-chunk auth set anthropic   # required for init (command detection) and build-prompt
-chunk auth set github      # only needed for build-prompt
+chunk auth set anthropic   # required for init (command detection); review and factory accept it too
+chunk auth set github      # optional: lets factory bootstrap learn from past review comments
 ```
 
 Check status at any time:
@@ -73,9 +73,9 @@ Credentials are stored in your system keychain by default. Pass `--insecure-stor
 
 | Variable | Used by |
 |---|---|
-| `ANTHROPIC_API_KEY` | `build-prompt`, `init` |
-| `CLAUDE_CODE_OAUTH_TOKEN` | `review` (when no API key is set) |
-| `GITHUB_TOKEN` | `build-prompt` |
+| `ANTHROPIC_API_KEY` | `init`, `review`, `factory` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `review`, `factory` (when no API key is set) |
+| `GITHUB_TOKEN` | `factory bootstrap` (optional) |
 | `CIRCLE_TOKEN` | `sidecar`, `task` |
 | `CIRCLECI_ORG_ID` | `sidecar` (optional; overrides `orgID` in `.chunk/config.json`) |
 
@@ -508,29 +508,23 @@ See [docs/HOOKS.md](HOOKS.md) for configuration details and [Result Caching](HOO
 
 ---
 
-## Team review context
+## Review prompts
 
-An additional tool, independent of the sidecar workflow above. `chunk build-prompt` mines your GitHub PR history and generates a prompt that captures how your team reviews code. Run it once and commit the output.
+An additional tool, independent of the sidecar workflow above. `chunk factory bootstrap` has Claude Code read your project on a sidecar and write review prompts for it, one file per area in `.chunk/reviews/`. Run it once, read and edit what it writes, and commit it.
 
 ```bash
-# Auto-detects org and repos from your git remote
-chunk build-prompt
+chunk factory bootstrap
 
-# Or specify explicitly
-chunk build-prompt --org myorg --repos api,backend --top 10 --since 2024-01-01
+# Choose which review comments it learns from, or leave them out
+chunk factory bootstrap --top 10 --since 2026-01-01
+chunk factory bootstrap --no-history
 ```
 
-The pipeline runs three steps:
+Claude reads what the project says about itself (AGENTS.md, CLAUDE.md, docs, CI and linter configuration, the code and its tests). With a GitHub token set, bootstrap also fetches the review comments your most active reviewers left on the repository's pull requests, and Claude turns what they keep pushing back on into rules in the prompts.
 
-1. **Discover** — fetches PR review comments from GitHub, identifies top reviewers
-2. **Analyze** — sends comments to Claude Sonnet to extract patterns
-3. **Generate** — sends patterns to Claude Opus to produce a focused prompt
+Requires a CircleCI token and a Claude credential (`chunk auth set anthropic-oauth` for your subscription, or `chunk auth set anthropic`). `chunk auth set github` is optional.
 
-Output lands at `.chunk/context/review-prompt.md`. Commit this file — your team's AI agents will read it automatically.
-
-Requires `chunk auth set anthropic` and `chunk auth set github`.
-
-Once that file exists and skills are installed, ask your agent to review:
+Once the prompts exist and skills are installed, ask your agent to review:
 
 ```
 chunk review
@@ -538,7 +532,7 @@ review my changes
 review PR #123
 ```
 
-The agent loads your team's prompt, diffs the changes, and returns filtered findings (Critical/High issues, capped at 10 comments).
+The agent runs one reviewer per prompt over the diff and returns the combined findings (High and Medium issues, capped at 10).
 
 ---
 
@@ -557,9 +551,8 @@ Before committing
 
 Push
 
-Optionally, if you generated review context
-    └─ Agent picks up .chunk/context/review-prompt.md automatically
-    └─ "chunk review" → agent applies team standards → filtered findings
+Optionally, if you wrote review prompts
+    └─ "chunk review" → one reviewer per prompt in .chunk/reviews/ → filtered findings
 ```
 
 ---

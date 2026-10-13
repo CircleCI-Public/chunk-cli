@@ -18,18 +18,6 @@ chunk
 ├── org                             # Manage CircleCI organizations
 │   └── create <name>               # Create a new standalone CircleCI organization
 │
-├── build-prompt                    # Mine PR comments → analyze → generate prompt
-│   --org <org>                     # GitHub org (auto-detected from git remote)
-│   --repos <items>                 # Comma-separated repo names
-│   --top <n>                       # Top reviewers to include (default: 5)
-│   --since <YYYY-MM-DD>            # Start date (default: 3 months ago)
-│   --output <path>                 # Output path (default: .chunk/context/review-prompt.md)
-│   --max-comments <n>              # Max comments per reviewer (0 = no limit)
-│   --analyze-model <model>         # Model for analysis step
-│   --prompt-model <model>          # Model for prompt generation step
-│   --include-attribution           # Include reviewer attribution
-│   --debug                  # Write intermediate files (details JSON, analysis, PR rankings CSV) for debugging
-│
 ├── config
 │   ├── show                        # Display resolved configuration
 │   │   --json                      # Output as JSON
@@ -176,6 +164,9 @@ chunk
 │       --image <id>                # Sidecar image with Claude Code (default: cimg-base:2026.09-claude)
 │       --model <name>              # Claude model (default: Claude Code's default)
 │       --timeout <duration>        # Max time for writing the prompts (default: 30m)
+│       --no-history                # Leave out the team's review comments from GitHub
+│       --since <YYYY-MM-DD>        # Use review comments from this date on (default: 90 days ago)
+│       --top <n>                   # Use review comments from this many reviewers (default: 5)
 │       --json                      # Output as JSON
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
@@ -206,11 +197,6 @@ chunk
 - After a successful `auth signup`, chunk checks whether the new account belongs to any organization. If it belongs to none, chunk prompts for a name and creates a standalone org, so the first sidecar command does not fail on having none. Without a terminal it prints a warning pointing at `chunk org create <name>` instead; the signup itself still succeeds.
 - Commands that resolve an org (sidecar, validate, init, mutate, prune) offer the same org creation prompt when the account has no organizations. Without a terminal, or with `CI` set, sidecar, validate, mutate and prune fail with a suggestion to run `chunk org create <name>` or pass `--org-id`; `init` prints a warning and finishes without writing an org ID.
 - `org create` is hidden from the default help output. It requires CircleCI authentication and creates a standalone org (not tied to a VCS provider), printing the org name, ID, and slug on success.
-- `build-prompt` auto-detects org and repos from the git remote when flags
-  are omitted. If `--org` is provided explicitly, `--repos` is required.
-- `build-prompt --output` creates parent directories automatically.
-- `build-prompt --since` defaults to 3 months before the current date.
-- `build-prompt` does not write intermediate files by default. Pass `--debug` to write the raw details JSON, analysis markdown, and PR rankings CSV alongside the prompt — useful when diagnosing unexpected prompt output.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
 - `config set` user keys: `model`, `telemetry`, `notifications`. Project keys (`.chunk/config.json`):
@@ -385,8 +371,17 @@ chunk
   bootstrap needs Claude Code rather than the project's toolchain, and a project
   image may not have it. `--image` overrides it. Claude Code reads what the project
   says about itself: AGENTS.md, CLAUDE.md, docs, CI and linter configuration,
-  and the code and tests. When `chunk build-prompt` has written the team's
-  standards to `.chunk/context/review-prompt.md`, they are included too. The
+  and the code and tests. With a GitHub token and a GitHub `origin`, it also
+  fetches the review comments the repository's most active reviewers (`--top`,
+  default 5) left on its pull requests since `--since` (default 90 days ago),
+  keeping each one's 200 newest. That happens before any sidecar starts, so a
+  failed fetch costs nothing; it fails the command, with `--no-history` as the
+  way out. No token or a non-GitHub origin is not an error: bootstrap warns and
+  goes on from the code alone. The comments go to the sidecar as
+  `.chunk/review-history.md` in its copy of the repository, over SSH rather than
+  in the request, so their size is not bounded by the request's, and Claude is
+  told to read them as data and make recurring pushback into rules. `--json`
+  reports how many were used as `review_comments`. The
   project's validation commands are named in the request so the reviews leave
   to them what they already enforce. While it reads, each tool call it
   makes (the file it reads, the pattern it searches for) is shown as it happens,

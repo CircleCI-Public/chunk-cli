@@ -388,8 +388,6 @@ func TestResolve_Defaults(t *testing.T) {
 	assert.Equal(t, rc.AnthropicAPIKey, "")
 	assert.Equal(t, rc.Model, DefaultModel)
 	assert.Equal(t, rc.ModelSource, "Default")
-	assert.Equal(t, rc.AnalyzeModel, AnalyzeModel)
-	assert.Equal(t, rc.PromptModel, PromptModel)
 }
 
 func TestResolve_EnvKey(t *testing.T) {
