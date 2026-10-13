@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
@@ -68,22 +69,38 @@ type PoolOptions struct {
 	Image string
 	// WorkDir is the tree synced to every member.
 	WorkDir string
-	// StateDir is where the pool's state is kept, under .chunk; WorkDir when
-	// empty. It differs when the synced tree is not the project the pool
-	// belongs to, such as a worktree, whose .chunk would be synced and
-	// committed with the work.
+	// StateDir is the project root the pool's state is keyed by; WorkDir
+	// when empty. It differs when the synced tree is not the project the
+	// pool belongs to, such as a factory worktree.
 	StateDir    string
 	RepoPath    string
 	ExistingIDs []string
 	FreshIDs    []string
 }
 
-func poolStatePath(stateDir, name string) string {
+func poolStatePath(stateDir, name string) (string, error) {
+	dataDir, err := config.ProjectDataDir(stateDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dataDir, "pools", name+".json"), nil
+}
+
+// legacyPoolStatePath is where pool state lived inside the synced tree. It is
+// read when the new path has nothing.
+func legacyPoolStatePath(stateDir, name string) string {
 	return filepath.Join(stateDir, ".chunk", name+"-pool.json")
 }
 
 func loadPoolState(stateDir, name string) (*poolState, error) {
-	data, err := os.ReadFile(poolStatePath(stateDir, name))
+	path, err := poolStatePath(stateDir, name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		data, err = os.ReadFile(legacyPoolStatePath(stateDir, name))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +113,10 @@ func savePoolState(stateDir, name string, state *poolState) error {
 	if err != nil {
 		return fmt.Errorf("marshal pool state: %w", err)
 	}
-	path := poolStatePath(stateDir, name)
+	path, err := poolStatePath(stateDir, name)
+	if err != nil {
+		return fmt.Errorf("resolve pool state path: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create pool state directory: %w", err)
 	}
@@ -106,8 +126,13 @@ func savePoolState(stateDir, name string, state *poolState) error {
 	return nil
 }
 
+// clearPoolState also removes the legacy file, or the next load would fall
+// back to it and resurrect sidecars that were just deleted.
 func clearPoolState(stateDir, name string) {
-	_ = os.Remove(poolStatePath(stateDir, name))
+	if path, err := poolStatePath(stateDir, name); err == nil {
+		_ = os.Remove(path)
+	}
+	_ = os.Remove(legacyPoolStatePath(stateDir, name))
 }
 
 func NewPool(
