@@ -474,7 +474,10 @@ smelt
   missing. The build context is exactly the Dockerfile's `COPY` sources (absolute paths, `..` and
   wildcards are rejected), never the repo. A failed build is an error pointing at `smelt factory image`.
 - **`smelt init` and `smelt factory image` verify what they build.** The image runs in a throwaway
-  container over a copy of the repo: first the agent kit (`git`, `claude`, `sha256sum`, `pkill`), then the
+  container over a copy of the repo: first the agent kit (`git`, `claude`, `codex`, `codex-code-mode-host`, `sha256sum`, `pkill`;
+  plus one `codex exec --skip-git-repo-check "reply ok"` with a 60-second timeout when this machine has a
+  Codex login, otherwise the output says `binary check only`; a usage-limit or 401 reply is reported as
+  "could not confirm", not a failure), then the
   install step, then the cheapest gate (lint, format, typecheck, test). If the build or a check fails in a
   terminal with `claude` installed, smelt offers to let Claude edit `Dockerfile.smelt` (up to 3 attempts,
   only that file may change) and prints the diff on success. `factory build` never verifies or repairs.
@@ -487,7 +490,20 @@ smelt
   one warning when the file's kit is older than the binary's, never block, record it in the run log and
   as `kit_outdated: true` in the `factory` section of `smelt factory status --json`. `factory build`
   prints it at most once a day per project (a stamp in the project's data dir); `factory image` always.
-  A newer kit than the binary's is not outdated.
+  A newer kit than the binary's is not outdated. Kit v3 adds `codex-code-mode-host`, the companion program
+  Codex runs every command through (a separate release asset, pinned by SHA-256 next to `codex` and
+  versioned by `sandboximage.CodexVersion`); a v2 image has Codex but it cannot run anything.
+- **A Codex turn that cannot start its command host fails the run.** Output saying
+  `codex-code-mode-host is missing` or `command host failed to start` (agent message, failed command or
+  error event) becomes `codex.ErrHostMissing`; the run ends `failed`, not `no_change`, with "Codex can't
+  run commands in this sandbox image: rebuild it with `smelt factory image --update-kit`". That error and
+  message are the stable hook for tooling (pilot) that wants to stop using Codex for the session.
+- **Codex reviews run in bypass mode and are held read-only by a check.** `--sandbox read-only` needs
+  bubblewrap and user namespaces on Linux, which containers often lack, so the review script uses
+  `--dangerously-bypass-approvals-and-sandbox` like the implementer, keeps the git guard on `PATH`, and
+  compares `git status --porcelain` and `git diff HEAD` before and after: a review that changed the tree
+  exits non-zero and its answer is dropped. This was chosen by design, not measured in a Docker Desktop
+  container; if read-only is shown to work in the image it can be restored.
 - **`smelt factory image --update-kit` replaces only the kit section** (from the marker to the end of the
   file), keeps everything above it, shows the diff, asks (`--yes` skips), writes, then builds and
   verifies as `factory image` does. It is exclusive with `--regenerate`. A Dockerfile with no marker

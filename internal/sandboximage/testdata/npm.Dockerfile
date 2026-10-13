@@ -9,7 +9,7 @@ ENV PATH=/home/circleci/.local/bin:$PATH
 COPY --chown=circleci package-lock.json package.json /tmp/smelt-deps/
 RUN cd /tmp/smelt-deps && npm ci --ignore-scripts && rm -rf /tmp/smelt-deps
 
-# --- smelt agent kit (v2) -------------------------------------------------
+# --- smelt agent kit (v3) -------------------------------------------------
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git coreutils procps ca-certificates curl bash \
@@ -31,5 +31,19 @@ RUN set -e; \
     mv "/tmp/${name}" "$HOME/.local/bin/codex"; \
     rm -f "/tmp/${name}.tar.gz"; \
     test -x "$HOME/.local/bin/codex"
-LABEL smelt.harnesses=claude,codex smelt.kit=2
+RUN set -e; \
+    case "$(uname -m)" in \
+      x86_64) arch=x86_64; sum=dee8bf3df637c68e1495b928d643b76d4ad44f94e4f0ed79fe8482fa79e23d97 ;; \
+      aarch64|arm64) arch=aarch64; sum=18d99b055d2ef4a2af51f1144919bd8a208f4f79ace389b7775341d6903cf7e9 ;; \
+      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    name="codex-code-mode-host-${arch}-unknown-linux-musl"; \
+    curl -fsSL -o "/tmp/${name}.tar.gz" "https://github.com/openai/codex/releases/download/rust-v0.162.0/${name}.tar.gz"; \
+    echo "${sum}  /tmp/${name}.tar.gz" | sha256sum -c -; \
+    mkdir -p "$HOME/.local/bin"; \
+    tar -xzf "/tmp/${name}.tar.gz" -C /tmp; \
+    mv "/tmp/${name}" "$HOME/.local/bin/codex-code-mode-host"; \
+    rm -f "/tmp/${name}.tar.gz"; \
+    test -x "$HOME/.local/bin/codex-code-mode-host"
+LABEL smelt.harnesses=claude,codex smelt.kit=3
 CMD ["sleep", "infinity"]

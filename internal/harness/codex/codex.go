@@ -11,12 +11,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
 
 // ErrMissing is returned when a sidecar has no codex binary.
 var ErrMissing = errors.New("codex is not installed on the sidecar")
+
+// msgHostMissing is a user-facing sentence, so it starts with the product
+// name's capital. Tooling that watches runs can key off ErrHostMissing.
+const msgHostMissing = "Codex can't run commands in this sandbox image: rebuild it with `" + brand.Command + " factory image --update-kit`"
+
+// ErrHostMissing is returned when Codex reports that its command host,
+// codex-code-mode-host, is missing or would not start: every command it tries
+// fails, so the turn can do no work. Older images (kit v2) lack the host.
+var ErrHostMissing = errors.New(msgHostMissing) //nolint:staticcheck // a user-facing sentence, which starts with the product name
 
 // ErrCredentialRejected is returned when OpenAI rejects the credential.
 var ErrCredentialRejected = errors.New("openai rejected the credential")
@@ -76,23 +86,43 @@ func (Harness) ImplementScript(in harness.ImplementInput) string {
 // and writes its answer to one, so the script writes the schema out and prints
 // the answer on stdout at the end. The event stream goes to stderr, which only
 // explains a failure.
+//
+// The review runs without Codex's sandbox, as the implementer does: on Linux
+// the read-only sandbox needs bubblewrap and user namespaces, which containers
+// often lack. Read-only is enforced instead by the git guard and by comparing
+// `git status --porcelain` and `git diff` before and after; a review that changed the tree
+// fails and its answer is dropped.
 func (Harness) ReviewScript(in harness.ReviewInput) string {
-	args := []string{binary, "exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check", "-C", in.RepoPath}
+	args := []string{binary, "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", in.RepoPath}
 	if in.Model != "" {
 		args = append(args, "-m", in.Model)
 	}
 	args = append(args, "--output-schema", `"$schema"`, "-o", `"$out"`, "-")
 	cmd := harness.PipeCommand(in.RepoPath, in.Prompt, strings.Join(quoteArgs(args), " "))
 	schema := base64.StdEncoding.EncodeToString([]byte(in.Schema))
-	return harness.ScriptHead(binary, "") + fmt.Sprintf(`schema=$(mktemp) && out=$(mktemp) || exit 1
+	// status alone misses a second edit to a file that was already modified, so
+	// the diff goes into the comparison too.
+	repo := "git -C " + sidecar.ShellEscape(in.RepoPath)
+	status := "{ " + repo + " status --porcelain; " + repo + " diff HEAD; } 2>&1 | cksum"
+	return harness.ScriptHead(binary, guardDir+":") + fmt.Sprintf(`schema=$(mktemp) && out=$(mktemp) || exit 1
 echo %s | base64 -d > "$schema"
+before=$(%s)
 %s 1>&2
 code=$?
+after=$(%s)
+if [ "$before" != "$after" ]; then
+  echo "%s" >&2
+  code=1
+fi
 [ $code -eq 0 ] && cat "$out"
 rm -f "$schema" "$out"
 exit $code
-`, schema, cmd)
+`, schema, status, cmd, status, reviewChangedTree)
 }
+
+// reviewChangedTree is what the review script prints when the reviewer changed
+// files, which a review must not do.
+const reviewChangedTree = "smelt: the review changed files in the working tree (git status differs from before); a review is read-only, so its answer was dropped"
 
 // quoteArgs shell-escapes args except the two file variables, which the shell
 // must expand.

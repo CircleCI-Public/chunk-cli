@@ -28,33 +28,65 @@ const (
 	kitCmd = "CMD [\"sleep\", \"infinity\"]\n"
 )
 
-// Codex is installed from its GitHub release, which needs no Node. The version
-// and the checksums of the two Linux archives are pinned together: change them
-// together, and Dockerfile.local with them (a test keeps the two in step).
+// Codex is installed from its GitHub release, which needs no Node. It runs
+// every command through a companion program, codex-code-mode-host, which the
+// release ships as a separate asset. The version and the checksums of the
+// four Linux archives are pinned together: change them together, and
+// Dockerfile.local with them (a test keeps the two in step).
 const (
-	CodexVersion        = "0.162.0"
-	codexSumX86         = "8daf67f6261161aa5939d8d42a516032d760406216779d7ce6040f242140ff73"
-	codexSumARM         = "15162a9b59edf8e512b27414ec0b7db22e6424a1262b0eee8666643e0d295c2f"
+	CodexVersion = "0.162.0"
+	// codexHostBinary is the file the command host is installed as.
+	codexHostBinary     = "codex-code-mode-host"
 	codexReleaseURLBase = "https://github.com/openai/codex/releases/download/rust-v"
 )
 
-// KitCodex is the Dockerfile block that installs the Codex CLI to
-// ~/.local/bin/codex, for the architecture the image is built on.
-const KitCodex = `RUN set -e; \
+// codexAsset is one release asset the kit installs: the archive holds a single
+// file named after the archive, which goes to ~/.local/bin/<installAs>.
+type codexAsset struct {
+	prefix    string // the archive name before "-<arch>-unknown-linux-musl"
+	installAs string
+	sumX86    string
+	sumARM    string
+}
+
+var (
+	codexMain = codexAsset{
+		prefix: "codex", installAs: "codex",
+		sumX86: "8daf67f6261161aa5939d8d42a516032d760406216779d7ce6040f242140ff73",
+		sumARM: "15162a9b59edf8e512b27414ec0b7db22e6424a1262b0eee8666643e0d295c2f",
+	}
+	codexHost = codexAsset{
+		prefix: codexHostBinary, installAs: codexHostBinary,
+		sumX86: "dee8bf3df637c68e1495b928d643b76d4ad44f94e4f0ed79fe8482fa79e23d97",
+		sumARM: "18d99b055d2ef4a2af51f1144919bd8a208f4f79ace389b7775341d6903cf7e9",
+	}
+)
+
+// install is the Dockerfile RUN block that downloads the asset for the
+// architecture the image is built on, checks it and installs it.
+func (a codexAsset) install() string {
+	return `RUN set -e; \
     case "$(uname -m)" in \
-      x86_64) arch=x86_64; sum=` + codexSumX86 + ` ;; \
-      aarch64|arm64) arch=aarch64; sum=` + codexSumARM + ` ;; \
+      x86_64) arch=x86_64; sum=` + a.sumX86 + ` ;; \
+      aarch64|arm64) arch=aarch64; sum=` + a.sumARM + ` ;; \
       *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    name="codex-${arch}-unknown-linux-musl"; \
+    name="` + a.prefix + `-${arch}-unknown-linux-musl"; \
     curl -fsSL -o "/tmp/${name}.tar.gz" "` + codexReleaseURLBase + CodexVersion + `/${name}.tar.gz"; \
     echo "${sum}  /tmp/${name}.tar.gz" | sha256sum -c -; \
     mkdir -p "$HOME/.local/bin"; \
     tar -xzf "/tmp/${name}.tar.gz" -C /tmp; \
-    mv "/tmp/${name}" "$HOME/.local/bin/codex"; \
+    mv "/tmp/${name}" "$HOME/.local/bin/` + a.installAs + `"; \
     rm -f "/tmp/${name}.tar.gz"; \
-    test -x "$HOME/.local/bin/codex"
+    test -x "$HOME/.local/bin/` + a.installAs + `"
 `
+}
+
+// KitCodex is the Dockerfile blocks that install the Codex CLI and its command
+// host to ~/.local/bin, for the architecture the image is built on.
+func KitCodex() string {
+	return codexMain.install() + codexHost.install()
+}
 
 // Render writes the Dockerfile for r. It is pure.
 func Render(r Recipe) string {
@@ -100,7 +132,7 @@ func kitHarnessLabel() string {
 func kitSection(user string) string {
 	return kitMarker() +
 		asUser(rootUser, user, kitPackages) +
-		kitClaude + KitCodex + kitHarnessLabel() + kitCmd
+		kitClaude + KitCodex() + kitHarnessLabel() + kitCmd
 }
 
 // asUser runs block as user, then restores the base image's user. A root base

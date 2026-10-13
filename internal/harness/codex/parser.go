@@ -18,6 +18,9 @@ type event struct {
 		Type    string `json:"type"`
 		Text    string `json:"text"`
 		Command string `json:"command"`
+		Output  string `json:"aggregated_output"`
+		Exit    *int   `json:"exit_code"`
+		Message string `json:"message"`
 		Changes []struct {
 			Path string `json:"path"`
 		} `json:"changes"`
@@ -39,6 +42,7 @@ type parser struct {
 	done       bool
 	failed     bool
 	failure    string
+	err        error
 }
 
 // NewImplementParser implements harness.Harness.
@@ -72,6 +76,12 @@ func (p *parser) line(b []byte) {
 }
 
 func (p *parser) item(e event) {
+	p.classify(e.Item.Text, e.Item.Message)
+	// A command that succeeded and printed the phrase is a file being read (this
+	// repo's own parser, say), not the host failing.
+	if e.Item.Exit != nil && *e.Item.Exit != 0 {
+		p.classify(e.Item.Output)
+	}
 	switch e.Item.Type {
 	case "agent_message":
 		t := strings.TrimSpace(e.Item.Text)
@@ -90,6 +100,20 @@ func (p *parser) item(e event) {
 	}
 }
 
+// hostMissingRe finds Codex saying it cannot start the program it runs every
+// command through.
+var hostMissingRe = regexp.MustCompile("(?i)codex-code-mode-host[`'\"]* is missing|command host failed to start")
+
+// classify marks the turn with ErrHostMissing when any of the texts says so.
+func (p *parser) classify(texts ...string) {
+	for _, t := range texts {
+		if hostMissingRe.MatchString(t) {
+			p.err = ErrHostMissing
+			return
+		}
+	}
+}
+
 func (p *parser) activity(a harness.Activity) {
 	if p.onActivity != nil && (a.Tool != "" || a.Detail != "") {
 		p.onActivity(a)
@@ -101,6 +125,7 @@ func (p *parser) activity(a harness.Activity) {
 // codex reports the same one as an error event and again as turn.failed.
 func (p *parser) fail(raw string) {
 	p.failed = true
+	p.classify(raw)
 	if p.failure != "" {
 		return
 	}
@@ -160,5 +185,5 @@ func (p *parser) resetTime(msg string) *time.Time {
 
 // Outcome implements harness.StreamParser.
 func (p *parser) Outcome() harness.Outcome {
-	return harness.Outcome{Turn: p.turn, Done: p.done, Failed: p.failed, Message: p.failure}
+	return harness.Outcome{Turn: p.turn, Done: p.done, Failed: p.failed, Message: p.failure, Err: p.err}
 }

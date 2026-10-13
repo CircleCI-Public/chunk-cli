@@ -3,11 +3,13 @@ package sandboximage
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/smeltdev/smelt/internal/brand"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
@@ -20,7 +22,21 @@ const (
 )
 
 // kitCheck proves the tools the factory's own scripts and agent need exist.
-const kitCheck = "git --version && claude --version && codex --version && sha256sum --version && pkill -V"
+// Codex runs every command through its host, which --version never starts.
+const kitCheck = "git --version && claude --version && codex --version && sha256sum --version && pkill -V && " +
+	`test -x "$HOME/.local/bin/` + codexHostBinary + `"`
+
+// codexSmokeTimeout bounds the one real Codex turn in the kit step; the
+// command's own timeout is the same 60 seconds.
+const codexSmokeTimeout = time.Minute
+
+// codexSmokeCommand asks Codex for the cheapest turn that still has it start
+// its command host.
+const codexSmokeCommand = `timeout 60 codex exec --skip-git-repo-check "reply ok"`
+
+// notConfirmedRe finds the replies that say the credential or the account is at
+// fault, not the image.
+var notConfirmedRe = regexp.MustCompile(`(?i)usage limit|rate limit|try again|\b401\b|unauthorized|not logged in|invalid api key|incorrect api key|authentication required`)
 
 // outputTailBytes bounds the output kept from a failed step.
 const outputTailBytes = 4000
@@ -43,6 +59,15 @@ type VerifyOptions struct {
 	// Gate is the cheapest validation command, nil for none.
 	Gate     *config.Command
 	Progress iostream.StatusFunc
+	// Codex, when set, has the kit step run one real Codex turn with this
+	// credential. Without it only the binaries are checked.
+	Codex *CodexSmoke
+}
+
+// CodexSmoke is what the kit step needs to run one Codex turn.
+type CodexSmoke struct {
+	Harness    harness.Harness
+	Credential harness.Credential
 }
 
 // VerifyResult is the outcome of Verify. Step is empty when everything passed;
@@ -109,13 +134,46 @@ func Verify(ctx context.Context, b verifyBackend, opts VerifyOptions) (VerifyRes
 		steps = append(steps, verifyStep{StepGate, opts.Gate.Run, time.Duration(opts.Gate.EffectiveTimeout()) * time.Second})
 	}
 	for _, step := range steps {
-		res, err := runStep(ctx, b, inst, repoPath, step.name, step.script, step.timeout)
+		res, err := runStep(ctx, b, inst, repoPath, step.name, step.script, nil, step.timeout)
 		if err != nil || !res.OK() {
 			return res, err
 		}
 		status(iostream.LevelDone, step.name+" ✓")
+		if step.name == StepKit {
+			if res, err := smokeCodex(ctx, b, inst, repoPath, opts.Codex, status); err != nil || !res.OK() {
+				return res, err
+			}
+		}
 	}
 	return VerifyResult{}, nil
+}
+
+// smokeCodex runs one Codex turn, which is the only check that the agent can
+// run a command. A reply that blames the credential or the account is not a
+// defect of the image, so it is reported and the step passes.
+func smokeCodex(ctx context.Context, b verifyBackend, inst sidecar.Instance, repoPath string, smoke *CodexSmoke, status iostream.StatusFunc) (VerifyResult, error) {
+	if smoke == nil {
+		status(iostream.LevelInfo, "codex: binary check only (no Codex login on this machine to run a turn with)")
+		return VerifyResult{}, nil
+	}
+	prepare, prepareEnv := smoke.Harness.Prepare(smoke.Credential)
+	env := smoke.Harness.Env(smoke.Credential, "")
+	for k, v := range prepareEnv {
+		env[k] = v
+	}
+	script := harness.ScriptHead(smoke.Harness.Binary(), "") + prepare + codexSmokeCommand
+	res, err := runStep(ctx, b, inst, repoPath, StepKit, script, env, codexSmokeTimeout+30*time.Second)
+	if err != nil || res.OK() {
+		if err == nil {
+			status(iostream.LevelDone, "codex turn ✓")
+		}
+		return res, err
+	}
+	if notConfirmedRe.MatchString(res.OutputTail) {
+		status(iostream.LevelWarn, "codex: could not confirm the image runs a turn (the login or account was refused); binary check only")
+		return VerifyResult{}, nil
+	}
+	return res, nil
 }
 
 // verifyStep is one script Verify runs.
@@ -126,12 +184,12 @@ type verifyStep struct {
 
 // runStep runs one script in the repo and reports a non-zero exit as a failed
 // VerifyResult rather than an error.
-func runStep(ctx context.Context, b verifyBackend, inst sidecar.Instance, repoPath, name, script string, timeout time.Duration) (VerifyResult, error) {
+func runStep(ctx context.Context, b verifyBackend, inst sidecar.Instance, repoPath, name, script string, env map[string]string, timeout time.Duration) (VerifyResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var out tail
 	var partial strings.Builder
-	code, err := b.Exec(ctx, inst.ID, "cd "+sidecar.ShellEscape(repoPath)+" && "+script, nil, func(_ string, data []byte) {
+	code, err := b.Exec(ctx, inst.ID, "cd "+sidecar.ShellEscape(repoPath)+" && "+script, env, func(_ string, data []byte) {
 		partial.Write(data)
 		for {
 			s := partial.String()

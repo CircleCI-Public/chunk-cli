@@ -181,6 +181,13 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 		Activity: acts,
 	}
 
+	// A failure the parser classified ends the run however the CLI exited: an
+	// agent that cannot run commands reports "done" with nothing changed, which
+	// would otherwise read as an empty change.
+	if out.Err != nil {
+		return turn, fmt.Errorf("implementer: %w", out.Err)
+	}
+
 	// The agent puts why a turn failed in its result, so that explains a failed
 	// exit before stderr does.
 	explain := out.Message

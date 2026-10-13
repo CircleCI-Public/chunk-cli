@@ -10,4 +10,7 @@ emails and request IDs redacted, usage history replaced with made-up numbers.
 - claude-oauth-usage.json   GET /api/oauth/usage with Claude Code's own login (200)
 - claude-oauth-usage-401.json  the same with the `claude setup-token` token (401)
 
+Fixtures that belong to one harness live next to it, e.g.
+`internal/harness/codex/testdata/real/`.
+
 Do not edit these; they pin the formats the parsers must handle.

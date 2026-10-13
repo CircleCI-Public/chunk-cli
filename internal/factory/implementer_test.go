@@ -14,6 +14,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/circleci"
+	"github.com/smeltdev/smelt/internal/harness/codex"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
@@ -196,4 +197,48 @@ func TestImplementerReportsMissingClaude(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	_, err := im.Run(context.Background(), "p")
 	assert.Assert(t, errors.Is(err, review.ErrClaudeMissing), "got %v", err)
+}
+
+// codexImplementer is an Implementer whose fake codex replays the fixture of a
+// turn that could not start its command host and still exited 0.
+func codexImplementer(t *testing.T) *Implementer {
+	t.Helper()
+	home := t.TempDir()
+	fixture, err := filepath.Abs("../harness/codex/testdata/real/codex-exec-host-missing.jsonl")
+	assert.NilError(t, err)
+	bin := filepath.Join(home, ".local", "bin")
+	assert.NilError(t, os.MkdirAll(bin, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\ncat >/dev/null\ncat '"+fixture+"'\n"), 0o755))
+	return &Implementer{
+		Harness:    codex.Harness{},
+		Exec:       localExec(home),
+		Entry:      &sidecar.PoolEntry{ID: "impl", RepoPath: t.TempDir()},
+		Credential: review.Credential{EnvVar: codex.EnvAPIKey, Value: "k"},
+	}
+}
+
+func TestImplementerFailsWhenCodexCannotStartItsCommandHost(t *testing.T) {
+	_, err := codexImplementer(t).Run(context.Background(), "add a flag")
+	assert.ErrorIs(t, err, codex.ErrHostMissing)
+	assert.ErrorContains(t, err, "Codex can't run commands in this sandbox image: rebuild it with `smelt factory image --update-kit`")
+}
+
+// implementerSteps drives the loop with a real Implementer, so the error it
+// returns is the one a run would see.
+type implementerSteps struct {
+	fakeSteps
+	im *Implementer
+}
+
+func (s *implementerSteps) Implement(ctx context.Context, prompt string) (Turn, error) {
+	return s.im.Run(ctx, prompt)
+}
+
+// A host-missing turn must end the run with an error, not as an empty change.
+func TestLoopFailsWhenCodexCannotStartItsCommandHost(t *testing.T) {
+	steps := &implementerSteps{fakeSteps: fakeSteps{changes: []Change{{Fingerprint: "empty"}}}, im: codexImplementer(t)}
+	out, err := Loop{Attempts: 2}.Run(context.Background(), steps, "p")
+	assert.ErrorIs(t, err, codex.ErrHostMissing)
+	assert.ErrorContains(t, err, "rebuild it with")
+	assert.Assert(t, out.Result != ResultNoChange)
 }

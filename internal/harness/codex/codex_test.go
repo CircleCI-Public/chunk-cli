@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,9 +87,123 @@ func TestImplementScriptPrependsTheRules(t *testing.T) {
 
 func TestReviewScript(t *testing.T) {
 	script := Harness{}.ReviewScript(harness.ReviewInput{RepoPath: "/r", Prompt: "look", Model: "m", Schema: `{"a":1}`})
-	assert.Assert(t, strings.Contains(script, "'--sandbox' 'read-only'"), script)
+	assert.Assert(t, strings.Contains(script, "'--dangerously-bypass-approvals-and-sandbox'"), script)
+	assert.Assert(t, !strings.Contains(script, "'--sandbox'"), script)
+	assert.Assert(t, strings.Contains(script, "git -C '/r' status --porcelain"), script)
+	assert.Assert(t, strings.Contains(script, guardDir+":"), script)
 	assert.Assert(t, strings.Contains(script, `'--output-schema' "$schema" '-o' "$out" '-'`), script)
 	assert.Assert(t, strings.Contains(script, "'-m' 'm'"), script)
+}
+
+func TestParserMapsAMissingCommandHostToAHarnessError(t *testing.T) {
+	b, err := os.ReadFile("testdata/real/codex-exec-host-missing.jsonl")
+	assert.NilError(t, err)
+	p := Harness{}.NewImplementParser(nil)
+	p.Write(b)
+	out := p.Outcome()
+	assert.Assert(t, out.Done)
+	assert.ErrorIs(t, out.Err, ErrHostMissing)
+	assert.ErrorContains(t, out.Err, "smelt factory image --update-kit")
+}
+
+func TestParserFindsAMissingHostInEachPlace(t *testing.T) {
+	tests := map[string]string{
+		"agent message":   `{"type":"item.completed","item":{"type":"agent_message","text":"/x/codex-code-mode-host is missing"}}`,
+		"backquoted path": "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"`/x/codex-code-mode-host` is missing\"}}",
+		"failed command":  `{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"Command Host failed to start","exit_code":1}}`,
+		"error event":     `{"type":"error","message":"command host failed to start"}`,
+		"turn failed":     `{"type":"turn.failed","error":{"message":"codex-code-mode-host is missing"}}`,
+		"error item":      `{"type":"item.completed","item":{"type":"error","message":"codex-code-mode-host is missing"}}`,
+	}
+	for name, line := range tests {
+		t.Run(name, func(t *testing.T) {
+			p := Harness{}.NewImplementParser(nil)
+			p.Write([]byte(line + "\n"))
+			assert.ErrorIs(t, p.Outcome().Err, ErrHostMissing)
+		})
+	}
+}
+
+func TestParserIgnoresThePhraseInASuccessfulCommand(t *testing.T) {
+	p := Harness{}.NewImplementParser(nil)
+	p.Write([]byte(`{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"codex-code-mode-host is missing","exit_code":0}}` + "\n"))
+	assert.NilError(t, p.Outcome().Err)
+	out := parse(t, "codex-exec-pass.jsonl")
+	assert.NilError(t, out.Err)
+}
+
+// reviewHarness runs the generated review script in a git repo, with a fake
+// codex on PATH that writes a valid answer and then runs body in the repo.
+func runReview(t *testing.T, setup, body string) (code int, stdout, stderr string) {
+	t.Helper()
+	home := t.TempDir()
+	repo := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	assert.NilError(t, os.MkdirAll(bin, 0o755))
+	fake := `#!/bin/sh
+cat >/dev/null
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
+echo '{"review":"fine","findings":[]}' > "$out"
+` + body + "\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(bin, "codex"), []byte(fake), 0o755))
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, string(out))
+	}
+	git("init", "-q")
+	assert.NilError(t, os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644))
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+	if setup != "" {
+		cmd := exec.Command("sh", "-c", setup)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, string(out))
+	}
+
+	script := Harness{}.ReviewScript(harness.ReviewInput{RepoPath: repo, Prompt: "look", Schema: `{}`})
+	var so, se strings.Builder
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Stdout, cmd.Stderr = &so, &se
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), so.String(), se.String()
+	}
+	assert.NilError(t, err)
+	return 0, so.String(), se.String()
+}
+
+func TestReviewScriptGuardsTheWorkingTree(t *testing.T) {
+	tests := []struct {
+		name, setup, body string
+		wantFail          bool
+	}{
+		{name: "tree left alone", body: "true"},
+		{name: "tracked file modified", body: "echo two > tracked.txt", wantFail: true},
+		{name: "untracked file created", body: "echo x > scratch.txt", wantFail: true},
+		{name: "tracked file deleted", body: "rm tracked.txt", wantFail: true},
+		{name: "pre-dirty tree, unchanged", setup: "echo dirty > tracked.txt; echo u > untracked.txt", body: "true"},
+		{name: "pre-dirty tree, changed further", setup: "echo dirty > tracked.txt", body: "echo more >> tracked.txt", wantFail: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, stdout, stderr := runReview(t, tt.setup, tt.body)
+			if tt.wantFail {
+				assert.Assert(t, code != 0, "stdout=%s stderr=%s", stdout, stderr)
+				assert.Assert(t, strings.Contains(stderr, "review changed files"), stderr)
+				assert.Equal(t, strings.TrimSpace(stdout), "")
+				return
+			}
+			assert.Equal(t, code, 0, stderr)
+			assert.Equal(t, strings.TrimSpace(stdout), `{"review":"fine","findings":[]}`)
+		})
+	}
 }
 
 func TestParseReview(t *testing.T) {
