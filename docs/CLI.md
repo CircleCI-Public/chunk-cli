@@ -170,6 +170,8 @@ chunk
 │   │   --log-file <path>           # Keep the log in this file instead (implies --log)
 │   │   --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │   │   --json                      # Output as JSON
+│   ├── start [prompt|-]            # Make a worktree to start a change in by hand, for a factory run to refine
+│   │   --json                      # Output as JSON
 │   └── bootstrap                   # Write a first set of review prompts for this project
 │       --output <dir>              # Directory to write them to (default: .chunk/reviews)
 │       --org-id <id>               # Organization ID
@@ -378,6 +380,19 @@ chunk
   by every checkout of the repository, which is what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The
   session's record names the run it continues as `continues_run_id`.
+- **`factory start` makes a worktree to start a change in by hand.** Not every
+  change starts as a prompt fired at the cloud: `chunk factory start "<prompt>"`
+  makes a run's worktree and branch, `chunk/factory/<description>/<run id>`,
+  from the developer's files as they are (uncommitted changes in the
+  baseline, as for a build), and keeps the run's record, marked `by_hand`. Nothing
+  runs on a sidecar. The developer works in the worktree, with Claude Code,
+  another agent or none, then hands the work to the factory with
+  `chunk factory build --continue <run id>`, which picks up whatever they did
+  there, committed or not, as the change to refine against the prompt. Its
+  implementer is told the work so far is the developer's first pass and to
+  finish it into something ready to merge. Only the worktree's path goes to
+  stdout, so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the
+  record instead.
 - **`factory bootstrap` writes a project's first review prompts.** It runs
   Claude Code once, read-only, on a sidecar of its own (pool
   `factory-bootstrap`, destroyed when it ends). The sidecar runs the system image

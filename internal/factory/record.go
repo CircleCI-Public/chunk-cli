@@ -28,6 +28,9 @@ type Record struct {
 	Branch   string `json:"branch"`
 	Baseline string `json:"baseline"`
 	Head     string `json:"head"`
+	// ByHand marks a run made by Start: its worktree is for the developer to
+	// work in, and its work is theirs until a continued run refines it.
+	ByHand bool `json:"by_hand,omitempty"`
 	// ContinuesRunID is the run this one continued, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
 	// Result and Rounds are how the run ended, once it has.

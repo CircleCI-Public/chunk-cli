@@ -122,7 +122,7 @@ func ReviewerCount(requested int, prompts []review.Prompt) int {
 // with the report so far. The work is committed either way once the implementer has
 // started, so it is not lost with the sidecars.
 func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
-	rep.RunID = time.Now().UTC().Format("20060102-150405")
+	rep.RunID = newRunID()
 	cont := opts.Continue
 	request := opts.Prompt
 	if cont != nil {
@@ -293,6 +293,11 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		rep.Stat, rep.StatErr = workStat(ctx, wt)
 	}
 	return rep, err
+}
+
+// newRunID names a run for when it starts.
+func newRunID() string {
+	return time.Now().UTC().Format("20060102-150405")
 }
 
 // keepRecord saves the run's record, so a later run can continue it. A run

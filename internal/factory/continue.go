@@ -35,9 +35,15 @@ func (c *Continuation) checkFirst() bool {
 // where the work is.
 func (c *Continuation) prompt() string {
 	var b strings.Builder
-	b.WriteString("You are continuing a change that an earlier session started and did not finish. It was asked:\n\n")
-	b.WriteString(strings.TrimSpace(c.From.Prompt))
-	b.WriteString("\n\nIts work is in the working tree as uncommitted changes; `git diff HEAD` shows it. Build on it rather than starting over.")
+	if c.From.ByHand {
+		b.WriteString("You are finishing a change the developer started. They want:\n\n")
+		b.WriteString(strings.TrimSpace(c.From.Prompt))
+		b.WriteString("\n\nThe work so far is in the working tree as uncommitted changes; `git diff HEAD` shows it. It may be a rough first pass: build on it, rather than starting over, until it is ready to merge.")
+	} else {
+		b.WriteString("You are continuing a change that an earlier session started and did not finish. It was asked:\n\n")
+		b.WriteString(strings.TrimSpace(c.From.Prompt))
+		b.WriteString("\n\nIts work is in the working tree as uncommitted changes; `git diff HEAD` shows it. Build on it rather than starting over.")
+	}
 	if g := strings.TrimSpace(c.Guidance); g != "" {
 		b.WriteString("\n\nThe developer adds:\n\n")
 		b.WriteString(g)
