@@ -434,6 +434,20 @@ func TestFactoryRecorderFinishKeepsTheNotes(t *testing.T) {
 	assert.DeepEqual(t, *got, smeltd.Notes{Title: "Add a flag", What: "- w", Why: "- y", How: "- h"})
 }
 
+// A run that continued an empty branch says so in its status.
+func TestFactoryRecorderFinishRecordsContinuedFromEmpty(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	assert.Equal(t, busy, "")
+	rec := &factoryRecorder{entry: entry, rounds: map[int]int{}}
+
+	rec.event(factory.Event{Kind: factory.EventNoPriorWork})
+	rec.finish(factory.Report{Started: true, Outcome: factory.Outcome{Result: factory.ResultPassed, FromEmpty: true}}, nil)
+
+	assert.Assert(t, entry.snapshot().Factory.ContinuedFromEmpty)
+	assert.Equal(t, len(entry.snapshot().Rounds), 0, "the event began a round")
+}
+
 func TestFactorySessionRecordsBlockedAndIncompleteWork(t *testing.T) {
 	run := scriptedRun(factory.ResultBlocked)
 	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {

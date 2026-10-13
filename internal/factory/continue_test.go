@@ -138,13 +138,26 @@ func TestContinuationWithGuidanceImplementsFirst(t *testing.T) {
 	assert.Assert(t, strings.HasSuffix(c.prompt(), "The developer adds:\n\nyou may update the test"))
 }
 
+func TestContinuationEmptyPrompt(t *testing.T) {
+	c := &Continuation{From: Record{RunID: "run-1", Prompt: "add a flag"}}
+	const context = "An earlier run on this branch produced no work; start from the request."
+	assert.Equal(t, c.emptyPrompt(), "add a flag\n\n"+context)
+
+	c.Guidance = "use cobra"
+	got := c.emptyPrompt()
+	assert.Equal(t, got, "add a flag\n\nThe developer adds:\n\nuse cobra\n\n"+context)
+	for _, bad := range []string{"Build on it", "working tree", "check first", "git diff"} {
+		assert.Assert(t, !strings.Contains(got, bad), bad)
+	}
+}
+
 func TestRecordRoundTrip(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	root := newProject(t)
 	dataDir, err := config.ProjectDataDir(root)
 	assert.NilError(t, err)
 	want := Record{RunID: "run-2", Prompt: "add a flag", Worktree: "/wt", Branch: "smelt/run-1",
-		Baseline: "abc", Head: "def", BaseBranch: "feature", DefaultBranch: "main", ContinuesRunID: "run-1", Result: ResultPassed, Rounds: 2}
+		Baseline: "abc", Head: "def", BaseBranch: "feature", DefaultBranch: "main", ContinuesRunID: "run-1", ContinuedFromEmpty: true, Result: ResultPassed, Rounds: 2}
 
 	assert.NilError(t, saveRecord(dataDir, want))
 	got, err := LoadRecord(root, "run-2")

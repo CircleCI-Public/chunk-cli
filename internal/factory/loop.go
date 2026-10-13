@@ -53,6 +53,9 @@ type Outcome struct {
 	// Plan is the plan the implementer was sent with, nil when the run did
 	// not plan.
 	Plan *Plan
+	// FromEmpty is set when the loop started from an empty change and sent
+	// Loop.EmptyPrompt.
+	FromEmpty bool
 }
 
 // Incomplete is the findings of the last round's checks that say requested
@@ -73,6 +76,7 @@ const (
 	EventCollected                     // the work was collected; Round, Change
 	EventChecking                      // checks started; Round
 	EventChecked                       // checks ended; Round, Checks
+	EventNoPriorWork                   // the work already there is empty; the request is implemented
 )
 
 // Event reports progress through the loop.
@@ -103,7 +107,13 @@ type Loop struct {
 	// before its first turn. A loop that checks first does not plan: there is
 	// work to describe already.
 	Planner Planner
-	OnEvent func(Event)
+	// EmptyPrompt, when set, makes the loop collect the work already there
+	// before the first turn. If it is empty, there is nothing to check or build
+	// on, so the loop sends EmptyPrompt instead of the prompt it was given and
+	// does not check first. Without it, checking first an empty change ends
+	// the loop as no_change.
+	EmptyPrompt string
+	OnEvent     func(Event)
 }
 
 // Run implements prompt, then checks the work and feeds failures back until
@@ -143,18 +153,23 @@ func (l Loop) run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 	// lead is held back from the implementer until there is feedback to send
 	// with it, when the loop checks first.
 	var lead string
-	if l.CheckFirst {
+	if l.CheckFirst || l.EmptyPrompt != "" {
 		change, err := steps.Collect(ctx)
 		if err != nil {
 			return out, fmt.Errorf("round 1: %w", err)
 		}
 		emit(Event{Kind: EventCollected, Round: 1, Change: change})
-		if change.Empty() {
+		switch {
+		case change.Empty() && l.EmptyPrompt != "":
+			emit(Event{Kind: EventNoPriorWork})
+			out.FromEmpty, prompt = true, l.EmptyPrompt
+		case change.Empty():
 			out.Result, out.Change = ResultNoChange, change
 			return out, nil
+		case l.CheckFirst:
+			out.Change = change
+			lead, prompt = prompt, ""
 		}
-		out.Change = change
-		lead, prompt = prompt, ""
 	}
 	for round := 1; ; round++ {
 		// An empty prompt means the last round failed only on checks that could

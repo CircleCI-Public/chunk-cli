@@ -359,14 +359,19 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		r.planReviewed(ev)
 		return
 	}
+	if ev.Kind == factory.EventNoPriorWork {
+		// Shown through the factory's status function, which feeds the progress
+		// lines; it belongs to no round.
+		return
+	}
 	ridx := r.round(ev.Round)
 	e := r.entry
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	round := &e.s.Rounds[ridx]
 	switch ev.Kind {
-	case factory.EventPlanning, factory.EventPlanReviewed:
-		// Recorded above: the plan comes before the first round.
+	case factory.EventPlanning, factory.EventPlanReviewed, factory.EventNoPriorWork:
+		// Recorded above.
 	case factory.EventImplementing:
 		round.State = smeltd.RoundImplementing
 		round.Implement = &smeltd.RoundImplement{State: smeltd.ImplementRunning}
@@ -552,6 +557,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds
 		f.Blocked = rep.Outcome.Blocked
+		f.ContinuedFromEmpty = rep.Outcome.FromEmpty
 		f.SkippedTests = rep.Outcome.Skipped()
 		for _, fd := range rep.Outcome.Incomplete() {
 			f.Incomplete = append(f.Incomplete, factory.FindingTitle(fd))

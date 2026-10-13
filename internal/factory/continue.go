@@ -51,6 +51,20 @@ func (c *Continuation) prompt() string {
 	return b.String()
 }
 
+// emptyPrompt is the first implementer prompt when the branch holds no work:
+// the original request and the guidance, with a line saying why there is
+// nothing to build on.
+func (c *Continuation) emptyPrompt() string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(c.From.Prompt))
+	if g := strings.TrimSpace(c.Guidance); g != "" {
+		b.WriteString("\n\nThe developer adds:\n\n")
+		b.WriteString(g)
+	}
+	b.WriteString("\n\nAn earlier run on this branch produced no work; start from the request.")
+	return b.String()
+}
+
 // request is what the reviewers check the work against: the original request
 // and whatever the developer added to it.
 func (c *Continuation) request() string {

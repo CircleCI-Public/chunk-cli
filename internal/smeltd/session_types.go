@@ -180,6 +180,9 @@ type FactoryRun struct {
 	Guidance string `json:"guidance,omitempty"`
 	// ContinuesRunID is the run whose work this one picked up, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
+	// ContinuedFromEmpty is set when the run found no work on the branch it
+	// continued and implemented the request from scratch.
+	ContinuedFromEmpty bool `json:"continued_from_empty,omitempty"`
 	// Harness and Model are the coding agent the run uses and the model it was
 	// asked for; Model is "" for the agent's own default.
 	Harness string `json:"harness,omitempty"`

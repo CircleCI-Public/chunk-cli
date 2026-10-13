@@ -174,12 +174,58 @@ func TestLoopCheckFirstHoldsThePromptUntilThereIsFeedback(t *testing.T) {
 	assert.DeepEqual(t, steps.prompts, []string{"pick up the work\n\n" + Feedback([]Check{fail})})
 }
 
-func TestLoopCheckFirstWithNoWork(t *testing.T) {
+// Without a way to start from the request, checking first an empty change
+// has nothing to do.
+func TestLoopCheckFirstWithNoWorkAndNoEmptyPromptIsNoChange(t *testing.T) {
 	steps := &fakeSteps{}
 	out, err := Loop{Attempts: 3, CheckFirst: true}.Run(context.Background(), steps, "pick up the work")
 	assert.NilError(t, err)
 	assert.Equal(t, out.Result, ResultNoChange)
 	assert.Equal(t, steps.checked, 0, "nothing to check")
+	assert.Assert(t, !out.FromEmpty)
+}
+
+// An empty branch has nothing to check, so the request is implemented.
+func TestLoopCheckFirstWithNoWorkImplementsTheRequest(t *testing.T) {
+	steps := &fakeSteps{changes: []Change{change(1)}, checks: [][]Check{{pass}}}
+	var kinds []EventKind
+	loop := Loop{Attempts: 3, CheckFirst: true, EmptyPrompt: "the request", OnEvent: func(e Event) { kinds = append(kinds, e.Kind) }}
+	out, err := loop.Run(context.Background(), steps, "pick up the work")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.Assert(t, out.FromEmpty)
+	assert.DeepEqual(t, steps.prompts, []string{"the request"})
+	assert.Equal(t, steps.checked, 1)
+	assert.DeepEqual(t, kinds, []EventKind{EventCollected, EventNoPriorWork, EventImplementing, EventImplemented, EventCollected, EventChecking, EventChecked})
+}
+
+// Guidance does not check first, but an empty branch still has no work to
+// build on, so the prompt for it is used.
+func TestLoopWithGuidanceAndNoWorkImplementsTheEmptyPrompt(t *testing.T) {
+	steps := &fakeSteps{changes: []Change{change(1)}, checks: [][]Check{{pass}}}
+	out, err := Loop{Attempts: 3, EmptyPrompt: "the request"}.Run(context.Background(), steps, "build on the work")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.Assert(t, out.FromEmpty)
+	assert.DeepEqual(t, steps.prompts, []string{"the request"})
+}
+
+// Work that is there keeps the prompt built for it.
+func TestLoopWithGuidanceAndWorkImplementsFirst(t *testing.T) {
+	steps := &fakeSteps{current: change(1), changes: []Change{change(2)}, checks: [][]Check{{pass}}}
+	out, err := Loop{Attempts: 3, EmptyPrompt: "the request"}.Run(context.Background(), steps, "build on the work")
+	assert.NilError(t, err)
+	assert.Assert(t, !out.FromEmpty)
+	assert.DeepEqual(t, steps.prompts, []string{"build on the work"})
+}
+
+func TestLoopCheckFirstWithWorkAndEmptyPromptStillChecksFirst(t *testing.T) {
+	steps := &fakeSteps{current: change(1), checks: [][]Check{{pass}}}
+	out, err := Loop{Attempts: 3, CheckFirst: true, EmptyPrompt: "the request"}.Run(context.Background(), steps, "pick up the work")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.Equal(t, len(steps.prompts), 0)
+	assert.Assert(t, !out.FromEmpty)
 }
 
 // An implementer that changes nothing after checking first is stuck, as in

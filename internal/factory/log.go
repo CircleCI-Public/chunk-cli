@@ -142,6 +142,8 @@ func (l *runLog) event(e Event) {
 			l.block(fmt.Sprintf("  plan review [%s] %s (not resolved)", f.Severity, f.Location()), f.Body)
 		}
 		l.line("info", "plan reviewed")
+	case EventNoPriorWork:
+		l.line("info", noPriorWork)
 	case EventImplementing:
 		l.block(fmt.Sprintf("round %d: prompt sent to the implementer", e.Round), e.Prompt)
 	case EventImplemented:

@@ -588,7 +588,12 @@ smelt
   and baseline) in the project's data directory beside its worktree, which is
   what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The
-  session's record names the run it continues as `continues_run_id`.
+  session's record names the run it continues as `continues_run_id`. A run
+  whose branch holds no work (it ended `no_change`, or was cancelled or failed
+  before its first turn's changes came back) has nothing to check, so
+  `--continue` implements the original request, plus any guidance, with a line
+  saying the earlier run produced no work, and `factory status` reports
+  `continued_from_empty: true`. A branch with work is still checked first.
 - **`watch` is organized around runs.** Factory runs are listed at the top of
   the left pane, live ones first, then up to five that ended in the last day;
   sidecars are listed below them, and `↑/↓` moves through both as one list. The

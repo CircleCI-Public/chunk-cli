@@ -34,6 +34,9 @@ type Record struct {
 	DefaultBranch string `json:"default_branch,omitempty"`
 	// ContinuesRunID is the run this one continued, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
+	// ContinuedFromEmpty is set when the run continued a branch with no work
+	// and implemented the request from scratch.
+	ContinuedFromEmpty bool `json:"continued_from_empty,omitempty"`
 	// Harness and Model are the coding agent the run used and the model it was
 	// asked for ("" for the agent's own default).
 	Harness string `json:"harness,omitempty"`

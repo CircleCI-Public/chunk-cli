@@ -294,7 +294,7 @@ func TestKeepEndedRecordStoresTheOutcomeAndNotes(t *testing.T) {
 	dataDir, err := config.ProjectDataDir(root)
 	assert.NilError(t, err)
 	notes := &Notes{Title: "Add a flag", What: "- w", Why: "- y", How: "- h"}
-	rep := Report{Outcome: Outcome{Result: ResultPassed, Rounds: 2}, Notes: notes}
+	rep := Report{Outcome: Outcome{Result: ResultPassed, Rounds: 2, FromEmpty: true}, Notes: notes}
 
 	keepEndedRecord(dataDir, Record{RunID: "run-1", Prompt: "add a flag"}, rep, func(iostream.Level, string) {})
 
@@ -302,6 +302,7 @@ func TestKeepEndedRecordStoresTheOutcomeAndNotes(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, got.Result, ResultPassed)
 	assert.Equal(t, got.Rounds, 2)
+	assert.Assert(t, got.ContinuedFromEmpty)
 	assert.DeepEqual(t, got.Notes, notes)
 }
 

@@ -335,12 +335,21 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	// The implementer's last turn goes into the notes.
 	lastSummary := ""
 	loop := Loop{Attempts: opts.Attempts, OnEvent: keepSummary(&lastSummary, opts.OnEvent)}
+	if status != nil {
+		next := loop.OnEvent
+		loop.OnEvent = func(e Event) {
+			if e.Kind == EventNoPriorWork {
+				status(iostream.LevelInfo, noPriorWork)
+			}
+			next(e)
+		}
+	}
 	loop.Planner = planFor(opts.Plan, cont, steps)
 	if cont != nil {
 		if err := steps.Relay.Push(ctx, []*sidecar.PoolEntry{impl}); err != nil {
 			return rep, fmt.Errorf("bring the work of run %s to the implementer: %w", cont.From.RunID, err)
 		}
-		loop.CheckFirst = cont.checkFirst()
+		loop.CheckFirst, loop.EmptyPrompt = cont.checkFirst(), cont.emptyPrompt()
 	}
 
 	// The record is kept once there is work to continue, and again with how
@@ -351,6 +360,10 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	concludeRun(ctx, steps, wt, &rep, NotesInput{Request: request, Summary: lastSummary, Log: lg.block}, status)
 	return rep, err
 }
+
+// noPriorWork is what is shown and logged when a continued run finds its branch
+// empty.
+const noPriorWork = "continuing with no prior work: implementing from the request"
 
 // planFor is the planner a run uses, nil for none. A continued run never plans:
 // the plan already exists in the record of the run it continues.
@@ -432,6 +445,7 @@ func keepRecord(dataDir string, rec Record, status iostream.StatusFunc) {
 // keepEndedRecord saves rec with how the run ended and the notes it wrote.
 func keepEndedRecord(dataDir string, rec Record, rep Report, status iostream.StatusFunc) {
 	rec.Result, rec.Rounds, rec.Notes, rec.Plan = rep.Outcome.Result, rep.Outcome.Rounds, rep.Notes, rep.Outcome.Plan
+	rec.ContinuedFromEmpty = rep.Outcome.FromEmpty
 	keepRecord(dataDir, rec, status)
 }
 
