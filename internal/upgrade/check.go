@@ -25,6 +25,7 @@ const (
 type updateCache struct {
 	CheckedAt     time.Time `json:"checked_at"`
 	LatestVersion string    `json:"latest_version"`
+	Changelog     string    `json:"changelog,omitempty"`
 }
 
 // Check reports the latest release tag if it is newer than the running binary,
@@ -89,9 +90,22 @@ func CheckForUpdate(cacheDir, apiBase, current string) string {
 	_ = writeCache(cacheFile, updateCache{
 		CheckedAt:     time.Now(),
 		LatestVersion: rel.TagName,
+		Changelog:     formatChangelog(rel.Body, maxNoticeEntries),
 	})
 
 	return newerTag(rel.TagName, current)
+}
+
+// NoticeChangelog returns a short changelog for the release CheckForUpdate
+// last reported, from the same cache, or "" if there is none. It makes no
+// request, so it is safe to call right after Check returns a tag.
+func NoticeChangelog() string {
+	stateDir, err := config.AppState()
+	if err != nil {
+		return ""
+	}
+	cached, _ := readCache(filepath.Join(stateDir, cacheFileName))
+	return cached.Changelog
 }
 
 func newerTag(latest, current string) string {

@@ -359,6 +359,10 @@ func printUpdateNotice(cmd *cobra.Command) {
 	// Release tags carry a "v" and the ldflags version does not, so the running
 	// version gets one to read as the same kind of thing as the tag beside it.
 	current := "v" + strings.TrimPrefix(version.Value, "v")
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of chunk is available: %s → %s\nRun: %s\nWhat's new: %s\n",
-		current, latest, upgrade.SelfUpgradeCommand(), upgrade.ReleaseURL(latest))
+	w := cmd.ErrOrStderr()
+	_, _ = fmt.Fprintf(w, "\nA new version of chunk is available: %s → %s\n", current, latest)
+	if notes := upgrade.NoticeChangelog(); notes != "" {
+		_, _ = fmt.Fprintf(w, "\nWhat's new:\n%s\n", notes)
+	}
+	_, _ = fmt.Fprintf(w, "\nRun: %s\nFull changelog: %s\n", upgrade.SelfUpgradeCommand(), upgrade.ReleaseURL(latest))
 }

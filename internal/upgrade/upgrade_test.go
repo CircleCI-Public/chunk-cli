@@ -221,3 +221,15 @@ func TestRunRefusesBrewInstall(t *testing.T) {
 		t.Errorf("expected suggestion of %q, got %q", "brew upgrade chunk", err.Error())
 	}
 }
+
+func TestFormatChangelog(t *testing.T) {
+	body := "## Changelog\n* d12ac9bd638e1939d5608c31d3d2cf4487649aba Fix the thing (#688)\n* 2eae6ac57f41d38a82d178054b07515ead1c248c Add another\n"
+	got := formatChangelog(body, 15)
+	want := "  - Fix the thing (#688)\n  - Add another"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if formatChangelog("no entries here", 15) != "" {
+		t.Fatal("expected empty changelog")
+	}
+}
