@@ -49,7 +49,7 @@ func (e *TargetUnavailableError) Unwrap() error {
 }
 
 func (t Target) ResolveWorkspace(ctx context.Context, cwd string) (string, error) {
-	_, repo, repoErr := gitremote.DetectOrgAndRepoCtx(ctx, cwd)
+	repo, repoErr := gitremote.RepoName(ctx, cwd)
 	if repoErr != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", fmt.Errorf("resolve workspace: detect repo: %w", ctxErr)

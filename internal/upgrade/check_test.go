@@ -283,3 +283,44 @@ func TestWriteCache_concurrentReadersNeverSeePartialFile(t *testing.T) {
 		t.Errorf("%d of %d reads saw a partial or empty cache file", n, atomic.LoadInt64(&reads))
 	}
 }
+
+func TestNoticeChangelog(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+	state, err := config.AppState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v2.0.0","body":"## Changelog\n* d12ac9bd638e1939d5608c31d3d2cf4487649aa Fix it\n"}`))
+	}))
+	t.Cleanup(srv.Close)
+	if CheckForUpdate(state, srv.URL, "v1.0.0") != "v2.0.0" {
+		t.Fatal("expected v2.0.0")
+	}
+	if got := NoticeChangelog("v2.0.0"); got != "  - Fix it" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// The cache is shared with every other chunk process, which may replace it
+// between the check and the notice. Entries for one release under another's
+// heading would mislead, so a mismatch reports nothing.
+func TestNoticeChangelogIgnoresAnotherRelease(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+	state, err := config.AppState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v2.0.0","body":"## Changelog\n* d12ac9bd638e1939d5608c31d3d2cf4487649aa Fix it\n"}`))
+	}))
+	t.Cleanup(srv.Close)
+	if CheckForUpdate(state, srv.URL, "v1.0.0") != "v2.0.0" {
+		t.Fatal("expected v2.0.0")
+	}
+	if got := NoticeChangelog("v3.0.0"); got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+}

@@ -114,22 +114,6 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 
 **Note:** `snapshot create` consumes the source sidecar — it is deleted once the snapshot is captured and cannot be reused. To resume work, launch a new sidecar from the snapshot with `chunk sidecar create --image <snapshot-id>`. Use `chunk sidecar snapshot list` to look up snapshot IDs for your org.
 
-## Also included: team review context
-
-An additional tool, independent of the sidecar workflow. `chunk build-prompt` mines PR review comments from your GitHub org and uses Claude to generate a context file tuned to your team's review standards, so the code agents write reflects those standards from the start.
-
-```bash
-# From inside a git repo — org and repos are auto-detected
-chunk build-prompt
-
-# Or specify explicitly
-chunk build-prompt --org myorg --repos api,backend --top 10
-
-# Output lands in .chunk/context/review-prompt.md
-```
-
-See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md#team-review-context) for details.
-
 ## Commands
 
 ```
@@ -145,7 +129,6 @@ chunk validate [name]                      Run quality checks
 chunk hook disable|enable|status           Manage hook execution
 chunk skill install|list                   Manage AI agent skills
 chunk task config|run                      Configure and trigger CI tasks
-chunk build-prompt                         Generate review context from PR comments
 chunk completion install|uninstall         Shell completions
 chunk upgrade                              Update CLI
 ```
@@ -168,9 +151,9 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key (required for `build-prompt`; optional for `init`) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (optional for `init`; for `review` and `factory`, or use `CLAUDE_CODE_OAUTH_TOKEN`) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription token from `claude setup-token` (for `review`, when no API key is set) |
-| `GITHUB_TOKEN` | GitHub PAT with `repo` scope (for `build-prompt`) |
+| `GITHUB_TOKEN` | GitHub PAT with `repo` scope (optional, for `factory bootstrap` to learn from past review comments) |
 | `CIRCLE_TOKEN` | CircleCI personal API token (for `sidecar` and `task`) |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete environment variable reference.

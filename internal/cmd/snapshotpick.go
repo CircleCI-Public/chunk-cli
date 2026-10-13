@@ -22,7 +22,7 @@ import (
 func snapshotCriteria(workDir string, cfg *config.ProjectConfig) sidecar.SnapshotCriteria {
 	c := sidecar.SnapshotCriteria{}
 
-	if _, repo, err := gitremote.DetectOrgAndRepo(workDir); err == nil && repo != "" {
+	if repo, err := gitremote.RepoName(context.Background(), workDir); err == nil {
 		c.Repo = repo
 	} else if cfg != nil && cfg.VCS != nil && cfg.VCS.Repo != "" {
 		c.Repo = cfg.VCS.Repo

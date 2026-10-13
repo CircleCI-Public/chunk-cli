@@ -292,7 +292,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 
 	io.Println("")
 	printSaved(io, "Anthropic API key", insecureStorage)
-	io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
+	io.Println(ui.Dim("You can now run code reviews with: chunk review"))
 	return nil
 }
 
@@ -546,7 +546,7 @@ func newAuthStatusCmd() *cobra.Command {
 
 			io.Println(ui.Bold("Command requirements:"))
 			io.Println("  task run, task config, sidecar  → CircleCI token")
-			io.Println("  build-prompt                    → GitHub + Anthropic tokens")
+			io.Println("  factory bootstrap               → CircleCI + Claude tokens (GitHub for review history)")
 			io.Println("  validate --remote               → CircleCI token")
 			io.Println("")
 

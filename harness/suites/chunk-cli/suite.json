@@ -1,0 +1,68 @@
+{
+  "cases": [
+    {
+      "name": "validate-project-root",
+      "revision": "5905eaa48eadc2a716ecd856ad0a7ece94448885",
+      "request": "Fix validate runs filing under wrong project root (#624)\n\n* fix validate runs filing under wrong project root\n\n* style: replace em-dash in comment\n\n\n---------",
+      "patch": "patches/validate-project-root.patch",
+      "source": "#624 (fixed by #650), commit 8dcbbd75",
+      "expect": [
+        {
+          "file": "internal/cmd/validate.go",
+          "lines": [
+            586,
+            586
+          ],
+          "about": "attributionDir is promoted to the git root for the event log and breadcrumb, but runValidationPlan still gets the unpromoted opts.attributionRoot(workDir), so commands register under a root the daemon never tracks when .chunk sits below the git root."
+        },
+        {
+          "file": "internal/watchd/validate.go",
+          "lines": [
+            257,
+            261
+          ],
+          "about": "A snapshot (worktree) run passes runRoot as the shadow but req.WorkDir unchanged, and the runner now prefers workDir for --project, so the commands run in the live tree while the result is filed as the snapshot's. Found by the first eval run; still in main at internal/chunkd/server/validate.go."
+        }
+      ]
+    },
+    {
+      "name": "telemetry-error-message",
+      "revision": "3802521bfb6f83ab70db23aef2f2ac8b35c1c586",
+      "request": "Track command success and error type in telemetry",
+      "patch": "patches/telemetry-error-message.patch",
+      "source": "#471 (fixed by #626), commit 9154724c",
+      "expect": [
+        {
+          "file": "internal/telemetry/record.go",
+          "lines": [
+            105,
+            105
+          ],
+          "about": "The error's message is sent with telemetry; wrapped errors routinely embed absolute file paths, which breaks the no-PII guarantee."
+        },
+        {
+          "file": "internal/telemetry/record.go",
+          "lines": [
+            61,
+            68
+          ],
+          "about": "Failure events are never delivered: the sender is only closed in PersistentPostRunE, which cobra skips when RunE returns an error. Found by the first eval run; fixed in #609, which closes the sender after ExecuteC."
+        }
+      ]
+    },
+    {
+      "name": "daemon-socket-path",
+      "revision": "e3a4d8aa7278de038dc710d020803b3fe82c7e56",
+      "request": "Report a too-long watch daemon socket path up front (#654)\n\nA Unix socket path is limited to 104 bytes on macOS and 108 on Linux. When\nthe daemon directory made it longer, the daemon died with 'bind: invalid\nargument' in its log and the CLI only said it did not start within 5s.\nSocketPath now refuses such a path and names the path, its length, the limit\nand the fix (set CHUNK_WATCHD_DIR to a shorter directory).",
+      "patch": "patches/daemon-socket-path.patch",
+      "source": "#654, commit 68c8bfe1"
+    },
+    {
+      "name": "init-hook-symlink",
+      "revision": "460249d854344cefe9f492769dde68d4685c789a",
+      "request": "init: skip pre-commit hook when it is a symlink (#616)\n\nWhen chunk init finds an existing .git/hooks/pre-commit it now calls\nos.Lstat (not os.Stat) before any write. If the path is a symlink \u2014\nas installed by hook managers like husky, lefthook, or pre-commit \u2014\nthe function warns and returns without touching the file. Previously\nos.WriteFile would silently replace the symlink with a regular file,\nbreaking the hook manager's setup.",
+      "patch": "patches/init-hook-symlink.patch",
+      "source": "#616, commit 13416b75"
+    }
+  ]
+}

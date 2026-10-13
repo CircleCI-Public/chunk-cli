@@ -72,7 +72,6 @@ Getting started:
   chunk init                    Initialize project configuration
   chunk auth login              Log in to CircleCI via browser (recommended)
   chunk auth set <provider>     Store a credential manually (circleci, anthropic, github)
-  chunk build-prompt            Generate a review prompt from GitHub PR comments
   chunk task config             Set up CircleCI task configuration
   chunk task run --definition <name> --prompt "<task>"
                                 Trigger an AI coding task
@@ -104,7 +103,6 @@ Configuration:
 	rootCmd.AddCommand(newAuthCmd())
 	rootCmd.AddCommand(newOrgCmd())
 	rootCmd.AddCommand(newConfigCmd())
-	rootCmd.AddCommand(newBuildPromptCmd())
 	rootCmd.AddCommand(newSkillCmd())
 	rootCmd.AddCommand(newCompletionCmd())
 	rootCmd.AddCommand(newManCmd())
@@ -359,6 +357,10 @@ func printUpdateNotice(cmd *cobra.Command) {
 	// Release tags carry a "v" and the ldflags version does not, so the running
 	// version gets one to read as the same kind of thing as the tag beside it.
 	current := "v" + strings.TrimPrefix(version.Value, "v")
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of chunk is available: %s → %s\nRun: %s\nWhat's new: %s\n",
-		current, latest, upgrade.SelfUpgradeCommand(), upgrade.ReleaseURL(latest))
+	w := cmd.ErrOrStderr()
+	_, _ = fmt.Fprintf(w, "\nA new version of chunk is available: %s → %s\n", current, latest)
+	if notes := upgrade.NoticeChangelog(latest); notes != "" {
+		_, _ = fmt.Fprintf(w, "\nWhat's new:\n%s\n", notes)
+	}
+	_, _ = fmt.Fprintf(w, "\nRun: %s\nFull changelog: %s\n", upgrade.SelfUpgradeCommand(), upgrade.ReleaseURL(latest))
 }

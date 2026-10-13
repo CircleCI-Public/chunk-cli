@@ -1,12 +1,12 @@
 ---
 name: chunk-review
-description: Use when asked to "review recent changes", "chunk review", "review my diff", "review this PR", "review PR #123", "review PR <url>", "review my changes", or asks for a code review using the team's review prompt. Supports GitHub PRs via `gh pr diff` and local diffs. Applies team-specific review standards from the .chunk/context/review-prompt.md file.
-version: 3.0.0
+description: Use when asked to "review recent changes", "chunk review", "review my diff", "review this PR", "review PR #123", "review PR <url>", "review my changes", or asks for a code review using the team's review prompts. Supports GitHub PRs via `gh pr diff` and local diffs. Applies the project's review prompts in .chunk/reviews/, one reviewer per prompt.
+version: 4.0.0
 ---
 
 # Chunk Review Skill
 
-Use the team's generated review prompt to review recent code changes. Runs the actual review in an isolated subagent so prior conversation context does not influence the findings.
+Use the project's review prompts in `.chunk/reviews/` to review recent code changes. Each prompt covers one area, such as testing or correctness, and gets its own isolated subagent, so prior conversation context does not influence the findings and one area does not crowd out another. These are the same prompts `chunk factory` and `chunk review` use.
 
 ## Steps
 
@@ -19,19 +19,20 @@ Use the team's generated review prompt to review recent code changes. Runs the a
    - If there are staged changes (`git diff --cached`) — review those
    - Otherwise, review uncommitted changes against the main branch (`git diff main...HEAD` or `git diff origin/main...HEAD`)
 
-2. **Get the diff**: Obtain the changes using the method selected above. If the diff is empty, tell the user there is nothing to review. Store the full diff text — you will pass it inline to the subagent. For PR reviews also store the PR title and body.
+2. **Get the diff**: Obtain the changes using the method selected above. If the diff is empty, tell the user there is nothing to review. Store the full diff text — you will pass it inline to the subagents. For PR reviews also store the PR title and body.
 
-3. **Load the review prompt**: The source depends on the review type:
-   - **PR review**: fetch `.chunk/context/review-prompt.md` from the PR's head branch using:
+3. **Load the review prompts**: Each `.md` or `.txt` file in `.chunk/reviews/` is one review prompt, named after its file without the extension. The source depends on the review type:
+   - **PR review**: list the prompts on the PR's head branch, then fetch each one:
      ```
-     gh api repos/{headRepositoryOwner}/{headRepository}/contents/.chunk/context/review-prompt.md?ref={headRefName} --jq '.content' | base64 --decode
+     gh api 'repos/{headRepositoryOwner}/{headRepository}/contents/.chunk/reviews?ref={headRefName}' --jq '.[] | select(.type == "file") | .name'
+     gh api 'repos/{headRepositoryOwner}/{headRepository}/contents/.chunk/reviews/{name}?ref={headRefName}' --jq '.content' | base64 --decode
      ```
-     From the PR metadata fetched in step 1, substitute `{headRepositoryOwner}` with `headRepositoryOwner.login`, `{headRepository}` with `headRepository.name`, and `{headRefName}` directly. If the file does not exist on that branch, fall back to the local `.chunk/context/review-prompt.md`.
-   - **Local review**: read `.chunk/context/review-prompt.md` from the root of the current project.
-   - If no review prompt is found in either location, tell the user and suggest they run `chunk build-prompt` to generate one. Do not proceed without it.
-   - Store the full file contents — you will pass them inline to the subagent.
+     From the PR metadata fetched in step 1, substitute `{headRepositoryOwner}` with `headRepositoryOwner.login`, `{headRepository}` with `headRepository.name`, and `{headRefName}` directly. If the directory does not exist on that branch, fall back to the local `.chunk/reviews/`.
+   - **Local review**: read every `.md` and `.txt` file in `.chunk/reviews/` at the root of the current project.
+   - If no review prompts are found in either location, tell the user and suggest they run `chunk factory bootstrap` to write a first set from the project and its review history. Do not proceed without them.
+   - Store each prompt's name and full contents — you will pass them inline to the subagents.
 
-4. **Delegate to a subagent**: Launch a general-purpose subagent with a self-contained prompt built from the template below. Substitute `{{REVIEW_PROMPT}}`, `{{PR_CONTEXT}}`, and `{{DIFF}}` with the actual content collected in steps 1–3. The subagent has no access to your conversation history — everything it needs must be in the prompt.
+4. **Delegate to one subagent per prompt**: Launch a general-purpose subagent for each review prompt, all in parallel, each with a self-contained prompt built from the template below. Substitute `{{REVIEW_NAME}}`, `{{REVIEW_PROMPT}}`, `{{PR_CONTEXT}}`, and `{{DIFF}}` with the actual content collected in steps 1–3. The subagents have no access to your conversation history — everything they need must be in the prompt.
 
    For local reviews, omit the PR context section entirely.
 
@@ -39,9 +40,9 @@ Use the team's generated review prompt to review recent code changes. Runs the a
    **Subagent prompt template:**
 
    ```
-   You are performing a code review. Apply the review standards below to the diff using a two-pass approach. Ignore anything outside this prompt — do not use any prior context.
+   You are performing the "{{REVIEW_NAME}}" code review. Apply the review prompt below to the diff using a two-pass approach. Ignore anything outside this prompt — do not use any prior context. You may read files in the repository to understand the code the diff touches, but do not edit anything; for a PR, the local checkout may differ from the PR's head.
 
-   ## Review Standards
+   ## Review Prompt
 
    {{REVIEW_PROMPT}}
 
@@ -56,19 +57,19 @@ Use the team's generated review prompt to review recent code changes. Runs the a
    ## Instructions
 
    **Pass 1 — Comprehensive Review** (internal, do NOT include in output):
-   Apply the standards above to the diff. Do not invent criteria beyond what is in the review standards. For each potential issue, internally record:
+   Apply the review prompt above to the diff. Do not invent criteria beyond what is in the review prompt. For each potential issue, internally record:
    - File path and line number
-   - Category (from the review standards)
+   - Category (from the review prompt)
    - Description of the concern
    - Relevant code snippet
 
    **Pass 2 — Validate and Prioritize**:
    Re-examine every finding from Pass 1. For each finding:
    - Attempt to construct a **concrete failure scenario** (bug triggered, error thrown, security hole exploited, maintenance burden realized). If you cannot construct one, discard the finding.
-   - Rate impact: **Critical** (breaks correctness, security vulnerability, data loss) / **High** (likely bug, significant performance issue, clear maintainability problem) / **Medium** (style or convention issue with real consequences) / **Low** (nitpick, subjective preference)
+   - Rate severity as **High**, **Medium** or **Low** using the review prompt's own definitions of each. Where it gives none: High breaks correctness, security or data; Medium is a likely bug or a convention issue with real consequences; Low is a nitpick or subjective preference.
    - Estimate confidence (how certain you are this is a real issue). Discard anything below ~80% confidence.
-   - **Keep**: all Critical and High findings. At most **1 Medium per changed file**. Discard all Low findings.
-   - **Cap at 10 comments total**. If more than 10 survive filtering, keep the 10 highest-impact ones.
+   - **Keep**: all High and Medium findings. Discard all Low findings.
+   - **Cap at 10 findings**. If more than 10 survive filtering, keep the 10 most severe.
 
    **Output the final filtered findings using this format:**
 
@@ -80,7 +81,7 @@ Use the team's generated review prompt to review recent code changes. Runs the a
    ## Findings
 
    ### 1. <short title>
-   **`<file>:<line>`** | **<Impact>**
+   **`<file>:<line>`** | **<Severity>**
 
    <Explanation — framed as a question unless 100% certain the issue is critical. Reference the specific code and explain the concrete failure scenario.>
 
@@ -97,12 +98,12 @@ Use the team's generated review prompt to review recent code changes. Runs the a
    **Files reviewed**: <count>
    **Issues identified**: 0
 
-   No significant issues identified. The changes look good against the team's review standards.
+   No significant issues identified. The changes look good against this review prompt.
    ```
 
    ---
 
-5. **Return the result**: Output the subagent's response directly to the user without modification.
+5. **Combine the results**: Merge the subagents' findings into one review in the same format, with a `**Reviews**:` line after `**Files reviewed**` naming the prompts that ran. Tag each finding with the review it came from, e.g. `**`<file>:<line>`** | **High** | testing`. When two reviews report the same issue, keep the clearer one. Order by severity, High first, and cap the combined review at 10 findings. Do not add findings of your own or soften the subagents' wording.
 
 ## Framing Guidelines (for the subagent prompt)
 
@@ -113,7 +114,7 @@ Use the team's generated review prompt to review recent code changes. Runs the a
 
 ## Notes
 
-- The `.chunk/context/review-prompt.md` file is generated by `chunk build-prompt` and encodes the team's actual review patterns mined from real PR comments. Treat it as the authoritative source of review standards.
-- If `.chunk/context/review-prompt.md` is missing, do not fall back to generic review criteria — prompt the user to generate it first.
+- The prompts in `.chunk/reviews/` are the project's own. `chunk factory bootstrap` writes a first set from the code and the review comments its team left on past pull requests, and the team edits them from there. Treat them as the authoritative source of review standards.
+- If `.chunk/reviews/` has no prompts, do not fall back to generic review criteria — prompt the user to write them first.
 - Keep review feedback grounded in the diff. Do not comment on code that was not changed.
-- The subagent must receive all context inline — it has no access to the filesystem or conversation history.
+- Each subagent must receive the prompt, diff and PR context inline — it has no access to the conversation history.

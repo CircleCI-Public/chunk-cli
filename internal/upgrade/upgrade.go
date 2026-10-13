@@ -22,6 +22,7 @@ const (
 
 type ghRelease struct {
 	TagName string    `json:"tag_name"`
+	Body    string    `json:"body"`
 	Assets  []ghAsset `json:"assets"`
 }
 
@@ -105,7 +106,66 @@ func Run(out io.Writer, client *http.Client, apiBase, installPath string) error 
 	}
 
 	_, _ = fmt.Fprintf(out, "Updated to %s\n", rel.TagName)
+	if notes := formatChangelog(rel.Body, maxChangelogEntries); notes != "" {
+		_, _ = fmt.Fprintf(out, "\nWhat's new:\n%s\n", notes)
+	}
 	return nil
+}
+
+// Caps on how much of a release's changelog is printed; the full list is
+// always at ReleaseURL. The passive notice gets fewer so it stays a teaser.
+const (
+	maxChangelogEntries = 15
+	maxNoticeEntries    = 5
+)
+
+// formatChangelog turns the goreleaser release body into a short bullet list.
+// Entries look like "* <full sha> message", so the SHA is dropped. Headings
+// and anything else are ignored. Returns "" if the body has no entries.
+func formatChangelog(body string, limit int) string {
+	var lines []string
+	total := 0
+	for _, line := range strings.Split(body, "\n") {
+		entry, ok := strings.CutPrefix(strings.TrimSpace(line), "* ")
+		if !ok {
+			continue
+		}
+		if sha, msg, found := strings.Cut(entry, " "); found && isHexSHA(sha) {
+			entry = msg
+		}
+		total++
+		if total <= limit {
+			lines = append(lines, "  - "+stripControl(entry))
+		}
+	}
+	if total > limit {
+		lines = append(lines, fmt.Sprintf("  ...and %d more", total-limit))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// stripControl drops control characters from a release body entry. The body is
+// free text that lands in the user's terminal, where an escape sequence could
+// rewrite what is already on screen.
+func stripControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\t' || (r >= 0x20 && r != 0x7f) {
+			return r
+		}
+		return -1
+	}, s)
+}
+
+func isHexSHA(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func fetchLatestRelease(client *http.Client, apiBase string) (*ghRelease, error) {

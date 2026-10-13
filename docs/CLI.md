@@ -18,18 +18,6 @@ chunk
 ├── org                             # Manage CircleCI organizations
 │   └── create <name>               # Create a new standalone CircleCI organization
 │
-├── build-prompt                    # Mine PR comments → analyze → generate prompt
-│   --org <org>                     # GitHub org (auto-detected from git remote)
-│   --repos <items>                 # Comma-separated repo names
-│   --top <n>                       # Top reviewers to include (default: 5)
-│   --since <YYYY-MM-DD>            # Start date (default: 3 months ago)
-│   --output <path>                 # Output path (default: .chunk/context/review-prompt.md)
-│   --max-comments <n>              # Max comments per reviewer (0 = no limit)
-│   --analyze-model <model>         # Model for analysis step
-│   --prompt-model <model>          # Model for prompt generation step
-│   --include-attribution           # Include reviewer attribution
-│   --debug                  # Write intermediate files (details JSON, analysis, PR rankings CSV) for debugging
-│
 ├── config
 │   ├── show                        # Display resolved configuration
 │   │   --json                      # Output as JSON
@@ -172,12 +160,25 @@ chunk
 │   │   --json                      # Output as JSON
 │   ├── start [prompt|-]            # Make a worktree to start a change in by hand, for a factory run to refine
 │   │   --json                      # Output as JSON
-│   └── bootstrap                   # Write a first set of review prompts for this project
-│       --output <dir>              # Directory to write them to (default: .chunk/reviews)
+│   ├── bootstrap                   # Write a first set of review prompts for this project
+│   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
+│   │   --org-id <id>               # Organization ID
+│   │   --image <id>                # Sidecar image with Claude Code (default: cimg-base:2026.09-claude)
+│   │   --model <name>              # Claude model (default: Claude Code's default)
+│   │   --timeout <duration>        # Max time for writing the prompts (default: 30m)
+│   │   --no-history                # Leave out the team's review comments from GitHub
+│   │   --since <YYYY-MM-DD>        # Use review comments from this date on (default: 90 days ago)
+│   │   --top <n>                   # Use review comments from this many reviewers (default: 5)
+│   │   --json                      # Output as JSON
+│   └── eval [prompts-dir]          # (hidden) Score review prompts against a suite of changes with known problems
+│       --suite <dir>               # Directory with suite.json and its patches (required)
+│       --runs <n>                  # Times to review each case (default: 1)
+│       --parallelism <n>           # Maximum number of sidecars (0: one per prompt)
+│       --output <path>             # Also write the full report as JSON to this file
 │       --org-id <id>               # Organization ID
-│       --image <id>                # Sidecar image with Claude Code (default: cimg-base:2026.09-claude)
-│       --model <name>              # Claude model (default: Claude Code's default)
-│       --timeout <duration>        # Max time for writing the prompts (default: 30m)
+│       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
+│       --model <name>              # Claude model for reviews (default: Claude Code's default)
+│       --timeout <duration>        # Max time for each review
 │       --json                      # Output as JSON
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
@@ -208,11 +209,6 @@ chunk
 - After a successful `auth signup`, chunk checks whether the new account belongs to any organization. If it belongs to none, chunk prompts for a name and creates a standalone org, so the first sidecar command does not fail on having none. Without a terminal it prints a warning pointing at `chunk org create <name>` instead; the signup itself still succeeds.
 - Commands that resolve an org (sidecar, validate, init, mutate, prune) offer the same org creation prompt when the account has no organizations. Without a terminal, or with `CI` set, sidecar, validate, mutate and prune fail with a suggestion to run `chunk org create <name>` or pass `--org-id`; `init` prints a warning and finishes without writing an org ID.
 - `org create` is hidden from the default help output. It requires CircleCI authentication and creates a standalone org (not tied to a VCS provider), printing the org name, ID, and slug on success.
-- `build-prompt` auto-detects org and repos from the git remote when flags
-  are omitted. If `--org` is provided explicitly, `--repos` is required.
-- `build-prompt --output` creates parent directories automatically.
-- `build-prompt --since` defaults to 3 months before the current date.
-- `build-prompt` does not write intermediate files by default. Pass `--debug` to write the raw details JSON, analysis markdown, and PR rankings CSV alongside the prompt — useful when diagnosing unexpected prompt output.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
 - `config set` user keys: `model`, `telemetry`, `notifications`. Project keys (`.chunk/config.json`):
@@ -400,8 +396,19 @@ chunk
   bootstrap needs Claude Code rather than the project's toolchain, and a project
   image may not have it. `--image` overrides it. Claude Code reads what the project
   says about itself: AGENTS.md, CLAUDE.md, docs, CI and linter configuration,
-  and the code and tests. When `chunk build-prompt` has written the team's
-  standards to `.chunk/context/review-prompt.md`, they are included too. The
+  and the code and tests. With a GitHub token and a GitHub `origin`, it also
+  fetches the review comments the repository's most active reviewers (`--top`,
+  default 5) left on its pull requests since `--since` (default 90 days ago),
+  keeping each one's 200 newest. That happens before any sidecar starts, so a
+  failed fetch costs nothing; it fails the command, with `--no-history` as the
+  way out. No token is not an error: bootstrap warns and goes on from the code
+  alone. Bootstrap needs a GitHub `origin` either way, since the sidecar's copy
+  of the repository is named from it; without one it fails before any sidecar
+  starts. The comments go to the sidecar as
+  `.chunk/review-history.md` in its copy of the repository, over SSH rather than
+  in the request, so their size is not bounded by the request's, and Claude is
+  told to read them as data and make recurring pushback into rules. `--json`
+  reports how many were used as `review_comments`. The
   project's validation commands are named in the request so the reviews leave
   to them what they already enforce. While it reads, each tool call it
   makes (the file it reads, the pattern it searches for) is shown as it happens,
@@ -417,6 +424,31 @@ chunk
   credential is needed, and the same overwrite refusal applies. An unknown name
   is refused with the list of sets. It cannot be combined with `--org-id`,
   `--image`, `--model` or `--timeout`.
+- **`factory eval` scores review prompts, and is hidden.** It is for tuning
+  prompts and what writes them, such as bootstrap, not for everyday use. A suite
+  is a directory with a `suite.json` of cases, each a patch to the repository at
+  a pinned `revision`, the `request` it answers, and the problems a review should
+  find (`expect`: a `file`, optional `lines` as `[first, last]`, and `about`). A
+  case with no `expect` is clean. Every case's revision and patch are checked
+  against the repository before any sidecar starts. Each case is put on every
+  sidecar of its own pool (`factory-eval`, destroyed when it ends) as factory
+  leaves a reviewer: the revision's tree committed as the baseline, the patch
+  uncommitted on top. The prompts are sent as factory's first round sends them,
+  with no implementer. Only high and medium findings count, grouped into the
+  problems they are about, so a problem several prompts report counts once. A
+  finding is about an expected problem when it names the same file and, if the
+  problem has lines, a line within three of them; each expected problem takes a
+  finding of its own first. Other findings are about the same problem as an
+  earlier one in the same file within three lines, or about the file as a whole.
+  Problems the suite does not list are unexpected: on a clean case they would
+  send sound work back, and on another they may be real, so precision, the share
+  of reported problems the suite lists, is a floor. Each prompt's row counts
+  every problem it reported, and how many of those another prompt reported too. A
+  case whose setup or any review fails is reported and left out of the totals
+  rather than scored on the reviews that ran. A missing Claude Code or a rejected
+  credential stops the suite. The command exits non-zero when no case could be
+  scored; a run in which only some cases errored still succeeds, and
+  `summary.errored` counts them.
 - **`watch` is organized around runs.** Factory runs are listed at the top of
   the left pane, live ones first, then up to five that ended in the last day;
   sidecars are listed below them, and `↑/↓` moves through both as one list. The
