@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory/eval"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -71,6 +72,17 @@ The sidecars are deleted when the suite ends.`,
 			root, err := gitutil.RepoRoot(workDir)
 			if err != nil {
 				return &userError{msg: "chunk factory eval runs in a git repository.", err: err}
+			}
+			// The sidecars' copy of the repository is named from origin. Without a
+			// GitHub one the pool fails after the credential and org prompts, so
+			// say so before them.
+			if _, _, err := gitremote.DetectOrgAndRepoCtx(ctx, root); err != nil {
+				return &userError{
+					msg:        "chunk factory eval needs a GitHub origin.",
+					suggestion: "Point the origin remote at the project's GitHub repository.",
+					blocked:    true,
+					err:        err,
+				}
 			}
 			suite, err := eval.LoadSuite(suiteDir)
 			if err != nil {
