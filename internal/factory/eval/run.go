@@ -116,13 +116,18 @@ func runCase(ctx context.Context, opts Options, c Case, status iostream.StatusFu
 	defer func() { _ = os.RemoveAll(scratch) }()
 	tree := filepath.Join(scratch, "tree")
 	git := gitexec.Runner{Dir: opts.Root}
-	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "--detach", tree, c.Revision); err != nil {
+	// The repository's own hooks are not run: the checkout is chunk's, not
+	// the developer's.
+	if out, err := git.CombinedOutput(ctx, "-c", "core.hooksPath=/dev/null", "worktree", "add", "--quiet", "--detach", tree, c.Revision); err != nil {
 		return nil, fmt.Errorf("check out %s: %w: %s", c.Revision, err, strings.TrimSpace(string(out)))
 	}
 	defer func() {
 		_ = git.Run(context.WithoutCancel(ctx), "worktree", "remove", "--force", tree)
 	}()
 
+	// A review that timed out on an earlier case stops being streamed but
+	// keeps running on its sidecar, and would read the tree as it is replaced.
+	stopReviews(ctx, opts)
 	baseline := gitIdentity + ` commit -q --no-verify --allow-empty -m "chunk eval baseline"`
 	if err := onEntries(ctx, opts, tree, "git reset -q && git add -A && "+baseline); err != nil {
 		return nil, fmt.Errorf("set up the baseline: %w", err)
@@ -183,4 +188,19 @@ func onEntries(ctx context.Context, opts Options, dir, script string) error {
 	}
 	wg.Wait()
 	return errors.Join(errs...)
+}
+
+// stopReviews kills any review still running on each sidecar. Best-effort: a
+// sidecar that cannot be reached fails the sync that follows anyway. The
+// bracket keeps the pattern from matching the shell running pkill.
+func stopReviews(ctx context.Context, opts Options) {
+	var wg sync.WaitGroup
+	for _, e := range opts.Entries {
+		wg.Add(1)
+		go func(e *sidecar.PoolEntry) {
+			defer wg.Done()
+			_, _ = review.RunScript(ctx, opts.Exec, e, "pkill -f '[c]laude -p' || true", maxScriptOutput)
+		}(e)
+	}
+	wg.Wait()
 }

@@ -51,6 +51,18 @@ func localExec(home string) sidecar.Execer {
 	}
 }
 
+// withoutPkill skips the sweep for reviews left running from an earlier case.
+// The fake sidecars are this machine, where it would kill any real
+// `claude -p` the developer has running.
+func withoutPkill(run sidecar.Execer) sidecar.Execer {
+	return func(ctx context.Context, e *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
+		if strings.Contains(script, "pkill") {
+			return 0, nil
+		}
+		return run(ctx, e, script, env, onOutput, onSubmitted)
+	}
+}
+
 func installFakeClaude(t *testing.T, home, body string) {
 	t.Helper()
 	bin := filepath.Join(home, ".local", "bin")
@@ -134,7 +146,7 @@ func newEvalFixture(t *testing.T) *evalFixture {
 			Suite:   s,
 			Prompts: []review.Prompt{{Name: "bugs", Body: "find bugs"}, {Name: "tests", Body: "check tests"}},
 			Entries: entries,
-			Exec:    localExec(home),
+			Exec:    withoutPkill(localExec(home)),
 			Sync:    mirror,
 			Review:  review.Options{Credential: claudecode.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"}},
 		},
@@ -209,6 +221,36 @@ func TestRunRecordsACaseThatCannotBeSetUpAndGoesOn(t *testing.T) {
 	assert.ErrorContains(t, errors.New(results[0].Errors[0].Error), "sc-1: sync: connection reset")
 	assert.Assert(t, !results[1].Errored(), "%+v", results[1].Errors)
 	assert.Equal(t, results[1].Unexpected(), 1)
+}
+
+// TestRunStopsLeftoverReviewsBeforeEachCase guards against a review that timed
+// out on one case still running while the next case replaces its tree.
+func TestRunStopsLeftoverReviewsBeforeEachCase(t *testing.T) {
+	f := newEvalFixture(t)
+	f.opts.Entries = f.entries[:1]
+	var mu sync.Mutex
+	var events []string
+	record := func(event string) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+	}
+	exec := f.opts.Exec
+	f.opts.Exec = func(ctx context.Context, e *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
+		if strings.Contains(script, "pkill") {
+			record("pkill")
+		}
+		return exec(ctx, e, script, env, onOutput, onSubmitted)
+	}
+	f.opts.Sync = func(ctx context.Context, e *sidecar.PoolEntry, dir string) error {
+		record("sync")
+		return mirror(ctx, e, dir)
+	}
+
+	_, err := Run(context.Background(), f.opts)
+	assert.NilError(t, err)
+
+	assert.DeepEqual(t, events, []string{"pkill", "sync", "sync", "pkill", "sync", "sync"})
 }
 
 func TestRunStopsWhenClaudeIsMissing(t *testing.T) {
