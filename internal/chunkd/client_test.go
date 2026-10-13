@@ -261,12 +261,17 @@ func fakeDaemon(t *testing.T, build string) *int {
 	t.Helper()
 	dir := socketDir(t)
 	t.Setenv("CHUNK_DAEMON_DIR", dir)
-	pidPath, err := PIDPath()
-	assert.NilError(t, err)
-	assert.NilError(t, WritePID(pidPath, os.Getpid()))
-	sockPath, err := SocketPath()
-	assert.NilError(t, err)
-	ln, err := net.Listen("unix", sockPath)
+	serveFakeDaemon(t, dir, build)
+	return stubLaunch(t)
+}
+
+// serveFakeDaemon writes a pid file naming this process into dir and answers
+// /ping with build on dir/daemon.sock.
+func serveFakeDaemon(t *testing.T, dir, build string) {
+	t.Helper()
+	assert.NilError(t, os.MkdirAll(dir, 0o700))
+	assert.NilError(t, WritePID(filepath.Join(dir, "daemon.pid"), os.Getpid()))
+	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
 	assert.NilError(t, err)
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -276,7 +281,52 @@ func fakeDaemon(t *testing.T, build string) *int {
 	}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
-	return stubLaunch(t)
+}
+
+// legacyHome points the daemon at a fresh XDG state dir under a HOME whose
+// ~/.chunk/daemon is where chunk releases before the XDG move ran it.
+func legacyHome(t *testing.T) (stateDir, legacyDir string) {
+	t.Helper()
+	home := socketDir(t)
+	t.Setenv("CHUNK_DAEMON_DIR", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "s"))
+	return filepath.Join(home, "s", "chunk", "daemon"), filepath.Join(home, ".chunk", "daemon")
+}
+
+func TestFindDaemon_reachesADaemonOnTheLegacySocket(t *testing.T) {
+	_, legacy := legacyHome(t)
+	serveFakeDaemon(t, legacy, BuildID())
+	launches := stubLaunch(t)
+
+	pidPath, sockPath, err := findDaemon()
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(pidPath, filepath.Join(legacy, "daemon.pid")))
+	assert.Check(t, cmp.Equal(sockPath, filepath.Join(legacy, "daemon.sock")))
+
+	assert.NilError(t, EnsureRunning())
+	assert.NilError(t, EnsureLaunched())
+	assert.Check(t, cmp.Equal(*launches, 0))
+	assert.Check(t, IsDaemonCompatible())
+}
+
+func TestFindDaemon_prefersTheStateDir(t *testing.T) {
+	state, legacy := legacyHome(t)
+	serveFakeDaemon(t, legacy, "old")
+	serveFakeDaemon(t, state, "new")
+
+	_, sockPath, err := findDaemon()
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(sockPath, filepath.Join(state, "daemon.sock")))
+}
+
+func TestFindDaemon_defaultsToTheStateDir(t *testing.T) {
+	state, _ := legacyHome(t)
+
+	pidPath, sockPath, err := findDaemon()
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(pidPath, filepath.Join(state, "daemon.pid")))
+	assert.Check(t, cmp.Equal(sockPath, filepath.Join(state, "daemon.sock")))
 }
 
 // stubLaunch replaces starting a daemon with counting the attempts.

@@ -2,9 +2,13 @@ package chunkd
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // maxSocketPath returns the size of the kernel's Unix socket path buffer: 104
@@ -44,15 +48,15 @@ func daemonDir() (string, error) {
 	if override := os.Getenv(EnvDir); override != "" {
 		return override, nil
 	}
-	home, err := os.UserHomeDir()
+	state, err := config.AppState()
 	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(home, ".chunk", "daemon"), nil
+	return filepath.Join(state, "daemon"), nil
 }
 
 // EnsureDir creates the daemon's directory if it doesn't exist and returns the
-// path. That is ~/.chunk/daemon/ unless CHUNK_DAEMON_DIR overrides it.
+// path. That is $XDG_STATE_HOME/chunk/daemon/ unless CHUNK_DAEMON_DIR overrides it.
 func EnsureDir() (string, error) {
 	d, err := daemonDir()
 	if err != nil {
@@ -81,6 +85,40 @@ func SocketPath() (string, error) {
 		return "", err
 	}
 	return sock, nil
+}
+
+// findDaemon returns the pid file and socket of the local daemon a client should
+// talk to: the ones under daemonDir, unless nothing answers there and a daemon
+// started by an older chunk answers under ~/.chunk/daemon. That daemon is reused
+// until it exits; a new one always starts under daemonDir.
+func findDaemon() (pidPath, sockPath string, err error) {
+	pidPath, err = PIDPath()
+	if err != nil {
+		return "", "", err
+	}
+	sockPath, err = SocketPath()
+	if err != nil || os.Getenv(EnvDir) != "" || accepts(sockPath) {
+		return pidPath, sockPath, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return pidPath, sockPath, nil
+	}
+	legacy := filepath.Join(home, ".chunk", "daemon")
+	if legacySock := filepath.Join(legacy, "daemon.sock"); accepts(legacySock) {
+		return filepath.Join(legacy, "daemon.pid"), legacySock, nil
+	}
+	return pidPath, sockPath, nil
+}
+
+// accepts reports whether something is listening on the Unix socket at path.
+func accepts(path string) bool {
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // LogPath returns the path to the daemon log file.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -518,4 +519,17 @@ func TestConflictReportIsKnownWithNoAnswerBeforeTheFirstCheck(t *testing.T) {
 	// And nothing is said or claimed on the back of it.
 	assert.Check(t, cmp.Equal(chunkd.ConflictNotice(report), ""))
 	assert.Check(t, cmp.Contains(chunkd.ConflictStatus(report), "No conflict check has completed"))
+}
+
+func TestRunDaemonRefusesASocketThatAnswers(t *testing.T) {
+	dir := socketDir(t)
+	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	err = runDaemon(context.Background(), nil, nil, "", nil, nil)
+	assert.ErrorContains(t, err, "already serving")
+	_, statErr := os.Stat(filepath.Join(dir, "daemon.pid"))
+	assert.Check(t, errors.Is(statErr, os.ErrNotExist), "pid file of the live daemon must be left alone")
 }

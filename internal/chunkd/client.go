@@ -30,7 +30,7 @@ func daemonClient() (*http.Client, error) {
 	if addr := TCPRemoteAddr(); addr != "" {
 		return tcpClient(addr), nil
 	}
-	sockPath, err := SocketPath()
+	_, sockPath, err := findDaemon()
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ func longDaemonClient() (*http.Client, error) {
 	if addr := TCPRemoteAddr(); addr != "" {
 		return longTCPClient(addr), nil
 	}
-	sockPath, err := SocketPath()
+	_, sockPath, err := findDaemon()
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +256,7 @@ var ErrDaemonPermission = errors.New("the chunk daemon socket is not accessible 
 // how loudly to fail: a hook stays quiet, a person running the command by hand
 // gets told why there is no answer.
 func FetchConflicts(root string) (ConflictReport, error) {
-	sockPath, err := SocketPath()
+	_, sockPath, err := findDaemon()
 	if err != nil {
 		return ConflictReport{}, err
 	}
@@ -368,11 +368,7 @@ func StopForCredentialChange() {
 	if TCPRemoteAddr() != "" {
 		return
 	}
-	pidPath, err := PIDPath()
-	if err != nil {
-		return
-	}
-	sockPath, err := SocketPath()
+	pidPath, sockPath, err := findDaemon()
 	if err != nil {
 		return
 	}
@@ -469,7 +465,7 @@ var ErrAsyncRefused = errors.New("async validation refused")
 // StartAsyncValidate asks the daemon to validate projectRoot in the background
 // and returns the new task's ID without waiting for the run.
 func StartAsyncValidate(projectRoot string, args []string, circleCIToken string) (string, error) {
-	sockPath, err := SocketPath()
+	_, sockPath, err := findDaemon()
 	if err != nil {
 		return "", err
 	}
@@ -517,7 +513,7 @@ func StartAsyncValidate(projectRoot string, args []string, circleCIToken string)
 // Best-effort: with no daemon running there is nothing to collect and nothing to
 // report, which is not an error worth surfacing on a hook path.
 func CollectValidateResults(projectRoot string) ([]TaskState, error) {
-	sockPath, err := SocketPath()
+	_, sockPath, err := findDaemon()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
 	}
@@ -561,11 +557,7 @@ func EnsureRunning() error {
 	if TCPRemoteAddr() != "" {
 		return nil
 	}
-	pidPath, err := PIDPath()
-	if err != nil {
-		return err
-	}
-	sockPath, err := SocketPath()
+	pidPath, sockPath, err := findDaemon()
 	if err != nil {
 		return err
 	}
@@ -602,11 +594,7 @@ func EnsureLaunched() error {
 	if TCPRemoteAddr() != "" {
 		return nil
 	}
-	pidPath, err := PIDPath()
-	if err != nil {
-		return err
-	}
-	sockPath, err := SocketPath()
+	pidPath, sockPath, err := findDaemon()
 	if err != nil {
 		return err
 	}

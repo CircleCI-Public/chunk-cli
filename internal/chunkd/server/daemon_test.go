@@ -67,7 +67,7 @@ func TestSnapshotAssignsPoolSidecarsToTheirFactoryRun(t *testing.T) {
 
 // TestDaemonRoundTrip starts the daemon in-process, waits for it to accept
 // connections, issues a FetchSnapshot, then cancels the context and verifies
-// clean shutdown. Uses CHUNK_DAEMON_DIR to avoid touching ~/.chunk/daemon.
+// clean shutdown. Uses CHUNK_DAEMON_DIR to avoid touching the real daemon dir.
 func TestDaemonRoundTrip(t *testing.T) {
 	t.Setenv("CHUNK_DAEMON_DIR", t.TempDir())
 
