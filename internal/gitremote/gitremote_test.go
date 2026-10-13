@@ -157,6 +157,18 @@ func TestParseRepoName(t *testing.T) {
 		{name: "empty", url: "", wantErr: true},
 		{name: "whitespace only", url: "   ", wantErr: true},
 		{name: "root only", url: "/", wantErr: true},
+		{name: "ssh url with port", url: "ssh://git@host:2222/org/repo.git", want: "repo"},
+		{name: "https with port", url: "https://host:8443/org/repo.git", want: "repo"},
+		{name: "dot github", url: "git@github.com:org/.github.git", want: ".github"},
+		// A name reaches rm -rf and rsync --delete on the sidecar, so these
+		// must not resolve to a directory outside the workspace or to one the
+		// remote shell would re-parse.
+		{name: "traversal", url: "https://host/org/..", wantErr: true},
+		{name: "scp traversal", url: "git@host:org/../..", wantErr: true},
+		{name: "no path", url: "https://github.com/", wantErr: true},
+		{name: "host and port only", url: "ssh://git@host:2222", wantErr: true},
+		{name: "shell metacharacter", url: "git@host:org/repo;rm -rf ~", wantErr: true},
+		{name: "space in name", url: "git@host:org/my repo", wantErr: true},
 	}
 
 	for _, tt := range tests {

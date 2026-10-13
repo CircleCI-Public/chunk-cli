@@ -60,18 +60,30 @@ func RepoName(ctx context.Context, workDir string) (string, error) {
 	return ParseRepoName(url)
 }
 
+// repoNameRe is what a name may contain to be used unquoted as a directory on
+// a sidecar and as an rsync destination, which the remote shell re-parses.
+var repoNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 // ParseRepoName extracts a repo name from any git remote URL by taking its last
 // path segment and stripping a trailing .git. It handles scp style remotes
 // (git@host:org/repo.git) as well as URLs and local paths.
 func ParseRepoName(url string) (string, error) {
 	trimmed := strings.TrimRight(strings.TrimSpace(url), "/")
-	// Drop any scp style host prefix so "git@host:repo.git" yields "repo".
-	if idx := strings.LastIndex(trimmed, ":"); idx != -1 {
-		trimmed = trimmed[idx+1:]
+	// A scheme's host carries no repo name, and neither does a scp style
+	// remote's. What is left of either is the path.
+	if _, rest, ok := strings.Cut(trimmed, "://"); ok {
+		_, rest, ok = strings.Cut(rest, "/")
+		if !ok {
+			return "", fmt.Errorf("no repo name in remote URL: %q", url)
+		}
+		trimmed = rest
+	} else if _, rest, ok := strings.Cut(trimmed, ":"); ok {
+		trimmed = rest
 	}
 	repo := strings.TrimSuffix(path.Base(trimmed), ".git")
-	// path.Base returns "." for an empty input and "/" for a root-only path.
-	if repo == "" || repo == "." || repo == "/" {
+	// A name reaches rm -rf and rsync --delete on the sidecar, so ".." or a
+	// shell metacharacter in it would act outside the workspace.
+	if repo == "." || repo == ".." || !repoNameRe.MatchString(repo) {
 		return "", fmt.Errorf("no repo name in remote URL: %q", url)
 	}
 	return repo, nil
