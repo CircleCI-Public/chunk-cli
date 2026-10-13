@@ -131,6 +131,22 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		return fmt.Errorf("ensure daemon dir: %w", err)
 	}
 
+	sockPath, err := chunkd.SocketPath()
+	if err != nil {
+		return err
+	}
+	// Taking over a socket that still answers would orphan the daemon behind
+	// it: alive, polling every project, but unreachable and with no pid file to
+	// stop it by. A client from a release that used another daemon dir
+	// relaunches the binary each time its own dir stays empty, so without
+	// this an old 'chunk watch' left open across an upgrade leaks a daemon per
+	// poll. A daemon being replaced stops answering before its replacement
+	// starts (see stopDaemon), so this only refuses a live one.
+	if conn, err := net.DialTimeout("unix", sockPath, time.Second); err == nil {
+		_ = conn.Close()
+		return fmt.Errorf("a chunk daemon is already serving %s", sockPath)
+	}
+
 	pidPath, err := chunkd.PIDPath()
 	if err != nil {
 		return err
@@ -146,10 +162,6 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		}
 	}()
 
-	sockPath, err := chunkd.SocketPath()
-	if err != nil {
-		return err
-	}
 	_ = os.Remove(sockPath)
 
 	ln, err := net.Listen("unix", sockPath)

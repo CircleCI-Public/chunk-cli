@@ -26,6 +26,10 @@ func isolateConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
+	// The daemon dir follows XDG_STATE_HOME ahead of HOME. Left inherited, a
+	// test that saves credentials would stop the developer's real daemon.
+	t.Setenv(config.EnvXDGStateHome, filepath.Join(home, ".local", "state"))
+	t.Setenv("CHUNK_DAEMON_DIR", "")
 	t.Setenv(config.EnvChunkSessionID, "")
 	t.Setenv(session.EnvClaudeSessionID, "")
 	// Keychain service keys are derived from these base URLs, which otherwise

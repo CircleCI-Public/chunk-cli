@@ -210,7 +210,7 @@ in `config.Resolve` and makes clients testable.
 | `CHUNK_SESSION_ID` | session, sidecar | Pins that session identity by hand; wins over `CLAUDE_CODE_SESSION_ID` |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
 | `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
-| `XDG_STATE_HOME` | upgrade | User state directory for the 24 h update-check cache (default: `~/.local/state`) |
+| `XDG_STATE_HOME` | upgrade, chunkd | User state directory for the 24 h update-check cache and the daemon's socket, pid file and log (default: `~/.local/state`) |
 | `CHUNK_NO_TELEMETRY` | telemetry | Disable usage telemetry (any non-empty value) |
 | `NO_ANALYTICS` | telemetry | Disable usage telemetry (any non-empty value) |
 | `DO_NOT_TRACK` | telemetry | Disable usage telemetry (any non-empty value) |
@@ -316,7 +316,7 @@ it, because a repo that never caches is otherwise silent about why. See
 
 The daemon is split in two. `internal/chunkd` is its API: the types that go over
 the wire, the HTTP client, the socket and pid paths, and starting the process.
-Its internal dependencies are `eventlog`, `iostream` and `version`.
+Its internal dependencies are `config`, `eventlog`, `iostream` and `version`.
 `internal/chunkd/server` is the daemon itself and imports `chunkd` for the types
 it serves. Clients — `chunk watch`, `chunk factory build`, hooks, `chunk validate` —
 import `chunkd` only, so they depend on the daemon's API and never on the factory
