@@ -164,12 +164,6 @@ The sidecars are deleted when the suite ends.`,
 				Status: statusFn,
 				OnCase: func(r eval.CaseResult) { statusFn(caseLevel(r), caseLine(r)) },
 			})
-			switch {
-			case errors.Is(runErr, claudecode.ErrMissing):
-				return agentNotInstalled("the eval sidecars", runErr)
-			case errors.Is(runErr, claudecode.ErrCredentialRejected):
-				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, runErr)
-			}
 
 			names := make([]string, len(prompts))
 			for i, p := range prompts {
@@ -192,10 +186,16 @@ The sidecars are deleted when the suite ends.`,
 			} else {
 				printEvalSummary(streams, report.Summary)
 			}
-			if runErr != nil {
-				return &userError{msg: "The suite stopped early.", err: runErr}
+			// The cases scored before the suite stopped are reported above.
+			switch {
+			case runErr == nil:
+				return nil
+			case errors.Is(runErr, claudecode.ErrMissing):
+				return agentNotInstalled("the eval sidecars", runErr)
+			case errors.Is(runErr, claudecode.ErrCredentialRejected):
+				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, runErr)
 			}
-			return nil
+			return &userError{msg: "The suite stopped early.", err: runErr}
 		},
 	}
 
