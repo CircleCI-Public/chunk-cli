@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -774,6 +775,33 @@ func TestNewPoolUsesConfiguredRepoPath(t *testing.T) {
 	pool.Release(entry)
 
 	assert.Equal(t, entry.RepoPath, "/custom/workspace")
+}
+
+// A pool names its workspace after the origin's repo on any host, so factory
+// and validate work in a repository that is not on GitHub.
+func TestNewPoolNamesWorkspaceFromNonGitHubOrigin(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	setURL := exec.Command("git", "remote", "set-url", "origin", "https://gitlab.com/my-org/gitlab-repo.git")
+	setURL.Dir = env.workDir
+	out, err := setURL.CombinedOutput()
+	assert.NilError(t, err, string(out))
+
+	pool, err := NewPool(context.Background(), env.cl, PoolOptions{
+		Size:        1,
+		Name:        "validate",
+		OrgID:       "org-1",
+		Image:       "ubuntu:22.04",
+		WorkDir:     env.workDir,
+		ExistingIDs: []string{"fresh-sb-1"},
+		FreshIDs:    []string{"fresh-sb-1"},
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Equal(t, entry.RepoPath, DefaultWorkspace("gitlab-repo"))
 }
 
 func TestPool_Replace(t *testing.T) {

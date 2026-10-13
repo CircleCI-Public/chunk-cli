@@ -36,8 +36,9 @@ func TestResolveVariantsWorkspaceDefaultsToSidecarHome(t *testing.T) {
 
 	ws, err := resolveVariantsWorkspace(context.Background(), "", repoDir)
 	assert.NilError(t, err)
-	// workspace uses the local directory basename, not the git remote repo name
-	assert.Equal(t, ws, "/home/runner/"+filepath.Base(repoDir))
+	// Named after the origin's repo, as `chunk sidecar env build` names it, not
+	// after the checkout's directory.
+	assert.Equal(t, ws, "/home/runner/my-repo")
 }
 
 func TestResolveVariantsWorkspacePrefersWorkdirFlag(t *testing.T) {

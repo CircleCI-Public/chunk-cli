@@ -71,7 +71,6 @@ func CurrentBranch(root string) string {
 }
 
 const defaultSidecarFile = "sidecar.json"
-const gitHeadRef = "HEAD"
 
 // sidecarFileName returns the name of the sidecar state file.
 //   - Both empty → "sidecar.json" (legacy fallback)
