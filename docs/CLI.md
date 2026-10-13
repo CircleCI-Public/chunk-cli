@@ -431,7 +431,9 @@ chunk
   every problem it reported, and how many of those another prompt reported too. A
   case whose setup or any review fails is reported and left out of the totals
   rather than scored on the reviews that ran. A missing Claude Code or a rejected
-  credential stops the suite.
+  credential stops the suite. The command exits non-zero when no case could be
+  scored; a run in which only some cases errored still succeeds, and
+  `summary.errored` counts them.
 - **`watch` is organized around runs.** Factory runs are listed at the top of
   the left pane, live ones first, then up to five that ended in the last day;
   sidecars are listed below them, and `↑/↓` moves through both as one list. The

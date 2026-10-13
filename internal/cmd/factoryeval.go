@@ -189,7 +189,7 @@ The sidecars are deleted when the suite ends.`,
 			// The cases scored before the suite stopped are reported above.
 			switch {
 			case runErr == nil:
-				return nil
+				return noneScored(report.Summary)
 			case errors.Is(runErr, claudecode.ErrMissing):
 				return agentNotInstalled("the eval sidecars", runErr)
 			case errors.Is(runErr, claudecode.ErrCredentialRejected):
@@ -210,6 +210,20 @@ The sidecars are deleted when the suite ends.`,
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	_ = cmd.MarkFlagRequired("suite")
 	return cmd
+}
+
+// noneScored fails a run in which every case errored: its report measures
+// nothing. A run in which only some did still succeeds; the summary counts
+// them.
+func noneScored(s eval.Summary) error {
+	if s.Runs == 0 || s.Scored > 0 {
+		return nil
+	}
+	return &userError{
+		msg:        "No case could be scored.",
+		suggestion: "Every case errored; see the errors above.",
+		errMsg:     fmt.Sprintf("all %d case run(s) errored", s.Runs),
+	}
 }
 
 // evalReport is the --json and --output report of an eval.
