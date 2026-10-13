@@ -1,0 +1,433 @@
+diff --git a/internal/cmd/validate.go b/internal/cmd/validate.go
+index 3b03e26e..860ee6ad 100644
+--- a/internal/cmd/validate.go
++++ b/internal/cmd/validate.go
+@@ -553,7 +553,16 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
+ 	// before env loading, so that sync and env-resolve status events are
+ 	// captured. Wired for every run, sidecar or not: an empty sidecar_id is what
+ 	// files a run under a project's local row, not a reason to record nothing.
+-	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, opts.attributionRoot(workDir), hook)
++	//
++	// Use the git root rather than workDir so the event log lands in the same
++	// data directory as sidecar state, which keys on the git top-level. A
++	// project whose .chunk sits below the git root would otherwise split its
++	// state across two data directories.
++	attributionDir := opts.attributionRoot(workDir)
++	if gitRoot := gitutil.TopLevelCtx(ctx, attributionDir); gitRoot != "" {
++		attributionDir = gitRoot
++	}
++	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, attributionDir, hook)
+ 	setupComplete := false
+ 	var setupErr error
+ 	defer func() {
+@@ -770,17 +779,10 @@ func ensureRequestedValidateCommand(workDir, name, inlineCmd string, cfg *config
+ // back unchanged: there is nowhere to write, so the run reports without
+ // recording.
+ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) (iostream.StatusFunc, *eventlog.Recorder) {
+-	// Keyed on workDir rather than sidecar.StateDir, which walks up from the
+-	// process's own working directory and so answers for the wrong project under
+-	// --project.
+-	//
+-	// workDir is only as good as what reached it, and two cases are known to
+-	// leave it pointing elsewhere. A project whose .chunk lives below the git
+-	// root keys its log here but its sidecar state under the root, splitting one
+-	// project's state in two. And a daemon-delegated run without an explicit
+-	// --project resolves workDir to the daemon's own working directory, because
+-	// the request carries Args and Env but nothing about where the caller stood.
+-	// Both file a run under a project that did not run it.
++	// Callers pass the git top-level (not their cwd) so the event log lands in
++	// the same data directory as sidecar state, which sidecar.StateDir also keys
++	// on the git top-level.  See the call site in runValidateCmdE for where the
++	// root is derived.
+ 	dataDir, err := config.ProjectDataDir(workDir)
+ 	if err != nil {
+ 		// A missing data dir leaves the recorder reporting without recording.
+@@ -899,6 +901,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID st
+ 	req := watchd.ValidateRequest{
+ 		Args:        reqArgs,
+ 		ProjectRoot: workDir,
++		WorkDir:     workDir,
+ 		OrgID:       orgID,
+ 		AllowAsync:  mayRunInBackground(hook),
+ 		HookCodex:   hook != nil && hook.codex,
+diff --git a/internal/cmd/watchdaemon.go b/internal/cmd/watchdaemon.go
+index 9ce80330..96e95164 100644
+--- a/internal/cmd/watchdaemon.go
++++ b/internal/cmd/watchdaemon.go
+@@ -76,7 +76,7 @@ func authMessage(err error) string {
+ // in-process by running a fresh cobra root command with the caller's env and
+ // session ID seeded into the context.
+ func makeValidateRunner() watchd.ValidateRunner {
+-	return func(ctx context.Context, projectRoot string, args []string, env []string, stdout, stderr io.Writer) int {
++	return func(ctx context.Context, projectRoot, workDir string, args []string, env []string, stdout, stderr io.Writer) int {
+ 		// Seed the context with the caller's session ID before cobra's
+ 		// PersistentPreRunE runs, so IDFromEnv (which reads the daemon's own env)
+ 		// does not overwrite it.
+@@ -99,8 +99,18 @@ func makeValidateRunner() watchd.ValidateRunner {
+ 		// validates repo A and reports A's exit code as B's answer. It goes last
+ 		// because cobra takes the final value, and the caller's own --project is
+ 		// already what the client resolved this from.
+-		if projectRoot != "" {
+-			runArgs = append(runArgs, "--project", projectRoot)
++		//
++		// Use workDir (the caller's original working directory) rather than
++		// projectRoot (the git top-level used for state keying) so the subprocess
++		// loads .chunk/config.json from the right location when the project's
++		// .chunk directory sits below the git root. Fall back to projectRoot for
++		// requests from older clients that did not send workDir.
++		target := workDir
++		if target == "" {
++			target = projectRoot
++		}
++		if target != "" {
++			runArgs = append(runArgs, "--project", target)
+ 		}
+ 		rootCmd.SetArgs(runArgs)
+ 		rootCmd.SetContext(ctx)
+diff --git a/internal/cmd/watchdaemon_test.go b/internal/cmd/watchdaemon_test.go
+index 042b93cb..ed6c7dad 100644
+--- a/internal/cmd/watchdaemon_test.go
++++ b/internal/cmd/watchdaemon_test.go
+@@ -42,7 +42,7 @@ func TestValidateRunnerValidatesTheRequestedProjectNotItsCwd(t *testing.T) {
+ 	t.Chdir(projectWithCommand(t, "ran-in-daemon-cwd"))
+ 
+ 	var stdout, stderr bytes.Buffer
+-	code := makeValidateRunner()(context.Background(), requested,
++	code := makeValidateRunner()(context.Background(), requested, "",
+ 		[]string{"validate", "--local"}, os.Environ(), &stdout, &stderr)
+ 
+ 	assert.Equal(t, code, 0)
+@@ -61,7 +61,7 @@ func TestValidateRunnerFallsBackToCwdWithoutAProjectRoot(t *testing.T) {
+ 	t.Chdir(projectWithCommand(t, "ran-in-daemon-cwd"))
+ 
+ 	var stdout, stderr bytes.Buffer
+-	code := makeValidateRunner()(context.Background(), "",
++	code := makeValidateRunner()(context.Background(), "", "",
+ 		[]string{"validate", "--local"}, os.Environ(), &stdout, &stderr)
+ 
+ 	assert.Equal(t, code, 0)
+@@ -80,7 +80,7 @@ func TestValidateRunnerOverridesACallerSuppliedProject(t *testing.T) {
+ 	t.Chdir(t.TempDir())
+ 
+ 	var stdout, stderr bytes.Buffer
+-	code := makeValidateRunner()(context.Background(), requested,
++	code := makeValidateRunner()(context.Background(), requested, "",
+ 		[]string{"validate", "--local", "--project", stale}, os.Environ(), &stdout, &stderr)
+ 
+ 	assert.Equal(t, code, 0)
+@@ -96,10 +96,31 @@ func TestValidateRunnerReportsAnUnknownFlagAsBadArgs(t *testing.T) {
+ 	isolateConfig(t)
+ 
+ 	var stdout, stderr bytes.Buffer
+-	code := makeValidateRunner()(context.Background(), t.TempDir(),
++	code := makeValidateRunner()(context.Background(), t.TempDir(), "",
+ 		[]string{"validate", "--no-such-flag"}, os.Environ(), &stdout, &stderr)
+ 
+ 	assert.Equal(t, code, ExitBadArgs)
+ 	assert.Assert(t, strings.Contains(stderr.String(), "no-such-flag"),
+ 		"the run should say what it rejected, got: %q", stderr.String())
+ }
++
++// When the request carries a workDir (the caller's original cwd), the runner
++// uses it for --project so .chunk/config.json is found at the right location.
++// This matters when the .chunk directory sits below the git root: projectRoot
++// (the git top-level) and workDir (the .chunk parent) then differ, and
++// validating from projectRoot would fail to find the config.
++func TestValidateRunnerPrefersWorkDirOverProjectRootForProject(t *testing.T) {
++	isolateConfig(t)
++	workDir := projectWithCommand(t, "ran-in-workdir")
++	projectRoot := t.TempDir() // simulates the git root, no .chunk here
++	t.Chdir(t.TempDir())
++
++	var stdout, stderr bytes.Buffer
++	code := makeValidateRunner()(context.Background(), projectRoot, workDir,
++		[]string{"validate", "--local"}, os.Environ(), &stdout, &stderr)
++
++	assert.Equal(t, code, 0)
++	combined := stdout.String() + stderr.String()
++	assert.Assert(t, strings.Contains(combined, "ran-in-workdir"),
++		"runner should use workDir for --project, got: %q", combined)
++}
+diff --git a/internal/watchd/client.go b/internal/watchd/client.go
+index 087037c9..5fc4b10b 100644
+--- a/internal/watchd/client.go
++++ b/internal/watchd/client.go
+@@ -401,6 +401,7 @@ func StartAsyncValidate(projectRoot string, args []string, circleCIToken string)
+ 		CircleCIToken: circleCIToken,
+ 		Env:           os.Environ(),
+ 		ProjectRoot:   projectRoot,
++		WorkDir:       projectRoot,
+ 	})
+ 	if err != nil {
+ 		return "", fmt.Errorf("marshal async validate request: %w", err)
+diff --git a/internal/watchd/ipc_test.go b/internal/watchd/ipc_test.go
+index 7021750e..a63fcfcf 100644
+--- a/internal/watchd/ipc_test.go
++++ b/internal/watchd/ipc_test.go
+@@ -389,7 +389,7 @@ func TestRunValidateTCP_DoesNotForwardCredentials(t *testing.T) {
+ 		env []string
+ 	}
+ 	got := make(chan captured, 1)
+-	runner := ValidateRunner(func(_ context.Context, _ string, _ []string, env []string, stdout io.Writer, _ io.Writer) int {
++	runner := ValidateRunner(func(_ context.Context, _ string, _ string, _ []string, env []string, stdout io.Writer, _ io.Writer) int {
+ 		got <- captured{env: env}
+ 		_, _ = stdout.Write([]byte("ok"))
+ 		return 0
+diff --git a/internal/watchd/risk_test.go b/internal/watchd/risk_test.go
+index 9217b61e..bca12507 100644
+--- a/internal/watchd/risk_test.go
++++ b/internal/watchd/risk_test.go
+@@ -221,7 +221,7 @@ func riskDaemon(t *testing.T, exitCode int) (*daemon, string, func() int) {
+ 
+ 	var mu sync.Mutex
+ 	runs := 0
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int {
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int {
+ 		mu.Lock()
+ 		runs++
+ 		mu.Unlock()
+@@ -400,7 +400,7 @@ func TestAFreshRepoIsMeasuredWithoutGit(t *testing.T) {
+ 	gitInit(t, root)
+ 	d := newTestDaemon()
+ 	t.Cleanup(d.tasks.stopAll)
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+ 	writeSource(t, root, 10)
+ 
+ 	resp := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
+@@ -417,7 +417,7 @@ func TestAFreshRepoIsMeasuredIncrementally(t *testing.T) {
+ 	gitInit(t, root)
+ 	d := newTestDaemon()
+ 	t.Cleanup(d.tasks.stopAll)
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+ 
+ 	writeSource(t, root, 400)
+ 	first := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
+diff --git a/internal/watchd/shadow_test.go b/internal/watchd/shadow_test.go
+index 8489c192..0870c6fa 100644
+--- a/internal/watchd/shadow_test.go
++++ b/internal/watchd/shadow_test.go
+@@ -48,7 +48,7 @@ func TestWorktreeModeRunsInASnapshotAndAttributesItBack(t *testing.T) {
+ 		args        []string
+ 	}
+ 	calls := make(chan call, 1)
+-	d.runner = func(_ context.Context, projectRoot string, a []string, _ []string, _ io.Writer, _ io.Writer) int {
++	d.runner = func(_ context.Context, projectRoot string, _ string, a []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 		calls <- call{projectRoot, a}
+ 		return 0
+ 	}
+@@ -76,7 +76,7 @@ func TestASnapshotResultSurvivesAnEditDuringTheRun(t *testing.T) {
+ 
+ 	release := make(chan struct{})
+ 	shadowSeen := make(chan string, 1)
+-	d.runner = func(_ context.Context, projectRoot string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
++	d.runner = func(_ context.Context, projectRoot string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 		shadowSeen <- projectRoot
+ 		<-release
+ 		return 0
+@@ -111,7 +111,7 @@ func TestALiveTreeVerdictIsStillDiscardedAfterAnEdit(t *testing.T) {
+ 
+ 	release := make(chan struct{})
+ 	started := make(chan struct{})
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int {
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int {
+ 		close(started)
+ 		<-release
+ 		return 0
+@@ -138,7 +138,7 @@ func TestTheShadowIsRemovedWhenTheRunEnds(t *testing.T) {
+ 	writeSource(t, root, 10)
+ 
+ 	shadowSeen := make(chan string, 1)
+-	d.runner = func(_ context.Context, projectRoot string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
++	d.runner = func(_ context.Context, projectRoot string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 		shadowSeen <- projectRoot
+ 		return 0
+ 	}
+@@ -170,7 +170,7 @@ func TestTheLiveTreeIsUsedUnlessTheProjectAsksOtherwise(t *testing.T) {
+ 		args        []string
+ 	}
+ 	calls := make(chan call, 1)
+-	d.runner = func(_ context.Context, projectRoot string, a []string, _ []string, _ io.Writer, _ io.Writer) int {
++	d.runner = func(_ context.Context, projectRoot string, _ string, a []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 		calls <- call{projectRoot, a}
+ 		return 0
+ 	}
+@@ -190,7 +190,7 @@ func TestReleasingARunSupersedesTheOneInFlight(t *testing.T) {
+ 
+ 	release := make(chan struct{})
+ 	started := make(chan struct{}, 2)
+-	d.runner = func(ctx context.Context, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
++	d.runner = func(ctx context.Context, _ string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 		started <- struct{}{}
+ 		select {
+ 		case <-release:
+@@ -226,7 +226,7 @@ func TestASupersededRunOwesNothing(t *testing.T) {
+ 
+ 	release := make(chan struct{})
+ 	started := make(chan struct{}, 2)
+-	d.runner = func(ctx context.Context, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
++	d.runner = func(ctx context.Context, _ string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 		started <- struct{}{}
+ 		select {
+ 		case <-release:
+@@ -257,7 +257,7 @@ func TestASnapshotRunIsNotSuperseded(t *testing.T) {
+ 
+ 	release := make(chan struct{})
+ 	started := make(chan struct{}, 2)
+-	d.runner = func(ctx context.Context, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
++	d.runner = func(ctx context.Context, _ string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 		started <- struct{}{}
+ 		select {
+ 		case <-release:
+diff --git a/internal/watchd/tasks_test.go b/internal/watchd/tasks_test.go
+index 638bfeda..68097ac2 100644
+--- a/internal/watchd/tasks_test.go
++++ b/internal/watchd/tasks_test.go
+@@ -747,7 +747,7 @@ func TestAsyncValidateEndpointAcceptsAndCollects(t *testing.T) {
+ 	t.Cleanup(d.tasks.stopAll)
+ 
+ 	release := make(chan struct{})
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int {
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int {
+ 		<-release
+ 		return 0
+ 	}
+@@ -786,7 +786,7 @@ func TestAsyncValidateEndpointRefusesAnUnfingerprintableTree(t *testing.T) {
+ 	d := newTestDaemon()
+ 	t.Cleanup(d.tasks.stopAll)
+ 	var ran bool
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int {
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int {
+ 		ran = true
+ 		return 0
+ 	}
+@@ -805,7 +805,7 @@ func TestAsyncValidateEndpointAcceptsATreeThatIsNotARepository(t *testing.T) {
+ 
+ 	d := newTestDaemon()
+ 	t.Cleanup(d.tasks.stopAll)
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+ 
+ 	rec := serve(d, asyncReq(t, dir))
+ 	assert.Equal(t, rec.Code, http.StatusAccepted)
+@@ -818,7 +818,7 @@ func TestAsyncValidateEndpointAcceptsATreeThatIsNotARepository(t *testing.T) {
+ func TestAsyncValidateEndpointRequiresAProjectRoot(t *testing.T) {
+ 	d := newTestDaemon()
+ 	t.Cleanup(d.tasks.stopAll)
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+ 
+ 	rec := serve(d, asyncReq(t, ""))
+ 	assert.Equal(t, rec.Code, http.StatusBadRequest)
+@@ -861,7 +861,7 @@ func TestCollectEndpointDoesNotAcknowledgeWhenTheWriteFails(t *testing.T) {
+ 	root := gitRepo(t)
+ 	d := newTestDaemon()
+ 	t.Cleanup(d.tasks.stopAll)
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 1 }
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 1 }
+ 
+ 	rec := serve(d, asyncReq(t, root))
+ 	assert.Equal(t, rec.Code, http.StatusAccepted)
+@@ -882,7 +882,7 @@ func TestCollectEndpointAcknowledgesAfterASuccessfulWrite(t *testing.T) {
+ 	root := gitRepo(t)
+ 	d := newTestDaemon()
+ 	t.Cleanup(d.tasks.stopAll)
+-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
++	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+ 
+ 	rec := serve(d, asyncReq(t, root))
+ 	assert.Equal(t, rec.Code, http.StatusAccepted)
+@@ -931,7 +931,7 @@ func TestAsyncValidateEndpointTellsTheRunnerWhichProject(t *testing.T) {
+ 	t.Cleanup(d.tasks.stopAll)
+ 
+ 	got := make(chan string, 1)
+-	d.runner = func(_ context.Context, projectRoot string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
++	d.runner = func(_ context.Context, projectRoot string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 		got <- projectRoot
+ 		return 0
+ 	}
+@@ -956,7 +956,7 @@ func TestValidateEndpointTellsTheRunnerWhichProject(t *testing.T) {
+ 	t.Cleanup(d.tasks.stopAll)
+ 
+ 	var ran string
+-	d.runner = func(_ context.Context, projectRoot string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
++	d.runner = func(_ context.Context, projectRoot string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 		ran = projectRoot
+ 		return 0
+ 	}
+@@ -984,7 +984,7 @@ func TestValidateEndpointPassesHookCodexToTheRunner(t *testing.T) {
+ 			t.Cleanup(d.tasks.stopAll)
+ 
+ 			var ran []string
+-			d.runner = func(_ context.Context, _ string, args []string, _ []string, _ io.Writer, _ io.Writer) int {
++			d.runner = func(_ context.Context, _ string, _ string, args []string, _ []string, _ io.Writer, _ io.Writer) int {
+ 				ran = args
+ 				return 0
+ 			}
+diff --git a/internal/watchd/validate.go b/internal/watchd/validate.go
+index 2b9c476c..2fded91d 100644
+--- a/internal/watchd/validate.go
++++ b/internal/watchd/validate.go
+@@ -15,19 +15,16 @@ import (
+ 	"github.com/CircleCI-Public/chunk-cli/internal/session"
+ )
+ 
+-// ValidateRunner runs a validate command in-process. projectRoot is the repo the
+-// run applies to; args is os.Args[1:] from the caller (e.g. ["validate", "test",
+-// "--remote"]); env is the caller's os.Environ(), which may differ from the
+-// daemon's own environment. stdout and stderr capture the command output.
++// ValidateRunner runs a validate command in-process. projectRoot is the repo
++// the daemon uses for task tracking and state keying; workDir is the caller's
++// working directory, passed to the subprocess as --project so it can load
++// .chunk/config.json from the right location (workDir equals projectRoot unless
++// the .chunk directory sits below the git root, in which case workDir is the
++// subdirectory and projectRoot is the git top-level). When workDir is empty the
++// runner falls back to projectRoot. args is os.Args[1:] from the caller;
++// env is the caller's os.Environ(). stdout and stderr capture command output.
+ // Returns the exit code.
+-//
+-// projectRoot is a parameter rather than something the runner works out for
+-// itself because the daemon has no working directory worth trusting. One daemon
+-// serves every repo on the machine — the socket is user-global — and it was
+-// launched with whatever cwd the developer happened to be in at the time. An
+-// implementation that resolves the project from its own cwd validates that repo
+-// no matter which one the request was about.
+-type ValidateRunner func(ctx context.Context, projectRoot string, args []string, env []string, stdout, stderr io.Writer) int
++type ValidateRunner func(ctx context.Context, projectRoot, workDir string, args []string, env []string, stdout, stderr io.Writer) int
+ 
+ // ValidateRequest is the payload sent to POST /validate and POST
+ // /validate/async.
+@@ -74,6 +71,14 @@ type ValidateRequest struct {
+ 	// nothing. A daemon that predates this field ignores it instead, and the run
+ 	// goes ahead, just without Codex's quieter output.
+ 	HookCodex bool `json:"hook_codex,omitempty"`
++	// WorkDir is the caller's working directory, which the daemon passes to the
++	// subprocess as --project so it can load .chunk/config.json from the right
++	// location. It equals ProjectRoot for callers whose working directory is the
++	// git top-level; it differs when the .chunk directory sits below the git root.
++	//
++	// A daemon that predates this field ignores it and falls back to ProjectRoot,
++	// which is the caller's cwd and therefore also correct in the common case.
++	WorkDir string `json:"work_dir,omitempty"`
+ }
+ 
+ // runArgs is the command line the run is given: the caller's args, plus
+@@ -253,7 +258,7 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary, onDon
+ 		if shadow != "" {
+ 			runRoot = shadow
+ 		}
+-		exitCode := d.runner(ctx, runRoot, args, env, &stdout, &stderr)
++		exitCode := d.runner(ctx, runRoot, req.WorkDir, args, env, &stdout, &stderr)
+ 		if ctx.Err() != nil {
+ 			// Superseded, or the daemon is shutting down. The run concluded
+ 			// nothing, so nothing is recorded: a cancelled run is not a failed one,
+@@ -430,7 +435,7 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *
+ 	}
+ 
+ 	var stdout, stderr bytes.Buffer
+-	exitCode := d.runner(ctx, req.ProjectRoot, args, req.Env, &stdout, &stderr)
++	exitCode := d.runner(ctx, req.ProjectRoot, req.WorkDir, args, req.Env, &stdout, &stderr)
+ 
+ 	// Recorded from synchronous runs too, not just background ones. This is what
+ 	// clears a failure debt: a project that owes a blocking run gets one, and if

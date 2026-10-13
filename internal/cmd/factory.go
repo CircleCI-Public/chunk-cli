@@ -34,6 +34,7 @@ func newFactoryCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newFactoryBuildCmd())
 	cmd.AddCommand(newFactoryBootstrapCmd())
+	cmd.AddCommand(newFactoryEvalCmd())
 	return cmd
 }
 

@@ -318,6 +318,12 @@ func (s *Sidecars) remember(round int, c Check) {
 	s.history[c.Name] = append(s.history[c.Name], priorRound{Round: round, Findings: worth})
 }
 
+// ReviewPrompts is prompts as a run's first round of reviews is sent them, for
+// running them the way factory does outside a run.
+func ReviewPrompts(request string, prompts []review.Prompt) []review.Prompt {
+	return scopePrompts(request, prompts, nil)
+}
+
 // scopePrompts is prompts as each reviewer is sent them, with the stable
 // request being checked, the location of the change under review, the severity
 // rubric, and what that reviewer reported in earlier rounds.
