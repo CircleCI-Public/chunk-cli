@@ -853,6 +853,27 @@ func TestHookResultCacheTargetAffectsKey(t *testing.T) {
 	assert.Assert(t, local != remote, "target must participate in the cache key")
 }
 
+// TestHookResultCacheSubprojectAffectsKey covers a monorepo: the cache directory
+// and the fingerprint are both repository-wide, so two subprojects with the same
+// config share a key unless the subproject reaches it, and a pass in one skips
+// the other's commands.
+func TestHookResultCacheSubprojectAffectsKey(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	repo := gitrepo.SetupGitRepo(t, "org", "repo")
+	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
+	hook := &hookContext{sessionID: "s1"}
+
+	keys := map[string]string{}
+	for _, sub := range []string{"", "svc-a", "svc-b"} {
+		dir := filepath.Join(repo, sub)
+		assert.NilError(t, os.MkdirAll(dir, 0o755))
+		_, key := hookResultCache(hook, "", dir, hookTree, "test", cfg, "")
+		assert.Assert(t, key != "", sub)
+		keys[key] = sub
+	}
+	assert.Equal(t, len(keys), 3, "each subproject must get its own cache key")
+}
+
 // --- execTarget ---
 
 func TestExecTarget(t *testing.T) {

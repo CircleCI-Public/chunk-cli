@@ -235,6 +235,8 @@ The cache key covers:
 - the execution target — the configured sidecar snapshot image and the active
   sidecar's ID, so a result validated against one sidecar is never reused for
   another
+- the project's directory within the repository, so subprojects of a monorepo
+  with identical configs never share a result
 - the HEAD commit SHA
 - the contents of every file git reports as changed — tracked, staged, and
   untracked alike
@@ -249,8 +251,11 @@ Two things deliberately stay out of the key:
   under `.gitignore` participates in the digest — `.env.local`, generated code,
   vendored dependencies, local tooling config. Hashing them would mean walking
   trees like `node_modules` on every hook invocation. A command whose result
-  depends on an ignored file can therefore report a hit after that file changes;
-  touch a tracked file, or delete the cache directory, to force a re-run.
+  depends on an ignored file can therefore report a hit after that file changes.
+  Because worktrees share the cache, the same goes for a fresh worktree that
+  lacks ignored state another worktree had when it passed, such as installed
+  dependencies. Touch a tracked file, or delete the cache directory, to force a
+  re-run.
 - **Environment variables** passed with `--env` or loaded from `.env.local`,
   for the same reason.
 

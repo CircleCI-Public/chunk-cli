@@ -38,6 +38,24 @@ func TestRepoDataDirIsSharedByEveryCheckout(t *testing.T) {
 	assert.Assert(t, other != want)
 }
 
+// TestRepoDataDirThroughASymlinkedSubdirectory covers git answering
+// --git-common-dir relative to the real working directory: joined to the
+// symlinked spelling instead, "../../.git" lands outside the repository.
+func TestRepoDataDirThroughASymlinkedSubdirectory(t *testing.T) {
+	t.Setenv(EnvXDGDataHome, t.TempDir())
+	repo := gitrepo.SetupGitRepo(t, "org", "repo")
+	sub := filepath.Join(repo, "a", "b")
+	assert.NilError(t, os.MkdirAll(sub, 0o755))
+	link := filepath.Join(t.TempDir(), "link")
+	assert.NilError(t, os.Symlink(sub, link))
+
+	want, err := RepoDataDir(repo)
+	assert.NilError(t, err)
+	got, err := RepoDataDir(link)
+	assert.NilError(t, err)
+	assert.Equal(t, got, want)
+}
+
 func TestRepoDataDirOutsideARepoIsAnError(t *testing.T) {
 	t.Setenv(EnvXDGDataHome, t.TempDir())
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(t.TempDir()))

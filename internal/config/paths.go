@@ -143,6 +143,10 @@ func RepoDataDir(dir string) (string, error) {
 	if dir == "" {
 		return "", errors.New("directory required")
 	}
+	// From a subdirectory git answers relative to the real working directory,
+	// so the join below only lands on the right .git once symlinks in dir are
+	// resolved.
+	dir = CanonicalProjectRoot(dir)
 	out, err := (gitexec.Runner{Dir: dir}).Output(context.Background(), "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("find the git repository of %s: %w", dir, err)

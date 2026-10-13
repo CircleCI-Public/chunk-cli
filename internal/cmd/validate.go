@@ -1830,6 +1830,7 @@ func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.
 		CommandName: commandName,
 		Config:      cfg,
 		Target:      target,
+		Project:     gitutil.Prefix(workDir),
 	})
 	if !ok {
 		return nil, ""
