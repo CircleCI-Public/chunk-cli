@@ -40,7 +40,8 @@ func NameWidth(commands []config.Command) int {
 
 // ExpandCommand replaces template variables in command before execution.
 // {{CHANGED_PACKAGES}} expands to the space-separated list of Go package
-// paths whose source files appear in `git diff HEAD`.
+// paths whose source files appear in `git diff HEAD`, leaving out packages
+// the change deleted, since go test fails on a directory that is gone.
 // Expands to "./..." when no .go files changed.
 func ExpandCommand(workDir, command string) string {
 	return ExpandCommandCtx(context.Background(), workDir, command)
@@ -63,9 +64,13 @@ func ExpandCommandCtx(ctx context.Context, workDir, command string) string {
 		if line == "" || !strings.HasSuffix(line, ".go") {
 			continue
 		}
-		pkg := "./" + filepath.Dir(line)
-		if !seen[pkg] {
-			seen[pkg] = true
+		dir := filepath.Dir(line)
+		pkg := "./" + dir
+		if seen[pkg] {
+			continue
+		}
+		seen[pkg] = true
+		if goFiles, _ := filepath.Glob(filepath.Join(workDir, dir, "*.go")); len(goFiles) > 0 {
 			pkgs = append(pkgs, pkg)
 		}
 	}
