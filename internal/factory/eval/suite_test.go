@@ -93,6 +93,7 @@ func TestLoadSuiteRejectsBadCases(t *testing.T) {
 	}{
 		{"bad name", func(c *Case) { c.Name = "Has Spaces" }, "name must be lowercase"},
 		{"no revision", func(c *Case) { c.Revision = "" }, "no revision"},
+		{"option as revision", func(c *Case) { c.Revision = "--upload-pack=x" }, "must not start with -"},
 		{"no request", func(c *Case) { c.Request = " " }, "no request"},
 		{"absolute patch", func(c *Case) { c.Patch = "/etc/passwd" }, "inside the suite directory"},
 		{"escaping patch", func(c *Case) { c.Patch = "../patches/ok.patch" }, "inside the suite directory"},
@@ -109,6 +110,26 @@ func TestLoadSuiteRejectsBadCases(t *testing.T) {
 			assert.ErrorContains(t, err, tc.want)
 		})
 	}
+
+	// filepath.IsLocal is lexical, so a link inside the suite directory still
+	// names whatever it likes, and the patch it names reaches a sidecar.
+	t.Run("patch symlinked out of the suite", func(t *testing.T) {
+		outside := filepath.Join(t.TempDir(), "outside.patch")
+		assert.NilError(t, os.WriteFile(outside, []byte("diff\n"), 0o644))
+		dir := writeSuite(t, []Case{ok}, patches)
+		link := filepath.Join(dir, "patches", "link.patch")
+		assert.NilError(t, os.Symlink(outside, link))
+
+		c := ok
+		c.Patch = "patches/link.patch"
+		data, err := json.Marshal(map[string]any{"cases": []Case{c}})
+		assert.NilError(t, err)
+		writeFile(t, dir, SuiteFile, string(data))
+
+		_, err = LoadSuite(dir)
+
+		assert.ErrorContains(t, err, "inside the suite directory")
+	})
 
 	t.Run("repeated name", func(t *testing.T) {
 		_, err := LoadSuite(writeSuite(t, []Case{ok, ok}, patches))

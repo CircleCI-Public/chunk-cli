@@ -113,13 +113,32 @@ func (c *Case) check(dir string, seen map[string]bool) error {
 	if strings.TrimSpace(c.Revision) == "" {
 		return fmt.Errorf("case %s: no revision", c.Name)
 	}
+	// A revision reaches read-tree and worktree add, neither of which takes a
+	// -- separator before it, so git would read this as an option.
+	if strings.HasPrefix(c.Revision, "-") {
+		return fmt.Errorf("case %s: revision must not start with -", c.Name)
+	}
 	if strings.TrimSpace(c.Request) == "" {
 		return fmt.Errorf("case %s: no request", c.Name)
 	}
 	if !filepath.IsLocal(c.Patch) {
 		return fmt.Errorf("case %s: patch must be a path inside the suite directory", c.Name)
 	}
-	patch, err := os.ReadFile(filepath.Join(dir, c.Patch))
+	// IsLocal is lexical, so a symlink in the suite directory still points
+	// wherever it likes, and the patch it names is applied to a checkout and
+	// sent to a sidecar.
+	patchPath, err := filepath.EvalSymlinks(filepath.Join(dir, c.Patch))
+	if err != nil {
+		return fmt.Errorf("case %s: read patch: %w", c.Name, err)
+	}
+	suiteDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("case %s: read suite directory: %w", c.Name, err)
+	}
+	if rel, relErr := filepath.Rel(suiteDir, patchPath); relErr != nil || !filepath.IsLocal(rel) {
+		return fmt.Errorf("case %s: patch must be a path inside the suite directory", c.Name)
+	}
+	patch, err := os.ReadFile(patchPath)
 	if err != nil {
 		return fmt.Errorf("case %s: read patch: %w", c.Name, err)
 	}
