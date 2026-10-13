@@ -2,6 +2,8 @@ package sandboximage
 
 import (
 	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -53,7 +55,7 @@ func TestRenderGolden(t *testing.T) {
 
 func TestKitInstallsBothAgentsAndLabelsTheImage(t *testing.T) {
 	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
-	assert.Check(t, cmp.Contains(got, KitCodex))
+	assert.Check(t, cmp.Contains(got, KitCodex()))
 	assert.Check(t, cmp.Contains(got, "LABEL "+LabelHarnesses+"=claude,codex"))
 	assert.Check(t, cmp.Contains(got, "claude.ai/install.sh"))
 }
@@ -61,6 +63,31 @@ func TestKitInstallsBothAgentsAndLabelsTheImage(t *testing.T) {
 func TestDockerfileLocalCarriesTheKitsCodexBlock(t *testing.T) {
 	local, err := os.ReadFile("../../Dockerfile.local")
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Contains(string(local), KitCodex))
+	assert.Check(t, cmp.Contains(string(local), KitCodex()))
 	assert.Check(t, cmp.Contains(string(local), "LABEL "+LabelHarnesses+"=claude,codex"))
+}
+
+func TestKitInstallsTheCodexCommandHost(t *testing.T) {
+	got := Render(NewRecipe(&envspec.Environment{Stack: "unknown"}, nil, nil))
+	assert.Check(t, cmp.Contains(got, "(v3)"))
+	assert.Check(t, cmp.Contains(got, `name="codex-code-mode-host-${arch}-unknown-linux-musl"`))
+	assert.Check(t, cmp.Contains(got, `test -x "$HOME/.local/bin/codex-code-mode-host"`))
+	assert.Check(t, cmp.Equal(strings.Count(got, "sha256sum -c -"), 2))
+}
+
+// The version lives in CodexVersion alone, and each asset has a full SHA-256
+// for both architectures.
+func TestCodexAssetsArePinnedForBothArchitectures(t *testing.T) {
+	sha := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	seen := map[string]bool{}
+	for _, a := range []codexAsset{codexMain, codexHost} {
+		for _, sum := range []string{a.sumX86, a.sumARM} {
+			assert.Check(t, sha.MatchString(sum), "%s: %q", a.prefix, sum)
+			assert.Check(t, !seen[sum], "duplicate checksum %s", sum)
+			seen[sum] = true
+			assert.Check(t, cmp.Contains(a.install(), sum))
+		}
+		assert.Check(t, cmp.Contains(a.install(), codexReleaseURLBase+CodexVersion+"/"))
+	}
+	assert.Check(t, cmp.Len(seen, 4))
 }

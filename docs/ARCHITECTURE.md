@@ -37,7 +37,7 @@ smelt/
     ├── harness/               # The coding-agent seam: Harness interface, scripts, parsers, shared helpers
     │   ├── all/               # Registry: All(), ByName()
     │   ├── claude/            # Claude Code harness and the usage probe
-    │   ├── codex/             # Codex harness: exec scripts, git guard, JSONL parser
+    │   ├── codex/             # Codex harness: exec scripts, git guard and review read-only check, JSONL parser (`ErrHostMissing` when the command host is missing)
     │   └── status/            # `harness status`: installed, login, usage windows, last rate-limit signal
     ├── hashutil/              # Collision-free digests of string parts (cache keys)
     ├── httpcl/                # HTTP client library (JSON + retries)

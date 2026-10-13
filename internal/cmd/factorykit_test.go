@@ -41,7 +41,7 @@ func TestNoteKitOutdatedWarnsOncePerDay(t *testing.T) {
 	n := kitNotice{Root: root, Dockerfile: "Dockerfile.smelt", Now: day}
 
 	got := noteKitOutdated(streams, n)
-	assert.Assert(t, strings.Contains(got, "agent kit v1; the current kit is v2"), got)
+	assert.Assert(t, strings.Contains(got, "agent kit v1; the current kit is v3"), got)
 	assert.Equal(t, strings.Count(out.String(), "Dockerfile.smelt was generated with agent kit v1"), 1)
 	assert.Assert(t, strings.Contains(out.String(), "smelt factory image --update-kit"))
 
@@ -62,7 +62,7 @@ func TestNoteKitOutdatedWarnsOncePerDay(t *testing.T) {
 
 func TestNoteKitOutdatedSaysNothingForACurrentOrNewerKit(t *testing.T) {
 	for _, body := range []string{
-		"FROM x\n# --- smelt agent kit (v2) ---\n",
+		"FROM x\n# --- smelt agent kit (v3) ---\n",
 		"FROM x\n# --- smelt agent kit (v9) ---\n",
 	} {
 		root := kitProject(t, body)
@@ -102,9 +102,9 @@ func TestUpdateKitChangesOnlyTheKitSection(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(root, "Dockerfile.smelt"))
 	assert.NilError(t, err)
 	head, _, _ := strings.Cut(kitV1Dockerfile, "# --- smelt agent kit")
-	assert.Assert(t, strings.HasPrefix(string(got), head+"# --- smelt agent kit (v2) "), string(got))
-	assert.Assert(t, strings.Contains(string(got), sandboximage.KitCodex))
-	assert.Assert(t, strings.Contains(string(got), "smelt.kit=2"))
+	assert.Assert(t, strings.HasPrefix(string(got), head+"# --- smelt agent kit (v3) "), string(got))
+	assert.Assert(t, strings.Contains(string(got), sandboximage.KitCodex()))
+	assert.Assert(t, strings.Contains(string(got), "smelt.kit=3"))
 	assert.Assert(t, strings.Contains(out.String(), "+LABEL smelt.harnesses"), out.String())
 	assert.Equal(t, kitWarning(root, "Dockerfile.smelt"), "")
 

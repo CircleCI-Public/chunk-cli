@@ -71,9 +71,9 @@ const FindingsSchema = `{
           "line": {"type": "integer", "minimum": 0, "description": "1-based line the finding is about; 0 for the file as a whole."},
           "severity": {"type": "string", "enum": ["high", "medium", "low", "info"]},
           "body": {"type": "string", "description": "What is wrong and why."},
-          "patch": {"type": "string", "description": "Optional unified diff that fixes it."}
+          "patch": {"type": "string", "description": "Unified diff that fixes it; empty when there is none."}
         },
-        "required": ["file", "severity", "body"],
+        "required": ["file", "line", "severity", "body", "patch"],
         "additionalProperties": false
       }
     }

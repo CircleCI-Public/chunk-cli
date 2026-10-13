@@ -177,7 +177,7 @@ func TestKitLive(t *testing.T) {
 	assert.NilError(t, err)
 	_, err = b.Ensure(context.Background(), plan, EnsureOptions{})
 	assert.NilError(t, err)
-	out, err := exec.Command(docker, "run", "--rm", plan.Tag, "sh", "-c", "codex --version && claude --version").CombinedOutput()
+	out, err := exec.Command(docker, "run", "--rm", plan.Tag, "sh", "-c", "codex --version && claude --version && test -x ~/.local/bin/codex-code-mode-host").CombinedOutput()
 	assert.NilError(t, err, string(out))
 	assert.Assert(t, strings.Contains(string(out), "codex"), string(out))
 }

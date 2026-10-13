@@ -10,7 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/smeltdev/smelt/internal/codexauth"
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
+	"github.com/smeltdev/smelt/internal/harness/all"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/sandboximage"
 	"github.com/smeltdev/smelt/internal/sidecar/docker"
@@ -262,7 +265,7 @@ func attemptImage(ctx context.Context, streams iostream.Streams, root, dockerfil
 	}
 	res, err := sandboximage.Verify(ctx, provider, sandboximage.VerifyOptions{
 		Dir: root, Image: tag, Install: cfg.InstallCommand(), Gate: sandboximage.PickGate(cfg.Commands),
-		Progress: status,
+		Progress: status, Codex: codexSmoke(),
 	})
 	if err != nil {
 		return imageAttempt{}, &userError{msg: "Could not verify the factory image.", suggestion: suggestionFactoryImage, err: err}
@@ -271,6 +274,25 @@ func attemptImage(ctx context.Context, streams iostream.Streams, root, dockerfil
 		return imageAttempt{Tag: tag, Failure: res.Describe()}, nil
 	}
 	return imageAttempt{Tag: tag}, nil
+}
+
+// codexSmoke is the Codex turn the kit check runs when this machine already has
+// a Codex login, and nil when it has none. It never prompts or logs in: an
+// expired login only makes the turn unconfirmed.
+func codexSmoke() *sandboximage.CodexSmoke {
+	login, err := codexauth.Find()
+	if err != nil {
+		return nil
+	}
+	cred, err := login.Credential()
+	if err != nil {
+		return nil
+	}
+	h, err := all.ByName(harness.Codex)
+	if err != nil {
+		return nil
+	}
+	return &sandboximage.CodexSmoke{Harness: h, Credential: cred}
 }
 
 // readyImage builds and verifies the image. When that fails in a terminal with

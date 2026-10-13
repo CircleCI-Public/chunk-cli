@@ -8,6 +8,8 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/harness"
+	"github.com/smeltdev/smelt/internal/harness/codex"
 	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/sidecar"
 	"github.com/smeltdev/smelt/internal/testing/gitrepo"
@@ -16,6 +18,8 @@ import (
 // fakeBackend records the scripts Verify runs and fails the ones it is told to.
 type fakeBackend struct {
 	failing  string // substring of the script that exits 1
+	output   string // what the failing script prints, "boom" when empty
+	env      map[string]string
 	scripts  []string
 	created  []string
 	synced   string
@@ -34,10 +38,15 @@ func (f *fakeBackend) Sync(_ context.Context, _, _, cwd string, _ bool, _ iostre
 	return nil
 }
 
-func (f *fakeBackend) Exec(_ context.Context, _, script string, _ map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
+func (f *fakeBackend) Exec(_ context.Context, _, script string, env map[string]string, onOutput iostream.OutputFn, _ func(string)) (int, error) {
 	f.scripts = append(f.scripts, script)
 	if f.failing != "" && strings.Contains(script, f.failing) {
-		onOutput(iostream.StreamStderr, []byte("boom\n"))
+		f.env = env
+		out := f.output
+		if out == "" {
+			out = "boom"
+		}
+		onOutput(iostream.StreamStderr, []byte(out+"\n"))
 		return 1, nil
 	}
 	return 0, nil
@@ -61,6 +70,7 @@ func TestVerify(t *testing.T) {
 	}{
 		{"all pass", "", "", 3},
 		{"kit fails first", "claude --version", StepKit, 1},
+		{"kit fails without the codex command host", `test -x "$HOME/.local/bin/codex-code-mode-host"`, StepKit, 1},
 		{"install fails before gate", "pnpm install", StepInstall, 2},
 		{"gate fails", "pnpm lint", StepGate, 3},
 	}
@@ -120,4 +130,55 @@ func TestPickGate(t *testing.T) {
 		}
 		assert.Equal(t, got.Name, tt.want)
 	}
+}
+
+func TestKitCheckTestsTheCodexCommandHost(t *testing.T) {
+	assert.Assert(t, strings.Contains(kitCheck, `test -x "$HOME/.local/bin/codex-code-mode-host"`))
+}
+
+func TestVerifyCodexTurn(t *testing.T) {
+	dir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	smoke := &CodexSmoke{Harness: codex.Harness{}, Credential: harness.Credential{EnvVar: codex.EnvAPIKey, Value: "sk-test"}}
+	tests := []struct {
+		name       string
+		smoke      *CodexSmoke
+		output     string
+		failing    string
+		wantStep   string
+		wantScript int
+		wantNote   string
+	}{
+		{name: "no login: binary check only", wantScript: 1, wantNote: "binary check only"},
+		{name: "turn passes", smoke: smoke, wantScript: 2, wantNote: "codex turn ✓"},
+		{name: "turn fails", smoke: smoke, failing: "codex exec", wantStep: StepKit, wantScript: 2},
+		{name: "host missing is a failure", smoke: smoke, failing: "codex exec", output: "codex-code-mode-host is missing", wantStep: StepKit, wantScript: 2},
+		{name: "usage limit is not a failure", smoke: smoke, failing: "codex exec", output: "You've hit your usage limit. Try again later.", wantScript: 2, wantNote: "could not confirm"},
+		{name: "401 is not a failure", smoke: smoke, failing: "codex exec", output: "unexpected status 401 Unauthorized", wantScript: 2, wantNote: "could not confirm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeBackend{failing: tt.failing, output: tt.output}
+			var notes []string
+			res, err := Verify(context.Background(), f, VerifyOptions{
+				Dir: dir, Image: "i", Codex: tt.smoke,
+				Progress: func(_ iostream.Level, msg string) { notes = append(notes, msg) },
+			})
+			assert.NilError(t, err)
+			assert.Equal(t, res.Step, tt.wantStep)
+			assert.Equal(t, len(f.scripts), tt.wantScript)
+			assert.Assert(t, strings.Contains(strings.Join(notes, "\n"), tt.wantNote), notes)
+			if tt.smoke != nil {
+				last := f.scripts[len(f.scripts)-1]
+				assert.Assert(t, strings.Contains(last, `timeout 60 codex exec --skip-git-repo-check "reply ok"`), last)
+			}
+		})
+	}
+}
+
+func TestVerifyCodexTurnGetsTheCredential(t *testing.T) {
+	f := &fakeBackend{failing: "codex exec"}
+	smoke := &CodexSmoke{Harness: codex.Harness{}, Credential: harness.Credential{EnvVar: codex.EnvAPIKey, Value: "sk-test"}}
+	_, err := Verify(context.Background(), f, VerifyOptions{Dir: gitrepo.SetupGitRepo(t, "my-org", "r"), Image: "i", Codex: smoke})
+	assert.NilError(t, err)
+	assert.Equal(t, f.env[codex.EnvAPIKey], "sk-test")
 }

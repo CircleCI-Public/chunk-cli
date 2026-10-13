@@ -10,8 +10,9 @@ import (
 // KitVersion numbers the agent-kit section of the rendered Dockerfile. Bump it
 // whenever that section changes, so projects whose committed Dockerfile has an
 // older kit are told. Version 1 is a Dockerfile without a marker (Claude only);
-// 2 adds Codex and the harness label.
-const KitVersion = 2
+// 2 adds Codex and the harness label; 3 adds codex-code-mode-host, which Codex
+// runs every command through.
+const KitVersion = 3
 
 // kitMarkerPrefix starts the line that opens the agent-kit section.
 const kitMarkerPrefix = "# --- smelt agent kit"
@@ -104,6 +105,6 @@ func kitUser(section string) string {
 func KitOutdatedWarning(name string, have int) string {
 	return name + " was generated with agent kit v" + strconv.Itoa(have) +
 		"; the current kit is v" + kitVersionString() + "\n" +
-		"  (adds Codex and the " + LabelHarnesses + " label). Update it with:\n" +
+		"  (adds Codex's command host, " + codexHost.installAs + ", without which Codex cannot run commands). Update it with:\n" +
 		"    smelt factory image --update-kit"
 }

@@ -89,8 +89,8 @@ type ReviewInput struct {
 	Model    string
 	// Schema, when set, is the JSON schema the answer must satisfy.
 	Schema string
-	// Tools limits what a reviewer may use. Claude only: Codex reviews run in a
-	// read-only sandbox instead.
+	// Tools limits what a reviewer may use. Claude only: Codex reviews are held
+	// to read-only by checking the working tree afterwards.
 	Tools []string
 }
 
@@ -146,6 +146,10 @@ type Outcome struct {
 	// Message is the CLI's own account of the turn: the final result, or why it
 	// failed. It stands in for stderr when explaining a failed exit.
 	Message string
+	// Err is a failure the parser recognised and classified, such as a sentinel
+	// a caller can test for. It ends the run as a harness error even when the
+	// CLI itself exited 0 and called the turn done.
+	Err error
 }
 
 // Tail keeps the last n bytes of s, marking the cut. The end is kept because
