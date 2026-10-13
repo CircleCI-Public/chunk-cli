@@ -128,6 +128,7 @@ func TestContinuationWithGuidanceImplementsFirst(t *testing.T) {
 
 func TestRecordRoundTrip(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	root := newProject(t)
 	dataDir, err := config.RepoDataDir(root)
 	assert.NilError(t, err)
@@ -152,6 +153,7 @@ func TestRecordRoundTrip(t *testing.T) {
 
 func TestLoadRecordFallsBackToTheCheckoutsDataDir(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	root := newProject(t)
 	legacyDir, err := config.ProjectDataDir(root)
 	assert.NilError(t, err)

@@ -700,6 +700,38 @@ func TestNewPoolKeepsStateAtStatePath(t *testing.T) {
 	assert.DeepEqual(t, pool.ids, []string{"existing-sb-1"})
 }
 
+// TestNewPoolAtStatePathLeavesTheProjectsStateAlone covers a pool that belongs
+// to something other than the project, such as a factory run: a project pool of
+// the same name is someone else's, so it must neither be adopted nor cleared.
+func TestNewPoolAtStatePathLeavesTheProjectsStateAlone(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	assert.NilError(t, savePoolState(env.statePath, &poolState{SidecarIDs: []string{"existing-sb-1"}}))
+	project := projectPoolStatePath(t, env.workDir, "validate")
+	legacy := legacyPoolStatePath(env.workDir, "validate")
+	for _, path := range []string{project, legacy} {
+		assert.NilError(t, savePoolState(path, &poolState{SidecarIDs: []string{"project-sb"}}))
+	}
+
+	pool, err := NewPool(context.Background(), env.cl, PoolOptions{
+		Size:      1,
+		Name:      "validate",
+		OrgID:     "org-1",
+		WorkDir:   env.workDir,
+		StatePath: env.statePath,
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, pool.ids, []string{"existing-sb-1"})
+
+	assert.NilError(t, pool.Destroy(context.Background()))
+	_, err = os.Stat(env.statePath)
+	assert.Assert(t, os.IsNotExist(err), "the pool's own state should be cleared")
+	for _, path := range []string{project, legacy} {
+		_, err := os.Stat(path)
+		assert.NilError(t, err, "%s should survive", path)
+	}
+}
+
 func TestNewPoolDeletesSurplusSidecarsFromState(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)

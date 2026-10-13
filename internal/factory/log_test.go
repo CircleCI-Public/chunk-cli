@@ -185,6 +185,7 @@ func TestLogReviewerTree(t *testing.T) {
 
 func TestLogDefaultPath(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	root := newProject(t)
 	lg, err := openLog(LogDefault, root, "20261002-150405", false)
 	assert.NilError(t, err)
