@@ -83,6 +83,38 @@ maintainability and review quality. Errored trials (infrastructure, not the agen
 are left out of every mean. Start with k ≥ 3: the run-to-run spread in `report.md`
 tells you how big a difference has to be before it means anything.
 
+## Running on CI
+
+`.circleci/config.yml` has two workflows that stay off until a pipeline sets the `eval`
+parameter. Ordinary pipelines (`eval=none`) run only the usual `ci` workflow.
+
+| `eval` | Runs | Needs |
+|---|---|---|
+| `check` | `eval-check`: `check-tasks` on all tasks. Catches a rotted task, a changed CLI flag or a broken pinned repo. | Nothing secret. |
+| `score` | `eval-check`, and `eval-score`: real trials, a report, and a failed job if too few factory trials are solved. | The `chunk-cli-eval` context. |
+
+Set it up once in the project's **Project Settings → Triggers**: add a scheduled pipeline
+and pass `eval` as a pipeline parameter. Weekly `check` and a less frequent `score` is a
+reasonable start. A run can also be started by hand with the same parameter.
+
+The `chunk-cli-eval` context must provide `CIRCLE_TOKEN`, `ANTHROPIC_API_KEY` and
+`CIRCLECI_ORG_ID`: factory runs on sidecars, and the judge and Claude Code use the API key.
+
+`eval-score` runs `factory.py run --min-solved`, which exits 1 when fewer than that share of
+factory trials are solved, and also when none completed (all infrastructure errors, so
+nothing was measured). Its defaults (2 tasks, 2 attempts, threshold 0.5) are a starting
+point, not a tuned value: with this few trials one unlucky run moves the rate a lot, so read
+`report.md` (stored as a job artifact) before trusting a single failure.
+
+`harness/results/` holds every trial and the report; the built `chunk` binary is left out of
+the CI artifact.
+
+`chunk factory eval` (a hidden command, `harness/suites/`) is a separate, smaller check: it
+scores review prompts against past changes whose problems are known, with no implementer. It
+needs no tasks, so it is the cheaper of the two for tuning prompts. `review_eval.py` measures
+noise on correct changes as well, and `factory.py` measures whether the whole loop produces
+correct code.
+
 ## Review eval: noise (`review_eval.py`)
 
 The main question is how often reviews flag things that aren't real issues, or

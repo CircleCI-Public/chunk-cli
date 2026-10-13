@@ -255,6 +255,20 @@ def check_tasks(job_dir: Path, tasks: list[Task]) -> int:
     return 1 if problems else 0
 
 
+def gate(job_dir: Path, minimum: float) -> int:
+    """Fails a job whose factory trials solved less than `minimum` of their tasks. Errored trials are
+    infrastructure, so they are left out, but a job with no completed factory trial proves nothing and fails."""
+    trials = [t for t in factory_report.load_trials(job_dir) if t["kind"] == "factory"]
+    done = [t for t in trials if t["status"] == "completed"]
+    if not done:
+        print(f"GATE FAILED: none of {len(trials)} factory trial(s) completed", file=sys.stderr)
+        return 1
+    solved = sum(1 for t in done if t["reward"].get("solved"))
+    rate = solved / len(done)
+    print(f"gate: {solved}/{len(done)} factory trials solved ({rate:.2f}), minimum {minimum:.2f}", file=sys.stderr)
+    return 0 if rate >= minimum else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -273,6 +287,8 @@ def main() -> int:
     run.add_argument("--job-dir", type=Path, help="job directory; reuse one to resume (default: a new one)")
     run.add_argument("--no-judge", action="store_true", help="skip the LLM judge; rewards come from checks only")
     run.add_argument("--echo", action="store_true", help="stream factory progress to stderr")
+    run.add_argument("--min-solved", type=float, metavar="RATE",
+                     help="exit 1 if factory trials solved less than this share (0-1), or none completed")
     run.add_argument("--chunk-src", type=Path, default=REPO_ROOT,
                      help="checkout to build the chunk under test from (default: this repository)")
 
@@ -302,7 +318,7 @@ def main() -> int:
     run_job(job_dir, tasks, agents, args.attempts, args.concurrency, not args.no_judge, args.echo,
             args.chunk_src.resolve())
     print((job_dir / "report.md").read_text(encoding="utf-8"))
-    return 0
+    return gate(job_dir, args.min_solved) if args.min_solved is not None else 0
 
 
 if __name__ == "__main__":
