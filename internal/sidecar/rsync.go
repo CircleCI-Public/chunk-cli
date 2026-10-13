@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -368,7 +367,7 @@ func rsyncWorkspace(ctx context.Context, workdir, cwd, originURL string, isWorkt
 		// Empty or unusable origin URL — fall through to normal resolution.
 	}
 
-	_, repo, repoErr := gitremote.DetectOrgAndRepoCtx(ctx, cwd)
+	repo, repoErr := gitremote.RepoName(ctx, cwd)
 	if repoErr != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", fmt.Errorf("rsync: detect repo: %w", ctxErr)
@@ -394,37 +393,11 @@ func rsyncWorkspace(ctx context.Context, workdir, cwd, originURL string, isWorkt
 // empty or yields no usable repo name, so the caller can fall back to
 // ResolveWorkspace.
 func worktreeWorkspace(originURL string) (string, bool) {
-	if originURL == "" {
+	repo, err := gitremote.ParseRepoName(originURL)
+	if err != nil {
 		return "", false
 	}
-	if _, repo, err := gitremote.ParseRemoteURL(originURL); err == nil && repo != "" {
-		return DefaultWorkspace(repo), true
-	}
-	// Non-GitHub remote (GitHub Enterprise, GitLab, a plain local path). The repo
-	// name is still the last path segment, which is what the sidecar workspace
-	// should be named after — and far better than the worktree directory name.
-	if repo, ok := repoNameFromURL(originURL); ok {
-		return DefaultWorkspace(repo), true
-	}
-	return "", false
-}
-
-// repoNameFromURL extracts a repo name from an arbitrary git remote URL by
-// taking its last path segment and stripping a trailing .git. It handles scp
-// style remotes (git@host:org/repo.git) as well as URLs and local paths.
-// Returns ("", false) when no plausible name can be recovered.
-func repoNameFromURL(originURL string) (string, bool) {
-	trimmed := strings.TrimRight(strings.TrimSpace(originURL), "/")
-	// Drop any scp style host prefix so "git@host:repo.git" yields "repo".
-	if idx := strings.LastIndex(trimmed, ":"); idx != -1 {
-		trimmed = trimmed[idx+1:]
-	}
-	repo := strings.TrimSuffix(path.Base(trimmed), ".git")
-	// path.Base returns "." for an empty input and "/" for a root-only path.
-	if repo == "" || repo == "." || repo == "/" {
-		return "", false
-	}
-	return repo, true
+	return DefaultWorkspace(repo), true
 }
 
 // initWorktreeGitRepo sets up a minimal git repo in repoPath on the sidecar

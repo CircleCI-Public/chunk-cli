@@ -3,6 +3,7 @@ package gitremote_test
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -137,4 +138,53 @@ func TestDetectOrgAndRepoCtxHonoursCanceledContext(t *testing.T) {
 
 	_, _, err := gitremote.DetectOrgAndRepoCtx(ctx, gitrepo.SetupGitRepo(t, "test-org", "test-repo"))
 	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
+}
+
+func TestParseRepoName(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		want    string
+		wantErr bool
+	}{
+		{name: "github ssh", url: "git@github.com:CircleCI-Public/chunk-cli.git", want: "chunk-cli"},
+		{name: "github https", url: "https://github.com/CircleCI-Public/chunk-cli", want: "chunk-cli"},
+		{name: "gitlab subgroup", url: "https://gitlab.com/group/sub/repo.git", want: "repo"},
+		{name: "enterprise host", url: "git@ghe.example.com:org/repo.git", want: "repo"},
+		{name: "scp without path", url: "git@host:repo.git", want: "repo"},
+		{name: "local path", url: "/srv/git/repo.git/", want: "repo"},
+		{name: "trailing whitespace", url: "git@gitlab.com:org/repo.git\n", want: "repo"},
+		{name: "empty", url: "", wantErr: true},
+		{name: "whitespace only", url: "   ", wantErr: true},
+		{name: "root only", url: "/", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := gitremote.ParseRepoName(tt.url)
+			if tt.wantErr {
+				assert.Assert(t, err != nil, "got %q", got)
+				return
+			}
+			assert.NilError(t, err)
+			assert.Equal(t, got, tt.want)
+		})
+	}
+}
+
+func TestRepoNameAcceptsAnyHost(t *testing.T) {
+	dir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	cmd := exec.Command("git", "remote", "set-url", "origin", "https://gitlab.com/test-org/gitlab-repo.git")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	assert.NilError(t, err, string(out))
+
+	repo, err := gitremote.RepoName(context.Background(), dir)
+	assert.NilError(t, err)
+	assert.Equal(t, repo, "gitlab-repo")
+}
+
+func TestRepoNameReportsMissingOrigin(t *testing.T) {
+	_, err := gitremote.RepoName(context.Background(), t.TempDir())
+	assert.Assert(t, err != nil)
 }

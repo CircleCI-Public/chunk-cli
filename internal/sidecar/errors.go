@@ -38,17 +38,6 @@ func (e *EncryptedKeyError) Error() string {
 
 func (e *EncryptedKeyError) Unwrap() error { return e.Err }
 
-// NoOriginRemoteError indicates git remote "origin" is not configured.
-type NoOriginRemoteError struct {
-	Err error
-}
-
-func (e *NoOriginRemoteError) Error() string {
-	return fmt.Sprintf("no origin remote: %v", e.Err)
-}
-
-func (e *NoOriginRemoteError) Unwrap() error { return e.Err }
-
 // RemoteExitError reports that a command or shell run over SSH exited
 // non-zero. Its output has already been written by the time this is returned,
 // so callers should exit with Code rather than print it as a failure of chunk.

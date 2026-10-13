@@ -17,6 +17,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
+// syncFanOutConcurrency caps concurrent sidecar syncs during pool sync, so a
+// large pool does not open an SSH proxy and walk the tree for every sidecar at
+// once.
+const syncFanOutConcurrency = 8
+
 // PoolEntry is a single ready-to-use sidecar checked out from a Pool.
 type PoolEntry struct {
 	ID       string
@@ -154,7 +159,7 @@ func NewPool(
 		repoPath = state.RepoPath
 	}
 	if repoPath == "" {
-		_, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, opts.WorkDir)
+		repo, err := gitremote.RepoName(ctx, opts.WorkDir)
 		if err != nil {
 			return nil, fmt.Errorf("pool: detect repo: %w", err)
 		}

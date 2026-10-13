@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -118,7 +117,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			if err != nil {
 				return &userError{
 					msg:        "Could not determine the remote workspace to sync into.",
-					suggestion: "Run from a clone with an 'origin' remote, or pass --workdir.",
+					suggestion: "Pass --workdir to name the workspace.",
 					err:        err,
 				}
 			}
@@ -230,8 +229,8 @@ func reportVariantSummary(results []variants.Result, statusFn iostream.StatusFun
 // sidecar: the path collides only within a machine, and no two variants share a
 // machine.
 //
-// It defers to sidecar.ResolveWorkspace rather than reimplementing the priority
-// order, so variants land where the rest of the CLI puts a workspace:
+// It defers to sidecar.Target.ResolveWorkspace rather than reimplementing the
+// priority order, so variants land where the rest of the CLI puts a workspace:
 // <sidecarHome>/<repo>. That is not a cosmetic detail. `chunk sidecar env build`
 // provisions dependencies in that directory before the snapshot is taken, so a
 // sync into any other path gets a tree the snapshot never prepared, every
@@ -240,11 +239,5 @@ func reportVariantSummary(results []variants.Result, statusFn iostream.StatusFun
 // The error is deliberate: RsyncSyncEphemeral has no shared state to fall back on, so
 // an unresolvable workspace has to stop the run rather than pick a guess.
 func resolveVariantsWorkspace(ctx context.Context, workdirFlag, projectDir string) (string, error) {
-	if workdirFlag != "" {
-		return workdirFlag, nil
-	}
-	// Use the local directory name as a fallback — an active sidecar may still
-	// name a workspace, so let ResolveWorkspace decide.
-	repo := filepath.Base(projectDir)
-	return sidecar.ResolveWorkspace(ctx, "", repo)
+	return sidecar.Target{Workdir: workdirFlag}.ResolveWorkspace(ctx, projectDir)
 }
