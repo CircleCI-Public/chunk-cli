@@ -3,6 +3,7 @@ package acceptance
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fixtures"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
@@ -131,7 +133,7 @@ func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {
 	assert.NilError(t, err)
 	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: string(answer)})
 
-	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
@@ -194,9 +196,8 @@ func bootstrapPrompts(t *testing.T, cci *fakes.FakeCircleCI) []string {
 	return prompts
 }
 
-// The team's standards from build-prompt, when the project has them, reach
-// Claude with the request.
-func TestFactoryBootstrapUsesTheTeamsStandards(t *testing.T) {
+func bootstrapAnswer(t *testing.T) string {
+	t.Helper()
 	answer, err := json.Marshal(map[string]any{
 		"type": "result", "subtype": "success", "is_error": false, "result": "done",
 		"structured_output": map[string]any{
@@ -204,17 +205,72 @@ func TestFactoryBootstrapUsesTheTeamsStandards(t *testing.T) {
 		},
 	})
 	assert.NilError(t, err)
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: string(answer)})
-	path := filepath.Join(workDir, ".chunk", "context", "review-prompt.md")
-	assert.NilError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	assert.NilError(t, os.WriteFile(path, []byte("Name every goroutine's exit."), 0o644))
+	return string(answer)
+}
+
+// The review comments on the project's GitHub repository reach the sidecar as
+// a file, and Claude is told to read it.
+func TestFactoryBootstrapUsesTheTeamsReviewHistory(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	gh := fakes.NewFakeGitHub()
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+	ghSrv := httptest.NewServer(gh)
+	t.Cleanup(ghSrv.Close)
+	env.GithubURL = ghSrv.URL
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--json"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Fetching review comments on test-org/test-repo"), "stderr: %s", result.Stderr)
+	var report struct {
+		ReviewComments int `json:"review_comments"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
+	assert.Equal(t, report.ReviewComments, 3)
+
+	prompts := bootstrapPrompts(t, cci)
+	assert.Equal(t, len(prompts), 1)
+	assert.Assert(t, strings.Contains(prompts[0], "`.chunk/review-history.md` holds 3 review comments"), prompts[0])
+	assert.Assert(t, !strings.Contains(prompts[0], "Consider using early return"), "the comments go in the file, not the prompt: %s", prompts[0])
+
+	files, err := filepath.Glob(filepath.Join(env.Extra["CHUNK_SIDECAR_HOME"], "*", ".chunk", "review-history.md"))
+	assert.NilError(t, err)
+	assert.Equal(t, len(files), 1, "history on the sidecar: %v", files)
+	data, err := os.ReadFile(files[0])
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(data), "> Consider using early return here to reduce nesting"), string(data))
+}
+
+// Without a GitHub token there is no history to fetch, and bootstrap goes on
+// from the code alone.
+func TestFactoryBootstrapGoesOnWithoutAGitHubToken(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	env.GithubToken = ""
 
 	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "chunk auth set github"), "stderr: %s", result.Stderr)
 	prompts := bootstrapPrompts(t, cci)
 	assert.Equal(t, len(prompts), 1)
-	assert.Assert(t, strings.Contains(prompts[0], "Name every goroutine's exit."), prompts[0])
+	assert.Assert(t, !strings.Contains(prompts[0], "review-history.md"), prompts[0])
+}
+
+// A token that cannot read the repository fails before any sidecar boots.
+func TestFactoryBootstrapFailsWhenTheHistoryCannotBeFetched(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, nil)
+	gh := fakes.NewFakeGitHub()
+	gh.SetRepoError("test-repo", fixtures.RepoNotFoundError("test-org", "test-repo"))
+	ghSrv := httptest.NewServer(gh)
+	t.Cleanup(ghSrv.Close)
+	env.GithubURL = ghSrv.URL
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "Could not fetch the review comments on test-org/test-repo."), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "--no-history"), "stderr: %s", result.Stderr)
+	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
 }
 
 // A template is written from the binary, so no sidecar boots and Claude never

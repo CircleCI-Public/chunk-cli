@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,19 +11,23 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/reviewhistory"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func newFactoryBootstrapCmd() *cobra.Command {
-	var orgID, image, model, output, template string
+	var orgID, image, model, output, since, template string
 	var timeout time.Duration
-	var jsonOut bool
+	var top int
+	var jsonOut, noHistory bool
 
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
@@ -32,10 +37,14 @@ it, one file per review, in .chunk/reviews. chunk factory reviews every change
 with them.
 
 Claude reads what the project says about itself, such as AGENTS.md, CLAUDE.md,
-docs, CI and linter configuration, and its code and tests. It also reads the
-team's review standards in .chunk/context/review-prompt.md when
-'chunk build-prompt' has written them. The project's validation commands are
-left out of the reviews, since chunk factory runs them on every change anyway.
+docs, CI and linter configuration, and its code and tests. The project's
+validation commands are left out of the reviews, since chunk factory runs them
+on every change anyway.
+
+When a GitHub token is set and origin is a GitHub repository, bootstrap also
+fetches the review comments its most active reviewers left on its pull
+requests, and Claude makes what they push back on into rules. --since and --top
+choose which comments; --no-history leaves them out.
 
 Bootstrap only reads the project, so it runs on a system image with Claude Code
 installed rather than the project's own sidecar image. --image picks another;
@@ -76,6 +85,15 @@ little for Claude to read yet.`,
 			if err != nil {
 				return &userError{msg: msgValidateNotConfigured, blocked: true, suggestion: suggestionRunInit, err: err}
 			}
+			historyOpts := reviewhistory.Options{Top: top}
+			if since != "" {
+				if historyOpts.Since, err = time.Parse(time.DateOnly, since); err != nil {
+					return &userError{msg: fmt.Sprintf("--since must be a date such as 2026-01-31, not %q.", since), err: err}
+				}
+			}
+			if top < 1 {
+				return &userError{msg: fmt.Sprintf("--top must be at least 1, not %d.", top), errMsg: "invalid --top"}
+			}
 
 			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
 			cred, credSource, credErr := reviewCredential(rc)
@@ -104,6 +122,15 @@ little for Claude to read yet.`,
 			}
 
 			statusFn := newStatusFunc(streams)
+			// Fetched before any sidecar boots, so a GitHub failure costs
+			// nothing.
+			var history *reviewhistory.History
+			if !noHistory {
+				if history, err = fetchReviewHistory(ctx, rc, workDir, historyOpts, statusFn); err != nil {
+					return err
+				}
+			}
+
 			statusFn(iostream.LevelStep, "Preparing a sidecar...")
 			pool, err := newPool(ctx, client, sidecar.PoolOptions{
 				Size:    1,
@@ -126,21 +153,17 @@ little for Claude to read yet.`,
 			}
 			defer pool.Release(entry)
 
-			standards, err := os.ReadFile(filepath.Join(workDir, factory.StandardsPath))
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				return &userError{msg: fmt.Sprintf("Could not read %s.", factory.StandardsPath), err: err}
-			}
-
 			statusFn(iostream.LevelStep, fmt.Sprintf("Reading the project and writing review prompts on %s...", entry.ID))
 			result, err := factory.RunBootstrap(ctx, factory.BootstrapOptions{
 				Exec:       sidecar.ClientExec,
+				WriteFile:  sidecar.WriteFile,
 				Entry:      entry,
 				Credential: cred,
 				BaseURL:    rc.AnthropicBaseURL,
 				Model:      model,
 				Timeout:    timeout,
 				Commands:   cfg.Commands,
-				Standards:  string(standards),
+				History:    history,
 				OnActivity: func(a claudecode.Activity) {
 					// Only what claude reads and runs: its passing remarks would
 					// bury the answer when it lands.
@@ -175,7 +198,7 @@ little for Claude to read yet.`,
 			}
 
 			if jsonOut {
-				return iostream.PrintJSON(streams.Out, newBootstrapReport(workDir, paths, result))
+				return iostream.PrintJSON(streams.Out, newBootstrapReport(workDir, paths, result, history))
 			}
 			statusFn(iostream.LevelDone, fmt.Sprintf("Wrote %d review prompt(s) ($%.2f)", len(paths), result.CostUSD))
 			for _, p := range paths {
@@ -196,10 +219,16 @@ little for Claude to read yet.`,
 	cmd.Flags().StringVar(&image, "image", "", "Sidecar image with Claude Code installed (default: "+factory.BootstrapImage+")")
 	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
 	cmd.Flags().DurationVar(&timeout, "timeout", factory.DefaultBootstrapTimeout, "max time for writing the prompts")
+	cmd.Flags().BoolVar(&noHistory, "no-history", false, "Write the prompts without the team's review comments from GitHub")
+	cmd.Flags().StringVar(&since, "since", "", "Use review comments from this date on, as YYYY-MM-DD (default: 90 days ago)")
+	cmd.Flags().IntVar(&top, "top", reviewhistory.DefaultTop, "Use review comments from this many of the most active reviewers")
+	cmd.MarkFlagsMutuallyExclusive("no-history", "since")
+	cmd.MarkFlagsMutuallyExclusive("no-history", "top")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().StringVar(&template, "template", "", "Write a standard set of prompts instead ("+strings.Join(factory.Templates(), ", ")+")")
-	// A template is written locally, so the sidecar and Claude flags do nothing.
-	for _, f := range []string{"org-id", "image", "model", "timeout"} {
+	// A template is written locally, so the sidecar, Claude and history flags do
+	// nothing.
+	for _, f := range []string{"org-id", "image", "model", "timeout", "no-history", "since", "top"} {
 		cmd.MarkFlagsMutuallyExclusive("template", f)
 	}
 	return cmd
@@ -228,7 +257,7 @@ func writeTemplate(streams iostream.Streams, workDir, dir, name string, jsonOut 
 	}
 
 	if jsonOut {
-		return iostream.PrintJSON(streams.Out, newBootstrapReport(workDir, paths, factory.Bootstrap{}))
+		return iostream.PrintJSON(streams.Out, newBootstrapReport(workDir, paths, factory.Bootstrap{}, nil))
 	}
 	newStatusFunc(streams)(iostream.LevelDone, fmt.Sprintf("Wrote %d review prompt(s) from the %s template", len(paths), name))
 	for _, p := range paths {
@@ -237,6 +266,41 @@ func writeTemplate(streams iostream.Streams, workDir, dir, name string, jsonOut 
 	streams.Println()
 	streams.Println(ui.Dim("Read and edit them before relying on them. chunk factory uses them on its next run."))
 	return nil
+}
+
+// fetchReviewHistory gathers the review comments on the project's GitHub
+// repository. Without a GitHub token or a GitHub origin there is no history to
+// fetch, which is not an error: bootstrap says so and goes on without it. A
+// failed fetch is, since the user asked for history by having a token.
+func fetchReviewHistory(ctx context.Context, rc config.ResolvedConfig, workDir string, opts reviewhistory.Options, statusFn iostream.StatusFunc) (*reviewhistory.History, error) {
+	client, err := authprompt.ResolveGitHubClient(rc, func(msg string) { statusFn(iostream.LevelInfo, msg) })
+	if errors.Is(err, authprompt.ErrNeedsAuth) {
+		statusFn(iostream.LevelWarn, "No GitHub token, so the team's review comments are left out. Run 'chunk auth set github' to include them, or pass --no-history.")
+		return nil, nil
+	}
+	if err != nil {
+		return nil, &userError{msg: "Could not set up the GitHub client.", err: err}
+	}
+	owner, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, workDir)
+	if err != nil {
+		statusFn(iostream.LevelWarn, "origin is not a GitHub repository, so the team's review comments are left out.")
+		return nil, nil
+	}
+	statusFn(iostream.LevelStep, fmt.Sprintf("Fetching review comments on %s/%s...", owner, repo))
+	history, err := reviewhistory.Fetch(ctx, client, owner, repo, opts)
+	if err != nil {
+		return nil, &userError{
+			msg:        fmt.Sprintf("Could not fetch the review comments on %s/%s.", owner, repo),
+			suggestion: "Check the GitHub token can read the repository, or pass --no-history to write the prompts without them.",
+			err:        err,
+		}
+	}
+	if history.Comments() == 0 {
+		statusFn(iostream.LevelWarn, fmt.Sprintf("No review comments on %s/%s since %s; the prompts come from the code alone.", owner, repo, history.Since.Format(time.DateOnly)))
+		return nil, nil
+	}
+	statusFn(iostream.LevelInfo, fmt.Sprintf("%d comments from %d reviewers", history.Comments(), len(history.Reviewers)))
+	return &history, nil
 }
 
 // maxActivityDetail caps what an activity line shows of a tool's target, such
@@ -276,10 +340,15 @@ type bootstrapReport struct {
 	Summary string   `json:"summary"`
 	Dropped int      `json:"dropped"`
 	CostUSD float64  `json:"cost_usd"`
+	// ReviewComments counts the team's review comments Claude was given.
+	ReviewComments int `json:"review_comments"`
 }
 
-func newBootstrapReport(workDir string, paths []string, result factory.Bootstrap) bootstrapReport {
+func newBootstrapReport(workDir string, paths []string, result factory.Bootstrap, history *reviewhistory.History) bootstrapReport {
 	report := bootstrapReport{Prompts: make([]string, 0, len(paths)), Summary: result.Summary, Dropped: result.Dropped, CostUSD: result.CostUSD}
+	if history != nil {
+		report.ReviewComments = history.Comments()
+	}
 	for _, p := range paths {
 		report.Prompts = append(report.Prompts, relPath(workDir, p))
 	}
