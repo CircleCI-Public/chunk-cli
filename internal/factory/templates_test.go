@@ -10,7 +10,9 @@ import (
 )
 
 func TestTemplatesListsTheStandardSets(t *testing.T) {
-	assert.DeepEqual(t, Templates(), []string{"generic", "go-service", "react"})
+	assert.DeepEqual(t, Templates(), []string{
+		"generic", "go-service", "node-service", "python", "react", "rust",
+	})
 }
 
 // Every standard prompt must hold to the same rules bootstrap asks Claude to
