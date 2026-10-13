@@ -39,7 +39,7 @@ func newFactoryCmd() *cobra.Command {
 
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, jsonOut, logOn, verbose, detach bool
+	var keepSidecars, noValidate, noPlan, jsonOut, logOn, verbose, detach bool
 	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, backend, plan, harnessFlag string
 	var implementTimeout, reviewTimeout time.Duration
 	var pub publishFlags
@@ -97,6 +97,17 @@ when it failed. --log-file FILE keeps the log in FILE instead, and on its own
 turns the log on. --verbose adds the review prompts, the output of commands
 that passed, and a check each round that every reviewer has the implementer's
 change, and also shows the log here as the run writes it; it implies --log.
+
+Before it writes code the implementer writes a plan: the files it will touch,
+the approach, how each acceptance item will be met, and what it cannot verify
+in the sandbox. The requirements review checks the plan against the request,
+and only a reviewed plan is implemented. --no-plan (or factory.plan: false)
+skips it, and a continued run never plans. Each round then runs the validation
+commands first (factory.gatesFirst: false runs them alongside the reviews): if
+any fails, the reviews are skipped and the implementer is sent the failures. The
+implementer must end its turn with the gates' output, and smelt checks that it
+ran them after its last edit. Tests a gate skipped are listed in the run's
+status and in the PR notes.
 
 --harness claude|codex picks the coding agent for the implementer and the
 reviewers. Without it, factory.harness from the config is used; with neither,
@@ -200,6 +211,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 				Continue:                continueRun,
 				ReviewsDir:              relReviews,
 				NoValidate:              noValidate,
+				NoPlan:                  noPlan,
 				Attempts:                settings.Attempts,
 				Reviewers:               reviewers,
 				Model:                   model,
@@ -241,6 +253,7 @@ missing or stale), never validation.sidecarImage (a CircleCI snapshot ID).`,
 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
 	cmd.Flags().BoolVar(&noValidate, "no-validate", false, "skip the project's validation commands")
+	cmd.Flags().BoolVar(&noPlan, "no-plan", false, "skip the plan the implementer writes, and the review of it, before it implements (default: factory.plan from config, else on)")
 	cmd.Flags().BoolVar(&keepSidecars, "keep-sidecars", false, "leave the sidecars running when the run ends")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "CircleCI organization ID (only with the circleci backend)")
 	cmd.Flags().StringVar(&image, "image", "", "image: a Docker image (default: factory.image or factory.dockerfile), or a CircleCI snapshot ID with --backend circleci (default: validation.sidecarImage)")

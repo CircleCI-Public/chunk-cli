@@ -51,6 +51,10 @@ type Notes struct {
 	// Fallback says why the notes could not be written. When set, the notes
 	// are only a title and this reason stands in for What, Why and How.
 	Fallback string `json:"fallback,omitempty"`
+	// Skipped are the tests the sandbox skipped in the run's last round. They
+	// are set from the checks, not written by the model, so a green test gate
+	// cannot hide them.
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // NotesInput is what the notes writer is told about a run.
@@ -62,6 +66,8 @@ type NotesInput struct {
 	DiffStat string
 	// Baseline is the commit the change is measured against.
 	Baseline string
+	// Plan is the plan the implementer was sent with, nil without one.
+	Plan *Plan
 	// Summary is the implementer's last turn summary.
 	Summary string
 	// Log, when set, receives the prompt and the response.
@@ -130,20 +136,17 @@ func notesPrompt(in NotesInput) string {
 		b.WriteString(review.Tail(stat, maxNotesDiffBytes))
 		b.WriteString("\n")
 	}
+	if in.Plan != nil {
+		b.WriteString("\nThe plan the implementer was working to, so that what and how stay consistent with it:\n\n")
+		b.WriteString(in.Plan.Markdown())
+		b.WriteString("\n")
+	}
 	if s := strings.TrimSpace(in.Summary); s != "" {
 		b.WriteString("\nThe implementer's own summary of its last turn:\n\n")
 		b.WriteString(s)
 		b.WriteString("\n")
 	}
 	return b.String()
-}
-
-// notesResult is claude's JSON result for a run with --json-schema.
-type notesResult struct {
-	IsError          bool   `json:"is_error"`
-	Subtype          string `json:"subtype"`
-	Result           string `json:"result"`
-	StructuredOutput *Notes `json:"structured_output"`
 }
 
 // parseNotesMessage reads the notes out of an agent's last message, which the
@@ -159,15 +162,11 @@ func parseNotesMessage(msg string) (Notes, error) {
 // ParseNotes reads the notes out of claude's JSON result. Every field must be
 // present, and the title is cut to fit a commit subject.
 func ParseNotes(output string) (Notes, error) {
-	var res notesResult
-	if err := json.Unmarshal([]byte(output), &res); err != nil {
-		return Notes{}, fmt.Errorf("read claude's result: %w", err)
+	n, err := parseStructured[Notes](output, "notes")
+	if err != nil {
+		return Notes{}, err
 	}
-	if res.IsError || res.StructuredOutput == nil {
-		return Notes{}, fmt.Errorf("claude gave no structured notes (%s): %s",
-			res.Subtype, review.Tail(strings.TrimSpace(res.Result), 500))
-	}
-	return validNotes(*res.StructuredOutput)
+	return validNotes(n)
 }
 
 // validNotes cleans n and checks that every field is present.
@@ -225,14 +224,18 @@ func cleanTitle(s string) string {
 // sections is the notes' body without headings: the reason when there are no
 // notes, else each part under label(name).
 func (n Notes) sections(label func(string) string) string {
+	parts := make([]string, 0, 4)
 	if n.Fallback != "" {
-		return fmt.Sprintf("(smelt could not write a summary for this change: %s)", n.Fallback)
-	}
-	parts := make([]string, 0, 3)
-	for _, s := range []struct{ name, text string }{{"What", n.What}, {"Why", n.Why}, {"How", n.How}} {
-		if s.text != "" {
-			parts = append(parts, label(s.name)+"\n"+s.text)
+		parts = append(parts, fmt.Sprintf("(smelt could not write a summary for this change: %s)", n.Fallback))
+	} else {
+		for _, s := range []struct{ name, text string }{{"What", n.What}, {"Why", n.Why}, {"How", n.How}} {
+			if s.text != "" {
+				parts = append(parts, label(s.name)+"\n"+s.text)
+			}
 		}
+	}
+	if len(n.Skipped) > 0 {
+		parts = append(parts, "Skipped in the sandbox: "+strings.Join(n.Skipped, ", "))
 	}
 	return strings.Join(parts, "\n\n")
 }

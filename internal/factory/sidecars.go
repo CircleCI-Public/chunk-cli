@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/smeltdev/smelt/internal/config"
+	"github.com/smeltdev/smelt/internal/iostream"
 	"github.com/smeltdev/smelt/internal/review"
 	"github.com/smeltdev/smelt/internal/sidecar"
 )
@@ -75,6 +77,9 @@ type Sidecars struct {
 	Prompts  []review.Prompt
 	Review   review.Options
 	Commands []config.Command
+	// GatesFirst runs Commands before the reviews, and skips the reviews of a
+	// round whose commands failed.
+	GatesFirst bool
 	// Install, when set, installs the project's dependencies once on every
 	// sidecar before the baseline commit. A prebuilt image holds only the
 	// package manager's store, since the workspace is mounted over the repo.
@@ -87,6 +92,9 @@ type Sidecars struct {
 	// OnCheck is called as each validation command finishes. Reviews report
 	// their progress through Review.ProgressFn.
 	OnCheck func(Check)
+	// Status, when set, receives notices about a round, such as a summary whose
+	// gates were not run.
+	Status iostream.StatusFunc
 	// OnReviewerTree, when set, is called each round for every reviewer, in
 	// Reviewers order, with whether the change it is about to review is the
 	// implementer's. It is a canary for the relay; a mismatch does not stop the
@@ -131,8 +139,42 @@ func (s *Sidecars) Implement(ctx context.Context, prompt string) (Turn, error) {
 	if err != nil {
 		return turn, err
 	}
+	if turn, err = s.prove(ctx, turn); err != nil {
+		return turn, err
+	}
 	s.answer(turn.Summary)
 	return turn, nil
+}
+
+// prove checks a summary that claims passing gates against what the turn ran.
+// One that claims them without running them after its last edit is asked once
+// to run them, in a turn that belongs to the same round; a second miss is
+// reported on the turn, and the round's own gates tell the truth.
+func (s *Sidecars) prove(ctx context.Context, turn Turn) (Turn, error) {
+	gates := gateCommands(s.Commands)
+	missing := unproven(turn.Activity, gates)
+	if len(missing) == 0 || !claimsGatesPass(turn.Summary) {
+		return turn, nil
+	}
+	s.notify(iostream.LevelWarn, "the summary says the gates pass but "+strings.Join(missing, ", ")+" were not run after the last edit; asking the implementer to run them")
+	next, err := s.Implementer.Run(ctx, nudgePrompt(missing))
+	if err != nil {
+		return mergeTurns(turn, next), err
+	}
+	turn = mergeTurns(turn, next)
+	turn.Nudged = true
+	if missing = unproven(turn.Activity, gates); len(missing) > 0 && claimsGatesPass(turn.Summary) {
+		turn.Unproven = missing
+		s.notify(iostream.LevelWarn, "the implementer still claims passing gates it did not run after its last edit: "+strings.Join(missing, ", "))
+	}
+	return turn, nil
+}
+
+// notify reports a notice, if anyone listens.
+func (s *Sidecars) notify(level iostream.Level, msg string) {
+	if s.Status != nil {
+		s.Status(level, msg)
+	}
 }
 
 // answer records the implementer's summary as the reply to every review's latest
@@ -154,34 +196,53 @@ func (s *Sidecars) Collect(ctx context.Context) (Change, error) {
 	return c, err
 }
 
-// Check relays the implementer's tree to the reviewers, then runs the reviews
-// there and validation on the implementer at the same time.
+// Check brings the implementer's work into the worktree, then validates it and
+// has it reviewed. With GatesFirst the validation commands run first and the
+// reviews only when none failed; otherwise both run at the same time.
 func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 	if err := s.Relay.Pull(ctx, s.Implementer.Entry.ID, s.Implementer.Entry.RepoPath); err != nil {
 		return nil, err
 	}
+	if s.GatesFirst && len(s.Prompts) > 0 {
+		return s.checkGatesFirst(ctx, round)
+	}
+	return s.checkTogether(ctx, round)
+}
+
+// checkGatesFirst runs the validation commands, and the reviews if they all
+// passed. A round whose gates failed is going back to the implementer anyway,
+// so its reviews are reported as skipped rather than spent on code that is
+// about to change.
+func (s *Sidecars) checkGatesFirst(ctx context.Context, round int) ([]Check, error) {
+	gates := runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnCheck)
+	if gatesFailed(gates) {
+		skipped := make([]Check, len(s.Prompts))
+		for i, p := range s.Prompts {
+			skipped[i] = skippedReview(p.Name)
+		}
+		return slices.Concat(skipped, gates), nil
+	}
+	if err := s.prepareReviewers(ctx, round); err != nil {
+		return nil, err
+	}
+	reviews, err := s.runReviews(ctx, round)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(reviews, gates), nil
+}
+
+// checkTogether runs the reviews on the reviewers and validation on the
+// implementer at the same time.
+func (s *Sidecars) checkTogether(ctx context.Context, round int) ([]Check, error) {
 	if len(s.Prompts) > 0 {
-		// A review that timed out stops being streamed but keeps running on
-		// its sidecar, and would read the tree as it is replaced. Best-effort:
-		// a sidecar that cannot be reached fails the push that follows anyway.
-		// The bracket keeps the pattern from matching the shell running pkill.
-		_ = s.onReviewers(s.script(ctx, "pkill -f '[c]laude -p' || true"))
-		if err := s.Relay.Push(ctx, s.Reviewers); err != nil {
+		if err := s.prepareReviewers(ctx, round); err != nil {
 			return nil, err
 		}
-		// New files are marked intent-to-add so `git diff HEAD` shows them; the
-		// reset first drops marks for files a later round deleted.
-		if err := s.onReviewers(s.script(ctx, "git reset -q && git add -A -N")); err != nil {
-			return nil, fmt.Errorf("prepare reviewers: %w", err)
-		}
-		if s.OnReviewerTree != nil {
-			s.reviewerTrees(ctx, round)
-		}
 	}
-
 	var (
 		wg         sync.WaitGroup
-		results    []review.Result
+		reviews    []Check
 		reviewErr  error
 		validation []Check
 	)
@@ -189,7 +250,7 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results, reviewErr = review.RunPass(ctx, s.Acquire, s.Release, s.Exec, scopePrompts(s.Request, s.Prompts, s.history), s.Review)
+			reviews, reviewErr = s.runReviews(ctx, round)
 		}()
 	}
 	wg.Add(1)
@@ -199,16 +260,47 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 	}()
 	wg.Wait()
 	if reviewErr != nil {
-		return nil, fmt.Errorf("reviews: %w", reviewErr)
+		return nil, reviewErr
 	}
+	return slices.Concat(reviews, validation), nil
+}
 
-	checks := make([]Check, 0, len(results)+len(validation))
+// prepareReviewers relays the implementer's tree, as pulled into the
+// worktree, to the reviewers.
+func (s *Sidecars) prepareReviewers(ctx context.Context, round int) error {
+	// A review that timed out stops being streamed but keeps running on
+	// its sidecar, and would read the tree as it is replaced. Best-effort:
+	// a sidecar that cannot be reached fails the push that follows anyway.
+	// The bracket keeps the pattern from matching the shell running pkill.
+	_ = s.onReviewers(s.script(ctx, "pkill -f '[c]laude -p' || true"))
+	if err := s.Relay.Push(ctx, s.Reviewers); err != nil {
+		return err
+	}
+	// New files are marked intent-to-add so `git diff HEAD` shows them; the
+	// reset first drops marks for files a later round deleted.
+	if err := s.onReviewers(s.script(ctx, "git reset -q && git add -A -N")); err != nil {
+		return fmt.Errorf("prepare reviewers: %w", err)
+	}
+	if s.OnReviewerTree != nil {
+		s.reviewerTrees(ctx, round)
+	}
+	return nil
+}
+
+// runReviews runs every review prompt on the reviewers and remembers what each
+// found for the next round.
+func (s *Sidecars) runReviews(ctx context.Context, round int) ([]Check, error) {
+	results, err := review.RunPass(ctx, s.Acquire, s.Release, s.Exec, scopePrompts(s.Request, s.Prompts, s.history), s.Review)
+	if err != nil {
+		return nil, fmt.Errorf("reviews: %w", err)
+	}
+	checks := make([]Check, 0, len(results))
 	for _, r := range results {
 		c := FromReview(r)
 		checks = append(checks, c)
 		s.remember(round, c)
 	}
-	return append(checks, validation...), nil
+	return checks, nil
 }
 
 // Pull brings the implementer's work so far into the worktree. Check does it
@@ -285,9 +377,9 @@ func (s *Sidecars) reviewerTrees(ctx context.Context, round int) {
 }
 
 // remember keeps what a review found this round for the reviews of later ones.
-// A review that could not run has nothing to remember.
+// A review that could not run, or was not started, has nothing to remember.
 func (s *Sidecars) remember(round int, c Check) {
-	if c.Kind != KindReview || c.Status == StatusErrored {
+	if c.Kind != KindReview || c.Status == StatusErrored || c.Status == StatusSkipped {
 		return
 	}
 	if s.history == nil {

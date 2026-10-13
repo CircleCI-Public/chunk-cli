@@ -640,6 +640,9 @@ func checkRow(st watchStyles, c smeltd.RoundCheck) runRow {
 	default:
 		row.icon, row.detail = st.vdim("·"), st.muted(c.Status)
 	}
+	if n := len(c.Skipped); n > 0 {
+		row.detail += "  " + st.warning(fmt.Sprintf("%d test%s skipped", n, plural(n)))
+	}
 	return row
 }
 
@@ -657,6 +660,8 @@ func (m Model) reviewRow(st watchStyles, p smeltd.ReviewPrompt) runRow {
 	case smeltd.PromptFailed:
 		row.icon = st.err(ui.IconFail)
 		row.detail = st.err(truncate(strings.Join(strings.Fields(p.Error), " "), 80))
+	case smeltd.PromptSkipped:
+		row.icon, row.detail = st.vdim("·"), st.muted("skipped (gates failed)")
 	}
 	return row
 }

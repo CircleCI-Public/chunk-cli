@@ -50,6 +50,9 @@ type Outcome struct {
 	// Blocked is the reason the implementer's last summary gave after
 	// BLOCKED:, or "".
 	Blocked string
+	// Plan is the plan the implementer was sent with, nil when the run did
+	// not plan.
+	Plan *Plan
 }
 
 // Incomplete is the findings of the last round's checks that say requested
@@ -63,7 +66,9 @@ type EventKind int
 
 // Event kinds, in the order a round emits them.
 const (
-	EventImplementing EventKind = iota // a turn started; Round, Prompt
+	EventPlanning     EventKind = iota // the plan was asked for
+	EventPlanReviewed                  // the plan is settled; Plan, Findings
+	EventImplementing                  // a turn started; Round, Prompt
 	EventImplemented                   // a turn ended; Round, Turn
 	EventCollected                     // the work was collected; Round, Change
 	EventChecking                      // checks started; Round
@@ -78,6 +83,10 @@ type Event struct {
 	Turn   Turn
 	Change Change
 	Checks []Check
+	// Plan and Findings are the settled plan and what its review still found
+	// wrong with it.
+	Plan     *Plan
+	Findings []review.Finding
 }
 
 // Loop drives the implementer through rounds of review and validation.
@@ -90,7 +99,11 @@ type Loop struct {
 	// as it is ends the loop without a turn. The first round counts as one of
 	// the attempts.
 	CheckFirst bool
-	OnEvent    func(Event)
+	// Planner, when set, has the implementer plan, and the plan reviewed,
+	// before its first turn. A loop that checks first does not plan: there is
+	// work to describe already.
+	Planner Planner
+	OnEvent func(Event)
 }
 
 // Run implements prompt, then checks the work and feeds failures back until
@@ -120,6 +133,13 @@ func (l Loop) run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 	}
 
 	var out Outcome
+	if l.Planner != nil && !l.CheckFirst {
+		plan, preamble, err := l.plan(ctx, emit, prompt)
+		if err != nil {
+			return out, fmt.Errorf("plan: %w", err)
+		}
+		out.Plan, prompt = &plan, preamble+prompt
+	}
 	// lead is held back from the implementer until there is feedback to send
 	// with it, when the loop checks first.
 	var lead string
@@ -186,4 +206,43 @@ func (l Loop) run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 			prompt, lead = lead+"\n\n"+prompt, ""
 		}
 	}
+}
+
+// plan has the implementer write a plan and has it reviewed. A plan whose
+// review found something worth changing is revised once; if the revision is
+// still found wanting the run goes ahead anyway, with what the review said in
+// front of the implementer, so a disagreement cannot stall it. preamble is
+// what goes before the request in the implementer's first prompt.
+func (l Loop) plan(ctx context.Context, emit func(Event), request string) (plan Plan, preamble string, err error) {
+	emit(Event{Kind: EventPlanning})
+	in := PlanInput{Request: request}
+	var worth []review.Finding
+	// The first pass writes the plan; the second revises it.
+	for range 2 {
+		if plan, err = l.Planner.Plan(ctx, in); err != nil {
+			return Plan{}, "", err
+		}
+		var found []review.Finding
+		if found, err = l.Planner.ReviewPlan(ctx, request, plan); err != nil {
+			return Plan{}, "", err
+		}
+		if worth = worthChanging(found); len(worth) == 0 {
+			break
+		}
+		prev := plan
+		in = PlanInput{Request: request, Previous: &prev, Findings: worth}
+	}
+	emit(Event{Kind: EventPlanReviewed, Plan: &plan, Findings: worth})
+	return plan, planPreamble(plan, worth), nil
+}
+
+// worthChanging is the findings that send work back.
+func worthChanging(findings []review.Finding) []review.Finding {
+	var out []review.Finding
+	for _, f := range findings {
+		if f.WorthChanging() {
+			out = append(out, f)
+		}
+	}
+	return out
 }

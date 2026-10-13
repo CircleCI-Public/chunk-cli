@@ -36,11 +36,17 @@ spec.md ──► implement ──► review ×N + validate ──► feedback �
   review prompt in `.smelt/reviews/`, all started from your repo's sandbox image.
   Your working tree is copied in; the containers never talk to each other.
 - **Each round:**
-  1. The implementer makes the change.
-  2. The reviewers and your validation commands (tests, lint, typecheck…) check
-     it in parallel.
+  0. Once, before round 1: the implementer writes a plan (files, approach, how
+     each acceptance item is met, what it can't verify in the sandbox) and the
+     requirements review checks it against your request.
+  1. The implementer makes the change, following the plan, and ends its turn
+     with the output of your gates. smelt checks it ran them after its last edit.
+  2. Your validation commands (tests, lint, typecheck…) run first. If one fails,
+     the reviews are skipped and the failure goes straight back to the
+     implementer. If they pass, the reviewers check the change.
   3. High and medium findings, and failed checks, go back to the implementer.
-  4. This repeats until everything passes or the attempts run out.
+  4. This repeats until everything passes or the attempts run out. In short,
+     each round reads plan → implement → gates → reviews.
 - **Your checkout is never touched.** The work happens in a git worktree on its
   own branch, `smelt/<description>/<run id>`. It starts from your files
   as they are, uncommitted changes included.
@@ -323,6 +329,8 @@ is committed and shared with your team:
 | `harness` | `claude` or `codex`: the coding agent runs use. Unset means ask (and fail without a terminal). |
 | `models` | Per-agent default model, e.g. `{"claude": "opus", "codex": "gpt-5-codex"}`, used when `--model` is not given |
 | `maxAttempts` | Default number of rounds (built-in: 3) |
+| `plan` | `true` (the default) has the implementer write a plan, reviewed before it implements; `false` skips it, like `--no-plan` |
+| `gatesFirst` | `true` (the default) runs the validation commands before the reviews and skips the reviews of a round whose commands failed; `false` runs them side by side |
 | `log` | Keep a run log by default |
 | `author` | `"Name <email>"` for factory commits. Leave it unset so everyone commits as their own git identity. |
 
