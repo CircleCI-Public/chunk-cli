@@ -350,11 +350,15 @@ The split is in the imports, not yet everywhere at runtime:
 The daemon backs `chunk watch` and runs `chunk factory build`. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte
 offset, and serves snapshots as JSON over a Unix socket at
-`~/.chunk/daemon/daemon.sock` (`CHUNK_DAEMON_DIR` overrides the directory).
+`$XDG_STATE_HOME/chunk/daemon/daemon.sock`, default
+`~/.local/state/chunk/daemon/daemon.sock` (`CHUNK_DAEMON_DIR` overrides the
+directory). When nothing answers there, clients also try
+`~/.chunk/daemon/daemon.sock`, so they reach a daemon started by an older
+release until it exits.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CHUNK_DAEMON_DIR` | `~/.chunk/daemon/` | Override the directory for the socket, pid file and log. The socket path (`<dir>/daemon.sock`) must fit the OS limit (104 bytes on macOS, 108 on Linux); a longer one is refused up front with this variable named as the fix |
+| `CHUNK_DAEMON_DIR` | `~/.local/state/chunk/daemon/` | Override the directory for the socket, pid file and log. The socket path (`<dir>/daemon.sock`) must fit the OS limit (104 bytes on macOS, 108 on Linux); a longer one is refused up front with this variable named as the fix |
 | `CHUNK_DAEMON_TCP_ADDR` | _(disabled)_ | Bind a TCP listener on this address in addition to the Unix socket (e.g. `127.0.0.1:7777`); requires `CHUNK_DAEMON_TCP_TOKEN` |
 | `CHUNK_DAEMON_REMOTE_ADDR` | _(local socket)_ | Connect to a remote daemon at this TCP address instead of the local socket (e.g. `127.0.0.1:7777` via an SSH tunnel) |
 | `CHUNK_DAEMON_TCP_TOKEN` | _(required when TCP is enabled)_ | Bearer token required on every TCP request; set the same value on the daemon and all clients. TCP traffic is not encrypted — use an SSH tunnel (`ssh -L`) when the daemon is not on loopback. |
