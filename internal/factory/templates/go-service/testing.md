@@ -7,8 +7,7 @@ change back for more work, so report one only when it clears the bar below.
 ## Project standards
 
 Before reviewing, read what the project says about itself, where it exists: `AGENTS.md`,
-`CLAUDE.md`, `CONTRIBUTING.md`, and `.chunk/context/review-prompt.md`, the team's review standards
-mined from past review comments. Read a few existing `_test.go` files too, and judge new tests by
+`CLAUDE.md`, and `CONTRIBUTING.md`. Read a few existing `_test.go` files too, and judge new tests by
 the patterns the project already uses: its assertion library, fixtures, fakes and test helpers.
 
 Failing tests are caught by the project's validation commands, which run on every change. This

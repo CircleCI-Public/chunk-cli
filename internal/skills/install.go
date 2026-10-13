@@ -44,7 +44,7 @@ var All = []Skill{
 	},
 	{
 		Name:        "chunk-review",
-		Description: `Use when asked to "review recent changes", "chunk review", "review my diff", "review this PR", or "review my changes". Applies team-specific review standards from .chunk/review-prompt.md.`,
+		Description: `Use when asked to "review recent changes", "chunk review", "review my diff", "review this PR", or "review my changes". Applies the project's review prompts in .chunk/reviews/, one reviewer per prompt.`,
 	},
 	{
 		Name:        "debug-ci-failures",

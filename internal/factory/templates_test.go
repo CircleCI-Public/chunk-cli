@@ -31,7 +31,7 @@ func TestTemplatesFollowTheReviewPromptRules(t *testing.T) {
 				for _, want := range []string{
 					"## Severity", "- **high**:", "- **medium**:", "- **low**:",
 					"## Scope", "Review only the change", "in one pass",
-					".chunk/context/review-prompt.md",
+					"read what the project says about itself",
 				} {
 					assert.Assert(t, strings.Contains(p.Body, want), "%s has no %q", p.Name, want)
 				}

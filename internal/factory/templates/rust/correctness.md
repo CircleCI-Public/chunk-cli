@@ -8,8 +8,7 @@ a long list of possible ones.
 ## Project standards
 
 Before reviewing, read what the project says about itself, where it exists: `AGENTS.md`,
-`CLAUDE.md`, `CONTRIBUTING.md`, `Cargo.toml`, and `.chunk/context/review-prompt.md`, the team's
-review standards mined from past review comments. Where they set a rule for this area, the rule wins
+`CLAUDE.md`, `CONTRIBUTING.md`, and `Cargo.toml`. Where they set a rule for this area, the rule wins
 over the defaults below.
 
 Formatting, compiler errors and warnings, clippy findings and failing tests are caught by the

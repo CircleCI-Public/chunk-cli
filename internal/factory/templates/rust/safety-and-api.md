@@ -7,9 +7,8 @@ can show are reachable or that break a real caller.
 ## Project standards
 
 Before reviewing, read what the project says about itself, where it exists: `AGENTS.md`,
-`CLAUDE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `Cargo.toml`, and `.chunk/context/review-prompt.md`,
-the team's review standards mined from past review comments. Where they set a rule for this area,
-the rule wins over the defaults below.
+`CLAUDE.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `Cargo.toml`. Where they set a rule for this
+area, the rule wins over the defaults below.
 
 ## What to look for
 

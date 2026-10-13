@@ -7,9 +7,8 @@ you can show are reachable.
 ## Project standards
 
 Before reviewing, read what the project says about itself, where it exists: `AGENTS.md`,
-`CLAUDE.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `.chunk/context/review-prompt.md`, the team's
-review standards mined from past review comments. Where they set a rule for this area, the rule wins
-over the defaults below.
+`CLAUDE.md`, `CONTRIBUTING.md`, and `SECURITY.md`. Where they set a rule for this area, the rule
+wins over the defaults below.
 
 ## What to look for
 

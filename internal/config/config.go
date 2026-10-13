@@ -32,8 +32,6 @@ func marshalIndent(v any) ([]byte, error) {
 // Model constants define the Claude models used for different operations.
 const (
 	DefaultModel    = "claude-sonnet-4-6"
-	AnalyzeModel    = "claude-sonnet-4-6"
-	PromptModel     = "claude-opus-4-6"
 	ValidationModel = "claude-haiku-4-5-20251001"
 	dirPermission   = 0o700
 	filePermission  = 0o600
@@ -159,8 +157,6 @@ type ResolvedConfig struct {
 	GitHubAPIURL           string
 	Model                  string
 	ModelSource            string
-	AnalyzeModel           string
-	PromptModel            string
 	Notifications          bool
 }
 
@@ -420,10 +416,7 @@ func Resolve(flagAPIKey, flagModel string, insecureStorage bool) (ResolvedConfig
 		return ResolvedConfig{}, envErr
 	}
 
-	rc := ResolvedConfig{
-		AnalyzeModel: AnalyzeModel,
-		PromptModel:  PromptModel,
-	}
+	rc := ResolvedConfig{}
 	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg, insecureStorage)
 	rc.AnthropicAPIKey, rc.AnthropicAPIKeySource = resolveAnthropicAPIKey(flagAPIKey, env, cfg, insecureStorage)
 	rc.ClaudeOAuthToken, rc.ClaudeOAuthTokenSource = resolveClaudeOAuthToken(env, insecureStorage)
@@ -467,8 +460,6 @@ func ResolveCircleCI(insecureStorage bool) (ResolvedConfig, error) {
 	}
 
 	rc := ResolvedConfig{
-		AnalyzeModel:     AnalyzeModel,
-		PromptModel:      PromptModel,
 		CircleCIBaseURL:  env.CircleCIBaseURL,
 		AnthropicBaseURL: env.AnthropicBaseURL,
 		GitHubAPIURL:     env.GitHubAPIURL,
