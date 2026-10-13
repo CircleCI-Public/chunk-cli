@@ -177,6 +177,7 @@ smelt
 │       --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
 │       --reviews <dir>             # Directory of review prompts (default: .smelt/reviews)
 │       --no-validate               # Skip the project's validation commands
+│       --no-plan                   # Skip the reviewed plan the implementer writes before it implements (default: factory.plan, else on)
 │       --keep-sidecars             # Leave the sidecars running when the run ends
 │       --push                     # Push the run's branch when it ends, without asking
 │       --pr                       # Push and open a PR (or update the branch's PR), without asking
@@ -397,6 +398,23 @@ smelt
   (circleci, 3 attempts, no log). An explicit `--max-attempts 3` beats `factory.maxAttempts`. The docker
   backend uses `--image` or `factory.image` and never `validation.sidecarImage`, which is a CircleCI
   snapshot ID; with neither (and no `SMELT_DOCKER_IMAGE`) the command fails before the run starts.
+- **A round is plan → implement → gates → reviews.** Before round 1 the implementer writes a plan
+  (schema: summary, files, acceptance, risks, questions, `cannot_verify_here`) with read-only tools and a
+  5-minute timeout; the `requirements` review (and `adversarial`, when the project has it) checks the plan
+  against the request. High or medium findings send the plan back for one revision; if the revision is still
+  found wanting the run goes ahead, with the findings in front of the implementer. The approved plan is
+  prepended to the implementation prompt and the PR-notes prompt, and is in `factory status --json` as
+  `factory.plan`, in the run log and in the run's record. `cannot_verify_here` items seed the implementer's
+  `BLOCKED:` line. `--no-plan` or `factory.plan: false` skips it; `--continue` never plans.
+  `factory.gatesFirst` (default `true`) runs the validation commands first; if any fails, the round's reviews
+  are reported as `skipped` (`gates failed`) and only the failures are fed back. `gatesFirst: false` runs them
+  side by side. A skipped round still counts towards `--max-attempts`.
+- **The implementer must prove its gates.** Its prompt lists the gate commands and asks for their output under
+  a `## Gates` heading. If the summary claims passing tests, lint or gates but the turn's activity shows a gate
+  (its command, or the `task` target that wraps it) was not run after the last edit, the implementer gets one
+  extra turn in the same round asking it to run them; a second miss is noted on the round and the real gates
+  decide. Tests a gate's output reports as `SKIP` (`go test -v`, gotestsum) are listed in the gate's detail,
+  as `skipped_tests` in `factory status --json`, and in the PR notes under "Skipped in the sandbox".
 - **`factory.maxConcurrent` allows several active runs per project.** The default, and `0` or a
   missing value, is 1: a second `factory build` is refused with `project already has N active run(s)
   (limit N; raise factory.maxConcurrent)`. Negative values are rejected. A continued run (`--continue`)

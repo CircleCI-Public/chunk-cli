@@ -100,6 +100,11 @@ type RoundImplement struct {
 	// Stat summarizes the work so far against the run's baseline.
 	Stat  string `json:"stat,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Nudged reports that the summary claimed passing gates that were not run
+	// after the last edit, so the implementer was asked to run them. Unproven
+	// are the gates it still claimed without running.
+	Nudged   bool     `json:"nudged,omitempty"`
+	Unproven []string `json:"unproven_gates,omitempty"`
 }
 
 // Feed is the latest lines of a stream that can run long, such as a run's
@@ -163,6 +168,8 @@ type RoundCheck struct {
 	Error      string `json:"error,omitempty"`
 	// Output is the end of a failed command's output.
 	Output string `json:"output,omitempty"`
+	// Skipped are the tests the command's output reports as skipped.
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // FactoryRun is what a factory session works on and where its work is.
@@ -199,6 +206,11 @@ type FactoryRun struct {
 	// and Rounds how many rounds were checked.
 	Result string `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
+	// Plan is the plan the implementer was sent with, absent when the run did
+	// not plan.
+	Plan *Plan `json:"plan,omitempty"`
+	// SkippedTests are the tests the last round's validation skipped.
+	SkippedTests []string `json:"skipped_tests,omitempty"`
 	// Blocked is what the implementer said it could not do, for ResultBlocked.
 	Blocked string `json:"blocked,omitempty"`
 	// Incomplete are the titles of the last round's findings that say part of
@@ -236,6 +248,33 @@ type Notes struct {
 	How   string `json:"how"`
 	// Fallback says why the notes could not be written, when they could not.
 	Fallback string `json:"fallback,omitempty"`
+	// Skipped are the tests the sandbox skipped in the run's last round.
+	Skipped []string `json:"skipped,omitempty"`
+}
+
+// Plan mirrors factory.Plan: what the implementer said it would do before it
+// wrote code.
+type Plan struct {
+	Summary          string     `json:"summary"`
+	Files            []PlanFile `json:"files,omitempty"`
+	Acceptance       []PlanItem `json:"acceptance,omitempty"`
+	Risks            []string   `json:"risks,omitempty"`
+	Questions        []string   `json:"questions,omitempty"`
+	CannotVerifyHere []string   `json:"cannot_verify_here,omitempty"`
+}
+
+// PlanFile mirrors factory.PlanFile.
+type PlanFile struct {
+	Path   string `json:"path"`
+	Change string `json:"change"`
+	Why    string `json:"why"`
+}
+
+// PlanItem mirrors factory.PlanItem.
+type PlanItem struct {
+	Item                string `json:"item"`
+	How                 string `json:"how"`
+	VerifiableInSandbox bool   `json:"verifiable_in_sandbox"`
 }
 
 // Why a factory run's loop stopped, as FactoryRun.Result.
@@ -262,6 +301,9 @@ const (
 	CheckFailed = "failed"
 	// CheckErrored means the check could not run.
 	CheckErrored = "errored"
+	// CheckSkipped means the check was not started because the round's gates
+	// failed.
+	CheckSkipped = "skipped"
 )
 
 // ReviewPrompt is one review's progress inside a round. It carries state only:
@@ -298,6 +340,8 @@ const (
 	PromptRunning PromptRunState = "running"
 	PromptDone    PromptRunState = "done"
 	PromptFailed  PromptRunState = "failed"
+	// PromptSkipped means the round's gates failed, so the review never ran.
+	PromptSkipped PromptRunState = "skipped"
 )
 
 // Round is one pass of implementing the work and checking it.
@@ -417,6 +461,8 @@ type FactoryRequest struct {
 	// commands are enough.
 	ReviewsDir string `json:"reviews_dir,omitempty"`
 	NoValidate bool   `json:"no_validate,omitempty"`
+	// NoPlan skips the plan turn that otherwise precedes the implementation.
+	NoPlan bool `json:"no_plan,omitempty"`
 	// Attempts is the most rounds to check; zero means DefaultAttempts.
 	Attempts int `json:"attempts,omitempty"`
 	// Reviewers is how many reviewer sidecars to run; zero means one per

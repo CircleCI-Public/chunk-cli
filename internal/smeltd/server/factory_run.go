@@ -222,6 +222,8 @@ func (d *daemon) startFactory(req smeltd.FactoryRequest) (smeltd.Session, error)
 		Reviewers:               factory.ReviewerCount(req.Reviewers, prompts),
 		Prompts:                 prompts,
 		Commands:                commands,
+		Plan:                    !req.NoPlan && cfg.Factory.PlanEnabled(),
+		GatesFirst:              cfg.Factory.GatesFirstEnabled(),
 		Client:                  d.factoryClient(req.Backend),
 		OrgID:                   orgID,
 		Image:                   image,
@@ -348,12 +350,23 @@ func (r *factoryRecorder) round(n int) int {
 }
 
 func (r *factoryRecorder) event(ev factory.Event) {
+	// The plan comes before the first round.
+	if ev.Kind == factory.EventPlanning {
+		r.progress(iostream.LevelStep, "planning")
+		return
+	}
+	if ev.Kind == factory.EventPlanReviewed {
+		r.planReviewed(ev)
+		return
+	}
 	ridx := r.round(ev.Round)
 	e := r.entry
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	round := &e.s.Rounds[ridx]
 	switch ev.Kind {
+	case factory.EventPlanning, factory.EventPlanReviewed:
+		// Recorded above: the plan comes before the first round.
 	case factory.EventImplementing:
 		round.State = smeltd.RoundImplementing
 		round.Implement = &smeltd.RoundImplement{State: smeltd.ImplementRunning}
@@ -367,6 +380,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 			impl.RateLimit = ev.Turn.RateLimit
 			r.recordRateLimit(ev.Turn.RateLimit)
 			impl.Summary = ev.Turn.Summary
+			impl.Nudged, impl.Unproven = ev.Turn.Nudged, ev.Turn.Unproven
 		}
 	case factory.EventCollected:
 		if impl := round.Implement; impl != nil {
@@ -379,16 +393,56 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		round.State = smeltd.RoundChecking
 	case factory.EventChecked:
 		r.recordReviewsLocked(ridx, ev.Checks)
-		passed := 0
+		passed, skipped := 0, 0
 		for _, c := range ev.Checks {
-			if c.Status == factory.StatusPassed {
+			switch c.Status {
+			case factory.StatusPassed:
 				passed++
+			case factory.StatusSkipped:
+				skipped++
+			case factory.StatusFailed, factory.StatusErrored:
 			}
 		}
 		now := time.Now()
 		round.State, round.EndedAt = smeltd.RoundDone, &now
 		round.Note = fmt.Sprintf("%d of %d checks passed", passed, len(ev.Checks))
+		if skipped > 0 {
+			round.Note += fmt.Sprintf("; %d review(s) skipped (gates failed)", skipped)
+		}
+		if impl := round.Implement; impl != nil && len(impl.Unproven) > 0 {
+			round.Note += "; the implementer claimed gates it did not run after its last edit: " + strings.Join(impl.Unproven, ", ")
+		}
+		e.s.Factory.SkippedTests = factory.Outcome{Checks: ev.Checks}.Skipped()
 	}
+}
+
+// planReviewed records the settled plan. It reads as a line of the run's
+// progress, so a follower sees the plan before the first turn.
+func (r *factoryRecorder) planReviewed(ev factory.Event) {
+	msg := "plan reviewed"
+	if n := len(ev.Findings); n > 0 {
+		msg += fmt.Sprintf(" (%d finding(s) still open, sent with the plan)", n)
+	}
+	r.progress(iostream.LevelDone, msg)
+	e := r.entry
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.s.Factory.Plan = wirePlan(ev.Plan)
+}
+
+// wirePlan is a plan as the session API carries it.
+func wirePlan(p *factory.Plan) *smeltd.Plan {
+	if p == nil {
+		return nil
+	}
+	out := &smeltd.Plan{Summary: p.Summary, Risks: p.Risks, Questions: p.Questions, CannotVerifyHere: p.CannotVerifyHere}
+	for _, f := range p.Files {
+		out.Files = append(out.Files, smeltd.PlanFile(f))
+	}
+	for _, a := range p.Acceptance {
+		out.Acceptance = append(out.Acceptance, smeltd.PlanItem(a))
+	}
+	return out
 }
 
 // recordReviewsLocked stores the findings of a round's reviews.
@@ -411,6 +465,9 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 		if i := e.reviewIndexLocked(ridx, c.Name); i >= 0 {
 			p := &e.s.Rounds[ridx].Reviews[i]
 			p.Findings, p.Worth, p.Status = len(res.Findings), len(worthChanging(c.Findings)), string(c.Status)
+			if c.Status == factory.StatusSkipped {
+				p.State = smeltd.PromptSkipped
+			}
 		}
 		rd.Results = append(rd.Results, res)
 	}
@@ -468,6 +525,7 @@ func (r *factoryRecorder) checked(c factory.Check) {
 		DurationMS: c.Duration.Milliseconds(),
 		Error:      c.Error,
 		Output:     c.Output,
+		Skipped:    c.Skipped,
 	})
 }
 
@@ -494,6 +552,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds
 		f.Blocked = rep.Outcome.Blocked
+		f.SkippedTests = rep.Outcome.Skipped()
 		for _, fd := range rep.Outcome.Incomplete() {
 			f.Incomplete = append(f.Incomplete, factory.FindingTitle(fd))
 		}

@@ -42,6 +42,12 @@ type RunOptions struct {
 	Reviewers int
 	Prompts   []review.Prompt
 	Commands  []config.Command
+	// Plan has the implementer write a plan, and the plan reviewed, before it
+	// writes code. A continued run never plans: its plan is in the record.
+	Plan bool
+	// GatesFirst runs Commands before the reviews and skips the reviews of a
+	// round whose commands failed.
+	GatesFirst bool
 
 	// Author is the configured author of the branch's commits (factory.author);
 	// when it is empty, ResolveAuthor falls back to the developer's identity.
@@ -298,7 +304,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Implementer: &Implementer{
 			Harness: opts.Harness, Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
 			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions,
-			OnActivity: opts.OnActivity,
+			OnActivity: opts.OnActivity, Gates: gateCommands(opts.Commands),
 		},
 		Acquire:   pool.Acquire,
 		Release:   pool.Release,
@@ -311,9 +317,11 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 			StructuredFindings: true,
 			ProgressFn:         opts.OnReviewProgress,
 		},
-		Commands: opts.Commands,
-		OnCheck:  opts.OnCheck,
-		Install:  opts.Install,
+		Commands:   opts.Commands,
+		GatesFirst: opts.GatesFirst,
+		Status:     status,
+		OnCheck:    opts.OnCheck,
+		Install:    opts.Install,
 		OnInstallOutput: func(id, line string) {
 			status(iostream.LevelInfo, "install "+id+": "+line)
 		},
@@ -326,14 +334,8 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	}
 	// The implementer's last turn goes into the notes.
 	lastSummary := ""
-	loop := Loop{Attempts: opts.Attempts, OnEvent: func(e Event) {
-		if e.Kind == EventImplemented {
-			lastSummary = e.Turn.Summary
-		}
-		if opts.OnEvent != nil {
-			opts.OnEvent(e)
-		}
-	}}
+	loop := Loop{Attempts: opts.Attempts, OnEvent: keepSummary(&lastSummary, opts.OnEvent)}
+	loop.Planner = planFor(opts.Plan, cont, steps)
 	if cont != nil {
 		if err := steps.Relay.Push(ctx, []*sidecar.PoolEntry{impl}); err != nil {
 			return rep, fmt.Errorf("bring the work of run %s to the implementer: %w", cont.From.RunID, err)
@@ -348,6 +350,28 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	rep.Outcome, err = loop.Run(ctx, steps, opts.Prompt)
 	concludeRun(ctx, steps, wt, &rep, NotesInput{Request: request, Summary: lastSummary, Log: lg.block}, status)
 	return rep, err
+}
+
+// planFor is the planner a run uses, nil for none. A continued run never plans:
+// the plan already exists in the record of the run it continues.
+func planFor(enabled bool, cont *Continuation, p Planner) Planner {
+	if !enabled || cont != nil {
+		return nil
+	}
+	return p
+}
+
+// keepSummary is an event handler that keeps the summary of the implementer's
+// latest turn in last, and passes every event on to next when it is set.
+func keepSummary(last *string, next func(Event)) func(Event) {
+	return func(e Event) {
+		if e.Kind == EventImplemented {
+			*last = e.Turn.Summary
+		}
+		if next != nil {
+			next(e)
+		}
+	}
 }
 
 // concludeRun commits the implementer's work and describes it. The commit is
@@ -369,13 +393,14 @@ func concludeRun(ctx context.Context, steps *Sidecars, wt Worktree, rep *Report,
 // commit's message with them. When the notes cannot be written the commit
 // carries the fallback, with a warning saying why.
 func describeWork(ctx context.Context, steps *Sidecars, wt Worktree, rep Report, in NotesInput, status iostream.StatusFunc) *Notes {
-	in.Outcome, in.Baseline = rep.Outcome, wt.Baseline
+	in.Outcome, in.Baseline, in.Plan = rep.Outcome, wt.Baseline, rep.Outcome.Plan
 	var err error
 	if in.DiffStat, err = diffStat(context.WithoutCancel(ctx), wt); err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("could not read the diff stat for the PR notes: %v", err))
 	}
 	status(iostream.LevelStep, "writing PR notes…")
 	notes, err := steps.WriteNotes(ctx, in)
+	notes.Skipped = rep.Outcome.Skipped()
 	if err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("PR notes were not generated: %v", err))
 	} else {
@@ -406,7 +431,7 @@ func keepRecord(dataDir string, rec Record, status iostream.StatusFunc) {
 
 // keepEndedRecord saves rec with how the run ended and the notes it wrote.
 func keepEndedRecord(dataDir string, rec Record, rep Report, status iostream.StatusFunc) {
-	rec.Result, rec.Rounds, rec.Notes = rep.Outcome.Result, rep.Outcome.Rounds, rep.Notes
+	rec.Result, rec.Rounds, rec.Notes, rec.Plan = rep.Outcome.Result, rep.Outcome.Rounds, rep.Notes, rep.Outcome.Plan
 	keepRecord(dataDir, rec, status)
 }
 

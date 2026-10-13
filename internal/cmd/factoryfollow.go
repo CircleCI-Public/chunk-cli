@@ -224,6 +224,8 @@ func (r *sessionReporter) report(d smeltd.SessionDetail) {
 				r.status(iostream.LevelWarn, fmt.Sprintf("%s: %s", p.Name, p.Error))
 			case smeltd.PromptQueued:
 				// Nothing to say yet.
+			case smeltd.PromptSkipped:
+				// reportFindings says so when the round is done.
 			}
 		}
 		// A factory round's findings are recorded as it is checked, which is
@@ -282,6 +284,9 @@ func (r *sessionReporter) reportFindings(results []smeltd.ReviewResult) {
 		case smeltd.CheckErrored:
 			r.status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", res.Prompt, res.Error))
 			continue
+		case smeltd.CheckSkipped:
+			r.status(iostream.LevelInfo, fmt.Sprintf("review %s skipped (gates failed)", res.Prompt))
+			continue
 		}
 		for _, f := range res.Findings {
 			r.status(iostream.LevelInfo, fmt.Sprintf("  [%s] %s %s", f.Severity, f.Location(), oneLineSummary(f.Body)))
@@ -309,6 +314,11 @@ func (r *sessionReporter) reportCheck(c smeltd.RoundCheck) {
 		}
 	case smeltd.CheckErrored:
 		r.status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
+	case smeltd.CheckSkipped:
+		r.status(iostream.LevelInfo, fmt.Sprintf("  %s skipped", c.Name))
+	}
+	if len(c.Skipped) > 0 {
+		r.status(iostream.LevelWarn, fmt.Sprintf("  %s skipped %d test(s): %s", c.Name, len(c.Skipped), strings.Join(c.Skipped, ", ")))
 	}
 }
 

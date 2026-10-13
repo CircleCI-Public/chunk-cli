@@ -47,6 +47,9 @@ type Record struct {
 	// Notes are the written account of the branch's change, once the run
 	// that committed it has written them.
 	Notes *Notes `json:"notes,omitempty"`
+	// Plan is the plan the implementer was sent with, nil when the run did
+	// not plan.
+	Plan *Plan `json:"plan,omitempty"`
 }
 
 // newRecord is the record of a run working in wt.

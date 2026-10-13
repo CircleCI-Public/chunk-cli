@@ -31,7 +31,14 @@ const (
 	// StatusErrored means the check could not run, such as a review that timed
 	// out. It says nothing about the code, so it is not fed back.
 	StatusErrored Status = "errored"
+	// StatusSkipped means the check was not started because an earlier phase
+	// of the round failed. Like an errored check it says nothing about the
+	// code, so it is not fed back.
+	StatusSkipped Status = "skipped"
 )
+
+// reasonGatesFailed is why a round's reviews are skipped.
+const reasonGatesFailed = "gates failed"
 
 // Check is the outcome of one review or validation command in one round. A
 // review is treated like any other command run on a sidecar: it passes or
@@ -46,6 +53,11 @@ type Check struct {
 	Feedback string
 	// Error is why the check could not run, for StatusErrored.
 	Error string
+	// Reason is why the check was skipped, for StatusSkipped.
+	Reason string
+	// Skipped are the tests a validation command's output reports as skipped,
+	// so that a green test gate cannot hide them.
+	Skipped []string
 	// Findings are a review's findings, kept as data for display.
 	Findings []review.Finding
 	// Prose is a review's prose alongside its findings, kept for display.
@@ -84,6 +96,17 @@ func FromReview(r review.Result) Check {
 	}
 	c.Status, c.Feedback = StatusFailed, strings.TrimRight(b.String(), "\n")
 	return c
+}
+
+// skippedReview is the check of a review that was not started because the
+// round's gates failed.
+func skippedReview(name string) Check {
+	return Check{Name: name, Kind: KindReview, Status: StatusSkipped, Reason: reasonGatesFailed}
+}
+
+// gatesFailed reports whether any validation command in checks failed.
+func gatesFailed(checks []Check) bool {
+	return slices.ContainsFunc(checks, func(c Check) bool { return c.Kind == KindValidate && c.Status == StatusFailed })
 }
 
 // FromCommand converts one validation command's run into a check. runErr is a

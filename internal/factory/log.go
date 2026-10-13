@@ -126,7 +126,7 @@ func (l *runLog) start(runID string, opts RunOptions, request string) {
 	// The prompts as they are sent: the implementer's system prompt comes with
 	// every turn, and each review gets the original request and the location of
 	// the change under review.
-	l.block("implementer system prompt", implementerSystemPrompt(opts.ImplementerInstructions))
+	l.block("implementer system prompt", implementerSystemPrompt(opts.ImplementerInstructions, gateCommands(opts.Commands)))
 	for _, p := range scopePrompts(request, opts.Prompts, nil) {
 		l.block("review prompt "+p.Name, p.Body)
 	}
@@ -134,11 +134,25 @@ func (l *runLog) start(runID string, opts RunOptions, request string) {
 
 func (l *runLog) event(e Event) {
 	switch e.Kind {
+	case EventPlanning:
+		l.line("step", "planning")
+	case EventPlanReviewed:
+		l.block("plan", e.Plan.Markdown())
+		for _, f := range e.Findings {
+			l.block(fmt.Sprintf("  plan review [%s] %s (not resolved)", f.Severity, f.Location()), f.Body)
+		}
+		l.line("info", "plan reviewed")
 	case EventImplementing:
 		l.block(fmt.Sprintf("round %d: prompt sent to the implementer", e.Round), e.Prompt)
 	case EventImplemented:
 		l.line("info", fmt.Sprintf("round %d: implementer finished in %s ($%.2f)", e.Round, e.Turn.Duration.Round(time.Second), e.Turn.CostUSD))
 		l.block(fmt.Sprintf("round %d: implementer's summary", e.Round), e.Turn.Summary)
+		if e.Turn.Nudged {
+			l.line("warn", fmt.Sprintf("round %d: the summary claimed passing gates that were not run after the last edit; the implementer was asked to run them", e.Round))
+		}
+		if len(e.Turn.Unproven) > 0 {
+			l.line("warn", fmt.Sprintf("round %d: the summary still claims gates that were not run after the last edit: %s", e.Round, strings.Join(e.Turn.Unproven, ", ")))
+		}
 	case EventCollected:
 		if e.Change.Empty() {
 			l.line("info", fmt.Sprintf("round %d: no changes", e.Round))
@@ -182,9 +196,14 @@ func (l *runLog) reviewProgress(e review.ProgressEvent) {
 // severity, and its prose.
 func (l *runLog) review(round int, c Check) {
 	head := fmt.Sprintf("round %d: review %s on %s %s in %s", round, c.Name, c.SidecarID, c.Status, c.Duration.Round(time.Second))
-	if c.Status == StatusErrored {
+	switch c.Status {
+	case StatusErrored:
 		l.line("warn", head+": "+c.Error)
 		return
+	case StatusSkipped:
+		l.line("info", fmt.Sprintf("round %d: review %s skipped (%s)", round, c.Name, c.Reason))
+		return
+	case StatusPassed, StatusFailed:
 	}
 	l.line(statusLevel(c.Status), fmt.Sprintf("%s with %d finding(s)", head, len(c.Findings)))
 	for _, f := range c.Findings {
@@ -214,6 +233,10 @@ func (l *runLog) check(c Check) {
 		if l.verbose {
 			l.block("  output", c.Output)
 		}
+	case StatusSkipped:
+	}
+	if len(c.Skipped) > 0 {
+		l.line("warn", fmt.Sprintf("%s skipped %d test(s): %s", c.Name, len(c.Skipped), strings.Join(c.Skipped, ", ")))
 	}
 }
 
@@ -272,7 +295,7 @@ func (l *runLog) line(level, msg string) {
 // checkTally sums up a round's checks in one line, naming those that did not
 // pass.
 func checkTally(checks []Check) string {
-	var failed, errored []string
+	var failed, errored, skipped []string
 	for _, c := range checks {
 		switch c.Status {
 		case StatusPassed:
@@ -280,14 +303,19 @@ func checkTally(checks []Check) string {
 			failed = append(failed, string(c.Kind)+" "+c.Name)
 		case StatusErrored:
 			errored = append(errored, string(c.Kind)+" "+c.Name)
+		case StatusSkipped:
+			skipped = append(skipped, string(c.Kind)+" "+c.Name)
 		}
 	}
-	line := fmt.Sprintf("%d of %d checks passed", len(checks)-len(failed)-len(errored), len(checks))
+	line := fmt.Sprintf("%d of %d checks passed", len(checks)-len(failed)-len(errored)-len(skipped), len(checks))
 	if len(failed) > 0 {
 		line += "; failed: " + strings.Join(failed, ", ")
 	}
 	if len(errored) > 0 {
 		line += "; could not run: " + strings.Join(errored, ", ")
+	}
+	if len(skipped) > 0 {
+		line += "; skipped (" + reasonGatesFailed + "): " + strings.Join(skipped, ", ")
 	}
 	return line
 }

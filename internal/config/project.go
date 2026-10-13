@@ -196,6 +196,23 @@ type FactoryConfig struct {
 	// Author is who the commits on a run's branch are attributed to, as
 	// "Name <email>". Empty means the developer's own git identity.
 	Author string `json:"author,omitempty"`
+	// Plan asks the implementer for a reviewed plan before it writes code.
+	// Unset means true.
+	Plan *bool `json:"plan,omitempty"`
+	// GatesFirst runs the validation commands before the reviews and skips
+	// the reviews of a round whose gates failed. Unset means true.
+	GatesFirst *bool `json:"gatesFirst,omitempty"`
+}
+
+// PlanEnabled reports whether runs plan before implementing; the default is yes.
+func (f *FactoryConfig) PlanEnabled() bool {
+	return f == nil || f.Plan == nil || *f.Plan
+}
+
+// GatesFirstEnabled reports whether a round's validation commands run before its
+// reviews; the default is yes.
+func (f *FactoryConfig) GatesFirstEnabled() bool {
+	return f == nil || f.GatesFirst == nil || *f.GatesFirst
 }
 
 // CommitAuthor is a git identity that commits are attributed to.

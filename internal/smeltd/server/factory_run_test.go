@@ -455,3 +455,75 @@ func TestFactorySessionRecordsBlockedAndIncompleteWork(t *testing.T) {
 	assert.DeepEqual(t, detail.Factory.Incomplete, []string{"The CLI is missing"})
 	assert.Equal(t, detail.Stages[0].Note, "the implementer is blocked: needs a credential")
 }
+
+func TestFactorySessionPlansAndRunsGatesFirstUnlessTurnedOff(t *testing.T) {
+	tests := []struct {
+		name       string
+		cfg        string
+		req        smeltd.FactoryRequest
+		plan, gate bool
+	}{
+		{"defaults", `{"orgID":"org-1"}`, smeltd.FactoryRequest{}, true, true},
+		{"--no-plan", `{"orgID":"org-1"}`, smeltd.FactoryRequest{NoPlan: true}, false, true},
+		{"factory.plan false", `{"orgID":"org-1","factory":{"plan":false}}`, smeltd.FactoryRequest{}, false, true},
+		{"factory.gatesFirst false", `{"orgID":"org-1","factory":{"gatesFirst":false}}`, smeltd.FactoryRequest{}, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got factory.RunOptions
+			run := scriptedRun(factory.ResultPassed)
+			d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+				got = opts
+				return run(ctx, opts)
+			})
+			cfg := strings.Replace(tt.cfg, `{`, `{"commands":[{"name":"test","run":"go test ./..."}],`, 1)
+			assert.NilError(t, os.WriteFile(filepath.Join(root, ".smelt", "config.json"), []byte(cfg), 0o644))
+			req := tt.req
+			req.Backend, req.ProjectRoot, req.Prompt = smeltd.BackendCircleCI, root, "add a flag"
+			sess, err := d.startFactory(req)
+			assert.NilError(t, err)
+			waitForSessionEnd(t, d, sess.ID)
+			assert.Equal(t, got.Plan, tt.plan)
+			assert.Equal(t, got.GatesFirst, tt.gate)
+		})
+	}
+}
+
+func TestFactoryRecorderRecordsThePlanSkippedReviewsAndSkippedTests(t *testing.T) {
+	s := newSessionStore(context.Background())
+	entry, _, busy := s.add(smeltd.Session{ProjectRoot: "/p", Factory: &smeltd.FactoryRun{}}, 1)
+	assert.Equal(t, busy, "")
+	rec := &factoryRecorder{entry: entry, prompts: []review.Prompt{{Name: "requirements"}}, rounds: map[int]int{}}
+
+	plan := factory.Plan{Summary: "do it", Files: []factory.PlanFile{{Path: "a.go", Change: "add", Why: "w"}},
+		Acceptance: []factory.PlanItem{{Item: "A", How: "h", VerifiableInSandbox: true}}, CannotVerifyHere: []string{"docker"}}
+	rec.event(factory.Event{Kind: factory.EventPlanning})
+	rec.event(factory.Event{Kind: factory.EventPlanReviewed, Plan: &plan})
+	rec.event(factory.Event{Kind: factory.EventImplementing, Round: 1})
+	rec.event(factory.Event{Kind: factory.EventImplemented, Round: 1, Turn: factory.Turn{Summary: "x", Nudged: true, Unproven: []string{"lint"}}})
+	rec.event(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: []factory.Check{
+		{Name: "requirements", Kind: factory.KindReview, Status: factory.StatusSkipped, Reason: "gates failed"},
+		{Name: "test", Kind: factory.KindValidate, Status: factory.StatusFailed, Skipped: []string{"TestDocker"}},
+	}})
+
+	snap := entry.snapshot()
+	f := snap.Factory
+	assert.Equal(t, f.Plan.Summary, "do it")
+	assert.DeepEqual(t, f.Plan.Files, []smeltd.PlanFile{{Path: "a.go", Change: "add", Why: "w"}})
+	assert.DeepEqual(t, f.Plan.Acceptance, []smeltd.PlanItem{{Item: "A", How: "h", VerifiableInSandbox: true}})
+	assert.DeepEqual(t, f.Plan.CannotVerifyHere, []string{"docker"})
+	var lines []string
+	for _, l := range f.Progress.Lines {
+		lines = append(lines, l.Text)
+	}
+	assert.DeepEqual(t, lines, []string{"planning", "plan reviewed"})
+	assert.DeepEqual(t, f.SkippedTests, []string{"TestDocker"})
+
+	assert.Equal(t, len(snap.Rounds), 1, "the plan is not a round")
+	round := snap.Rounds[0]
+	assert.Equal(t, round.Reviews[0].State, smeltd.PromptSkipped)
+	assert.Equal(t, round.Reviews[0].Status, smeltd.CheckSkipped)
+	assert.Assert(t, round.Implement.Nudged)
+	assert.Assert(t, strings.Contains(round.Note, "1 review(s) skipped (gates failed)"), round.Note)
+	assert.Assert(t, strings.Contains(round.Note, "lint"), round.Note)
+}

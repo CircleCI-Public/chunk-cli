@@ -106,10 +106,13 @@ func runCommand(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntr
 			out.Write(data[:min(len(data), room)])
 		}
 	}, nil)
+	skipped := SkippedTests(out.String())
 	if ctx.Err() == context.DeadlineExceeded {
 		// A command that runs past its timeout is a failure the implementer may
 		// be able to fix, such as a test that hangs, so it is fed back.
 		return FromCommand(c.Name, entry.ID, -1, out.String()+fmt.Sprintf("\n(timed out after %s)", timeout), time.Since(start), nil)
 	}
-	return FromCommand(c.Name, entry.ID, code, out.String(), time.Since(start), err)
+	check := FromCommand(c.Name, entry.ID, code, out.String(), time.Since(start), err)
+	check.Skipped = skipped
+	return check
 }

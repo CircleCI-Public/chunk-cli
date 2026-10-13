@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/smeltdev/smelt/internal/config"
 	"github.com/smeltdev/smelt/internal/harness"
 	"github.com/smeltdev/smelt/internal/harness/claude"
 	"github.com/smeltdev/smelt/internal/iostream"
@@ -49,11 +50,27 @@ func BlockedReason(summary string) string {
 
 // implementerSystemPrompt returns the base system prompt, followed by the
 // run's own instructions when there are any.
-func implementerSystemPrompt(instructions string) string {
-	if strings.TrimSpace(instructions) == "" {
-		return baseImplementerSystemPrompt
+func implementerSystemPrompt(instructions string, gates []config.Command) string {
+	prompt := baseImplementerSystemPrompt
+	if len(gates) > 0 {
+		prompt += "\n\n" + gatesInstructions(gates)
 	}
-	return baseImplementerSystemPrompt + "\n\nRun-specific instructions:\n" + strings.TrimSpace(instructions)
+	if strings.TrimSpace(instructions) == "" {
+		return prompt
+	}
+	return prompt + "\n\nRun-specific instructions:\n" + strings.TrimSpace(instructions)
+}
+
+// gatesInstructions tells the implementer to prove its work with the project's
+// gates. smelt checks the claim against what the implementer ran.
+func gatesInstructions(gates []config.Command) string {
+	var b strings.Builder
+	b.WriteString("Before you finish, run the project's gates yourself, after your last edit, and paste the last lines of each one's output under a " + gatesHeading + " heading in your summary. ")
+	b.WriteString("Do not say a gate passes unless you ran it after your last edit; smelt checks. Fix what fails and run them again. The gates:\n")
+	for _, g := range gates {
+		fmt.Fprintf(&b, "- %s: %s\n", g.Name, g.Run)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // Activity is one thing the implementer did, for display.
@@ -73,6 +90,14 @@ type Turn struct {
 	OutputTokens int
 	// RateLimit is the last rate-limit signal the agent emitted, if any.
 	RateLimit *harness.RateLimit
+	// Activity is what the implementer did in the turn, in order.
+	Activity []Activity
+	// Nudged reports that the summary claimed passing gates that were not run
+	// after the last edit, and the implementer was asked to run them.
+	Nudged bool
+	// Unproven are the gates the summary still claims to pass although they
+	// were not run after the last edit, after the nudge.
+	Unproven []string
 }
 
 // Implementer runs a coding agent on a sidecar to write code. Every turn
@@ -88,7 +113,10 @@ type Implementer struct {
 	Model        string
 	Timeout      time.Duration
 	Instructions string
-	OnActivity   func(Activity)
+	// Gates are the commands the implementer is asked to run before it
+	// finishes; see gateCommands.
+	Gates      []config.Command
+	OnActivity func(Activity)
 
 	sessionID string
 	started   bool
@@ -116,10 +144,16 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 
 	h := im.agent()
 	start := time.Now()
-	parser := h.NewImplementParser(im.OnActivity)
+	var acts []Activity
+	parser := h.NewImplementParser(func(a Activity) {
+		acts = append(acts, a)
+		if im.OnActivity != nil {
+			im.OnActivity(a)
+		}
+	})
 	var stderr bytes.Buffer
 	script := h.ImplementScript(harness.ImplementInput{
-		RepoPath: im.Entry.RepoPath, Prompt: prompt, SystemPrompt: implementerSystemPrompt(im.Instructions),
+		RepoPath: im.Entry.RepoPath, Prompt: prompt, SystemPrompt: implementerSystemPrompt(im.Instructions, im.Gates),
 		Model: im.Model, SessionID: im.sessionID, Resume: im.started,
 	})
 	code, err := im.Exec(ctx, im.Entry, script, h.Env(im.Credential, im.BaseURL), func(stream string, data []byte) {
@@ -144,6 +178,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 		Summary: out.Turn.Summary, Duration: time.Since(start), CostUSD: out.Turn.CostUSD,
 		Harness: h.Name(), Model: im.Model, InputTokens: out.Turn.InputTokens,
 		CachedTokens: out.Turn.CachedTokens, OutputTokens: out.Turn.OutputTokens, RateLimit: out.Turn.RateLimit,
+		Activity: acts,
 	}
 
 	// The agent puts why a turn failed in its result, so that explains a failed
