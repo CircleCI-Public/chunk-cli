@@ -20,7 +20,7 @@ import (
 )
 
 func newFactoryBootstrapCmd() *cobra.Command {
-	var orgID, image, model, output string
+	var orgID, image, model, output, template string
 	var timeout time.Duration
 	var jsonOut bool
 
@@ -44,7 +44,11 @@ it must have Claude Code.
 Existing review prompts are never overwritten: bootstrap refuses a directory
 that has any. Pass --output to write somewhere else, for example to compare
 with the prompts you have. The prompts are a starting point; read them and
-edit them before relying on them.`,
+edit them before relying on them.
+
+--template writes a standard set of prompts instead, such as python or
+go-service, without a sidecar or Claude. It suits a new project that has
+little for Claude to read yet.`,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -63,6 +67,9 @@ edit them before relying on them.`,
 			// costs nothing.
 			if err := factory.CheckPromptsDir(dir); err != nil {
 				return promptsExistError(dir, err)
+			}
+			if template != "" {
+				return writeTemplate(streams, workDir, dir, template, jsonOut)
 			}
 
 			cfg, err := config.LoadProjectConfig(workDir)
@@ -190,7 +197,46 @@ edit them before relying on them.`,
 	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
 	cmd.Flags().DurationVar(&timeout, "timeout", factory.DefaultBootstrapTimeout, "max time for writing the prompts")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().StringVar(&template, "template", "", "Write a standard set of prompts instead ("+strings.Join(factory.Templates(), ", ")+")")
+	// A template is written locally, so the sidecar and Claude flags do nothing.
+	for _, f := range []string{"org-id", "image", "model", "timeout"} {
+		cmd.MarkFlagsMutuallyExclusive("template", f)
+	}
 	return cmd
+}
+
+// writeTemplate writes the named standard set of review prompts to dir.
+func writeTemplate(streams iostream.Streams, workDir, dir, name string, jsonOut bool) error {
+	prompts, err := factory.Template(name)
+	if errors.Is(err, factory.ErrUnknownTemplate) {
+		return &userError{
+			msg:        fmt.Sprintf("No review template is named %q.", name),
+			suggestion: "Pick one of: " + strings.Join(factory.Templates(), ", ") + ".",
+			hideDetail: true,
+			err:        err,
+		}
+	}
+	if err != nil {
+		return &userError{msg: "Could not read the review template.", err: err}
+	}
+	paths, err := factory.WritePrompts(dir, prompts)
+	if errors.Is(err, factory.ErrPromptsExist) {
+		return promptsExistError(dir, err)
+	}
+	if err != nil {
+		return &userError{msg: "Could not save the review prompts.", err: err}
+	}
+
+	if jsonOut {
+		return iostream.PrintJSON(streams.Out, newBootstrapReport(workDir, paths, factory.Bootstrap{}))
+	}
+	newStatusFunc(streams)(iostream.LevelDone, fmt.Sprintf("Wrote %d review prompt(s) from the %s template", len(paths), name))
+	for _, p := range paths {
+		streams.Println("  " + relPath(workDir, p))
+	}
+	streams.Println()
+	streams.Println(ui.Dim("Read and edit them before relying on them. chunk factory uses them on its next run."))
+	return nil
 }
 
 // maxActivityDetail caps what an activity line shows of a tool's target, such

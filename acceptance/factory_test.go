@@ -217,6 +217,47 @@ func TestFactoryBootstrapUsesTheTeamsStandards(t *testing.T) {
 	assert.Assert(t, strings.Contains(prompts[0], "Name every goroutine's exit."), prompts[0])
 }
 
+// A template is written from the binary, so no sidecar boots and Claude never
+// runs.
+func TestFactoryBootstrapWritesATemplate(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, nil)
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--template", "python"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	for _, name := range []string{"correctness", "security", "testing"} {
+		data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", name+".md"))
+		assert.NilError(t, err)
+		assert.Assert(t, strings.Contains(string(data), "## Severity"), "%s: %s", name, data)
+		assert.Assert(t, strings.Contains(result.Stdout, filepath.Join(".chunk", "reviews", name+".md")), "stdout: %s", result.Stdout)
+	}
+	assert.Equal(t, len(cci.Recorder.AllRequests()), 0)
+}
+
+func TestFactoryBootstrapNamesTheTemplates(t *testing.T) {
+	env, _, workDir := setupReviewProject(t, nil)
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--template", "rails"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, `No review template is named "rails"`), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "go-service"), "stderr: %s", result.Stderr)
+	entries, err := os.ReadDir(filepath.Join(workDir, ".chunk", "reviews"))
+	assert.NilError(t, err)
+	assert.Equal(t, len(entries), 0)
+}
+
+func TestFactoryBootstrapTemplateLeavesExistingPromptsAlone(t *testing.T) {
+	env, _, workDir := setupReviewProject(t, nil, "mine")
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--template", "generic"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "already has review prompts"), "stderr: %s", result.Stderr)
+	_, err := os.Stat(filepath.Join(workDir, ".chunk", "reviews", "correctness.md"))
+	assert.Assert(t, os.IsNotExist(err), "correctness.md: %v", err)
+}
+
 // A project that has review prompts keeps them, and no sidecar boots to find
 // that out.
 func TestFactoryBootstrapLeavesExistingPromptsAlone(t *testing.T) {
