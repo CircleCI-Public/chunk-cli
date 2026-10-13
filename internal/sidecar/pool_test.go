@@ -201,7 +201,18 @@ func TestMain(m *testing.M) {
 		_, err := OpenSession(ctx, client, sidecarID, retryOn404)
 		return err
 	}
-	os.Exit(m.Run())
+	// Pool state lives in the project data dir, which XDG_DATA_HOME overrides
+	// ahead of HOME. Pin it for the whole run, not per test, so neither a test
+	// that only isolates HOME nor a background sync that outlives its test
+	// writes into the developer's real data dir.
+	dataHome, err := os.MkdirTemp("", "chunk-pool-test-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv(config.EnvXDGDataHome, dataHome)
+	code := m.Run()
+	_ = os.RemoveAll(dataHome)
+	os.Exit(code)
 }
 
 func setupPoolTest(t *testing.T) poolTestEnv {

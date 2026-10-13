@@ -94,7 +94,7 @@ Run this after authenticating — init uses your CircleCI credentials to detect 
 What it creates:
 
 - **`.chunk/config.json`** — list of validation commands (test, lint, format) and your CircleCI org ID; tracked in git
-- **`.gitignore` entry for `.chunk/*-pool.json`** — machine-local validate/mutate pool state (sidecar IDs); not for commit. Keeps `.chunk/config.json` tracked
+- **`.gitignore` entry for `.chunk/*-pool.json`** — pool state (sidecar IDs) written there by older versions; current versions keep it in the project data dir. Keeps `.chunk/config.json` tracked
 - **`.claude/settings.json`** — hooks that run validation before commits and after each agent session, plus one that reports finished background runs before each prompt; tracked in git
 - **`.codex/hooks.json`** — the commit and session hooks, for Codex sessions (only written if Codex is installed); tracked in git
 - **`.git/hooks/pre-commit`** — runs `chunk validate` locally before every commit; not tracked in git
@@ -174,7 +174,7 @@ Commands run remotely by default. Set `"local": true` on commands that must run 
 
 With no `validation.sidecarImage` recorded, a sidecar that has to be created is started from whichever of your org's snapshots best fits the repo — one named after the repo first, then one built for the detected stack. The chosen snapshot and the reason are printed. If no snapshot fits, the default image is used, which has none of your dependencies on it; record a snapshot ID to pin the environment instead of relying on the match.
 
-The active sidecar and snapshot state are stored in `$XDG_DATA_HOME/chunk/<project>/` (default: `~/.local/share/chunk/<project>/`) — never inside the repo. The project key is derived from the git root path.
+The active sidecar, sidecar pool and snapshot state are stored in `$XDG_DATA_HOME/chunk/<project>/` (default: `~/.local/share/chunk/<project>/`) — never inside the repo. The project key is derived from the git root path.
 
 Or hand this off to the `chunk-sidecar` skill:
 
