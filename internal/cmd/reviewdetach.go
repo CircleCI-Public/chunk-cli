@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -264,8 +265,12 @@ type detachedState struct {
 	StartedAt time.Time `json:"started_at"`
 }
 
-func detachedStatePath(workDir string) string {
-	return filepath.Join(workDir, ".chunk", "review-run.json")
+func detachedStatePath(workDir string) (string, error) {
+	dir, err := config.ProjectDataDir(workDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "review-run.json"), nil
 }
 
 func saveDetachedState(workDir string, st detachedState) error {
@@ -273,7 +278,10 @@ func saveDetachedState(workDir string, st detachedState) error {
 	if err != nil {
 		return fmt.Errorf("marshal detached run: %w", err)
 	}
-	path := detachedStatePath(workDir)
+	path, err := detachedStatePath(workDir)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
@@ -285,12 +293,21 @@ func saveDetachedState(workDir string, st detachedState) error {
 
 func loadDetachedState(workDir string) (detachedState, error) {
 	var st detachedState
-	data, err := os.ReadFile(detachedStatePath(workDir))
+	path, err := detachedStatePath(workDir)
+	if err != nil {
+		return st, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// Older versions kept it in the repo.
+		path = filepath.Join(workDir, ".chunk", "review-run.json")
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return st, err
 	}
 	if err := json.Unmarshal(data, &st); err != nil {
-		return st, fmt.Errorf("parse %s: %w", detachedStatePath(workDir), err)
+		return st, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return st, nil
 }

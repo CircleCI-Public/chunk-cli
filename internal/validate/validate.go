@@ -342,17 +342,38 @@ func (e *HookExitError) ExitCode() int { return e.code }
 // NewHookExitError returns a HookExitError with the given exit code.
 func NewHookExitError(code int) error { return &HookExitError{code: code} }
 
+// HooksDisabledPaths returns where the hooks-disabled sentinel can live: the
+// project data dir first, then the repo's .chunk/ where older versions wrote it.
+func HooksDisabledPaths(workDir string) ([]string, error) {
+	dir, err := config.ProjectDataDir(workDir)
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		filepath.Join(dir, "hooks-disabled"),
+		filepath.Join(workDir, ".chunk", "hooks-disabled"),
+	}, nil
+}
+
 // HooksDisabled reports whether chunk validate hooks are currently suppressed.
 // envDisabled should be set by the caller from CHUNK_HOOKS_DISABLED; it returns
-// true when that flag is set or the sentinel file .chunk/hooks-disabled exists
-// under workDir. On any error other than ErrNotExist the function fails open
-// (returns false) so hooks continue to run when the check is uncertain.
+// true when that flag is set or a sentinel from HooksDisabledPaths exists.
+// On any error other than ErrNotExist the function fails open (returns false)
+// so hooks continue to run when the check is uncertain.
 func HooksDisabled(workDir string, envDisabled bool) bool {
 	if envDisabled {
 		return true
 	}
-	_, err := os.Stat(filepath.Join(workDir, ".chunk", "hooks-disabled"))
-	return err == nil
+	paths, err := HooksDisabledPaths(workDir)
+	if err != nil {
+		return false
+	}
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // WrapHookResult applies Stop hook lifecycle to the result of running validate

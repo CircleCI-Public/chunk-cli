@@ -551,7 +551,7 @@ chunk
   failing with an error.
 - `chunk auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.
-- `chunk hook disable` creates a `.chunk/hooks-disabled` sentinel file inspected by the `chunk validate` Stop hook; `hook enable` removes it. Stop-hook validation is also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
+- `chunk hook disable` creates a `hooks-disabled` sentinel file in the project data directory (`~/.local/share/chunk/<hash>/`) inspected by the `chunk validate` Stop hook; `hook enable` removes it, along with any `.chunk/hooks-disabled` left by older versions. Stop-hook validation is also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
 - **Hook runs may be validated in the background.** When the chunk daemon is
   running, a Stop-hook `chunk validate` offers the daemon the choice of running
   the checks after the hook has exited. The daemon takes the offer for a change

@@ -528,7 +528,7 @@ asks for the hooks to be trusted again in `/hooks`.
 Temporarily disable the `chunk validate` Stop hook without modifying `.claude/settings.json`:
 
 ```bash
-chunk hook disable   # Creates .chunk/hooks-disabled sentinel file
+chunk hook disable   # Creates a hooks-disabled sentinel in the project data dir
 chunk hook enable    # Removes the sentinel file
 chunk hook status    # Shows "enabled" or "disabled"
 ```

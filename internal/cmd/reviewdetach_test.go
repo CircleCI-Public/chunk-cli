@@ -15,6 +15,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
@@ -48,6 +49,7 @@ func TestRelativePromptsDir(t *testing.T) {
 }
 
 func TestDetachedStateRoundTrip(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	work := t.TempDir()
 
 	_, err := loadDetachedState(work)
@@ -62,9 +64,31 @@ func TestDetachedStateRoundTrip(t *testing.T) {
 	assert.Equal(t, got.RunDir, want.RunDir)
 	assert.Assert(t, got.StartedAt.Equal(want.StartedAt))
 
-	info, err := os.Stat(detachedStatePath(work))
+	path, err := detachedStatePath(work)
+	assert.NilError(t, err)
+	info, err := os.Stat(path)
 	assert.NilError(t, err)
 	assert.Equal(t, info.Mode().Perm(), os.FileMode(0o600))
+	_, err = os.Stat(filepath.Join(work, ".chunk"))
+	assert.Assert(t, errors.Is(err, os.ErrNotExist), "expected nothing written in the repo, got %v", err)
+}
+
+func TestDetachedStateReadsLegacyPath(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	work := t.TempDir()
+	legacy := filepath.Join(work, ".chunk", "review-run.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(legacy), 0o700))
+	assert.NilError(t, os.WriteFile(legacy, []byte(`{"sidecar_id":"sc-old"}`), 0o600))
+
+	got, err := loadDetachedState(work)
+	assert.NilError(t, err)
+	assert.Equal(t, got.SidecarID, "sc-old")
+
+	// The new path wins once written.
+	assert.NilError(t, saveDetachedState(work, detachedState{SidecarID: "sc-new"}))
+	got, err = loadDetachedState(work)
+	assert.NilError(t, err)
+	assert.Equal(t, got.SidecarID, "sc-new")
 }
 
 func TestLastLine(t *testing.T) {
@@ -122,6 +146,7 @@ func TestCheckNoActiveRun(t *testing.T) {
 			client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 			assert.NilError(t, err)
 
+			t.Setenv(config.EnvXDGDataHome, t.TempDir())
 			work := t.TempDir()
 			if tt.saved {
 				assert.NilError(t, saveDetachedState(work, detachedState{
