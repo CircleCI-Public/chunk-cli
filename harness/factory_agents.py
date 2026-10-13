@@ -202,8 +202,8 @@ async def _with_timeout(run, seconds: float) -> None:
 
 
 def factory_command(binary: Path, agent: dict, task: Task, trial_dir: Path) -> list[str]:
-    command = [str(binary), "factory", "--attempts", str(agent.get("attempts", 3)), "--json", "--verbose",
-               f"--log={trial_dir / 'factory.log'}", "--reviews", EVAL_REVIEWS,
+    command = [str(binary), "factory", "build", "--max-attempts", str(agent.get("attempts", 3)), "--json", "--verbose",
+               "--log-file", str(trial_dir / "factory.log"), "--reviews", EVAL_REVIEWS,
                "--implementer-instructions", instructions(agent, task, "implementer_instructions")]
     for key, flag in (("reviewers", "--reviewers"), ("model", "--model"),
                       ("implement_timeout", "--implement-timeout"), ("review_timeout", "--review-timeout")):

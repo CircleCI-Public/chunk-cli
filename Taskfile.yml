@@ -26,7 +26,7 @@ tasks:
     cmds:
       - go tool golangci-lint run {{.ARGS}}
       - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py
-      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py harness/factory_agents.py harness/factory_judge.py harness/factory_report.py harness/factory_tasks.py harness/review_eval.py
+      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py harness/factory_agents.py harness/factory_judge.py harness/factory_report.py harness/factory_tasks.py harness/review_eval.py harness/triage_replay.py
 
   fmt:
     desc: Format the code
