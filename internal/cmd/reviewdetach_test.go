@@ -84,11 +84,13 @@ func TestDetachedStateReadsLegacyPath(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, got.SidecarID, "sc-old")
 
-	// The new path wins once written.
+	// The new path wins once written, and the legacy file goes.
 	assert.NilError(t, saveDetachedState(work, detachedState{SidecarID: "sc-new"}))
 	got, err = loadDetachedState(work)
 	assert.NilError(t, err)
 	assert.Equal(t, got.SidecarID, "sc-new")
+	_, err = os.Stat(legacy)
+	assert.Assert(t, errors.Is(err, os.ErrNotExist), "expected legacy record removed, got %v", err)
 }
 
 func TestLastLine(t *testing.T) {

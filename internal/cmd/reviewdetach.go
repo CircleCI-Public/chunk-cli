@@ -268,9 +268,15 @@ type detachedState struct {
 func detachedStatePath(workDir string) (string, error) {
 	dir, err := config.ProjectDataDir(workDir)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolve detached run path: %w", err)
 	}
 	return filepath.Join(dir, "review-run.json"), nil
+}
+
+// legacyDetachedStatePath is where older versions kept the record, inside the
+// repo, where it synced to sidecars and could be committed.
+func legacyDetachedStatePath(workDir string) string {
+	return filepath.Join(workDir, ".chunk", "review-run.json")
 }
 
 func saveDetachedState(workDir string, st detachedState) error {
@@ -288,6 +294,9 @@ func saveDetachedState(workDir string, st detachedState) error {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write detached run: %w", err)
 	}
+	// The new record shadows the legacy one from here on, so it is only clutter
+	// in the repo. chunk init does not gitignore it.
+	_ = os.Remove(legacyDetachedStatePath(workDir))
 	return nil
 }
 
@@ -299,8 +308,7 @@ func loadDetachedState(workDir string) (detachedState, error) {
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		// Older versions kept it in the repo.
-		path = filepath.Join(workDir, ".chunk", "review-run.json")
+		path = legacyDetachedStatePath(workDir)
 		data, err = os.ReadFile(path)
 	}
 	if err != nil {
