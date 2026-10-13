@@ -16,7 +16,7 @@ import (
 var ErrNoRecord = errors.New("no record of the run")
 
 // Record is what a later run needs to continue a run: the request, and where
-// its work is and what it is measured against. It is kept in the project's
+// its work is and what it is measured against. It is kept in the repository's
 // data directory beside the run's worktree, so it outlives the daemon's
 // sessions.
 type Record struct {
@@ -50,13 +50,26 @@ func recordPath(dataDir, runID string) string {
 	return filepath.Join(dataDir, "factory", runID+".json")
 }
 
-// LoadRecord reads the record of the run runID in the project at root.
+// PoolStatePath is where the run's sidecar pool keeps its state, beside the
+// run's record in dataDir.
+func PoolStatePath(dataDir, runID string) string {
+	return filepath.Join(dataDir, "factory", runID+".pool.json")
+}
+
+// LoadRecord reads the record of the run runID in the repository at root,
+// falling back to its legacy location, the data directory of the checkout at
+// root.
 func LoadRecord(root, runID string) (Record, error) {
-	dataDir, err := config.ProjectDataDir(root)
+	dataDir, err := config.RepoDataDir(root)
 	if err != nil {
-		return Record{}, fmt.Errorf("find chunk's data directory for the project: %w", err)
+		return Record{}, fmt.Errorf("find chunk's data directory for the repository: %w", err)
 	}
 	b, err := os.ReadFile(recordPath(dataDir, runID))
+	if errors.Is(err, os.ErrNotExist) {
+		if legacyDir, dirErr := config.ProjectDataDir(root); dirErr == nil {
+			b, err = os.ReadFile(recordPath(legacyDir, runID))
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return Record{}, fmt.Errorf("run %s: %w", runID, ErrNoRecord)
 	}
@@ -70,7 +83,7 @@ func LoadRecord(root, runID string) (Record, error) {
 	return r, nil
 }
 
-// saveRecord writes r to the project's data directory, replacing what an
+// saveRecord writes r to the repository's data directory, replacing what an
 // earlier save wrote.
 func saveRecord(dataDir string, r Record) error {
 	b, err := json.MarshalIndent(r, "", "  ")

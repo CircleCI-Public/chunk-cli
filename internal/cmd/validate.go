@@ -1801,13 +1801,14 @@ const suggestionValidateNotConfigured = "Run 'chunk init' to detect and configur
 	"This also installs the /chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
 
 // validateCacheDir returns the directory used to store validate result cache
-// entries for the given project root.
+// entries for the repository at workDir. Entries are keyed by the tree's
+// fingerprint, so every checkout of the repository can share them.
 func validateCacheDir(workDir string) (string, error) {
-	projectDir, err := config.ProjectDataDir(workDir)
+	dataDir, err := config.RepoDataDir(workDir)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(projectDir, "validate-cache"), nil
+	return filepath.Join(dataDir, "validate-cache"), nil
 }
 
 // hookResultCache returns a cache and cache key for hook-mode runs, or

@@ -1,11 +1,15 @@
 package config
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 )
 
 const appName = "chunk"
@@ -130,6 +134,28 @@ func ProjectDataDir(projectRoot string) (string, error) {
 	}
 
 	return newDir, nil
+}
+
+// RepoDataDir returns the data directory shared by every checkout of the git
+// repository dir is in, keyed by the repository's common git directory, for
+// state that belongs to the repository rather than to one worktree of it.
+func RepoDataDir(dir string) (string, error) {
+	if dir == "" {
+		return "", errors.New("directory required")
+	}
+	out, err := (gitexec.Runner{Dir: dir}).Output(context.Background(), "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", fmt.Errorf("find the git repository of %s: %w", dir, err)
+	}
+	common := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(dir, common)
+	}
+	base, err := AppData()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, fmt.Sprintf("repo-%x", sha256.Sum256([]byte(CanonicalProjectRoot(common))))), nil
 }
 
 func configHome() (string, error) {

@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 // TestFactoryChecksOnlyToleratesMissingDefaultReviews guards against a
@@ -123,10 +124,12 @@ func TestKeepWorkHint(t *testing.T) {
 }
 
 func TestFactoryLogPath(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := gitrepo.SetupGitRepo(t, "org", "repo")
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
 	now := time.Date(2026, 10, 2, 15, 4, 5, 0, time.UTC)
-	byTime := filepath.Join(home, ".chunk", "factory", "run-20261002-150405.log")
+	byTime := filepath.Join(dataDir, "factory", "20261002-150405.log")
 	for _, tc := range []struct {
 		name string
 		path string
@@ -140,7 +143,7 @@ func TestFactoryLogPath(t *testing.T) {
 		{name: "file with the switch", path: "/tmp/run.log", on: true, want: "/tmp/run.log"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := factoryLogPath(tc.path, tc.on, now)
+			got, err := factoryLogPath(root, tc.path, tc.on, now)
 			assert.NilError(t, err)
 			assert.Equal(t, got, tc.want)
 		})
@@ -148,7 +151,7 @@ func TestFactoryLogPath(t *testing.T) {
 
 	// The daemon does not share this process's working directory, so a
 	// relative path is resolved here.
-	got, err := factoryLogPath("run.log", false, now)
+	got, err := factoryLogPath(root, "run.log", false, now)
 	assert.NilError(t, err)
 	wd, err := os.Getwd()
 	assert.NilError(t, err)

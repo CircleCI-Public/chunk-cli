@@ -276,10 +276,11 @@ regular file); running everything, caching nothing
 That line is the only signal that a repo is getting no benefit from the cache, so
 a repo that never prints `skipped` is not left unexplained.
 
-Entries live outside the repo, under the per-project data directory:
+Entries live outside the repo, under the per-repository data directory, so
+every worktree of a repository shares them:
 
 ```
-$XDG_DATA_HOME/chunk/<sha256-of-project-path>/validate-cache/
+$XDG_DATA_HOME/chunk/repo-<sha256-of-git-common-dir>/validate-cache/
 ```
 
 Each entry is a small JSON file. Keys are content-addressed, so a superseded

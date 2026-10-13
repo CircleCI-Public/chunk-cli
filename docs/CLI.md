@@ -166,7 +166,7 @@ chunk
 │   │   --model <name>              # Claude model (default: Claude Code's default)
 │   │   --implement-timeout <duration> # Max time for each implementer turn
 │   │   --review-timeout <duration> # Max time for each review
-│   │   --log                       # Keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log
+│   │   --log                       # Keep a log of the run's full context in ~/.local/share/chunk/repo-<id>/factory/<start time>.log
 │   │   --log-file <path>           # Keep the log in this file instead (implies --log)
 │   │   --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │   │   --json                      # Output as JSON
@@ -346,7 +346,7 @@ chunk
   final segment remains the stable run ID. When the run ends it prints that
   branch, how to keep it, how long the run took and what the implementer cost,
   and exits non-zero unless every check passed. `--log` has the run keep a
-  plain-text log in `~/.chunk/factory/run-<start time>.log`, and
+  plain-text log in `~/.local/share/chunk/repo-<id>/factory/<start time>.log`, and
   `--log-file <path>` keeps it in a file of your choosing instead (it implies
   `--log`), with the full context the display leaves
   out — each prompt the implementer is sent, what it did and said, every
@@ -374,8 +374,8 @@ chunk
   `--max-attempts`. Given no prompt in a terminal, it asks what to do
   differently first; Enter skips that and checks first. Without a terminal it
   does not ask. Each run keeps a record (its request, worktree, branch
-  and baseline) in the project's data directory beside its worktree, which is
-  what `--continue` reads, so a run can be continued after the daemon
+  and baseline) in the repository's data directory beside its worktree, shared
+  by every checkout of the repository, which is what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The
   session's record names the run it continues as `continues_run_id`.
 - **`factory bootstrap` writes a project's first review prompts.** It runs

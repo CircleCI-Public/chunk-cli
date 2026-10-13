@@ -829,16 +829,22 @@ func TestHookResultCacheDisabledCases(t *testing.T) {
 func TestHookResultCacheEnabledForNamedCommand(t *testing.T) {
 	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
 
-	cache, key := hookResultCache(&hookContext{sessionID: "s1"}, "", t.TempDir(), hookTree, "test", cfg, "")
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	dir := gitrepo.SetupGitRepo(t, "org", "repo")
+	cache, key := hookResultCache(&hookContext{sessionID: "s1"}, "", dir, hookTree, "test", cfg, "")
 	assert.Assert(t, cache != nil, "expected a cache for a named command in hook mode")
 	assert.Assert(t, key != "")
+	dataDir, err := config.RepoDataDir(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, cache.Dir, filepath.Join(dataDir, "validate-cache"))
 }
 
 // TestHookResultCacheTargetAffectsKey pins the wiring: a different execution
 // target has to reach the key, or a run validated on one sidecar reports a hit
 // for another.
 func TestHookResultCacheTargetAffectsKey(t *testing.T) {
-	dir := t.TempDir()
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	dir := gitrepo.SetupGitRepo(t, "org", "repo")
 	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
 	hook := &hookContext{sessionID: "s1"}
 

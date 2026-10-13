@@ -344,7 +344,7 @@ The split is in the imports, not yet everywhere at runtime:
   `eventlog.Event`s, and `chunk watch` works out from them what happened.
 - **`chunk factory build` reads the daemon's files to check a request.** With
   `--continue`, `checkFactoryContinue` loads the earlier run's record from the
-  project's data directory before asking the daemon, which loads it again.
+  repository's data directory before asking the daemon, which loads it again.
   This only works while the two share a filesystem.
 
 The daemon backs `chunk watch` and runs `chunk factory build`. It polls every

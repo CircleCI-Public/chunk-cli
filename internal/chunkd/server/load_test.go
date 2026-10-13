@@ -11,6 +11,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 )
 
 func writeSidecarJSON(t *testing.T, dir, filename, content string) {
@@ -92,7 +93,7 @@ func TestLoadSidecars_readsPoolState(t *testing.T) {
 	assert.NilError(t, os.Mkdir(poolsDir, 0o755))
 	writeSidecarJSON(t, poolsDir, "validate.json", `{"sidecar_ids":["id1","id2"]}`)
 
-	result, pools := loadSidecarsAndPools(dataDir, root, "")
+	result, pools := loadSidecarsAndPools(dataDir, "", root, "")
 	assert.Equal(t, len(result), 2)
 	assert.Equal(t, result[0].Name, "validate-1")
 	assert.Equal(t, result[1].Name, "validate-2")
@@ -111,12 +112,25 @@ func TestLoadSidecars_readsLegacyPoolState(t *testing.T) {
 	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["stale"]}`)
 	writeSidecarJSON(t, poolsDir, "validate.json", `{"sidecar_ids":["id2"]}`)
 
-	result, pools := loadSidecarsAndPools(dataDir, root, "")
+	result, pools := loadSidecarsAndPools(dataDir, "", root, "")
 	assert.Equal(t, len(result), 2)
 	assert.Equal(t, pools["id1"], "mutate")
 	assert.Equal(t, pools["id2"], "validate")
 	_, hasStale := pools["stale"]
 	assert.Assert(t, !hasStale, "legacy file is skipped when the data dir has the same pool")
+}
+
+func TestLoadSidecars_readsFactoryRunPoolState(t *testing.T) {
+	dataDir := t.TempDir()
+	repoDataDir := t.TempDir()
+	runsDir := filepath.Join(repoDataDir, "factory")
+	assert.NilError(t, os.Mkdir(runsDir, 0o755))
+	writeSidecarJSON(t, runsDir, "20261009-010000.pool.json", `{"sidecar_ids":["id1"]}`)
+	writeSidecarJSON(t, runsDir, "20261009-010000.json", `{"run_id":"20261009-010000"}`)
+
+	result, pools := loadSidecarsAndPools(dataDir, repoDataDir, t.TempDir(), "")
+	assert.Equal(t, len(result), 1)
+	assert.Equal(t, pools["id1"], factory.PoolName("20261009-010000"))
 }
 
 func TestLoadSidecars_readsPoolOrg(t *testing.T) {
@@ -142,7 +156,7 @@ func TestLoadSidecars_deduplicatesActiveAndPoolState(t *testing.T) {
 	newer := time.Now().Add(time.Hour)
 	assert.NilError(t, os.Chtimes(filepath.Join(poolsDir, "validate.json"), newer, newer))
 
-	result, pools := loadSidecarsAndPools(dataDir, root, "")
+	result, pools := loadSidecarsAndPools(dataDir, "", root, "")
 	assert.Equal(t, len(result), 3)
 	byID := make(map[string]chunkd.SidecarState, len(result))
 	for _, state := range result {

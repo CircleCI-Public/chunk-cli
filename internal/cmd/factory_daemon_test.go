@@ -130,7 +130,7 @@ func TestFactoryLogFlagsReachTheDaemon(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		args        []string
-		wantLog     string // "default" is the run-<time>.log in the home directory
+		wantLog     string // "default" is the <time>.log in the repository's data directory
 		wantVerbose bool
 	}{
 		{name: "no log"},
@@ -140,7 +140,7 @@ func TestFactoryLogFlagsReachTheDaemon(t *testing.T) {
 		{name: "--log-file names where --log goes", args: []string{"--log", "--log-file", logFile}, wantLog: logFile},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			factoryProject(t)
+			project := factoryProject(t)
 			started := make(chan factory.RunOptions, 1)
 			cfg := fakeFactoryConfig(t, factory.ResultPassed)
 			run := cfg.RunFactory
@@ -158,10 +158,10 @@ func TestFactoryLogFlagsReachTheDaemon(t *testing.T) {
 				assert.Equal(t, got.Log, tc.wantLog)
 				return
 			}
-			home, err := os.UserHomeDir()
+			dataDir, err := config.RepoDataDir(project)
 			assert.NilError(t, err)
-			assert.Equal(t, filepath.Dir(got.Log), filepath.Join(home, ".chunk", "factory"))
-			assert.Assert(t, strings.HasPrefix(filepath.Base(got.Log), "run-") && strings.HasSuffix(got.Log, ".log"), got.Log)
+			assert.Equal(t, filepath.Dir(got.Log), filepath.Join(dataDir, "factory"))
+			assert.Assert(t, strings.HasSuffix(got.Log, ".log"), got.Log)
 		})
 	}
 }
@@ -279,8 +279,8 @@ func TestFactoryRefusesLogFlagMisuse(t *testing.T) {
 	}{
 		{args: []string{"--log=run.log", "add a flag"}, wantMsg: "--log takes no file.", wantS: "Write --log-file run.log."},
 		{args: []string{"--log=", "add a flag"}, wantMsg: "--log takes no file.", wantS: "Write --log-file FILE."},
-		{args: []string{"--log-file", "", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
-		{args: []string{"--log-file=", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
+		{args: []string{"--log-file", "", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log for the default log."},
+		{args: []string{"--log-file=", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log for the default log."},
 	} {
 		_, _, err := runFactoryBuildCmd(t, tc.args...)
 		var ue *userError
@@ -306,7 +306,7 @@ func TestFactoryRejectsMaxAttemptsBelowOne(t *testing.T) {
 // had run in project.
 func writeFactoryRecord(t *testing.T, project, runID string) {
 	t.Helper()
-	dataDir, err := config.ProjectDataDir(project)
+	dataDir, err := config.RepoDataDir(project)
 	assert.NilError(t, err)
 	rec := factory.Record{RunID: runID, Prompt: "add a --verbose flag", Branch: "chunk/factory/add-a-verbose-flag/" + runID, Result: factory.ResultExhausted, Rounds: 3}
 	b, err := json.Marshal(rec)

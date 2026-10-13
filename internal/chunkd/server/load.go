@@ -13,6 +13,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -35,14 +36,15 @@ const (
 // display metadata; pool state supplements it with managed members that are
 // not present there.
 func loadSidecars(dataDir, root, snapshotName string) []chunkd.SidecarState {
-	states, _ := loadSidecarsAndPools(dataDir, root, snapshotName)
+	states, _ := loadSidecarsAndPools(dataDir, "", root, snapshotName)
 	return states
 }
 
 // loadSidecarsAndPools also returns each sidecar's persisted pool name. Pool
 // ownership is server bookkeeping: callers receive the run's concrete sidecar
 // IDs in the snapshot, not the naming convention used to discover them.
-func loadSidecarsAndPools(dataDir, root, snapshotName string) ([]chunkd.SidecarState, map[string]string) {
+// repoDataDir holds the factory runs' pools; "" for none.
+func loadSidecarsAndPools(dataDir, repoDataDir, root, snapshotName string) ([]chunkd.SidecarState, map[string]string) {
 	projectName := filepath.Base(root)
 	repoName := projectRepoName(root)
 	idx := map[string]int{}
@@ -103,6 +105,12 @@ func loadSidecarsAndPools(dataDir, root, snapshotName string) ([]chunkd.SidecarS
 	current, _ := filepath.Glob(filepath.Join(dataDir, "pools", "*.json"))
 	for _, path := range current {
 		poolFiles[strings.TrimSuffix(filepath.Base(path), ".json")] = path
+	}
+	if repoDataDir != "" {
+		runs, _ := filepath.Glob(filepath.Join(repoDataDir, "factory", "*.pool.json"))
+		for _, path := range runs {
+			poolFiles[factory.PoolName(strings.TrimSuffix(filepath.Base(path), ".pool.json"))] = path
+		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(poolFiles)) {
 		path := poolFiles[name]
