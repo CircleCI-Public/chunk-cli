@@ -617,8 +617,8 @@ func reportOutcome(status iostream.StatusFunc, result string, rounds int) error 
 // oneLineSummary collapses text to one line short enough for a status line.
 func oneLineSummary(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 160 {
-		return s[:157] + "..."
+	if r := []rune(s); len(r) > 160 {
+		return string(r[:157]) + "..."
 	}
 	return s
 }
