@@ -10,6 +10,11 @@ chunk factory eval --suite harness/suites/chunk-cli [prompts-dir]
 Each case is one commit on main, as its patch against its first parent, with
 its commit message as the request.
 
+`--commits` needs no suite: the grader scores recent commits without labels.
+This suite's labels are what that grader is checked against. Run with the
+grader on, the default, and the summary's `graded.calibration` says whether it
+confirms the known bugs and leaves the clean cases alone.
+
 **Cases with a known problem** are commits that shipped a bug a later commit
 fixed. The expected problem is the line the fix changed, in the file as the
 buggy commit left it:
@@ -26,7 +31,7 @@ fix that made the case: the reviews kept reporting it, and reading the code
 confirmed it. Expect more of that. A finding the suite does not list is worth
 reading before it counts against a prompt, and one that holds up belongs here.
 
-**Clean cases** are commits nothing later had to fix: #654 and #616. A high or
+**Clean cases**, marked `"clean": true`, are commits nothing later had to fix: #654 and #616. A high or
 medium finding on one would have sent accepted work back. That they were
 accepted does not prove they are sound, so read such findings before counting
 them against a prompt.

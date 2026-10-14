@@ -434,6 +434,39 @@ func TestFactoryEvalRefusesCasesThatCannotRun(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stderr, "case gone: revision 0000000000000000000000000000000000000000 is not in this repository"), "stderr: %s", result.Stderr)
 }
 
+// Commits carry no labels, so without the grader nothing would score them,
+// and a run needs one source of cases or the other.
+func TestFactoryEvalRefusesFlagsThatScoreNothing(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"factory", "eval"}, "at least one of the flags in the group [suite commits] is required"},
+		{[]string{"factory", "eval", "--commits", "3", "--no-grade"}, "[commits no-grade] were all set"},
+		{[]string{"factory", "eval", "--suite", t.TempDir(), "--commits", "3"}, "[commits suite] were all set"},
+		{[]string{"factory", "eval", "--suite", t.TempDir(), "--no-grade", "--grader-model", "x"}, "[grader-model no-grade] were all set"},
+	} {
+		result := binary.RunCLI(t, tc.args, env, workDir)
+		assert.Assert(t, result.ExitCode != 0, "%v: expected non-zero exit code", tc.args)
+		assert.Assert(t, strings.Contains(result.Stderr, tc.want), "%v: stderr: %s", tc.args, result.Stderr)
+	}
+}
+
+// A revision with no history to take commits from is refused before any
+// sidecar starts.
+func TestFactoryEvalRefusesCommitsFromAMissingRevision(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+
+	result := binary.RunCLI(t, []string{"factory", "eval", "--commits", "3", "--from", "no-such-branch"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "Could not make cases of the commits on no-such-branch."), "stderr: %s", result.Stderr)
+}
+
 // Without a GitHub origin the sidecars cannot name their copy of the
 // repository, which is said before any credential or org prompt.
 func TestFactoryEvalNeedsAGitHubOrigin(t *testing.T) {

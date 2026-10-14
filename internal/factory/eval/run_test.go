@@ -127,7 +127,7 @@ func newEvalFixture(t *testing.T) *evalFixture {
 	s, err := LoadSuite(writeSuite(t, []Case{
 		{Name: "bug", Revision: base, Request: "add X", Patch: "patches/bug.patch",
 			Expect: []Expected{{File: "pkg/new.go", Lines: []int{3, 3}, About: "divides by zero"}}},
-		{Name: "clean", Revision: base, Request: "print a line", Patch: "patches/clean.patch"},
+		{Name: "clean", Revision: base, Request: "print a line", Patch: "patches/clean.patch", Clean: true},
 	}, patches))
 	assert.NilError(t, err)
 

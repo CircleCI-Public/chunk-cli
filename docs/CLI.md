@@ -174,8 +174,10 @@ chunk
 │   │   --since <YYYY-MM-DD>        # Use review comments from this date on (default: 90 days ago)
 │   │   --top <n>                   # Use review comments from this many reviewers (default: 5)
 │   │   --json                      # Output as JSON
-│   └── eval [prompts-dir]          # (hidden) Score review prompts against a suite of changes with known problems
-│       --suite <dir>               # Directory with suite.json and its patches (required)
+│   └── eval [prompts-dir]          # (hidden) Score review prompts by reviewing past changes and grading what they find
+│       --commits <n>               # Review this many recent commits (this or --suite is required)
+│       --from <rev>                # Take --commits from this revision's history (default: HEAD)
+│       --suite <dir>               # Review the cases of the suite.json in this directory instead
 │       --runs <n>                  # Times to review each case (default: 1)
 │       --parallelism <n>           # Maximum number of sidecars (0: one per prompt)
 │       --output <path>             # Also write the full report as JSON to this file
@@ -183,6 +185,9 @@ chunk
 │       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
 │       --model <name>              # Claude model for reviews (default: Claude Code's default)
 │       --timeout <duration>        # Max time for each review
+│       --no-grade                  # Score on the suite's labels alone (not with --commits)
+│       --grader-model <name>       # Claude model for the grader (default: Claude Code's default)
+│       --grader-timeout <duration> # Max time for grading each case (default: 20m)
 │       --json                      # Output as JSON
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
@@ -468,30 +473,63 @@ chunk
   is refused with the list of sets. It cannot be combined with `--org-id`,
   `--image`, `--model` or `--timeout`.
 - **`factory eval` scores review prompts, and is hidden.** It is for tuning
-  prompts and what writes them, such as bootstrap, not for everyday use. A suite
-  is a directory with a `suite.json` of cases, each a patch to the repository at
-  a pinned `revision`, the `request` it answers, and the problems a review should
-  find (`expect`: a `file`, optional `lines` as `[first, last]`, and `about`). A
-  case with no `expect` is clean. Every case's revision and patch are checked
-  against the repository before any sidecar starts. Each case is put on every
-  sidecar of its own pool (`factory-eval`, destroyed when it ends) as factory
-  leaves a reviewer: the revision's tree committed as the baseline, the patch
-  uncommitted on top. The prompts are sent as factory's first round sends them,
-  with no implementer. Only high and medium findings count, grouped into the
-  problems they are about, so a problem several prompts report counts once. A
-  finding is about an expected problem when it names the same file and, if the
-  problem has lines, a line within three of them; each expected problem takes a
-  finding of its own first. Other findings are about the same problem as an
-  earlier one in the same file within three lines, or about the file as a whole.
-  Problems the suite does not list are unexpected: on a clean case they would
-  send sound work back, and on another they may be real, so precision, the share
-  of reported problems the suite lists, is a floor. Each prompt's row counts
-  every problem it reported, and how many of those another prompt reported too. A
-  case whose setup or any review fails is reported and left out of the totals
-  rather than scored on the reviews that ran. A missing Claude Code or a rejected
-  credential stops the suite. The command exits non-zero when no case could be
-  scored; a run in which only some cases errored still succeeds, and
-  `summary.errored` counts them.
+  prompts and what writes them, such as bootstrap, not for everyday use. It
+  reviews a set of cases, each a change to the repository at a pinned revision
+  and the request it answers. `--commits <n>` makes cases of the `n` most recent
+  commits on the first-parent history of `--from`: each commit's diff against its
+  parent, with its message as the request. Merges, bots' commits (an author
+  ending in `[bot]`), commits that change only documentation or nothing, and
+  diffs over 48 KB are skipped, and at most ten times `n` commits are looked at.
+  `--suite <dir>` reads the cases from a `suite.json` instead: each a patch at a
+  `revision` and its `request`, optionally labeled with the problems a review
+  should find (`expect`: a `file`, optional `lines` as `[first, last]`, and
+  `about`) or as `clean`, but not both. Every case's revision and patch are
+  checked against the repository before any sidecar starts. Each case is put on
+  every sidecar of its own pool (`factory-eval`, destroyed when it ends) as
+  factory leaves a reviewer: the revision's tree committed as the baseline, the
+  patch uncommitted on top. The prompts are sent as factory's first round sends
+  them, with no implementer. Only high and medium findings count.
+- **A grader judges every case, so cases need no labels.** After a case's
+  reviews, a Claude run of its own on the first sidecar, where the case is still
+  the uncommitted work, is given the request, factory's blocking rubric and the
+  blocking findings, sorted by place and without the prompts that reported them.
+  It may read the code and run commands, such as a test, to check them. It gives
+  each finding a verdict, `confirmed` (a real problem that clears the bar),
+  `not_blocking` (a real point that does not) or `wrong`, marks findings about a
+  problem an earlier one reported as duplicates, and lists high and medium
+  problems no finding is about as missed. Literal requested behavior overrides
+  the reviewers: asking for broader or contrary behavior is `wrong`. Graded
+  precision is confirmed problems over problems with a verdict, a duplicate
+  counting once at its first finding's verdict; coverage is confirmed problems
+  over those plus the missed ones, so it is relative to what the grader finds. A
+  grading that fails leaves its case ungraded and the eval goes on; a missing
+  Claude Code or a rejected credential stops it. `--no-grade` skips the grader,
+  which leaves `--commits` with nothing to score, so the two cannot be combined.
+- **Labeled cases also score the reviews, and check the grader.** Findings are
+  grouped into the problems they are about, so a problem several prompts report
+  counts once. A finding is about an expected problem when it names the same
+  file and, if the problem has lines, a line within three of them; each expected
+  problem takes a finding of its own first. Other findings are about the same
+  problem as an earlier one in the same file within three lines, or about the
+  file as a whole. Where a run is graded, its problems are regrouped by the
+  grader's judgment, which reads the findings where nearby lines only place
+  them: an expected problem keeps the finding paired with it and gains those the
+  grader judged about the same problem, and the grader's other groups are
+  problems the case does not list. Which expected problems were caught does not
+  change. Recall is the share of expected problems caught. Problems a
+  labeled case does not list are unexpected: on a clean case they would send
+  sound work back, and on another they may be real, so the share of reported
+  problems the labels list is a floor. Unlabeled cases count towards overlap but
+  not towards these. Where a labeled case is graded, the summary's
+  `graded.calibration` says how the grader agreed: findings on expected problems
+  it confirmed, findings on clean cases it confirmed, misses it listed on clean
+  cases, and expected problems the reviews missed that it found. Each prompt's
+  row counts every problem it reported, how many of those another prompt
+  reported too, and its findings by verdict. A case whose setup or any review
+  fails is reported and left out of the totals rather than scored on the reviews
+  that ran. The command exits non-zero when no case could be scored; a run in
+  which only some cases errored still succeeds, and `summary.errored` counts
+  them.
 - **`watch` is organized around runs.** Factory runs are listed at the top of
   the left pane, live ones first, then up to five that ended in the last day;
   sidecars are listed below them, and `↑/↓` moves through both as one list. The

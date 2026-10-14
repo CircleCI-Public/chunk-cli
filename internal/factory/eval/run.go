@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -45,15 +46,20 @@ type Options struct {
 	// the workspace's .git alone, as a pool's sync does.
 	Sync   func(ctx context.Context, entry *sidecar.PoolEntry, dir string) error
 	Review review.Options
+	// Grade, when set, has the grader judge every case run whose reviews all
+	// finished. Nil, cases are scored on their labels alone.
+	Grade  *GradeOptions
 	Status iostream.StatusFunc
 	// OnCase is called with each case's result as it is scored.
 	OnCase func(CaseResult)
 }
 
 // Run reviews every case in the suite with the prompts, Runs times over, and
-// scores each. A case whose setup or reviews fail is recorded as errored and
-// the suite goes on. The returned error is for failures that would fail every
-// case the same way, such as a missing claude or a rejected credential.
+// scores each, with the grader when Grade is set. A case whose setup or
+// reviews fail is recorded as errored, and one whose grading fails as
+// ungraded, and the suite goes on. The returned error is for failures that
+// would fail every case the same way, such as a missing claude or a rejected
+// credential.
 func Run(ctx context.Context, opts Options) ([]CaseResult, error) {
 	if len(opts.Entries) == 0 {
 		return nil, errors.New("no sidecars to review on")
@@ -83,6 +89,20 @@ func Run(ctx context.Context, opts Options) ([]CaseResult, error) {
 			r := Score(c, run, results)
 			if err != nil {
 				r.Errors = append(r.Errors, PromptError{Prompt: setupPrompt, Error: err.Error()})
+			}
+			if opts.Grade != nil && !r.Errored() {
+				status(iostream.LevelStep, fmt.Sprintf("Grading case %s (run %d of %d)...", c.Name, run, runs))
+				// The case is still every sidecar's uncommitted work; the next
+				// case replaces it.
+				g, err := gradeCase(ctx, opts.Exec, opts.Entries[0], c, r.Findings, *opts.Grade)
+				if err != nil && (ctx.Err() != nil || errors.Is(err, claudecode.ErrMissing) || errors.Is(err, claudecode.ErrCredentialRejected)) {
+					return out, err
+				}
+				r.Grade = g
+				if err != nil {
+					r.GradeError = err.Error()
+				}
+				regroup(&r)
 			}
 			out = append(out, r)
 			onCase(r)

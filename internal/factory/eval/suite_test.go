@@ -72,14 +72,18 @@ func TestLoadSuite(t *testing.T) {
 	dir := writeSuite(t, []Case{
 		{Name: "flag", Revision: "abc", Request: "add a flag", Patch: "patches/flag.patch",
 			Expect: []Expected{{File: "main.go", Lines: []int{3, 4}, About: "bug"}}},
-		{Name: "clean", Revision: "abc", Request: "tidy", Patch: "patches/clean.patch"},
+		{Name: "clean", Revision: "abc", Request: "tidy", Patch: "patches/clean.patch", Clean: true},
+		{Name: "unlabeled", Revision: "abc", Request: "refactor", Patch: "patches/clean.patch"},
 	}, map[string]string{"flag": "diff --git a/x b/x\n", "clean": "diff --git a/y b/y\n"})
 
 	s, err := LoadSuite(dir)
 	assert.NilError(t, err)
-	assert.Equal(t, len(s.Cases), 2)
-	assert.Assert(t, !s.Cases[0].Clean())
-	assert.Assert(t, s.Cases[1].Clean())
+	assert.Equal(t, len(s.Cases), 3)
+	assert.Assert(t, s.Cases[0].Labeled() && !s.Cases[0].Clean)
+	assert.Assert(t, s.Cases[1].Labeled() && s.Cases[1].Clean)
+	// A case that says nothing of its problems is the grader's alone, not
+	// clean.
+	assert.Assert(t, !s.Cases[2].Labeled() && !s.Cases[2].Clean)
 	assert.Equal(t, string(s.Cases[0].patch), "diff --git a/x b/x\n")
 }
 
@@ -102,6 +106,10 @@ func TestLoadSuiteRejectsBadCases(t *testing.T) {
 		{"no file", func(c *Case) { c.Expect = []Expected{{About: "x"}} }, "names no file"},
 		{"backwards lines", func(c *Case) { c.Expect = []Expected{{File: "a.go", Lines: []int{5, 2}}} }, "must be [first, last]"},
 		{"one line", func(c *Case) { c.Expect = []Expected{{File: "a.go", Lines: []int{5}}} }, "must be [first, last]"},
+		{"clean with problems", func(c *Case) {
+			c.Clean = true
+			c.Expect = []Expected{{File: "a.go", About: "x"}}
+		}, "a clean case expects no problems"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := ok

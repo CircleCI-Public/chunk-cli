@@ -2,12 +2,16 @@
 // whose problems are known, so prompts can be compared by what they catch and
 // what they send back that they should not.
 //
-// Each case is a change to a repository at a pinned revision: a patch, the
-// request it answers, and the problems a good review should find in it. A case
-// that expects none is clean, and any high or medium finding on it sends sound
-// work back for nothing. Reviews run as factory runs them in its first round,
+// Each case is a change to a repository at a pinned revision: a patch and the
+// request it answers. Reviews run as factory runs them in its first round,
 // against the patch as uncommitted work, but with no implementer: the score is
 // the reviews' alone.
+//
+// A grader, a Claude run of its own, judges every case: whether each blocking
+// finding is a real problem, and what the reviews missed. So a case needs no
+// labels, and any past commit is one. A case may still be labeled, with the
+// problems a good review should find or as clean, and labeled cases score the
+// reviews without the grader and check the grader against what is known.
 package eval
 
 import (
@@ -49,9 +53,13 @@ type Case struct {
 	// Source says where the case came from, such as a pull request or a
 	// mutation, for whoever reads the results.
 	Source string `json:"source,omitempty"`
-	// Expect are the problems a review should find. Empty means the change is
-	// sound and should come back with no high or medium findings.
+	// Expect are the problems a review should find, when they are known.
 	Expect []Expected `json:"expect,omitempty"`
+	// Clean labels the change as sound: it should come back with no high or
+	// medium findings, each of which would send it back for nothing. A case
+	// with neither Clean nor Expect is unlabeled, and only the grader scores
+	// it.
+	Clean bool `json:"clean,omitempty"`
 
 	// patch is the patch's content, read by LoadSuite.
 	patch []byte
@@ -68,12 +76,13 @@ type Expected struct {
 	About string `json:"about"`
 }
 
-// Clean reports whether the case expects no problems.
-func (c Case) Clean() bool { return len(c.Expect) == 0 }
+// Labeled reports whether the case says what a review should find: the
+// problems it expects, or that it is clean.
+func (c Case) Labeled() bool { return c.Clean || len(c.Expect) > 0 }
 
 // LoadSuite reads and checks the suite in dir: every case is named uniquely,
-// has a request and a non-empty patch, and every expected problem names a file
-// and a sensible line range.
+// has a request and a non-empty patch, is not both clean and expecting
+// problems, and every expected problem names a file and a sensible line range.
 func LoadSuite(dir string) (Suite, error) {
 	data, err := os.ReadFile(filepath.Join(dir, SuiteFile))
 	if err != nil {
@@ -146,6 +155,9 @@ func (c *Case) check(dir string, seen map[string]bool) error {
 		return fmt.Errorf("case %s: patch is empty", c.Name)
 	}
 	c.patch = patch
+	if c.Clean && len(c.Expect) > 0 {
+		return fmt.Errorf("case %s: a clean case expects no problems", c.Name)
+	}
 	for _, e := range c.Expect {
 		if strings.TrimSpace(e.File) == "" {
 			return fmt.Errorf("case %s: an expected problem names no file", c.Name)
