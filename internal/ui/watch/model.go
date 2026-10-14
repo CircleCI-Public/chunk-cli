@@ -234,6 +234,11 @@ type Model struct {
 	runItem    int
 	runConfirm string
 	runNote    string
+	// runOpen is the rounds of each run (by run ID) the user opened or closed,
+	// over the default of showing only the round that matters. runDetails shows
+	// the infrastructure under a run: its worktree, sidecars and setup log.
+	runOpen    map[string]map[int]bool
+	runDetails bool
 	// spinning is true while a spinner tick chain is in flight, so a poll that
 	// finds something running after a quiet spell can start one without doubling
 	// up on a chain that never stopped.
@@ -318,7 +323,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m = m.moveSelection(run, -1)
 	case key.Matches(msg, k.Open):
 		if run != nil {
-			return m.openRunItem(run, runItems(run.s))
+			return m.openRunItem(run, m.runItems(run.s))
 		}
 		// Enter opens output when the invocation has any; otherwise it falls
 		// back to expand/collapse, so the key never feels dead.
@@ -326,8 +331,16 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return *opened, cmd
 		}
 		m = m.toggleSelectedInvoc()
+	case key.Matches(msg, k.Copy):
+		return m.copyRunFailure(run)
 	case key.Matches(msg, k.Toggle):
+		if run != nil {
+			m = m.toggleRound(run)
+			break
+		}
 		m = m.toggleSelectedInvoc()
+	case key.Matches(msg, k.Details):
+		m.runDetails = !m.runDetails
 	}
 	return m, nil
 }
@@ -339,7 +352,7 @@ func (m Model) moveSelection(run *sessionInfo, delta int) Model {
 	case m.focusedPane == paneLeft:
 		return m.moveLeftSelection(delta)
 	case run != nil:
-		m.runItem = min(max(m.runItem+delta, 0), max(len(runItems(run.s))-1, 0))
+		m.runItem = min(max(m.runItem+delta, 0), max(len(m.runItems(run.s))-1, 0))
 	default:
 		m.rightSelectedIdx = max(m.rightSelectedIdx+delta, 0)
 	}
@@ -417,12 +430,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.headRefs = msg.headRefs
 		m.commands = msg.commands
 		m.authErr = msg.authErr
+		// A new round, or the run ending, can change which round is open by
+		// default and so add or drop rows above the selection: note which row
+		// it is before the poll and find that row again after.
+		prevRun, prevItem := m.selRun, m.selectedRunItem()
 		m.sessions = visibleRuns(msg.sessions, time.Now())
 		m.sidecars, m.runSidecars = splitRunSidecars(m.sidecars, m.sessions)
 		m.reviewAuthErr = msg.reviewAuthErr
 		m = m.reselectRun()
 		if run := m.selectedRun(); run != nil {
-			m.runItem = min(m.runItem, max(len(runItems(run.s))-1, 0))
+			if run.s.ID == prevRun && prevItem != nil {
+				m.runItem = m.findRunItem(run.s, *prevItem)
+			} else {
+				m.runItem = min(m.runItem, max(len(m.runItems(run.s))-1, 0))
+			}
 		}
 		// Sidecars are re-sorted by recency each poll, so track the selection
 		// by id. An unknown id (first poll, or the sidecar aged out) falls back

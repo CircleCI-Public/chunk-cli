@@ -81,7 +81,7 @@ func sessionError(err error) error {
 		e := newUserError(refused.Message).withoutDetail()
 		switch refused.Status {
 		case http.StatusConflict:
-			e = e.withSuggestion("Follow the active one in 'chunk watch' (press r).")
+			e = e.withSuggestion("Follow the active one in 'chunk watch'.")
 		case http.StatusNotFound:
 			e = e.withSuggestion("The daemon tracks projects it has seen; check the path or the session ID.")
 		}
@@ -121,7 +121,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 			if failures++; failures >= maxSessionPollFailures {
 				printLostFactoryWork(streams, lastFactory)
 				return newUserError("Lost contact with the chunk daemon.").
-					withSuggestion(fmt.Sprintf("Run %s may still be running on the daemon. Follow it in 'chunk watch' (press r).", id)).
+					withSuggestion(fmt.Sprintf("Run %s may still be running on the daemon. Follow it in 'chunk watch'.", id)).
 					wrap(err)
 			}
 		default:
