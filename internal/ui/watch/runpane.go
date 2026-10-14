@@ -83,20 +83,27 @@ func (m Model) roundOpen(s chunkd.Session, ri int) bool {
 // each round's header, then, when it is open, its rows.
 func (m Model) runItems(s chunkd.Session) []runItem {
 	var items []runItem
-	for ri, r := range s.Rounds {
+	for ri := range s.Rounds {
 		items = append(items, runItem{kind: itemRound, round: ri})
-		if !m.roundOpen(s, ri) {
-			continue
+		if m.roundOpen(s, ri) {
+			items = append(items, roundItems(s, ri)...)
 		}
-		if r.Implement != nil {
-			items = append(items, runItem{kind: itemImplement, round: ri})
-		}
-		for i := range r.Checks {
-			items = append(items, runItem{kind: itemCheck, round: ri, idx: i})
-		}
-		for i := range r.Reviews {
-			items = append(items, runItem{kind: itemReview, round: ri, idx: i})
-		}
+	}
+	return items
+}
+
+// roundItems lists round ri's rows under its header, open or not.
+func roundItems(s chunkd.Session, ri int) []runItem {
+	r := s.Rounds[ri]
+	var items []runItem
+	if r.Implement != nil {
+		items = append(items, runItem{kind: itemImplement, round: ri})
+	}
+	for i := range r.Checks {
+		items = append(items, runItem{kind: itemCheck, round: ri, idx: i})
+	}
+	for i := range r.Reviews {
+		items = append(items, runItem{kind: itemReview, round: ri, idx: i})
 	}
 	return items
 }
@@ -299,9 +306,9 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 		if ri == 0 || m.roundOpen(s, ri) {
 			body = append(body, "")
 		}
-		rows, at, n := m.renderRunRound(st, s, ri, item, m.runItem, focused)
+		rows, at, end, n := m.renderRunRound(st, s, ri, item, m.runItem, focused)
 		if at >= 0 {
-			selStart, selEnd = len(body)+at, len(body)+at+1
+			selStart, selEnd = len(body)+at, len(body)+end
 		}
 		body = append(body, rows...)
 		item += n
@@ -348,18 +355,19 @@ type runRow struct {
 // renderRunRound draws round ri: one line when closed, or its header, the
 // implementer turn and a validate group of checks and reviews when open. first
 // is the run-wide index of the round's header; at is the line of the selected
-// row within the returned lines, -1 when it is in another round; n is how many
-// selectable rows the round has.
-func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel int, focused bool) (lines []string, at, n int) {
+// row within the returned lines, -1 when it is in another round, and end is
+// just past the lines under it, so scrolling keeps them in view too; n is how
+// many selectable rows the round has.
+func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel int, focused bool) (lines []string, at, end, n int) {
 	r := s.Rounds[ri]
 	open := m.roundOpen(s, ri)
-	at = -1
+	at, end = -1, -1
 	// pad is the indent in front of a selectable row, with the marker in its
 	// last two columns when it is the selected one.
 	pad := func(idx, indent int) string {
 		p := strings.Repeat(" ", indent-2)
 		if first+idx == sel {
-			at = len(lines)
+			at, end = len(lines), len(lines)+1
 			if focused {
 				return p + st.success("›") + " "
 			}
@@ -369,7 +377,7 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 
 	if !open {
 		line := pad(0, 2) + st.vdim("▸") + " Round " + fmt.Sprint(r.Number) + "  " + m.roundIcon(st, r) + "  " + roundRollup(st, r)
-		return []string{line}, at, 1
+		return []string{line}, at, end, 1
 	}
 
 	head := pad(0, 2) + st.vdim("▾") + " Round " + fmt.Sprint(r.Number) + "  " + roundStateText(st, r)
@@ -398,6 +406,9 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 		}
 		lines = append(lines, line)
 		lines = append(lines, row.extra...)
+		if first+idx == sel {
+			end = len(lines)
+		}
 		idx++
 	}
 	if nImpl == 1 {
@@ -416,7 +427,7 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 	if r.Note != "" {
 		lines = append(lines, "      "+st.vdim(r.Note))
 	}
-	return lines, at, idx
+	return lines, at, end, idx
 }
 
 // roundPending counts the round's checks and reviews that have not finished,
