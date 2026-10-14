@@ -443,10 +443,11 @@ chunk
   where the work is (branch, whether it was committed) and, for a run that
   stopped with committed work still failing, the `--continue` command that picks
   it up. The title, status and outcome stay in place while the rounds scroll.
-  One round is open at a time: the latest while the run goes and, once it ended, the one that failed.
-  The others are a line each (how they came out, findings, duration), and
-  `Space` or `Enter` on a round opens or closes it. An open round shows the
-  implementer's turn (duration, cost, diff stat), then its validation commands
+  One round starts open: the latest, or on a run that ended failing, the one
+  that failed. The others are a line each (how they came out, findings,
+  duration), and `Space` or `Enter` on a round opens or closes it, so any number
+  can be open. An open round shows the implementer's turn (duration, cost, diff
+  stat), then its validation commands
   and reviews under `validate`. What the run runs on (worktree, setup progress,
   kept sidecars, the run's sidecars and their resources) is folded under
   `infra`, which `i` opens. A factory review is a check: it passes unless it

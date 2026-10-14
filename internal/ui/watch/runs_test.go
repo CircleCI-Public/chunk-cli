@@ -595,3 +595,116 @@ func TestFactoryReviewRowsSayWhetherTheReviewPassed(t *testing.T) {
 }
 
 func stripANSI(s string) string { return regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(s, "") }
+
+// poll delivers the daemon's runs as the dashboard's poll does.
+func poll(m Model, runs ...sessionInfo) Model {
+	next, _ := m.Update(dataMsg{sessions: runs})
+	return next.(Model)
+}
+
+// liveRound is a finished round with an implementer turn, lint and test, and a
+// review.
+func liveRound(n int, lint string) chunkd.Round {
+	ended := time.Now()
+	return chunkd.Round{
+		Number: n, State: chunkd.RoundDone, EndedAt: &ended,
+		Implement: &chunkd.RoundImplement{State: chunkd.ImplementApplied},
+		Checks:    []chunkd.RoundCheck{{Name: "lint", Status: lint}, {Name: "test", Status: "passed"}},
+		Reviews:   []chunkd.ReviewPrompt{{Name: "bugs", State: chunkd.PromptDone, CommandID: fmt.Sprintf("cmd-r%d", n)}},
+	}
+}
+
+// A new round folds the one before it; a selection inside the folded round
+// moves to its header rather than onto whatever row slid into its place.
+func TestSelectionInARoundThatFoldsMovesToItsHeader(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	r.s.Rounds = []chunkd.Round{liveRound(1, "failed")}
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemReview, round: 0})
+
+	r.s.Rounds = append(r.s.Rounds, liveRound(2, "passed"))
+	m = poll(m, r)
+	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemRound, round: 0})
+}
+
+// When the run ends failing, its failing round opens above the selection; the
+// selection stays on the row it was on.
+func TestSelectionKeepsItsRowWhenRowsOpenAboveIt(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	r.s.Rounds = []chunkd.Round{liveRound(1, "failed"), liveRound(2, "failed")}
+	r.s.Rounds[1].Checks[0].Status = "passed"
+	m := sessModel(r)
+	m.selRun = "abc"
+	// Pin round 2 open (close, then open), then walk to its review.
+	m, _ = press(m, tea.KeyRight, tea.KeyDown, ' ', ' ')
+	for *m.selectedRunItem() != (runItem{kind: itemReview, round: 1}) {
+		m, _ = press(m, tea.KeyDown)
+	}
+
+	ended := time.Now()
+	r.s.State, r.s.EndedAt = chunkd.SessionDone, &ended
+	r.s.Stages[0].State = chunkd.StageFailed
+	m = poll(m, r)
+	run := m.selectedRun()
+	assert.Assert(t, m.roundOpen(run.s, 0) && m.roundOpen(run.s, 1))
+	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemReview, round: 1})
+}
+
+// A run that failed early and then passed opens the round that passed, not
+// the earlier failure.
+func TestPassedRunOpensItsLastRound(t *testing.T) {
+	r := failedRun()
+	r.s.Stages[0].State, r.s.Stages[0].Note = chunkd.StageDone, ""
+	r.s.Factory.Result = chunkd.ResultPassed
+	r.s.Rounds = r.s.Rounds[:2]
+	r.s.Rounds[0].Checks[0].Status, r.s.Rounds[1].Checks[0].Status = "failed", "passed"
+	m := sessModel(r)
+	assert.Assert(t, !m.roundOpen(r.s, 0) && m.roundOpen(r.s, 1))
+}
+
+// While a round's checks and reviews run, validate says how many are done.
+func TestOpenRoundCountsWhatIsStillRunning(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	round := liveRound(1, "passed")
+	round.State = chunkd.RoundChecking
+	round.Checks[1].Status = ""
+	round.Reviews[0].State = chunkd.PromptRunning
+	r.s.Rounds = []chunkd.Round{round}
+	m := sessModel(r)
+	m.selRun = "abc"
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "validate · 1 of 3 done"), out)
+}
+
+// A setup warning on a live run shows with infra folded; a plain step does not.
+func TestLiveRunShowsItsLatestSetupWarning(t *testing.T) {
+	for _, tc := range []struct {
+		level chunkd.FeedLevel
+		shown bool
+	}{
+		{chunkd.FeedStep, false},
+		{chunkd.FeedWarn, true},
+		{chunkd.FeedError, true},
+	} {
+		r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+		r.s.Factory.Progress = chunkd.Feed{Lines: []chunkd.FeedLine{{Level: tc.level, Text: "sidecar slow to start"}}, Total: 1}
+		m := sessModel(r)
+		m.selRun = "abc"
+		out := stripANSI(m.render())
+		assert.Assert(t, strings.Contains(out, "▸ infra"), out)
+		assert.Equal(t, strings.Contains(out, "sidecar slow to start"), tc.shown, "%s:\n%s", tc.level, out)
+	}
+}
+
+// i is offered only when the run has something under infra.
+func TestFooterOffersInfraOnlyWhenThereIsSome(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	m := sessModel(r).reselectRun()
+	assert.Assert(t, strings.Contains(m.renderFooter(m.styles()), "infra"))
+
+	r.s.Factory.Worktree = ""
+	m = sessModel(r).reselectRun()
+	assert.Assert(t, !strings.Contains(m.renderFooter(m.styles()), "infra"))
+}

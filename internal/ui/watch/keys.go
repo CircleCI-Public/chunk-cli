@@ -45,7 +45,9 @@ func (m Model) keys() keyMap {
 	k.Right.SetEnabled(!right)
 	k.Open.SetEnabled(right)
 	k.Toggle.SetEnabled(right)
-	k.Details.SetEnabled(run != nil)
+	// A run with nothing under infra yet (it failed before its worktree was
+	// made, say) draws no infra row, so i would do nothing.
+	k.Details.SetEnabled(run != nil && m.runDetailLines(m.styles(), *run) != nil)
 	k.Cancel.SetEnabled(run != nil && !run.s.State.Finished())
 	if run != nil {
 		k.Toggle.SetHelp("Space", "expand/collapse")

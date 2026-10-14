@@ -13,9 +13,9 @@ import (
 
 // The run pane reads top to bottom as the run does: what was asked, where the
 // run stands, each round, then where the work ended up. Rounds that are done
-// collapse to a line, so the one that matters — the latest, or on an ended run
-// the one that failed — has the room. What the run runs on (worktree, sidecars,
-// what it said while setting up) is behind "infra".
+// collapse to a line, so the one that matters — the latest, or on a run that
+// ended failing the one that failed — has the room. What the run runs on
+// (worktree, sidecars, what it said while setting up) is behind "infra".
 
 // maxGoalLines caps how much of the prompt the pane spends lines on.
 const maxGoalLines = 3
@@ -59,10 +59,11 @@ func lastFailingRound(s chunkd.Session) int {
 }
 
 // defaultOpenRound is the round shown in full unless the user chose otherwise:
-// the latest while the run goes, and once it has ended the one that failed,
-// since that is the one to read.
+// the latest while the run goes, and once it has ended failing the round that
+// failed, since that is the one to read. A run that came good opens its last
+// round, the one that fixed what earlier rounds failed.
 func defaultOpenRound(s chunkd.Session) int {
-	if s.State.Finished() {
+	if s.State.Finished() && loopFailed(s) {
 		if i := lastFailingRound(s); i >= 0 {
 			return i
 		}
@@ -100,6 +101,39 @@ func (m Model) runItems(s chunkd.Session) []runItem {
 	return items
 }
 
+// selectedRunItem is the selected run's selected row, nil when no run is
+// selected or the selection is past its rows.
+func (m Model) selectedRunItem() *runItem {
+	run := m.selectedRun()
+	if run == nil {
+		return nil
+	}
+	items := m.runItems(run.s)
+	if m.runItem >= len(items) {
+		return nil
+	}
+	return &items[m.runItem]
+}
+
+// findRunItem is the index of row it among s's rows: the row itself, else its
+// round's header when the round has closed over it, else the last row.
+func (m Model) findRunItem(s chunkd.Session, it runItem) int {
+	items := m.runItems(s)
+	header := -1
+	for i, cand := range items {
+		if cand == it {
+			return i
+		}
+		if cand.kind == itemRound && cand.round == it.round {
+			header = i
+		}
+	}
+	if header >= 0 {
+		return header
+	}
+	return max(len(items)-1, 0)
+}
+
 // toggleRound opens or closes the selected row's round and leaves the
 // selection on its header, which is still there when the rows under it are not.
 func (m Model) toggleRound(run *sessionInfo) Model {
@@ -119,12 +153,7 @@ func (m Model) toggleRound(run *sessionInfo) Model {
 	rounds[ri] = !m.roundOpen(run.s, ri)
 	byRun[run.s.ID] = rounds
 	m.runOpen = byRun
-	for i, it := range m.runItems(run.s) {
-		if it.kind == itemRound && it.round == ri {
-			m.runItem = i
-			break
-		}
-	}
+	m.runItem = m.findRunItem(run.s, runItem{kind: itemRound, round: ri})
 	return m
 }
 

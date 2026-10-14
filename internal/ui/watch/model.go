@@ -428,12 +428,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.headRefs = msg.headRefs
 		m.commands = msg.commands
 		m.authErr = msg.authErr
+		// A new round, or the run ending, can change which round is open by
+		// default and so add or drop rows above the selection: note which row
+		// it is before the poll and find that row again after.
+		prevRun, prevItem := m.selRun, m.selectedRunItem()
 		m.sessions = visibleRuns(msg.sessions, time.Now())
 		m.sidecars, m.runSidecars = splitRunSidecars(m.sidecars, m.sessions)
 		m.reviewAuthErr = msg.reviewAuthErr
 		m = m.reselectRun()
 		if run := m.selectedRun(); run != nil {
-			m.runItem = min(m.runItem, max(len(m.runItems(run.s))-1, 0))
+			if run.s.ID == prevRun && prevItem != nil {
+				m.runItem = m.findRunItem(run.s, *prevItem)
+			} else {
+				m.runItem = min(m.runItem, max(len(m.runItems(run.s))-1, 0))
+			}
 		}
 		// Sidecars are re-sorted by recency each poll, so track the selection
 		// by id. An unknown id (first poll, or the sidecar aged out) falls back
