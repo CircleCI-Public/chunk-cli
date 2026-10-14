@@ -17,7 +17,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -1076,10 +1075,9 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 }
 
 func newSidecarSetupCmd() *cobra.Command {
-	var sidecarID, orgID, name, dir string
+	var dir, sidecarID, orgID, name, envFile string
 	var skipSync, force bool
 	var envVarsFlag []string
-	var envFile string
 
 	cmd := &cobra.Command{
 		Use:   "setup",
@@ -1098,12 +1096,12 @@ Example:
   chunk sidecar setup --dir . --name my-sidecar --org-id <org-id>
   chunk sidecar setup --dir . --force`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
 			status := newStatusFunc(streams)
 
-			insecureStorage := insecureStorageFlag(cmd)
-			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, streams, ui.PromptHidden)
+			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
+			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -1114,89 +1112,36 @@ Example:
 				cfg = &config.ProjectConfig{}
 			}
 
-			// Step 1: Detect environment (skip when cached and --force not set).
-			envCached := cfg.Environment != nil && !force
-			var env *envbuilder.Environment
-			var detectionErr error
-			if envCached {
-				streams.ErrPrintln("Using environment from .chunk/config.json")
-				env = cfg.Environment
-			} else {
-				status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))
-				env, detectionErr = envbuilder.DetectEnvironment(cmd.Context(), dir)
-				if detectionErr == nil {
-					cfg.Environment = env.ForConfig()
-					if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
-						streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
-					}
-					status(iostream.LevelInfo, fmt.Sprintf("stack: %s", env.Stack))
-				}
+			env, envCached, runErr := loadEnvironment(ctx, dir, cfg, force, status)
+			if runErr == nil && !envCached {
+				saveConfigOrWarn(dir, cfg, status)
 			}
-
-			// Steps 2-6: run in a closure so outcome can be captured for telemetry.
-			runErr := func() error {
-				if detectionErr != nil {
-					return &userError{
-						msg:        "Could not detect the environment.",
-						suggestion: "Check the directory contains a supported project.",
-						err:        detectionErr,
-					}
-				}
-				// Step 2: Resolve or create sidecar.
-				if sidecarID == "" {
-					var resolveErr error
-					sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, rc.CircleCITokenSource, status, streams)
-					if resolveErr != nil {
-						return resolveErr
-					}
-				}
-
-				// Step 3: Ensure SSH key exists (generate if missing).
-				if err := sidecarSetupEnsureSSHKey(status); err != nil {
-					return err
-				}
-
-				// Step 4: Sync files to sidecar.
-				if !skipSync {
-					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, dir, rc.CircleCITokenSource, status); err != nil {
-						return err
-					}
-				}
-
-				// Step 5: Resolve env vars for SSH execution.
-				envVars, err := resolveEnvVars(cmd.Context(), dir, envFile, envVarsFlag)
-				if err != nil {
-					return err
-				}
-
-				// Step 6: Run setup steps over SSH.
-				opts := sidecarRunSetupOpts{
-					client:    client,
-					sidecarID: sidecarID,
-					env:       env,
-					envVars:   envVars,
-					streams:   streams,
-					status:    status,
-				}
-				if err := sidecarSetupRunSetup(cmd.Context(), opts); err != nil {
-					return err
-				}
-
-				if cfg.MarkRemoteCommandsForSidecarSetup() {
-					if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
-						streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
-					} else {
-						streams.ErrPrintf("Marked install and gate commands as remote in .chunk/config.json\n")
-					}
-				}
-
+			if runErr == nil {
+				runErr = provisionSidecar(ctx, env, sidecar.ProvisionOptions{
+					Dir:      dir,
+					Client:   client,
+					SkipSync: skipSync,
+					Streams:  streams,
+					Status:   status,
+					Sidecar: func(ctx context.Context) (string, error) {
+						if sidecarID != "" {
+							return sidecarID, nil
+						}
+						id, _, err := sidecarSetupResolveSidecar(ctx, client, orgID, name, dir, rc.CircleCITokenSource, status, streams)
+						return id, err
+					},
+				}, envFile, envVarsFlag)
+			}
+			if runErr == nil && cfg.MarkRemoteCommandsForSidecarSetup() && saveConfigOrWarn(dir, cfg, status) {
+				status(iostream.LevelInfo, "Marked install and gate commands as remote in .chunk/config.json")
+			}
+			if runErr == nil {
 				streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it\n")
 				streams.ErrPrintf("to record it as the project's sidecar image:\n")
 				streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n")
 				streams.ErrPrintf("  chunk sidecar snapshot list              # list snapshot IDs for your org\n\n")
-
-				return nil
-			}()
+			}
+			runErr = sidecarSetupError(runErr, rc.CircleCITokenSource)
 
 			outcome := "success"
 			if runErr != nil {
@@ -1207,10 +1152,10 @@ Example:
 			if env != nil {
 				stack = env.Stack
 				// Count only the steps that actually ran on the sidecar; the test
-				// step is skipped (see sidecarSetupRunSetup).
+				// step is skipped (see sidecar.Provision).
 				setupStepTotal = env.ProvisioningSteps()
 			}
-			_ = telemetry.FromContext(cmd.Context()).Track("chunk_sidecar_setup", map[string]any{
+			_ = telemetry.FromContext(ctx).Track("chunk_sidecar_setup", map[string]any{
 				"stack":            stack,
 				"setup_step_total": setupStepTotal,
 				"env_cached":       envCached,
@@ -1231,6 +1176,81 @@ Example:
 	cmd.Flags().StringVar(&envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
 
 	return cmd
+}
+
+// loadEnvironment returns the environment saved in cfg, or detects one in dir
+// and records it in cfg when there is none or force is set. cached reports
+// whether the saved one was used; when it was not, cfg has changed and the
+// caller should save it.
+func loadEnvironment(ctx context.Context, dir string, cfg *config.ProjectConfig, force bool, status iostream.StatusFunc) (env *envbuilder.Environment, cached bool, err error) {
+	if cfg.Environment != nil && !force {
+		status(iostream.LevelInfo, "Using environment from .chunk/config.json")
+		return cfg.Environment, true, nil
+	}
+	status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))
+	env, err = envbuilder.DetectEnvironment(ctx, dir)
+	if err != nil {
+		return nil, false, &userError{
+			msg:        "Could not detect the environment.",
+			suggestion: "Check the directory contains a supported project.",
+			err:        err,
+		}
+	}
+	cfg.Environment = env.ForConfig()
+	status(iostream.LevelInfo, "stack: "+env.Stack)
+	return env, false, nil
+}
+
+// provisionSidecar resolves the env vars the setup steps run with, then
+// provisions the sidecar with them.
+func provisionSidecar(
+	ctx context.Context,
+	env *envbuilder.Environment,
+	opts sidecar.ProvisionOptions,
+	envFile string,
+	envVarsFlag []string,
+) error {
+	envVars, err := resolveEnvVars(ctx, opts.Dir, envFile, envVarsFlag)
+	if err != nil {
+		return err
+	}
+	opts.EnvVars = envVars
+	return sidecar.Provision(ctx, opts, env)
+}
+
+// saveConfigOrWarn saves cfg as the project's config, warning rather than
+// failing when it cannot. It reports whether the config was saved.
+func saveConfigOrWarn(dir string, cfg *config.ProjectConfig, status iostream.StatusFunc) bool {
+	if err := config.SaveProjectConfig(dir, cfg); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("Could not save config: %v", err))
+		return false
+	}
+	return true
+}
+
+// sidecarSetupError phrases an error from sidecar setup for the user. Errors
+// that are already phrased, such as from resolving the sidecar, pass through.
+func sidecarSetupError(err error, tokenSource string) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := errors.AsType[*userError](err); ok {
+		return err
+	}
+	if ue := sshSessionError(err); ue != nil {
+		return ue
+	}
+	if ue := notAuthorized("sync files", tokenSource, err); ue != nil {
+		return ue
+	}
+	if e, ok := errors.AsType[*sidecar.SetupStepError](err); ok {
+		return &userError{
+			msg:        fmt.Sprintf("Setup step %q exited with status %d.", e.Step, e.ExitCode),
+			suggestion: "Check the output above for details.",
+			err:        err,
+		}
+	}
+	return &userError{msg: "Could not set up the sidecar.", err: err}
 }
 
 func sidecarSetupResolveSidecar(
@@ -1273,115 +1293,4 @@ func sidecarSetupResolveSidecar(
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID))
 	return sc.ID, sc.Name, nil
-}
-
-func sidecarSetupEnsureSSHKey(status iostream.StatusFunc) error {
-	keyPath, err := sidecar.DefaultKeyPath()
-	if err != nil {
-		return &userError{msg: "Could not determine SSH key path.", err: err}
-	}
-	generated, err := sidecar.EnsureKeyPair(keyPath)
-	if err != nil {
-		return &userError{msg: "Could not generate SSH key.", err: err}
-	}
-	if generated {
-		status(iostream.LevelDone, fmt.Sprintf("Generated SSH key at %s", keyPath))
-	}
-	return nil
-}
-
-func sidecarSetupSync(
-	ctx context.Context,
-	client *circleci.Client,
-	sidecarID string,
-	cwd string,
-	tokenSource string,
-	status iostream.StatusFunc,
-) error {
-	status(iostream.LevelStep, "Syncing files to sidecar...")
-	err := sidecar.RsyncSync(ctx, client, sidecarID, "", cwd, status)
-	if err == nil {
-		return nil
-	}
-	if authErr := sshSessionError(err); authErr != nil {
-		return authErr
-	}
-	if authErr := notAuthorized("sync files", tokenSource, err); authErr != nil {
-		return authErr
-	}
-	return err
-}
-
-type sidecarRunSetupOpts struct {
-	client    *circleci.Client
-	sidecarID string
-	env       *envbuilder.Environment
-	envVars   map[string]string
-	streams   iostream.Streams
-	status    iostream.StatusFunc
-}
-
-func sidecarSetupRunSetup(ctx context.Context, opts sidecarRunSetupOpts) error {
-	if len(opts.env.Setup) == 0 {
-		opts.status(iostream.LevelInfo, "No setup steps detected, skipping")
-		return nil
-	}
-
-	// ws is non-empty only when re-attaching to a pre-existing sidecar that had a
-	// workspace saved; for freshly created sidecars it stays "".
-	var ws string
-	if active, lerr := sidecar.LoadActive(ctx); lerr == nil && active != nil {
-		ws = active.Workspace
-	}
-
-	for _, step := range opts.env.Setup {
-		// A freshly detected env still carries the test step (it feeds the
-		// Dockerfile CMD); only the saved copy has it stripped. Skip it here so
-		// setup never runs the project's test suite as a provisioning step.
-		if step.Name == envspec.StepTest {
-			continue
-		}
-		opts.status(iostream.LevelStep, fmt.Sprintf("Running setup step %q: %s", step.Name, step.Command))
-		session, err := sidecar.OpenSession(ctx, opts.client, opts.sidecarID, false)
-		if err != nil {
-			if sessErr := sshSessionError(err); sessErr != nil {
-				return sessErr
-			}
-			return err
-		}
-		// Run from the synced workspace directory so package managers can
-		// find their manifest files (go.mod, package.json, etc.).
-		workspaceCmd := step.Command
-		if ws != "" {
-			workspaceCmd = "cd " + sidecar.ShellEscape(ws) + " && " + step.Command
-		}
-		// cimg images set PATH via Docker ENV which e2b does not propagate to SSH
-		// sessions, so prepend the stack's binary locations explicitly.
-		if paths := opts.env.BinaryPaths(); paths != "" {
-			workspaceCmd = "export PATH=" + paths + ":$PATH && " + workspaceCmd
-		}
-		loginCmd := "bash -l -c " + sidecar.ShellEscape(workspaceCmd)
-		result, err := sidecar.ExecOverSSH(ctx, session, loginCmd, nil, opts.envVars)
-		if err != nil {
-			if sessErr := sshSessionError(err); sessErr != nil {
-				return sessErr
-			}
-			return err
-		}
-		if result.Stdout != "" {
-			opts.streams.Printf("%s", result.Stdout)
-		}
-		if result.Stderr != "" {
-			opts.streams.ErrPrintf("%s", result.Stderr)
-		}
-		if result.ExitCode != 0 {
-			return &userError{
-				msg:        fmt.Sprintf("Setup step %q exited with status %d.", step.Name, result.ExitCode),
-				suggestion: "Check the output above for details.",
-				errMsg:     fmt.Sprintf("setup step %q exited with status %d", step.Name, result.ExitCode),
-			}
-		}
-		opts.status(iostream.LevelDone, fmt.Sprintf("Step %q complete", step.Name))
-	}
-	return nil
 }

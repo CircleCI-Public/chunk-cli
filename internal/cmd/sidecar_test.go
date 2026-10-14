@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -12,9 +13,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -266,4 +269,51 @@ func TestRecordSnapshotImageWithInvalidConfig(t *testing.T) {
 	assert.Equal(t, string(data), bad, "the invalid config is left untouched")
 	assert.Assert(t, strings.Contains(errOut.String(), "Warning: could not record"), "stderr: %s", errOut.String())
 	assert.Assert(t, strings.Contains(errOut.String(), "chunk config set validation.sidecarImage snap-new"), "stderr: %s", errOut.String())
+}
+
+func TestSidecarSetupError(t *testing.T) {
+	assert.NilError(t, sidecarSetupError(nil, ""))
+
+	phrased := &userError{msg: "Could not create the sidecar."}
+	assert.Equal(t, sidecarSetupError(phrased, ""), error(phrased))
+
+	step, ok := errors.AsType[*userError](sidecarSetupError(&sidecar.SetupStepError{Step: "install", ExitCode: 1}, ""))
+	assert.Assert(t, ok)
+	assert.Equal(t, step.msg, `Setup step "install" exited with status 1.`)
+
+	denied, ok := errors.AsType[*userError](sidecarSetupError(fmt.Errorf("sync files to the sidecar: %w", circleci.ErrNotAuthorized), "env"))
+	assert.Assert(t, ok)
+	assert.Equal(t, denied.msg, "Not authorized to sync files.")
+}
+
+func TestLoadEnvironmentUsesSavedEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	streams, _, errOut := testStreams()
+
+	saved := &envbuilder.Environment{Stack: "go", Image: "cimg/go", ImageVersion: "1.25.3"}
+	cfg := &config.ProjectConfig{Environment: saved}
+	env, cached, err := loadEnvironment(context.Background(), dir, cfg, false, newStatusFunc(streams))
+	assert.NilError(t, err)
+	assert.Assert(t, cached)
+	assert.Equal(t, env, saved)
+	assert.Assert(t, strings.Contains(errOut.String(), "Using environment from .chunk/config.json"))
+	// Nothing is saved; that is left to the caller.
+	_, err = os.Stat(filepath.Join(dir, ".chunk", "config.json"))
+	assert.Assert(t, os.IsNotExist(err))
+}
+
+func TestLoadEnvironmentDetectsWhenForced(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/widget\n\ngo 1.25\n"), 0o644))
+	streams, _, _ := testStreams()
+
+	saved := &envbuilder.Environment{Stack: "python"}
+	cfg := &config.ProjectConfig{Environment: saved}
+	env, cached, err := loadEnvironment(context.Background(), dir, cfg, true, newStatusFunc(streams))
+	assert.NilError(t, err)
+	assert.Assert(t, !cached)
+	assert.Equal(t, env.Stack, "go")
+	assert.Equal(t, cfg.Environment.Stack, "go")
+	_, err = os.Stat(filepath.Join(dir, ".chunk", "config.json"))
+	assert.Assert(t, os.IsNotExist(err), "loadEnvironment must leave saving to the caller")
 }

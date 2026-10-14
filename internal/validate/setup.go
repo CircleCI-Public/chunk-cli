@@ -106,6 +106,22 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 	}, nil
 }
 
+// WithInstallCommand returns commands with an install command first, guessed
+// from workDir's lock file, unless commands already have one — a CircleCI
+// config names one directly. pm is the package manager the install command
+// came from, or nil when none was added.
+func WithInstallCommand(workDir string, commands []config.Command) (_ []config.Command, pm *PackageManager) {
+	if slices.ContainsFunc(commands, func(c config.Command) bool { return c.Name == config.CmdInstall }) {
+		return commands, nil
+	}
+	pm = DetectPackageManager(workDir)
+	if pm == nil {
+		return commands, nil
+	}
+	install := config.Command{Name: config.CmdInstall, Run: pm.InstallCommand}
+	return append([]config.Command{install}, commands...), pm
+}
+
 // withDefaults fills the roles a CircleCI config left unnamed from the
 // toolchain defaults, leaving every command CI did name untouched.
 //
