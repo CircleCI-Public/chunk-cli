@@ -126,12 +126,15 @@ func TestSplitRunSidecarsDoesNotMixRunsWithTheSameFactoryID(t *testing.T) {
 	assert.Equal(t, byRun["session-b"][0].id, "sidecar-b")
 }
 
-// The factory run's pane shows the work a round did, each check and review,
-// where the work is, and fits the screen however short it is.
+// The factory run's pane says where the run stands, shows the round that
+// matters in full and the finished ones in a line, keeps the infrastructure
+// folded until asked for, and fits the screen however short it is.
 func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	ended := time.Now()
 	r.s.Rounds = []chunkd.Round{{
-		Number: 1, State: chunkd.RoundDone, Note: "1 of 3 checks passed",
+		Number: 1, State: chunkd.RoundDone, Note: "1 of 3 checks passed", Findings: 2, Worth: 1,
+		StartedAt: ended.Add(-time.Minute), EndedAt: &ended,
 		Implement: &chunkd.RoundImplement{State: chunkd.ImplementApplied, DurationMS: 4000, CostUSD: 0.41, Stat: "3 files changed"},
 		Checks: []chunkd.RoundCheck{
 			{Name: "test", Status: "passed", DurationMS: 1000},
@@ -154,13 +157,120 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 			continue
 		}
 		for _, want := range []string{
-			"Add a --verbose flag", "round 2/3", "/tmp/wt/abc", "Round 1", "Round 2",
-			"implement", "$0.41", "3 files changed", "test", "lint", "review: bugs", "2 findings",
-			"1 of 3 checks passed", "syncing the implementer",
+			"Add a --verbose flag", "Round 2 (max 3) · implementing", "$0.41",
+			"Round 1", "1 of 3 checks passed", "2 findings, 1 worth changing", "Round 2", "implement", "▸ infra",
 		} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 		}
-		assert.Assert(t, !strings.Contains(out, "not built yet"), "stages nothing runs are not shown:\n%s", out)
+		// The finished round is a line; infrastructure is folded.
+		for _, absent := range []string{"review: bugs", "lint", "/tmp/wt/abc", "syncing the implementer", "not built yet"} {
+			assert.Assert(t, !strings.Contains(out, absent), "unexpected %q:\n%s", absent, out)
+		}
+
+		m, _ = press(m, 'i')
+		out = m.render()
+		for _, want := range []string{"▾ infra", "/tmp/wt/abc", "syncing the implementer"} {
+			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A finished round opens and closes on Space, from its header or from a row
+// inside it, and the selection stays on the header.
+func TestRoundsOpenAndCloseAndKeepTheSelectionOnTheHeader(t *testing.T) {
+	r := failedRun()
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+	run := m.selectedRun()
+	// The ended run opens its failing round, 2, and no other.
+	assert.Assert(t, !m.roundOpen(run.s, 0) && m.roundOpen(run.s, 1) && !m.roundOpen(run.s, 2))
+	assert.Equal(t, len(m.runItems(run.s)), 3+3, "three headers and round 2's implementer and two checks")
+
+	m, _ = press(m, ' ')
+	assert.Assert(t, m.roundOpen(m.selectedRun().s, 0), "space on the first header opens it")
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "▾ Round 1") && strings.Contains(out, "unit tests"), out)
+
+	// From a row inside round 2: space closes the round and selects its header.
+	m, _ = press(m, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown) // header 1 → implement, lint(round 1), test, header 2... walk to a row of round 2
+	items := m.runItems(m.selectedRun().s)
+	for items[m.runItem].round != 1 || items[m.runItem].kind != itemCheck {
+		m, _ = press(m, tea.KeyDown)
+	}
+	m, _ = press(m, ' ')
+	items = m.runItems(m.selectedRun().s)
+	assert.Assert(t, !m.roundOpen(m.selectedRun().s, 1))
+	assert.Equal(t, items[m.runItem].kind, itemRound)
+	assert.Equal(t, items[m.runItem].round, 1)
+
+	// Enter on a header toggles too.
+	m, _ = press(m, tea.KeyEnter)
+	assert.Assert(t, m.roundOpen(m.selectedRun().s, 1))
+}
+
+func failedRun() sessionInfo {
+	r := factoryRun("abc", chunkd.SessionDone, time.Now().Add(-time.Hour))
+	ended := time.Now()
+	r.s.EndedAt = &ended
+	r.s.Stages[0].State, r.s.Stages[0].Note = chunkd.StageFailed, "checks still failed after 3 round(s)"
+	r.s.Factory.Result, r.s.Factory.Committed = "exhausted", true
+	r.s.Factory.Branch, r.s.Factory.Log = "chunk/factory/abc", "/tmp/run.log"
+	round := func(n int, lint string) chunkd.Round {
+		return chunkd.Round{
+			Number: n, State: chunkd.RoundDone,
+			Implement: &chunkd.RoundImplement{State: chunkd.ImplementApplied, CostUSD: 0.5},
+			Checks:    []chunkd.RoundCheck{{Name: "lint", Status: lint}, {Name: "unit tests", Status: "passed"}},
+		}
+	}
+	r.s.Rounds = []chunkd.Round{round(1, "passed"), round(2, "failed"), round(3, "passed")}
+	return r
+}
+
+// An ended run that did not pass says what stopped it, opens the round that
+// failed rather than the last, and says how to carry on.
+func TestEndedFailedRunNamesTheBlockerAndTheNextStep(t *testing.T) {
+	m := sessModel(failedRun())
+	m.selRun = "abc"
+	out := stripANSI(m.render())
+	for _, want := range []string{
+		"checks still failed after 3 round(s) · blocked by lint", "$1.50",
+		"▾ Round 2", "▸ Round 1", "▸ Round 3",
+		"branch", "chunk/factory/abc", "next", "chunk factory build --continue abc",
+	} {
+		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+	}
+	assert.Assert(t, !strings.Contains(out, "/tmp/run.log"), "the log is infrastructure:\n%s", out)
+}
+
+// The title, status and outcome hold their place on a short terminal while the
+// rounds between them give way.
+func TestShortTerminalKeepsStatusAndOutcomeInView(t *testing.T) {
+	m := sessModel(failedRun())
+	m.selRun = "abc"
+	m.height = 16
+	out := m.render()
+	assert.Assert(t, strings.Count(out, "\n") <= 16, out)
+	for _, want := range []string{"blocked by lint", "chunk factory build --continue abc"} {
+		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+	}
+}
+
+// A long prompt wraps onto a few lines instead of being cut to one, and no line
+// of the pane runs past the terminal.
+func TestLongPromptWrapsAndPaneStaysWithinTheTerminal(t *testing.T) {
+	r := failedRun()
+	r.s.Factory.Prompt = strings.Repeat("refactor the helper so that ", 12)
+	for _, width := range []int{70, 110, 160} {
+		m := sessModel(r)
+		m.selRun = "abc"
+		m.width = width
+		out := m.render()
+		assert.Assert(t, strings.Count(out, "refactor the helper") > 1, "the prompt is wrapped over lines:\n%s", out)
+		assert.Assert(t, strings.Contains(out, "…"), "a prompt past three lines is cut with an ellipsis:\n%s", out)
+		for i, line := range strings.Split(out, "\n") {
+			assert.Assert(t, lipgloss.Width(line) <= width, "width %d line %d is %d columns", width, i, lipgloss.Width(line))
+		}
 	}
 }
 
@@ -176,9 +286,11 @@ func TestEndedFactoryRunSaysWhereItsWorkIs(t *testing.T) {
 	m := sessModel(r)
 	m.selRun = "abc"
 	out := m.render()
-	for _, want := range []string{"still failing", "checks still failed after 3 round(s)", "chunk/factory/abc", "committed · 2 files changed, 10 insertions(+)", "/tmp/run.log"} {
+	for _, want := range []string{"still failing", "checks still failed after 3 round(s)", "chunk/factory/abc", "committed · 2 files changed, 10 insertions(+)", "chunk factory build --continue abc"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 	}
+	m, _ = press(m, 'i')
+	assert.Assert(t, strings.Contains(m.render(), "/tmp/run.log"), "the log is under infra:\n%s", m.render())
 }
 
 func TestNoRunsLeavesTheSidecarPaneAsItWas(t *testing.T) {
@@ -242,7 +354,7 @@ func TestRunItemsOpenTheirOutput(t *testing.T) {
 	}}
 	m := sessModel(r)
 	m.selRun = "abc"
-	m, _ = press(m, tea.KeyRight)
+	m, _ = press(m, tea.KeyRight, tea.KeyDown) // past the round's header
 
 	// The implementer's turn and a failed check open what the snapshot holds.
 	m, cmd := press(m, tea.KeyEnter)
@@ -483,3 +595,255 @@ func TestFactoryReviewRowsSayWhetherTheReviewPassed(t *testing.T) {
 }
 
 func stripANSI(s string) string { return regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(s, "") }
+
+// poll delivers the daemon's runs as the dashboard's poll does.
+func poll(m Model, runs ...sessionInfo) Model {
+	next, _ := m.Update(dataMsg{sessions: runs})
+	return next.(Model)
+}
+
+// liveRound is a finished round with an implementer turn, lint and test, and a
+// review.
+func liveRound(n int, lint string) chunkd.Round {
+	ended := time.Now()
+	return chunkd.Round{
+		Number: n, State: chunkd.RoundDone, EndedAt: &ended,
+		Implement: &chunkd.RoundImplement{State: chunkd.ImplementApplied},
+		Checks:    []chunkd.RoundCheck{{Name: "lint", Status: lint}, {Name: "test", Status: "passed"}},
+		Reviews:   []chunkd.ReviewPrompt{{Name: "bugs", State: chunkd.PromptDone, CommandID: fmt.Sprintf("cmd-r%d", n)}},
+	}
+}
+
+// A new round folds the one before it; a selection inside the folded round
+// moves to its header rather than onto whatever row slid into its place.
+func TestSelectionInARoundThatFoldsMovesToItsHeader(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	r.s.Rounds = []chunkd.Round{liveRound(1, "failed")}
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemReview, round: 0})
+
+	r.s.Rounds = append(r.s.Rounds, liveRound(2, "passed"))
+	m = poll(m, r)
+	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemRound, round: 0})
+}
+
+// When the run ends failing, its failing round opens above the selection; the
+// selection stays on the row it was on.
+func TestSelectionKeepsItsRowWhenRowsOpenAboveIt(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	r.s.Rounds = []chunkd.Round{liveRound(1, "failed"), liveRound(2, "failed")}
+	r.s.Rounds[1].Checks[0].Status = "passed"
+	m := sessModel(r)
+	m.selRun = "abc"
+	// Pin round 2 open (close, then open), then walk to its review.
+	m, _ = press(m, tea.KeyRight, tea.KeyDown, ' ', ' ')
+	for *m.selectedRunItem() != (runItem{kind: itemReview, round: 1}) {
+		m, _ = press(m, tea.KeyDown)
+	}
+
+	ended := time.Now()
+	r.s.State, r.s.EndedAt = chunkd.SessionDone, &ended
+	r.s.Stages[0].State = chunkd.StageFailed
+	m = poll(m, r)
+	run := m.selectedRun()
+	assert.Assert(t, m.roundOpen(run.s, 0) && m.roundOpen(run.s, 1))
+	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemReview, round: 1})
+}
+
+// A run that failed early and then passed opens the round that passed, not
+// the earlier failure.
+func TestPassedRunOpensItsLastRound(t *testing.T) {
+	r := failedRun()
+	r.s.Stages[0].State, r.s.Stages[0].Note = chunkd.StageDone, ""
+	r.s.Factory.Result = chunkd.ResultPassed
+	r.s.Rounds = r.s.Rounds[:2]
+	r.s.Rounds[0].Checks[0].Status, r.s.Rounds[1].Checks[0].Status = "failed", "passed"
+	m := sessModel(r)
+	assert.Assert(t, !m.roundOpen(r.s, 0) && m.roundOpen(r.s, 1))
+}
+
+// While a round's checks and reviews run, validate says how many are done.
+func TestOpenRoundCountsWhatIsStillRunning(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	round := liveRound(1, "passed")
+	round.State = chunkd.RoundChecking
+	round.Checks[1].Status = ""
+	round.Reviews[0].State = chunkd.PromptRunning
+	r.s.Rounds = []chunkd.Round{round}
+	m := sessModel(r)
+	m.selRun = "abc"
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "validate · 1 of 3 done"), out)
+}
+
+// A setup warning on a live run shows with infra folded; a plain step does not.
+func TestLiveRunShowsItsLatestSetupWarning(t *testing.T) {
+	for _, tc := range []struct {
+		level chunkd.FeedLevel
+		shown bool
+	}{
+		{chunkd.FeedStep, false},
+		{chunkd.FeedWarn, true},
+		{chunkd.FeedError, true},
+	} {
+		r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+		r.s.Factory.Progress = chunkd.Feed{Lines: []chunkd.FeedLine{{Level: tc.level, Text: "sidecar slow to start"}}, Total: 1}
+		m := sessModel(r)
+		m.selRun = "abc"
+		out := stripANSI(m.render())
+		assert.Assert(t, strings.Contains(out, "▸ infra"), out)
+		assert.Equal(t, strings.Contains(out, "sidecar slow to start"), tc.shown, "%s:\n%s", tc.level, out)
+	}
+}
+
+// i is offered only when the run has something under infra.
+func TestFooterOffersInfraOnlyWhenThereIsSome(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	m := sessModel(r).reselectRun()
+	assert.Assert(t, strings.Contains(m.renderFooter(m.styles()), "infra"))
+
+	r.s.Factory.Worktree = ""
+	m = sessModel(r).reselectRun()
+	assert.Assert(t, !strings.Contains(m.renderFooter(m.styles()), "infra"))
+}
+
+func TestCheckRowShowsFailureTail(t *testing.T) {
+	st := newWatchStyles(false)
+	row := checkRow(st, chunkd.RoundCheck{
+		Name:   "test",
+		Status: chunkd.CheckFailed,
+		Output: "ok  pkg/a\n\n--- FAIL: TestX\n    x_test.go:9: want 3, got 4\nFAIL\n",
+	})
+	assert.Equal(t, len(row.extra), failTailLines)
+	assert.Assert(t, strings.Contains(row.extra[len(row.extra)-1], "FAIL"))
+
+	passed := checkRow(st, chunkd.RoundCheck{Name: "lint", Status: chunkd.CheckPassed, Output: "noise"})
+	assert.Equal(t, len(passed.extra), 0)
+
+	// Raw output's colour and progress redraws are resolved, not drawn: a bare
+	// \r would overwrite the left pane.
+	assert.DeepEqual(t, tailLines("fetching  10%\rfetching 100%\n\x1b[31mFAIL\x1b[0m pkg\r\n", 3),
+		[]string{"fetching 100%", "FAIL pkg"})
+}
+
+func TestItemFailureReport(t *testing.T) {
+	s := chunkd.Session{Rounds: []chunkd.Round{{
+		Number:    2,
+		Implement: &chunkd.RoundImplement{State: chunkd.ImplementFailed, Error: "claude exited 1"},
+		Checks: []chunkd.RoundCheck{
+			{Name: "lint", Status: chunkd.CheckPassed, Output: "noise"},
+			{Name: "test", Status: chunkd.CheckFailed, Output: "--- FAIL: TestX\nFAIL\n"},
+			{Name: "build", Status: chunkd.CheckErrored, Error: "sidecar unreachable"},
+		},
+		Reviews: []chunkd.ReviewPrompt{
+			{Name: "bugs", State: chunkd.PromptDone, Status: chunkd.CheckPassed},
+			{Name: "style", State: chunkd.PromptDone, Status: chunkd.CheckFailed, Worth: 2},
+			{Name: "tests", State: chunkd.PromptFailed, Error: "claude timed out"},
+		},
+	}}}
+	items := roundItems(s, 0)
+	assert.Equal(t, len(items), 7)
+
+	for i, want := range []string{
+		"Round 2 implementer failed: claude exited 1",
+		"",
+		"Round 2 check: test failed\n\n```\n--- FAIL: TestX\nFAIL\n```",
+		"Round 2 check: build failed: sidecar unreachable",
+		"",
+		"Round 2 review: style failed: 2 findings worth changing",
+		"Round 2 review: tests failed: claude timed out",
+	} {
+		assert.Equal(t, itemFailureReport(s, items[i]), want, "item %d", i)
+	}
+
+	s.Rounds[0].Implement.State = chunkd.ImplementApplied
+	assert.Equal(t, itemFailureReport(s, items[0]), "")
+}
+
+// c copies the selected row's failure, and on a row that passed, the latest
+// round's failures: an earlier round's were what the next one set out to fix.
+func TestCopyFailureCopiesTheSelectedOrLatestRoundsFailures(t *testing.T) {
+	clipboard := func(cmd tea.Cmd) string {
+		t.Helper()
+		assert.Assert(t, cmd != nil, "nothing was copied")
+		return fmt.Sprint(cmd())
+	}
+
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Rounds = []chunkd.Round{
+		{Number: 1, Checks: []chunkd.RoundCheck{{Name: "test", Status: chunkd.CheckFailed, Output: "--- FAIL: TestOld"}}},
+		{Number: 2, Checks: []chunkd.RoundCheck{
+			{Name: "test", Status: chunkd.CheckFailed, Output: "--- FAIL: TestNew"},
+			{Name: "lint", Status: chunkd.CheckPassed},
+		}},
+	}
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+	assert.Assert(t, strings.Contains(m.renderFooter(m.styles()), "copy failure"))
+
+	m, cmd := press(m, 'c')
+	got := clipboard(cmd)
+	assert.Assert(t, strings.HasPrefix(got, "chunk factory run (repo · chunk/factory/abc · 0123456)\n"), got)
+	assert.Assert(t, strings.Contains(got, "TestOld") && !strings.Contains(got, "TestNew"), got)
+	assert.Equal(t, m.runNote, "copied failure to clipboard")
+
+	m, cmd = press(m, tea.KeyDown, tea.KeyDown, 'c')
+	got = clipboard(cmd)
+	assert.Assert(t, strings.Contains(got, "Round 2 check: test failed") && !strings.Contains(got, "TestOld"), got)
+
+	// Once the latest round passes, nothing is left to copy.
+	m.sessions[0].s.Rounds[1].Checks[0].Status = chunkd.CheckPassed
+	m.sessions[0].s.State = chunkd.SessionDone
+	m, cmd = press(m, 'c')
+	assert.Assert(t, cmd == nil)
+	assert.Equal(t, m.runNote, "nothing failed in this run")
+
+	// A run that failed before any round copies its error.
+	m.sessions[0].s.Rounds = nil
+	m.sessions[0].s.State, m.sessions[0].s.Error = chunkd.SessionFailed, "no sidecar image"
+	m.runItem = 0
+	_, cmd = press(m, 'c')
+	got = clipboard(cmd)
+	assert.Assert(t, strings.HasPrefix(got, "chunk factory run failed ("), got)
+	assert.Assert(t, strings.HasSuffix(got, "Error: no sidecar image"), got)
+}
+
+// The latest round's failures are copied even when that round is folded and
+// its rows are not on screen.
+func TestCopyFailureReachesAFoldedLatestRound(t *testing.T) {
+	r := failedRun()
+	r.s.Rounds[2].Checks[0].Status = chunkd.CheckFailed
+	r.s.Rounds[2].Checks[0].Output = "--- FAIL: TestLatest"
+	m := sessModel(r)
+	m.selRun = "abc"
+	m.runOpen = map[string]map[int]bool{"abc": {2: false}}
+	m, _ = press(m, tea.KeyRight) // round 1's header; round 1 passed
+
+	_, cmd := press(m, 'c')
+	assert.Assert(t, cmd != nil, "nothing was copied")
+	got := fmt.Sprint(cmd())
+	assert.Assert(t, strings.Contains(got, "Round 3 check: lint failed") && strings.Contains(got, "TestLatest"), got)
+}
+
+// A failed check's tail sits under its row, so selecting it scrolls far enough
+// to show the tail as well as the row.
+func TestSelectedFailedCheckKeepsItsTailInView(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	var checks []chunkd.RoundCheck
+	for i := range 12 {
+		checks = append(checks, chunkd.RoundCheck{Name: fmt.Sprintf("check-%d", i), Status: chunkd.CheckPassed})
+	}
+	checks = append(checks, chunkd.RoundCheck{Name: "test", Status: chunkd.CheckFailed, Output: "one\ntwo\nlast tail line"})
+	r.s.Rounds = []chunkd.Round{{Number: 1, Checks: checks}}
+	m := sessModel(r)
+	m.selRun = "abc"
+	m.height = 16
+	m, _ = press(m, tea.KeyRight)
+	m.runItem = len(checks) // past the round's header, the last check
+
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "last tail line"), out)
+}

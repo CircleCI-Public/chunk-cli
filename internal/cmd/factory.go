@@ -592,11 +592,10 @@ func printFactoryLeftovers(f *chunkd.FactoryRun, status iostream.StatusFunc, str
 // still fails its checks. The branch names the run whose record a continued
 // run reads, the first in a chain of them.
 func printFactoryContinueHint(f *chunkd.FactoryRun, status iostream.StatusFunc) {
-	failing := f.Result == string(factory.ResultExhausted) || f.Result == string(factory.ResultStuck)
-	if !failing || !f.Committed || f.Branch == "" {
+	if !f.Continuable() {
 		return
 	}
-	status(iostream.LevelInfo, fmt.Sprintf(`Keep working on it with: chunk factory build --continue %s ["what to do differently"]`, factory.ParseRunID(f.Branch)))
+	status(iostream.LevelInfo, fmt.Sprintf(`Keep working on it with: %s ["what to do differently"]`, f.ContinueCommand()))
 }
 
 // reportOutcome says why the loop stopped and returns an error unless every
