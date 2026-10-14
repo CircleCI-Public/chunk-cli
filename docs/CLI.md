@@ -159,6 +159,7 @@ chunk
 │   │   --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │   │   --json                      # Output as JSON
 │   ├── start [prompt|-]            # Make a worktree to start a change in by hand, for a factory run to refine
+│   │   --diff <file|->             # Start from a patch of work done elsewhere
 │   │   --json                      # Output as JSON
 │   ├── bootstrap                   # Write a first set of review prompts for this project
 │   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
@@ -380,7 +381,10 @@ chunk
   change starts as a prompt fired at the cloud: `chunk factory start "<prompt>"`
   makes a run's worktree and branch, `chunk/factory/<description>/<run id>`,
   from the developer's files as they are (uncommitted changes in the
-  baseline, as for a build), and keeps the run's record, marked `by_hand`. Nothing
+  baseline, as for a build), and keeps the run's record. The record carries
+  what the refining run needs to know as data, `brief` (how its implementer is
+  told about the work) and `needs_work`, rather than where the work came from,
+  so the factory does not change when a new way to make a first pass does. Nothing
   runs on a sidecar. The developer works in the worktree, with Claude Code,
   another agent or none, then hands the work to the factory with
   `chunk factory build --continue <run id>`, which picks up whatever they did
@@ -388,7 +392,10 @@ chunk
   implementer is told the work so far is the developer's first pass and to
   finish it into something ready to merge. The continued run says how big the
   handed-over diff is, measured from the baseline, and refuses to start if
-  nothing was done in the worktree. Only the worktree's path goes to
+  nothing was done in the worktree. The factory's input is the diff and the
+  prompt, not where the work was done: `--diff <file>` (or `-` for stdin, with
+  the prompt as an argument) starts the run from a patch made anywhere, applied
+  to the developer's files in the worktree as the work so far. Only the worktree's path goes to
   stdout, so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the
   record instead.
 - **`factory bootstrap` writes a project's first review prompts.** It runs

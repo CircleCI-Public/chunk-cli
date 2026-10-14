@@ -19,10 +19,11 @@ func TestStartRecordsAWorktreeForWorkByHand(t *testing.T) {
 	root := newProject(t)
 	before := gitOutput(t, root, "status", "--porcelain")
 
-	rec, err := Start(ctx, root, "Add a --verbose flag")
+	rec, err := Start(ctx, root, Handoff{Prompt: "Add a --verbose flag"})
 	assert.NilError(t, err)
 
-	assert.Assert(t, rec.ByHand)
+	assert.Assert(t, rec.NeedsWork)
+	assert.Equal(t, rec.Brief, handoffBrief("Add a --verbose flag"), "the record says how the work is described")
 	assert.Equal(t, rec.Branch, "chunk/factory/add-a-verbose-flag/"+rec.RunID)
 	assert.Equal(t, gitOutput(t, rec.Worktree, "rev-parse", "HEAD"), rec.Baseline)
 	assert.Equal(t, readFile(t, rec.Worktree, "mine.go"), "package main\n", "the developer's files are the starting point")
@@ -39,7 +40,7 @@ func TestContinuingAStartedRunPicksUpTheWorkDoneByHand(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	ctx := context.Background()
 	root := newProject(t)
-	rec, err := Start(ctx, root, "add a flag")
+	rec, err := Start(ctx, root, Handoff{Prompt: "add a flag"})
 	assert.NilError(t, err)
 	writeFile(t, rec.Worktree, "flag.go", "package main\n")
 
@@ -58,7 +59,7 @@ func TestContinuingAStartedRunWithNoWorkIsRefused(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	ctx := context.Background()
 	root := newProject(t)
-	rec, err := Start(ctx, root, "add a flag")
+	rec, err := Start(ctx, root, Handoff{Prompt: "add a flag"})
 	assert.NilError(t, err)
 
 	c := &Continuation{From: rec}
@@ -68,10 +69,52 @@ func TestContinuingAStartedRunWithNoWorkIsRefused(t *testing.T) {
 }
 
 func TestContinuationOfAStartedRunFinishesTheDevelopersWork(t *testing.T) {
-	c := &Continuation{From: Record{RunID: "run-1", Prompt: "add a flag", ByHand: true}}
+	c := &Continuation{From: Record{RunID: "run-1", Prompt: "add a flag", Brief: handoffBrief("add a flag")}}
 
 	assert.Assert(t, c.checkFirst())
 	assert.Equal(t, c.request(), "add a flag")
 	assert.Assert(t, strings.HasPrefix(c.prompt(), "You are finishing a change the developer started. They want:\n\nadd a flag"))
 	assert.Assert(t, strings.Contains(c.prompt(), "`git diff HEAD` shows it"))
+}
+
+// A record that does not say how its work is described, like a build's, gets
+// the default: an earlier session's unfinished work.
+func TestContinuationWithNoBriefContinuesAnEarlierSession(t *testing.T) {
+	c := &Continuation{From: Record{RunID: "run-1", Prompt: "add a flag"}}
+
+	assert.Assert(t, strings.HasPrefix(c.prompt(), "You are continuing a change that an earlier session started and did not finish. It was asked:\n\nadd a flag"))
+}
+
+// A diff of work done elsewhere is laid on the developer's files as the work
+// so far, so a continued run refines it like work done in the worktree.
+func TestStartFromADiffHandsItToTheFactory(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	ctx := context.Background()
+	root := newProject(t)
+	diff := "diff --git a/flag.go b/flag.go\nnew file mode 100644\n--- /dev/null\n+++ b/flag.go\n@@ -0,0 +1 @@\n+package main\n"
+
+	rec, err := Start(ctx, root, Handoff{Prompt: "add a flag", Diff: []byte(diff)})
+	assert.NilError(t, err)
+	assert.Equal(t, readFile(t, rec.Worktree, "flag.go"), "package main\n")
+
+	c := &Continuation{From: rec}
+	_, stat, err := c.handOff(ctx, root, "run-2")
+	assert.NilError(t, err)
+	assert.Equal(t, stat, "1 file changed, 1 insertion(+)")
+}
+
+// A diff that does not apply leaves nothing behind: no worktree, branch or
+// record for a run that has no work.
+func TestStartFromADiffThatDoesNotApplyCleansUp(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	ctx := context.Background()
+	root := newProject(t)
+	diff := "diff --git a/missing.go b/missing.go\n--- a/missing.go\n+++ b/missing.go\n@@ -1 +1 @@\n-old\n+new\n"
+
+	_, err := Start(ctx, root, Handoff{Prompt: "add a flag", Diff: []byte(diff)})
+
+	assert.ErrorContains(t, err, "apply the diff")
+	assert.Equal(t, gitOutput(t, root, "branch", "--list", "chunk/factory/*"), "")
 }

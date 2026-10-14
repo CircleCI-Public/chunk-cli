@@ -28,9 +28,13 @@ type Record struct {
 	Branch   string `json:"branch"`
 	Baseline string `json:"baseline"`
 	Head     string `json:"head"`
-	// ByHand marks a run made by Start: its worktree is for the developer to
-	// work in, and its work is theirs until a continued run refines it.
-	ByHand bool `json:"by_hand,omitempty"`
+	// Brief is what a run continuing this one tells its implementer about the
+	// work, when whoever made the record knows better than the default: that
+	// an earlier session started it and did not finish.
+	Brief string `json:"brief,omitempty"`
+	// NeedsWork means a run continuing this one refuses to start until there
+	// is a change in the worktree to refine.
+	NeedsWork bool `json:"needs_work,omitempty"`
 	// ContinuesRunID is the run this one continued, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
 	// Result and Rounds are how the run ended, once it has.

@@ -145,16 +145,15 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	status := opts.Status
 	lg.start(rep.RunID, opts, request)
 
-	// Runs belong to the repository, so every checkout of it sees them.
-	dataDir, err := config.RepoDataDir(opts.Root)
+	dataDir, err := runsDir(opts.Root)
 	if err != nil {
-		return rep, fmt.Errorf("find chunk's data directory for the repository: %w", err)
+		return rep, err
 	}
 	var wt Worktree
 	if cont == nil {
-		wt, err = CreateWorktree(ctx, opts.Root, filepath.Join(dataDir, "factory", rep.RunID), rep.RunID, opts.Prompt)
+		wt, err = createRunWorktree(ctx, opts.Root, dataDir, rep.RunID, opts.Prompt)
 		if err != nil {
-			return rep, fmt.Errorf("create the run's worktree: %w", err)
+			return rep, err
 		}
 	} else {
 		var stat string
@@ -168,10 +167,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if opts.OnStart != nil {
 		opts.OnStart(rep.RunID, wt)
 	}
-	rec := Record{
-		RunID: rep.RunID, Prompt: request,
-		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
-	}
+	rec := newRecord(rep.RunID, request, wt)
 	if cont != nil {
 		rec.Prompt, rec.ContinuesRunID = cont.From.Prompt, cont.From.RunID
 	}
@@ -307,6 +303,34 @@ func describeWork(stat string) string {
 // newRunID names a run for when it starts.
 func newRunID() string {
 	return time.Now().UTC().Format("20060102-150405")
+}
+
+// runsDir is where a repository's runs keep their worktrees and records.
+// Runs belong to the repository, so every checkout of it sees them.
+func runsDir(root string) (string, error) {
+	dataDir, err := config.RepoDataDir(root)
+	if err != nil {
+		return "", fmt.Errorf("find chunk's data directory for the repository: %w", err)
+	}
+	return dataDir, nil
+}
+
+// createRunWorktree makes a new run's worktree and branch, beside its record
+// in dataDir.
+func createRunWorktree(ctx context.Context, root, dataDir, runID, prompt string) (Worktree, error) {
+	wt, err := CreateWorktree(ctx, root, filepath.Join(dataDir, "factory", runID), runID, prompt)
+	if err != nil {
+		return Worktree{}, fmt.Errorf("create the run's worktree: %w", err)
+	}
+	return wt, nil
+}
+
+// newRecord is the record of run runID, for prompt, whose work is in wt.
+func newRecord(runID, prompt string, wt Worktree) Record {
+	return Record{
+		RunID: runID, Prompt: prompt,
+		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
+	}
 }
 
 // keepRecord saves the run's record, so a later run can continue it. A run
