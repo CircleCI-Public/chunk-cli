@@ -19,30 +19,33 @@ func newFactoryStartCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "start [prompt|-]",
-		Short: "Make a worktree to start a change in by hand, for a factory run to refine",
-		Long: `Make a factory run's worktree and branch for you to start a change in
-yourself, with Claude Code, another agent or none, then hand what you did to
-the factory to refine into a mergeable change:
+		Short: "Hand the factory a diff and a prompt to refine into a mergeable change",
+		Long: `Hand the factory a diff and a prompt: the prompt says what the change is
+for, and the diff is a first pass at it. The factory refines the diff against
+the prompt into a mergeable change. Where the diff comes from is up to you:
+
+Make it in the run's worktree, with Claude Code, another agent or by hand:
 
   cd "$(chunk factory start "add a --verbose flag")"
   # ...work on it...
   chunk factory build --continue <run id>
 
-The worktree starts from your files as they are, uncommitted changes included,
-on a branch named chunk/factory/<description>/<run id>, like a build's.
-Nothing runs on a sidecar yet. The prompt says what the change is for: the
-continued run's implementer is told it, and its reviewers check the work
-against it. Whatever you do in the worktree is the change they see, committed
-or not.
-
---diff FILE starts from work done somewhere else instead: a patch, such as
-git diff's output, applied to your files in the worktree as the work so far.
-A - reads it from stdin, with the prompt as an argument:
+Or pass a patch made somewhere else with --diff, such as git diff's output.
+It is applied to your files in the worktree as the first pass. A - reads it
+from stdin, with the prompt as an argument:
 
   git -C ../scratch diff | chunk factory start --diff - "add a --verbose flag"
 
-The worktree's path is printed on stdout, and how to continue on stderr. A -
-prompt, or none with stdin redirected, reads the prompt from stdin.`,
+Either way, chunk factory build --continue <run id> hands the diff and the
+prompt to the factory: its implementer is told the prompt and finishes the
+diff, and its reviewers check the work against the prompt. The diff is
+whatever changed in the worktree, committed or not.
+
+The worktree starts from your files as they are, uncommitted changes included,
+on a branch named chunk/factory/<description>/<run id>, like a build's.
+Nothing runs on a sidecar until you continue. The worktree's path is printed on
+stdout, and how to continue on stderr. A - prompt, or none with stdin
+redirected, reads the prompt from stdin.`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {

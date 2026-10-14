@@ -158,7 +158,7 @@ chunk
 │   │   --log-file <path>           # Keep the log in this file instead (implies --log)
 │   │   --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │   │   --json                      # Output as JSON
-│   ├── start [prompt|-]            # Make a worktree to start a change in by hand, for a factory run to refine
+│   ├── start [prompt|-]            # Hand the factory a diff and a prompt to refine
 │   │   --diff <file|->             # Start from a patch of work done elsewhere
 │   │   --json                      # Output as JSON
 │   ├── bootstrap                   # Write a first set of review prompts for this project
@@ -377,27 +377,29 @@ chunk
   by every checkout of the repository, which is what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The
   session's record names the run it continues as `continues_run_id`.
-- **`factory start` makes a worktree to start a change in by hand.** Not every
-  change starts as a prompt fired at the cloud: `chunk factory start "<prompt>"`
-  makes a run's worktree and branch, `chunk/factory/<description>/<run id>`,
-  from the developer's files as they are (uncommitted changes in the
-  baseline, as for a build), and keeps the run's record. The record carries
-  what the refining run needs to know as data, `brief` (how its implementer is
-  told about the work) and `needs_work`, rather than where the work came from,
-  so the factory does not change when a new way to make a first pass does. Nothing
-  runs on a sidecar. The developer works in the worktree, with Claude Code,
-  another agent or none, then hands the work to the factory with
-  `chunk factory build --continue <run id>`, which picks up whatever they did
-  there, committed or not, as the change to refine against the prompt. Its
-  implementer is told the work so far is the developer's first pass and to
-  finish it into something ready to merge. The continued run says how big the
-  handed-over diff is, measured from the baseline, and refuses to start if
-  nothing was done in the worktree. The factory's input is the diff and the
-  prompt, not where the work was done: `--diff <file>` (or `-` for stdin, with
-  the prompt as an argument) starts the run from a patch made anywhere, applied
-  to the developer's files in the worktree as the work so far. Only the worktree's path goes to
-  stdout, so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the
-  record instead.
+- **`factory start` hands the factory a diff and a prompt.** The factory's
+  input is a diff, a first pass at the change, and the prompt it is for, not
+  where the work was done (`factory.Handoff`). Not every change starts as a
+  prompt fired at the cloud: some developers work out a first pass with an
+  agent first. `chunk factory start "<prompt>"` makes a run's worktree and
+  branch, `chunk/factory/<description>/<run id>`, from the developer's files as
+  they are (uncommitted changes in the baseline, as for a build), and keeps the
+  run's record. The diff is made one of two ways: in the worktree, with Claude
+  Code, another agent or none, or elsewhere and passed with `--diff <file>` (or
+  `-` for stdin, with the prompt as an argument), which applies it to the
+  developer's files in the worktree. Other ways, such as a TUI that iterates
+  with the developer, hand over the same diff and prompt. Nothing runs on a
+  sidecar. `chunk factory build --continue <run id>` hands the diff, whatever
+  changed in the worktree since the baseline, committed or not, to the factory
+  to refine against the prompt. Its implementer is told the diff is the
+  developer's first pass and to finish it into something ready to merge. The
+  continued run says how big the diff is and refuses to start if there is
+  none. The record carries what the refining run needs to know as data,
+  `brief` (how its implementer is told about the work) and `needs_work`,
+  rather than where the work came from, so the factory does not change when a
+  new way to make a first pass does. Only the worktree's path goes to stdout,
+  so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the record
+  instead.
 - **`factory bootstrap` writes a project's first review prompts.** It runs
   Claude Code once, read-only, on a sidecar of its own (pool
   `factory-bootstrap`, destroyed when it ends). The sidecar runs the system image
