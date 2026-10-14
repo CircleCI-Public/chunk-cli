@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -177,4 +178,15 @@ func TestRunKeepsItsLog(t *testing.T) {
 	// The end is the last thing written.
 	lines := strings.Split(strings.TrimSpace(got), "\n")
 	assert.Assert(t, strings.Contains(lines[len(lines)-1], " end "), got)
+}
+
+// Two runs that start in the same second get different IDs: they share a
+// project's data directory, so the same ID would mean the same worktree.
+func TestNewRunIDDiffersForRunsStartedTogether(t *testing.T) {
+	a, b := newRunID(), newRunID()
+
+	assert.Assert(t, a != b, "both runs were %s", a)
+	assert.Assert(t, regexp.MustCompile(`^\d{8}-\d{6}-[0-9a-f]{6}$`).MatchString(a), a)
+	// A branch carries the ID, and continuing a run is asked for by either.
+	assert.Equal(t, ParseRunID("chunk/factory/add-a-status-command/"+a), a)
 }
