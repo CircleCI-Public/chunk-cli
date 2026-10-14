@@ -2,12 +2,14 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -245,4 +247,19 @@ func TestRelayPullRequiresGitWorkspace(t *testing.T) {
 	r := newRelay(t, t.TempDir())
 	err := r.Pull(context.Background(), "impl", t.TempDir())
 	assert.ErrorContains(t, err, "list ignored files")
+}
+
+// A pull or push that does not finish is stopped, not waited on: rsync ends
+// only with its context, so a hung tunnel would otherwise hold the run for as
+// long as it stays hung.
+func TestRelayStopsATransferThatTakesTooLong(t *testing.T) {
+	r := newRelay(t, localRepo(t))
+	r.timeout = time.Nanosecond
+	ctx := context.Background()
+
+	err := r.Pull(ctx, "impl", gitrepo.SetupGitRepo(t, "my-org", "my-repo"))
+	assert.Assert(t, errors.Is(err, context.DeadlineExceeded), "pull: %v", err)
+
+	err = r.Push(ctx, []*sidecar.PoolEntry{{ID: "rev", RepoPath: filepath.Join(t.TempDir(), "my-repo")}})
+	assert.Assert(t, errors.Is(err, context.DeadlineExceeded), "push: %v", err)
 }
