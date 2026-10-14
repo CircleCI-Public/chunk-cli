@@ -437,16 +437,26 @@ chunk
 - **`watch` is organized around runs.** Factory runs are listed at the top of
   the left pane, live ones first, then up to five that ended in the last day;
   sidecars are listed below them, and `↑/↓` moves through both as one list. The
-  first poll selects the newest run. A selected run's pane shows where it stands
-  and where its work is (prompt, worktree, branch, log), then each round: the
-  implementer's turn (duration, cost, diff stat), each validation command, and
-  each review with its findings, followed by the run's latest progress and its
-  sidecars. A factory review is a check: it passes unless it found something
-  worth changing (high or medium severity), so its row shows ✓ with any lesser
+  first poll selects the newest run. A selected run's pane reads top to
+  bottom: the prompt, a status line that says what the run is doing (or, once it
+  ended, how it ended, what blocked it and what it cost), then each round, then
+  where the work is (branch, whether it was committed) and, for a run that
+  stopped with committed work still failing, the `--continue` command that picks
+  it up. The title, status and outcome stay in place while the rounds scroll.
+  One round starts open: the latest, or on a run that ended failing, the one
+  that failed. The others are a line each (how they came out, findings,
+  duration), and `Space` or `Enter` on a round opens or closes it, so any number
+  can be open. An open round shows the implementer's turn (duration, cost, diff
+  stat), then its validation commands
+  and reviews under `validate`. What the run runs on (worktree, setup progress,
+  kept sidecars, the run's sidecars and their resources) is folded under
+  `infra`, which `i` opens. A factory review is a check: it passes unless it
+  found something worth changing (high or medium severity), so its row shows ✓ with any lesser
   findings noted, or ✗ with how many are worth changing. A factory run's own
   sidecars are shown there rather than as rows of their own. `→` moves into
   the pane, `↑/↓` picks a row and `Enter` opens it: a review's live log, a
-  failed check's output, or the implementer's summary. The summary and a
+  failed check's output, or the implementer's summary (on a round, it opens or
+  closes the round). The summary and a
   check's output are word-wrapped to the screen; a log keeps one line per line
   of output. The footer only lists keys that do something for what is
   selected, so `x` is gone once a run has ended. **`q` only detaches**: the run
