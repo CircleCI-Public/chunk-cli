@@ -13,6 +13,7 @@ type keyMap struct {
 	Up, Down    key.Binding
 	Left, Right key.Binding
 	Open        key.Binding
+	Copy        key.Binding
 	Toggle      key.Binding
 	Cancel      key.Binding
 	// Back is Esc: back to the list from the right pane, and quit from the
@@ -33,6 +34,7 @@ func (m Model) keys() keyMap {
 		Left:      key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "back")),
 		Right:     key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "details")),
 		Open:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
+		Copy:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy failure")),
 		Toggle:    key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
 		Cancel:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
 		Back:      key.NewBinding(key.WithKeys("esc")),
@@ -42,6 +44,7 @@ func (m Model) keys() keyMap {
 	k.Left.SetEnabled(right)
 	k.Right.SetEnabled(!right)
 	k.Open.SetEnabled(right)
+	k.Copy.SetEnabled(right && run != nil)
 	k.Toggle.SetEnabled(right && run == nil)
 	k.Cancel.SetEnabled(run != nil && !run.s.State.Finished())
 	if run == nil {
@@ -55,7 +58,7 @@ func (m Model) keys() keyMap {
 
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Right, k.Open, k.Toggle, k.Cancel, k.Left, k.Quit}
+	return []key.Binding{k.Up, k.Right, k.Open, k.Copy, k.Toggle, k.Cancel, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

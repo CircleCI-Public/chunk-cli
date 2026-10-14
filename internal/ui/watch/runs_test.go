@@ -483,3 +483,125 @@ func TestFactoryReviewRowsSayWhetherTheReviewPassed(t *testing.T) {
 }
 
 func stripANSI(s string) string { return regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(s, "") }
+
+func TestCheckRowShowsFailureTail(t *testing.T) {
+	st := newWatchStyles(false)
+	row := checkRow(st, chunkd.RoundCheck{
+		Name:   "test",
+		Status: chunkd.CheckFailed,
+		Output: "ok  pkg/a\n\n--- FAIL: TestX\n    x_test.go:9: want 3, got 4\nFAIL\n",
+	})
+	assert.Equal(t, len(row.extra), failTailLines)
+	assert.Assert(t, strings.Contains(row.extra[len(row.extra)-1], "FAIL"))
+
+	passed := checkRow(st, chunkd.RoundCheck{Name: "lint", Status: chunkd.CheckPassed, Output: "noise"})
+	assert.Equal(t, len(passed.extra), 0)
+
+	// Raw output's colour and progress redraws are resolved, not drawn: a bare
+	// \r would overwrite the left pane.
+	assert.DeepEqual(t, tailLines("fetching  10%\rfetching 100%\n\x1b[31mFAIL\x1b[0m pkg\r\n", 3),
+		[]string{"fetching 100%", "FAIL pkg"})
+}
+
+func TestItemFailureReport(t *testing.T) {
+	s := chunkd.Session{Rounds: []chunkd.Round{{
+		Number:    2,
+		Implement: &chunkd.RoundImplement{State: chunkd.ImplementFailed, Error: "claude exited 1"},
+		Checks: []chunkd.RoundCheck{
+			{Name: "lint", Status: chunkd.CheckPassed, Output: "noise"},
+			{Name: "test", Status: chunkd.CheckFailed, Output: "--- FAIL: TestX\nFAIL\n"},
+			{Name: "build", Status: chunkd.CheckErrored, Error: "sidecar unreachable"},
+		},
+		Reviews: []chunkd.ReviewPrompt{
+			{Name: "bugs", State: chunkd.PromptDone, Status: chunkd.CheckPassed},
+			{Name: "style", State: chunkd.PromptDone, Status: chunkd.CheckFailed, Worth: 2},
+			{Name: "tests", State: chunkd.PromptFailed, Error: "claude timed out"},
+		},
+	}}}
+	items := runItems(s)
+	assert.Equal(t, len(items), 7)
+
+	for i, want := range []string{
+		"Round 2 implementer failed: claude exited 1",
+		"",
+		"Round 2 check: test failed\n\n```\n--- FAIL: TestX\nFAIL\n```",
+		"Round 2 check: build failed: sidecar unreachable",
+		"",
+		"Round 2 review: style failed: 2 findings worth changing",
+		"Round 2 review: tests failed: claude timed out",
+	} {
+		assert.Equal(t, itemFailureReport(s, items[i]), want, "item %d", i)
+	}
+
+	s.Rounds[0].Implement.State = chunkd.ImplementApplied
+	assert.Equal(t, itemFailureReport(s, items[0]), "")
+}
+
+// c copies the selected row's failure, and on a row that passed, the latest
+// round's failures: an earlier round's were what the next one set out to fix.
+func TestCopyFailureCopiesTheSelectedOrLatestRoundsFailures(t *testing.T) {
+	clipboard := func(cmd tea.Cmd) string {
+		t.Helper()
+		assert.Assert(t, cmd != nil, "nothing was copied")
+		return fmt.Sprint(cmd())
+	}
+
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Rounds = []chunkd.Round{
+		{Number: 1, Checks: []chunkd.RoundCheck{{Name: "test", Status: chunkd.CheckFailed, Output: "--- FAIL: TestOld"}}},
+		{Number: 2, Checks: []chunkd.RoundCheck{
+			{Name: "test", Status: chunkd.CheckFailed, Output: "--- FAIL: TestNew"},
+			{Name: "lint", Status: chunkd.CheckPassed},
+		}},
+	}
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+	assert.Assert(t, strings.Contains(m.renderFooter(m.styles()), "copy failure"))
+
+	m, cmd := press(m, 'c')
+	got := clipboard(cmd)
+	assert.Assert(t, strings.HasPrefix(got, "chunk factory run (repo · chunk/factory/abc · 0123456)\n"), got)
+	assert.Assert(t, strings.Contains(got, "TestOld") && !strings.Contains(got, "TestNew"), got)
+	assert.Equal(t, m.runNote, "copied failure to clipboard")
+
+	m, cmd = press(m, tea.KeyDown, tea.KeyDown, 'c')
+	got = clipboard(cmd)
+	assert.Assert(t, strings.Contains(got, "Round 2 check: test failed") && !strings.Contains(got, "TestOld"), got)
+
+	// Once the latest round passes, nothing is left to copy.
+	m.sessions[0].s.Rounds[1].Checks[0].Status = chunkd.CheckPassed
+	m.sessions[0].s.State = chunkd.SessionDone
+	m, cmd = press(m, 'c')
+	assert.Assert(t, cmd == nil)
+	assert.Equal(t, m.runNote, "nothing failed in this run")
+
+	// A run that failed before any round copies its error.
+	m.sessions[0].s.Rounds = nil
+	m.sessions[0].s.State, m.sessions[0].s.Error = chunkd.SessionFailed, "no sidecar image"
+	m.runItem = 0
+	_, cmd = press(m, 'c')
+	got = clipboard(cmd)
+	assert.Assert(t, strings.HasPrefix(got, "chunk factory run failed ("), got)
+	assert.Assert(t, strings.HasSuffix(got, "Error: no sidecar image"), got)
+}
+
+// A failed check's tail sits under its row, so selecting it scrolls far enough
+// to show the tail as well as the row.
+func TestSelectedFailedCheckKeepsItsTailInView(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	var checks []chunkd.RoundCheck
+	for i := range 12 {
+		checks = append(checks, chunkd.RoundCheck{Name: fmt.Sprintf("check-%d", i), Status: chunkd.CheckPassed})
+	}
+	checks = append(checks, chunkd.RoundCheck{Name: "test", Status: chunkd.CheckFailed, Output: "one\ntwo\nlast tail line"})
+	r.s.Rounds = []chunkd.Round{{Number: 1, Checks: checks}}
+	m := sessModel(r)
+	m.selRun = "abc"
+	m.height = 16
+	m, _ = press(m, tea.KeyRight)
+	m.runItem = len(checks) - 1
+
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "last tail line"), out)
+}

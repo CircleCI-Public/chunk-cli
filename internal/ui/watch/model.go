@@ -326,6 +326,8 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return *opened, cmd
 		}
 		m = m.toggleSelectedInvoc()
+	case key.Matches(msg, k.Copy):
+		return m.copyRunFailure(run)
 	case key.Matches(msg, k.Toggle):
 		m = m.toggleSelectedInvoc()
 	}
