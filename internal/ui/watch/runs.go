@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -305,8 +306,9 @@ func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cm
 }
 
 // copyRunFailure puts a report of the selected row's failure on the clipboard,
-// ready to paste to an agent. A row that did not fail falls back to every
-// failure in the run. The copy travels as an OSC 52 escape sequence, so it
+// ready to paste to an agent. A row that did not fail falls back to the
+// failures in the latest round, since an earlier round's were what the next
+// one set out to fix. The copy travels as an OSC 52 escape sequence, so it
 // reaches the user's clipboard over SSH, though a terminal that ignores OSC 52
 // drops it silently.
 func (m Model) copyRunFailure(run *sessionInfo) (tea.Model, tea.Cmd) {
@@ -322,6 +324,9 @@ func (m Model) copyRunFailure(run *sessionInfo) (tea.Model, tea.Cmd) {
 	}
 	if len(parts) == 0 {
 		for _, it := range items {
+			if it.round != len(run.s.Rounds)-1 {
+				continue
+			}
 			if r := itemFailureReport(run.s, it); r != "" {
 				parts = append(parts, r)
 			}
@@ -334,7 +339,10 @@ func (m Model) copyRunFailure(run *sessionInfo) (tea.Model, tea.Cmd) {
 		m.runNote = "nothing failed in this run"
 		return m, nil
 	}
-	head := fmt.Sprintf("chunk factory run failed (%s)\n", sessionTitle(*run))
+	head := fmt.Sprintf("chunk factory run (%s)\n", sessionTitle(*run))
+	if run.s.State == chunkd.SessionFailed {
+		head = fmt.Sprintf("chunk factory run failed (%s)\n", sessionTitle(*run))
+	}
 	m.runNote = "copied failure to clipboard"
 	return m, tea.SetClipboard(head + "\n" + strings.Join(parts, "\n\n"))
 }
@@ -575,9 +583,9 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 	item := 0
 	for ri, r := range s.Rounds {
 		body = append(body, "")
-		rows, at := m.renderRunRound(st, r, item, m.runItem, focused)
+		rows, at, end := m.renderRunRound(st, r, item, m.runItem, focused)
 		if at >= 0 {
-			selStart, selEnd = len(body)+at, len(body)+at+1
+			selStart, selEnd = len(body)+at, len(body)+end
 		}
 		body = append(body, rows...)
 		item += len(runItems(chunkd.Session{Rounds: s.Rounds[ri : ri+1]}))
@@ -615,8 +623,9 @@ type runRow struct {
 
 // renderRunRound draws one round's header and rows. first is the run-wide
 // index of the round's first row; at is the line within the returned rows of
-// the selected one, -1 when it is in another round.
-func (m Model) renderRunRound(st watchStyles, r chunkd.Round, first, sel int, focused bool) (lines []string, at int) {
+// the selected one, -1 when it is in another round, and end is just past the
+// lines under it, so scrolling keeps them in view too.
+func (m Model) renderRunRound(st watchStyles, r chunkd.Round, first, sel int, focused bool) (lines []string, at, end int) {
 	head := fmt.Sprintf("  Round %d  %s", r.Number, roundStateText(st, r))
 	if len(r.Reviews) > 0 && (r.Findings > 0 || r.State == chunkd.RoundDone) {
 		head += st.dim(fmt.Sprintf("  ·  %d finding%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
@@ -628,11 +637,11 @@ func (m Model) renderRunRound(st watchStyles, r chunkd.Round, first, sel int, fo
 	for _, row := range rows {
 		width = max(width, len(row.name))
 	}
-	at = -1
+	at, end = -1, -1
 	for i, row := range rows {
 		prefix := "    "
 		if first+i == sel {
-			at = len(lines)
+			at, end = len(lines), len(lines)+1+len(row.extra)
 			if focused {
 				prefix = "  " + st.success("›") + " "
 			}
@@ -647,7 +656,7 @@ func (m Model) renderRunRound(st watchStyles, r chunkd.Round, first, sel int, fo
 	if r.Note != "" {
 		lines = append(lines, "      "+st.vdim(r.Note))
 	}
-	return lines, at
+	return lines, at, end
 }
 
 // roundRows builds a round's rows in runItems order.
@@ -722,11 +731,14 @@ func checkRow(st watchStyles, c chunkd.RoundCheck) runRow {
 // shows under its row, enough to see why it failed without opening the output.
 const failTailLines = 3
 
-// tailLines returns the last n non-blank lines of output, trimmed.
+// tailLines returns the last n non-blank lines of output as plain text. The
+// output is raw, so colour is stripped and carriage-return rewrites resolved,
+// as the output pane does: a bare \r inside the split pane would overwrite the
+// left pane from the screen's first column.
 func tailLines(output string, n int) []string {
 	var lines []string
 	for _, l := range strings.Split(output, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
+		if l = strings.TrimSpace(resolveCR(ansi.Strip(l))); l != "" {
 			lines = append(lines, l)
 		}
 	}
