@@ -43,13 +43,28 @@ func TestContinuingAStartedRunPicksUpTheWorkDoneByHand(t *testing.T) {
 	assert.NilError(t, err)
 	writeFile(t, rec.Worktree, "flag.go", "package main\n")
 
-	wt, err := openWorktree(ctx, root, rec, "run-2")
+	c := &Continuation{From: rec}
+	wt, stat, err := c.handOff(ctx, root, "run-2")
 	assert.NilError(t, err)
 
 	assert.Equal(t, wt.Baseline, rec.Baseline)
-	stat, err := wt.Stat(ctx)
-	assert.NilError(t, err)
 	assert.Equal(t, stat, "1 file changed, 1 insertion(+)")
+}
+
+// The factory refines a diff, so a started run continued before anything was
+// done in its worktree has nothing to hand over.
+func TestContinuingAStartedRunWithNoWorkIsRefused(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	ctx := context.Background()
+	root := newProject(t)
+	rec, err := Start(ctx, root, "add a flag")
+	assert.NilError(t, err)
+
+	c := &Continuation{From: rec}
+	_, _, err = c.handOff(ctx, root, "run-2")
+
+	assert.ErrorIs(t, err, ErrNothingToRefine)
 }
 
 func TestContinuationOfAStartedRunFinishesTheDevelopersWork(t *testing.T) {

@@ -386,7 +386,9 @@ chunk
   `chunk factory build --continue <run id>`, which picks up whatever they did
   there, committed or not, as the change to refine against the prompt. Its
   implementer is told the work so far is the developer's first pass and to
-  finish it into something ready to merge. Only the worktree's path goes to
+  finish it into something ready to merge. The continued run says how big the
+  handed-over diff is, measured from the baseline, and refuses to start if
+  nothing was done in the worktree. Only the worktree's path goes to
   stdout, so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the
   record instead.
 - **`factory bootstrap` writes a project's first review prompts.** It runs

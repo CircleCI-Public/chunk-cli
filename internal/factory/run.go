@@ -157,11 +157,12 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 			return rep, fmt.Errorf("create the run's worktree: %w", err)
 		}
 	} else {
-		status(iostream.LevelInfo, fmt.Sprintf("Continuing run %s on %s", cont.From.RunID, cont.From.Branch))
-		wt, err = openWorktree(ctx, opts.Root, cont.From, rep.RunID)
+		var stat string
+		wt, stat, err = cont.handOff(ctx, opts.Root, rep.RunID)
 		if err != nil {
-			return rep, fmt.Errorf("open the worktree of run %s: %w", cont.From.RunID, err)
+			return rep, err
 		}
+		status(iostream.LevelInfo, fmt.Sprintf("Continuing run %s on %s: %s", cont.From.RunID, cont.From.Branch, describeWork(stat)))
 	}
 	rep.Worktree = wt
 	if opts.OnStart != nil {
@@ -293,6 +294,14 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		rep.Stat, rep.StatErr = workStat(ctx, wt)
 	}
 	return rep, err
+}
+
+// describeWork is how a run's work is shown, from its stat.
+func describeWork(stat string) string {
+	if stat == "" {
+		return "no changes yet"
+	}
+	return stat
 }
 
 // newRunID names a run for when it starts.
