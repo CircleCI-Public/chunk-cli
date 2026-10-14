@@ -3,6 +3,7 @@ package commandutil
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -41,8 +42,9 @@ func NameWidth(commands []config.Command) int {
 // ExpandCommand replaces template variables in command before execution.
 // {{CHANGED_PACKAGES}} expands to the space-separated list of Go package
 // paths whose source files appear in `git diff HEAD`, leaving out packages
-// the change deleted, since go test fails on a directory that is gone.
-// Expands to "./..." when no .go files changed.
+// the change deleted, since go test fails on a directory that is gone, and
+// packages in a nested Go module, which a command run from workDir cannot name.
+// Expands to "./..." when no such packages changed.
 func ExpandCommand(workDir, command string) string {
 	return ExpandCommandCtx(context.Background(), workDir, command)
 }
@@ -70,6 +72,9 @@ func ExpandCommandCtx(ctx context.Context, workDir, command string) string {
 			continue
 		}
 		seen[pkg] = true
+		if inNestedModule(workDir, dir) {
+			continue
+		}
 		if goFiles, _ := filepath.Glob(filepath.Join(workDir, dir, "*.go")); len(goFiles) > 0 {
 			pkgs = append(pkgs, pkg)
 		}
@@ -80,4 +85,16 @@ func ExpandCommandCtx(ctx context.Context, workDir, command string) string {
 		expanded = strings.Join(pkgs, " ")
 	}
 	return strings.ReplaceAll(command, "{{CHANGED_PACKAGES}}", expanded)
+}
+
+// inNestedModule reports whether dir, relative to workDir, belongs to a Go
+// module of its own: a go.mod sits between it and workDir. go test run from
+// workDir fails on such a package, as it is outside the main module.
+func inNestedModule(workDir, dir string) bool {
+	for d := dir; d != "." && d != string(filepath.Separator); d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(workDir, d, "go.mod")); err == nil {
+			return true
+		}
+	}
+	return false
 }
