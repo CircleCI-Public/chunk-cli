@@ -506,20 +506,22 @@ func logSuffix(log string) string {
 // a prompts directory that is ignored, or partly so, is present here and absent
 // there. want is the number of prompts loaded locally.
 func checkPromptsSynced(ctx context.Context, workDir, dir string, want int) error {
-	out, err := (gitexec.Runner{Dir: workDir}).Output(ctx, "ls-files", "--cached", "--others", "--exclude-standard", "--", dir)
+	runner := gitexec.Runner{Dir: workDir}
+	out, err := runner.Output(ctx, "ls-files", "--cached", "--others", "--exclude-standard", "--", dir)
 	if err != nil {
 		// Not a git checkout the sync could use either; it reports that itself.
 		return nil
 	}
-	got := 0
+	var candidates []string
 	for _, f := range strings.Split(string(out), "\n") {
 		if f == "" || filepath.Dir(f) != filepath.Clean(relToWork(workDir, dir)) {
 			continue
 		}
 		if review.IsPromptFile(f) {
-			got++
+			candidates = append(candidates, f)
 		}
 	}
+	got := len(candidates) - ignoredCount(ctx, runner, candidates)
 	if got >= want {
 		return nil
 	}
@@ -528,6 +530,28 @@ func checkPromptsSynced(ctx context.Context, workDir, dir string, want int) erro
 		withSuggestion(fmt.Sprintf("Only files git tracks or could track are synced, and %s has ignored prompts. Stop ignoring them, or run without --detach.", dir)).
 		withExitCode(ExitBadArgs).
 		withoutDetail()
+}
+
+// ignoredCount reports how many of files are matched by .gitignore. ls-files
+// --exclude-standard only filters untracked files, so a tracked prompt that
+// gitignore also matches is counted as present by it but is still dropped by
+// the rsync filter, so it needs this separate check.
+func ignoredCount(ctx context.Context, runner gitexec.Runner, files []string) int {
+	if len(files) == 0 {
+		return 0
+	}
+	args := append([]string{"check-ignore", "--no-index", "--"}, files...)
+	out, err := runner.Output(ctx, args...)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if f != "" {
+			n++
+		}
+	}
+	return n
 }
 
 func relToWork(workDir, dir string) string {

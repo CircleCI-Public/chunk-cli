@@ -179,13 +179,15 @@ func TestCheckPromptsSynced(t *testing.T) {
 		assert.NilError(t, err, string(out))
 	}
 	run("init", "-q")
-	assert.NilError(t, os.WriteFile(filepath.Join(work, ".gitignore"), []byte("ignored/\n"), 0o644))
-	for _, p := range []string{"prompts/a.md", "ignored/b.md"} {
+	assert.NilError(t, os.WriteFile(filepath.Join(work, ".gitignore"), []byte("ignored/\ntracked-ignored/c.md\n"), 0o644))
+	for _, p := range []string{"prompts/a.md", "ignored/b.md", "tracked-ignored/c.md"} {
 		assert.NilError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(p)), 0o755))
 		assert.NilError(t, os.WriteFile(filepath.Join(work, p), []byte("review"), 0o644))
 	}
+	run("add", "-f", "tracked-ignored/c.md")
 
 	ctx := context.Background()
 	assert.NilError(t, checkPromptsSynced(ctx, work, filepath.Join(work, "prompts"), 1))
 	assert.Assert(t, checkPromptsSynced(ctx, work, filepath.Join(work, "ignored"), 1) != nil)
+	assert.Assert(t, checkPromptsSynced(ctx, work, filepath.Join(work, "tracked-ignored"), 1) != nil)
 }
