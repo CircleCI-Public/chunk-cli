@@ -468,7 +468,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// to index 0, the most recently active sidecar.
 		m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
 		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-		m.hasSpinner = anyRunning(msg.sidecars) || anySessionLive(m.sessions)
+		m.hasSpinner = anyRunning(msg.sidecars) || anySessionLive(m.allRuns)
 		m = m.adjustLeftScroll()
 		next := tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 		if m.hasSpinner && !m.spinning {
@@ -703,7 +703,7 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 	}
 	add("")
 
-	if len(m.sidecars) == 0 && len(m.sessions) > 0 {
+	if len(m.sidecars) == 0 && len(m.allRuns) > 0 {
 		add(st.muted("no other sidecars"))
 		return lines, 0
 	}

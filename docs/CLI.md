@@ -465,8 +465,8 @@ chunk
   sidecars are listed below them, and `↑/↓` moves through both as one list. The
   first poll selects the newest run. `/` searches the run list: type to narrow it
   to the runs whose title, project, branch or status contain every word typed
-  (`Enter` keeps the filter, `Esc` drops it, and `Esc` again quits). A selected run's pane reads top to
-  bottom: the prompt, a status line that says what the run is doing (or, once it
+  (`Enter` keeps the filter, `Esc` drops it, and `Esc` again quits). A selected
+  run's pane reads top to bottom: the prompt, a status line that says what the run is doing (or, once it
   ended, how it ended, what blocked it and what it cost), then each round, then
   where the work is (branch, whether it was committed) and, for a run that
   stopped with committed work still failing, the `--continue` command that picks

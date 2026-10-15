@@ -611,6 +611,13 @@ func TestNextStepLineSaysWhatToDo(t *testing.T) {
 		ui.IconOK+" All checks passed. The change is ready for you to look at.")
 	assert.Equal(t, say(chunkd.SessionDone, chunkd.Round{State: chunkd.RoundDone, Checks: []chunkd.RoundCheck{{Name: "lint", Status: chunkd.CheckFailed}}}),
 		ui.IconFail+" Still failing after the last round: lint")
+	// A run that made no change has nothing for the person to look at.
+	noChange := chunkd.Session{State: chunkd.SessionDone, Factory: &chunkd.FactoryRun{Result: chunkd.ResultNoChange}, Rounds: []chunkd.Round{{State: chunkd.RoundDone}}}
+	assert.Equal(t, stripANSI(nextStepLine(st, noChange)), "The implementer made no change, so there is nothing to look at.")
+	// A loop that failed without a failing row in its last round is not a pass.
+	failedLoop := chunkd.Session{State: chunkd.SessionDone, Factory: &chunkd.FactoryRun{}, Rounds: []chunkd.Round{{State: chunkd.RoundDone}},
+		Stages: []chunkd.Stage{{State: chunkd.StageFailed}}}
+	assert.Equal(t, stripANSI(nextStepLine(st, failedLoop)), ui.IconFail+" The run ended without its checks passing.")
 	assert.Equal(t, nextStepLine(st, chunkd.Session{}), "")
 }
 
@@ -944,4 +951,16 @@ func TestPollKeepsTheRunFilter(t *testing.T) {
 	assert.Equal(t, len(m.sessions), 1)
 	assert.Equal(t, m.selRun, "bbb")
 	assert.Equal(t, len(filterRuns(all, "CACHE flaky")), 1, "every word must match, ignoring case")
+}
+
+// A filter narrows the list, not what the header and sidecar pane know: a
+// hidden run still counts as running, and its sidecars are not loose ones.
+func TestFilterDoesNotHideRunsFromTheHeader(t *testing.T) {
+	live := liveSession("live", chunkd.SessionRunning, time.Now())
+	m := sessModel(live)
+	m = m.setQuery("nothing matches this")
+	assert.Equal(t, len(m.sessions), 0)
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "1 running"), "a hidden live run is still in flight:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "no other sidecars"), out)
 }

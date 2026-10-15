@@ -753,7 +753,7 @@ func feedText(st watchStyles, l chunkd.FeedLine) string {
 // visible whatever is selected.
 func (m Model) runTag(st watchStyles) string {
 	running := 0
-	for _, s := range m.sessions {
+	for _, s := range m.allRuns {
 		if s.s.State == chunkd.SessionRunning {
 			running++
 		}

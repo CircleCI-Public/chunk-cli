@@ -546,8 +546,14 @@ func nextStepLine(st watchStyles, s chunkd.Session) string {
 	case chunkd.SessionCancelled:
 		return st.dim("Cancelled.")
 	case chunkd.SessionDone:
+		if s.Factory.Result == chunkd.ResultNoChange {
+			return st.dim("The implementer made no change, so there is nothing to look at.")
+		}
 		if names := failedNames(last); len(names) > 0 {
 			return st.err(fmt.Sprintf("%s Still failing after the last round: %s", ui.IconFail, strings.Join(names, ", ")))
+		}
+		if loopFailed(s) {
+			return st.err(ui.IconFail + " The run ended without its checks passing.")
 		}
 		return st.success(ui.IconOK + " All checks passed. The change is ready for you to look at.")
 	case chunkd.SessionRunning:
