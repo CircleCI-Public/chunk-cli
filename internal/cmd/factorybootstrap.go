@@ -101,24 +101,29 @@ little for Claude to read yet.`,
 			}
 			// Checked before any sidecar boots, so a project that has prompts
 			// costs nothing.
-			promptsErr := factory.CheckPromptsDir(dir)
-			if promptsErr != nil && (output != "" || cmd.Flags().Changed("template")) {
-				return promptsExistError(dir, promptsErr)
+			promptsExist, err := checkBootstrapPrompts(workDir, dir, output != "" || cmd.Flags().Changed("template"))
+			if err != nil {
+				return err
 			}
 			if cmd.Flags().Changed("template") {
 				return writeTemplate(streams, workDir, dir, template, jsonOut)
 			}
 
-			cfg, err := config.LoadProjectConfig(workDir)
-			switch {
-			case errors.Is(err, os.ErrNotExist):
-				cfg = nil
-			case err != nil:
-				return &userError{msg: "Could not read .chunk/config.json.", suggestion: "Fix it, or remove it to have bootstrap write a new one.", blocked: true, err: err}
+			cfg, err := loadBootstrapConfig(workDir)
+			if err != nil {
+				return err
 			}
-			plan := planBootstrap(cfg, promptsErr, skipSidecar, noHistory, relPath(workDir, dir))
+			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
+			plan := planBootstrap(planInputs{
+				Cfg:          cfg,
+				PromptsExist: promptsExist,
+				PromptsDir:   relPath(workDir, dir),
+				SkipSidecar:  skipSidecar,
+				NoHistory:    noHistory,
+				GitHubToken:  rc.GitHubToken != "",
+			})
 			if plan.empty() {
-				return promptsExistError(dir, promptsErr)
+				return promptsExistError(dir, factory.ErrPromptsExist)
 			}
 			// Checked before any prompt or sidecar, so a project without a
 			// GitHub origin costs nothing.
@@ -130,15 +135,12 @@ little for Claude to read yet.`,
 			}
 			printBootstrapPlan(streams, plan, relPath(workDir, dir))
 
-			var rc config.ResolvedConfig
-			var cred claudecode.Credential
-			var credSource string
-			if plan.Prompts {
-				if rc, cred, credSource, err = claudeCredential(ctx, cmd, streams, jsonOut); err != nil {
-					return err
-				}
-			} else {
-				rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
+			// Asked for even when the prompts exist: chunk factory build runs
+			// Claude on every change, so a run that cannot is better found out
+			// now than after a sidecar image has been set up for it.
+			rc, cred, credSource, err := claudeCredential(ctx, cmd, streams, jsonOut)
+			if err != nil {
+				return err
 			}
 			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
@@ -287,6 +289,36 @@ func printPromptPaths(streams iostream.Streams, workDir string, paths []string) 
 	for _, p := range paths {
 		streams.Println("  " + relPath(workDir, p))
 	}
+}
+
+// checkBootstrapPrompts reports whether dir has review prompts. When the run
+// was asked to write to dir, with --output or --template, prompts there are an
+// error rather than a part done. A directory that cannot be read is an error
+// either way, not one taken to have prompts.
+func checkBootstrapPrompts(workDir, dir string, asked bool) (exist bool, err error) {
+	err = factory.CheckPromptsDir(dir)
+	switch {
+	case err == nil:
+		return false, nil
+	case !errors.Is(err, factory.ErrPromptsExist):
+		return false, &userError{msg: fmt.Sprintf("Could not read %s.", relPath(workDir, dir)), suggestion: suggestionCheckPerms, err: err}
+	case asked:
+		return true, promptsExistError(dir, err)
+	}
+	return true, nil
+}
+
+// loadBootstrapConfig loads the project's config, or nil when it has none
+// yet, which bootstrap writes.
+func loadBootstrapConfig(workDir string) (*config.ProjectConfig, error) {
+	cfg, err := config.LoadProjectConfig(workDir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, &userError{msg: "Could not read .chunk/config.json.", suggestion: "Fix it, or remove it to have bootstrap write a new one.", blocked: true, err: err}
+	}
+	return cfg, nil
 }
 
 // printBootstrapPrompts lists the review prompts a run wrote, if it wrote any,

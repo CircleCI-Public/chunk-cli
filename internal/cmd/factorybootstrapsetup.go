@@ -43,24 +43,46 @@ type bootstrapPlan struct {
 	skipped []string
 }
 
-// planBootstrap works out what a bootstrap run does. cfg is nil when the
-// project has no config yet. promptsErr is from checking the prompts
-// directory, which is non-nil when it has prompts already.
-func planBootstrap(cfg *config.ProjectConfig, promptsErr error, skipSidecar, noHistory bool, promptsDir string) bootstrapPlan {
-	p := bootstrapPlan{Config: cfg == nil, Prompts: promptsErr == nil, History: !noHistory}
+// planInputs is what planBootstrap decides from. All of it is found locally,
+// so the plan is shown before any prompt for a login or any sidecar.
+type planInputs struct {
+	// Cfg is the project's config, nil when it has none yet.
+	Cfg *config.ProjectConfig
+	// PromptsExist is whether the prompts directory has review prompts.
+	PromptsExist bool
+	// PromptsDir names the prompts directory in the plan.
+	PromptsDir  string
+	SkipSidecar bool
+	NoHistory   bool
+	// GitHubToken is whether a GitHub token is set, without which there is no
+	// review history to fetch.
+	GitHubToken bool
+}
+
+// planBootstrap works out what a bootstrap run does.
+func planBootstrap(in planInputs) bootstrapPlan {
+	p := bootstrapPlan{Config: in.Cfg == nil, Prompts: !in.PromptsExist}
 	if !p.Config {
 		p.skipped = append(p.skipped, ".chunk/config.json already exists")
 	}
 	switch {
-	case skipSidecar:
+	case in.SkipSidecar:
 		p.skipped = append(p.skipped, "sidecar image: --skip-sidecar")
-	case cfg.HasSidecarImage():
-		p.skipped = append(p.skipped, "sidecar image: validation.sidecarImage is "+cfg.Validation.SidecarImage)
+	case in.Cfg.HasSidecarImage():
+		p.skipped = append(p.skipped, "sidecar image: validation.sidecarImage is "+in.Cfg.Validation.SidecarImage)
 	default:
 		p.Sidecar = true
 	}
-	if !p.Prompts {
-		p.skipped = append(p.skipped, promptsDir+" already has review prompts")
+	switch {
+	case !p.Prompts:
+		p.skipped = append(p.skipped, in.PromptsDir+" already has review prompts")
+	case in.NoHistory:
+	case !in.GitHubToken:
+		// Said here rather than when the history would be fetched, so the
+		// plan does not promise what the run then leaves out.
+		p.skipped = append(p.skipped, "the team's review comments: no GitHub token. Run 'chunk auth set github' to include them, or pass --no-history.")
+	default:
+		p.History = true
 	}
 	return p
 }

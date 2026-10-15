@@ -467,7 +467,12 @@ chunk
   written, and the command then fails with it, so a rerun has only the image
   left to do.
   Existing review prompts in `.chunk/reviews` are left out of the run; in an
-  `--output` directory they are an error. The review prompts part runs
+  `--output` directory they are an error. A prompts directory that cannot be read is
+  an error rather than taken for one with prompts. The plan is worked out from
+  local files and flags alone, so it is shown before any login prompt: without
+  a GitHub token it says up front that the team's review comments are left out.
+  A Claude credential is required even when the prompts exist, since
+  `chunk factory build` runs Claude on every change. The review prompts part runs
   Claude Code once, read-only, on a sidecar of its own (pool
   `factory-bootstrap`, destroyed when it ends). The sidecar runs the system image
   `cimg-base:2026.09-claude`, not the project's `validation.sidecarImage`:

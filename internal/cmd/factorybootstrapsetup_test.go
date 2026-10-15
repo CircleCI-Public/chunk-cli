@@ -6,61 +6,69 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 )
 
 func TestPlanBootstrap(t *testing.T) {
 	withImage := &config.ProjectConfig{Validation: &config.ValidationConfig{SidecarImage: "snap-1"}}
+	const noToken = "the team's review comments: no GitHub token. Run 'chunk auth set github' to include them, or pass --no-history."
 	tests := []struct {
 		name        string
-		cfg         *config.ProjectConfig
-		promptsErr  error
-		skipSidecar bool
+		in          planInputs
 		want        bootstrapPlan
 		wantSkipped []string
 		empty       bool
 	}{
 		{
 			name: "a new project gets everything",
+			in:   planInputs{GitHubToken: true},
 			want: bootstrapPlan{Config: true, Sidecar: true, Prompts: true, History: true},
 		},
 		{
 			name:        "an existing config is kept",
-			cfg:         &config.ProjectConfig{},
+			in:          planInputs{Cfg: &config.ProjectConfig{}, GitHubToken: true},
 			want:        bootstrapPlan{Sidecar: true, Prompts: true, History: true},
 			wantSkipped: []string{".chunk/config.json already exists"},
 		},
 		{
 			name:        "a recorded image is kept",
-			cfg:         withImage,
+			in:          planInputs{Cfg: withImage, GitHubToken: true},
 			want:        bootstrapPlan{Prompts: true, History: true},
 			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: validation.sidecarImage is snap-1"},
 		},
 		{
 			name:        "--skip-sidecar leaves the image out",
-			skipSidecar: true,
+			in:          planInputs{SkipSidecar: true, GitHubToken: true},
 			want:        bootstrapPlan{Config: true, Prompts: true, History: true},
 			wantSkipped: []string{"sidecar image: --skip-sidecar"},
 		},
 		{
-			name:        "existing prompts are kept",
-			cfg:         &config.ProjectConfig{},
-			promptsErr:  factory.ErrPromptsExist,
-			want:        bootstrapPlan{Sidecar: true, History: true},
+			name:        "without a GitHub token the plan says the comments are left out",
+			in:          planInputs{},
+			want:        bootstrapPlan{Config: true, Sidecar: true, Prompts: true},
+			wantSkipped: []string{noToken},
+		},
+		{
+			name: "--no-history needs no token and says nothing of it",
+			in:   planInputs{NoHistory: true},
+			want: bootstrapPlan{Config: true, Sidecar: true, Prompts: true},
+		},
+		{
+			name:        "existing prompts are kept, and need no history",
+			in:          planInputs{Cfg: &config.ProjectConfig{}, PromptsExist: true, PromptsDir: ".chunk/reviews"},
+			want:        bootstrapPlan{Sidecar: true},
 			wantSkipped: []string{".chunk/config.json already exists", ".chunk/reviews already has review prompts"},
 		},
 		{
 			name:        "a project set up already has nothing to do",
-			cfg:         withImage,
-			promptsErr:  factory.ErrPromptsExist,
-			want:        bootstrapPlan{History: true},
+			in:          planInputs{Cfg: withImage, PromptsExist: true, PromptsDir: ".chunk/reviews", GitHubToken: true},
+			want:        bootstrapPlan{},
 			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: validation.sidecarImage is snap-1", ".chunk/reviews already has review prompts"},
 			empty:       true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := planBootstrap(tt.cfg, tt.promptsErr, tt.skipSidecar, false, ".chunk/reviews")
+			got := planBootstrap(tt.in)
 			assert.DeepEqual(t, got.skipped, tt.wantSkipped)
 			assert.Equal(t, got.Config, tt.want.Config)
 			assert.Equal(t, got.Sidecar, tt.want.Sidecar)

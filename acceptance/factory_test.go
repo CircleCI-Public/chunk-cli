@@ -316,6 +316,10 @@ func TestFactoryBootstrapGoesOnWithoutAGitHubToken(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stderr, "chunk auth set github"), "stderr: %s", result.Stderr)
+	// The plan says so up front, rather than promising comments it then
+	// leaves out.
+	assert.Assert(t, strings.Contains(result.Stderr, "Write review prompts to .chunk/reviews from the code\n"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Skipping: the team's review comments: no GitHub token"), "stderr: %s", result.Stderr)
 	prompts := bootstrapPrompts(t, cci)
 	assert.Equal(t, len(prompts), 1)
 	assert.Assert(t, !strings.Contains(prompts[0], "review-history.md"), prompts[0])
@@ -753,4 +757,36 @@ func TestFactoryBootstrapExplainsATakenSnapshotName(t *testing.T) {
 	assert.Assert(t, !hasValidation, "no image is recorded")
 	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "DELETE", "/api/v3/sidecar/instances/")), 1,
 		"the sidecar is deleted")
+}
+
+// chunk factory build runs Claude on every change, so a missing Claude
+// credential is found out before a sidecar image is set up for it, even when
+// the review prompts need no Claude.
+func TestFactoryBootstrapNeedsAClaudeCredentialWhenThePromptsExist(t *testing.T) {
+	env, cci, workDir := sidecarImageProject(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "No Claude credential found"), "stderr: %s", result.Stderr)
+	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+}
+
+// A prompts directory that cannot be read is reported, not taken for one that
+// has prompts and skipped.
+func TestFactoryBootstrapReportsAnUnreadablePromptsDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads the directory whatever its mode")
+	}
+	env, cci, workDir := setupReviewProject(t, nil, "mine")
+	reviews := filepath.Join(workDir, ".chunk", "reviews")
+	assert.NilError(t, os.Chmod(reviews, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(reviews, 0o755) })
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "Could not read .chunk/reviews"), "stderr: %s", result.Stderr)
+	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
 }
