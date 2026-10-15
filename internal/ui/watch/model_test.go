@@ -265,7 +265,8 @@ func TestSortByActivity_keepsProjectsGrouped(t *testing.T) {
 func TestFilterSidecars_keepsEveryConfirmedSidecar(t *testing.T) {
 	now := time.Now()
 	// Confirmed sidecars are still running however long they have sat idle, so
-	// none of them is filtered for age — not even one with no activity at all.
+	// none of them is filtered for age. One that has never done anything has
+	// nothing to show, though, and is dropped.
 	sidecars := []sidecarInfo{
 		{id: "busy", verified: true, lastActivity: now.Add(-time.Minute)},
 		{id: "idle-for-days", verified: true, lastActivity: now.Add(-72 * time.Hour)},
@@ -274,7 +275,7 @@ func TestFilterSidecars_keepsEveryConfirmedSidecar(t *testing.T) {
 
 	got := filterSidecars(sidecars)
 
-	want := []string{"busy", "idle-for-days", "never-used"}
+	want := []string{"busy", "idle-for-days"}
 	assert.Equal(t, len(got), len(want))
 	for i, id := range want {
 		assert.Equal(t, got[i].id, id, "position %d", i)
@@ -285,7 +286,7 @@ func TestFilterSidecars_dropsStaleUnconfirmedSidecars(t *testing.T) {
 	now := time.Now()
 	sidecars := []sidecarInfo{
 		{id: "recent", lastActivity: now.Add(-23 * time.Hour)},
-		{id: "mtime-recent", fileMtime: now.Add(-10 * time.Minute)},
+		{id: "mtime-recent", fileMtime: now.Add(-10 * time.Minute)}, // no events: "No activity yet."
 		{id: "too-old", lastActivity: now.Add(-25 * time.Hour)},
 		{id: "mtime-old", fileMtime: now.Add(-25 * time.Hour)},
 		{id: "no-activity-at-all"},
@@ -293,7 +294,7 @@ func TestFilterSidecars_dropsStaleUnconfirmedSidecars(t *testing.T) {
 
 	got := filterSidecars(sidecars)
 
-	want := []string{"recent", "mtime-recent"}
+	want := []string{"recent"}
 	assert.Equal(t, len(got), len(want))
 	for i, id := range want {
 		assert.Equal(t, got[i].id, id, "position %d", i)
