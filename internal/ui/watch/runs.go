@@ -468,16 +468,7 @@ func (m Model) renderRunList(st watchStyles) []string {
 	if m.focusedPane == paneLeft && m.selRun != "" {
 		head = st.emphasis("runs")
 	}
-	if m.searching || m.query != "" {
-		cursor := ""
-		if m.searching {
-			cursor = "▏"
-		}
-		head += "  " + st.muted(truncate("/"+m.query, leftPaneWidth-8)+cursor)
-	} else {
-		head += "  " + st.vdim("/ to search")
-	}
-	lines := []string{head, ""}
+	lines := []string{head, m.searchRow(st)}
 	if len(m.sessions) == 0 {
 		return append(lines, "  "+st.dim("no runs match"), "")
 	}
@@ -499,6 +490,19 @@ func (m Model) renderRunList(st watchStyles) []string {
 		lines = append(lines, "    "+st.vdim(truncate(status, leftPaneWidth-4)))
 	}
 	return append(lines, "")
+}
+
+// searchRow is the line under the runs heading that is always there, so the
+// search can be found before it is used: a hint, then what is being typed, then
+// the filter that is kept.
+func (m Model) searchRow(st watchStyles) string {
+	switch {
+	case m.searching:
+		return st.teal("⌕ ") + truncate(m.query, leftPaneWidth-4) + st.teal("▏")
+	case m.query != "":
+		return st.teal("⌕ ") + st.muted(truncate(m.query, leftPaneWidth-14)) + "  " + st.vdim("Esc clear")
+	}
+	return st.vdim("⌕ search runs") + "  " + st.vdim("/")
 }
 
 // runTitle names a run by the first line of its prompt.

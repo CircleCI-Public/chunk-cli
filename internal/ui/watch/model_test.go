@@ -572,11 +572,11 @@ func TestRenderSidecarPane_dropsWholeRowsRatherThanCuttingOne(t *testing.T) {
 
 	// Room for the title, the blank under it, and the first row only. The second
 	// row would previously have been started and then clipped by renderBody,
-	// losing its sync badge and age.
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 9), "\n")
+	// losing its status and age.
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 7), "\n")
 
-	// A complete row ends in an age line, so one age line per status line means
-	// no row was cut part-way through.
+	// A complete row carries its age, so one age per status means no row was
+	// cut part-way through.
 	assert.Equal(t, strings.Count(pane, "unconfirmed"), strings.Count(pane, "ago"), pane)
 	assert.Assert(t, strings.Contains(pane, "1 more"), pane)
 }

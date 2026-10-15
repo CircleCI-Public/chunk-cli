@@ -898,7 +898,7 @@ func searchModel() Model {
 // moves to one that is still listed, Enter keeps the filter and Esc drops it.
 func TestSlashSearchesTheRunList(t *testing.T) {
 	m := searchModel()
-	assert.Assert(t, strings.Contains(stripANSI(m.render()), "/ to search"), "the search is discoverable before it is used:\n%s", m.render())
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "search runs"), "the search is discoverable before it is used:\n%s", m.render())
 	m, _ = press(m, '/')
 	assert.Assert(t, m.searching)
 
@@ -906,7 +906,7 @@ func TestSlashSearchesTheRunList(t *testing.T) {
 	assert.Equal(t, len(m.sessions), 1)
 	assert.Equal(t, m.selRun, "bbb", "the selection follows to a run that is still listed")
 	out := stripANSI(m.render())
-	assert.Assert(t, strings.Contains(out, "/cache▏"), "the query is shown:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "⌕ cache▏"), "the query is shown:\n%s", out)
 	assert.Assert(t, !strings.Contains(out, "webhook"), "the other run is hidden:\n%s", out)
 
 	// While searching, keys are text: q does not quit.
