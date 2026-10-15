@@ -102,6 +102,41 @@ func TestSidecarPaused(t *testing.T) {
 	}
 }
 
+func TestSidecarTransitioning(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "409 naming the condition",
+			err:  &StatusError{Op: "exec", StatusCode: http.StatusConflict, ServerMessage: "sidecar is changing state; try again"},
+			want: true,
+		},
+		{
+			name: "409 for some other conflict",
+			err:  &StatusError{Op: "exec", StatusCode: http.StatusConflict, ServerMessage: "sidecar is paused"},
+			want: false,
+		},
+		{
+			name: "changing-state wording on a different status",
+			err:  &StatusError{Op: "exec", StatusCode: http.StatusGone, ServerMessage: "sidecar is changing state; try again"},
+			want: false,
+		},
+		{
+			name: "unrelated error",
+			err:  errors.New("dial tcp: connection refused"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, sidecarTransitioning(tt.err), tt.want)
+		})
+	}
+}
+
 // mapErr used to attach the server's message only for 410, so every other
 // status reached users as bare status text. These check it for the statuses the
 // sidecar routes actually return, in both body shapes the API uses.

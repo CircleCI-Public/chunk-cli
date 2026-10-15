@@ -99,8 +99,12 @@ type FakeCircleCI struct {
 	PruneStatusCode          int                     // override for POST /sidecar/instances/prune
 	ExecStatusCode           int                     // override for POST /sidecar/instances/:id/exec
 	ExecMessage              string                  // V3 error title when ExecStatusCode is set
-	CommandOutputStatusCode  int                     // override for GET /sidecar/commands/:id/output
-	CommandOutputMessage     string                  // error message body when CommandOutputStatusCode is set
+	// TransitioningBeforeExec is how many initial exec calls return a 409
+	// "transitioning" conflict before one succeeds (or hits ExecStatusCode).
+	TransitioningBeforeExec int
+	execCalls               int
+	CommandOutputStatusCode int    // override for GET /sidecar/commands/:id/output
+	CommandOutputMessage    string // error message body when CommandOutputStatusCode is set
 	// DropStreamsBeforeExit ends this many output streams after delivering their
 	// output but before the terminal event, so client resume can be exercised.
 	DropStreamsBeforeExit int
@@ -418,11 +422,18 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 	if !f.requireToken(c) {
 		return
 	}
-	f.mu.RLock()
+	f.mu.Lock()
 	resp := f.ExecResponse
 	statusCode := f.ExecStatusCode
 	msg := f.ExecMessage
-	f.mu.RUnlock()
+	transitioning := f.execCalls < f.TransitioningBeforeExec
+	f.execCalls++
+	f.mu.Unlock()
+
+	if transitioning {
+		c.JSON(http.StatusConflict, gin.H{"error": gin.H{"id": "trace-1", "title": "sidecar is changing state; try again"}})
+		return
+	}
 
 	if statusCode != 0 {
 		if msg == "" {

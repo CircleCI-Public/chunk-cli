@@ -46,11 +46,8 @@ func SidecarGone(err error) bool {
 // SidecarPaused reports whether err is the API refusing an operation because the
 // sidecar is suspended. Sidecars pause themselves when left idle.
 //
-// The underlying sandbox can be resumed: the provider has an API for it, and
-// resume-on-connect is enabled. But the exec path checks the paused state and
-// declines rather than waking it, and no route exposes a resume. So a
-// replacement is the only remedy a caller can act on, however recoverable the
-// sidecar itself may be.
+// Exec wakes a paused sandbox itself before running a command, so this is
+// only ever seen from operations other than exec.
 //
 // Matched on the server's wording for the same reason as SidecarOutOfDate: the
 // V3 error envelope carries no machine-readable code.
@@ -60,4 +57,16 @@ func SidecarPaused(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(se.ServerMessage), "paused")
+}
+
+// sidecarTransitioning reports whether err is the API rejecting an exec
+// because the sandbox is mid-pause or mid-resume. It clears on its own once
+// the transition finishes, which is why SubmitExec retries it instead of
+// surfacing it to callers.
+func sidecarTransitioning(err error) bool {
+	var se *StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusConflict {
+		return false
+	}
+	return strings.Contains(strings.ToLower(se.ServerMessage), "changing state")
 }
