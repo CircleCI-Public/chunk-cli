@@ -98,6 +98,9 @@ type daemon struct {
 	// sessions holds pre-PR sessions, and rcfg what the daemon needs to run one.
 	sessions *sessionStore
 	rcfg     ReviewConfig
+	// gh is the GitHub client, nil when the daemon has no token. Factory runs
+	// asked to open a pull request need it.
+	gh *github.Client
 }
 
 // RunDaemon is the chunk daemon entry point, called by the hidden _daemon subcommand.
@@ -206,6 +209,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		live:      newLivenessChecker(listFor(client)),
 		sessions:  newSessionStore(ctx),
 		rcfg:      dopts.review,
+		gh:        ghClient,
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.

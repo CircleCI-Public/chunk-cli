@@ -31,6 +31,10 @@ type sessionEntry struct {
 	// consequences.
 	loopNote   string
 	loopFailed bool
+	// pr is what a factory session was asked to do with its branch once its
+	// checks passed, nil when it was asked for nothing. Set before the run
+	// starts and not changed.
+	pr *pullRequestPlan
 }
 
 func cloneSession(s chunkd.Session) chunkd.Session {
@@ -55,6 +59,10 @@ func cloneSession(s chunkd.Session) chunkd.Session {
 		f.SidecarIDs = slices.Clone(s.Factory.SidecarIDs)
 		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
 		f.Progress = cloneFeed(s.Factory.Progress)
+		if s.Factory.PullRequest != nil {
+			pr := *s.Factory.PullRequest
+			f.PullRequest = &pr
+		}
 		out.Factory = &f
 	}
 	if s.EndedAt != nil {
