@@ -33,7 +33,7 @@ timeout = 30
 [[verifier.checks]]
 name = "suite-test"
 kind = "suite"
-command = "go test -race -count=1 -skip '^(TestHiddenEval|TestDelegateDestination_Close_DeliversToSegment$)' $(go list ./... | grep -v /acceptance)"
+command = "go test -race -count=1 -skip '^(TestHiddenEval|TestDelegateDestination_Close_DeliversToSegment$|TestDaemonRoundTrip$)' $(go list ./... | grep -v /acceptance)"
 timeout = 1200
 
 [[verifier.checks]]

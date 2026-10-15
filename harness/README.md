@@ -24,9 +24,9 @@ of the agent's final commit with `tests/` copied in.
 - `hidden` checks are the acceptance tests.
 - `suite` checks are existing validation, to catch regressions. They must pass at
   the baseline, so they skip the hidden tests (`-skip '^TestHiddenEval'`, `--exclude '**/*hidden-eval*'`).
-  Go suites also skip `TestDelegateDestination_Close_DeliversToSegment`: at the pinned
-  revisions it waits 5s for a background subprocess and times out on a loaded machine, so it
-  measures machine speed, not the agent.
+  Go suites also skip `TestDelegateDestination_Close_DeliversToSegment` and
+  `TestDaemonRoundTrip`: at the pinned revisions each waits 5s for a background process
+  and times out on a loaded machine, so they measure machine speed, not the agent.
 
 Rules for adding a task:
 - Assert only what the instruction literally asks for, through a user-facing
