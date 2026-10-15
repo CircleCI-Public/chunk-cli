@@ -382,7 +382,7 @@ chunk sidecar snapshot create --name checkpoint
 chunk sidecar create --image <snapshot-id>           # name auto-generated
 ```
 
-`snapshot list` prints each snapshot's name and ID for your org (from `--org-id`, project config, or the org picker). `snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it belonged to the active pool, that member is removed from local active-pool state; the state is cleared only when the pool becomes empty. Launch a new pool member from the snapshot to resume work.
+`snapshot list` prints each snapshot's name and ID for your org (from `--org-id`, project config, or the org picker). `snapshot create` records the snapshot as `validation.sidecarImage` in `.chunk/config.json`, so `chunk validate` and `chunk factory` start their sidecars from it. If the project already records a different image, it asks before replacing it, and keeps it when there is no terminal to ask in. Pass `--skip-config` for a throwaway checkpoint. `snapshot create` also deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it belonged to the active pool, that member is removed from local active-pool state; the state is cleared only when the pool becomes empty. Launch a new pool member from the snapshot to resume work.
 
 ### Lock file regeneration
 

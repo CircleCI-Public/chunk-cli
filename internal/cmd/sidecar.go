@@ -875,11 +875,17 @@ func newSidecarSnapshotCmd() *cobra.Command {
 
 func newSidecarSnapshotCreateCmd() *cobra.Command {
 	var sidecarID, name string
+	var skipConfig bool
 
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a snapshot of a sidecar and delete the source sidecar",
 		Long: `Create a snapshot of a sidecar and delete the source sidecar.
+
+The snapshot is recorded as validation.sidecarImage in .chunk/config.json, so
+chunk validate and chunk factory start their sidecars from it. When the project
+already has a different image recorded, you are asked before it is replaced;
+without a terminal it is kept. --skip-config leaves the config alone.
 
 Once the snapshot is captured, the source sidecar is deleted to avoid
 leaking the build instance. If the deleted sidecar belonged to the active pool,
@@ -907,6 +913,11 @@ from the snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 			if err := sidecar.SaveActiveSnapshot(cmd.Context(), sidecar.ActiveSnapshot{ID: snap.ID, Name: name}); err != nil {
 				io.ErrPrintf("Warning: could not save active snapshot: %v\n", err)
 			}
+			if !skipConfig {
+				if workDir, err := os.Getwd(); err == nil {
+					recordSnapshotImage(workDir, snap.ID, io, ui.Confirm)
+				}
+			}
 
 			if err := client.DeleteSidecar(cmd.Context(), sidecarID); err != nil {
 				io.ErrPrintf("Warning: could not delete sidecar %s: %v\n", sidecarID, err)
@@ -924,9 +935,57 @@ from the snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&name, "name", "", "Snapshot name (max 255 characters)")
+	cmd.Flags().BoolVar(&skipConfig, "skip-config", false, "Don't record the snapshot as validation.sidecarImage")
 	_ = cmd.MarkFlagRequired("name")
 
 	return cmd
+}
+
+// recordSnapshotImage records snapshotID as the project's sidecar image, which
+// is the only image chunk factory reads. A project with no image takes it; one
+// with a different image keeps it unless the user agrees to the replacement.
+// Recording is housekeeping, so a failure is reported rather than returned.
+func recordSnapshotImage(workDir, snapshotID string, streams iostream.Streams, confirm confirmFunc) {
+	setHint := ui.Dim("  To use it: chunk config set validation.sidecarImage " + snapshotID)
+	cfg, err := config.LoadProjectConfig(workDir)
+	if errors.Is(err, os.ErrNotExist) {
+		// Not a chunk project, or not its root: there is no config to record in.
+		streams.ErrPrintln(setHint)
+		return
+	}
+	if err != nil {
+		streams.ErrPrintf("Warning: could not record the snapshot in .chunk/config.json: %v\n", err)
+		streams.ErrPrintln(setHint)
+		return
+	}
+
+	current := ""
+	if cfg.Validation != nil {
+		current = cfg.Validation.SidecarImage
+	}
+	if current == snapshotID {
+		return
+	}
+	if current != "" {
+		ok, err := confirm(fmt.Sprintf("Replace validation.sidecarImage %s with %s?", current, snapshotID), true)
+		if err != nil || !ok {
+			streams.ErrPrintln("Kept validation.sidecarImage " + current)
+			streams.ErrPrintln(setHint)
+			return
+		}
+	}
+
+	if cfg.Validation == nil {
+		cfg.Validation = &config.ValidationConfig{}
+	}
+	cfg.Validation.SidecarImage = snapshotID
+	if err := config.SaveProjectConfig(workDir, cfg); err != nil {
+		streams.ErrPrintf("Warning: could not record the snapshot in .chunk/config.json: %v\n", err)
+		streams.ErrPrintln(setHint)
+		return
+	}
+	streams.ErrPrintf("%s\n", ui.Success("Recorded "+snapshotID+" as validation.sidecarImage in .chunk/config.json"))
+	streams.ErrPrintln(ui.Dim("  chunk validate and chunk factory now start sidecars from it, and validate runs every command there."))
 }
 
 func newSidecarSnapshotGetCmd() *cobra.Command {
@@ -1131,7 +1190,8 @@ Example:
 					}
 				}
 
-				streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it:\n")
+				streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it\n")
+				streams.ErrPrintf("to record it as the project's sidecar image:\n")
 				streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n")
 				streams.ErrPrintf("  chunk sidecar snapshot list              # list snapshot IDs for your org\n\n")
 

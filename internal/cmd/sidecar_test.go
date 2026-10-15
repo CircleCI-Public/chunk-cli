@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -190,4 +191,57 @@ func TestSnapshotCreateNameAtLimit(t *testing.T) {
 		assert.Assert(t, !strings.Contains(err.Error(), "255 characters or fewer"),
 			"unexpected length validation error for 255-char name: %v", err)
 	}
+}
+
+func TestRecordSnapshotImage(t *testing.T) {
+	never := func(string, bool) (bool, error) {
+		t.Fatal("asked to confirm")
+		return false, nil
+	}
+	answer := func(ok bool, err error) confirmFunc {
+		return func(string, bool) (bool, error) { return ok, err }
+	}
+
+	tests := []struct {
+		name    string
+		current string // "" leaves validation.sidecarImage unset
+		confirm confirmFunc
+		want    string
+		wantErr string // a line stderr must contain
+	}{
+		{name: "unset is recorded", confirm: never, want: "snap-new", wantErr: "Recorded snap-new"},
+		{name: "same image is left alone", current: "snap-new", confirm: never, want: "snap-new"},
+		{name: "replaced when confirmed", current: "snap-old", confirm: answer(true, nil), want: "snap-new", wantErr: "Recorded snap-new"},
+		{name: "kept when declined", current: "snap-old", confirm: answer(false, nil), want: "snap-old", wantErr: "Kept validation.sidecarImage snap-old"},
+		{name: "kept without a terminal", current: "snap-old", confirm: answer(false, ui.ErrNoTTY), want: "snap-old", wantErr: "chunk config set validation.sidecarImage snap-new"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := &config.ProjectConfig{OrgID: "org-1"}
+			if tt.current != "" {
+				cfg.Validation = &config.ValidationConfig{SidecarImage: tt.current}
+			}
+			assert.NilError(t, config.SaveProjectConfig(dir, cfg))
+
+			var errOut strings.Builder
+			recordSnapshotImage(dir, "snap-new", iostream.Streams{Out: io.Discard, Err: &errOut}, tt.confirm)
+
+			got, err := config.LoadProjectConfig(dir)
+			assert.NilError(t, err)
+			assert.Equal(t, got.Validation.SidecarImage, tt.want)
+			assert.Equal(t, got.OrgID, "org-1", "the rest of the config is kept")
+			assert.Assert(t, strings.Contains(errOut.String(), tt.wantErr), "stderr: %s", errOut.String())
+		})
+	}
+}
+
+func TestRecordSnapshotImageWithoutConfig(t *testing.T) {
+	dir := t.TempDir()
+	var errOut strings.Builder
+	recordSnapshotImage(dir, "snap-new", iostream.Streams{Out: io.Discard, Err: &errOut}, nil)
+
+	_, err := config.LoadProjectConfig(dir)
+	assert.Assert(t, errors.Is(err, os.ErrNotExist), "no config is created: %v", err)
+	assert.Assert(t, strings.Contains(errOut.String(), "chunk config set validation.sidecarImage snap-new"), "stderr: %s", errOut.String())
 }

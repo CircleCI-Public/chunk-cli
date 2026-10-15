@@ -135,6 +135,7 @@ chunk
 │       ├── create                  # Snapshot a sidecar, then delete the source sidecar
 │       │   --sidecar-id <id>       # Sidecar ID (defaults to active sidecar)
 │       │   --name <name>           # Snapshot name (required)
+│       │   --skip-config           # Don't record it as validation.sidecarImage
 │       ├── get <snapshot-id>       # Get a snapshot by ID
 │       │   --json                  # Output as JSON
 │       └── list                    # List snapshots
