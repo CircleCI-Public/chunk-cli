@@ -36,7 +36,7 @@ func liveSession(id string, state chunkd.SessionState, started time.Time) sessio
 func sessModel(sessions ...sessionInfo) Model {
 	m := New(nil, true).WithConnection(chunkd.Connection{})
 	m.width, m.height = 110, 40
-	m.sessions = sessions
+	m.sessions, m.allRuns = sessions, sessions
 	return m
 }
 
@@ -158,7 +158,7 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 		}
 		for _, want := range []string{
 			"Add a --verbose flag", "Round 2 (max 3) · implementing", "$0.41",
-			"Round 1", "1 of 3 checks passed", "2 findings, 1 worth changing", "Round 2", "implement", "▸ infra",
+			"Round 1", "1 of 3 checks passed", "2 issues, 1 worth changing", "Round 2", "implement", "▸ infra",
 		} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 		}
@@ -587,11 +587,38 @@ func TestFactoryReviewRowsSayWhetherTheReviewPassed(t *testing.T) {
 	}
 
 	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "passed"}), ui.IconOK+" 0ms")
-	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "passed", Findings: 2}), ui.IconOK+" 0ms  2 findings, none worth changing")
-	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "failed", Findings: 3, Worth: 1}), ui.IconFail+" 0ms  1 worth changing")
+	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "passed", Findings: 2}), ui.IconOK+" 0ms  2 issues, none worth changing")
+	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "failed", Findings: 3, Worth: 1}), ui.IconFail+" 0ms  3 issues, 1 worth changing")
 	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "errored", Error: "timed out"}), ui.IconFail+" 0ms  timed out")
 	// Until its status is known, any finding is flagged.
-	assert.Equal(t, row(chunkd.ReviewPrompt{Findings: 2}), ui.IconWarn+" 0ms  2 findings")
+	assert.Equal(t, row(chunkd.ReviewPrompt{Findings: 2}), ui.IconWarn+" 0ms  2 issues found")
+}
+
+// The run pane says what is happening and whether there is anything to do,
+// without making the person read the rounds to work it out.
+func TestNextStepLineSaysWhatToDo(t *testing.T) {
+	st := newWatchStyles(false)
+	say := func(state chunkd.SessionState, r chunkd.Round) string {
+		s := chunkd.Session{State: state, Factory: &chunkd.FactoryRun{}, Rounds: []chunkd.Round{r}}
+		return stripANSI(nextStepLine(st, s))
+	}
+
+	assert.Equal(t, say(chunkd.SessionRunning, chunkd.Round{State: chunkd.RoundImplementing}),
+		"Now: the implementer is making the change. Nothing to do yet.")
+	assert.Equal(t, say(chunkd.SessionRunning, chunkd.Round{State: chunkd.RoundChecking}),
+		"Now: checks and reviewers are looking at the change. Nothing to do yet.")
+	assert.Equal(t, say(chunkd.SessionDone, chunkd.Round{State: chunkd.RoundDone}),
+		ui.IconOK+" All checks passed. The change is ready for you to look at.")
+	assert.Equal(t, say(chunkd.SessionDone, chunkd.Round{State: chunkd.RoundDone, Checks: []chunkd.RoundCheck{{Name: "lint", Status: chunkd.CheckFailed}}}),
+		ui.IconFail+" Still failing after the last round: lint")
+	// A run that made no change has nothing for the person to look at.
+	noChange := chunkd.Session{State: chunkd.SessionDone, Factory: &chunkd.FactoryRun{Result: chunkd.ResultNoChange}, Rounds: []chunkd.Round{{State: chunkd.RoundDone}}}
+	assert.Equal(t, stripANSI(nextStepLine(st, noChange)), "The implementer made no change, so there is nothing to look at.")
+	// A loop that failed without a failing row in its last round is not a pass.
+	failedLoop := chunkd.Session{State: chunkd.SessionDone, Factory: &chunkd.FactoryRun{}, Rounds: []chunkd.Round{{State: chunkd.RoundDone}},
+		Stages: []chunkd.Stage{{State: chunkd.StageFailed}}}
+	assert.Equal(t, stripANSI(nextStepLine(st, failedLoop)), ui.IconFail+" The run ended without its checks passing.")
+	assert.Equal(t, nextStepLine(st, chunkd.Session{}), "")
 }
 
 func stripANSI(s string) string { return regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(s, "") }
@@ -752,7 +779,7 @@ func TestItemFailureReport(t *testing.T) {
 		"Round 2 check: test failed\n\n```\n--- FAIL: TestX\nFAIL\n```",
 		"Round 2 check: build failed: sidecar unreachable",
 		"",
-		"Round 2 review: style failed: 2 findings worth changing",
+		"Round 2 review: style failed: 2 issues worth changing",
 		"Round 2 review: tests failed: claude timed out",
 	} {
 		assert.Equal(t, itemFailureReport(s, items[i]), want, "item %d", i)
@@ -846,4 +873,94 @@ func TestSelectedFailedCheckKeepsItsTailInView(t *testing.T) {
 
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "last tail line"), out)
+}
+
+func typeText(m Model, text string) Model {
+	for _, r := range text {
+		next, _ := m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = next.(Model)
+	}
+	return m
+}
+
+// searchModel is a dashboard with two runs, the newest selected, on the left pane.
+func searchModel() Model {
+	a := factoryRun("aaa", chunkd.SessionDone, time.Now().Add(-time.Hour))
+	a.s.Factory.Prompt = "Add retry to the webhook sender"
+	b := factoryRun("bbb", chunkd.SessionDone, time.Now().Add(-2*time.Hour))
+	b.s.Factory.Prompt = "Fix flaky cache test"
+	m := sessModel(a, b)
+	m.selRun, m.focusedPane = "aaa", paneLeft
+	return m
+}
+
+// / opens a search over the runs: they narrow as it is typed, the selection
+// moves to one that is still listed, Enter keeps the filter and Esc drops it.
+func TestSlashSearchesTheRunList(t *testing.T) {
+	m := searchModel()
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "/ to search"), "the search is discoverable before it is used:\n%s", m.render())
+	m, _ = press(m, '/')
+	assert.Assert(t, m.searching)
+
+	m = typeText(m, "cache")
+	assert.Equal(t, len(m.sessions), 1)
+	assert.Equal(t, m.selRun, "bbb", "the selection follows to a run that is still listed")
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "/cache▏"), "the query is shown:\n%s", out)
+	assert.Assert(t, !strings.Contains(out, "webhook"), "the other run is hidden:\n%s", out)
+
+	// While searching, keys are text: q does not quit.
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	assert.Assert(t, cmd == nil)
+
+	m, _ = press(m, tea.KeyEnter)
+	assert.Assert(t, !m.searching)
+	assert.Equal(t, m.query, "cache", "Enter keeps the filter")
+	assert.Equal(t, len(m.sessions), 1)
+
+	// Esc outside a search drops a kept filter before it would quit.
+	m, cmd = press(m, tea.KeyEscape)
+	assert.Equal(t, m.query, "")
+	assert.Equal(t, len(m.sessions), 2)
+	assert.Assert(t, cmd == nil)
+}
+
+func TestSearchEscClearsAndBackspaceWidens(t *testing.T) {
+	m, _ := press(searchModel(), '/')
+	m = typeText(m, "cachx")
+	assert.Equal(t, len(m.sessions), 0)
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "no runs match"))
+
+	m, _ = press(m, tea.KeyBackspace)
+	assert.Equal(t, m.query, "cach")
+	assert.Equal(t, len(m.sessions), 1)
+
+	m, _ = press(m, tea.KeyEscape)
+	assert.Assert(t, !m.searching)
+	assert.Equal(t, m.query, "")
+	assert.Equal(t, len(m.sessions), 2)
+}
+
+// A poll while a filter is on keeps filtering instead of bringing every run back.
+func TestPollKeepsTheRunFilter(t *testing.T) {
+	m := searchModel()
+	all := m.allRuns
+	m = m.setQuery("cache")
+	m = poll(m, all...)
+	assert.Equal(t, len(m.allRuns), 2)
+	assert.Equal(t, len(m.sessions), 1)
+	assert.Equal(t, m.selRun, "bbb")
+	assert.Equal(t, len(filterRuns(all, "CACHE flaky")), 1, "every word must match, ignoring case")
+}
+
+// A filter narrows the list, not what the header and sidecar pane know: a
+// hidden run still counts as running, and its sidecars are not loose ones.
+func TestFilterDoesNotHideRunsFromTheHeader(t *testing.T) {
+	live := liveSession("live", chunkd.SessionRunning, time.Now())
+	m := sessModel(live)
+	m = m.setQuery("nothing matches this")
+	assert.Equal(t, len(m.sessions), 0)
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "1 running"), "a hidden live run is still in flight:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "no other sidecars"), out)
 }

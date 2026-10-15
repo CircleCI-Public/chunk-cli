@@ -356,7 +356,7 @@ func itemFailureReport(s chunkd.Session, it runItem) string {
 		case p.State == chunkd.PromptFailed || p.Status == chunkd.CheckErrored:
 			reason = p.Error
 		case p.Status == chunkd.CheckFailed:
-			reason = fmt.Sprintf("%d finding%s worth changing", p.Worth, plural(p.Worth))
+			reason = fmt.Sprintf("%d issue%s worth changing", p.Worth, plural(p.Worth))
 		default:
 			return ""
 		}
@@ -395,19 +395,92 @@ func (m Model) openText(name, text string) Model {
 	return m
 }
 
+// filterRuns keeps the runs whose title, project, branch or status contains
+// every word of query, ignoring case. An empty query keeps them all.
+func filterRuns(all []sessionInfo, query string) []sessionInfo {
+	words := strings.Fields(strings.ToLower(query))
+	if len(words) == 0 {
+		return all
+	}
+	var out []sessionInfo
+	for _, r := range all {
+		hay := strings.ToLower(strings.Join([]string{runTitle(r.s), r.label, r.s.Branch, runStatus(r.s)}, " "))
+		match := true
+		for _, w := range words {
+			if !strings.Contains(hay, w) {
+				match = false
+				break
+			}
+		}
+		if match {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// setQuery filters the run list by query and keeps the selection on a run
+// that is still listed.
+func (m Model) setQuery(query string) Model {
+	m.query = query
+	m.sessions = filterRuns(m.allRuns, query)
+	prev := m.selRun
+	m = m.reselectRun()
+	if m.selRun != prev {
+		m.runItem, m.runConfirm, m.runNote = 0, "", ""
+	}
+	return m.adjustLeftScroll()
+}
+
+// updateSearchKey handles a key while the run search has the keyboard: text
+// narrows the list as it is typed, Enter keeps the filter and Esc drops it.
+func (m Model) updateSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "enter":
+		m.searching = false
+		return m, nil
+	case "esc":
+		m.searching = false
+		return m.setQuery(""), nil
+	case "backspace":
+		if r := []rune(m.query); len(r) > 0 {
+			return m.setQuery(string(r[:len(r)-1])), nil
+		}
+		return m, nil
+	}
+	if msg.Text != "" {
+		return m.setQuery(m.query + msg.Text), nil
+	}
+	return m, nil
+}
+
 // ---- left pane: the run list ---------------------------------------------------
 
 // renderRunList draws the runs at the top of the left pane, or nothing when
 // there are none, so a dashboard with no runs looks as it always has.
 func (m Model) renderRunList(st watchStyles) []string {
-	if len(m.sessions) == 0 {
+	if len(m.allRuns) == 0 {
 		return nil
 	}
 	head := st.vdim("runs")
 	if m.focusedPane == paneLeft && m.selRun != "" {
 		head = st.emphasis("runs")
 	}
+	if m.searching || m.query != "" {
+		cursor := ""
+		if m.searching {
+			cursor = "▏"
+		}
+		head += "  " + st.muted(truncate("/"+m.query, leftPaneWidth-8)+cursor)
+	} else {
+		head += "  " + st.vdim("/ to search")
+	}
 	lines := []string{head, ""}
+	if len(m.sessions) == 0 {
+		return append(lines, "  "+st.dim("no runs match"), "")
+	}
 	for _, r := range m.sessions {
 		title := truncate(runTitle(r.s), leftPaneWidth-5)
 		icon := m.runIcon(st, r.s)
@@ -631,14 +704,14 @@ func reviewOutcome(st watchStyles, p chunkd.ReviewPrompt) (icon, note string) {
 		if p.Findings == 0 {
 			return st.success(ui.IconOK), ""
 		}
-		return st.success(ui.IconOK), "  " + st.dim(fmt.Sprintf("%d finding%s, none worth changing", p.Findings, plural(p.Findings)))
+		return st.success(ui.IconOK), "  " + st.dim(fmt.Sprintf("%d issue%s, none worth changing", p.Findings, plural(p.Findings)))
 	case chunkd.CheckFailed:
-		return st.err(ui.IconFail), "  " + st.err(fmt.Sprintf("%d worth changing", p.Worth))
+		return st.err(ui.IconFail), "  " + st.err(fmt.Sprintf("%d issue%s, %d worth changing", p.Findings, plural(p.Findings), p.Worth))
 	case chunkd.CheckErrored:
 		return st.err(ui.IconFail), "  " + st.err(truncate(strings.Join(strings.Fields(p.Error), " "), 80))
 	}
 	if p.Findings > 0 {
-		return st.warning(ui.IconWarn), "  " + st.warning(fmt.Sprintf("%d finding%s", p.Findings, plural(p.Findings)))
+		return st.warning(ui.IconWarn), "  " + st.warning(fmt.Sprintf("%d issue%s found", p.Findings, plural(p.Findings)))
 	}
 	return st.success(ui.IconOK), ""
 }
@@ -680,7 +753,7 @@ func feedText(st watchStyles, l chunkd.FeedLine) string {
 // visible whatever is selected.
 func (m Model) runTag(st watchStyles) string {
 	running := 0
-	for _, s := range m.sessions {
+	for _, s := range m.allRuns {
 		if s.s.State == chunkd.SessionRunning {
 			running++
 		}

@@ -463,8 +463,10 @@ chunk
 - **`watch` is organized around runs.** Factory runs are listed at the top of
   the left pane, live ones first, then up to five that ended in the last day;
   sidecars are listed below them, and `↑/↓` moves through both as one list. The
-  first poll selects the newest run. A selected run's pane reads top to
-  bottom: the prompt, a status line that says what the run is doing (or, once it
+  first poll selects the newest run. `/` searches the run list: type to narrow it
+  to the runs whose title, project, branch or status contain every word typed
+  (`Enter` keeps the filter, `Esc` drops it, and `Esc` again quits). A selected
+  run's pane reads top to bottom: the prompt, a status line that says what the run is doing (or, once it
   ended, how it ended, what blocked it and what it cost), then each round, then
   where the work is (branch, whether it was committed) and, for a run that
   stopped with committed work still failing, the `--continue` command that picks
@@ -478,7 +480,10 @@ chunk
   kept sidecars, the run's sidecars and their resources) is folded under
   `infra`, which `i` opens. A factory review is a check: it passes unless it
   found something worth changing (high or medium severity), so its row shows ✓ with any lesser
-  findings noted, or ✗ with how many are worth changing. A factory run's own
+  issues noted ("2 issues, none worth changing"), or ✗ with how many of its issues are
+  worth changing ("3 issues, 1 worth changing"). A line under the rounds says what
+  is happening and whether there is anything to do ("Now: the implementer is making the
+  change. Nothing to do yet.", or, once the run ended, whether the checks passed). A factory run's own
   sidecars are shown there rather than as rows of their own. `→` moves into
   the pane, `↑/↓` picks a row and `Enter` opens it: a review's live log, a
   failed check's output, or the implementer's summary (on a round, it opens or
