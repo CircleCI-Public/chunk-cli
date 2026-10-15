@@ -33,6 +33,7 @@ func newFactoryCmd() *cobra.Command {
 		RunE:  groupRunE,
 	}
 	cmd.AddCommand(newFactoryBuildCmd())
+	cmd.AddCommand(newFactoryStartCmd())
 	cmd.AddCommand(newFactoryBootstrapCmd())
 	cmd.AddCommand(newFactoryEvalCmd())
 	return cmd

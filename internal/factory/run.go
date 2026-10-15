@@ -122,10 +122,11 @@ func ReviewerCount(requested int, prompts []review.Prompt) int {
 // with the report so far. The work is committed either way once the implementer has
 // started, so it is not lost with the sidecars.
 func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
-	rep.RunID = time.Now().UTC().Format("20060102-150405")
+	rep.RunID = newRunID()
 	cont := opts.Continue
 	request := opts.Prompt
 	if cont != nil {
+		rep.RunID = runIDAfter(cont.From.RunID)
 		opts.Prompt, request = cont.prompt(), cont.request()
 	}
 	if opts.Verbose && opts.Log == "" {
@@ -145,32 +146,29 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	status := opts.Status
 	lg.start(rep.RunID, opts, request)
 
-	// Runs belong to the repository, so every checkout of it sees them.
-	dataDir, err := config.RepoDataDir(opts.Root)
+	dataDir, err := runsDir(opts.Root)
 	if err != nil {
-		return rep, fmt.Errorf("find chunk's data directory for the repository: %w", err)
+		return rep, err
 	}
 	var wt Worktree
 	if cont == nil {
-		wt, err = CreateWorktree(ctx, opts.Root, filepath.Join(dataDir, "factory", rep.RunID), rep.RunID, opts.Prompt)
+		wt, err = createRunWorktree(ctx, opts.Root, dataDir, rep.RunID, opts.Prompt)
 		if err != nil {
-			return rep, fmt.Errorf("create the run's worktree: %w", err)
+			return rep, err
 		}
 	} else {
-		status(iostream.LevelInfo, fmt.Sprintf("Continuing run %s on %s", cont.From.RunID, cont.From.Branch))
-		wt, err = openWorktree(ctx, opts.Root, cont.From, rep.RunID)
+		var stat string
+		wt, stat, err = cont.handOff(ctx, opts.Root, rep.RunID)
 		if err != nil {
-			return rep, fmt.Errorf("open the worktree of run %s: %w", cont.From.RunID, err)
+			return rep, err
 		}
+		status(iostream.LevelInfo, fmt.Sprintf("Continuing run %s on %s: %s", cont.From.RunID, cont.From.Branch, describeWork(stat)))
 	}
 	rep.Worktree = wt
 	if opts.OnStart != nil {
 		opts.OnStart(rep.RunID, wt)
 	}
-	rec := Record{
-		RunID: rep.RunID, Prompt: request,
-		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
-	}
+	rec := newRecord(rep.RunID, request, wt)
 	if cont != nil {
 		rec.Prompt, rec.ContinuesRunID = cont.From.Prompt, cont.From.RunID
 	}
@@ -293,6 +291,59 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		rep.Stat, rep.StatErr = workStat(ctx, wt)
 	}
 	return rep, err
+}
+
+// describeWork is how a run's work is shown, from its stat.
+func describeWork(stat string) string {
+	if stat == "" {
+		return "no changes yet"
+	}
+	return stat
+}
+
+// newRunID names a run for when it starts.
+func newRunID() string {
+	return time.Now().UTC().Format("20060102-150405")
+}
+
+// runIDAfter names a run that continues prev. A run started with 'chunk
+// factory start' can be continued within the second it was named in, and
+// sharing its ID would overwrite its record, so this waits for the next one.
+func runIDAfter(prev string) string {
+	id := newRunID()
+	for id == prev {
+		time.Sleep(50 * time.Millisecond)
+		id = newRunID()
+	}
+	return id
+}
+
+// runsDir is where a repository's runs keep their worktrees and records.
+// Runs belong to the repository, so every checkout of it sees them.
+func runsDir(root string) (string, error) {
+	dataDir, err := config.RepoDataDir(root)
+	if err != nil {
+		return "", fmt.Errorf("find chunk's data directory for the repository: %w", err)
+	}
+	return dataDir, nil
+}
+
+// createRunWorktree makes a new run's worktree and branch, beside its record
+// in dataDir.
+func createRunWorktree(ctx context.Context, root, dataDir, runID, prompt string) (Worktree, error) {
+	wt, err := CreateWorktree(ctx, root, filepath.Join(dataDir, "factory", runID), runID, prompt)
+	if err != nil {
+		return Worktree{}, fmt.Errorf("create the run's worktree: %w", err)
+	}
+	return wt, nil
+}
+
+// newRecord is the record of run runID, for prompt, whose work is in wt.
+func newRecord(runID, prompt string, wt Worktree) Record {
+	return Record{
+		RunID: runID, Prompt: prompt,
+		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
+	}
 }
 
 // keepRecord saves the run's record, so a later run can continue it. A run

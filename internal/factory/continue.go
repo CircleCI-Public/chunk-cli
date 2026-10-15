@@ -10,6 +10,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 )
 
+// ErrNothingToRefine is returned when a run whose record needs work, such as
+// one made by Start, is continued before anything was done in its worktree:
+// the factory refines a diff, and there is none.
+var ErrNothingToRefine = errors.New("nothing was done in the run's worktree to refine")
+
 // Continuation is a run that picks up the work an earlier run left on its
 // branch, typically one whose checks still failed when its attempts ran out.
 // It works in that run's worktree and adds a commit to its branch, and its
@@ -35,14 +40,24 @@ func (c *Continuation) checkFirst() bool {
 // where the work is.
 func (c *Continuation) prompt() string {
 	var b strings.Builder
-	b.WriteString("You are continuing a change that an earlier session started and did not finish. It was asked:\n\n")
-	b.WriteString(strings.TrimSpace(c.From.Prompt))
-	b.WriteString("\n\nIts work is in the working tree as uncommitted changes; `git diff HEAD` shows it. Build on it rather than starting over.")
+	if c.From.Brief != "" {
+		b.WriteString(c.From.Brief)
+	} else {
+		b.WriteString(retryBrief(c.From.Prompt))
+	}
 	if g := strings.TrimSpace(c.Guidance); g != "" {
 		b.WriteString("\n\nThe developer adds:\n\n")
 		b.WriteString(g)
 	}
 	return b.String()
+}
+
+// retryBrief is how a continued run's implementer is told about an earlier
+// run's unfinished work.
+func retryBrief(prompt string) string {
+	return "You are continuing a change that an earlier session started and did not finish. It was asked:\n\n" +
+		strings.TrimSpace(prompt) +
+		"\n\nIts work is in the working tree as uncommitted changes; `git diff HEAD` shows it. Build on it rather than starting over."
 }
 
 // request is what the reviewers check the work against: the original request
@@ -70,6 +85,23 @@ func (c *Continuation) commitMessage(runID string, o Outcome) string {
 	}
 	b.WriteString(".\n")
 	return b.String()
+}
+
+// handOff opens the worktree of the run c continues and summarizes the work it
+// hands over: the whole change since the baseline, as git's one-line stat.
+func (c *Continuation) handOff(ctx context.Context, root, runID string) (Worktree, string, error) {
+	wt, err := openWorktree(ctx, root, c.From, runID)
+	if err != nil {
+		return Worktree{}, "", fmt.Errorf("open the worktree of run %s: %w", c.From.RunID, err)
+	}
+	stat, err := wt.Stat(ctx)
+	if err != nil {
+		return Worktree{}, "", err
+	}
+	if stat == "" && c.From.NeedsWork {
+		return Worktree{}, "", fmt.Errorf("run %s: %w", c.From.RunID, ErrNothingToRefine)
+	}
+	return wt, stat, nil
 }
 
 // openWorktree returns the worktree of the run rec describes, adding it back
