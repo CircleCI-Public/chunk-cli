@@ -234,6 +234,11 @@ var maxStreamAttempts = 2000
 // A var only so tests can shrink it; not intended to vary in normal use.
 var streamRetryBase = 500 * time.Millisecond
 
+// transitioningRetryBackoff is the delay between retries of a submit that
+// hits a sandbox mid-pause or mid-resume.
+// A var only so tests can shrink it; not intended to vary in normal use.
+var transitioningRetryBackoff = 200 * time.Millisecond
+
 type execSubmitAttrs struct {
 	Phase string `json:"phase"`
 }
@@ -249,16 +254,29 @@ func (c *Client) SubmitExec(
 	ctx context.Context, sidecarID, command string, args []string, env map[string]string,
 ) (string, error) {
 	var attrs execSubmitAttrs
-	envelope := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/sidecar/instances/%s/exec",
-		hc.RouteParams(sidecarID),
-		hc.Body(ExecRequest{Command: command, Args: args, Env: env}),
-		hc.JSONDecoder(&envelope),
-	))
-	if err != nil {
-		return "", mapErr("exec", err)
+	// A sandbox mid-pause or mid-resume rejects the exec until the transition
+	// finishes, which is usually a moment away, so retry a bounded number of
+	// times rather than fail a request the next attempt would have served.
+	for attempt := 0; ; attempt++ {
+		envelope := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
+		_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/sidecar/instances/%s/exec",
+			hc.RouteParams(sidecarID),
+			hc.Body(ExecRequest{Command: command, Args: args, Env: env}),
+			hc.JSONDecoder(&envelope),
+		))
+		if err == nil {
+			return envelope.Data.ID, nil
+		}
+		mapped := mapErr("exec", err)
+		if !sidecarTransitioning(mapped) || attempt >= 5 {
+			return "", mapped
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(transitioningRetryBackoff):
+		}
 	}
-	return envelope.Data.ID, nil
 }
 
 // StreamOutput consumes a command's output stream from cursor to termination,

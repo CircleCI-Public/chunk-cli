@@ -43,6 +43,45 @@ func TestSubmitExecReturnsIDBeforeStreaming(t *testing.T) {
 	assert.Check(t, commandID != "", "SubmitExec must return a usable command ID")
 }
 
+// A sandbox mid-pause or mid-resume answers exec with a 409 "transitioning"
+// conflict that clears on its own, so SubmitExec must retry rather than fail
+// the request the next attempt would have served.
+func TestSubmitExecRetriesTransitioningSandbox(t *testing.T) {
+	previous := transitioningRetryBackoff
+	transitioningRetryBackoff = time.Millisecond
+	t.Cleanup(func() { transitioningRetryBackoff = previous })
+
+	fake := fakes.NewFakeCircleCI()
+	fake.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-abc"}
+	fake.TransitioningBeforeExec = 3
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	commandID, err := client.SubmitExec(context.Background(), "sb-1", "sh", nil, nil)
+	assert.NilError(t, err)
+	assert.Equal(t, commandID, "cmd-abc")
+}
+
+// A sandbox stuck transitioning must not hang the caller forever: once the
+// retries are exhausted, SubmitExec reports the error instead of retrying
+// without bound.
+func TestSubmitExecGivesUpOnSandboxStuckTransitioning(t *testing.T) {
+	previous := transitioningRetryBackoff
+	transitioningRetryBackoff = time.Millisecond
+	t.Cleanup(func() { transitioningRetryBackoff = previous })
+
+	fake := fakes.NewFakeCircleCI()
+	fake.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-abc"}
+	fake.TransitioningBeforeExec = 1000
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.SubmitExec(context.Background(), "sb-1", "sh", nil, nil)
+	assert.Assert(t, sidecarTransitioning(err), "expected a transitioning error, got %v", err)
+}
+
 func TestStreamOutputConsumesSubmittedCommand(t *testing.T) {
 	client, _ := newSubmitStreamFake(t, &fakes.ExecResponse{
 		CommandID: "cmd-abc",

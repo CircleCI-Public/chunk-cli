@@ -118,10 +118,9 @@ func DetachScript(s DetachSpec) string {
 	fmt.Fprintf(&b, "cd %s\n", sidecar.ShellEscape(s.RepoPath))
 	// Detached, the review is not a running command to the sidecar's agent, so
 	// nothing keeps the primary awake: it pauses about five minutes after this
-	// exec, mid-review if the review is still going. A paused sidecar declines
-	// execs rather than waking (see circleci.SidecarPaused), so 'review
-	// results' cannot read the report of a review that outlasts that window,
-	// though DefaultTimeout allows one to.
+	// exec, mid-review if the review is still going. Exec wakes a paused
+	// sidecar before running, so 'review results' can still read the report
+	// once the review finishes.
 	fmt.Fprintf(&b, "nohup setsid sh -c %s >/dev/null 2>&1 </dev/null &\n", sidecar.ShellEscape(inner))
 	b.WriteString("echo \"$RUN\"\n")
 	return b.String()
