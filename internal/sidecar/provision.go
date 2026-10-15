@@ -2,12 +2,20 @@ package sidecar
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+)
+
+// Errors from the parts of Provision that do not reach the sidecar's setup
+// steps, so a caller can say which part failed.
+var (
+	ErrSSHKey = errors.New("prepare SSH key")
+	ErrSync   = errors.New("sync files to the sidecar")
 )
 
 // SetupStepError is a setup step that ran on the sidecar and failed.
@@ -51,7 +59,7 @@ func Provision(ctx context.Context, opts ProvisionOptions, env *envbuilder.Envir
 	if !opts.SkipSync {
 		opts.Status(iostream.LevelStep, "Syncing files to sidecar...")
 		if err := RsyncSync(ctx, opts.Client, sidecarID, "", opts.Dir, opts.Status); err != nil {
-			return fmt.Errorf("sync files to the sidecar: %w", err)
+			return fmt.Errorf("%w: %w", ErrSync, err)
 		}
 	}
 
@@ -61,11 +69,11 @@ func Provision(ctx context.Context, opts ProvisionOptions, env *envbuilder.Envir
 func ensureSSHKey(status iostream.StatusFunc) error {
 	keyPath, err := DefaultKeyPath()
 	if err != nil {
-		return fmt.Errorf("determine SSH key path: %w", err)
+		return fmt.Errorf("%w: determine key path: %w", ErrSSHKey, err)
 	}
 	generated, err := EnsureKeyPair(keyPath)
 	if err != nil {
-		return fmt.Errorf("generate SSH key: %w", err)
+		return fmt.Errorf("%w: generate key: %w", ErrSSHKey, err)
 	}
 	if generated {
 		status(iostream.LevelDone, "Generated SSH key at "+keyPath)

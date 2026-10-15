@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -97,7 +99,7 @@ func updateGitignore(dir string, status iostream.StatusFunc) {
 func writeAgentHooks(dir, homeDir string, commands []config.Command, status iostream.StatusFunc, confirm settings.ConfirmFunc) error {
 	res, err := settings.WriteClaude(dir, commands, confirm)
 	if err != nil {
-		return err
+		return fileError(res.Path, err)
 	}
 	reportAgentFile(res, status,
 		"Hidden Claude Code config. Runs `chunk validate` before commits and after each agent session.",
@@ -108,7 +110,7 @@ func writeAgentHooks(dir, homeDir string, commands []config.Command, status iost
 	}
 	res, err = settings.WriteCodex(dir, commands, confirm)
 	if err != nil {
-		return err
+		return fileError(res.Path, err)
 	}
 	reportAgentFile(res, status,
 		"Hidden Codex config. Same hooks as .claude/settings.json, for Codex sessions.",
@@ -140,7 +142,7 @@ func reportAgentFile(res settings.WriteResult, status iostream.StatusFunc, about
 func writeGitHook(gitCommonDir string, status iostream.StatusFunc) error {
 	outcome, err := gitutil.EnsurePreCommit(gitCommonDir, gitHookCommand)
 	if err != nil {
-		return err
+		return fileError(".git/hooks/pre-commit", err)
 	}
 	const about = "Not tracked in git. Runs `chunk validate` locally before every commit you make."
 	switch outcome {
@@ -156,6 +158,16 @@ func writeGitHook(gitCommonDir string, status iostream.StatusFunc) error {
 		status(iostream.LevelWarn, ".git/hooks/pre-commit is a symlink; skipping modification to avoid breaking your hook manager. Add `chunk validate` to the hook manually.")
 	}
 	return nil
+}
+
+// fileError phrases an error from writing one of the project's files for the
+// user. path is relative to the project directory; err says which step failed.
+func fileError(path string, err error) error {
+	ue := &userError{msg: "Could not update " + path + ".", err: err}
+	if errors.As(err, new(*fs.PathError)) {
+		ue.suggestion = suggestionCheckPerms
+	}
+	return ue
 }
 
 // writeTestSuites scaffolds .circleci/test-suites.yml when the toolchain has a

@@ -1240,7 +1240,15 @@ func sidecarSetupError(err error, tokenSource string) error {
 	if ue := sshSessionError(err); ue != nil {
 		return ue
 	}
-	if ue := notAuthorized("sync files", tokenSource, err); ue != nil {
+	if errors.Is(err, sidecar.ErrSSHKey) {
+		return &userError{msg: "Could not prepare the SSH key.", err: err}
+	}
+	syncFailed := errors.Is(err, sidecar.ErrSync)
+	action := "run setup steps"
+	if syncFailed {
+		action = "sync files"
+	}
+	if ue := notAuthorized(action, tokenSource, err); ue != nil {
 		return ue
 	}
 	if e, ok := errors.AsType[*sidecar.SetupStepError](err); ok {
@@ -1249,6 +1257,9 @@ func sidecarSetupError(err error, tokenSource string) error {
 			suggestion: "Check the output above for details.",
 			err:        err,
 		}
+	}
+	if syncFailed {
+		return &userError{msg: "Could not sync files to the sidecar.", err: err}
 	}
 	return &userError{msg: "Could not set up the sidecar.", err: err}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"strings"
 
@@ -66,16 +65,12 @@ func confirmDiff(streams iostream.Streams, confirm confirmFunc) settings.Confirm
 	}
 }
 
-// initError phrases an error from initializing the project for the user.
-func initError(err error) error {
-	switch {
-	case errors.Is(err, gitutil.ErrNotGitRepo):
+// gitDirError phrases an error from finding the project's git directory.
+func gitDirError(err error) error {
+	if errors.Is(err, gitutil.ErrNotGitRepo) {
 		return &userError{msg: "Not a git repository.", suggestion: suggestionGitRepo, err: err}
-	case errors.As(err, new(*fs.PathError)):
-		return &userError{msg: "Could not write the project's chunk files.", suggestion: suggestionCheckPerms, err: err}
-	default:
-		return &userError{msg: "Could not initialize the project.", err: err}
 	}
+	return &userError{msg: "Could not determine git directory.", err: err}
 }
 
 // printInitSummary prints the discovered validation commands and next-step hints.
@@ -147,7 +142,7 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 	status := initStatus(streams)
 	gitCommonDir, err := gitutil.CommonDirCtx(ctx, workDir)
 	if err != nil {
-		return initError(err)
+		return gitDirError(err)
 	}
 
 	// Guard: exit cleanly if config exists and --force not set
@@ -176,7 +171,7 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 	}
 	vcs, err := detectVCS(ctx, workDir, status)
 	if err != nil {
-		return initError(err)
+		return err
 	}
 	if vcs != nil {
 		cfg.VCS = vcs
@@ -207,11 +202,11 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 	if !opts.skipHooks {
 		confirm := confirmDiff(streams, ui.Confirm)
 		if err := writeAgentHooks(workDir, os.Getenv(config.EnvHome), cfg.Commands, status, confirm); err != nil {
-			return initError(err)
+			return err
 		}
 		if !opts.skipGitHook {
 			if err := writeGitHook(gitCommonDir, status); err != nil {
-				return initError(err)
+				return err
 			}
 		}
 	}

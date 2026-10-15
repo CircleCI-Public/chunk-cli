@@ -231,16 +231,28 @@ func TestConfirmDiffShowsChangeAndAsks(t *testing.T) {
 	assert.Assert(t, strings.Contains(errOut.String(), "+added"), errOut.String())
 }
 
-func TestInitError(t *testing.T) {
-	notRepo := initError(fmt.Errorf("%w: exit status 128", gitutil.ErrNotGitRepo))
-	ue, ok := errors.AsType[*userError](notRepo)
+func TestGitDirError(t *testing.T) {
+	ue, ok := errors.AsType[*userError](gitDirError(fmt.Errorf("%w: exit status 128", gitutil.ErrNotGitRepo)))
 	assert.Assert(t, ok)
 	assert.Equal(t, ue.msg, "Not a git repository.")
 	assert.Equal(t, ue.suggestion, suggestionGitRepo)
 
-	denied := initError(fmt.Errorf("write .claude/settings.json: %w", &fs.PathError{Op: "open", Path: "x", Err: fs.ErrPermission}))
-	ue, ok = errors.AsType[*userError](denied)
+	ue, ok = errors.AsType[*userError](gitDirError(errors.New("git rev-parse --git-common-dir: exit status 1")))
 	assert.Assert(t, ok)
+	assert.Equal(t, ue.msg, "Could not determine git directory.")
+}
+
+func TestFileError(t *testing.T) {
+	denied := fmt.Errorf("write .claude/settings.json: %w", &fs.PathError{Op: "open", Path: "x", Err: fs.ErrPermission})
+	ue, ok := errors.AsType[*userError](fileError(".claude/settings.json", denied))
+	assert.Assert(t, ok)
+	assert.Equal(t, ue.msg, "Could not update .claude/settings.json.")
 	assert.Equal(t, ue.suggestion, suggestionCheckPerms)
-	assert.Assert(t, strings.Contains(ue.Error(), ".claude/settings.json"), ue.Error())
+
+	// A file that cannot be merged is not a permissions problem.
+	ue, ok = errors.AsType[*userError](fileError(".codex/hooks.json", errors.New("merge .codex/hooks.json: invalid character")))
+	assert.Assert(t, ok)
+	assert.Equal(t, ue.msg, "Could not update .codex/hooks.json.")
+	assert.Equal(t, ue.suggestion, "")
+	assert.Assert(t, strings.Contains(ue.Error(), "invalid character"), ue.Error())
 }
