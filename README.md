@@ -4,6 +4,13 @@ CLI for [Chunk](https://chunk.ai/) — inner loop validation for software teams 
 
 **Chunk sidecars** are lightweight microVM environments that run alongside your AI agent and validate changes in the inner loop, before they reach CI.
 
+On top of sidecars, chunk provides:
+
+- **`chunk validate`** to run your test, lint and format checks locally, on a sidecar, or in the background.
+- **`chunk factory`** to have an implementer agent make a change on a sidecar while reviewers check it against the prompts in `.chunk/reviews/`, until the checks pass.
+- **`chunk watch`** for a live dashboard of your sidecar pools, factory runs and recent activity.
+- **`chunk mutate`** to find test coverage gaps with mutation testing.
+
 ## Why chunk?
 
 As AI churns out more and more code, CI pipelines get flooded with commits that haven't been well validated. Failures surface late, forcing expensive re-prompting cycles and slowing delivery.
@@ -59,10 +66,8 @@ Create and work in cloud sidecar environments. Sidecars are available to all Cir
 
 ```bash
 # Authenticate (browser OAuth — recommended)
-To create a new account:
-chunk auth signup
-or, to log in to an existing account:
-chunk auth login
+chunk auth signup           # create a new account
+chunk auth login            # or log in to an existing account
 
 # Or set a token directly
 chunk auth set circleci
@@ -77,6 +82,12 @@ chunk validate --remote
 # SSH in interactively or run a one-off command
 chunk sidecar ssh
 chunk sidecar ssh -- make test
+
+# Read the output of a command that ran on a sidecar (IDs show in `chunk watch`)
+chunk sidecar logs <command-id> --follow
+
+# Delete your old sidecars (default: created more than 1h ago)
+chunk prune --before 24h
 ```
 
 ##### Active sidecar
@@ -116,21 +127,57 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 
 **Note:** `snapshot create` consumes the source sidecar — it is deleted once the snapshot is captured and cannot be reused. To resume work, launch a new sidecar from the snapshot with `chunk sidecar create --image <snapshot-id>`. Use `chunk sidecar snapshot list` to look up snapshot IDs for your org.
 
+## Factory
+
+`chunk factory` has an implementer agent change your code on a sidecar, then reviews the result with each prompt in `.chunk/reviews/` and runs your validation commands, feeding failures back until every check passes or attempts run out. It works in a git worktree of its own, so your checkout is never touched, and you can follow a run in `chunk watch`.
+
+```bash
+# Write a first set of review prompts from your code and past PR review comments
+chunk factory bootstrap
+
+# Implement a prompt, then review and validate it until it passes
+chunk factory build "add a --verbose flag"
+
+# Or start from a diff of your own and have the factory refine it
+chunk factory start "add a --verbose flag"
+```
+
+`factory bootstrap` only writes prompts when `.chunk/reviews/` has none, and the prompts are a starting point: read and edit them before relying on them.
+
+## Other Tools
+
+```bash
+chunk watch                  # live dashboard of pools and recent activity (--focus: this directory only)
+chunk mutate ./internal --parallel 4   # find coverage gaps; see docs/MUTATE.md
+chunk conflicts              # does this branch still merge cleanly? (advisory, always exits 0)
+chunk validate --async       # run in the background, then `chunk validate results`
+chunk validate variants <file>   # run checks against code variants on a temporary sidecar pool
+```
+
 ## Commands
 
 ```
 chunk auth login|signup|set|status|remove  Authentication
-chunk org create                           Manage CircleCI organizations
-chunk sidecar list|create|exec|ssh         Manage cloud sidecar environments
-chunk sidecar sync|env|build               Sync files, detect env, build images
+chunk org create|list                      Manage CircleCI organizations
+chunk sidecar list|create|delete|exec|ssh  Manage cloud sidecar environments
+chunk sidecar sync|env|build|add-ssh-key   Sync files, detect env, build images, add SSH keys
+chunk sidecar logs                         Print output of a command that ran on a sidecar
 chunk sidecar use|current|forget           Manage active sidecar
 chunk sidecar setup                        Detect env and install deps
 chunk sidecar snapshot create|get|list     Manage sidecar snapshots
+chunk prune                                Delete your sidecars
 chunk init                                 Initialize project configuration
+chunk config set|show                      Manage configuration
 chunk validate [name]                      Run quality checks
+chunk validate results|variants            Background run results; validate code variants
+chunk factory bootstrap|build|start        Implement and review changes on sidecars
+chunk watch                                Live dashboard of pools and activity
+chunk mutate [path]                        Find test coverage gaps via mutation testing
+chunk conflicts                            Report whether this branch merges cleanly
 chunk hook disable|enable|status           Manage hook execution
 chunk skill install|list                   Manage AI agent skills
 chunk task config|run                      Configure and trigger CI tasks
+chunk commands                             List all available commands
 chunk completion install|uninstall         Shell completions
 chunk upgrade                              Update CLI
 ```
@@ -145,6 +192,7 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 | [docs/SKILLS.md](docs/SKILLS.md) | Skills reference: installing, triggering, and troubleshooting agent skills |
 | [docs/CLI.md](docs/CLI.md) | Full command and flag reference |
 | [docs/HOOKS.md](docs/HOOKS.md) | Pre-commit and Stop hook configuration |
+| [docs/MUTATE.md](docs/MUTATE.md) | Mutation testing with `chunk mutate` |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal module layout and dependency rules |
 
 ## Configuration
@@ -153,10 +201,12 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key (optional for `init`; for `review` and `factory`, or use `CLAUDE_CODE_OAUTH_TOKEN`) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription token from `claude setup-token` (for `review`, when no API key is set) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (optional for `init`; for `factory`, or use `CLAUDE_CODE_OAUTH_TOKEN`) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription token from `claude setup-token` (for `factory`, when no API key is set) |
 | `GITHUB_TOKEN` | GitHub PAT with `repo` scope (optional, for `factory bootstrap` to learn from past review comments) |
-| `CIRCLE_TOKEN` | CircleCI personal API token (for `sidecar` and `task`) |
+| `CIRCLECI_TOKEN` | CircleCI personal API token (for `sidecar` and `task`); `CIRCLE_TOKEN` also works |
+| `CIRCLECI_ORG_ID` | CircleCI organization ID, used instead of `--org-id` |
+| `CODE_REVIEW_CLI_MODEL` | Claude model override |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete environment variable reference.
 
@@ -177,6 +227,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete environment va
 
 - Go 1.26+
 - [Task](https://taskfile.dev/) (task runner)
+
 ### Building
 
 ```bash
