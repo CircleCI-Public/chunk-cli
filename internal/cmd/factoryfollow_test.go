@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
@@ -30,6 +31,13 @@ func fakeSessionConfig() server.ReviewConfig {
 // startSessionDaemon runs a real daemon on a Unix socket with a fake backend.
 func startSessionDaemon(t *testing.T, cfg server.ReviewConfig) {
 	t.Helper()
+	startSessionDaemonWithGitHub(t, cfg, nil)
+}
+
+// startSessionDaemonWithGitHub is startSessionDaemon for a daemon that has a
+// GitHub client, as one started with a token does.
+func startSessionDaemonWithGitHub(t *testing.T, cfg server.ReviewConfig, gh *github.Client) {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
@@ -37,7 +45,7 @@ func startSessionDaemon(t *testing.T, cfg server.ReviewConfig) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- server.RunDaemon(ctx, nil, "", nil, nil, server.WithReview(cfg)) }()
+	go func() { errCh <- server.RunDaemon(ctx, nil, "", nil, gh, server.WithReview(cfg)) }()
 	t.Cleanup(func() {
 		cancel()
 		select {

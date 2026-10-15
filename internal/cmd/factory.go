@@ -41,7 +41,7 @@ func newFactoryCmd() *cobra.Command {
 
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, jsonOut, logOn, verbose bool
+	var keepSidecars, noValidate, jsonOut, logOn, verbose, openPR, draft bool
 	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun string
 	var implementTimeout, reviewTimeout time.Duration
 
@@ -76,6 +76,14 @@ implementer starts on it; without one, the work is checked first and the
 implementer is sent what failed, in a round that counts toward
 --max-attempts. Without a prompt in a terminal, it asks for one first, and
 Enter skips it.
+
+With --open-pr, once every check has passed the run pushes its branch to origin
+and opens a pull request on GitHub, ready for review (--draft opens a draft).
+It needs a GitHub token ('chunk auth set github' or GITHUB_TOKEN, then restart
+the daemon) with write access to pull requests, and an origin on GitHub. The
+pull request targets the branch you started the run from if origin has it, and
+otherwise the repository's default branch. A run whose checks did not pass
+pushes nothing and opens nothing.
 
 With --log, the run keeps a plain-text log in
 ~/.local/share/chunk/repo-<id>/factory/<start time>.log, beside the run's
@@ -113,6 +121,13 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 				return newUserError("--log-file needs a file.").
 					withCode("command.invalid_flags").
 					withSuggestion("Write --log-file FILE, or --log for the default log.").
+					withExitCode(ExitBadArgs).
+					withoutDetail()
+			}
+			if draft && !openPR {
+				return newUserError("--draft needs --open-pr.").
+					withCode("command.invalid_flags").
+					withSuggestion("Write --open-pr --draft to open the pull request as a draft.").
 					withExitCode(ExitBadArgs).
 					withoutDetail()
 			}
@@ -180,6 +195,8 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 				Image:                   image,
 				Log:                     logArg,
 				Verbose:                 verbose,
+				OpenPR:                  openPR,
+				Draft:                   draft,
 			})
 			if err != nil {
 				return sessionError(err)
@@ -213,6 +230,8 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.local/share/chunk/repo-<id>/factory/<start time>.log")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
+	cmd.Flags().BoolVar(&openPR, "open-pr", false, "when every check passes, push the branch to origin and open a pull request on GitHub")
+	cmd.Flags().BoolVar(&draft, "draft", false, "open the pull request as a draft (needs --open-pr)")
 	cmd.SetFlagErrorFunc(factoryFlagError)
 	return cmd
 }
@@ -544,6 +563,7 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 		status = func(iostream.Level, string) {}
 	} else {
 		printFactoryLeftovers(f, status, streams)
+		printFactoryPullRequest(f, status)
 		printFactoryContinueHint(f, status)
 	}
 	printFactoryTotals(detail, status)
@@ -554,7 +574,45 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
 	case chunkd.SessionRunning, chunkd.SessionDone:
 	}
-	return reportOutcome(status, f.Result, f.Rounds)
+	if err := reportOutcome(status, f.Result, f.Rounds); err != nil {
+		return err
+	}
+	return reportPullRequest(f)
+}
+
+// printFactoryPullRequest says what became of the pull request a run was asked
+// to open.
+func printFactoryPullRequest(f *chunkd.FactoryRun, status iostream.StatusFunc) {
+	pr := f.PullRequest
+	if pr == nil {
+		return
+	}
+	switch pr.State {
+	case chunkd.PROpened:
+		status(iostream.LevelDone, "Opened pull request "+pr.URL)
+	case chunkd.PRFailed:
+		status(iostream.LevelWarn, "Could not open a pull request: "+pr.Message)
+	case chunkd.PRSkipped:
+		status(iostream.LevelInfo, "No pull request opened: "+pr.Message)
+	case chunkd.PRPending, chunkd.PRPushing, chunkd.PROpening:
+		status(iostream.LevelWarn, "The pull request was not finished: the run ended while it was "+pr.State)
+	}
+}
+
+// reportPullRequest is an error when the checks passed but the pull request
+// the run was asked for could not be opened: the person asked for it, so a
+// script waiting on the command should not be told it worked. The work is safe
+// on the branch either way.
+func reportPullRequest(f *chunkd.FactoryRun) error {
+	if f.PullRequest == nil || f.PullRequest.State != chunkd.PRFailed {
+		return nil
+	}
+	return &userError{
+		msg:        "All checks passed, but the pull request could not be opened: " + f.PullRequest.Message,
+		suggestion: fmt.Sprintf("The work is committed on %s. Push it and open the pull request yourself, or fix the cause and run again.", f.Branch),
+		hideDetail: true,
+		errMsg:     "pull request failed",
+	}
 }
 
 // printFactoryTotals says how long the run took and what the implementer's
