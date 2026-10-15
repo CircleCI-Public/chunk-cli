@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -16,6 +17,11 @@ import (
 // relayConcurrency caps concurrent pushes from the worktree. Each push
 // runs its own rsync and SSH tunnel.
 const relayConcurrency = 8
+
+// relayTimeout is how long one pull, or one push to all the reviewers, may take.
+// rsync stops only when its context ends, so without a limit a transfer that
+// hangs on a dead tunnel holds the run until someone cancels it.
+const relayTimeout = 5 * time.Minute
 
 // Relay carries the implementer's workspace to the reviewers through the run's
 // worktree on this machine. Sidecars cannot reach each other, so the
@@ -27,9 +33,10 @@ const relayConcurrency = 8
 // ones included: the worktree keeps its own, and the implementer's git config
 // and hooks never reach this machine, where git will run on the files.
 type Relay struct {
-	client *circleci.Client
-	dir    string
-	status iostream.StatusFunc
+	client  *circleci.Client
+	dir     string
+	status  iostream.StatusFunc
+	timeout time.Duration
 }
 
 // NewRelay relays through dir, the run's worktree.
@@ -37,11 +44,13 @@ func NewRelay(client *circleci.Client, dir string, status iostream.StatusFunc) *
 	if status == nil {
 		status = func(iostream.Level, string) {}
 	}
-	return &Relay{client: client, dir: dir, status: status}
+	return &Relay{client: client, dir: dir, status: status, timeout: relayTimeout}
 }
 
 // Pull mirrors the workspace at repoPath on sidecarID into the worktree.
 func (r *Relay) Pull(ctx context.Context, sidecarID, repoPath string) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
 	if err := sidecar.RsyncPull(ctx, r.client, sidecarID, repoPath, r.dir, r.status); err != nil {
 		return fmt.Errorf("pull from %s: %w", sidecarID, err)
 	}
@@ -51,6 +60,8 @@ func (r *Relay) Pull(ctx context.Context, sidecarID, repoPath string) error {
 // Push mirrors the worktree to each entry's workspace, in parallel. It
 // attempts every entry and reports all that failed.
 func (r *Relay) Push(ctx context.Context, entries []*sidecar.PoolEntry) error {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
 	errs := make([]error, len(entries))
 	sem := make(chan struct{}, relayConcurrency)
 	var wg sync.WaitGroup

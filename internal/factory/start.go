@@ -34,7 +34,7 @@ func Start(ctx context.Context, root string, h Handoff) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	runID := newRunID()
+	runID := NewRunID()
 	wt, err := createRunWorktree(ctx, root, dataDir, runID, h.Prompt)
 	if err != nil {
 		return Record{}, err

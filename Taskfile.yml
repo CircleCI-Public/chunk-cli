@@ -57,7 +57,9 @@ tasks:
     vars:
       ARGS: '{{default "./acceptance/..." .CLI_ARGS}}'
     cmds:
-      - go tool gotestsum -- -race {{.ARGS}}
+      # -count=1: the tests run a binary they build themselves, which Go's test
+      # cache does not track, so a cached pass says nothing about current code.
+      - go tool gotestsum -- -race -count=1 {{.ARGS}}
 
   env-harness:
     desc: |

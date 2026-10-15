@@ -138,7 +138,7 @@ func TestStartFromADiffOfTheCheckoutsOwnChangesIsRefused(t *testing.T) {
 // A run continued in the second the run it continues was named in still gets
 // its own ID, so the earlier run's record is not overwritten.
 func TestRunIDAfterNeverReusesTheEarlierRunsID(t *testing.T) {
-	prev := newRunID()
+	prev := NewRunID()
 
 	assert.Assert(t, runIDAfter(prev) != prev)
 }

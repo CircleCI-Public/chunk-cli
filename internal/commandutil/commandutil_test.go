@@ -69,3 +69,33 @@ func TestExpandCommandFallsBackToAllWhenOnlyDeletionsChanged(t *testing.T) {
 
 	assert.Equal(t, got, "go test ./...")
 }
+
+// A package in a nested Go module is left out: go test run from the root
+// cannot name it, as it is outside the main module.
+func TestExpandCommandLeavesOutNestedModules(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "o", "r")
+	writeGoFile(t, workDir, "a/a.go")
+	writeGoFile(t, workDir, "tools/inner/inner.go")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "tools", "go.mod"), []byte("module example.com/tools\n"), 0o644))
+	git(t, workDir, "add", ".")
+	git(t, workDir, "commit", "-m", "add")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "a", "a.go"), []byte("package a\n\nvar X = 1\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "tools", "inner", "inner.go"), []byte("package inner\n\nvar X = 1\n"), 0o644))
+
+	got := ExpandCommand(workDir, "go test {{CHANGED_PACKAGES}}")
+
+	assert.Equal(t, got, "go test ./a")
+}
+
+func TestExpandCommandFallsBackToAllWhenOnlyNestedModulesChanged(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "o", "r")
+	writeGoFile(t, workDir, "tools/inner/inner.go")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "tools", "go.mod"), []byte("module example.com/tools\n"), 0o644))
+	git(t, workDir, "add", ".")
+	git(t, workDir, "commit", "-m", "add")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "tools", "inner", "inner.go"), []byte("package inner\n\nvar X = 1\n"), 0o644))
+
+	got := ExpandCommand(workDir, "go test {{CHANGED_PACKAGES}}")
+
+	assert.Equal(t, got, "go test ./...")
+}

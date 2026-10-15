@@ -2,6 +2,8 @@ package factory
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -122,7 +124,7 @@ func ReviewerCount(requested int, prompts []review.Prompt) int {
 // with the report so far. The work is committed either way once the implementer has
 // started, so it is not lost with the sidecars.
 func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
-	rep.RunID = newRunID()
+	rep.RunID = NewRunID()
 	cont := opts.Continue
 	request := opts.Prompt
 	if cont != nil {
@@ -301,19 +303,28 @@ func describeWork(stat string) string {
 	return stat
 }
 
-// newRunID names a run for when it starts.
-func newRunID() string {
-	return time.Now().UTC().Format("20060102-150405")
+// NewRunID names a run by its start time and a short random suffix. Runs are
+// keyed by repository, so two started in the same second, from different
+// clones of one repository, would otherwise share a worktree, record and pool.
+func NewRunID() string {
+	stamp := time.Now().UTC().Format("20060102-150405")
+	var b [3]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Never happens on supported platforms; the time alone still names the run.
+		return stamp
+	}
+	return stamp + "-" + hex.EncodeToString(b[:])
 }
 
 // runIDAfter names a run that continues prev. A run started with 'chunk
 // factory start' can be continued within the second it was named in, and
-// sharing its ID would overwrite its record, so this waits for the next one.
+// sharing its ID would overwrite its record. IDs carry a random suffix, so
+// they differ already; the loop only guards against the same ID drawn twice.
 func runIDAfter(prev string) string {
-	id := newRunID()
+	id := NewRunID()
 	for id == prev {
 		time.Sleep(50 * time.Millisecond)
-		id = newRunID()
+		id = NewRunID()
 	}
 	return id
 }

@@ -152,7 +152,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return err
 			}
-			logArg, err := factoryLogPath(root, logFile, logOn || verbose, time.Now())
+			logArg, err := factoryLogPath(root, logFile, logOn || verbose, factory.NewRunID())
 			if err != nil {
 				return err
 			}
@@ -515,14 +515,14 @@ func plainText(b []byte) []byte {
 // when --log-file names one, else the default when on, as --log and --verbose
 // turn it. It is absolute, since the daemon does not share this process's
 // working directory, and settled here, so this command knows where the log is
-// to show it. A default log is named for now, the run's start, in the
-// repository at root.
-func factoryLogPath(root, path string, on bool, now time.Time) (string, error) {
+// to show it. A default log is named name, in the repository at root; a name
+// made by factory.NewRunID keeps runs started in the same second apart.
+func factoryLogPath(root, path string, on bool, name string) (string, error) {
 	switch {
 	case path == "" && !on:
 		return "", nil
 	case path == "":
-		return factory.DefaultLogPath(root, now.UTC().Format("20060102-150405"))
+		return factory.DefaultLogPath(root, name)
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -617,8 +617,8 @@ func reportOutcome(status iostream.StatusFunc, result string, rounds int) error 
 // oneLineSummary collapses text to one line short enough for a status line.
 func oneLineSummary(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 160 {
-		return s[:157] + "..."
+	if r := []rune(s); len(r) > 160 {
+		return string(r[:157]) + "..."
 	}
 	return s
 }
