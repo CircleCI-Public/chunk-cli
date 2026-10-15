@@ -74,7 +74,13 @@ func reportDetectionSource(det validate.Detection, status iostream.StatusFunc) {
 	}
 	// With nothing detected, the notes are all detection has to say — and they
 	// are what explains a CircleCI config that exists but could not be used.
+	// They sit under the source line when there is one; otherwise they are
+	// flush left, but dimmed.
 	for _, note := range det.Notes {
+		if det.Source == "" {
+			status(iostream.LevelStep, ui.Dim(note))
+			continue
+		}
 		status(iostream.LevelInfo, note)
 	}
 }
@@ -100,7 +106,7 @@ func updateGitignore(dir string, status iostream.StatusFunc) {
 func writeAgentHooks(dir, homeDir string, commands []config.Command, status iostream.StatusFunc, confirm settings.ConfirmFunc) error {
 	res, err := settings.WriteClaude(dir, commands, confirm)
 	if err != nil {
-		return fileError(res.Path, err)
+		return agentFileError(res, err, status)
 	}
 	reportAgentFile(res, status,
 		"Hidden Claude Code config. Runs `chunk validate` before commits and after each agent session.",
@@ -111,12 +117,23 @@ func writeAgentHooks(dir, homeDir string, commands []config.Command, status iost
 	}
 	res, err = settings.WriteCodex(dir, commands, confirm)
 	if err != nil {
-		return fileError(res.Path, err)
+		return agentFileError(res, err, status)
 	}
 	reportAgentFile(res, status,
 		"Hidden Codex config. Same hooks as .claude/settings.json, for Codex sessions.",
 		"Codex hooks already up to date")
 	return nil
+}
+
+// agentFileError names the file that could not be written. When chunk could
+// not ask before changing an agent's file and wrote its example instead, the
+// example is the one that failed, and the user is told why it was written.
+func agentFileError(res settings.WriteResult, err error, status iostream.StatusFunc) error {
+	if res.Outcome != settings.WroteExample {
+		return fileError(res.Path, err)
+	}
+	status(iostream.LevelWarn, fmt.Sprintf("Could not confirm: %v", res.ConfirmErr))
+	return fileError(res.Example, err)
 }
 
 // reportAgentFile says what writing an agent's hook file did. about explains

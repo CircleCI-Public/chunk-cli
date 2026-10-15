@@ -16,6 +16,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/settings"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
 // recordStatus returns a StatusFunc that records each message, one per line.
@@ -158,4 +160,39 @@ func TestInstallSkillsInstallsSidecarSetup(t *testing.T) {
 		_, err := os.Stat(skillPath)
 		assert.NilError(t, err, "expected skill installed at %s", skillPath)
 	}
+}
+
+// Notes print flush left when there is no source line for them to sit under.
+func TestReportDetectionSourceNotesWithoutSource(t *testing.T) {
+	ui.SetColorEnabled(false)
+	t.Cleanup(func() { ui.SetColorEnabled(true) })
+	streams, _, errOut := testStreams()
+
+	reportDetectionSource(validate.Detection{Notes: []string{"config is dynamic"}}, initStatus(streams))
+	assert.Equal(t, errOut.String(), "config is dynamic\n")
+
+	errOut.Reset()
+	reportDetectionSource(validate.Detection{Source: "Makefile", Notes: []string{"no lint target"}}, initStatus(streams))
+	assert.Equal(t, errOut.String(), "Detected commands from Makefile\n  no lint target\n")
+}
+
+// When chunk cannot ask and the example it writes instead fails, the error
+// names the example, and says why it was written.
+func TestWriteAgentHooksNamesTheExampleThatFailed(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", t.TempDir()) // no codex on PATH
+	claudeDir := filepath.Join(dir, ".claude")
+	assert.NilError(t, os.MkdirAll(filepath.Join(claudeDir, "settings.example.json"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{"theme":"dark"}`+"\n"), 0o644))
+	status, out := recordStatus()
+
+	commands := []config.Command{{Name: "test", Run: "go test ./..."}}
+	err := writeAgentHooks(dir, t.TempDir(), commands, status, func(_, _ string) (bool, error) {
+		return false, errors.New("no terminal")
+	})
+
+	ue, ok := errors.AsType[*userError](err)
+	assert.Assert(t, ok, "got %v", err)
+	assert.Equal(t, ue.msg, "Could not update .claude/settings.example.json.")
+	assert.Assert(t, strings.Contains(out.String(), "Could not confirm: no terminal"), out.String())
 }
