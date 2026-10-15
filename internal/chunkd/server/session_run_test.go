@@ -305,3 +305,35 @@ func TestExecerForUnregisteredCommandStillStreamsOutput(t *testing.T) {
 
 	assert.Equal(t, outputRequestCount(cci), 1)
 }
+
+// TestExecerForRegisteredCommandStopsWhenTheDaemonStops pins that sharing the
+// caller's stream with the output store does not drop the store's context: a
+// daemon shutdown must still stop a registered command's stream even while the
+// caller's own context is live.
+func TestExecerForRegisteredCommandStopsWhenTheDaemonStops(t *testing.T) {
+	daemonCtx, stopDaemon := context.WithCancel(context.Background())
+	d := newTestDaemon()
+	d.out = newOutputStore(daemonCtx)
+	d.rcfg.Submit = func(context.Context, *sidecar.PoolEntry, string, map[string]string) (string, error) {
+		return "cmd-1", nil
+	}
+	d.rcfg.Stream = func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ circleci.OutputFn) (int, error) {
+		<-ctx.Done() // a command that would otherwise run indefinitely
+		return 0, ctx.Err()
+	}
+	exec := d.execerFor("/repo", func(string, string) string { return "step" })
+
+	errc := make(chan error, 1)
+	go func() {
+		_, err := exec(context.Background(), &sidecar.PoolEntry{ID: "sc-1"}, "sleep", nil, func(string, []byte) {}, nil)
+		errc <- err
+	}()
+	stopDaemon()
+
+	select {
+	case err := <-errc:
+		assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("registered command's stream outlived the daemon context")
+	}
+}

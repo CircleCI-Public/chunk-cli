@@ -215,8 +215,13 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 			// stream is called once here, fanning each run of output out to both
 			// the output store's buffer and the caller's own onOutput, so a
 			// registered command's output is not fetched from the API twice.
-			asBuffered := func(_ context.Context, _ string, onBuffer func([]byte)) (*circleci.ExecResponse, error) {
-				code, err := stream(ctx, pe, commandID, func(streamName string, data []byte) {
+			// The stream stops when either side's context ends: the caller's, as
+			// before, and the store's, so daemon shutdown still stops it.
+			asBuffered := func(storeCtx context.Context, _ string, onBuffer func([]byte)) (*circleci.ExecResponse, error) {
+				streamCtx, stop := context.WithCancel(ctx)
+				defer stop()
+				defer context.AfterFunc(storeCtx, stop)()
+				code, err := stream(streamCtx, pe, commandID, func(streamName string, data []byte) {
 					onBuffer(data)
 					onOutput(streamName, data)
 				})

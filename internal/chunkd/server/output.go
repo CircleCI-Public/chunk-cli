@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"strconv"
@@ -230,8 +231,9 @@ func (s *outputStore) register(reg chunkd.CommandReg, stream streamFn) <-chan st
 		defer cancel()
 		resp, err := stream(ctx, reg.CommandID, entry.buf.append)
 		if err != nil {
-			// A cancelled stream is a shutdown, not a failure worth logging.
-			if ctx.Err() == nil {
+			// A cancelled stream is a shutdown, or a caller sharing the stream
+			// giving up, not a failure worth logging.
+			if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 				log.Printf("chunkd: stream output for %s: %v", reg.CommandID, err)
 			}
 			entry.buf.finish(nil, err.Error())
