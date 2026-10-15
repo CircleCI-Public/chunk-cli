@@ -890,7 +890,9 @@ func searchModel() Model {
 // / opens a search over the runs: they narrow as it is typed, the selection
 // moves to one that is still listed, Enter keeps the filter and Esc drops it.
 func TestSlashSearchesTheRunList(t *testing.T) {
-	m, _ := press(searchModel(), '/')
+	m := searchModel()
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "/ to search"), "the search is discoverable before it is used:\n%s", m.render())
+	m, _ = press(m, '/')
 	assert.Assert(t, m.searching)
 
 	m = typeText(m, "cache")

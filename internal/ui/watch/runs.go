@@ -474,6 +474,8 @@ func (m Model) renderRunList(st watchStyles) []string {
 			cursor = "▏"
 		}
 		head += "  " + st.muted(truncate("/"+m.query, leftPaneWidth-8)+cursor)
+	} else {
+		head += "  " + st.vdim("/ to search")
 	}
 	lines := []string{head, ""}
 	if len(m.sessions) == 0 {
