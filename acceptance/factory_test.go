@@ -502,6 +502,11 @@ func claudeOnSidecar(sshSrv *fakes.SSHServer, installed bool) {
 		if !strings.Contains(command, "command -v claude") {
 			return "", 0, false
 		}
+		// A real sidecar runs the command without a shell, so a script not
+		// handed to one fails there the way a missing program does.
+		if !strings.HasPrefix(command, "bash -l -c ") {
+			return "", 127, true
+		}
 		if installed {
 			return "", 0, true
 		}

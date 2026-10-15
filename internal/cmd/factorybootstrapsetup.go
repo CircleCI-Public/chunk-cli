@@ -248,7 +248,9 @@ func checkClaudeInstalled(ctx context.Context, client *circleci.Client, tokenSou
 	if err != nil {
 		return sidecarSetupError(fmt.Errorf("open a session on the sidecar: %w", err), tokenSource)
 	}
-	result, err := sidecar.ExecOverSSH(ctx, session, claudecode.InstalledScript(), nil, nil)
+	// The sidecar's SSH server runs a command without a shell, so the script
+	// gets one of its own, as the setup steps do.
+	result, err := sidecar.ExecOverSSH(ctx, session, "bash -l -c "+sidecar.ShellEscape(claudecode.InstalledScript()), nil, nil)
 	if err != nil {
 		return &userError{msg: "Could not check for Claude Code on the sidecar.", err: err}
 	}
