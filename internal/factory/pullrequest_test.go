@@ -79,12 +79,20 @@ func TestPullRequestTitle(t *testing.T) {
 		{"leading blank lines and spacing", "\n\n  Add   a\tflag  \n", "Add a flag"},
 		{"nothing to say", " \n\n", "chunk factory run run-1"},
 		{"cut on a character", strings.Repeat("é", 100), strings.Repeat("é", 71) + "…"},
+		{
+			"cut between words",
+			"Add a short 'About' paragraph to the README describing what this demo app does",
+			"Add a short 'About' paragraph to the README describing what this demo…",
+		},
+		{"no tidy place to cut", "Fix " + strings.Repeat("x", 90), "Fix " + strings.Repeat("x", 67) + "…"},
+		{"fits as it is", strings.Repeat("a", 72), strings.Repeat("a", 72)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := PullRequestTitle(tt.prompt, "run-1")
 			assert.Equal(t, got, tt.want)
 			assert.Assert(t, utf8.ValidString(got))
+			assert.Assert(t, utf8.RuneCountInString(got) <= 72, "%d characters", utf8.RuneCountInString(got))
 		})
 	}
 }
@@ -120,4 +128,18 @@ func TestPullRequestBodyKeepsALongPromptShort(t *testing.T) {
 
 	assert.Assert(t, utf8.ValidString(got))
 	assert.Assert(t, utf8.RuneCountInString(got) < 9000, "the body was %d characters", utf8.RuneCountInString(got))
+}
+
+// A run that started from uncommitted work has that work as its branch's first
+// commit, so the pull request is bigger than the run's own change, and says so.
+func TestPullRequestBodySaysWhenTheBranchCarriesTheStartingWork(t *testing.T) {
+	rep := Report{Stat: "1 file changed, 4 insertions(+)", Outcome: Outcome{Rounds: 1}}
+
+	rep.Worktree = Worktree{Baseline: "aaa", Head: "bbb"}
+	with := PullRequestBody("add a flag", "run-1", rep)
+	assert.Assert(t, strings.Contains(with, "uncommitted work the run started from"), with)
+
+	rep.Worktree = Worktree{Baseline: "aaa", Head: "aaa"}
+	without := PullRequestBody("add a flag", "run-1", rep)
+	assert.Assert(t, !strings.Contains(without, "uncommitted"), without)
 }

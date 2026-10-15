@@ -59,7 +59,8 @@ func TestFactoryOpensAPullRequestOnceTheChecksPass(t *testing.T) {
 	_, stderr, err := runFactoryBuildCmd(t, "--open-pr", "add a --verbose flag")
 
 	assert.NilError(t, err, stderr)
-	assert.Assert(t, strings.Contains(stderr, "Opened pull request https://github.com/acme/widgets/pull/1"), stderr)
+	// The progress said so as it happened, and the summary does not say it again.
+	assert.Equal(t, strings.Count(stderr, "Opened pull request https://github.com/acme/widgets/pull/1"), 1, stderr)
 	pulls := gh.PullRequests()
 	assert.Equal(t, len(pulls), 1)
 	assert.Equal(t, pulls[0].Title, "add a --verbose flag")
@@ -115,7 +116,9 @@ func TestFactoryThatCannotOpenThePullRequestExitsWithAnError(t *testing.T) {
 	assert.Assert(t, strings.HasPrefix(ue.UserMessage(), "All checks passed, but the pull request could not be opened"), ue.UserMessage())
 	assert.Assert(t, strings.Contains(ue.UserMessage(), "Pull requests: write"), ue.UserMessage())
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk/factory/add-a-verbose-flag/run-1"), ue.Suggestion())
-	assert.Assert(t, strings.Contains(stderr, "Could not open a pull request"), stderr)
+	// Said once as it happened and once as the error, not a third time in the summary.
+	assert.Equal(t, strings.Count(stderr, "Resource not accessible by personal access token"), 1, stderr)
+	assert.Assert(t, strings.Contains(stderr, "could not open the pull request"), stderr)
 }
 
 func TestFactoryJSONCarriesThePullRequest(t *testing.T) {

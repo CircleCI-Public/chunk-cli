@@ -56,6 +56,11 @@ func TestCreatePullRequestSaysWhyGitHubRefused(t *testing.T) {
 			want: []string{"404", "no access to acme/widgets"},
 		},
 		{
+			name: "a token not authorized for single sign-on", status: http.StatusForbidden,
+			body: `{"message":"Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization."}`,
+			want: []string{"403", "single sign-on", "Configure SSO", "SAML enforcement"},
+		},
+		{
 			name: "a token GitHub rejects", status: http.StatusUnauthorized,
 			body: `{"message":"Bad credentials"}`,
 			want: []string{"401", "token was not accepted"},

@@ -364,8 +364,9 @@ chunk
   loop ends with every check passed, the daemon pushes the run's branch to `origin`
   (with the developer's own git credentials, never prompting) and opens a pull request
   on GitHub, ready for review; `--draft` opens a draft instead. The title is the
-  prompt's first line and the description holds the request, the diff stat and the
-  checks that passed. It targets the branch the run was started from if `origin` has
+  prompt's first line, cut between words to 72 characters, and the description holds
+  the request, the diff stat and the checks that passed, with a note when the branch
+  also carries the uncommitted work the run started from. It targets the branch the run was started from if `origin` has
   it, and the repository's default branch otherwise (a local-only branch, or a factory
   branch, cannot be a target). A run whose checks did not pass, was cancelled or made
   no changes pushes nothing and opens nothing. It needs a GitHub token with write
@@ -373,7 +374,8 @@ chunk
   daemon, which reads it at start) and an `origin` on GitHub; both are checked
   before the run starts, so a missing one costs nothing. `chunk auth` only checks that
   a token works, not what it may do, so a read-only token is found when the pull
-  request is refused. The branch includes the baseline commit when the run started
+  request is refused. An organization with single sign-on also refuses a token until
+  it is authorized there (GitHub's token page, Configure SSO), and the error says so. The branch includes the baseline commit when the run started
   from uncommitted work, so that commit is part of the pull request. If the checks
   passed but the pull request could not be opened (a refused token, a pull request that
   already exists), the work stays committed, and pushed if the push got that far; the

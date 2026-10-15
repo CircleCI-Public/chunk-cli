@@ -80,6 +80,13 @@ func pullRequestErr(op, repo string, err error) error {
 	case http.StatusUnauthorized:
 		msg = "the GitHub token was not accepted"
 	case http.StatusForbidden, http.StatusNotFound:
+		// An organization with single sign-on refuses a token until it is authorized
+		// there, which no scope fixes.
+		if strings.Contains(strings.ToLower(msg), "saml") {
+			msg = "the GitHub token must be authorized for this organization's single sign-on: open " +
+				"https://github.com/settings/tokens, choose the token, then Configure SSO and Authorize; GitHub said: " + msg
+			break
+		}
 		// GitHub answers 404 for a repository a token cannot see, and 403 or 404
 		// for one it can read but not write.
 		msg = fmt.Sprintf("the GitHub token has no access to %s, or not enough to open a pull request there "+

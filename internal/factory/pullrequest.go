@@ -49,7 +49,7 @@ func RemoteHasBranch(ctx context.Context, dir, remote, name string) (bool, error
 }
 
 // PullRequestTitle is the title a run's pull request gets: the prompt's first
-// line, cut on a character to what a listing shows. A prompt with no words in
+// line, cut between words to what a listing shows. A prompt with no words in
 // it falls back to naming the run.
 func PullRequestTitle(prompt, runID string) string {
 	for _, line := range strings.Split(prompt, "\n") {
@@ -58,7 +58,7 @@ func PullRequestTitle(prompt, runID string) string {
 		if line == "" {
 			continue
 		}
-		return cutRunes(line, maxPRTitleRunes)
+		return cutWords(line, maxPRTitleRunes)
 	}
 	return "chunk factory run " + runID
 }
@@ -74,6 +74,12 @@ func PullRequestBody(prompt, runID string, rep Report) string {
 	}
 	if rep.Stat != "" {
 		fmt.Fprintf(&b, "\n## Changes\n\n%s\n", rep.Stat)
+		// The run's branch starts from the developer's uncommitted work, committed
+		// first, so the pull request's own diff is larger than the run's change.
+		if rep.Worktree.Baseline != "" && rep.Worktree.Baseline != rep.Worktree.Head {
+			b.WriteString("\nThat counts only what the run changed. The first commit on this branch is the " +
+				"uncommitted work the run started from, which is part of this pull request too.\n")
+		}
 	}
 	fmt.Fprintf(&b, "\n## Review\n\nAll checks passed after %d round(s):\n\n", rep.Outcome.Rounds)
 	for _, c := range rep.Outcome.Checks {
@@ -98,4 +104,22 @@ func cutRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// cutWords cuts s to at most n characters, between words where it can, marking
+// a cut with an ellipsis. A single word longer than n is cut inside it.
+func cutWords(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	cut := n - 1
+	// Back up to the last space that leaves a title worth reading, not one so
+	// early that most of the line is lost.
+	for i := cut; i > n/2; i-- {
+		if r[i] == ' ' {
+			return strings.TrimRight(string(r[:i]), " ,;:-") + "…"
+		}
+	}
+	return string(r[:cut]) + "…"
 }

@@ -581,21 +581,19 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 }
 
 // printFactoryPullRequest says what became of the pull request a run was asked
-// to open.
+// to open, where the progress already shown has not. The run's progress said it
+// when one was opened or refused, as it happened, so only the rest is said here.
 func printFactoryPullRequest(f *chunkd.FactoryRun, status iostream.StatusFunc) {
 	pr := f.PullRequest
 	if pr == nil {
 		return
 	}
 	switch pr.State {
-	case chunkd.PROpened:
-		status(iostream.LevelDone, "Opened pull request "+pr.URL)
-	case chunkd.PRFailed:
-		status(iostream.LevelWarn, "Could not open a pull request: "+pr.Message)
 	case chunkd.PRSkipped:
 		status(iostream.LevelInfo, "No pull request opened: "+pr.Message)
 	case chunkd.PRPending, chunkd.PRPushing, chunkd.PROpening:
 		status(iostream.LevelWarn, "The pull request was not finished: the run ended while it was "+pr.State)
+	case chunkd.PROpened, chunkd.PRFailed:
 	}
 }
 
