@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -60,10 +61,12 @@ redirected, reads the prompt from stdin.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
-			if diffFile == "-" && len(args) == 0 {
+			// Stdin is the diff, so the prompt can only be an argument, and a -
+			// prompt would read the diff's stdin a second time.
+			if diffFile == "-" && (len(args) == 0 || args[0] == "-") {
 				return newUserError("With --diff -, pass the prompt as an argument.").
 					withCode("command.invalid_args").
-					withSuggestion(`git diff | chunk factory start --diff - "add a --verbose flag"`).
+					withSuggestion(`git -C ../scratch diff | chunk factory start --diff - "add a --verbose flag"`).
 					withExitCode(ExitBadArgs).
 					withoutDetail()
 			}
@@ -96,6 +99,13 @@ redirected, reads the prompt from stdin.`,
 				return err
 			}
 			rec, err := factory.Start(ctx, root, factory.Handoff{Prompt: prompt, Diff: diff})
+			if errors.Is(err, factory.ErrDiffAlreadyApplied) {
+				return newUserError("The diff is already in your files, so the worktree starts with it.").
+					withCode("command.invalid_args").
+					withSuggestion(`Leave out --diff: chunk factory start "add a --verbose flag"`).
+					withExitCode(ExitBadArgs).
+					withoutDetail()
+			}
 			if err != nil {
 				return &userError{msg: "Could not start a factory run.", err: err}
 			}

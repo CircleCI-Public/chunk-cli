@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,16 +70,19 @@ func TestContinuedRunThatFailsBeforeTheImplementerKeepsTheWork(t *testing.T) {
 	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
 	assert.NilError(t, err)
 
+	var messages []string
 	rep, err := Run(context.Background(), RunOptions{
 		Root:     root,
 		Continue: &Continuation{From: rec},
 		Attempts: 1,
 		Client:   client,
 		OrgID:    "org-1",
-		Status:   func(iostream.Level, string) {},
+		Status:   func(_ iostream.Level, msg string) { messages = append(messages, msg) },
 	})
 
 	assert.ErrorContains(t, err, "create the run's sidecars: ")
+	// The size of the work handed over is shown before anything runs.
+	assert.Assert(t, slices.Contains(messages, "Continuing run run-1 on "+rec.Branch+": 2 files changed, 1 insertion(+), 1 deletion(-)"), "%q", messages)
 	assert.Equal(t, rep.Worktree.Path, rec.Worktree)
 	assert.Equal(t, readFile(t, rec.Worktree, "flag.go"), "package main\n", "the work's files were not put back")
 	assert.Equal(t, gitOutput(t, rec.Worktree, "status", "--porcelain"), "")

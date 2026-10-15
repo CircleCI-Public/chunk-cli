@@ -126,6 +126,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	cont := opts.Continue
 	request := opts.Prompt
 	if cont != nil {
+		rep.RunID = runIDAfter(cont.From.RunID)
 		opts.Prompt, request = cont.prompt(), cont.request()
 	}
 	if opts.Verbose && opts.Log == "" {
@@ -303,6 +304,18 @@ func describeWork(stat string) string {
 // newRunID names a run for when it starts.
 func newRunID() string {
 	return time.Now().UTC().Format("20060102-150405")
+}
+
+// runIDAfter names a run that continues prev. A run started with 'chunk
+// factory start' can be continued within the second it was named in, and
+// sharing its ID would overwrite its record, so this waits for the next one.
+func runIDAfter(prev string) string {
+	id := newRunID()
+	for id == prev {
+		time.Sleep(50 * time.Millisecond)
+		id = newRunID()
+	}
+	return id
 }
 
 // runsDir is where a repository's runs keep their worktrees and records.

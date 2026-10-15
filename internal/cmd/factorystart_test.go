@@ -105,6 +105,7 @@ func TestFactoryStartRefusesAnUnusableDiff(t *testing.T) {
 		want string
 	}{
 		{args: []string{"--diff", "-"}, want: "With --diff -, pass the prompt as an argument."},
+		{args: []string{"--diff", "-", "-"}, want: "With --diff -, pass the prompt as an argument."},
 		{args: []string{"--diff", empty, "add a flag"}, want: "The diff is empty, so there is nothing to refine."},
 	} {
 		_, _, err := runFactoryStartCmd(t, tc.args...)

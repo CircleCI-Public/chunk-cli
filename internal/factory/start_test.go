@@ -118,3 +118,27 @@ func TestStartFromADiffThatDoesNotApplyCleansUp(t *testing.T) {
 	assert.ErrorContains(t, err, "apply the diff")
 	assert.Equal(t, gitOutput(t, root, "branch", "--list", "chunk/factory/*"), "")
 }
+
+// The worktree starts from the developer's uncommitted changes, so a diff of
+// those same changes is already in it and is refused rather than misapplied.
+// Nothing is left behind.
+func TestStartFromADiffOfTheCheckoutsOwnChangesIsRefused(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	ctx := context.Background()
+	root := newProject(t)
+	diff := gitOutput(t, root, "diff") + "\n"
+
+	_, err := Start(ctx, root, Handoff{Prompt: "add a flag", Diff: []byte(diff)})
+
+	assert.ErrorIs(t, err, ErrDiffAlreadyApplied)
+	assert.Equal(t, gitOutput(t, root, "branch", "--list", "chunk/factory/*"), "")
+}
+
+// A run continued in the second the run it continues was named in still gets
+// its own ID, so the earlier run's record is not overwritten.
+func TestRunIDAfterNeverReusesTheEarlierRunsID(t *testing.T) {
+	prev := newRunID()
+
+	assert.Assert(t, runIDAfter(prev) != prev)
+}

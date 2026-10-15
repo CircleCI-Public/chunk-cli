@@ -10,6 +10,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 )
 
+// ErrDiffAlreadyApplied is returned by Start when the diff is already in the
+// developer's files, as a git diff of the same checkout is: the worktree starts
+// from those files, so there is no first pass left to lay on them.
+var ErrDiffAlreadyApplied = errors.New("the diff is already in your files")
+
 // Handoff is the work a developer gives the factory to refine: the prompt that
 // says what the change is for, and the work so far as a diff against their
 // files. Where the diff was made, by hand, by a local agent or on a sidecar,
@@ -43,8 +48,11 @@ func Start(ctx context.Context, root string, h Handoff) (Record, error) {
 		err = saveRecord(dataDir, rec)
 	}
 	if err != nil {
-		// A worktree no record points at could not be refined, so it goes.
-		if rmErr := wt.Remove(ctx, root); rmErr != nil {
+		// A worktree no record points at could not be refined, so it goes,
+		// even when the start was interrupted.
+		rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
+		if rmErr := wt.Remove(rmCtx, root); rmErr != nil {
 			return Record{}, errors.Join(err, fmt.Errorf("remove the worktree %s: %w", wt.Path, rmErr))
 		}
 		return Record{}, err
@@ -70,7 +78,13 @@ func applyDiff(ctx context.Context, wt Worktree, diff []byte) error {
 	if err != nil {
 		return fmt.Errorf("save the diff: %w", err)
 	}
-	if out, err := (gitexec.Runner{Dir: wt.Path}).CombinedOutput(ctx, "apply", "--whitespace=nowarn", f.Name()); err != nil {
+	git := gitexec.Runner{Dir: wt.Path}
+	if out, err := git.CombinedOutput(ctx, "apply", "--whitespace=nowarn", f.Name()); err != nil {
+		// The worktree starts from the developer's uncommitted changes, so a
+		// diff of this checkout's own changes is already in it.
+		if _, revErr := git.CombinedOutput(ctx, "apply", "--reverse", "--check", f.Name()); revErr == nil {
+			return ErrDiffAlreadyApplied
+		}
 		return fmt.Errorf("apply the diff to your files: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
