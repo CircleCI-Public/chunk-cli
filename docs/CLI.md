@@ -168,7 +168,7 @@ chunk
 │   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
 │   │   --skip-sidecar              # Leave out setting up and recording the sidecar image
 │   │   --org-id <id>               # Organization ID
-│   │   --image <id>                # Sidecar image with Claude Code (default: cimg-base:2026.09-claude)
+│   │   --image <id>                # Image with Claude Code, for both sidecars (default: cimg-base:2026.09-claude)
 │   │   --model <name>              # Claude model (default: Claude Code's default)
 │   │   --timeout <duration>        # Max time for writing the prompts (default: 30m)
 │   │   --no-history                # Leave out the team's review comments from GitHub
@@ -446,9 +446,14 @@ chunk
   `chunk init` does, but without init's hooks, skills and completions, which
   are for `chunk validate`. Without `validation.sidecarImage` (and unless
   `--skip-sidecar`), it does what `sidecar setup` and then `sidecar snapshot
-  create` do, on a sidecar of its own rather than the active one: it syncs the
-  project to `/workspace/<repo>`, runs the environment's setup steps, snapshots
-  the sidecar as `<repo>-<date>`, records the snapshot as
+  create` do, on a sidecar of its own rather than the active one: it starts the
+  sidecar from `cimg-base:2026.09-claude` (or `--image`) rather than the
+  provisioner's default `cimg-base`, which has no Claude Code, since
+  `chunk factory` runs its implementer and reviewers as Claude Code on sidecars
+  made from the snapshot. It syncs the project to `/workspace/<repo>`, runs the
+  environment's setup steps, checks that `claude` is on the sidecar's `PATH`
+  (with `~/.local/bin`, as every Claude run does) and stops without a snapshot
+  when it is not, then snapshots the sidecar as `<repo>-<date>`, records the snapshot as
   `validation.sidecarImage`, marks the install and gate commands remote, and
   deletes the sidecar. The setup steps' output is shown only when one fails.
   An environment with no setup steps gets no sidecar or snapshot: it warns and

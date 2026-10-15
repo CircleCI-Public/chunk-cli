@@ -60,9 +60,11 @@ fetches the review comments its most active reviewers left on its pull
 requests, and Claude makes what they push back on into rules. --since and --top
 choose which comments; --no-history leaves them out.
 
-Bootstrap only reads the project, so it runs on a system image with Claude Code
-installed rather than the project's own sidecar image. --image picks another;
-it must have Claude Code.
+Both sidecars start from a system image with Claude Code installed rather than
+the provisioner's default, which has none: the review prompts are written by
+Claude, and chunk factory runs Claude on sidecars made from the snapshot. The
+snapshot is not taken unless Claude Code is there. --image picks another image
+for both; it must have Claude Code.
 
 Existing review prompts are never overwritten: bootstrap leaves them out of
 the run, and refuses an --output directory that has any. Pass --output to
@@ -169,6 +171,7 @@ little for Claude to read yet.`,
 					Client:      client,
 					TokenSource: rc.CircleCITokenSource,
 					OrgID:       resolvedOrgID,
+					Image:       image,
 					Cfg:         cfg,
 					Now:         time.Now(),
 				}
@@ -213,7 +216,7 @@ little for Claude to read yet.`,
 
 	cmd.Flags().StringVar(&output, "output", "", "Directory to write the prompts to (default: .chunk/reviews)")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
-	cmd.Flags().StringVar(&image, "image", "", "Sidecar image with Claude Code installed (default: "+factory.BootstrapImage+")")
+	cmd.Flags().StringVar(&image, "image", "", "Image with Claude Code installed, for both sidecars (default: "+factory.BootstrapImage+")")
 	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
 	cmd.Flags().DurationVar(&timeout, "timeout", factory.DefaultBootstrapTimeout, "max time for writing the prompts")
 	cmd.Flags().BoolVar(&noHistory, "no-history", false, "Write the prompts without the team's review comments from GitHub")

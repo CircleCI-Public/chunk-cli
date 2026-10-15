@@ -13,6 +13,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
@@ -126,6 +127,10 @@ type sidecarImageRun struct {
 	Client      *circleci.Client
 	TokenSource string
 	OrgID       string
+	// Image is the image the sidecar starts from, which must have Claude
+	// Code: chunk factory runs Claude on sidecars made from the snapshot.
+	// Empty is factory.BootstrapImage.
+	Image string
 	// Cfg is the project's config. The detected environment and the snapshot
 	// are recorded in it, and it is saved.
 	Cfg *config.ProjectConfig
@@ -138,6 +143,11 @@ type sidecarImageRun struct {
 // project to it and runs the environment's setup steps there, snapshots it and
 // records the snapshot as validation.sidecarImage. The sidecar is deleted
 // afterwards, as snapshot create does, and the active sidecar is left alone.
+//
+// The sidecar starts from an image with Claude Code rather than the
+// provisioner's default, which has none: chunk factory's implementer and
+// reviewers run Claude on sidecars made from the snapshot. Claude is checked
+// for before the snapshot is taken, so an image without it is never recorded.
 //
 // An environment with no setup steps has nothing to put in a snapshot, so no
 // sidecar is created for it and snapshotID is empty: recording the default
@@ -162,8 +172,12 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 		return "", err
 	}
 
-	status(iostream.LevelStep, "Creating a sidecar...")
-	sc, err := sidecar.Create(ctx, run.Client, run.OrgID, randomSidecarName(), "")
+	image := run.Image
+	if image == "" {
+		image = factory.BootstrapImage
+	}
+	status(iostream.LevelStep, fmt.Sprintf("Creating a sidecar from %s...", image))
+	sc, err := sidecar.Create(ctx, run.Client, run.OrgID, randomSidecarName(), image)
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", run.TokenSource, err); authErr != nil {
 			return "", authErr
@@ -200,6 +214,10 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 		return "", sidecarSetupError(err, run.TokenSource)
 	}
 
+	if err := checkClaudeInstalled(ctx, run.Client, run.TokenSource, sc.ID, image); err != nil {
+		return "", err
+	}
+
 	name := run.Repo + "-" + run.Now.Format(time.DateOnly)
 	status(iostream.LevelStep, fmt.Sprintf("Snapshotting the sidecar as %s...", name))
 	snap, err := run.Client.CreateSnapshot(ctx, sc.ID, name)
@@ -221,6 +239,31 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Recorded snapshot %s as validation.sidecarImage", snap.ID))
 	return snap.ID, nil
+}
+
+// checkClaudeInstalled reports whether Claude Code is installed on the
+// sidecar, which chunk factory needs on every sidecar made from its snapshot.
+func checkClaudeInstalled(ctx context.Context, client *circleci.Client, tokenSource, sidecarID, image string) error {
+	session, err := sidecar.OpenSession(ctx, client, sidecarID, false)
+	if err != nil {
+		return sidecarSetupError(fmt.Errorf("open a session on the sidecar: %w", err), tokenSource)
+	}
+	result, err := sidecar.ExecOverSSH(ctx, session, claudecode.InstalledScript(), nil, nil)
+	if err != nil {
+		return &userError{msg: "Could not check for Claude Code on the sidecar.", err: err}
+	}
+	if result.ExitCode == claudecode.ExitMissing {
+		return &userError{
+			msg:        fmt.Sprintf("Claude Code is not installed in the image %s, so chunk factory could not run on a snapshot of it. Nothing was recorded.", image),
+			suggestion: fmt.Sprintf("Omit --image to use %s, or pass an image that has Claude Code.", factory.BootstrapImage),
+			hideDetail: true,
+			err:        claudecode.ErrMissing,
+		}
+	}
+	if result.ExitCode != 0 {
+		return &userError{msg: "Could not check for Claude Code on the sidecar.", err: fmt.Errorf("check exited with status %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))}
+	}
+	return nil
 }
 
 // setupOutputLines is how much of a failed setup step's output is shown.

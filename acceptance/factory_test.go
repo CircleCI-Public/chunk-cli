@@ -495,11 +495,47 @@ func readProjectConfig(t *testing.T, workDir string) map[string]any {
 	return cfg
 }
 
+// claudeOnSidecar answers the check for Claude Code on a sidecar, which would
+// otherwise depend on whether this machine has it.
+func claudeOnSidecar(sshSrv *fakes.SSHServer, installed bool) {
+	sshSrv.OverrideLocally(func(command string) (string, int, bool) {
+		if !strings.Contains(command, "command -v claude") {
+			return "", 0, false
+		}
+		if installed {
+			return "", 0, true
+		}
+		return "", 97, true
+	})
+}
+
+// sidecarImages returns the image of each sidecar the CLI created.
+func sidecarImages(t *testing.T, cci *fakes.FakeCircleCI) []string {
+	t.Helper()
+	var images []string
+	for _, r := range filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances") {
+		if r.URL.Path != "/api/v3/sidecar/instances" {
+			continue
+		}
+		var req struct {
+			Data struct {
+				Attributes struct {
+					Image string `json:"image"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		assert.NilError(t, json.Unmarshal(r.Body, &req))
+		images = append(images, req.Data.Attributes.Image)
+	}
+	return images
+}
+
 // Bootstrap sets the project's environment up on a sidecar of its own,
 // snapshots it and records the snapshot, which is what chunk factory starts
 // its sidecars from. Prompts the project has are left as they are.
 func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, nil, "mine")
+	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, nil, "mine")
+	claudeOnSidecar(sshSrv, true)
 	marker := filepath.Join(t.TempDir(), "setup-ran")
 	writeChunkConfig(t, workDir, map[string]interface{}{
 		"environment": map[string]any{
@@ -515,6 +551,9 @@ func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
 	assert.NilError(t, err, "the setup step did not run")
 	cfg := readProjectConfig(t, workDir)
 	assert.Equal(t, cfg["validation"].(map[string]any)["sidecarImage"], "snap-1")
+	// chunk factory runs Claude on sidecars made from the snapshot, so the
+	// sidecar it is taken of starts from the image that has Claude.
+	assert.DeepEqual(t, sidecarImages(t, cci), []string{"cimg-base:2026.09-claude"})
 
 	snaps := filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots")
 	assert.Equal(t, len(snaps), 1)
@@ -540,7 +579,8 @@ func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
 // The sidecar image and the review prompts are set up at the same time, and
 // each part's progress says which it is.
 func TestFactoryBootstrapSetsUpTheImageAndPromptsTogether(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	claudeOnSidecar(sshSrv, true)
 	writeChunkConfig(t, workDir, map[string]interface{}{
 		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
 	})
@@ -601,4 +641,25 @@ func TestFactoryBootstrapRefusesAnOutputWithPrompts(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	assert.Assert(t, strings.Contains(result.Stderr, "already has review prompts"), "stderr: %s", result.Stderr)
 	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+}
+
+// An image without Claude Code is never recorded: chunk factory could not run
+// on a snapshot of it.
+func TestFactoryBootstrapRecordsNoImageWithoutClaude(t *testing.T) {
+	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, nil, "mine")
+	claudeOnSidecar(sshSrv, false)
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
+	})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--image", "cimg-base:2026.09"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "Claude Code is not installed in the image cimg-base:2026.09"), "stderr: %s", result.Stderr)
+	assert.DeepEqual(t, sidecarImages(t, cci), []string{"cimg-base:2026.09"})
+	assert.Equal(t, len(filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots")), 0)
+	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "DELETE", "/api/v3/sidecar/instances/")), 1,
+		"the sidecar is deleted")
+	_, hasValidation := readProjectConfig(t, workDir)["validation"]
+	assert.Assert(t, !hasValidation, "no image is recorded")
 }
