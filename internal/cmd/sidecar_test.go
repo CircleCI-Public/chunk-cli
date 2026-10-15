@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -224,8 +225,12 @@ func TestRecordSnapshotImage(t *testing.T) {
 			}
 			assert.NilError(t, config.SaveProjectConfig(dir, cfg))
 
+			confirm := func(label string, defaultYes bool) (bool, error) {
+				assert.Check(t, defaultYes, "pressing Enter should replace the image")
+				return tt.confirm(label, defaultYes)
+			}
 			var errOut strings.Builder
-			recordSnapshotImage(dir, "snap-new", iostream.Streams{Out: io.Discard, Err: &errOut}, tt.confirm)
+			recordSnapshotImage(dir, "snap-new", iostream.Streams{Out: io.Discard, Err: &errOut}, confirm)
 
 			got, err := config.LoadProjectConfig(dir)
 			assert.NilError(t, err)
@@ -243,5 +248,22 @@ func TestRecordSnapshotImageWithoutConfig(t *testing.T) {
 
 	_, err := config.LoadProjectConfig(dir)
 	assert.Assert(t, errors.Is(err, os.ErrNotExist), "no config is created: %v", err)
+	assert.Assert(t, strings.Contains(errOut.String(), "chunk config set validation.sidecarImage snap-new"), "stderr: %s", errOut.String())
+}
+
+func TestRecordSnapshotImageWithInvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	const bad = "{not json"
+	assert.NilError(t, os.WriteFile(path, []byte(bad), 0o644))
+
+	var errOut strings.Builder
+	recordSnapshotImage(dir, "snap-new", iostream.Streams{Out: io.Discard, Err: &errOut}, nil)
+
+	data, err := os.ReadFile(path)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), bad, "the invalid config is left untouched")
+	assert.Assert(t, strings.Contains(errOut.String(), "Warning: could not record"), "stderr: %s", errOut.String())
 	assert.Assert(t, strings.Contains(errOut.String(), "chunk config set validation.sidecarImage snap-new"), "stderr: %s", errOut.String())
 }
