@@ -19,7 +19,7 @@ func TestEnsureGitignoreCreatesNew(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
 	assert.NilError(t, err)
 	content := string(data)
-	for _, pattern := range LocalStatePatterns {
+	for _, pattern := range localStatePatterns {
 		assert.Assert(t, strings.Contains(content, pattern), "missing %s", pattern)
 	}
 	assert.Assert(t, !strings.Contains(content, ".chunk/config.json"), "must not ignore config.json")
@@ -37,7 +37,7 @@ func TestEnsureGitignoreAppendsToExisting(t *testing.T) {
 	assert.NilError(t, err)
 	content := string(data)
 	assert.Assert(t, strings.HasPrefix(content, existing))
-	for _, pattern := range LocalStatePatterns {
+	for _, pattern := range localStatePatterns {
 		assert.Assert(t, strings.Contains(content, pattern), "missing %s", pattern)
 	}
 }

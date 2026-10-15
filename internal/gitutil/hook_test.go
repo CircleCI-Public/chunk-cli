@@ -26,6 +26,33 @@ func TestCommonDirIsAbsolute(t *testing.T) {
 	assert.Equal(t, filepath.Base(got), ".git")
 }
 
+// From a subdirectory git answers relative to its own working directory, which
+// is the directory with its symlinks resolved. A symlink to a directory deeper
+// than the link itself changes how many ".." reach the repository, so the
+// answer has to be joined to the resolved directory, not the one given.
+func TestCommonDirFromSubdirectory(t *testing.T) {
+	repo := setupRepo(t)
+	sub := filepath.Join(repo, "a", "b")
+	assert.NilError(t, os.MkdirAll(sub, 0o755))
+	want, err := filepath.EvalSymlinks(filepath.Join(repo, ".git"))
+	assert.NilError(t, err)
+
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(sub, link); err != nil {
+		t.Skipf("cannot create symlinks: %v", err)
+	}
+
+	for name, dir := range map[string]string{"subdirectory": sub, "symlinked subdirectory": link} {
+		t.Run(name, func(t *testing.T) {
+			got, err := CommonDirCtx(context.Background(), dir)
+			assert.NilError(t, err)
+			got, err = filepath.EvalSymlinks(got)
+			assert.NilError(t, err, "the common dir must exist")
+			assert.Equal(t, got, want)
+		})
+	}
+}
+
 func TestEnsurePreCommitNewFile(t *testing.T) {
 	gitDir := filepath.Join(setupRepo(t), ".git")
 

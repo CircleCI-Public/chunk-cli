@@ -29,7 +29,15 @@ func CommonDirCtx(ctx context.Context, dir string) (string, error) {
 	}
 	common := trimNewline(out)
 	if !filepath.IsAbs(common) {
-		common = filepath.Join(dir, common)
+		// From a subdirectory git answers relative to its own working
+		// directory, which is dir with its symlinks resolved. Joining to dir
+		// as given lands in the wrong place when a symlink stands for a
+		// directory deeper than itself.
+		base := dir
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			base = real
+		}
+		common = filepath.Join(base, common)
 	}
 	return common, nil
 }

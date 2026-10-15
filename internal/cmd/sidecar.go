@@ -1136,7 +1136,9 @@ Example:
 				}, envFile, envVarsFlag)
 			}
 			if runErr == nil && cfg.MarkRemoteCommandsForSidecarSetup() && saveConfigOrWarn(dir, cfg, status) {
-				status(iostream.LevelInfo, "Marked install and gate commands as remote in .chunk/config.json")
+				// Plain and flush left, as it was before the steps moved; no
+				// status level prints that.
+				streams.ErrPrintln("Marked install and gate commands as remote in .chunk/config.json")
 			}
 			if runErr == nil {
 				streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it\n")

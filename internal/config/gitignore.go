@@ -9,14 +9,14 @@ import (
 	"strings"
 )
 
-// LocalStatePatterns are the .gitignore patterns for the machine-local state
+// localStatePatterns are the .gitignore patterns for the machine-local state
 // chunk keeps under .chunk/, such as sidecar pool IDs. .chunk/config.json and
 // the rest of the project's config must stay tracked.
-var LocalStatePatterns = []string{
+var localStatePatterns = []string{
 	".chunk/*-pool.json",
 }
 
-// EnsureGitignore appends LocalStatePatterns to the .gitignore in dir, creating
+// EnsureGitignore appends localStatePatterns to the .gitignore in dir, creating
 // it if need be. added reports whether any pattern was missing.
 func EnsureGitignore(dir string) (added bool, err error) {
 	path := filepath.Join(dir, ".gitignore")
@@ -28,7 +28,7 @@ func EnsureGitignore(dir string) (added bool, err error) {
 
 	content := string(existing)
 	var toAdd []string
-	for _, pattern := range LocalStatePatterns {
+	for _, pattern := range localStatePatterns {
 		if !strings.Contains(content, pattern) {
 			toAdd = append(toAdd, pattern)
 		}
