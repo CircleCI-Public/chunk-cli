@@ -107,10 +107,12 @@ Capture a configured environment so future sidecars start from a known-good stat
 
 ```bash
 chunk sidecar snapshot list
-chunk sidecar snapshot create --name checkpoint
+chunk sidecar snapshot create --name my-env
 # Later:
 chunk sidecar create --name new-sidecar --image <snapshot-id>
 ```
+
+`snapshot create` records the snapshot as `validation.sidecarImage` in `.chunk/config.json`, so `chunk validate` and `chunk factory` start their sidecars from it. If the project already records a different image, it asks before replacing it. Pass `--skip-config` for a throwaway checkpoint.
 
 **Note:** `snapshot create` consumes the source sidecar — it is deleted once the snapshot is captured and cannot be reused. To resume work, launch a new sidecar from the snapshot with `chunk sidecar create --image <snapshot-id>`. Use `chunk sidecar snapshot list` to look up snapshot IDs for your org.
 
