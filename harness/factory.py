@@ -6,6 +6,8 @@
     run           run a job: every task x agent x attempt, one trial directory each
     report        aggregate a job's trials into report.md and report.json
     rejudge       judge a job's finished trials again (after a judge or policy change), reusing their results
+    adaptive      the earlier adaptive experiment: one prompt, N graded passes, an advisor
+                  choosing each next profile (see factory_adaptive.py)
 
 A job directory is the unit of resumption: re-running `run` with the same
 --job-dir skips completed trials and retries the rest. See harness/README.md.
@@ -24,6 +26,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import factory_adaptive
 import factory_report
 from factory_agents import EVAL_REVIEWS, NotApplicable, load_agents, run_agent, summarize_factory
 from factory_judge import JUDGE_MODEL, judge, judge_rewards
@@ -299,7 +302,13 @@ def main() -> int:
     again.add_argument("job_dir", type=Path)
     again.add_argument("-n", "--concurrency", type=int, default=6)
 
+    adaptive = sub.add_parser("adaptive", help="run the adaptive single-prompt experiment",
+                              description=factory_adaptive.__doc__)
+    factory_adaptive.add_arguments(adaptive)
+
     args = parser.parse_args()
+    if args.command == "adaptive":
+        return factory_adaptive.run_experiment(args, adaptive)
     if args.command == "report":
         factory_report.write(args.job_dir.resolve())
         print((args.job_dir / "report.md").read_text(encoding="utf-8"))

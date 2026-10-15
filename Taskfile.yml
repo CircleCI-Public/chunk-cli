@@ -26,7 +26,7 @@ tasks:
     cmds:
       - go tool golangci-lint run {{.ARGS}}
       - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py
-      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py harness/factory_agents.py harness/factory_judge.py harness/factory_report.py harness/factory_tasks.py harness/review_eval.py harness/triage_replay.py
+      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py harness/factory_adaptive.py harness/factory_agents.py harness/factory_judge.py harness/factory_report.py harness/factory_tasks.py harness/review_eval.py harness/triage_replay.py
 
   fmt:
     desc: Format the code
@@ -80,6 +80,7 @@ tasks:
         task factory-harness -- run -k 3                         # every default agent, 3 trials each
         task factory-harness -- run --tasks react-search --agents factory-control,claude-code -k 1
         task factory-harness -- report harness/results/<job>
+        task factory-harness -- adaptive --passes 1 --profile targeted --no-advisor
     cmds:
       - uv run --project harness harness/factory.py {{.CLI_ARGS}}
 

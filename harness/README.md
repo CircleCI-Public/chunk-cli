@@ -115,6 +115,30 @@ needs no tasks, so it is the cheaper of the two for tuning prompts. `review_eval
 noise on correct changes as well, and `factory.py` measures whether the whole loop produces
 correct code.
 
+## Adaptive experiment (`factory.py adaptive`)
+
+The earlier harness, kept as a mode for exploring profiles on a single prompt. It has no
+hidden tests: each pass runs factory once from a pinned baseline, Claude grades the pass
+against `good_looks_like`, and an advisor picks the profile for the next pass.
+
+| File | Purpose |
+|---|---|
+| `factory-experiment.json` | Pass count, attempts, profiles (reviews, reviewers, implementer instructions) and `good_looks_like`. |
+| `factory-baseline.json` | The pinned chunk-cli revision each pass starts from. |
+| `targets/<repo>/` | The same two files for another repository, passed with `--config`, `--baseline-file` and `--target-repo`. |
+
+Prompts and reviews are shared with the tasks above: the default prompt is
+`tasks/session-list-failed/instruction.md`.
+
+```bash
+task factory-harness -- adaptive                                   # configured passes
+task factory-harness -- adaptive --passes 1 --profile targeted --no-advisor
+task factory-harness -- adaptive --results-dir harness/results/<stamp> --resume
+```
+
+Results go to `results/<stamp>/`: one `pass-NN/` per pass with the factory log, diff and
+`grade.json`, plus `leaderboard.md` and `best.json`.
+
 ## Review eval: noise (`review_eval.py`)
 
 The main question is how often reviews flag things that aren't real issues, or

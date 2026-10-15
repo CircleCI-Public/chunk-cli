@@ -74,7 +74,7 @@ def parse_json_response(text: str) -> dict:
     return json.loads(text)
 
 
-def ask_claude(prompt: str, model: str = JUDGE_MODEL, cwd: Path = HARNESS_ROOT,
+def ask_claude(prompt: str, model: str | None = JUDGE_MODEL, cwd: Path = HARNESS_ROOT,
                tools: list[str] | None = None) -> dict:
     """One Claude turn answering in JSON; tools are none unless given (read-only ones)."""
     response = ""
