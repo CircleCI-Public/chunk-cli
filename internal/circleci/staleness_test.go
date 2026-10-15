@@ -110,7 +110,7 @@ func TestSidecarTransitioning(t *testing.T) {
 	}{
 		{
 			name: "409 naming the condition",
-			err:  &StatusError{Op: "exec", StatusCode: http.StatusConflict, ServerMessage: "sandbox is transitioning"},
+			err:  &StatusError{Op: "exec", StatusCode: http.StatusConflict, ServerMessage: "sidecar is changing state; try again"},
 			want: true,
 		},
 		{
@@ -119,8 +119,8 @@ func TestSidecarTransitioning(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "transitioning wording on a different status",
-			err:  &StatusError{Op: "exec", StatusCode: http.StatusGone, ServerMessage: "sandbox is transitioning"},
+			name: "changing-state wording on a different status",
+			err:  &StatusError{Op: "exec", StatusCode: http.StatusGone, ServerMessage: "sidecar is changing state; try again"},
 			want: false,
 		},
 		{

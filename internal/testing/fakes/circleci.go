@@ -431,7 +431,7 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 	f.mu.Unlock()
 
 	if transitioning {
-		c.JSON(http.StatusConflict, gin.H{"error": gin.H{"id": "trace-1", "title": "sandbox is transitioning"}})
+		c.JSON(http.StatusConflict, gin.H{"error": gin.H{"id": "trace-1", "title": "sidecar is changing state; try again"}})
 		return
 	}
 

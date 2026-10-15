@@ -68,5 +68,5 @@ func sidecarTransitioning(err error) bool {
 	if !errors.As(err, &se) || se.StatusCode != http.StatusConflict {
 		return false
 	}
-	return strings.Contains(strings.ToLower(se.ServerMessage), "transitioning")
+	return strings.Contains(strings.ToLower(se.ServerMessage), "changing state")
 }
