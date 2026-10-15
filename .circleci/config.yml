@@ -144,7 +144,9 @@ jobs:
             --agents << parameters.agents >>
             -k << parameters.attempts >>
             --min-solved << parameters.min-solved >>
-          no_output_timeout: 60m
+          # Trials print nothing until they finish, and one may run up to the
+          # 75-minute factory limit (factory_agents.py) before its verifier starts.
+          no_output_timeout: 90m
       - run:
           name: Bundle the results
           when: always

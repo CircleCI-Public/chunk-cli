@@ -121,7 +121,14 @@ def run_trial(job_dir: Path, task: Task, agent_name: str, agent: dict, attempt: 
         write_json(directory / "trial.json", record)
         return record
 
-    record["checks"] = verify(task, clone, result.final, directory / "verifier")
+    try:
+        record["checks"] = verify(task, clone, result.final, directory / "verifier")
+    except Exception as error:
+        # One broken verifier must not stop the job writing its report.
+        (directory / "harness-error.log").write_text(traceback.format_exc(), encoding="utf-8")
+        record.update(status="errored", error=f"verifier: {error}", ended_utc=now())
+        write_json(directory / "trial.json", record)
+        return record
     record["reward"] = rewards(record["checks"])
     if use_judge and agent["kind"] not in ("oracle", "nop"):
         verdict = judge(task, record["checks"], diff, result.evidence)
