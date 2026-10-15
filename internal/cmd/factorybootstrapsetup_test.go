@@ -3,7 +3,6 @@ package cmd
 import (
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -63,8 +62,10 @@ func TestPlanBootstrap(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := planBootstrap(tt.cfg, tt.promptsErr, tt.skipSidecar, false, ".chunk/reviews")
 			assert.DeepEqual(t, got.skipped, tt.wantSkipped)
-			got.skipped = nil
-			assert.DeepEqual(t, got, tt.want, cmp.AllowUnexported(bootstrapPlan{}))
+			assert.Equal(t, got.Config, tt.want.Config)
+			assert.Equal(t, got.Sidecar, tt.want.Sidecar)
+			assert.Equal(t, got.Prompts, tt.want.Prompts)
+			assert.Equal(t, got.History, tt.want.History)
 			assert.Equal(t, got.empty(), tt.empty)
 		})
 	}
