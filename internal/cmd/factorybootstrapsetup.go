@@ -183,6 +183,9 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 	if err != nil {
 		return "", err
 	}
+	if cached {
+		_, _ = fmt.Fprintln(run.Output, msgUsingSavedEnvironment)
+	}
 	// Saved before the sidecar boots, so a setup step that fails does not
 	// lose the detected environment, as with sidecar setup.
 	if !cached {
