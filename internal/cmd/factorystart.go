@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,8 +11,11 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/factorystart"
 )
 
 func newFactoryStartCmd() *cobra.Command {
@@ -46,7 +50,16 @@ The worktree starts from your files as they are, uncommitted changes included,
 on a branch named chunk/factory/<description>/<run id>, like a build's.
 Nothing runs on a sidecar until you continue. The worktree's path is printed on
 stdout, and how to continue on stderr. A - prompt, or none with stdin
-redirected, reads the prompt from stdin.`,
+redirected, reads the prompt from stdin.
+
+Run with no prompt in a terminal to have Claude Code make the first pass:
+
+  chunk factory start
+
+You type the prompt, Claude Code works on it in the worktree on your machine,
+with your own login, and you see the diff it made. Enter hands the diff and the
+prompt to the factory, as chunk factory build --continue would; q keeps it in
+the worktree for later.`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
@@ -71,6 +84,11 @@ redirected, reads the prompt from stdin.`,
 					withoutDetail()
 			}
 			if f, ok := cmd.InOrStdin().(*os.File); ok && len(args) == 0 && term.IsTerminal(int(f.Fd())) {
+				// The TUI needs the terminal on stdout too, so cd "$(chunk
+				// factory start)" is still refused rather than open it.
+				if diffFile == "" && !jsonOut && !nonInteractive() && ui.RequireStdoutTTY() == nil {
+					return runFactoryStartTUI(cmd)
+				}
 				return newUserError("Pass the prompt as an argument or on stdin.").
 					withCode("command.invalid_args").
 					withSuggestion(`chunk factory start "add a --verbose flag", or chunk factory start < prompt.md`).
@@ -123,6 +141,84 @@ redirected, reads the prompt from stdin.`,
 	cmd.Flags().StringVar(&diffFile, "diff", "", "start from this patch of work done elsewhere (- for stdin)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
+}
+
+// runFactoryStartTUI has Claude Code make the first pass at a prompt the
+// developer types, shows them the diff, and hands it to the factory or keeps
+// it in the run's worktree, as they choose.
+func runFactoryStartTUI(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+	streams := iostream.FromCmd(cmd)
+	root, err := sessionProjectRoot(ctx)
+	if err != nil {
+		return err
+	}
+	if err := factory.CheckClaude(); err != nil {
+		return newUserError("Claude Code is not installed, so it cannot make the first pass.").
+			withCode("command.missing_dependency").
+			withSuggestion(`Install it from https://claude.com/claude-code, or make the first pass yourself: chunk factory start "add a --verbose flag"`).
+			withExitCode(ExitBadArgs).
+			wrap(err)
+	}
+	out, err := factorystart.Run(ctx, firstPassWork(root))
+	if err != nil {
+		return &userError{msg: "Could not show the prompt.", err: err}
+	}
+	p := out.Pass
+	status := newStatusFunc(streams)
+	switch {
+	case out.Choice == factorystart.Cancelled:
+		return &userError{msg: "No factory run started.", err: ui.ErrCancelled, hideDetail: true}
+	case out.Choice == factorystart.HandOff:
+		status(iostream.LevelDone, fmt.Sprintf("Handing factory run %s to the factory", p.RunID))
+		return handOffFirstPass(cmd, p.RunID)
+	case p.RunID == "":
+		return &userError{msg: "Could not start a factory run.", err: out.Err}
+	case errors.Is(out.Err, context.Canceled):
+		status(iostream.LevelWarn, fmt.Sprintf("Stopped Claude. What it did so far is in factory run %s.", p.RunID))
+	case out.Err != nil:
+		status(iostream.LevelError, fmt.Sprintf("Claude's first pass in factory run %s failed.", p.RunID))
+	default:
+		status(iostream.LevelDone, fmt.Sprintf("Kept factory run %s", p.RunID))
+	}
+	streams.ErrPrintf("  Work on the change in the worktree, then refine it with: chunk factory build --continue %s\n", p.RunID)
+	streams.Printf("%s\n", p.Worktree)
+	if out.Err != nil && !errors.Is(out.Err, context.Canceled) {
+		return &userError{msg: "Claude could not make the first pass.", err: out.Err}
+	}
+	return nil
+}
+
+// firstPassWork starts a run for the prompt and has Claude Code make the
+// first pass in its worktree.
+func firstPassWork(root string) factorystart.Work {
+	return func(ctx context.Context, prompt string, activity func(string)) (factorystart.Pass, error) {
+		rec, err := factory.Start(ctx, root, factory.Handoff{Prompt: prompt})
+		if err != nil {
+			return factorystart.Pass{}, err
+		}
+		pass := factorystart.Pass{RunID: rec.RunID, Worktree: rec.Worktree}
+		turn, err := factory.FirstPass(ctx, rec, func(a claudecode.Activity) { activity(activityLine(a)) })
+		pass.Summary = turn.Summary
+		if err != nil {
+			return pass, err
+		}
+		pass.Stat, err = factory.WorkStat(ctx, rec)
+		return pass, err
+	}
+}
+
+// handOffFirstPass refines a first pass as 'chunk factory build --continue'
+// does. Stdin is left out, so it is not asked what to do differently: the
+// pass was just made for the prompt.
+func handOffFirstPass(cmd *cobra.Command, runID string) error {
+	build := newFactoryBuildCmd()
+	build.SetArgs([]string{"--continue", runID})
+	build.SetIn(strings.NewReader(""))
+	build.SetOut(cmd.OutOrStdout())
+	build.SetErr(cmd.ErrOrStderr())
+	build.SilenceErrors = true
+	return build.ExecuteContext(cmd.Context())
 }
 
 // readDiff reads the patch --diff names, from stdin for -. An empty one is

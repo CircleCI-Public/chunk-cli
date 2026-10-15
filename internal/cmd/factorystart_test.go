@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -114,4 +115,58 @@ func TestFactoryStartRefusesAnUnusableDiff(t *testing.T) {
 		assert.Equal(t, ue.UserMessage(), tc.want, "args %q", tc.args)
 		assert.Equal(t, ue.UserExitCode(), ExitBadArgs, "args %q", tc.args)
 	}
+}
+
+// A first pass fired from the TUI is a started run with Claude Code's edits in
+// its worktree, and what Claude did is reported as it goes.
+func TestFirstPassWorkLeavesClaudesEditsInARun(t *testing.T) {
+	project := factoryProject(t)
+	dir := t.TempDir()
+	script := `#!/bin/sh
+printf 'package main\n' > flag.go
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"flag.go"}}]}}'
+echo '{"type":"result","result":"Added flag.go"}'
+`
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var activity []string
+	pass, err := firstPassWork(project)(t.Context(), "add a flag", func(s string) { activity = append(activity, s) })
+	assert.NilError(t, err)
+
+	rec, err := factory.LoadRecord(project, pass.RunID)
+	assert.NilError(t, err)
+	assert.Assert(t, rec.NeedsWork)
+	assert.Equal(t, rec.Prompt, "add a flag")
+	assert.Equal(t, pass.Worktree, rec.Worktree)
+	assert.Equal(t, pass.Summary, "Added flag.go")
+	assert.Assert(t, strings.Contains(pass.Stat, "flag.go | 1 +"), pass.Stat)
+	assert.DeepEqual(t, activity, []string{"Write flag.go"})
+}
+
+// Handing off a first pass continues its run with no guidance: the pass was
+// just made for the prompt, so there is nothing to ask.
+func TestHandingOffAFirstPassContinuesItsRun(t *testing.T) {
+	project := factoryProject(t)
+	writeFactoryRecord(t, project, "run-0")
+	cfg := fakeFactoryConfig(t, factory.ResultPassed)
+	got := make(chan factory.RunOptions, 1)
+	run := cfg.RunFactory
+	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got <- opts
+		return run(ctx, opts)
+	}
+	startSessionDaemon(t, cfg)
+	cmd := newFactoryStartCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetContext(t.Context())
+
+	assert.NilError(t, handOffFirstPass(cmd, "run-0"), errOut.String())
+
+	opts := <-got
+	assert.Assert(t, opts.Continue != nil, "the run was not told to continue")
+	assert.Equal(t, opts.Continue.From.RunID, "run-0")
+	assert.Equal(t, opts.Continue.Guidance, "")
 }

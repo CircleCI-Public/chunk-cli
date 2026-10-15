@@ -385,11 +385,18 @@ chunk
   agent first. `chunk factory start "<prompt>"` makes a run's worktree and
   branch, `chunk/factory/<description>/<run id>`, from the developer's files as
   they are (uncommitted changes in the baseline, as for a build), and keeps the
-  run's record. The diff is made one of two ways: in the worktree, with Claude
-  Code, another agent or none, or elsewhere and passed with `--diff <file>` (or
-  `-` for stdin, with the prompt as an argument), which applies it to the
-  developer's files in the worktree. Other ways, such as a TUI that iterates
-  with the developer, hand over the same diff and prompt. Nothing runs on a
+  run's record. The diff is made in the worktree, with Claude Code, another
+  agent or none, or elsewhere and passed with `--diff <file>` (or `-` for
+  stdin, with the prompt as an argument), which applies it to the developer's
+  files in the worktree. Run with no prompt in a terminal, `chunk factory
+  start` opens a TUI that makes the diff for them: the developer types the
+  prompt, Claude Code makes a first pass in the worktree on their machine
+  (`claude -p` with their own login, edits accepted, anything else left to
+  their own Claude Code permissions), and they see its summary and a per-file
+  diff stat. Enter hands the diff and prompt to the factory as `build
+  --continue` would, without asking what to do differently; q keeps the
+  worktree for later. Without a terminal on stdout, as in `cd "$(chunk factory
+  start)"`, it still asks for the prompt as an argument. Nothing runs on a
   sidecar. `chunk factory build --continue <run id>` hands the diff, whatever
   changed in the worktree since the baseline, committed or not, to the factory
   to refine against the prompt. Its implementer is told the diff is the
