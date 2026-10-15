@@ -5,10 +5,10 @@
   "profiles": {
     "candidate": {
       "reviews": [
-        "harness/targets/circleci-demo-javascript-react-app/reviews/requirements.md",
-        "harness/targets/circleci-demo-javascript-react-app/reviews/browser-navigation.md",
-        "harness/targets/circleci-demo-javascript-react-app/reviews/accessibility.md",
-        "harness/targets/circleci-demo-javascript-react-app/reviews/testing.md"
+        "harness/tasks/react-search/reviews/requirements.md",
+        "harness/tasks/react-search/reviews/browser-navigation.md",
+        "harness/tasks/react-search/reviews/accessibility.md",
+        "harness/tasks/react-search/reviews/testing.md"
       ],
       "implementer_instructions": "Install dependencies if needed. Format changed files and run the smallest focused test that exercises the change. Factory runs all configured validation afterward, so do not run the full suite unless diagnosis requires it.",
       "reviewers": 0

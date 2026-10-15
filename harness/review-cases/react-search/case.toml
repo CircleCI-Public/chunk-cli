@@ -1,0 +1,32 @@
+# Seeded defects in the react-search reference solution. Each mutant is an exact
+# find/replace on the solution-applied tree; `defect` is what a matching review
+# finding has to identify.
+task = "react-search"
+
+[[mutants]]
+name = "listener-leak"
+file = "src/App.tsx"
+defect = "The popstate listener is never removed: the effect returns no cleanup, so each mount leaks a listener that calls setState on an unmounted component."
+find = "    return () => window.removeEventListener('popstate', onPopState);\n"
+replace = ""
+
+[[mutants]]
+name = "push-state"
+file = "src/App.tsx"
+defect = "Typing calls history.pushState instead of replaceState, adding a history entry per keystroke, contrary to the request."
+find = "window.history.replaceState(window.history.state, '', url);"
+replace = "window.history.pushState(window.history.state, '', url);"
+
+[[mutants]]
+name = "hash-dropped"
+file = "src/App.tsx"
+defect = "The URL is rebuilt from pathname and search only, so updating q drops the URL hash, which the request says to preserve."
+find = "const url = new URL(window.location.href);"
+replace = "const url = new URL(window.location.pathname + window.location.search, window.location.origin);"
+
+[[mutants]]
+name = "untrimmed"
+file = "src/App.tsx"
+defect = "The query is not trimmed before matching, so surrounding whitespace in the user's query makes posts stop matching."
+find = "const needle = query.trim().toLowerCase();"
+replace = "const needle = query.toLowerCase();"

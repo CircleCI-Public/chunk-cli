@@ -1,0 +1,75 @@
+# Seeded defects in the factory-review-select reference solution. Each mutant is
+# an exact find/replace on the solution-applied tree; `defect` is what a
+# matching review finding has to identify. None is caught by the hidden checks.
+task = "factory-review-select"
+
+[[mutants]]
+name = "daemon-skips-selection-without-prompts"
+file = "internal/watchd/factory_run.go"
+defect = "The daemon only applies review_names when the reviews directory has prompts, so a POST /factory naming reviews for a project with no review prompts is accepted and starts a validation-only run instead of being refused with a 400 (only the CLI's up-front check refuses it)."
+find = """
+	prompts, err = factory.SelectReviews(prompts, req.ReviewNames)
+	if err != nil {
+		return Session{}, apiErr(http.StatusBadRequest, "%v", err)
+	}
+"""
+replace = """
+	// With no prompts there is nothing to narrow.
+	if len(prompts) > 0 {
+		prompts, err = factory.SelectReviews(prompts, req.ReviewNames)
+		if err != nil {
+			return Session{}, apiErr(http.StatusBadRequest, "%v", err)
+		}
+	}
+"""
+
+[[mutants]]
+name = "case-insensitive-check-exact-select"
+file = "internal/factory/validate.go"
+defect = "SelectReviews checks names case-insensitively but selects them exactly, so `--review Bugs` (or review_names [\"Bugs\"]) passes the unknown-name check yet selects no prompt: the run starts with no reviews and no reviewers instead of refusing the name."
+find = """
+	for _, p := range prompts {
+		known[p.Name] = true
+		available = append(available, p.Name)
+	}
+	wanted := make(map[string]bool, len(names))
+	var unknown []string
+	for _, n := range names {
+		if wanted[n] {
+			continue
+		}
+		wanted[n] = true
+		if !known[n] {
+"""
+replace = """
+	for _, p := range prompts {
+		known[strings.ToLower(p.Name)] = true
+		available = append(available, p.Name)
+	}
+	wanted := make(map[string]bool, len(names))
+	var unknown []string
+	for _, n := range names {
+		if wanted[n] {
+			continue
+		}
+		wanted[n] = true
+		if !known[strings.ToLower(n)] {
+"""
+
+[[mutants]]
+name = "json-skips-up-front-check"
+file = "internal/cmd/factory.go"
+defect = "With --json the CLI skips its up-front check of --review names and leaves the refusal to the daemon, so `chunk factory --json --review nope` exits 1 (the daemon's 400 shown as a generic error) instead of the bad-arguments exit code 2 with the list of available reviews."
+find = """
+			if err := checkReviewNames(prompts, reviewNames); err != nil {
+				return err
+			}
+"""
+replace = """
+			// With --json the daemon's refusal is reported as it gives it.
+			if !jsonOut {
+				if err := checkReviewNames(prompts, reviewNames); err != nil {
+					return err
+				}
+			}
+"""

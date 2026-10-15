@@ -24,6 +24,7 @@ share/
 *.log
 harness/logs/
 harness/results/
+harness/.cache/
 
 # Python bytecode
 __pycache__/

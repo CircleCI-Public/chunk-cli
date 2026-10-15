@@ -1,0 +1,74 @@
+# Agents an eval job can run. See factory_agents.py for each kind and for how
+# `reviews` entries are resolved. Task-specific environment notes (a task's
+# implementer_context) are appended to every agent's instructions.
+
+# What `factory.py run` runs when --agents is not given.
+default = ["factory-control", "factory-lean", "factory-targeted", "factory-consolidated", "claude-code"]
+
+# Applies the task's reference solution. Used by `factory.py check-tasks`.
+[agents.oracle]
+kind = "oracle"
+
+# Changes nothing. Used by `factory.py check-tasks`.
+[agents.nop]
+kind = "nop"
+
+# One Claude Code session on this machine with no review loop or sidecars:
+# what the factory loop has to beat.
+[agents.claude-code]
+kind = "claude-code"
+instructions = "Use your judgment about which validation commands to run before finishing."
+timeout = 1800
+
+[agents.factory-control]
+kind = "factory"
+attempts = 3
+reviews = ["repo"]
+implementer_instructions = "Use your judgment about which validation commands to run before finishing."
+
+[agents.factory-lean]
+kind = "factory"
+attempts = 3
+reviews = ["repo/adversarial.md", "repo/testing.md"]
+implementer_instructions = "Factory runs all repository-wide validation after this turn. Format changed files and run only the smallest focused test that exercises the changed behavior. Do not run repository-wide tests, lint, or vet."
+
+# Narrow generic lenses, specialised or extended by the task's own reviews/.
+[agents.factory-targeted]
+kind = "factory"
+attempts = 3
+reviews = ["reviews/requirements.md", "reviews/runtime.md", "reviews/testing.md", "reviews/safety.md", "task"]
+implementer_instructions = "Factory runs all repository-wide validation after this turn. Format changed files and run one focused test for the user-facing behavior, then stop. Do not run package-wide or repository-wide tests, lint, or vet."
+
+[agents.factory-consolidated]
+kind = "factory"
+attempts = 3
+reviews = ["reviews/consolidated.md"]
+reviewers = 1
+implementer_instructions = "Factory runs all repository-wide validation after this turn. Format changed files and run one focused test for the user-facing behavior, then stop."
+
+# factory-control with only its testing review changed: the repo's testing.md
+# asks for every error path and edge case, which the evals show keeps runs from
+# converging. This one reports a missing test as medium only with a concrete,
+# plausible regression of requested behaviour that every test would miss.
+[agents.factory-control-calibrated]
+kind = "factory"
+attempts = 3
+reviews = ["repo/adversarial.md", "repo/correctness.md", "reviews/testing-calibrated.md"]
+implementer_instructions = "Use your judgment about which validation commands to run before finishing."
+
+# For a chunk built with review triage and reviewer memory (run with
+# --chunk-src pointing at that build's checkout). Both have the repo's review
+# prompts, as factory-control does; the second turns triage and memory off, so
+# the pair differ only in those.
+[agents.factory-triage]
+kind = "factory"
+attempts = 3
+reviews = ["repo"]
+implementer_instructions = "Use your judgment about which validation commands to run before finishing."
+
+[agents.factory-triage-off]
+kind = "factory"
+attempts = 3
+reviews = ["repo"]
+implementer_instructions = "Use your judgment about which validation commands to run before finishing."
+args = ["--no-triage", "--no-review-memory"]

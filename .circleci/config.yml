@@ -4,6 +4,14 @@ orbs:
   shellcheck: circleci/shellcheck@3.4.0
   go: circleci/go@4.0.0
 
+parameters:
+  # Selects the factory eval workflows (harness/README.md). "none" runs the normal
+  # CI workflow. A scheduled pipeline sets this to "check" or "score".
+  eval:
+    type: enum
+    enum: ["none", "check", "score"]
+    default: "none"
+
 jobs:
   lint:
     docker:
@@ -82,8 +90,82 @@ jobs:
                   echo "OK: project-scope skill content embedded correctly"
                   head -5 .claude/skills/chunk-review/SKILL.md
 
+  eval-check-tasks:
+    docker:
+      - image: cimg/go:1.26-node
+    resource_class: large
+    steps:
+      - checkout
+      - run: task mod-download
+      - run:
+          name: Install uv
+          command: |
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+      - run:
+          name: Check every task with the reference solution and no change
+          command: task factory-harness -- check-tasks
+          no_output_timeout: 30m
+      - store_artifacts:
+          path: harness/results
+          destination: check-tasks
+
+  eval-score:
+    parameters:
+      tasks:
+        type: string
+        default: "config-duplicate-commands,session-list-failed"
+      agents:
+        type: string
+        default: "factory-control-calibrated,claude-code"
+      attempts:
+        type: integer
+        default: 2
+      min-solved:
+        type: string
+        default: "0.5"
+    docker:
+      - image: cimg/go:1.26-node
+    resource_class: large
+    steps:
+      - checkout
+      - run: task mod-download
+      - run:
+          name: Install uv and Claude Code
+          command: |
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+            npm install --global @anthropic-ai/claude-code
+      - run:
+          name: Run the tasks and score the results
+          command: >-
+            task factory-harness -- run
+            --tasks << parameters.tasks >>
+            --agents << parameters.agents >>
+            -k << parameters.attempts >>
+            --min-solved << parameters.min-solved >>
+          # Trials print nothing until they finish, and one may run up to the
+          # 75-minute factory limit (factory_agents.py) before its verifier starts.
+          no_output_timeout: 90m
+      - run:
+          name: Bundle the results
+          when: always
+          command: |
+            mkdir -p /tmp/eval
+            for job in harness/results/*/; do
+              name=$(basename "$job")
+              cp "$job/report.md" "/tmp/eval/$name-report.md" || true
+              cp "$job/report.json" "/tmp/eval/$name-report.json" || true
+              tar -czf "/tmp/eval/$name-trials.tgz" --exclude="$name/chunk" -C harness/results "$name" || true
+            done
+      - store_artifacts:
+          path: /tmp/eval
+          destination: eval
+
 workflows:
   ci:
+    when:
+      equal: [none, << pipeline.parameters.eval >>]
     jobs:
       - shellcheck/check
       - lint
@@ -99,3 +181,21 @@ workflows:
             - lint
             - test
             - acceptance-test
+
+  # The workflows below run only from a scheduled pipeline (or by hand) that sets
+  # the `eval` parameter. See harness/README.md, "Running on CI".
+  eval-check:
+    when:
+      or:
+        - equal: [check, << pipeline.parameters.eval >>]
+        - equal: [score, << pipeline.parameters.eval >>]
+    jobs:
+      - eval-check-tasks
+
+  eval-score:
+    when:
+      equal: [score, << pipeline.parameters.eval >>]
+    jobs:
+      - eval-score:
+          context:
+            - chunk-cli-eval

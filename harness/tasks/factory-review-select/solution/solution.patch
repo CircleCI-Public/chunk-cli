@@ -1,0 +1,272 @@
+diff --git a/docs/CLI.md b/docs/CLI.md
+index cc899eac..198885ec 100644
+--- a/docs/CLI.md
++++ b/docs/CLI.md
+@@ -157,6 +157,7 @@ chunk
+ │   --attempts <n>                  # Most rounds of review and validation (default: 3)
+ │   --reviewers <n>                 # Reviewer sidecars (0: one per review prompt)
+ │   --reviews <dir>                 # Directory of review prompts (default: .chunk/reviews)
++│   --review <name>                 # Run only this review prompt (repeatable; file name without extension)
+ │   --no-validate                   # Skip the project's validation commands
+ │   --keep-sidecars                 # Leave the sidecars running when the run ends
+ │   --org-id <id>                   # Organization ID
+@@ -348,7 +349,9 @@ chunk
+   so far. It uses the daemon's
+   credentials and the project's configured org and image unless `--org-id` or
+   `--image` say otherwise, and it is refused when `CHUNK_WATCHD_REMOTE_ADDR` is
+-  set. `--reviews` must name a directory inside the project. Every reviewer is
++  set. `--reviews` must name a directory inside the project. `--review <name>`, repeatable, runs only the named
++  prompts from that directory (a prompt's name is its file name without the
++  extension); a name matching no prompt is refused before the run starts. Every reviewer is
+   given the original factory prompt as the requested-change specification, so
+   the files in that directory can be reusable review lenses rather than copies
+   of a particular request. As it follows the run it prints the sidecars being
+diff --git a/internal/cmd/factory.go b/internal/cmd/factory.go
+index 3baa5e80..df82ff86 100644
+--- a/internal/cmd/factory.go
++++ b/internal/cmd/factory.go
+@@ -26,6 +26,7 @@ func newFactoryCmd() *cobra.Command {
+ 	var attempts, reviewers int
+ 	var keepSidecars, noValidate, jsonOut, verbose bool
+ 	var orgID, image, model, reviewsDir, logPath, implementerInstructions string
++	var reviewNames []string
+ 	var implementTimeout, reviewTimeout time.Duration
+ 
+ 	cmd := &cobra.Command{
+@@ -93,7 +94,11 @@ also shows the log here as the run writes it; it implies --log.`,
+ 			}
+ 			// The daemon loads these itself; loading them here first explains a
+ 			// mistake before anything starts.
+-			if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
++			prompts, _, err := factoryChecks(root, reviewsDir, cfg, noValidate)
++			if err != nil {
++				return err
++			}
++			if err := checkReviewNames(prompts, reviewNames); err != nil {
+ 				return err
+ 			}
+ 			relReviews, err := factoryReviewsDir(root, reviewsDir)
+@@ -115,6 +120,7 @@ also shows the log here as the run writes it; it implies --log.`,
+ 				ProjectRoot:             root,
+ 				Prompt:                  prompt,
+ 				ReviewsDir:              relReviews,
++				ReviewNames:             reviewNames,
+ 				NoValidate:              noValidate,
+ 				Attempts:                attempts,
+ 				Reviewers:               reviewers,
+@@ -147,6 +153,7 @@ also shows the log here as the run writes it; it implies --log.`,
+ 	cmd.Flags().IntVar(&attempts, "attempts", 3, "most rounds of review and validation")
+ 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
+ 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
++	cmd.Flags().StringArrayVar(&reviewNames, "review", nil, "run only this review prompt, by file name without extension (repeatable)")
+ 	cmd.Flags().BoolVar(&noValidate, "no-validate", false, "skip the project's validation commands")
+ 	cmd.Flags().BoolVar(&keepSidecars, "keep-sidecars", false, "leave the sidecars running when the run ends")
+ 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
+@@ -221,6 +228,26 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
+ 	return nil, nil, &userError{msg: fmt.Sprintf("Could not read review prompts from %s.", reviewsDir), err: err}
+ }
+ 
++// checkReviewNames refuses a --review naming no prompt in the reviews
++// directory, before anything starts; the daemon would refuse it too, but
++// without saying it was a bad argument.
++func checkReviewNames(prompts []review.Prompt, names []string) error {
++	_, err := factory.SelectReviews(prompts, names)
++	var unknown *factory.UnknownReviewsError
++	if !errors.As(err, &unknown) {
++		return err
++	}
++	suggestion := "There are no review prompts to choose from."
++	if len(unknown.Available) > 0 {
++		suggestion = "Available reviews: " + strings.Join(unknown.Available, ", ")
++	}
++	return newUserError(fmt.Sprintf("No review prompt named %s.", strings.Join(unknown.Unknown, ", "))).
++		withCode("command.invalid_args").
++		withSuggestion(suggestion).
++		withExitCode(ExitBadArgs).
++		withoutDetail()
++}
++
+ // printFactoryWork summarizes the work committed on the run's branch and says
+ // how to keep it.
+ func printFactoryWork(ctx context.Context, wt factory.Worktree, status iostream.StatusFunc, streams iostream.Streams) {
+diff --git a/internal/cmd/factory_daemon_test.go b/internal/cmd/factory_daemon_test.go
+index 2cf7ad32..1386b831 100644
+--- a/internal/cmd/factory_daemon_test.go
++++ b/internal/cmd/factory_daemon_test.go
+@@ -227,3 +227,38 @@ func TestFactoryRejectsAttemptsBelowOne(t *testing.T) {
+ 	assert.Equal(t, ue.UserMessage(), "--attempts must be at least 1.")
+ 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+ }
++
++// --review narrows the run to the named prompts, each once, and the reviewer
++// sidecars follow the selection.
++func TestFactoryRunsOnlyTheSelectedReviews(t *testing.T) {
++	project := factoryProject(t)
++	assert.NilError(t, os.WriteFile(filepath.Join(project, ".chunk", "reviews", "docs.md"), []byte("check docs"), 0o644))
++	got := make(chan factory.RunOptions, 1)
++	cfg := fakeSessionConfig("fine")
++	cfg.RunFactory = func(_ context.Context, opts factory.RunOptions) (factory.Report, error) {
++		got <- opts
++		return factory.Report{Started: true, Outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 1}}, nil
++	}
++	startSessionDaemon(t, cfg)
++
++	_, stderr, err := runFactoryCmd(t, "--review", "style", "--review", "bugs", "--review", "style", "add a --verbose flag")
++	assert.NilError(t, err, stderr)
++	opts := <-got
++	var names []string
++	for _, p := range opts.Prompts {
++		names = append(names, p.Name)
++	}
++	assert.DeepEqual(t, names, []string{"bugs", "style"})
++	assert.Equal(t, opts.Reviewers, 2)
++	assert.Equal(t, len(opts.Commands), 1, "validation still runs")
++}
++
++func TestFactoryRefusesAnUnknownReview(t *testing.T) {
++	factoryProject(t)
++	_, _, err := runFactoryCmd(t, "--review", "bugs", "--review", "nope", "add a --verbose flag")
++	var ue *userError
++	assert.Assert(t, errors.As(err, &ue), "got %v", err)
++	assert.Equal(t, ue.UserMessage(), "No review prompt named nope.")
++	assert.Equal(t, ue.Suggestion(), "Available reviews: bugs, style")
++	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
++}
+diff --git a/internal/factory/validate.go b/internal/factory/validate.go
+index e329a8f7..5ce2085e 100644
+--- a/internal/factory/validate.go
++++ b/internal/factory/validate.go
+@@ -62,6 +62,57 @@ func LoadChecks(dir string, optional bool, cfg *config.ProjectConfig, noValidate
+ 	return prompts, commands, nil
+ }
+ 
++// UnknownReviewsError is a selection of reviews naming prompts that are not
++// there. Available is every prompt's name, for saying what could be chosen.
++type UnknownReviewsError struct {
++	Unknown   []string
++	Available []string
++}
++
++func (e *UnknownReviewsError) Error() string {
++	available := "there are no review prompts"
++	if len(e.Available) > 0 {
++		available = "available: " + strings.Join(e.Available, ", ")
++	}
++	return fmt.Sprintf("unknown review(s) %s; %s", strings.Join(e.Unknown, ", "), available)
++}
++
++// SelectReviews keeps the prompts named in names, in the order loaded, each
++// once however often it is named. No names keeps every prompt. A name matching
++// no prompt is an *UnknownReviewsError.
++func SelectReviews(prompts []review.Prompt, names []string) ([]review.Prompt, error) {
++	if len(names) == 0 {
++		return prompts, nil
++	}
++	known := make(map[string]bool, len(prompts))
++	available := make([]string, 0, len(prompts))
++	for _, p := range prompts {
++		known[p.Name] = true
++		available = append(available, p.Name)
++	}
++	wanted := make(map[string]bool, len(names))
++	var unknown []string
++	for _, n := range names {
++		if wanted[n] {
++			continue
++		}
++		wanted[n] = true
++		if !known[n] {
++			unknown = append(unknown, n)
++		}
++	}
++	if len(unknown) > 0 {
++		return nil, &UnknownReviewsError{Unknown: unknown, Available: available}
++	}
++	selected := make([]review.Prompt, 0, len(wanted))
++	for _, p := range prompts {
++		if wanted[p.Name] {
++			selected = append(selected, p)
++		}
++	}
++	return selected, nil
++}
++
+ // runValidation runs each command in turn in the implementer's workspace, where
+ // the code under review already is, and returns one check per command. They
+ // run one after another because they share one checkout and one machine.
+diff --git a/internal/factory/validate_test.go b/internal/factory/validate_test.go
+new file mode 100644
+index 00000000..06e7c127
+--- /dev/null
++++ b/internal/factory/validate_test.go
+@@ -0,0 +1,39 @@
++package factory
++
++import (
++	"errors"
++	"testing"
++
++	"gotest.tools/v3/assert"
++
++	"github.com/CircleCI-Public/chunk-cli/internal/review"
++)
++
++func TestSelectReviews(t *testing.T) {
++	prompts := []review.Prompt{{Name: "bugs"}, {Name: "security"}, {Name: "style"}}
++	names := func(ps []review.Prompt) []string {
++		out := []string{}
++		for _, p := range ps {
++			out = append(out, p.Name)
++		}
++		return out
++	}
++
++	all, err := SelectReviews(prompts, nil)
++	assert.NilError(t, err)
++	assert.DeepEqual(t, names(all), []string{"bugs", "security", "style"})
++
++	some, err := SelectReviews(prompts, []string{"style", "bugs", "style"})
++	assert.NilError(t, err)
++	assert.DeepEqual(t, names(some), []string{"bugs", "style"}) // in load order, each once
++
++	_, err = SelectReviews(prompts, []string{"bugs", "nope", "nada", "nope"})
++	var unknown *UnknownReviewsError
++	assert.Assert(t, errors.As(err, &unknown), "got %v", err)
++	assert.DeepEqual(t, unknown.Unknown, []string{"nope", "nada"})
++	assert.DeepEqual(t, unknown.Available, []string{"bugs", "security", "style"})
++	assert.Error(t, err, "unknown review(s) nope, nada; available: bugs, security, style")
++
++	_, err = SelectReviews(nil, []string{"bugs"})
++	assert.Error(t, err, "unknown review(s) bugs; there are no review prompts")
++}
+diff --git a/internal/watchd/factory_run.go b/internal/watchd/factory_run.go
+index e789290e..933aca4f 100644
+--- a/internal/watchd/factory_run.go
++++ b/internal/watchd/factory_run.go
+@@ -59,6 +59,10 @@ func (d *daemon) startFactory(req FactoryRequest) (Session, error) {
+ 	if err != nil {
+ 		return Session{}, apiErr(http.StatusBadRequest, "%v", err)
+ 	}
++	prompts, err = factory.SelectReviews(prompts, req.ReviewNames)
++	if err != nil {
++		return Session{}, apiErr(http.StatusBadRequest, "%v", err)
++	}
+ 	orgID, image := req.OrgID, req.Image
+ 	if orgID == "" || image == "" {
+ 		cfgOrg, cfgImage, err := poolTarget(ps.root, cfg)
+diff --git a/internal/watchd/session_types.go b/internal/watchd/session_types.go
+index ad73e1b1..c8834765 100644
+--- a/internal/watchd/session_types.go
++++ b/internal/watchd/session_types.go
+@@ -457,7 +457,10 @@ type FactoryRequest struct {
+ 	// root; empty means .chunk/reviews, which may be missing when validation
+ 	// commands are enough.
+ 	ReviewsDir string `json:"reviews_dir,omitempty"`
+-	NoValidate bool   `json:"no_validate,omitempty"`
++	// ReviewNames runs only the review prompts with these names, the prompt
++	// files' names without their extension; empty runs every prompt.
++	ReviewNames []string `json:"review_names,omitempty"`
++	NoValidate  bool     `json:"no_validate,omitempty"`
+ 	// Attempts is the most rounds to check; zero means DefaultAttempts.
+ 	Attempts int `json:"attempts,omitempty"`
+ 	// Reviewers is how many reviewer sidecars to run; zero means one per

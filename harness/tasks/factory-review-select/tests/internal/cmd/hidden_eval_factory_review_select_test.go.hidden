@@ -1,0 +1,422 @@
+package cmd
+
+// Hidden acceptance tests for the factory-review-select eval task. The harness
+// copies this file in after the agent has finished, so the agent never sees it.
+// Every assertion traces to a sentence of the task's instruction.md; anything
+// the instruction leaves open (the order of the selected reviews, the wording of
+// errors beyond the names they must contain, comma-separated values) is not
+// checked.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/session"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+)
+
+// hiddenEvalRun is what the daemon handed one factory run.
+type hiddenEvalRun struct {
+	prompts   []string
+	reviewers int
+	commands  []string
+}
+
+// hiddenEvalRuns records the runs a fake daemon was asked to make.
+type hiddenEvalRuns struct {
+	mu   sync.Mutex
+	runs []hiddenEvalRun
+}
+
+func (r *hiddenEvalRuns) all() []hiddenEvalRun {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.runs)
+}
+
+func (r *hiddenEvalRuns) last(t *testing.T) hiddenEvalRun {
+	t.Helper()
+	all := r.all()
+	assert.Assert(t, len(all) > 0, "no factory run was started")
+	return all[len(all)-1]
+}
+
+// hiddenEvalDaemon runs a real daemon whose factory runs do one round without
+// sidecars or Claude: the round reviews with every prompt the run was given,
+// all of them passing, and the run ends having passed.
+func hiddenEvalDaemon(t *testing.T) *hiddenEvalRuns {
+	t.Helper()
+	runs := &hiddenEvalRuns{}
+	cfg := watchd.ReviewConfig{
+		Credential: review.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: "sk-test"},
+		RunFactory: func(_ context.Context, opts factory.RunOptions) (factory.Report, error) {
+			run := hiddenEvalRun{reviewers: opts.Reviewers}
+			for _, p := range opts.Prompts {
+				run.prompts = append(run.prompts, p.Name)
+			}
+			for _, c := range opts.Commands {
+				run.commands = append(run.commands, c.Name)
+			}
+			runs.mu.Lock()
+			runs.runs = append(runs.runs, run)
+			runs.mu.Unlock()
+
+			opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1, Prompt: opts.Prompt})
+			opts.OnEvent(factory.Event{Kind: factory.EventImplemented, Round: 1, Turn: factory.Turn{Summary: "done"}})
+			opts.OnEvent(factory.Event{Kind: factory.EventChecking, Round: 1})
+			var checks []factory.Check
+			for _, p := range opts.Prompts {
+				checks = append(checks, factory.Check{Name: p.Name, Kind: factory.KindReview, Status: factory.StatusPassed})
+			}
+			for _, c := range opts.Commands {
+				check := factory.Check{Name: c.Name, Kind: factory.KindValidate, Status: factory.StatusPassed}
+				opts.OnCheck(check)
+				checks = append(checks, check)
+			}
+			opts.OnEvent(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: checks})
+			return factory.Report{
+				RunID: "run-1", Started: true,
+				Outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 1, Checks: checks},
+			}, nil
+		},
+	}
+
+	dir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- watchd.RunDaemon(ctx, nil, "", nil, nil, watchd.WithReview(cfg)) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Error("daemon did not shut down")
+		}
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for !watchd.IsDaemonRunning() {
+		if time.Now().After(deadline) {
+			t.Fatal("daemon did not become reachable")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return runs
+}
+
+// hiddenEvalProject makes a git repository with a validation command and the
+// given files, and makes it the current directory. It keeps the test away from
+// the developer's own config and credentials.
+func hiddenEvalProject(t *testing.T, files map[string]string) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	t.Setenv(config.EnvChunkSessionID, "")
+	t.Setenv(session.EnvClaudeSessionID, "")
+	t.Setenv(config.EnvCircleCIBaseURL, "http://192.0.2.1")
+	t.Setenv(config.EnvAnthropicBaseURL, "http://192.0.2.1")
+	t.Setenv(config.EnvGitHubAPIURL, "http://192.0.2.1")
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "")
+
+	dir := t.TempDir()
+	run := func(args ...string) {
+		c := exec.Command("git", args...)
+		c.Dir = dir
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := c.CombinedOutput()
+		assert.NilError(t, err, string(out))
+	}
+	run("init", "-b", "main")
+	run("remote", "add", "origin", "https://github.com/acme/widgets.git")
+	files[".chunk/config.json"] = `{"orgID":"org-1","commands":[{"name":"test","run":"go test ./..."}]}`
+	for name, body := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		assert.NilError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		assert.NilError(t, os.WriteFile(path, []byte(body), 0o644))
+	}
+	run("add", ".")
+	run("commit", "-m", "init")
+	t.Chdir(dir)
+	return dir
+}
+
+// hiddenEvalThreeReviews is a project with the review prompts bugs, security
+// and style in .chunk/reviews.
+func hiddenEvalThreeReviews(t *testing.T) {
+	t.Helper()
+	hiddenEvalProject(t, map[string]string{
+		".chunk/reviews/bugs.md":     "find bugs",
+		".chunk/reviews/security.md": "find security holes",
+		".chunk/reviews/style.md":    "check style",
+	})
+}
+
+func hiddenEvalFactory(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+	cmd := newFactoryCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetArgs(args)
+	cmd.SetContext(t.Context())
+	err := cmd.Execute()
+	return out.String(), errOut.String(), err
+}
+
+type hiddenEvalRecord struct {
+	ProjectRoot string `json:"project_root"`
+	Rounds      []struct {
+		Reviews []struct {
+			Name string `json:"name"`
+		} `json:"reviews"`
+	} `json:"rounds"`
+}
+
+// hiddenEvalPasses runs chunk factory --json with args, which must succeed,
+// and returns the run's record and what the daemon handed the run.
+func hiddenEvalPasses(t *testing.T, runs *hiddenEvalRuns, args ...string) (hiddenEvalRecord, hiddenEvalRun) {
+	t.Helper()
+	before := len(runs.all())
+	stdout, stderr, err := hiddenEvalFactory(t, append(append([]string{"--json"}, args...), "add a --verbose flag")...)
+	assert.NilError(t, err, "args %q:\n%s", args, stderr)
+	var rec hiddenEvalRecord
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &rec), stdout)
+	assert.Equal(t, len(runs.all()), before+1, "args %q: want exactly one run started", args)
+	return rec, runs.last(t)
+}
+
+// hiddenEvalRecordedReviews is every review in the record's rounds, in order.
+func hiddenEvalRecordedReviews(rec hiddenEvalRecord) []string {
+	var names []string
+	for _, r := range rec.Rounds {
+		for _, p := range r.Reviews {
+			names = append(names, p.Name)
+		}
+	}
+	return names
+}
+
+func hiddenEvalSorted(names []string) []string {
+	s := slices.Clone(names)
+	slices.Sort(s)
+	return s
+}
+
+// hiddenEvalErrorText is everything chunk would print for err, as main
+// renders it, and the exit code it would exit with.
+func hiddenEvalErrorText(err error) (string, int) {
+	parts := []string{err.Error()}
+	if e, ok := err.(interface{ UserMessage() string }); ok {
+		parts = append(parts, e.UserMessage())
+	}
+	if e, ok := err.(interface{ Detail() string }); ok {
+		parts = append(parts, e.Detail())
+	}
+	if e, ok := err.(interface{ Suggestion() string }); ok {
+		parts = append(parts, e.Suggestion())
+	}
+	code := 1
+	if e, ok := err.(interface{ UserExitCode() int }); ok {
+		code = e.UserExitCode()
+	}
+	return strings.Join(parts, "\n"), code
+}
+
+// hiddenEvalRefused runs chunk factory with args, which must be refused as a
+// bad argument before any run starts, and returns what it printed.
+func hiddenEvalRefused(t *testing.T, runs *hiddenEvalRuns, args ...string) string {
+	t.Helper()
+	sessions, err := watchd.ListSessions("")
+	assert.NilError(t, err)
+	before := len(runs.all())
+
+	_, _, err = hiddenEvalFactory(t, append(args, "add a --verbose flag")...)
+	assert.Assert(t, err != nil, "args %q: want the run refused", args)
+	text, code := hiddenEvalErrorText(err)
+	assert.Equal(t, code, ExitBadArgs, "args %q: %s", args, text)
+
+	assert.Equal(t, len(runs.all()), before, "args %q: a run was started", args)
+	after, err := watchd.ListSessions("")
+	assert.NilError(t, err)
+	assert.Equal(t, len(after), len(sessions), "args %q: a session was started", args)
+	return text
+}
+
+func TestHiddenEvalFactoryReviewSelection(t *testing.T) {
+	runs := hiddenEvalDaemon(t)
+	hiddenEvalThreeReviews(t)
+
+	// "Without the flag, every review prompt runs, as now."
+	t.Run("without the flag every review runs", func(t *testing.T) {
+		rec, run := hiddenEvalPasses(t, runs)
+		assert.DeepEqual(t, hiddenEvalSorted(run.prompts), []string{"bugs", "security", "style"})
+		assert.Equal(t, run.reviewers, 3)
+		assert.DeepEqual(t, run.commands, []string{"test"})
+		assert.DeepEqual(t, hiddenEvalSorted(hiddenEvalRecordedReviews(rec)), []string{"bugs", "security", "style"})
+	})
+
+	// "runs only the named review prompts"; "The flag can be repeated to
+	// select several reviews"; "only the selected reviews run, and only they
+	// appear in the run's record"; "by default one per selected review"; "the
+	// project's validation commands still run".
+	t.Run("repeated flags run only the selected reviews", func(t *testing.T) {
+		rec, run := hiddenEvalPasses(t, runs, "--review", "bugs", "--review", "style")
+		assert.DeepEqual(t, hiddenEvalSorted(run.prompts), []string{"bugs", "style"})
+		assert.Equal(t, run.reviewers, 2)
+		assert.DeepEqual(t, run.commands, []string{"test"})
+		assert.DeepEqual(t, hiddenEvalSorted(hiddenEvalRecordedReviews(rec)), []string{"bugs", "style"})
+	})
+
+	// "naming the same review more than once selects it once"
+	t.Run("a review named twice runs once", func(t *testing.T) {
+		rec, run := hiddenEvalPasses(t, runs, "--review", "security", "--review", "security")
+		assert.DeepEqual(t, run.prompts, []string{"security"})
+		assert.Equal(t, run.reviewers, 1)
+		assert.DeepEqual(t, hiddenEvalRecordedReviews(rec), []string{"security"})
+	})
+
+	// "--reviewers is capped at the number of selected reviews"
+	t.Run("reviewers are capped at the selection", func(t *testing.T) {
+		_, run := hiddenEvalPasses(t, runs, "--review", "bugs", "--review", "style", "--reviewers", "3")
+		assert.Equal(t, run.reviewers, 2)
+		_, run = hiddenEvalPasses(t, runs, "--review", "bugs", "--review", "style", "--reviewers", "1")
+		assert.Equal(t, run.reviewers, 1)
+	})
+
+	// "the project's validation commands still run unless --no-validate is
+	// given"
+	t.Run("no-validate still applies", func(t *testing.T) {
+		_, run := hiddenEvalPasses(t, runs, "--review", "bugs", "--no-validate")
+		assert.DeepEqual(t, run.prompts, []string{"bugs"})
+		assert.Equal(t, len(run.commands), 0, "%v", run.commands)
+	})
+
+	// "A name that matches no review prompt is refused before the run starts:
+	// chunk factory exits with the bad-arguments exit code (2), and its error
+	// names each unknown review and lists the names of the reviews that are
+	// available."
+	t.Run("unknown names are refused", func(t *testing.T) {
+		text := hiddenEvalRefused(t, runs, "--review", "bugs", "--review", "nope", "--review", "nada")
+		for _, want := range []string{"nope", "nada", "security", "style"} {
+			assert.Assert(t, strings.Contains(text, want), "missing %q in:\n%s", want, text)
+		}
+	})
+}
+
+// "It selects from whichever directory the run uses: the default
+// .chunk/reviews, or the one given with --reviews."
+func TestHiddenEvalFactoryReviewSelectionFromReviewsDir(t *testing.T) {
+	runs := hiddenEvalDaemon(t)
+	hiddenEvalProject(t, map[string]string{
+		".chunk/reviews/bugs.md": "find bugs",
+		"lenses/api.md":          "check the API",
+		"lenses/docs.txt":        "check the docs",
+	})
+
+	rec, run := hiddenEvalPasses(t, runs, "--reviews", "lenses", "--review", "docs")
+	assert.DeepEqual(t, run.prompts, []string{"docs"})
+	assert.DeepEqual(t, hiddenEvalRecordedReviews(rec), []string{"docs"})
+
+	// bugs is a review in .chunk/reviews, not in the directory the run uses.
+	text := hiddenEvalRefused(t, runs, "--reviews", "lenses", "--review", "bugs")
+	for _, want := range []string{"bugs", "api", "docs"} {
+		assert.Assert(t, strings.Contains(text, want), "missing %q in:\n%s", want, text)
+	}
+}
+
+// "This includes a project whose reviews directory has no prompts at all."
+func TestHiddenEvalFactoryReviewSelectionWithoutPrompts(t *testing.T) {
+	runs := hiddenEvalDaemon(t)
+	hiddenEvalProject(t, map[string]string{"README.md": "widgets"})
+
+	// Precondition: validation commands alone are enough for a run.
+	_, run := hiddenEvalPasses(t, runs)
+	assert.Equal(t, len(run.prompts), 0)
+
+	text := hiddenEvalRefused(t, runs, "--review", "bugs")
+	assert.Assert(t, strings.Contains(text, "bugs"), text)
+}
+
+// "The watch daemon enforces the same rules ...: the factory request (POST
+// /factory) takes the selection as review_names, a JSON array of names, and an
+// unknown name is refused with a 400 whose message names it, without starting
+// a run."
+func TestHiddenEvalFactoryReviewSelectionOnTheDaemon(t *testing.T) {
+	runs := hiddenEvalDaemon(t)
+	hiddenEvalThreeReviews(t)
+	// A run from the CLI has the daemon track the project.
+	rec, _ := hiddenEvalPasses(t, runs)
+	root := rec.ProjectRoot
+	assert.Assert(t, root != "")
+
+	request := func(names ...string) watchd.FactoryRequest {
+		raw, err := json.Marshal(map[string]any{"project_root": root, "prompt": "add a --verbose flag", "review_names": names})
+		assert.NilError(t, err)
+		var req watchd.FactoryRequest
+		assert.NilError(t, json.Unmarshal(raw, &req))
+		return req
+	}
+
+	t.Run("unknown names are refused", func(t *testing.T) {
+		before := len(runs.all())
+		sessions, err := watchd.ListSessions("")
+		assert.NilError(t, err)
+
+		_, err = watchd.StartFactory(request("style", "nope"))
+		var refused *watchd.SessionRefused
+		assert.Assert(t, errors.As(err, &refused), "got %v", err)
+		assert.Equal(t, refused.Status, 400)
+		assert.Assert(t, strings.Contains(refused.Message, "nope"), refused.Message)
+
+		after, err := watchd.ListSessions("")
+		assert.NilError(t, err)
+		assert.Equal(t, len(after), len(sessions), "a session was started")
+		assert.Equal(t, len(runs.all()), before, "a run was started")
+	})
+
+	t.Run("known names select the reviews", func(t *testing.T) {
+		id, err := watchd.StartFactory(request("style", "security", "style"))
+		assert.NilError(t, err)
+		hiddenEvalWait(t, id)
+		run := runs.last(t)
+		assert.DeepEqual(t, hiddenEvalSorted(run.prompts), []string{"security", "style"})
+		assert.Equal(t, run.reviewers, 2)
+		assert.DeepEqual(t, run.commands, []string{"test"})
+	})
+}
+
+func hiddenEvalWait(t *testing.T, id string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		detail, err := watchd.FetchSession(id)
+		assert.NilError(t, err)
+		if detail.State.Finished() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s did not finish: %s", id, detail.State)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

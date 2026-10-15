@@ -1,0 +1,41 @@
+# Seeded defects in the session-list-failed reference solution. Each mutant is an
+# exact find/replace on the solution-applied tree; `defect` is what a matching
+# review finding has to identify.
+task = "session-list-failed"
+
+[[mutants]]
+name = "json-unfiltered"
+file = "internal/cmd/session.go"
+defect = "--failed filters only the text output: the JSON branch returns before the filter is applied, so `session list --failed --json` still lists every session."
+find = """
+			if failedOnly {
+				sessions = failedSessions(sessions)
+			}
+			streams := iostream.FromCmd(cmd)
+			if jsonOut {
+				return iostream.PrintJSON(streams.Out, sessions)
+			}
+"""
+replace = """
+			streams := iostream.FromCmd(cmd)
+			if jsonOut {
+				return iostream.PrintJSON(streams.Out, sessions)
+			}
+			if failedOnly {
+				sessions = failedSessions(sessions)
+			}
+"""
+
+[[mutants]]
+name = "not-done-is-failed"
+file = "internal/cmd/session.go"
+defect = "The filter keeps every session that is not done, so running, paused and cancelled sessions are listed as well as failed ones."
+find = "if s.State == watchd.SessionFailed {"
+replace = "if s.State != watchd.SessionDone {"
+
+[[mutants]]
+name = "undocumented"
+file = "docs/CLI.md"
+defect = "The --failed flag is not documented in docs/CLI.md, which the request requires."
+find = "│       --failed                    # Show only failed sessions\n"
+replace = ""
