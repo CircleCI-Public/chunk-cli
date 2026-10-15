@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
@@ -483,11 +484,12 @@ func (m Model) renderRunList(st watchStyles) []string {
 		default:
 			lines = append(lines, "  "+icon+" "+title)
 		}
-		status := runStatus(r.s)
+		status := runDetail(r.s)
 		if len(m.projects) > 1 {
 			status = r.label + " · " + status
 		}
-		lines = append(lines, "    "+st.vdim(truncate(status, leftPaneWidth-4)))
+		chip := runChip(st, r.s)
+		lines = append(lines, "    "+chip+" "+st.vdim(truncate(status, leftPaneWidth-5-lipgloss.Width(chip))))
 	}
 	return append(lines, "")
 }
@@ -537,13 +539,45 @@ func runStatus(s chunkd.Session) string {
 	return out
 }
 
+// outcomeFailed is how a run that failed is named in the run list.
+const outcomeFailed = "failed"
+
+// runChip is the run's state as a coloured block: the one thing in the run
+// list the eye should find first.
+func runChip(st watchStyles, s chunkd.Session) string {
+	text, bg := "running", "4"
+	if s.State != chunkd.SessionRunning {
+		text = truncate(runOutcome(s), 14)
+		switch text {
+		case "cancelled", "no change", "stuck":
+			bg = "3"
+		case outcomeFailed, "still failing":
+			bg = "1"
+		default:
+			bg = "2"
+		}
+	}
+	return st.Chip.Background(lipgloss.Color(bg)).Render(" " + text + " ")
+}
+
+// runDetail is runStatus without the word the chip already says.
+func runDetail(s chunkd.Session) string {
+	if s.State == chunkd.SessionRunning {
+		return runStatus(s)
+	}
+	if s.EndedAt != nil {
+		return ago(*s.EndedAt)
+	}
+	return ""
+}
+
 // runOutcome is how an ended run came out, in a word or two.
 func runOutcome(s chunkd.Session) string {
 	switch s.State {
 	case chunkd.SessionCancelled:
 		return "cancelled"
 	case chunkd.SessionFailed:
-		return "failed"
+		return outcomeFailed
 	case chunkd.SessionRunning, chunkd.SessionDone:
 	}
 	if f := s.Factory; f != nil {
@@ -559,7 +593,7 @@ func runOutcome(s chunkd.Session) string {
 		}
 	}
 	if loopFailed(s) {
-		return "failed"
+		return outcomeFailed
 	}
 	return "done"
 }

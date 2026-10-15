@@ -399,8 +399,8 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 	if nImpl == 1 {
 		width = max(width, utf8.RuneCountInString(rows[0].name)-2)
 	}
-	draw := func(row runRow, indent, nameWidth int) {
-		line := pad(idx, indent) + row.icon + "  " + row.name + strings.Repeat(" ", max(nameWidth-utf8.RuneCountInString(row.name), 0))
+	draw := func(row runRow, indent, nameWidth int, branch string) {
+		line := pad(idx, indent) + branch + row.icon + "  " + row.name + strings.Repeat(" ", max(nameWidth-utf8.RuneCountInString(row.name), 0))
 		if row.detail != "" {
 			line += "   " + row.detail
 		}
@@ -412,7 +412,7 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 		idx++
 	}
 	if nImpl == 1 {
-		draw(rows[0], 4, width+2)
+		draw(rows[0], 4, width+2, "")
 	}
 	if len(rows) > nImpl {
 		label := "    " + st.vdim("validate")
@@ -420,8 +420,13 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 			label += st.dim(fmt.Sprintf(" · %d of %d done", total-pending, total))
 		}
 		lines = append(lines, label)
-		for _, row := range rows[nImpl:] {
-			draw(row, 6, width)
+		for i, row := range rows[nImpl:] {
+			// A tree down the left, so the group reads as one thing.
+			branch := "├─ "
+			if i == len(rows)-nImpl-1 {
+				branch = "└─ "
+			}
+			draw(row, 4, width, st.vdim(branch))
 		}
 	}
 	if r.Note != "" {

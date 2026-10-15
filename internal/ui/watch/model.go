@@ -66,6 +66,8 @@ type watchStyles struct {
 	Error    lipgloss.Style
 	Muted    lipgloss.Style
 	VDim     lipgloss.Style
+	// Chip is the base of a coloured label; the caller sets its background.
+	Chip lipgloss.Style
 }
 
 func (s watchStyles) dim(text string) string      { return s.Dim.Render(text) }
@@ -90,6 +92,7 @@ func newWatchStyles(hasDark bool) watchStyles {
 		Error:    lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
 		Muted:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("252"), lipgloss.Color("250"))),
 		VDim:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242"))),
+		Chip:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")),
 	}
 }
 
@@ -547,7 +550,7 @@ func (m Model) renderHeader(st watchStyles) string {
 	if r := len(m.sessions); r > 0 {
 		count = fmt.Sprintf("%d run%s · %s", r, plural(r), count)
 	}
-	title := st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
+	title := st.teal("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
 	right := m.runTag(st) + m.connectionTag(st) + "  " + st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
@@ -1607,12 +1610,21 @@ func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
 // leftover than live.
 const staleAfter = 24 * time.Hour
 
+// maxSidecarAge is how long a sidecar can sit untouched before the dashboard
+// stops listing it.
+const maxSidecarAge = 5 * 24 * time.Hour
+
 // filterSidecars keeps every sidecar the API has confirmed, and unconfirmed
 // ones only while they have been active within staleAfter.
 func filterSidecars(sidecars []sidecarInfo) []sidecarInfo {
 	now := time.Now()
 	var kept []sidecarInfo
 	for _, sc := range sidecars {
+		// Whatever the API still lists, a sidecar nobody has touched for days is
+		// not what the dashboard is for.
+		if eff := effectiveActivity(sc); !eff.IsZero() && now.Sub(eff) > maxSidecarAge {
+			continue
+		}
 		if sc.verified || within(now, sc, staleAfter) {
 			kept = append(kept, sc)
 		}

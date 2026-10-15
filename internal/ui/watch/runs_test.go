@@ -964,3 +964,40 @@ func TestFilterDoesNotHideRunsFromTheHeader(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "1 running"), "a hidden live run is still in flight:\n%s", out)
 	assert.Assert(t, strings.Contains(out, "no other sidecars"), out)
 }
+
+// A sidecar nobody has touched for days is not listed, even though the API
+// still knows it.
+func TestFilterSidecarsDropsOnesOlderThanFiveDays(t *testing.T) {
+	now := time.Now()
+	kept := filterSidecars([]sidecarInfo{
+		{id: "fresh", verified: true, lastActivity: now.Add(-2 * time.Hour)},
+		{id: "old", verified: true, lastActivity: now.Add(-6 * 24 * time.Hour)},
+	})
+	assert.Equal(t, len(kept), 1)
+	assert.Equal(t, kept[0].id, "fresh")
+}
+
+// The run list leads a run with its state as a block, then says when or how far.
+func TestRunListLeadsWithAStateChip(t *testing.T) {
+	r := factoryRun("aaa", chunkd.SessionDone, time.Now().Add(-time.Hour))
+	ended := time.Now().Add(-10 * time.Minute)
+	r.s.EndedAt = &ended
+	m := sessModel(r)
+	m.selRun = "aaa"
+	out := stripANSI(strings.Join(m.renderRunList(m.styles()), "\n"))
+	assert.Assert(t, strings.Contains(out, " done  10m ago"), out)
+}
+
+// An open round's checks and reviews hang off one tree, the last on └─.
+func TestOpenRoundDrawsATree(t *testing.T) {
+	r := factoryRun("aaa", chunkd.SessionRunning, time.Now())
+	r.s.Rounds = []chunkd.Round{{
+		Number: 1, State: chunkd.RoundChecking,
+		Checks: []chunkd.RoundCheck{{Name: "lint", Status: chunkd.CheckPassed}, {Name: "test", Status: chunkd.CheckPassed}},
+	}}
+	m := sessModel(r)
+	m.selRun = "aaa"
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "├─ ✓  lint"), out)
+	assert.Assert(t, strings.Contains(out, "└─ ✓  test"), out)
+}
