@@ -301,10 +301,41 @@ type bootstrapOutcome struct {
 	result factory.Bootstrap
 }
 
+// progressSpinner is the spinner the review prompts part shows its progress
+// on while the sidecar image part prints its own: ui.Spinner, or a fake.
+type progressSpinner interface {
+	Enabled() bool
+	Start(message string)
+	Update(message string)
+	Stop()
+	Log(message string)
+}
+
+// spinnerLines writes each line it is given above spin, which keeps spinning
+// below them.
+type spinnerLines struct{ spin progressSpinner }
+
+func (w spinnerLines) Write(p []byte) (int, error) {
+	w.spin.Log(strings.TrimSuffix(string(p), "\n"))
+	return len(p), nil
+}
+
 // runBootstrapParts runs the sidecar image and review prompts parts of a
 // bootstrap run, whichever are not nil. It returns what they made, and the
 // error of the last that failed, having warned of any other.
-func runBootstrapParts(ctx context.Context, streams iostream.Streams, sidecarRun *sidecarImageRun, prompts *promptsRun, status iostream.StatusFunc) (bootstrapOutcome, error) {
+//
+// When both run, the sidecar image part's progress is printed as it happens,
+// since its setup steps are what a person waits on and may need to read. The
+// review prompts part leaves out Claude's tool calls, and on a terminal shows
+// its progress on spin instead, so the two do not interleave.
+func runBootstrapParts(ctx context.Context, streams iostream.Streams, sidecarRun *sidecarImageRun, prompts *promptsRun, spin progressSpinner) (bootstrapOutcome, error) {
+	together := sidecarRun != nil && prompts != nil
+	spinning := together && spin.Enabled()
+	status := newStatusFunc(streams)
+	if spinning {
+		status = newStatusFunc(iostream.Streams{Out: streams.Out, Err: spinnerLines{spin}})
+	}
+
 	var out bootstrapOutcome
 	var parts []bootstrapPart
 	if sidecarRun != nil {
@@ -315,9 +346,32 @@ func runBootstrapParts(ctx context.Context, streams iostream.Streams, sidecarRun
 		}})
 	}
 	if prompts != nil {
+		run := *prompts
+		run.HideActivity = together
 		parts = append(parts, bootstrapPart{name: "prompts", run: func(ctx context.Context, status iostream.StatusFunc) error {
+			promptsStatus := status
+			if spinning {
+				spin.Start("[prompts] Writing review prompts...")
+				// Warnings and errors still get a line of their own; the
+				// steps only move the spinner on.
+				promptsStatus = func(level iostream.Level, msg string) {
+					switch level {
+					case iostream.LevelWarn, iostream.LevelError:
+						status(level, msg)
+					case iostream.LevelStep:
+						spin.Update("[prompts] " + msg)
+					case iostream.LevelInfo, iostream.LevelDone:
+					}
+				}
+			}
 			var err error
-			out.paths, out.result, err = writeBootstrapPrompts(ctx, *prompts, status)
+			out.paths, out.result, err = writeBootstrapPrompts(ctx, run, promptsStatus)
+			if spinning {
+				spin.Stop()
+				if err == nil {
+					status(iostream.LevelDone, "Review prompts written")
+				}
+			}
 			return err
 		}})
 	}

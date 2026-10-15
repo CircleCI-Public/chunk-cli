@@ -196,7 +196,7 @@ little for Claude to read yet.`,
 					History:  history,
 				}
 			}
-			out, err := runBootstrapParts(ctx, streams, sidecarRun, prompts, statusFn)
+			out, err := runBootstrapParts(ctx, streams, sidecarRun, prompts, ui.NewSpinner())
 			if jsonOut {
 				if err != nil {
 					return err
@@ -339,6 +339,9 @@ type promptsRun struct {
 	// out since chunk factory runs them anyway.
 	Commands []config.Command
 	History  *reviewhistory.History
+	// HideActivity leaves out a status line for each tool call Claude makes,
+	// for when something else is reporting at the same time.
+	HideActivity bool
 }
 
 // writeBootstrapPrompts boots a sidecar, has Claude Code read the project on
@@ -385,7 +388,7 @@ func writeBootstrapPrompts(ctx context.Context, run promptsRun, statusFn iostrea
 		OnActivity: func(a claudecode.Activity) {
 			// Only what claude reads and runs: its passing remarks would
 			// bury the answer when it lands.
-			if a.Tool != "" {
+			if a.Tool != "" && !run.HideActivity {
 				statusFn(iostream.LevelInfo, activityLine(a))
 			}
 		},

@@ -133,11 +133,13 @@ func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {
 		},
 	})
 	assert.NilError(t, err)
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: string(answer)})
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: readAgentsMD + string(answer)})
 
 	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history", "--skip-sidecar"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	// Alone, the prompts part shows each tool call Claude makes.
+	assert.Assert(t, strings.Contains(result.Stderr, "Read AGENTS.md"), "stderr: %s", result.Stderr)
 	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), "# Testing\n\nCheck the tests.\n")
@@ -174,6 +176,10 @@ func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {
 	}
 	assert.Equal(t, created, 1)
 }
+
+// readAgentsMD is a tool call in Claude's streamed output, to precede its
+// answer.
+const readAgentsMD = `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"AGENTS.md"}}]}}` + "\n"
 
 // bootstrapPrompts returns the prompt of every bootstrap claude run the CLI
 // sent to a sidecar.
@@ -584,7 +590,7 @@ func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
 // The sidecar image and the review prompts are set up at the same time, and
 // each part's progress says which it is.
 func TestFactoryBootstrapSetsUpTheImageAndPromptsTogether(t *testing.T) {
-	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: readAgentsMD + bootstrapAnswer(t)})
 	claudeOnSidecar(sshSrv, true)
 	writeChunkConfig(t, workDir, map[string]interface{}{
 		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
@@ -599,6 +605,8 @@ func TestFactoryBootstrapSetsUpTheImageAndPromptsTogether(t *testing.T) {
 	assert.Equal(t, len(bootstrapPrompts(t, cci)), 1)
 	assert.Assert(t, strings.Contains(result.Stderr, "[sidecar] "), "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stderr, "[prompts] "), "stderr: %s", result.Stderr)
+	// Claude's tool calls would bury the setup steps, so they are left out.
+	assert.Assert(t, !strings.Contains(result.Stderr, "Read AGENTS.md"), "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory build"), "stderr: %s", result.Stderr)
 }
 

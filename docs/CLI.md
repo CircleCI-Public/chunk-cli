@@ -460,6 +460,9 @@ chunk
   the default image stays. `--json` reports the snapshot as `sidecar_image`.
   The sidecar image and the review prompts run at the same time, each status
   line marked `[sidecar]` or `[prompts]`; one failing does not stop the other.
+  While both run, the sidecar image part's progress prints as it happens, and
+  the review prompts part leaves out Claude's tool calls; on a terminal its
+  progress shows on a spinner below the sidecar's lines instead.
   Existing review prompts in `.chunk/reviews` are left out of the run; in an
   `--output` directory they are an error. The review prompts part runs
   Claude Code once, read-only, on a sidecar of its own (pool
