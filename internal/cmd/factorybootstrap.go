@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
@@ -99,16 +100,9 @@ little for Claude to read yet.`,
 				return err
 			}
 
-			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
-			cred, credSource, credErr := reviewCredential(rc)
-			if credErr != nil {
-				if err := setupClaudeCredential(ctx, cmd, streams, rc, jsonOut, credErr); err != nil {
-					return err
-				}
-				rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
-				if cred, credSource, credErr = reviewCredential(rc); credErr != nil {
-					return credErr
-				}
+			rc, cred, credSource, err := claudeCredential(ctx, cmd, streams, jsonOut)
+			if err != nil {
+				return err
 			}
 			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
@@ -121,9 +115,6 @@ little for Claude to read yet.`,
 			if err != nil {
 				return err
 			}
-			if image == "" {
-				image = factory.BootstrapImage
-			}
 
 			statusFn := newStatusFunc(streams)
 			// Fetched before any sidecar boots, so a GitHub failure costs
@@ -135,85 +126,36 @@ little for Claude to read yet.`,
 				}
 			}
 
-			statusFn(iostream.LevelStep, "Preparing a sidecar...")
-			pool, err := newPool(ctx, client, sidecar.PoolOptions{
-				Size:    1,
-				Name:    factory.BootstrapPoolName,
-				OrgID:   resolvedOrgID,
-				Image:   image,
-				WorkDir: workDir,
-			}, "bootstrap sidecar", rc.CircleCITokenSource, statusFn)
+			paths, result, err := writeBootstrapPrompts(ctx, promptsRun{
+				WorkDir:     workDir,
+				Dir:         dir,
+				Client:      client,
+				TokenSource: rc.CircleCITokenSource,
+				OrgID:       resolvedOrgID,
+				Image:       image,
+				Model:       model,
+				Timeout:     timeout,
+				Cred:        cred,
+				CredSource:  credSource,
+				BaseURL:     rc.AnthropicBaseURL,
+				Commands:    cfg.Commands,
+				History:     history,
+			}, statusFn)
 			if err != nil {
 				return err
-			}
-			// Bootstrap runs once per project, so its sidecar is not kept.
-			defer closePool(ctx, pool, true, statusFn)
-			if err := waitPoolReady(ctx, pool, "bootstrap sidecar"); err != nil {
-				return err
-			}
-			entry, err := pool.Acquire(ctx)
-			if err != nil {
-				return &userError{msg: "Could not get the bootstrap sidecar.", err: err}
-			}
-			defer pool.Release(entry)
-
-			statusFn(iostream.LevelStep, fmt.Sprintf("Reading the project and writing review prompts on %s...", entry.ID))
-			result, err := factory.RunBootstrap(ctx, factory.BootstrapOptions{
-				Exec:       sidecar.ClientExec,
-				WriteFile:  sidecar.WriteFile,
-				Entry:      entry,
-				Credential: cred,
-				BaseURL:    rc.AnthropicBaseURL,
-				Model:      model,
-				Timeout:    timeout,
-				Commands:   cfg.Commands,
-				History:    history,
-				OnActivity: func(a claudecode.Activity) {
-					// Only what claude reads and runs: its passing remarks would
-					// bury the answer when it lands.
-					if a.Tool != "" {
-						statusFn(iostream.LevelInfo, activityLine(a))
-					}
-				},
-			})
-			switch {
-			case errors.Is(err, claudecode.ErrMissing):
-				return &userError{
-					msg:        fmt.Sprintf("Claude Code is not installed in the image %s.", image),
-					suggestion: fmt.Sprintf("Omit --image to use %s, or pass an image that has Claude Code.", factory.BootstrapImage),
-					hideDetail: true,
-					err:        err,
-				}
-			case errors.Is(err, claudecode.ErrCredentialRejected):
-				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, err)
-			case err != nil:
-				return &userError{msg: "Could not write review prompts.", err: err}
-			}
-
-			paths, err := factory.WritePrompts(dir, result.Prompts)
-			if errors.Is(err, factory.ErrPromptsExist) {
-				return promptsExistError(dir, err)
-			}
-			if err != nil {
-				return &userError{msg: "Could not save the review prompts.", err: err}
-			}
-			if result.Dropped > 0 {
-				statusFn(iostream.LevelWarn, fmt.Sprintf("left out %d unusable prompt(s) from Claude's answer", result.Dropped))
 			}
 
 			if jsonOut {
 				return iostream.PrintJSON(streams.Out, newBootstrapReport(workDir, paths, result, history))
 			}
 			statusFn(iostream.LevelDone, fmt.Sprintf("Wrote %d review prompt(s) ($%.2f)", len(paths), result.CostUSD))
-			for _, p := range paths {
-				streams.Println("  " + relPath(workDir, p))
-			}
+			printPromptPaths(streams, workDir, paths)
 			if result.Summary != "" {
 				streams.Println()
 				streams.Println(result.Summary)
 			}
 			streams.Println()
-			streams.Println(ui.Dim("Read and edit them before relying on them. chunk factory uses them on its next run."))
+			streams.Println(ui.Dim(promptsReadHint))
 			return nil
 		},
 	}
@@ -270,12 +212,137 @@ func writeTemplate(streams iostream.Streams, workDir, dir, name string, jsonOut 
 		return iostream.PrintJSON(streams.Out, newBootstrapReport(workDir, paths, factory.Bootstrap{}, nil))
 	}
 	newStatusFunc(streams)(iostream.LevelDone, fmt.Sprintf("Wrote %d review prompt(s) from the %s template", len(paths), name))
+	printPromptPaths(streams, workDir, paths)
+	streams.Println()
+	streams.Println(ui.Dim(promptsReadHint))
+	return nil
+}
+
+// promptsReadHint closes the output of a run that wrote review prompts.
+const promptsReadHint = "Read and edit them before relying on them. chunk factory uses them on its next run."
+
+// printPromptPaths lists the review prompts that were written.
+func printPromptPaths(streams iostream.Streams, workDir string, paths []string) {
 	for _, p := range paths {
 		streams.Println("  " + relPath(workDir, p))
 	}
-	streams.Println()
-	streams.Println(ui.Dim("Read and edit them before relying on them. chunk factory uses them on its next run."))
-	return nil
+}
+
+// claudeCredential returns the resolved config and the credential Claude runs
+// with on the sidecar, offering to mint one when there is none. The config is
+// resolved again after minting, so it carries the new credential.
+func claudeCredential(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, jsonOut bool) (rc config.ResolvedConfig, cred claudecode.Credential, source string, err error) {
+	rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
+	cred, source, credErr := reviewCredential(rc)
+	if credErr == nil {
+		return rc, cred, source, nil
+	}
+	if err := setupClaudeCredential(ctx, cmd, streams, rc, jsonOut, credErr); err != nil {
+		return rc, cred, source, err
+	}
+	rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
+	cred, source, err = reviewCredential(rc)
+	return rc, cred, source, err
+}
+
+// promptsRun is what writing review prompts on a sidecar needs. All of it is
+// gathered before the sidecar boots, so a missing credential, org or history
+// costs nothing.
+type promptsRun struct {
+	WorkDir string
+	// Dir is where the prompts are written. It must have none yet.
+	Dir         string
+	Client      *circleci.Client
+	TokenSource string
+	OrgID       string
+	// Image is the sidecar image, which must have Claude Code. Empty is
+	// factory.BootstrapImage.
+	Image      string
+	Model      string
+	Timeout    time.Duration
+	Cred       claudecode.Credential
+	CredSource string
+	BaseURL    string
+	// Commands are the project's validation commands, which the prompts leave
+	// out since chunk factory runs them anyway.
+	Commands []config.Command
+	History  *reviewhistory.History
+}
+
+// writeBootstrapPrompts boots a sidecar, has Claude Code read the project on
+// it and write review prompts, and saves them to run.Dir. The sidecar is
+// deleted afterwards: bootstrap runs once per project.
+func writeBootstrapPrompts(ctx context.Context, run promptsRun, statusFn iostream.StatusFunc) (paths []string, result factory.Bootstrap, err error) {
+	image := run.Image
+	if image == "" {
+		image = factory.BootstrapImage
+	}
+
+	statusFn(iostream.LevelStep, "Preparing a sidecar...")
+	pool, err := newPool(ctx, run.Client, sidecar.PoolOptions{
+		Size:    1,
+		Name:    factory.BootstrapPoolName,
+		OrgID:   run.OrgID,
+		Image:   image,
+		WorkDir: run.WorkDir,
+	}, "bootstrap sidecar", run.TokenSource, statusFn)
+	if err != nil {
+		return nil, result, err
+	}
+	defer closePool(ctx, pool, true, statusFn)
+	if err := waitPoolReady(ctx, pool, "bootstrap sidecar"); err != nil {
+		return nil, result, err
+	}
+	entry, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, result, &userError{msg: "Could not get the bootstrap sidecar.", err: err}
+	}
+	defer pool.Release(entry)
+
+	statusFn(iostream.LevelStep, fmt.Sprintf("Reading the project and writing review prompts on %s...", entry.ID))
+	result, err = factory.RunBootstrap(ctx, factory.BootstrapOptions{
+		Exec:       sidecar.ClientExec,
+		WriteFile:  sidecar.WriteFile,
+		Entry:      entry,
+		Credential: run.Cred,
+		BaseURL:    run.BaseURL,
+		Model:      run.Model,
+		Timeout:    run.Timeout,
+		Commands:   run.Commands,
+		History:    run.History,
+		OnActivity: func(a claudecode.Activity) {
+			// Only what claude reads and runs: its passing remarks would
+			// bury the answer when it lands.
+			if a.Tool != "" {
+				statusFn(iostream.LevelInfo, activityLine(a))
+			}
+		},
+	})
+	switch {
+	case errors.Is(err, claudecode.ErrMissing):
+		return nil, result, &userError{
+			msg:        fmt.Sprintf("Claude Code is not installed in the image %s.", image),
+			suggestion: fmt.Sprintf("Omit --image to use %s, or pass an image that has Claude Code.", factory.BootstrapImage),
+			hideDetail: true,
+			err:        err,
+		}
+	case errors.Is(err, claudecode.ErrCredentialRejected):
+		return nil, result, credentialRejected(run.Cred, run.CredSource, run.BaseURL, err)
+	case err != nil:
+		return nil, result, &userError{msg: "Could not write review prompts.", err: err}
+	}
+
+	paths, err = factory.WritePrompts(run.Dir, result.Prompts)
+	if errors.Is(err, factory.ErrPromptsExist) {
+		return nil, result, promptsExistError(run.Dir, err)
+	}
+	if err != nil {
+		return nil, result, &userError{msg: "Could not save the review prompts.", err: err}
+	}
+	if result.Dropped > 0 {
+		statusFn(iostream.LevelWarn, fmt.Sprintf("left out %d unusable prompt(s) from Claude's answer", result.Dropped))
+	}
+	return paths, result, nil
 }
 
 // historyOptions checks the --since and --top flags.
