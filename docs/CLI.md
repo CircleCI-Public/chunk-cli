@@ -456,7 +456,7 @@ chunk
   (with `~/.local/bin`, as every Claude run does) and stops without a snapshot
   when it is not, then snapshots the sidecar as `<repo>-<YYYY-MM-DD>-<HHMMSS>` (`--snapshot-name` picks
   another; a name the org already has is explained rather than left as a bare
-  409), records the snapshot as
+  409, and is looked for before the sidecar is made), records the snapshot as
   `validation.sidecarImage`, marks the install and gate commands remote, and
   deletes the sidecar.
   An environment with no setup steps gets no sidecar or snapshot: it warns and

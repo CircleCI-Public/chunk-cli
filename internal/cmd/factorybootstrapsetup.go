@@ -200,6 +200,9 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 	if err != nil {
 		return "", err
 	}
+	if err := checkSnapshotNameFree(ctx, run); err != nil {
+		return "", err
+	}
 
 	image := run.Image
 	if image == "" {
@@ -244,13 +247,12 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 	status(iostream.LevelStep, fmt.Sprintf("Snapshotting the sidecar as %s...", name))
 	snap, err := run.Client.CreateSnapshot(ctx, sc.ID, name)
 	if se, ok := errors.AsType[*circleci.StatusError](err); ok && se.StatusCode == http.StatusConflict {
-		return "", &userError{
-			msg:        fmt.Sprintf("A snapshot named %s already exists in the org.", name),
-			suggestion: "Pass --snapshot-name with another name. To use the existing one instead, find its ID with 'chunk sidecar snapshot list' and run: chunk config set validation.sidecarImage <id>",
-			err:        err,
-		}
+		return "", snapshotNameTaken(name, "", err)
 	}
 	if err != nil {
+		if authErr := notAuthorized("create snapshots", run.TokenSource, err); authErr != nil {
+			return "", authErr
+		}
 		return "", &userError{msg: "Could not snapshot the sidecar.", err: err}
 	}
 
@@ -258,7 +260,7 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 		run.Cfg.Validation = &config.ValidationConfig{}
 	}
 	run.Cfg.Validation.SidecarImage = snap.ID
-	run.Cfg.MarkRemoteCommandsForSidecarSetup()
+	marked := run.Cfg.MarkRemoteCommandsForSidecarSetup()
 	if err := config.SaveProjectConfig(run.WorkDir, run.Cfg); err != nil {
 		return snap.ID, &userError{
 			msg:        fmt.Sprintf("Created snapshot %s, but could not record it in .chunk/config.json.", snap.ID),
@@ -267,7 +269,47 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 		}
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Recorded snapshot %s as validation.sidecarImage", snap.ID))
+	if marked {
+		// chunk validate now runs these on a sidecar, which is more than
+		// chunk factory asked for, so say so as sidecar setup does.
+		status(iostream.LevelInfo, "Marked install and gate commands as remote in .chunk/config.json")
+	}
 	return snap.ID, nil
+}
+
+// snapshotNameTaken explains a snapshot name the org already has, with the
+// ways out. existingID is the snapshot that has the name, when it is known.
+func snapshotNameTaken(name, existingID string, err error) error {
+	use := "find its ID with 'chunk sidecar snapshot list' and run: chunk config set validation.sidecarImage <id>"
+	if existingID != "" {
+		use = "run: chunk config set validation.sidecarImage " + existingID
+	}
+	return &userError{
+		msg:        fmt.Sprintf("A snapshot named %s already exists in the org.", name),
+		suggestion: "Pass --snapshot-name with another name. To use the existing one instead, " + use,
+		err:        err,
+	}
+}
+
+// checkSnapshotNameFree stops a run whose --snapshot-name the org already has
+// before it makes a sidecar, syncs the project and runs every setup step only
+// to be refused at the snapshot. The default name has the time in it and needs
+// no check. Failing to list the snapshots does not stop the run: the snapshot
+// call reports a taken name too.
+func checkSnapshotNameFree(ctx context.Context, run sidecarImageRun) error {
+	if run.SnapshotName == "" {
+		return nil
+	}
+	snaps, err := run.Client.ListSnapshots(ctx, run.OrgID)
+	if err != nil {
+		return nil
+	}
+	for _, s := range snaps {
+		if !s.IsSystem && s.Name == run.SnapshotName {
+			return snapshotNameTaken(run.SnapshotName, s.ID, fmt.Errorf("snapshot %s has the name %s", s.ID, s.Name))
+		}
+	}
+	return nil
 }
 
 // snapshotTimeLayout dates a snapshot's default name to the second, so a

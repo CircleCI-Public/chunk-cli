@@ -862,6 +862,24 @@ func TestFactoryBootstrapNamesTheSnapshotAsAsked(t *testing.T) {
 	assert.Equal(t, readProjectConfig(t, workDir)["validation"].(map[string]any)["sidecarImage"], "snap-1")
 }
 
+// The gate commands run on a sidecar from now on, which chunk validate does
+// without being asked, so the run says it marked them.
+func TestFactoryBootstrapSaysItMarkedTheGateCommandsRemote(t *testing.T) {
+	env, _, sshSrv, workDir := setupReviewProjectWithSSH(t, nil, "mine")
+	claudeOnSidecar(sshSrv, true)
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"commands":    []map[string]any{{"name": "lint", "run": "golangci-lint run", "role": "gate"}},
+		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
+	})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Marked install and gate commands as remote"), "stderr: %s", result.Stderr)
+	commands := readProjectConfig(t, workDir)["commands"].([]any)
+	assert.Equal(t, commands[0].(map[string]any)["remote"], true)
+}
+
 func TestFactoryBootstrapReportsTheSidecarImageAsJSON(t *testing.T) {
 	env, _, workDir := sidecarImageProject(t)
 
@@ -877,10 +895,31 @@ func TestFactoryBootstrapReportsTheSidecarImageAsJSON(t *testing.T) {
 }
 
 // A name the org already has is explained, with the ways out, rather than
-// left as a bare conflict from the API.
+// left as a bare conflict from the API, and before any sidecar is made for
+// the setup steps to run on.
 func TestFactoryBootstrapExplainsATakenSnapshotName(t *testing.T) {
 	env, cci, workDir := sidecarImageProject(t)
-	cci.Snapshots = append(cci.Snapshots, fakes.Snapshot{ID: "snap-old", Name: "compass-env"})
+	cci.AddSnapshot(fakes.Snapshot{ID: "snap-old", OrgID: "org-aaa", Name: "compass-env"})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--snapshot-name", "compass-env"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "A snapshot named compass-env already exists"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "--snapshot-name"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "chunk config set validation.sidecarImage snap-old"), "stderr: %s", result.Stderr)
+	_, hasValidation := readProjectConfig(t, workDir)["validation"]
+	assert.Assert(t, !hasValidation, "no image is recorded")
+	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0,
+		"a sidecar was made for a name that is taken")
+}
+
+// A taken name the listing did not show is still explained when the snapshot
+// call refuses it, and the sidecar that was made for it is deleted. The fake
+// keeps names unique across orgs, so a snapshot filed under no org stands in
+// for one created after the listing.
+func TestFactoryBootstrapExplainsATakenSnapshotNameAtTheSnapshot(t *testing.T) {
+	env, cci, workDir := sidecarImageProject(t)
+	cci.AddSnapshot(fakes.Snapshot{ID: "snap-old", Name: "compass-env"})
 
 	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--snapshot-name", "compass-env"}, env, workDir)
 

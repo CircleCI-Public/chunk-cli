@@ -145,6 +145,14 @@ func (f *FakeCircleCI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.Handler.ServeHTTP(w, r)
 }
 
+// AddSnapshot adds a snapshot to the org's list while the server is running,
+// which assigning to Snapshots would race with.
+func (f *FakeCircleCI) AddSnapshot(s Snapshot) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Snapshots = append(f.Snapshots, s)
+}
+
 func NewFakeCircleCI() *FakeCircleCI {
 	r, rec := newRouter()
 	f := &FakeCircleCI{
