@@ -146,12 +146,18 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			}
 			cfg, err := config.LoadProjectConfig(root)
 			if err != nil {
-				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err, blocked: true}
+				return &userError{msg: msgValidateNotConfigured, suggestion: "Run 'chunk factory bootstrap' to set the project up for chunk factory, or 'chunk init' for chunk validate alone.", err: err, blocked: true}
 			}
 			// The daemon loads these itself; loading them here first explains a
 			// mistake before anything starts.
 			if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
 				return err
+			}
+			// Not an error: a project whose commands need nothing installed
+			// runs fine on the default image. But one that does fails every
+			// round on a missing toolchain, so say why up front.
+			if image == "" && !cfg.HasSidecarImage() {
+				streams.ErrPrintln(ui.Dim("No validation.sidecarImage, so sidecars start from the default image. 'chunk factory bootstrap' sets one up."))
 			}
 			if continueRun != "" {
 				if err := checkFactoryContinue(root, continueRun); err != nil {

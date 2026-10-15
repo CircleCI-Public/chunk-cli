@@ -135,7 +135,7 @@ func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {
 	assert.NilError(t, err)
 	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: string(answer)})
 
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history"}, env, workDir)
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history", "--skip-sidecar"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
@@ -400,10 +400,11 @@ func TestFactoryBootstrapNeedsAGitHubOrigin(t *testing.T) {
 	}
 }
 
-// A project that has review prompts keeps them, and no sidecar boots to find
-// that out.
+// A project that is set up already keeps its review prompts, and no sidecar
+// boots to find that out.
 func TestFactoryBootstrapLeavesExistingPromptsAlone(t *testing.T) {
 	env, cci, workDir := setupReviewProject(t, nil, "mine")
+	writeChunkConfig(t, workDir, map[string]interface{}{"validation": map[string]interface{}{"sidecarImage": "snap-old"}})
 
 	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
 
@@ -482,4 +483,122 @@ func TestFactoryEvalNeedsAGitHubOrigin(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory eval needs a GitHub origin."), "stderr: %s", result.Stderr)
+}
+
+// readProjectConfig reads .chunk/config.json from workDir.
+func readProjectConfig(t *testing.T, workDir string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "config.json"))
+	assert.NilError(t, err)
+	var cfg map[string]any
+	assert.NilError(t, json.Unmarshal(data, &cfg))
+	return cfg
+}
+
+// Bootstrap sets the project's environment up on a sidecar of its own,
+// snapshots it and records the snapshot, which is what chunk factory starts
+// its sidecars from. Prompts the project has are left as they are.
+func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, nil, "mine")
+	marker := filepath.Join(t.TempDir(), "setup-ran")
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"environment": map[string]any{
+			"stack": "go",
+			"setup": []map[string]any{{"name": "install", "command": "touch " + marker}},
+		},
+	})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	_, err := os.Stat(marker)
+	assert.NilError(t, err, "the setup step did not run")
+	cfg := readProjectConfig(t, workDir)
+	assert.Equal(t, cfg["validation"].(map[string]any)["sidecarImage"], "snap-1")
+
+	snaps := filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots")
+	assert.Equal(t, len(snaps), 1)
+	var body struct {
+		Data struct {
+			Attributes struct {
+				Name string `json:"name"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	assert.NilError(t, json.Unmarshal(snaps[0].Body, &body))
+	assert.Assert(t, strings.HasPrefix(body.Data.Attributes.Name, "test-repo-"), "snapshot name: %s", body.Data.Attributes.Name)
+	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "DELETE", "/api/v3/sidecar/instances/")), 1,
+		"the sidecar that was snapshotted is deleted")
+
+	// The prompts were there already, so no Claude ran to write more.
+	assert.Equal(t, len(bootstrapPrompts(t, cci)), 0)
+	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", "mine.md"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), "review mine")
+}
+
+// The sidecar image and the review prompts are set up at the same time, and
+// each part's progress says which it is.
+func TestFactoryBootstrapSetsUpTheImageAndPromptsTogether(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
+	})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Equal(t, readProjectConfig(t, workDir)["validation"].(map[string]any)["sidecarImage"], "snap-1")
+	_, err := os.Stat(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
+	assert.NilError(t, err)
+	assert.Equal(t, len(bootstrapPrompts(t, cci)), 1)
+	assert.Assert(t, strings.Contains(result.Stderr, "[sidecar] "), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "[prompts] "), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory build"), "stderr: %s", result.Stderr)
+}
+
+// An environment with no setup steps has nothing for a snapshot to hold, so no
+// sidecar is made and the default image stays.
+func TestFactoryBootstrapRecordsNoImageWithoutSetupSteps(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, nil, "mine")
+	writeChunkConfig(t, workDir, map[string]interface{}{"environment": map[string]any{"stack": "unknown", "setup": []any{}}})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "No setup steps detected"), "stderr: %s", result.Stderr)
+	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+	_, hasValidation := readProjectConfig(t, workDir)["validation"]
+	assert.Assert(t, !hasValidation, "no image is recorded")
+}
+
+// A project without .chunk/config.json gets one, as chunk init would write it,
+// rather than being sent to run init first.
+func TestFactoryBootstrapWritesTheConfig(t *testing.T) {
+	env, _, workDir := setupReviewProject(t, nil, "mine")
+	assert.NilError(t, os.Remove(filepath.Join(workDir, ".chunk", "config.json")))
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--skip-sidecar"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	cfg := readProjectConfig(t, workDir)
+	assert.Equal(t, cfg["orgID"], "org-aaa")
+	vcs := cfg["vcs"].(map[string]any)
+	assert.Equal(t, vcs["org"], "test-org")
+	assert.Equal(t, vcs["repo"], "test-repo")
+	// Hooks belong to chunk init.
+	_, err := os.Stat(filepath.Join(workDir, ".claude", "settings.json"))
+	assert.Assert(t, os.IsNotExist(err), "bootstrap wrote agent hooks")
+}
+
+// Prompts already in an --output directory are an error: the run was asked to
+// write there.
+func TestFactoryBootstrapRefusesAnOutputWithPrompts(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, nil, "mine")
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--output", filepath.Join(workDir, ".chunk", "reviews")}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "already has review prompts"), "stderr: %s", result.Stderr)
+	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
 }

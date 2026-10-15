@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,14 +29,26 @@ func newFactoryBootstrapCmd() *cobra.Command {
 	var orgID, image, model, output, since, template string
 	var timeout time.Duration
 	var top int
-	var jsonOut, noHistory bool
+	var jsonOut, noHistory, skipSidecar bool
 
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
-		Short: "Write a first set of review prompts for this project",
-		Long: `Have Claude Code read the project on a sidecar and write review prompts for
-it, one file per review, in .chunk/reviews. chunk factory reviews every change
-with them.
+		Short: "Set up this project for chunk factory",
+		Long: `Set up the project for chunk factory: its config, the sidecar image factory
+runs on, and review prompts to check each change with. Each part already done
+is left out, so running bootstrap again finishes a setup that stopped partway.
+
+Without .chunk/config.json, bootstrap detects the validation commands and
+writes it, as chunk init does. Init's hooks and skills, which run
+chunk validate in your agent, are left to chunk init.
+
+Without validation.sidecarImage, bootstrap sets up a sidecar with the
+project's environment, as chunk sidecar setup does, snapshots it, and records
+the snapshot as validation.sidecarImage. --skip-sidecar leaves it out.
+
+It runs at the same time as the review prompts, which Claude Code writes on a
+sidecar of its own, one file per review, in .chunk/reviews. chunk factory
+reviews every change with them.
 
 Claude reads what the project says about itself, such as AGENTS.md, CLAUDE.md,
 docs, CI and linter configuration, and its code and tests. The project's
@@ -51,10 +64,10 @@ Bootstrap only reads the project, so it runs on a system image with Claude Code
 installed rather than the project's own sidecar image. --image picks another;
 it must have Claude Code.
 
-Existing review prompts are never overwritten: bootstrap refuses a directory
-that has any. Pass --output to write somewhere else, for example to compare
-with the prompts you have. The prompts are a starting point; read them and
-edit them before relying on them.
+Existing review prompts are never overwritten: bootstrap leaves them out of
+the run, and refuses an --output directory that has any. Pass --output to
+write somewhere else, for example to compare with the prompts you have. The
+prompts are a starting point; read them and edit them before relying on them.
 
 --template writes a standard set of prompts instead, such as python or
 go-service, without a sidecar or Claude. It suits a new project that has
@@ -82,33 +95,50 @@ little for Claude to read yet.`,
 			}
 			// Checked before any sidecar boots, so a project that has prompts
 			// costs nothing.
-			if err := factory.CheckPromptsDir(dir); err != nil {
-				return promptsExistError(dir, err)
+			promptsErr := factory.CheckPromptsDir(dir)
+			if promptsErr != nil && (output != "" || cmd.Flags().Changed("template")) {
+				return promptsExistError(dir, promptsErr)
 			}
 			if cmd.Flags().Changed("template") {
 				return writeTemplate(streams, workDir, dir, template, jsonOut)
 			}
 
 			cfg, err := config.LoadProjectConfig(workDir)
-			if err != nil {
-				return &userError{msg: msgValidateNotConfigured, blocked: true, suggestion: suggestionRunInit, err: err}
+			switch {
+			case errors.Is(err, os.ErrNotExist):
+				cfg = nil
+			case err != nil:
+				return &userError{msg: "Could not read .chunk/config.json.", suggestion: "Fix it, or remove it to have bootstrap write a new one.", blocked: true, err: err}
+			}
+			plan := planBootstrap(cfg, promptsErr, skipSidecar, noHistory, relPath(workDir, dir))
+			if plan.empty() {
+				return promptsExistError(dir, promptsErr)
 			}
 			// Checked before any prompt or sidecar, so a project without a
 			// GitHub origin costs nothing.
-			owner, repo, err := bootstrapOrigin(ctx, workDir)
-			if err != nil {
-				return err
+			var owner, repo string
+			if plan.Prompts {
+				if owner, repo, err = bootstrapOrigin(ctx, workDir); err != nil {
+					return err
+				}
 			}
+			printBootstrapPlan(streams, plan, relPath(workDir, dir))
 
-			rc, cred, credSource, err := claudeCredential(ctx, cmd, streams, jsonOut)
-			if err != nil {
-				return err
+			var rc config.ResolvedConfig
+			var cred claudecode.Credential
+			var credSource string
+			if plan.Prompts {
+				if rc, cred, credSource, err = claudeCredential(ctx, cmd, streams, jsonOut); err != nil {
+					return err
+				}
+			} else {
+				rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
 			}
 			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
-			if orgID == "" {
+			if orgID == "" && cfg != nil {
 				orgID = cfg.OrgID
 			}
 			resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, rc.CircleCITokenSource, streams))
@@ -117,45 +147,66 @@ little for Claude to read yet.`,
 			}
 
 			statusFn := newStatusFunc(streams)
+			if plan.Config {
+				if cfg, err = writeBootstrapConfig(ctx, workDir, rc, resolvedOrgID, statusFn); err != nil {
+					return err
+				}
+			}
 			// Fetched before any sidecar boots, so a GitHub failure costs
 			// nothing.
 			var history *reviewhistory.History
-			if !noHistory {
+			if plan.Prompts && plan.History {
 				if history, err = fetchReviewHistory(ctx, rc, owner, repo, historyOpts, statusFn); err != nil {
 					return err
 				}
 			}
 
-			paths, result, err := writeBootstrapPrompts(ctx, promptsRun{
-				WorkDir:     workDir,
-				Dir:         dir,
-				Client:      client,
-				TokenSource: rc.CircleCITokenSource,
-				OrgID:       resolvedOrgID,
-				Image:       image,
-				Model:       model,
-				Timeout:     timeout,
-				Cred:        cred,
-				CredSource:  credSource,
-				BaseURL:     rc.AnthropicBaseURL,
-				Commands:    cfg.Commands,
-				History:     history,
-			}, statusFn)
+			var sidecarRun *sidecarImageRun
+			if plan.Sidecar {
+				sidecarRun = &sidecarImageRun{
+					WorkDir:     workDir,
+					Repo:        repoName(ctx, workDir),
+					Client:      client,
+					TokenSource: rc.CircleCITokenSource,
+					OrgID:       resolvedOrgID,
+					Cfg:         cfg,
+					Now:         time.Now(),
+				}
+			}
+			var prompts *promptsRun
+			if plan.Prompts {
+				prompts = &promptsRun{
+					WorkDir:     workDir,
+					Dir:         dir,
+					Client:      client,
+					TokenSource: rc.CircleCITokenSource,
+					OrgID:       resolvedOrgID,
+					Image:       image,
+					Model:       model,
+					Timeout:     timeout,
+					Cred:        cred,
+					CredSource:  credSource,
+					BaseURL:     rc.AnthropicBaseURL,
+					// A copy, since the sidecar part marks the commands remote
+					// in cfg while the prompts are written.
+					Commands: slices.Clone(cfg.Commands),
+					History:  history,
+				}
+			}
+			out, err := runBootstrapParts(ctx, streams, sidecarRun, prompts, statusFn)
+			if jsonOut {
+				if err != nil {
+					return err
+				}
+				report := newBootstrapReport(workDir, out.paths, out.result, history)
+				report.SidecarImage = out.snapshotID
+				return iostream.PrintJSON(streams.Out, report)
+			}
+			printBootstrapPrompts(streams, workDir, out, statusFn)
 			if err != nil {
 				return err
 			}
-
-			if jsonOut {
-				return iostream.PrintJSON(streams.Out, newBootstrapReport(workDir, paths, result, history))
-			}
-			statusFn(iostream.LevelDone, fmt.Sprintf("Wrote %d review prompt(s) ($%.2f)", len(paths), result.CostUSD))
-			printPromptPaths(streams, workDir, paths)
-			if result.Summary != "" {
-				streams.Println()
-				streams.Println(result.Summary)
-			}
-			streams.Println()
-			streams.Println(ui.Dim(promptsReadHint))
+			bootstrapNextStep(streams, workDir)
 			return nil
 		},
 	}
@@ -170,11 +221,12 @@ little for Claude to read yet.`,
 	cmd.Flags().IntVar(&top, "top", reviewhistory.DefaultTop, "Use review comments from this many of the most active reviewers")
 	cmd.MarkFlagsMutuallyExclusive("no-history", "since")
 	cmd.MarkFlagsMutuallyExclusive("no-history", "top")
+	cmd.Flags().BoolVar(&skipSidecar, "skip-sidecar", false, "Leave out setting up and recording the project's sidecar image")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().StringVar(&template, "template", "", "Write a standard set of prompts instead ("+strings.Join(factory.Templates(), ", ")+")")
 	// A template is written locally, so the sidecar, Claude and history flags do
 	// nothing with it.
-	markExclusiveWith(cmd, "template", "org-id", "image", "model", "timeout", "no-history", "since", "top")
+	markExclusiveWith(cmd, "template", "org-id", "image", "model", "timeout", "no-history", "since", "top", "skip-sidecar")
 	return cmd
 }
 
@@ -226,6 +278,23 @@ func printPromptPaths(streams iostream.Streams, workDir string, paths []string) 
 	for _, p := range paths {
 		streams.Println("  " + relPath(workDir, p))
 	}
+}
+
+// printBootstrapPrompts lists the review prompts a run wrote, if it wrote any,
+// with Claude's summary of the project.
+func printBootstrapPrompts(streams iostream.Streams, workDir string, out bootstrapOutcome, statusFn iostream.StatusFunc) {
+	if out.paths == nil {
+		return
+	}
+	streams.ErrPrintln("")
+	statusFn(iostream.LevelDone, fmt.Sprintf("Wrote %d review prompt(s) ($%.2f)", len(out.paths), out.result.CostUSD))
+	printPromptPaths(streams, workDir, out.paths)
+	if out.result.Summary != "" {
+		streams.Println()
+		streams.Println(out.result.Summary)
+	}
+	streams.Println()
+	streams.Println(ui.Dim(promptsReadHint))
 }
 
 // claudeCredential returns the resolved config and the credential Claude runs
@@ -445,6 +514,9 @@ type bootstrapReport struct {
 	CostUSD float64  `json:"cost_usd"`
 	// ReviewComments counts the team's review comments Claude was given.
 	ReviewComments int `json:"review_comments"`
+	// SidecarImage is the snapshot recorded as validation.sidecarImage, when
+	// the run set one up.
+	SidecarImage string `json:"sidecar_image,omitempty"`
 }
 
 func newBootstrapReport(workDir string, paths []string, result factory.Bootstrap, history *reviewhistory.History) bootstrapReport {

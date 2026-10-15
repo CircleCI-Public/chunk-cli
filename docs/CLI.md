@@ -164,8 +164,9 @@ chunk
 │   ├── start [prompt|-]            # Hand the factory a diff and a prompt to refine
 │   │   --diff <file|->             # Start from a patch of work done elsewhere
 │   │   --json                      # Output as JSON
-│   ├── bootstrap                   # Write a first set of review prompts for this project
+│   ├── bootstrap                   # Set up this project for chunk factory: config, sidecar image, review prompts
 │   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
+│   │   --skip-sidecar              # Leave out setting up and recording the sidecar image
 │   │   --org-id <id>               # Organization ID
 │   │   --image <id>                # Sidecar image with Claude Code (default: cimg-base:2026.09-claude)
 │   │   --model <name>              # Claude model (default: Claude Code's default)
@@ -437,7 +438,25 @@ chunk
   new way to make a first pass does. Only the worktree's path goes to stdout,
   so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the record
   instead.
-- **`factory bootstrap` writes a project's first review prompts.** It runs
+- **`factory bootstrap` sets a project up for `chunk factory`.** It plans
+  three parts, prints the plan, and leaves out each part already done, so a
+  rerun finishes a setup that stopped partway; with nothing left to do it fails
+  as it does for existing prompts. Without `.chunk/config.json` it detects the
+  VCS, the validation commands and the org and writes the config, as
+  `chunk init` does, but without init's hooks, skills and completions, which
+  are for `chunk validate`. Without `validation.sidecarImage` (and unless
+  `--skip-sidecar`), it does what `sidecar setup` and then `sidecar snapshot
+  create` do, on a sidecar of its own rather than the active one: it syncs the
+  project to `/workspace/<repo>`, runs the environment's setup steps, snapshots
+  the sidecar as `<repo>-<date>`, records the snapshot as
+  `validation.sidecarImage`, marks the install and gate commands remote, and
+  deletes the sidecar. The setup steps' output is shown only when one fails.
+  An environment with no setup steps gets no sidecar or snapshot: it warns and
+  the default image stays. `--json` reports the snapshot as `sidecar_image`.
+  The sidecar image and the review prompts run at the same time, each status
+  line marked `[sidecar]` or `[prompts]`; one failing does not stop the other.
+  Existing review prompts in `.chunk/reviews` are left out of the run; in an
+  `--output` directory they are an error. The review prompts part runs
   Claude Code once, read-only, on a sidecar of its own (pool
   `factory-bootstrap`, destroyed when it ends). The sidecar runs the system image
   `cimg-base:2026.09-claude`, not the project's `validation.sidecarImage`:
