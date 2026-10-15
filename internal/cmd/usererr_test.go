@@ -110,7 +110,7 @@ func TestSidecarUnavailableNamesTheSidecarAndTheRemedy(t *testing.T) {
 		assert.Assert(t, errors.As(err, &ue), "expected *userError, got %T", err)
 		assert.Assert(t, strings.Contains(ue.UserMessage(), "paused"), "got %q", ue.UserMessage())
 		// Exec wakes a paused sidecar, so that is the remedy offered.
-		assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar exec"))
+		assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar exec --sidecar-id"), "got %q", ue.Suggestion())
 		assert.Equal(t, ue.UserExitCode(), ExitAPIError)
 	})
 

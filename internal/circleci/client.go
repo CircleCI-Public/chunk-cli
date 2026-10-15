@@ -239,6 +239,10 @@ var streamRetryBase = 500 * time.Millisecond
 // A var only so tests can shrink it; not intended to vary in normal use.
 var transitioningRetryBackoff = 200 * time.Millisecond
 
+// maxTransitioningRetries bounds how many times SubmitExec retries a
+// transitioning conflict before surfacing it.
+const maxTransitioningRetries = 5
+
 type execSubmitAttrs struct {
 	Phase string `json:"phase"`
 }
@@ -268,7 +272,7 @@ func (c *Client) SubmitExec(
 			return envelope.Data.ID, nil
 		}
 		mapped := mapErr("exec", err)
-		if !sidecarTransitioning(mapped) || attempt >= 5 {
+		if !sidecarTransitioning(mapped) || attempt >= maxTransitioningRetries {
 			return "", mapped
 		}
 		select {

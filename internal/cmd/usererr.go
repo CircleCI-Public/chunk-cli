@@ -165,7 +165,8 @@ func sidecarUnavailable(sidecarID string, err error) error {
 	case circleci.SidecarPaused(err):
 		return newUserError(fmt.Sprintf("Sidecar %s is paused.", sidecarID)).
 			withCode("sidecar.paused").
-			withSuggestion("Sidecars pause when left idle. Running a command on it wakes it: chunk sidecar exec").
+			withSuggestion(fmt.Sprintf("Sidecars pause when left idle. Running a command on it wakes it: "+
+				"chunk sidecar exec --sidecar-id %s --command true", sidecarID)).
 			withExitCode(ExitAPIError).
 			withoutDetail().
 			wrap(err)
