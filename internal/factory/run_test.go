@@ -183,7 +183,7 @@ func TestRunKeepsItsLog(t *testing.T) {
 // Two runs that start in the same second get different IDs: they share a
 // project's data directory, so the same ID would mean the same worktree.
 func TestNewRunIDDiffersForRunsStartedTogether(t *testing.T) {
-	a, b := newRunID(), newRunID()
+	a, b := NewRunID(), NewRunID()
 
 	assert.Assert(t, a != b, "both runs were %s", a)
 	assert.Assert(t, regexp.MustCompile(`^\d{8}-\d{6}-[0-9a-f]{6}$`).MatchString(a), a)

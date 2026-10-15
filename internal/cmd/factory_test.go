@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"gotest.tools/v3/assert"
@@ -129,8 +128,8 @@ func TestFactoryLogPath(t *testing.T) {
 	root := gitrepo.SetupGitRepo(t, "org", "repo")
 	dataDir, err := config.RepoDataDir(root)
 	assert.NilError(t, err)
-	now := time.Date(2026, 10, 2, 15, 4, 5, 0, time.UTC)
-	byTime := filepath.Join(dataDir, "factory", "20261002-150405.log")
+	name := "20261002-150405-a1b2c3"
+	byName := filepath.Join(dataDir, "factory", name+".log")
 	for _, tc := range []struct {
 		name string
 		path string
@@ -139,12 +138,12 @@ func TestFactoryLogPath(t *testing.T) {
 	}{
 		{name: "no log", want: ""},
 		// The default is named here, so this command can show the log.
-		{name: "default", on: true, want: byTime},
+		{name: "default", on: true, want: byName},
 		{name: "file without the switch", path: "/tmp/run.log", want: "/tmp/run.log"},
 		{name: "file with the switch", path: "/tmp/run.log", on: true, want: "/tmp/run.log"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := factoryLogPath(root, tc.path, tc.on, now)
+			got, err := factoryLogPath(root, tc.path, tc.on, name)
 			assert.NilError(t, err)
 			assert.Equal(t, got, tc.want)
 		})
@@ -152,7 +151,7 @@ func TestFactoryLogPath(t *testing.T) {
 
 	// The daemon does not share this process's working directory, so a
 	// relative path is resolved here.
-	got, err := factoryLogPath(root, "run.log", false, now)
+	got, err := factoryLogPath(root, "run.log", false, name)
 	assert.NilError(t, err)
 	wd, err := os.Getwd()
 	assert.NilError(t, err)
