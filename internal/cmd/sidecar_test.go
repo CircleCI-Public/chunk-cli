@@ -317,6 +317,10 @@ func TestLoadEnvironmentUsesSavedEnvironment(t *testing.T) {
 func TestLoadEnvironmentDetectsWhenForced(t *testing.T) {
 	dir := t.TempDir()
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/widget\n\ngo 1.25\n"), 0o644))
+	// Pin the image version so detection does not ask Docker Hub for it.
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".circleci"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".circleci", "config.yml"),
+		[]byte("jobs:\n  test:\n    docker:\n      - image: cimg/go:1.25.3\n"), 0o644))
 	streams, _, _ := testStreams()
 
 	saved := &envbuilder.Environment{Stack: "python"}
@@ -325,7 +329,38 @@ func TestLoadEnvironmentDetectsWhenForced(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, !cached)
 	assert.Equal(t, env.Stack, "go")
+	assert.Equal(t, env.ImageVersion, "1.25.3")
 	assert.Equal(t, cfg.Environment.Stack, "go")
 	_, err = os.Stat(filepath.Join(dir, ".chunk", "config.json"))
 	assert.Assert(t, os.IsNotExist(err), "loadEnvironment must leave saving to the caller")
+}
+
+// A bad --env or --env-file is rejected before a sidecar is created or synced.
+func TestProvisionSidecarChecksEnvFirst(t *testing.T) {
+	tests := []struct {
+		name    string
+		envFile string
+		envVars []string
+		want    string
+	}{
+		{name: "bad --env", envVars: []string{"NOEQUALS"}, want: "NOEQUALS"},
+		{name: "bad --env-file", envFile: "bad.env", want: "bad.env"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			assert.NilError(t, os.WriteFile(filepath.Join(dir, "bad.env"), []byte("NOEQUALS\n"), 0o644))
+			called := false
+			opts := sidecar.ProvisionOptions{
+				Dir: dir,
+				Sidecar: func(context.Context) (string, error) {
+					called = true
+					return "", errors.New("the sidecar should not be resolved")
+				},
+			}
+			err := provisionSidecar(context.Background(), &envbuilder.Environment{}, opts, tt.envFile, tt.envVars)
+			assert.ErrorContains(t, err, tt.want)
+			assert.Assert(t, !called, "the sidecar was resolved before the env was checked")
+		})
+	}
 }
