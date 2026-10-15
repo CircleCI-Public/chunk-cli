@@ -3,6 +3,7 @@ package fakes
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -22,6 +23,24 @@ type FakeGitHub struct {
 	reviewActivity map[string]string // keyed by repo name
 	errorRepos     map[string]string // keyed by repo name, value is full JSON error response
 	rateLimit      string
+
+	defaultBranch string
+	pullRefusal   *pullRefusal
+	pulls         []OpenedPullRequest
+}
+
+type pullRefusal struct {
+	status int
+	body   string
+}
+
+// OpenedPullRequest is a pull request the fake was asked to open.
+type OpenedPullRequest struct {
+	Owner, Repo string
+	Number      int
+	Title, Body string
+	Head, Base  string
+	Draft       bool
 }
 
 func NewFakeGitHub() *FakeGitHub {
@@ -32,11 +51,74 @@ func NewFakeGitHub() *FakeGitHub {
 		reviewActivity: map[string]string{},
 		errorRepos:     map[string]string{},
 		rateLimit:      `{"remaining": 4999, "resetAt": "2099-01-01T00:00:00Z"}`,
+		defaultBranch:  "main",
 	}
 
 	r.POST("/graphql", f.handleGraphQL)
 	r.GET("/user", f.handleUser)
+	r.GET("/repos/:owner/:repo", f.handleRepo)
+	r.POST("/repos/:owner/:repo/pulls", f.handleCreatePull)
 	return f
+}
+
+// SetDefaultBranch sets the default branch GET /repos/{owner}/{repo} reports.
+func (f *FakeGitHub) SetDefaultBranch(name string) { f.set(func() { f.defaultBranch = name }) }
+
+// RefusePullRequests makes opening a pull request fail with status and the
+// given JSON body, as GitHub does for a token without access or a duplicate.
+func (f *FakeGitHub) RefusePullRequests(status int, body string) {
+	f.set(func() { f.pullRefusal = &pullRefusal{status: status, body: body} })
+}
+
+// PullRequests are the pull requests opened so far, oldest first.
+func (f *FakeGitHub) PullRequests() []OpenedPullRequest {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return append([]OpenedPullRequest(nil), f.pulls...)
+}
+
+func (f *FakeGitHub) handleRepo(c *gin.Context) {
+	if c.GetHeader("authorization") == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "Bad credentials"})
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	c.JSON(http.StatusOK, gin.H{"default_branch": f.defaultBranch})
+}
+
+func (f *FakeGitHub) handleCreatePull(c *gin.Context) {
+	if c.GetHeader("authorization") == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "Bad credentials"})
+		return
+	}
+	var in struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+		Head  string `json:"head"`
+		Base  string `json:"base"`
+		Draft bool   `json:"draft"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Problems parsing JSON"})
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pullRefusal != nil {
+		c.Data(f.pullRefusal.status, "application/json", []byte(f.pullRefusal.body))
+		return
+	}
+	owner, repo := c.Param("owner"), c.Param("repo")
+	number := len(f.pulls) + 1
+	f.pulls = append(f.pulls, OpenedPullRequest{
+		Owner: owner, Repo: repo, Number: number,
+		Title: in.Title, Body: in.Body, Head: in.Head, Base: in.Base, Draft: in.Draft,
+	})
+	c.JSON(http.StatusCreated, gin.H{
+		"number":   number,
+		"html_url": "https://github.com/" + owner + "/" + repo + "/pull/" + strconv.Itoa(number),
+	})
 }
 
 func (f *FakeGitHub) handleUser(c *gin.Context) {
