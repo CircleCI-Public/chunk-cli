@@ -570,7 +570,9 @@ func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
 		} `json:"data"`
 	}
 	assert.NilError(t, json.Unmarshal(snaps[0].Body, &body))
-	assert.Assert(t, strings.HasPrefix(body.Data.Attributes.Name, "test-repo-"), "snapshot name: %s", body.Data.Attributes.Name)
+	// Dated to the second, so a rerun on the same day gets a name of its own.
+	assert.Assert(t, regexp.MustCompile(`^test-repo-\d{4}-\d{2}-\d{2}-\d{6}$`).MatchString(body.Data.Attributes.Name),
+		"snapshot name: %s", body.Data.Attributes.Name)
 	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "DELETE", "/api/v3/sidecar/instances/")), 1,
 		"the sidecar that was snapshotted is deleted")
 
@@ -693,4 +695,62 @@ func TestFactoryBootstrapRecordsNoImageWithoutClaude(t *testing.T) {
 		"the sidecar is deleted")
 	_, hasValidation := readProjectConfig(t, workDir)["validation"]
 	assert.Assert(t, !hasValidation, "no image is recorded")
+}
+
+// sidecarImageProject is a project with review prompts and a saved
+// environment, so a bootstrap run only sets up the sidecar image.
+func sidecarImageProject(t *testing.T) (*testenv.TestEnv, *fakes.FakeCircleCI, string) {
+	t.Helper()
+	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, nil, "mine")
+	claudeOnSidecar(sshSrv, true)
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
+	})
+	return env, cci, workDir
+}
+
+// snapshotNames returns the name of each snapshot the CLI asked for.
+func snapshotNames(t *testing.T, cci *fakes.FakeCircleCI) []string {
+	t.Helper()
+	var names []string
+	for _, r := range filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots") {
+		var body struct {
+			Data struct {
+				Attributes struct {
+					Name string `json:"name"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		assert.NilError(t, json.Unmarshal(r.Body, &body))
+		names = append(names, body.Data.Attributes.Name)
+	}
+	return names
+}
+
+func TestFactoryBootstrapNamesTheSnapshotAsAsked(t *testing.T) {
+	env, cci, workDir := sidecarImageProject(t)
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--snapshot-name", "compass-env"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.DeepEqual(t, snapshotNames(t, cci), []string{"compass-env"})
+	assert.Equal(t, readProjectConfig(t, workDir)["validation"].(map[string]any)["sidecarImage"], "snap-1")
+}
+
+// A name the org already has is explained, with the ways out, rather than
+// left as a bare conflict from the API.
+func TestFactoryBootstrapExplainsATakenSnapshotName(t *testing.T) {
+	env, cci, workDir := sidecarImageProject(t)
+	cci.Snapshots = append(cci.Snapshots, fakes.Snapshot{ID: "snap-old", Name: "compass-env"})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--snapshot-name", "compass-env"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "A snapshot named compass-env already exists"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "--snapshot-name"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "chunk config set validation.sidecarImage"), "stderr: %s", result.Stderr)
+	_, hasValidation := readProjectConfig(t, workDir)["validation"]
+	assert.Assert(t, !hasValidation, "no image is recorded")
+	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "DELETE", "/api/v3/sidecar/instances/")), 1,
+		"the sidecar is deleted")
 }

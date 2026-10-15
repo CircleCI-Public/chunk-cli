@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,7 +134,9 @@ type sidecarImageRun struct {
 	// Cfg is the project's config. The detected environment and the snapshot
 	// are recorded in it, and it is saved.
 	Cfg *config.ProjectConfig
-	// Now dates the snapshot's name.
+	// SnapshotName names the snapshot. Empty is snapshotName's default.
+	SnapshotName string
+	// Now dates the snapshot's default name.
 	Now time.Time
 	// Output receives the setup steps' output.
 	Output io.Writer
@@ -211,9 +215,16 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 		return "", err
 	}
 
-	name := run.Repo + "-" + run.Now.Format(time.DateOnly)
+	name := snapshotName(run)
 	status(iostream.LevelStep, fmt.Sprintf("Snapshotting the sidecar as %s...", name))
 	snap, err := run.Client.CreateSnapshot(ctx, sc.ID, name)
+	if se, ok := errors.AsType[*circleci.StatusError](err); ok && se.StatusCode == http.StatusConflict {
+		return "", &userError{
+			msg:        fmt.Sprintf("A snapshot named %s already exists in the org.", name),
+			suggestion: "Pass --snapshot-name with another name. To use the existing one instead, find its ID with 'chunk sidecar snapshot list' and run: chunk config set validation.sidecarImage <id>",
+			err:        err,
+		}
+	}
 	if err != nil {
 		return "", &userError{msg: "Could not snapshot the sidecar.", err: err}
 	}
@@ -232,6 +243,19 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Recorded snapshot %s as validation.sidecarImage", snap.ID))
 	return snap.ID, nil
+}
+
+// snapshotTimeLayout dates a snapshot's default name to the second, so a
+// rerun on the same day does not ask for a name that is taken.
+const snapshotTimeLayout = "2006-01-02-150405"
+
+// snapshotName is the name the run's snapshot is taken with: the one asked
+// for, or the repo and when the run started.
+func snapshotName(run sidecarImageRun) string {
+	if run.SnapshotName != "" {
+		return run.SnapshotName
+	}
+	return run.Repo + "-" + run.Now.Format(snapshotTimeLayout)
 }
 
 // checkClaudeInstalled reports whether Claude Code is installed on the

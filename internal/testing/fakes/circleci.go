@@ -686,6 +686,14 @@ func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {
 	sidecarID := body.Data.References.SidecarInstance.ID
 
 	f.mu.Lock()
+	// Snapshot names are unique in an org, as the real API holds them to.
+	for _, s := range f.Snapshots {
+		if s.Name == body.Data.Attributes.Name {
+			f.mu.Unlock()
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{"id": "trace-1", "title": "a snapshot with this name already exists"}})
+			return
+		}
+	}
 	f.snapshotCounter++
 	snap := Snapshot{
 		ID:   fmt.Sprintf("snap-%d", f.snapshotCounter),

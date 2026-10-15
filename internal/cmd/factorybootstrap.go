@@ -25,7 +25,7 @@ import (
 )
 
 func newFactoryBootstrapCmd() *cobra.Command {
-	var orgID, image, model, output, since, template string
+	var orgID, image, model, output, since, template, snapshotName string
 	var timeout time.Duration
 	var top int
 	var jsonOut, noHistory, skipSidecar bool
@@ -43,7 +43,9 @@ chunk validate in your agent, are left to chunk init.
 
 Without validation.sidecarImage, bootstrap sets up a sidecar with the
 project's environment, as chunk sidecar setup does, snapshots it, and records
-the snapshot as validation.sidecarImage. --skip-sidecar leaves it out.
+the snapshot as validation.sidecarImage. The snapshot is named after the repo
+and the time, as <repo>-<YYYY-MM-DD>-<HHMMSS>; --snapshot-name picks another.
+--skip-sidecar leaves it out.
 
 Then Claude Code writes the review prompts on a sidecar of its own, one file
 per review, in .chunk/reviews. chunk factory reviews every change with them.
@@ -93,6 +95,9 @@ little for Claude to read yet.`,
 			historyOpts, err := historyOptions(since, top)
 			if err != nil {
 				return err
+			}
+			if len(snapshotName) > 255 {
+				return &userError{msg: fmt.Sprintf("--snapshot-name must be 255 characters or fewer, not %d.", len(snapshotName)), errMsg: "invalid --snapshot-name"}
 			}
 			// Checked before any sidecar boots, so a project that has prompts
 			// costs nothing.
@@ -165,15 +170,16 @@ little for Claude to read yet.`,
 			var sidecarRun *sidecarImageRun
 			if plan.Sidecar {
 				sidecarRun = &sidecarImageRun{
-					WorkDir:     workDir,
-					Repo:        repoName(ctx, workDir),
-					Client:      client,
-					TokenSource: rc.CircleCITokenSource,
-					OrgID:       resolvedOrgID,
-					Image:       image,
-					Cfg:         cfg,
-					Now:         time.Now(),
-					Output:      streams.Err,
+					WorkDir:      workDir,
+					Repo:         repoName(ctx, workDir),
+					Client:       client,
+					TokenSource:  rc.CircleCITokenSource,
+					OrgID:        resolvedOrgID,
+					Image:        image,
+					Cfg:          cfg,
+					SnapshotName: snapshotName,
+					Now:          time.Now(),
+					Output:       streams.Err,
 				}
 			}
 			var prompts *promptsRun
@@ -223,11 +229,13 @@ little for Claude to read yet.`,
 	cmd.MarkFlagsMutuallyExclusive("no-history", "since")
 	cmd.MarkFlagsMutuallyExclusive("no-history", "top")
 	cmd.Flags().BoolVar(&skipSidecar, "skip-sidecar", false, "Leave out setting up and recording the project's sidecar image")
+	cmd.Flags().StringVar(&snapshotName, "snapshot-name", "", "Name for the sidecar image's snapshot (default: <repo>-<YYYY-MM-DD>-<HHMMSS>)")
+	cmd.MarkFlagsMutuallyExclusive("skip-sidecar", "snapshot-name")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().StringVar(&template, "template", "", "Write a standard set of prompts instead ("+strings.Join(factory.Templates(), ", ")+")")
 	// A template is written locally, so the sidecar, Claude and history flags do
 	// nothing with it.
-	markExclusiveWith(cmd, "template", "org-id", "image", "model", "timeout", "no-history", "since", "top", "skip-sidecar")
+	markExclusiveWith(cmd, "template", "org-id", "image", "model", "timeout", "no-history", "since", "top", "skip-sidecar", "snapshot-name")
 	return cmd
 }
 

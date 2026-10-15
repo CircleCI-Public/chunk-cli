@@ -167,6 +167,7 @@ chunk
 │   ├── bootstrap                   # Set up this project for chunk factory: config, sidecar image, review prompts
 │   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
 │   │   --skip-sidecar              # Leave out setting up and recording the sidecar image
+│   │   --snapshot-name <name>      # Name the sidecar image's snapshot (default: <repo>-<YYYY-MM-DD>-<HHMMSS>)
 │   │   --org-id <id>               # Organization ID
 │   │   --image <id>                # Image with Claude Code, for both sidecars (default: cimg-base:2026.09-claude)
 │   │   --model <name>              # Claude model (default: Claude Code's default)
@@ -453,7 +454,9 @@ chunk
   made from the snapshot. It syncs the project to `/workspace/<repo>`, runs the
   environment's setup steps, checks that `claude` is on the sidecar's `PATH`
   (with `~/.local/bin`, as every Claude run does) and stops without a snapshot
-  when it is not, then snapshots the sidecar as `<repo>-<date>`, records the snapshot as
+  when it is not, then snapshots the sidecar as `<repo>-<YYYY-MM-DD>-<HHMMSS>` (`--snapshot-name` picks
+  another; a name the org already has is explained rather than left as a bare
+  409), records the snapshot as
   `validation.sidecarImage`, marks the install and gate commands remote, and
   deletes the sidecar.
   An environment with no setup steps gets no sidecar or snapshot: it warns and
