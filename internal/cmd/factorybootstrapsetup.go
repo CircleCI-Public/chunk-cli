@@ -330,7 +330,8 @@ type bootstrapOutcome struct {
 // The sidecar image comes first: it is the slower part, the likelier to fail,
 // and the one chunk factory cannot run without. Its failing does not stop the
 // prompts, so a rerun has only the image left to do; it is warned of, and
-// returned when the prompts succeed.
+// returned when the prompts succeed. An image without Claude Code, or a
+// cancelled run, stops the prompts too.
 func runBootstrapParts(ctx context.Context, streams iostream.Streams, sidecarRun *sidecarImageRun, prompts *promptsRun, status iostream.StatusFunc) (bootstrapOutcome, error) {
 	var out bootstrapOutcome
 	var sidecarErr error
@@ -338,6 +339,11 @@ func runBootstrapParts(ctx context.Context, streams iostream.Streams, sidecarRun
 		out.snapshotID, sidecarErr = setupSidecarImage(ctx, *sidecarRun, status)
 	}
 	if prompts == nil {
+		return out, sidecarErr
+	}
+	// The prompts are written on a sidecar from the same image, so one
+	// without Claude Code fails them the same way, and Ctrl-C stops both.
+	if sidecarErr != nil && (ctx.Err() != nil || errors.Is(sidecarErr, claudecode.ErrMissing)) {
 		return out, sidecarErr
 	}
 	if sidecarErr != nil {

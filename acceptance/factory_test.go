@@ -14,6 +14,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
@@ -104,6 +105,52 @@ func TestFactoryWithoutProjectConfigPointsAtInit(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	assert.Assert(t, strings.Contains(result.Stderr, "No validate commands configured"), "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stderr, "chunk init"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory bootstrap"), "stderr: %s", result.Stderr)
+}
+
+// A config that cannot be read is reported as such, not as a project with no
+// config: bootstrap, which that would point at, refuses it too.
+func TestFactoryWithAnUnreadableProjectConfig(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, ".chunk"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, ".chunk", "config.json"), []byte("{"), 0o644))
+
+	result := binary.RunCLI(t, []string{"factory", "build", "add a --verbose flag"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "Could not read .chunk/config.json"), "stderr: %s", result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stderr, "No validate commands configured"), "stderr: %s", result.Stderr)
+}
+
+// A project with no sidecar image is told its sidecars start from the default
+// image, unless one is given for the run. --continue with a run that does not
+// exist stops the command just after, before the daemon is started.
+func TestFactoryHintsAtAMissingSidecarImage(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		extra    map[string]interface{}
+		args     []string
+		wantHint bool
+	}{
+		{name: "no image", wantHint: true},
+		{name: "image in config", extra: map[string]interface{}{"validation": map[string]any{"sidecarImage": "snap-1"}}},
+		{name: "image flag", args: []string{"--image", "snap-2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := testenv.NewTestEnv(t)
+			workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+			writeChunkConfig(t, workDir, tc.extra)
+
+			args := append([]string{"factory", "build", "--continue", "nope"}, tc.args...)
+			result := binary.RunCLI(t, append(args, "add a --verbose flag"), env, workDir)
+
+			assert.Equal(t, result.ExitCode, 2, "stderr: %s", result.Stderr)
+			assert.Assert(t, strings.Contains(result.Stderr, "No factory run nope to continue"), "stderr: %s", result.Stderr)
+			hint := strings.Contains(result.Stderr, "No validation.sidecarImage, so sidecars start from the default image")
+			assert.Equal(t, hint, tc.wantHint, "stderr: %s", result.Stderr)
+		})
+	}
 }
 
 // Without reviews or validation commands the loop would pass whatever the
@@ -701,6 +748,57 @@ func TestFactoryBootstrapRecordsNoImageWithoutClaude(t *testing.T) {
 	assert.Assert(t, !hasValidation, "no image is recorded")
 }
 
+// Bootstrap's sidecar has a workspace of its own, which the setup steps run
+// in, and the project's active sidecar is left as it was.
+func TestFactoryBootstrapLeavesTheActiveSidecarAlone(t *testing.T) {
+	env, _, sshSrv, workDir := setupReviewProjectWithSSH(t, nil, "mine")
+	claudeOnSidecar(sshSrv, true)
+	marker := filepath.Join(t.TempDir(), "setup-dir")
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"environment": map[string]any{
+			"stack": "go",
+			"setup": []map[string]any{{"name": "install", "command": "pwd -P > " + marker}},
+		},
+	})
+	stateDir := projectDataDir(t, env, workDir)
+	assert.NilError(t, os.MkdirAll(stateDir, 0o755))
+	statePath := filepath.Join(stateDir, sidecar.StateFileName("", gitCurrentBranch(t, workDir)))
+	state := []byte(`{"sidecar_ids":["sidecar-mine"],"workspace":"/home/user/mine"}`)
+	assert.NilError(t, os.WriteFile(statePath, state, 0o644))
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	ran, err := os.ReadFile(marker)
+	assert.NilError(t, err, "the setup step did not run")
+	want, err := filepath.EvalSymlinks(filepath.Join(env.Extra["CHUNK_SIDECAR_HOME"], "test-repo"))
+	assert.NilError(t, err)
+	assert.Equal(t, strings.TrimSpace(string(ran)), want)
+	after, err := os.ReadFile(statePath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(after), string(state))
+}
+
+// An image without Claude Code would fail the review prompts the same way, on
+// another sidecar, so they are not written either.
+func TestFactoryBootstrapWritesNoPromptsWithoutClaude(t *testing.T) {
+	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	claudeOnSidecar(sshSrv, false)
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
+	})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history", "--image", "cimg-base:2026.09"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "Claude Code is not installed in the image cimg-base:2026.09"), "stderr: %s", result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stderr, "Writing the review prompts anyway"), "stderr: %s", result.Stderr)
+	assert.Equal(t, len(bootstrapPrompts(t, cci)), 0)
+	files, err := filepath.Glob(filepath.Join(workDir, ".chunk", "reviews", "*"))
+	assert.NilError(t, err)
+	assert.Equal(t, len(files), 0, "prompts were written: %v", files)
+}
+
 // sidecarImageProject is a project with review prompts and a saved
 // environment, so a bootstrap run only sets up the sidecar image.
 func sidecarImageProject(t *testing.T) (*testenv.TestEnv, *fakes.FakeCircleCI, string) {
@@ -739,6 +837,20 @@ func TestFactoryBootstrapNamesTheSnapshotAsAsked(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	assert.DeepEqual(t, snapshotNames(t, cci), []string{"compass-env"})
 	assert.Equal(t, readProjectConfig(t, workDir)["validation"].(map[string]any)["sidecarImage"], "snap-1")
+}
+
+func TestFactoryBootstrapReportsTheSidecarImageAsJSON(t *testing.T) {
+	env, _, workDir := sidecarImageProject(t)
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--json"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	var report struct {
+		Prompts      []string `json:"prompts"`
+		SidecarImage string   `json:"sidecar_image"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
+	assert.Equal(t, report.SidecarImage, "snap-1")
 }
 
 // A name the org already has is explained, with the ways out, rather than

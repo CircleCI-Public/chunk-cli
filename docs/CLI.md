@@ -451,7 +451,7 @@ chunk
   sidecar from `cimg-base:2026.09-claude` (or `--image`) rather than the
   provisioner's default `cimg-base`, which has no Claude Code, since
   `chunk factory` runs its implementer and reviewers as Claude Code on sidecars
-  made from the snapshot. It syncs the project to `/workspace/<repo>`, runs the
+  made from the snapshot. It syncs the project to `/home/user/<repo>`, runs the
   environment's setup steps, checks that `claude` is on the sidecar's `PATH`
   (with `~/.local/bin`, as every Claude run does) and stops without a snapshot
   when it is not, then snapshots the sidecar as `<repo>-<YYYY-MM-DD>-<HHMMSS>` (`--snapshot-name` picks
@@ -465,7 +465,8 @@ chunk
   as they run, and the review prompts are written after it. A sidecar image
   that fails does not stop the prompts: it is warned of, the prompts are
   written, and the command then fails with it, so a rerun has only the image
-  left to do.
+  left to do. An image without Claude Code, or an interrupted run, stops the
+  prompts too, since they would fail the same way.
   Existing review prompts in `.chunk/reviews` are left out of the run; in an
   `--output` directory they are an error. A prompts directory that cannot be read is
   an error rather than taken for one with prompts. The plan is worked out from

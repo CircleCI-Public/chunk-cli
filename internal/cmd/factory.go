@@ -144,9 +144,9 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return err
 			}
-			cfg, err := config.LoadProjectConfig(root)
+			cfg, err := loadFactoryConfig(root)
 			if err != nil {
-				return &userError{msg: msgValidateNotConfigured, suggestion: "Run 'chunk factory bootstrap' to set the project up for chunk factory, or 'chunk init' for chunk validate alone.", err: err, blocked: true}
+				return err
 			}
 			// The daemon loads these itself; loading them here first explains a
 			// mistake before anything starts.
@@ -373,6 +373,20 @@ func checkFactoryContinue(root, run string) error {
 			withoutDetail()
 	}
 	return &userError{msg: fmt.Sprintf("Could not read factory run %s.", factory.ParseRunID(run)), err: err}
+}
+
+// loadFactoryConfig loads the project's config, pointing a project that has
+// none at bootstrap. One that is there but cannot be read is reported as such:
+// bootstrap would refuse it too, so it is not the way out.
+func loadFactoryConfig(root string) (*config.ProjectConfig, error) {
+	cfg, err := loadBootstrapConfig(root)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, &userError{msg: msgValidateNotConfigured, suggestion: "Run 'chunk factory bootstrap' to set the project up for chunk factory, or 'chunk init' for chunk validate alone.", err: os.ErrNotExist, hideDetail: true, blocked: true}
+	}
+	return cfg, nil
 }
 
 // factoryChecks loads what the implementer's work is checked with: the review
