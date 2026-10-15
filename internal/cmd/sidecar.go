@@ -1184,7 +1184,7 @@ Example:
 // caller should save it.
 func loadEnvironment(ctx context.Context, dir string, cfg *config.ProjectConfig, force bool, status iostream.StatusFunc) (env *envbuilder.Environment, cached bool, err error) {
 	if cfg.Environment != nil && !force {
-		status(iostream.LevelInfo, "Using environment from .chunk/config.json")
+		status(iostream.LevelStep, "Using environment from .chunk/config.json")
 		return cfg.Environment, true, nil
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))

@@ -214,7 +214,7 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 		maybeInstallCompletions(streams)
 	}
 	if opts.skipTestSuites {
-		sidecarHint(workDir, status)
+		sidecarHint(workDir, streams)
 	} else {
 		writeTestSuites(workDir, status)
 	}

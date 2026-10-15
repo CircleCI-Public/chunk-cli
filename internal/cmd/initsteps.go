@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/settings"
 	"github.com/CircleCI-Public/chunk-cli/internal/skills"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
@@ -182,7 +183,8 @@ func writeTestSuites(dir string, status iostream.StatusFunc) {
 	case validate.TestSuitesWritten:
 		status(iostream.LevelDone, "Wrote .circleci/test-suites.yml")
 	case validate.TestSuitesExist:
-		status(iostream.LevelInfo, ".circleci/test-suites.yml already exists, leaving as-is")
+		// Flush left like the lines around it, but dimmed: it is not news.
+		status(iostream.LevelStep, ui.Dim(".circleci/test-suites.yml already exists, leaving as-is"))
 	case validate.TestSuitesNoTemplate:
 	}
 }
@@ -207,12 +209,14 @@ func installSkills(dir string, status iostream.StatusFunc) {
 }
 
 // sidecarHint points the user at setting up the sidecar dev loop. Skipped
-// when .circleci/test-suites.yml already exists.
-func sidecarHint(dir string, status iostream.StatusFunc) {
+// when .circleci/test-suites.yml already exists. It is advice rather than a
+// step, so it is set apart from the steps above it.
+func sidecarHint(dir string, streams iostream.Streams) {
 	if _, err := os.Stat(filepath.Join(dir, ".circleci", "test-suites.yml")); err == nil {
 		return
 	}
-	status(iostream.LevelStep, "Next step: set up a sidecar")
-	status(iostream.LevelInfo, "Ask your AI coding agent to run the chunk-sidecar skill to spin up")
-	status(iostream.LevelInfo, "a microVM, sync your repo, and run tests remotely.")
+	streams.ErrPrintln("")
+	streams.ErrPrintln(ui.Bold("Next step: set up a sidecar"))
+	streams.ErrPrintln(ui.Dim("  Ask your AI coding agent to run the chunk-sidecar skill to spin up"))
+	streams.ErrPrintln(ui.Dim("  a microVM, sync your repo, and run tests remotely."))
 }
