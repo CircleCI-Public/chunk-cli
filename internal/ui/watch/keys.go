@@ -15,6 +15,9 @@ type keyMap struct {
 	Open        key.Binding
 	Copy        key.Binding
 	Toggle      key.Binding
+	Search      key.Binding
+	// Keep and Clear end a search: Enter keeps its filter, Esc drops it.
+	Keep, Clear key.Binding
 	Details     key.Binding
 	Cancel      key.Binding
 	// Back is Esc: back to the list from the right pane, and quit from the
@@ -37,12 +40,18 @@ func (m Model) keys() keyMap {
 		Open:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
 		Copy:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy failure")),
 		Toggle:    key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
+		Search:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search runs")),
+		Keep:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "keep filter")),
+		Clear:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "clear")),
 		Details:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "infra")),
 		Cancel:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
 		Back:      key.NewBinding(key.WithKeys("esc")),
 		Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		ForceQuit: key.NewBinding(key.WithKeys("ctrl+c")),
 	}
+	k.Search.SetEnabled(!right && len(m.allRuns) > 0)
+	k.Keep.SetEnabled(m.searching)
+	k.Clear.SetEnabled(m.searching)
 	k.Left.SetEnabled(right)
 	k.Right.SetEnabled(!right)
 	k.Open.SetEnabled(right)
@@ -61,12 +70,18 @@ func (m Model) keys() keyMap {
 			k.Up.SetHelp("↑/↓", "navigate")
 		}
 	}
+	if m.searching {
+		// Typing goes to the search, so no other key does anything.
+		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.Copy, &k.Toggle, &k.Search, &k.Details, &k.Cancel, &k.Quit} {
+			b.SetEnabled(false)
+		}
+	}
 	return k
 }
 
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Right, k.Open, k.Copy, k.Toggle, k.Details, k.Cancel, k.Left, k.Quit}
+	return []key.Binding{k.Keep, k.Clear, k.Up, k.Right, k.Open, k.Copy, k.Toggle, k.Search, k.Details, k.Cancel, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

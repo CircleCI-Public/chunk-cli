@@ -382,7 +382,7 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 
 	head := pad(0, 2) + st.vdim("▾") + " Round " + fmt.Sprint(r.Number) + "  " + roundStateText(st, r)
 	if len(r.Reviews) > 0 && (r.Findings > 0 || r.State == chunkd.RoundDone) {
-		head += st.dim(fmt.Sprintf("  ·  %d finding%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
+		head += st.dim(fmt.Sprintf("  ·  %d issue%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
 	}
 	lines = []string{head}
 	idx := 1
@@ -473,7 +473,7 @@ func roundRollup(st watchStyles, r chunkd.Round) string {
 		parts = append(parts, roundStateText(st, r))
 	}
 	if len(r.Reviews) > 0 && r.Findings > 0 {
-		parts = append(parts, fmt.Sprintf("%d finding%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
+		parts = append(parts, fmt.Sprintf("%d issue%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
 	}
 	if r.EndedAt != nil && !r.StartedAt.IsZero() {
 		parts = append(parts, ui.FormatDuration(r.EndedAt.Sub(r.StartedAt).Truncate(time.Second)))
@@ -489,6 +489,9 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) []string {
 		return nil
 	}
 	var lines []string
+	if next := nextStepLine(st, s); next != "" {
+		lines = append(lines, "  "+next)
+	}
 	if !s.State.Finished() {
 		if feed := f.Progress.Lines; len(feed) > 0 {
 			if l := feed[len(feed)-1]; l.Level == chunkd.FeedWarn || l.Level == chunkd.FeedError {
@@ -517,6 +520,39 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) []string {
 		return nil
 	}
 	return append([]string{""}, lines...)
+}
+
+// nextStepLine tells a person watching the run what is happening and whether
+// there is anything for them to do, in plain terms rather than the run's
+// internals.
+func nextStepLine(st watchStyles, s chunkd.Session) string {
+	if s.Factory == nil || len(s.Rounds) == 0 {
+		return ""
+	}
+	last := s.Rounds[len(s.Rounds)-1]
+	if !s.State.Finished() {
+		switch last.State {
+		case chunkd.RoundStarted, chunkd.RoundImplementing:
+			return st.dim("Now: the implementer is making the change. Nothing to do yet.")
+		case chunkd.RoundChecking:
+			return st.dim("Now: checks and reviewers are looking at the change. Nothing to do yet.")
+		case chunkd.RoundDone, chunkd.RoundFailed:
+		}
+		return ""
+	}
+	switch s.State {
+	case chunkd.SessionFailed:
+		return st.err(ui.IconFail + " The run failed before it finished.")
+	case chunkd.SessionCancelled:
+		return st.dim("Cancelled.")
+	case chunkd.SessionDone:
+		if names := failedNames(last); len(names) > 0 {
+			return st.err(fmt.Sprintf("%s Still failing after the last round: %s", ui.IconFail, strings.Join(names, ", ")))
+		}
+		return st.success(ui.IconOK + " All checks passed. The change is ready for you to look at.")
+	case chunkd.SessionRunning:
+	}
+	return ""
 }
 
 // runDetailLines are what the run runs on: its worktree, what it said while

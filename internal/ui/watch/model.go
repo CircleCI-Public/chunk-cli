@@ -222,7 +222,13 @@ type Model struct {
 	// sessions are the runs the left pane lists, across projects, and
 	// runSidecars the sidecars of each factory run among them, by run ID. Those
 	// sidecars are shown with their run rather than as rows of their own.
-	sessions      []sessionInfo
+	sessions []sessionInfo
+	// allRuns is every run worth listing before the search filters it down to
+	// sessions. query is what the person typed after /, and searching is true
+	// while the keyboard goes to it.
+	allRuns       []sessionInfo
+	query         string
+	searching     bool
 	runSidecars   map[string][]sidecarInfo
 	reviewAuthErr string
 
@@ -302,13 +308,22 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// A pending cancel is withdrawn by any key but the one that confirms it.
 	wasConfirm := m.runConfirm
 	m.runConfirm = ""
+	if m.searching {
+		return m.updateSearchKey(msg)
+	}
 	switch {
+	case key.Matches(msg, k.Search):
+		m.searching = true
+		m.focusedPane = paneLeft
 	case key.Matches(msg, k.Quit, k.ForceQuit):
 		return m, tea.Quit
 	case key.Matches(msg, k.Back):
 		if right {
 			m.focusedPane = paneLeft
 			return m, nil
+		}
+		if m.query != "" {
+			return m.setQuery(""), nil
 		}
 		return m, tea.Quit
 	case key.Matches(msg, k.Cancel):
@@ -434,8 +449,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// default and so add or drop rows above the selection: note which row
 		// it is before the poll and find that row again after.
 		prevRun, prevItem := m.selRun, m.selectedRunItem()
-		m.sessions = visibleRuns(msg.sessions, time.Now())
-		m.sidecars, m.runSidecars = splitRunSidecars(m.sidecars, m.sessions)
+		m.allRuns = visibleRuns(msg.sessions, time.Now())
+		m.sessions = filterRuns(m.allRuns, m.query)
+		// A hidden run's sidecars still belong to it, so they stay out of the
+		// sidecar list.
+		m.sidecars, m.runSidecars = splitRunSidecars(m.sidecars, m.allRuns)
 		m.reviewAuthErr = msg.reviewAuthErr
 		m = m.reselectRun()
 		if run := m.selectedRun(); run != nil {
