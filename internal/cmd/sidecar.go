@@ -1113,6 +1113,9 @@ Example:
 			}
 
 			env, envCached, runErr := loadEnvironment(ctx, dir, cfg, force, status)
+			if envCached {
+				streams.ErrPrintln(msgUsingSavedEnvironment)
+			}
 			if runErr == nil && !envCached {
 				saveConfigOrWarn(dir, cfg, status)
 			}
@@ -1178,13 +1181,17 @@ Example:
 	return cmd
 }
 
+// msgUsingSavedEnvironment notes that the environment saved in
+// .chunk/config.json was used rather than detected.
+const msgUsingSavedEnvironment = "Using environment from .chunk/config.json"
+
 // loadEnvironment returns the environment saved in cfg, or detects one in dir
 // and records it in cfg when there is none or force is set. cached reports
 // whether the saved one was used; when it was not, cfg has changed and the
-// caller should save it.
+// caller should save it. The caller notes that the saved one was used, as a
+// plain flush-left line, which none of the status levels prints.
 func loadEnvironment(ctx context.Context, dir string, cfg *config.ProjectConfig, force bool, status iostream.StatusFunc) (env *envbuilder.Environment, cached bool, err error) {
 	if cfg.Environment != nil && !force {
-		status(iostream.LevelStep, "Using environment from .chunk/config.json")
 		return cfg.Environment, true, nil
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))

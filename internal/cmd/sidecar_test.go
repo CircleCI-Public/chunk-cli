@@ -308,7 +308,7 @@ func TestLoadEnvironmentUsesSavedEnvironment(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, cached)
 	assert.Equal(t, env, saved)
-	assert.Assert(t, strings.Contains(errOut.String(), "Using environment from .chunk/config.json"))
+	assert.Equal(t, errOut.String(), "", "the caller says the saved environment was used")
 	// Nothing is saved; that is left to the caller.
 	_, err = os.Stat(filepath.Join(dir, ".chunk", "config.json"))
 	assert.Assert(t, os.IsNotExist(err))
