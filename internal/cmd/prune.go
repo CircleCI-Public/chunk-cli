@@ -11,13 +11,14 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/localprune"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func newPruneCmd() *cobra.Command {
 	var orgID, before string
-	var force bool
+	var force, local, yes bool
 
 	cmd := &cobra.Command{
 		Use:   "prune",
@@ -25,8 +26,15 @@ func newPruneCmd() *cobra.Command {
 		Long: `Delete your sidecar instances for the given org.
 
 By default the API deletes sidecars created more than 1 hour ago.
-Pass --before to extend the cutoff (e.g. --before 24h).`,
+Pass --before to extend the cutoff (e.g. --before 24h).
+
+Pass --local to delete chunk's leftover local files instead: state left
+behind at paths chunk no longer reads as its primary source. It never
+touches remote sidecars. Without --yes it only lists what it would remove.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if local {
+				return runLocalPrune(cmd, yes)
+			}
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -109,6 +117,34 @@ Pass --before to extend the cutoff (e.g. --before 24h).`,
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&before, "before", "", "Delete sidecars created more than this long ago (e.g. 2h, 24h; default: 1h)")
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&local, "local", false, "Delete chunk's leftover local files instead of remote sidecars")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Actually delete; without it, only list what --local would remove")
 
 	return cmd
+}
+
+// runLocalPrune lists, or with yes deletes, chunk's leftover local files.
+func runLocalPrune(cmd *cobra.Command, yes bool) error {
+	io := iostream.FromCmd(cmd)
+	plan, err := localprune.Scan(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("scan local state: %w", err)
+	}
+	if len(plan.Items) == 0 {
+		io.ErrPrintln(ui.Dim("Nothing to prune"))
+		return nil
+	}
+	for _, it := range plan.Items {
+		io.Printf("%s\n", it.Path)
+		io.ErrPrintln(ui.Dim("  " + it.Reason))
+	}
+	if !yes {
+		io.ErrPrintf("\n%d item(s) would be removed. Re-run with --local --yes to delete them.\n", len(plan.Items))
+		return nil
+	}
+	if err := plan.Apply(cmd.Context()); err != nil {
+		return &userError{msg: "Could not remove all local leftovers.", err: err}
+	}
+	io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Removed %d item(s)", len(plan.Items))))
+	return nil
 }
