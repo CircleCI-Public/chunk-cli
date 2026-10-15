@@ -466,7 +466,8 @@ chunk
   that fails does not stop the prompts: it is warned of, the prompts are
   written, and the command then fails with it, so a rerun has only the image
   left to do. An image without Claude Code, or an interrupted run, stops the
-  prompts too, since they would fail the same way.
+  prompts too, since they would fail the same way. With `--json`, what one part
+  made is reported even when the other fails.
   Existing review prompts in `.chunk/reviews` are left out of the run; in an
   `--output` directory they are an error. A prompts directory that cannot be read is
   an error rather than taken for one with prompts. The plan is worked out from

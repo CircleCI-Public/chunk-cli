@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -679,6 +680,28 @@ func TestFactoryBootstrapWritesThePromptsWhenTheImageFails(t *testing.T) {
 	assert.Equal(t, len(filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots")), 0)
 	_, hasValidation := readProjectConfig(t, workDir)["validation"]
 	assert.Assert(t, !hasValidation, "no image is recorded")
+}
+
+// With --json, the prompts written after the image failed are still reported:
+// a rerun skips them, so this is the only report of them.
+func TestFactoryBootstrapReportsThePromptsAsJSONWhenTheImageFails(t *testing.T) {
+	env, _, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	claudeOnSidecar(sshSrv, true)
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "exit 3"}}},
+	})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history", "--json"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, `Setup step "install" exited with status 3`), "stderr: %s", result.Stderr)
+	var report struct {
+		Prompts      []string `json:"prompts"`
+		SidecarImage string   `json:"sidecar_image"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
+	assert.Assert(t, slices.Contains(report.Prompts, filepath.Join(".chunk", "reviews", "testing.md")), "prompts: %v", report.Prompts)
+	assert.Equal(t, report.SidecarImage, "")
 }
 
 // An environment with no setup steps has nothing for a snapshot to hold, so no

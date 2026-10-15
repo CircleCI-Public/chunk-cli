@@ -204,12 +204,17 @@ little for Claude to read yet.`,
 			}
 			out, err := runBootstrapParts(ctx, streams, sidecarRun, prompts, statusFn)
 			if jsonOut {
-				if err != nil {
+				// A part that failed does not hide what the other made: a
+				// rerun skips that part, so this is the only report of it.
+				if err != nil && out.paths == nil && out.snapshotID == "" {
 					return err
 				}
 				report := newBootstrapReport(workDir, out.paths, out.result, history)
 				report.SidecarImage = out.snapshotID
-				return iostream.PrintJSON(streams.Out, report)
+				if jsonErr := iostream.PrintJSON(streams.Out, report); jsonErr != nil {
+					return jsonErr
+				}
+				return err
 			}
 			printBootstrapPrompts(streams, workDir, out, statusFn)
 			if err != nil {
