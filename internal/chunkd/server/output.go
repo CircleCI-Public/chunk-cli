@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"strconv"
@@ -185,12 +186,20 @@ func streamFor(client *circleci.Client) streamFn {
 	}
 }
 
-// register records a command and starts streaming it. A command ID already known
-// is ignored, so a duplicate registration cannot start a second streamer for the
-// same output.
-func (s *outputStore) register(reg chunkd.CommandReg, stream streamFn) {
+// streamOutcome is a registered command's result, delivered on register's
+// returned channel once its streamer finishes.
+type streamOutcome struct {
+	code int
+	err  error
+}
+
+// register records a command and starts streaming it, returning a channel that
+// carries the outcome once the streamer finishes. A command ID already known is
+// ignored and the returned channel is nil, so a duplicate registration cannot
+// start a second streamer for the same output.
+func (s *outputStore) register(reg chunkd.CommandReg, stream streamFn) <-chan streamOutcome {
 	if reg.CommandID == "" {
-		return
+		return nil
 	}
 	// Canonicalised here rather than at each client: the clients send the working
 	// directory they were handed, project discovery canonicalises, and a command
@@ -200,7 +209,7 @@ func (s *outputStore) register(reg chunkd.CommandReg, stream streamFn) {
 	s.mu.Lock()
 	if _, exists := s.cmds[reg.CommandID]; exists {
 		s.mu.Unlock()
-		return
+		return nil
 	}
 	ctx, cancel := context.WithCancel(s.parent)
 	entry := &commandEntry{reg: reg, buf: newBuffer(s.bufCap), cancel: cancel}
@@ -214,23 +223,28 @@ func (s *outputStore) register(reg chunkd.CommandReg, stream streamFn) {
 		// it exists, but there is no output to serve for it.
 		entry.buf.finish(nil, "no CircleCI credentials, so output was never streamed")
 		cancel()
-		return
+		return nil
 	}
 
+	done := make(chan streamOutcome, 1)
 	go func() {
 		defer cancel()
 		resp, err := stream(ctx, reg.CommandID, entry.buf.append)
 		if err != nil {
-			// A cancelled stream is a shutdown, not a failure worth logging.
-			if ctx.Err() == nil {
+			// A cancelled stream is a shutdown, or a caller sharing the stream
+			// giving up, not a failure worth logging.
+			if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 				log.Printf("chunkd: stream output for %s: %v", reg.CommandID, err)
 			}
 			entry.buf.finish(nil, err.Error())
+			done <- streamOutcome{err: err}
 			return
 		}
 		code := resp.ExitCode
 		entry.buf.finish(&code, "")
+		done <- streamOutcome{code: code}
 	}()
+	return done
 }
 
 // evictLocked drops finished commands until the project is under MaxCommands.
