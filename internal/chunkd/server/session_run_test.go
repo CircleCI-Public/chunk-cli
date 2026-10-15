@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 const testSecret = "sk-ant-super-secret-value"
@@ -213,4 +215,93 @@ func startTestDaemonWithReview(t *testing.T, cfg ReviewConfig) {
 		reachable, _ := ping(sockPath)
 		return reachable
 	})
+}
+
+// outputRequestCount counts requests to the command output endpoint, so a test
+// can pin how many times a command's output was actually fetched.
+func outputRequestCount(cci *fakes.FakeCircleCI) int {
+	n := 0
+	for _, req := range cci.Recorder.AllRequests() {
+		if strings.HasSuffix(req.URL.Path, "/output") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestExecerForRegisteredCommandStreamsOutputOnce guards against fetching a
+// registered command's output twice: once for the output store's buffer and
+// once for the caller, both from the same cursor.
+func TestExecerForRegisteredCommandStreamsOutputOnce(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-1", Stdout: "hello\n", ExitCode: 0}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	d := newTestDaemon()
+	pe := &sidecar.PoolEntry{ID: "sc-1", Client: newTestClient(t, srv.URL)}
+	exec := d.execerFor("/repo", func(string, string) string { return "step" })
+
+	var got strings.Builder
+	code, err := exec(context.Background(), pe, "echo hello", nil, func(_ string, data []byte) {
+		got.Write(data)
+	}, nil)
+	assert.NilError(t, err)
+	assert.Equal(t, code, 0)
+	assert.Equal(t, got.String(), "hello\n")
+
+	chunk := d.out.read("cmd-1", 0)
+	assert.Assert(t, chunk.Found)
+	assert.Equal(t, string(chunk.Data), "hello\n")
+
+	assert.Equal(t, outputRequestCount(cci), 1,
+		"a registered command's output must be streamed once, not once per consumer")
+}
+
+// TestExecerForRegisteredCommandPropagatesStreamFailure pins the other half of
+// sharing one stream between two consumers: the exec caller must see the same
+// failure the output store's buffer records, not a clean exit.
+func TestExecerForRegisteredCommandPropagatesStreamFailure(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.CommandOutputStatusCode = http.StatusGone
+	cci.CommandOutputMessage = "sidecar is out of date"
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	d := newTestDaemon()
+	pe := &sidecar.PoolEntry{ID: "sc-1", Client: newTestClient(t, srv.URL)}
+	exec := d.execerFor("/repo", func(string, string) string { return "step" })
+
+	_, err := exec(context.Background(), pe, "echo hello", nil, func(string, []byte) {}, nil)
+	assert.Assert(t, err != nil, "a failed stream must not be reported to the caller as a clean exit")
+	assert.Assert(t, strings.Contains(err.Error(), "out of date"), "got %q", err)
+
+	chunk := d.out.read("cmd-123", 0)
+	assert.Assert(t, chunk.Found)
+	assert.Assert(t, strings.Contains(chunk.Error, "out of date"),
+		"the output store's buffer must record the same failure, got %q", chunk.Error)
+}
+
+// TestExecerForUnregisteredCommandStillStreamsOutput pins the other half of the
+// fix: a command with no log-pane name skips the output store, but the caller
+// must still get its output from the one stream that does happen.
+func TestExecerForUnregisteredCommandStillStreamsOutput(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-1", Stdout: "hello\n", ExitCode: 0}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	d := newTestDaemon()
+	pe := &sidecar.PoolEntry{ID: "sc-1", Client: newTestClient(t, srv.URL)}
+	exec := d.execerFor("/repo", func(string, string) string { return "" })
+
+	var got strings.Builder
+	code, err := exec(context.Background(), pe, "echo hello", nil, func(_ string, data []byte) {
+		got.Write(data)
+	}, nil)
+	assert.NilError(t, err)
+	assert.Equal(t, code, 0)
+	assert.Equal(t, got.String(), "hello\n")
+
+	assert.Equal(t, outputRequestCount(cci), 1)
 }

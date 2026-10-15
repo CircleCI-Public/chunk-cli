@@ -212,14 +212,33 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 		}
 		// An empty name means the command is bookkeeping, not worth a log pane.
 		if name := attribute(pe.ID, commandID); name != "" {
-			d.out.register(chunkd.CommandReg{
+			// stream is called once here, fanning each run of output out to both
+			// the output store's buffer and the caller's own onOutput, so a
+			// registered command's output is not fetched from the API twice.
+			asBuffered := func(_ context.Context, _ string, onBuffer func([]byte)) (*circleci.ExecResponse, error) {
+				code, err := stream(ctx, pe, commandID, func(streamName string, data []byte) {
+					onBuffer(data)
+					onOutput(streamName, data)
+				})
+				if err != nil {
+					return nil, err
+				}
+				return &circleci.ExecResponse{ExitCode: code}, nil
+			}
+			if done := d.out.register(chunkd.CommandReg{
 				CommandID:   commandID,
 				SidecarID:   pe.ID,
 				ProjectRoot: root,
 				Op:          "review",
 				Name:        name,
 				SubmittedAt: time.Now(),
-			}, streamFor(pe.Client))
+			}, asBuffered); done != nil {
+				outcome := <-done
+				if outcome.err != nil {
+					return 0, fmt.Errorf("stream output: %w", outcome.err)
+				}
+				return outcome.code, nil
+			}
 		}
 		code, err := stream(ctx, pe, commandID, onOutput)
 		if err != nil {
