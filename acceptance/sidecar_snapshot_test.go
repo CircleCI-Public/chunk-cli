@@ -3,6 +3,8 @@ package acceptance
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -271,4 +273,92 @@ func TestSidecarSnapshotListEmpty(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stderr, "No snapshots found"), "expected 'No snapshots found' in stderr: %s", result.Stderr)
+}
+
+func TestSidecarSnapshotCreateRecordsSidecarImage(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	workDir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, ".chunk"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, ".chunk", "config.json"), []byte(`{"orgID":"org-aaa"}`), 0o644))
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "snapshot", "create",
+		"--sidecar-id", "sb-111",
+		"--name", "my-env",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "config.json"))
+	assert.NilError(t, err)
+	var cfg struct {
+		OrgID      string `json:"orgID"`
+		Validation struct {
+			SidecarImage string `json:"sidecarImage"`
+		} `json:"validation"`
+	}
+	assert.NilError(t, json.Unmarshal(data, &cfg))
+	assert.Equal(t, cfg.Validation.SidecarImage, "snap-1")
+	assert.Equal(t, cfg.OrgID, "org-aaa")
+}
+
+func TestSidecarSnapshotCreateSkipConfig(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	workDir := t.TempDir()
+	configPath := filepath.Join(workDir, ".chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(configPath), 0o755))
+	assert.NilError(t, os.WriteFile(configPath, []byte(`{"orgID":"org-aaa"}`), 0o644))
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "snapshot", "create",
+		"--sidecar-id", "sb-111",
+		"--name", "checkpoint",
+		"--skip-config",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), `{"orgID":"org-aaa"}`)
+}
+
+func TestSidecarSnapshotCreateRecordsSidecarImageWhenDeleteFails(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.DeleteStatusCode = 500
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	workDir := t.TempDir()
+	configPath := filepath.Join(workDir, ".chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(configPath), 0o755))
+	assert.NilError(t, os.WriteFile(configPath, []byte(`{"orgID":"org-aaa"}`), 0o644))
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "snapshot", "create",
+		"--sidecar-id", "sb-222",
+		"--name", "my-env",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "could not delete sidecar sb-222"), "stderr: %s", result.Stderr)
+
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+	var cfg struct {
+		Validation struct {
+			SidecarImage string `json:"sidecarImage"`
+		} `json:"validation"`
+	}
+	assert.NilError(t, json.Unmarshal(data, &cfg))
+	assert.Equal(t, cfg.Validation.SidecarImage, "snap-1")
 }

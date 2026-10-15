@@ -292,13 +292,13 @@ chunk sidecar snapshot create --name <snapshot-name>
 
 Note the snapshot ID from the output. The source sidecar is automatically deleted after a successful snapshot — that is expected behavior. The member is also removed from local active-pool state; `chunk sidecar current` will return empty if that leaves the pool empty, until you launch from the snapshot in Stage 9.
 
-Persist the snapshot ID:
+`snapshot create` records the snapshot ID as `validation.sidecarImage` in `.chunk/config.json`. If the project already had a different image, it asks first, and without a terminal it keeps the old one and prints the command to switch. In that case, confirm with the user and run it:
 
 ```bash
 chunk config set validation.sidecarImage <snapshot-id>
 ```
 
-**This overrides the per-command routing from Stage 6.** With
+**Recording the image overrides the per-command routing from Stage 6.** With
 `validation.sidecarImage` set, `chunk validate` sends every command to the sidecar
 regardless of its `remote` flag or role — including autofix commands. If the user
 needs a formatter to keep rewriting local files, they run it directly (`task fmt`,

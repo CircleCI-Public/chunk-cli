@@ -177,12 +177,11 @@ Then, for each round of edits:
 
 Snapshots save a configured sidecar state so future sessions boot fast.
 
-- **Create:** `chunk sidecar snapshot create --name <name>` — captures current sidecar. The source sidecar is deleted after a successful snapshot.
+- **Create:** `chunk sidecar snapshot create --name <name>` — captures current sidecar and records it as `validation.sidecarImage` in `.chunk/config.json`. The source sidecar is deleted after a successful snapshot. Add `--skip-config` for a throwaway checkpoint that should not become the project's image.
 - **List:** `chunk sidecar snapshot list`
-- **Record in config:** `chunk config set validation.sidecarImage <snapshot-id>`
 - **Launch from:** `chunk sidecar create --image <snapshot-id>` then `chunk sidecar sync`
 
-Always snapshot after `chunk validate` passes.
+Snapshot once `chunk validate` passes after setting up the environment, or after changing its dependencies (new packages, lockfile or toolchain updates). If the project already records a different image, `snapshot create` asks before replacing it, and without a terminal it keeps the old one and prints the `chunk config set validation.sidecarImage <snapshot-id>` command. Confirm with the user before running it.
 
 ---
 
