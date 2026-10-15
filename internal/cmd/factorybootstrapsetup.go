@@ -1,14 +1,12 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
@@ -136,6 +134,8 @@ type sidecarImageRun struct {
 	Cfg *config.ProjectConfig
 	// Now dates the snapshot's name.
 	Now time.Time
+	// Output receives the setup steps' output.
+	Output io.Writer
 }
 
 // setupSidecarImage does what chunk sidecar setup and then chunk sidecar
@@ -192,25 +192,18 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 		}
 	}()
 
-	// The setup steps' output is kept back and shown only when one fails: the
-	// review prompts are being written at the same time, and their progress
-	// would be lost among it.
-	var output bytes.Buffer
 	err = sidecar.Provision(ctx, sidecar.ProvisionOptions{
 		Dir:       run.WorkDir,
 		Client:    run.Client,
 		Sidecar:   func(context.Context) (string, error) { return sc.ID, nil },
 		Workspace: sidecar.DefaultWorkspace(run.Repo),
 		EnvVars:   envVars,
-		Streams:   iostream.Streams{Out: &output, Err: &output},
-		Status:    status,
+		// All of it to stderr: stdout is for the prompts bootstrap writes,
+		// or its --json report.
+		Streams: iostream.Streams{Out: run.Output, Err: run.Output},
+		Status:  status,
 	}, env)
 	if err != nil {
-		if _, ok := errors.AsType[*sidecar.SetupStepError](err); ok {
-			for _, line := range lastLines(output.String(), setupOutputLines) {
-				status(iostream.LevelInfo, line)
-			}
-		}
 		return "", sidecarSetupError(err, run.TokenSource)
 	}
 
@@ -268,21 +261,6 @@ func checkClaudeInstalled(ctx context.Context, client *circleci.Client, tokenSou
 	return nil
 }
 
-// setupOutputLines is how much of a failed setup step's output is shown.
-const setupOutputLines = 20
-
-// lastLines returns the last n non-empty lines of s.
-func lastLines(s string, n int) []string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	if len(lines) == 1 && lines[0] == "" {
-		return nil
-	}
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return lines
-}
-
 // repoName names the project's repository from its git origin, or from its
 // directory when it has none.
 func repoName(ctx context.Context, workDir string) string {
@@ -301,129 +279,34 @@ type bootstrapOutcome struct {
 	result factory.Bootstrap
 }
 
-// progressSpinner is the spinner the review prompts part shows its progress
-// on while the sidecar image part prints its own: ui.Spinner, or a fake.
-type progressSpinner interface {
-	Enabled() bool
-	Start(message string)
-	Update(message string)
-	Stop()
-	Log(message string)
-}
-
-// spinnerLines writes each line it is given above spin, which keeps spinning
-// below them.
-type spinnerLines struct{ spin progressSpinner }
-
-func (w spinnerLines) Write(p []byte) (int, error) {
-	w.spin.Log(strings.TrimSuffix(string(p), "\n"))
-	return len(p), nil
-}
-
-// runBootstrapParts runs the sidecar image and review prompts parts of a
-// bootstrap run, whichever are not nil. It returns what they made, and the
-// error of the last that failed, having warned of any other.
-//
-// When both run, the sidecar image part's progress is printed as it happens,
-// since its setup steps are what a person waits on and may need to read. The
-// review prompts part leaves out Claude's tool calls, and on a terminal shows
-// its progress on spin instead, so the two do not interleave.
-func runBootstrapParts(ctx context.Context, streams iostream.Streams, sidecarRun *sidecarImageRun, prompts *promptsRun, spin progressSpinner) (bootstrapOutcome, error) {
-	together := sidecarRun != nil && prompts != nil
-	spinning := together && spin.Enabled()
-	status := newStatusFunc(streams)
-	if spinning {
-		status = newStatusFunc(iostream.Streams{Out: streams.Out, Err: spinnerLines{spin}})
-	}
-
+// runBootstrapParts runs the sidecar image part of a bootstrap run and then
+// the review prompts part, whichever are not nil, and returns what they made.
+// The sidecar image comes first: it is the slower part, the likelier to fail,
+// and the one chunk factory cannot run without. Its failing does not stop the
+// prompts, so a rerun has only the image left to do; it is warned of, and
+// returned when the prompts succeed.
+func runBootstrapParts(ctx context.Context, streams iostream.Streams, sidecarRun *sidecarImageRun, prompts *promptsRun, status iostream.StatusFunc) (bootstrapOutcome, error) {
 	var out bootstrapOutcome
-	var parts []bootstrapPart
+	var sidecarErr error
 	if sidecarRun != nil {
-		parts = append(parts, bootstrapPart{name: "sidecar", run: func(ctx context.Context, status iostream.StatusFunc) error {
-			var err error
-			out.snapshotID, err = setupSidecarImage(ctx, *sidecarRun, status)
-			return err
-		}})
+		out.snapshotID, sidecarErr = setupSidecarImage(ctx, *sidecarRun, status)
 	}
-	if prompts != nil {
-		run := *prompts
-		run.HideActivity = together
-		parts = append(parts, bootstrapPart{name: "prompts", run: func(ctx context.Context, status iostream.StatusFunc) error {
-			promptsStatus := status
-			if spinning {
-				spin.Start("[prompts] Writing review prompts...")
-				// Warnings and errors still get a line of their own; the
-				// steps only move the spinner on.
-				promptsStatus = func(level iostream.Level, msg string) {
-					switch level {
-					case iostream.LevelWarn, iostream.LevelError:
-						status(level, msg)
-					case iostream.LevelStep:
-						spin.Update("[prompts] " + msg)
-					case iostream.LevelInfo, iostream.LevelDone:
-					}
-				}
-			}
-			var err error
-			out.paths, out.result, err = writeBootstrapPrompts(ctx, run, promptsStatus)
-			if spinning {
-				spin.Stop()
-				if err == nil {
-					status(iostream.LevelDone, "Review prompts written")
-				}
-			}
-			return err
-		}})
+	if prompts == nil {
+		return out, sidecarErr
 	}
-	errs := runConcurrently(ctx, parts, status)
-	return out, bootstrapPartsError(streams, parts, errs)
-}
-
-// bootstrapPart is a part of bootstrap that runs on a sidecar of its own.
-type bootstrapPart struct {
-	name string
-	run  func(ctx context.Context, status iostream.StatusFunc) error
-}
-
-// runConcurrently runs parts at the same time: each waits on a sidecar for
-// minutes, and none needs what another does. With more than one, each status
-// line says which part it is from. It returns each part's error, in order.
-// One part failing does not stop the others, so a rerun has less to do.
-func runConcurrently(ctx context.Context, parts []bootstrapPart, status iostream.StatusFunc) []error {
-	var mu sync.Mutex
-	errs := make([]error, len(parts))
-	var wg sync.WaitGroup
-	for i, part := range parts {
-		partStatus := func(level iostream.Level, msg string) {
-			if len(parts) > 1 {
-				msg = "[" + part.name + "] " + msg
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			status(level, msg)
-		}
-		wg.Go(func() { errs[i] = part.run(ctx, partStatus) })
+	if sidecarErr != nil {
+		warnUserError(streams, "", sidecarErr)
+		streams.ErrPrintln(ui.Dim("Writing the review prompts anyway; run bootstrap again to set up the sidecar image."))
 	}
-	wg.Wait()
-	return errs
-}
-
-// bootstrapPartsError is the error of a run whose parts failed. Every failure
-// but the last is reported as a warning, so none goes unsaid, and the last is
-// returned.
-func bootstrapPartsError(streams iostream.Streams, parts []bootstrapPart, errs []error) error {
-	var last error
-	var lastName string
-	for i, err := range errs {
-		if err == nil {
-			continue
-		}
-		if last != nil {
-			warnUserError(streams, "["+lastName+"] ", last)
-		}
-		last, lastName = err, parts[i].name
+	if sidecarRun != nil {
+		streams.ErrPrintln("")
 	}
-	return last
+	var err error
+	out.paths, out.result, err = writeBootstrapPrompts(ctx, *prompts, status)
+	if err != nil {
+		return out, err
+	}
+	return out, sidecarErr
 }
 
 // bootstrapNextStep closes a run that finished setting the project up.

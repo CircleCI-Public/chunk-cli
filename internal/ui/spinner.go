@@ -38,11 +38,6 @@ func NewSpinner() *Spinner {
 	}
 }
 
-// Enabled reports whether the spinner draws anything: it does only on a
-// terminal. A caller with something to say that the spinner would have shown
-// says it some other way when it does not.
-func (s *Spinner) Enabled() bool { return s.isTTY }
-
 func (s *Spinner) Start(message string) {
 	if !s.isTTY {
 		return
@@ -82,7 +77,6 @@ func (s *Spinner) Stop() {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.ticker != nil {
 		s.ticker.Stop()
 	}
@@ -93,6 +87,7 @@ func (s *Spinner) Stop() {
 			close(s.done)
 		}
 	}
+	s.mu.Unlock()
 	_, _ = fmt.Fprint(s.w, "\r\x1b[2K")
 }
 
@@ -101,8 +96,7 @@ func (s *Spinner) StopWithMessage(message string) {
 	_, _ = fmt.Fprintln(s.w, message)
 }
 
-// Log prints a message on its own line while keeping the spinner running. It
-// is safe to call from other goroutines, and after Stop, when it only prints.
+// Log prints a message on its own line while keeping the spinner running.
 func (s *Spinner) Log(message string) {
 	if !s.isTTY {
 		_, _ = fmt.Fprintln(s.w, message)
@@ -115,24 +109,16 @@ func (s *Spinner) Log(message string) {
 	s.render()
 }
 
-// render draws the spinner's line, unless it has stopped. It writes under the
-// lock, so a redraw never lands in the middle of a line Log is printing.
 func (s *Spinner) render() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.done == nil {
-		return
-	}
-	select {
-	case <-s.done:
-		return
-	default:
-	}
 	frame := frames[s.frameIndex%len(frames)]
 	s.frameIndex++
+	msg := s.message
+	start := s.startTime
+	s.mu.Unlock()
 
-	line := fmt.Sprintf("%s %s", frame, s.message)
-	if elapsed := time.Since(s.startTime); elapsed >= elapsedThreshold {
+	line := fmt.Sprintf("%s %s", frame, msg)
+	if elapsed := time.Since(start); elapsed >= elapsedThreshold {
 		line += ErrDim(fmt.Sprintf(" (%ds)", int(elapsed.Seconds())))
 	}
 	_, _ = fmt.Fprintf(s.w, "\r\x1b[2K%s", line)

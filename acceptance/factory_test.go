@@ -133,13 +133,11 @@ func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {
 		},
 	})
 	assert.NilError(t, err)
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: readAgentsMD + string(answer)})
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: string(answer)})
 
 	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history", "--skip-sidecar"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	// Alone, the prompts part shows each tool call Claude makes.
-	assert.Assert(t, strings.Contains(result.Stderr, "Read AGENTS.md"), "stderr: %s", result.Stderr)
 	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), "# Testing\n\nCheck the tests.\n")
@@ -176,10 +174,6 @@ func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {
 	}
 	assert.Equal(t, created, 1)
 }
-
-// readAgentsMD is a tool call in Claude's streamed output, to precede its
-// answer.
-const readAgentsMD = `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"AGENTS.md"}}]}}` + "\n"
 
 // bootstrapPrompts returns the prompt of every bootstrap claude run the CLI
 // sent to a sidecar.
@@ -587,13 +581,13 @@ func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
 	assert.Equal(t, string(data), "review mine")
 }
 
-// The sidecar image and the review prompts are set up at the same time, and
-// each part's progress says which it is.
-func TestFactoryBootstrapSetsUpTheImageAndPromptsTogether(t *testing.T) {
-	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: readAgentsMD + bootstrapAnswer(t)})
+// The sidecar image is set up first and the review prompts after it, so each
+// part's output reads as a whole.
+func TestFactoryBootstrapSetsUpTheImageBeforeThePrompts(t *testing.T) {
+	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
 	claudeOnSidecar(sshSrv, true)
 	writeChunkConfig(t, workDir, map[string]interface{}{
-		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
+		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "echo installing"}}},
 	})
 
 	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history"}, env, workDir)
@@ -603,11 +597,35 @@ func TestFactoryBootstrapSetsUpTheImageAndPromptsTogether(t *testing.T) {
 	_, err := os.Stat(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
 	assert.NilError(t, err)
 	assert.Equal(t, len(bootstrapPrompts(t, cci)), 1)
-	assert.Assert(t, strings.Contains(result.Stderr, "[sidecar] "), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "[prompts] "), "stderr: %s", result.Stderr)
-	// Claude's tool calls would bury the setup steps, so they are left out.
-	assert.Assert(t, !strings.Contains(result.Stderr, "Read AGENTS.md"), "stderr: %s", result.Stderr)
+
+	recorded := strings.Index(result.Stderr, "Recorded snapshot snap-1")
+	prompts := strings.Index(result.Stderr, "Reading the project and writing review prompts")
+	assert.Assert(t, recorded >= 0 && prompts > recorded, "the prompts came before the image: %s", result.Stderr)
+	// The setup steps' output is shown as they run, on stderr: stdout is for
+	// the prompts.
+	assert.Assert(t, strings.Contains(result.Stderr, "installing"), "stderr: %s", result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stdout, "installing"), "stdout: %s", result.Stdout)
 	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory build"), "stderr: %s", result.Stderr)
+}
+
+// A sidecar image that cannot be set up does not stop the review prompts, so
+// a rerun has only the image left to do.
+func TestFactoryBootstrapWritesThePromptsWhenTheImageFails(t *testing.T) {
+	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
+	claudeOnSidecar(sshSrv, true)
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "exit 3"}}},
+	})
+
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, `Setup step "install" exited with status 3`), "stderr: %s", result.Stderr)
+	_, err := os.Stat(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
+	assert.NilError(t, err, "the prompts were not written")
+	assert.Equal(t, len(filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots")), 0)
+	_, hasValidation := readProjectConfig(t, workDir)["validation"]
+	assert.Assert(t, !hasValidation, "no image is recorded")
 }
 
 // An environment with no setup steps has nothing for a snapshot to hold, so no

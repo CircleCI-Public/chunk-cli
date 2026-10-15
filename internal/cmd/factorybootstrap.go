@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -46,9 +45,9 @@ Without validation.sidecarImage, bootstrap sets up a sidecar with the
 project's environment, as chunk sidecar setup does, snapshots it, and records
 the snapshot as validation.sidecarImage. --skip-sidecar leaves it out.
 
-It runs at the same time as the review prompts, which Claude Code writes on a
-sidecar of its own, one file per review, in .chunk/reviews. chunk factory
-reviews every change with them.
+Then Claude Code writes the review prompts on a sidecar of its own, one file
+per review, in .chunk/reviews. chunk factory reviews every change with them.
+The prompts are written even when the sidecar image could not be set up.
 
 Claude reads what the project says about itself, such as AGENTS.md, CLAUDE.md,
 docs, CI and linter configuration, and its code and tests. The project's
@@ -174,6 +173,7 @@ little for Claude to read yet.`,
 					Image:       image,
 					Cfg:         cfg,
 					Now:         time.Now(),
+					Output:      streams.Err,
 				}
 			}
 			var prompts *promptsRun
@@ -190,13 +190,11 @@ little for Claude to read yet.`,
 					Cred:        cred,
 					CredSource:  credSource,
 					BaseURL:     rc.AnthropicBaseURL,
-					// A copy, since the sidecar part marks the commands remote
-					// in cfg while the prompts are written.
-					Commands: slices.Clone(cfg.Commands),
-					History:  history,
+					Commands:    cfg.Commands,
+					History:     history,
 				}
 			}
-			out, err := runBootstrapParts(ctx, streams, sidecarRun, prompts, ui.NewSpinner())
+			out, err := runBootstrapParts(ctx, streams, sidecarRun, prompts, statusFn)
 			if jsonOut {
 				if err != nil {
 					return err
@@ -339,9 +337,6 @@ type promptsRun struct {
 	// out since chunk factory runs them anyway.
 	Commands []config.Command
 	History  *reviewhistory.History
-	// HideActivity leaves out a status line for each tool call Claude makes,
-	// for when something else is reporting at the same time.
-	HideActivity bool
 }
 
 // writeBootstrapPrompts boots a sidecar, has Claude Code read the project on
@@ -388,7 +383,7 @@ func writeBootstrapPrompts(ctx context.Context, run promptsRun, statusFn iostrea
 		OnActivity: func(a claudecode.Activity) {
 			// Only what claude reads and runs: its passing remarks would
 			// bury the answer when it lands.
-			if a.Tool != "" && !run.HideActivity {
+			if a.Tool != "" {
 				statusFn(iostream.LevelInfo, activityLine(a))
 			}
 		},

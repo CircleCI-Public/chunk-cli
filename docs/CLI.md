@@ -455,14 +455,14 @@ chunk
   (with `~/.local/bin`, as every Claude run does) and stops without a snapshot
   when it is not, then snapshots the sidecar as `<repo>-<date>`, records the snapshot as
   `validation.sidecarImage`, marks the install and gate commands remote, and
-  deletes the sidecar. The setup steps' output is shown only when one fails.
+  deletes the sidecar.
   An environment with no setup steps gets no sidecar or snapshot: it warns and
   the default image stays. `--json` reports the snapshot as `sidecar_image`.
-  The sidecar image and the review prompts run at the same time, each status
-  line marked `[sidecar]` or `[prompts]`; one failing does not stop the other.
-  While both run, the sidecar image part's progress prints as it happens, and
-  the review prompts part leaves out Claude's tool calls; on a terminal its
-  progress shows on a spinner below the sidecar's lines instead.
+  The sidecar image is set up first, its setup steps' output shown on stderr
+  as they run, and the review prompts are written after it. A sidecar image
+  that fails does not stop the prompts: it is warned of, the prompts are
+  written, and the command then fails with it, so a rerun has only the image
+  left to do.
   Existing review prompts in `.chunk/reviews` are left out of the run; in an
   `--output` directory they are an error. The review prompts part runs
   Claude Code once, read-only, on a sidecar of its own (pool
