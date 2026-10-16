@@ -114,7 +114,7 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 
 	assert.Equal(t, m.draft, draftReady)
 	out = view(m)
-	assert.Assert(t, strings.Contains(out, "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change\n  1. write a prompt → 2. Claude drafts the change → [3. send to the factory (last step)]\n  › Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-)\n  Enter = send to factory (last step)  ·  d = view the draft's diff  ·  Esc = keep for later"), out)
+	assert.Assert(t, strings.Contains(out, "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change\n  1. write a prompt → 2. Claude drafts the change → [3. send to the factory (last step)]\n  › Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-) · press d to view the change\n  Enter = send to factory (last step)  ·  d = view the draft's diff  ·  Esc = keep for later"), out)
 	assert.Assert(t, strings.Contains(out, "Enter = send to factory (last step)"), out)
 	assert.Assert(t, strings.Contains(out, "d = view the draft's diff"), out)
 	assert.Assert(t, strings.Contains(out, "Esc = keep for later"), out)

@@ -323,7 +323,7 @@ func (m Model) draftFooter(st watchStyles, bar string) string {
 		step = 3
 		line := "Claude made no changes, so there is nothing to send"
 		if m.draftResult.Stat != "" {
-			line = "Draft ready: " + lastLine(m.draftResult.Stat)
+			line = "Draft ready: " + lastLine(m.draftResult.Stat) + " · press d to view the change"
 		}
 		last = st.muted(clip("› "+line, m.width-2))
 	}
