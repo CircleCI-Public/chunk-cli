@@ -1,6 +1,10 @@
 package validate
 
-import "os"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
 
 // TestSuitesTemplate returns the contents of .circleci/test-suites.yml for the
 // detected toolchain in workDir, or "" if no toolchain template applies.
@@ -21,6 +25,44 @@ func TestSuitesTemplate(workDir string) string {
 		return pytestTestSuitesYAML
 	}
 	return ""
+}
+
+// TestSuitesOutcome is what WriteTestSuites did.
+// The zero value is no outcome, so an unset result never reads as success.
+type TestSuitesOutcome int
+
+const (
+	// TestSuitesWritten means .circleci/test-suites.yml was written.
+	TestSuitesWritten TestSuitesOutcome = iota + 1
+	// TestSuitesExist means the project already had a test-suites.yml, which
+	// was left alone.
+	TestSuitesExist
+	// TestSuitesNoTemplate means the project's toolchain has no template.
+	TestSuitesNoTemplate
+)
+
+// WriteTestSuites scaffolds .circleci/test-suites.yml for CircleCI Smarter
+// Testing when workDir's toolchain has a template, creating .circleci/ if need
+// be. It never overwrites an existing test-suites.yml.
+func WriteTestSuites(workDir string) (TestSuitesOutcome, error) {
+	template := TestSuitesTemplate(workDir)
+	if template == "" {
+		return TestSuitesNoTemplate, nil
+	}
+
+	circleDir := filepath.Join(workDir, ".circleci")
+	path := filepath.Join(circleDir, "test-suites.yml")
+	if _, err := os.Stat(path); err == nil {
+		return TestSuitesExist, nil
+	}
+
+	if err := os.MkdirAll(circleDir, 0o755); err != nil {
+		return 0, fmt.Errorf("create .circleci dir: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
+		return 0, fmt.Errorf("write test-suites.yml: %w", err)
+	}
+	return TestSuitesWritten, nil
 }
 
 const goTestSuitesYAML = `---

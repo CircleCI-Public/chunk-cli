@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -12,9 +13,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -266,4 +269,108 @@ func TestRecordSnapshotImageWithInvalidConfig(t *testing.T) {
 	assert.Equal(t, string(data), bad, "the invalid config is left untouched")
 	assert.Assert(t, strings.Contains(errOut.String(), "Warning: could not record"), "stderr: %s", errOut.String())
 	assert.Assert(t, strings.Contains(errOut.String(), "chunk config set validation.sidecarImage snap-new"), "stderr: %s", errOut.String())
+}
+
+func TestSidecarSetupError(t *testing.T) {
+	ctx := context.Background()
+	assert.NilError(t, sidecarSetupError(ctx, nil, ""))
+
+	phrased := &userError{msg: "Could not create the sidecar."}
+	assert.Equal(t, sidecarSetupError(ctx, phrased, ""), error(phrased))
+
+	step, ok := errors.AsType[*userError](sidecarSetupError(ctx, &sidecar.SetupStepError{Step: "install", ExitCode: 1}, ""))
+	assert.Assert(t, ok)
+	assert.Equal(t, step.msg, `Setup step "install" exited with status 1.`)
+
+	denied, ok := errors.AsType[*userError](sidecarSetupError(ctx, fmt.Errorf("%w: %w", sidecar.ErrSync, circleci.ErrNotAuthorized), "env"))
+	assert.Assert(t, ok)
+	assert.Equal(t, denied.msg, "Not authorized to sync files.")
+
+	denied, ok = errors.AsType[*userError](sidecarSetupError(ctx, fmt.Errorf("open a session on the sidecar: %w", circleci.ErrNotAuthorized), "env"))
+	assert.Assert(t, ok)
+	assert.Equal(t, denied.msg, "Not authorized to run setup steps.")
+
+	syncFailed, ok := errors.AsType[*userError](sidecarSetupError(ctx, fmt.Errorf("%w: rsync exited 23", sidecar.ErrSync), ""))
+	assert.Assert(t, ok)
+	assert.Equal(t, syncFailed.msg, "Could not sync files to the sidecar.")
+
+	key, ok := errors.AsType[*userError](sidecarSetupError(ctx, fmt.Errorf("%w: generate key: permission denied", sidecar.ErrSSHKey), ""))
+	assert.Assert(t, ok)
+	assert.Equal(t, key.msg, "Could not prepare the SSH key.")
+
+	// A Ctrl-C reads as a cancellation, not as the step it interrupted failing.
+	canceled := fmt.Errorf("%w: rsync: %w", sidecar.ErrSync, context.Canceled)
+	assert.Equal(t, sidecarSetupError(ctx, canceled, ""), canceled)
+
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	interrupted := errors.New("run setup step \"install\": ssh: connection closed")
+	assert.Equal(t, sidecarSetupError(cancelledCtx, interrupted, ""), interrupted)
+}
+
+func TestLoadEnvironmentUsesSavedEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	streams, _, errOut := testStreams()
+
+	saved := &envbuilder.Environment{Stack: "go", Image: "cimg/go", ImageVersion: "1.25.3"}
+	cfg := &config.ProjectConfig{Environment: saved}
+	env, cached, err := loadEnvironment(context.Background(), dir, cfg, false, newStatusFunc(streams))
+	assert.NilError(t, err)
+	assert.Assert(t, cached)
+	assert.Equal(t, env, saved)
+	assert.Equal(t, errOut.String(), "", "the caller says the saved environment was used")
+	// Nothing is saved; that is left to the caller.
+	_, err = os.Stat(filepath.Join(dir, ".chunk", "config.json"))
+	assert.Assert(t, os.IsNotExist(err))
+}
+
+func TestLoadEnvironmentDetectsWhenForced(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/widget\n\ngo 1.25\n"), 0o644))
+	// Pin the image version so detection does not ask Docker Hub for it.
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".circleci"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".circleci", "config.yml"),
+		[]byte("jobs:\n  test:\n    docker:\n      - image: cimg/go:1.25.3\n"), 0o644))
+	streams, _, _ := testStreams()
+
+	saved := &envbuilder.Environment{Stack: "python"}
+	cfg := &config.ProjectConfig{Environment: saved}
+	env, cached, err := loadEnvironment(context.Background(), dir, cfg, true, newStatusFunc(streams))
+	assert.NilError(t, err)
+	assert.Assert(t, !cached)
+	assert.Equal(t, env.Stack, "go")
+	assert.Equal(t, env.ImageVersion, "1.25.3")
+	assert.Equal(t, cfg.Environment.Stack, "go")
+	_, err = os.Stat(filepath.Join(dir, ".chunk", "config.json"))
+	assert.Assert(t, os.IsNotExist(err), "loadEnvironment must leave saving to the caller")
+}
+
+// A bad --env or --env-file is rejected before a sidecar is created or synced.
+func TestProvisionSidecarChecksEnvFirst(t *testing.T) {
+	tests := []struct {
+		name    string
+		envFile string
+		envVars []string
+		want    string
+	}{
+		{name: "bad --env", envVars: []string{"NOEQUALS"}, want: "NOEQUALS"},
+		{name: "bad --env-file", envFile: "bad.env", want: "bad.env"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			assert.NilError(t, os.WriteFile(filepath.Join(dir, "bad.env"), []byte("NOEQUALS\n"), 0o644))
+			called := false
+			opts := sidecar.ProvisionOptions{
+				Dir: dir,
+				Sidecar: func(context.Context) (string, error) {
+					called = true
+					return "", errors.New("the sidecar should not be resolved")
+				},
+			}
+			err := provisionSidecar(context.Background(), &envbuilder.Environment{}, opts, tt.envFile, tt.envVars)
+			assert.ErrorContains(t, err, tt.want)
+			assert.Assert(t, !called, "the sidecar was resolved before the env was checked")
+		})
+	}
 }

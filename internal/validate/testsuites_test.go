@@ -49,3 +49,42 @@ func TestTestSuitesTemplate(t *testing.T) {
 		assert.Assert(t, strings.Contains(got, "go list -f"), "expected Go template, got: %s", got)
 	})
 }
+
+func TestWriteTestSuites(t *testing.T) {
+	t.Run("writes the template, creating .circleci", func(t *testing.T) {
+		dir := t.TempDir()
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+
+		outcome, err := WriteTestSuites(dir)
+		assert.NilError(t, err)
+		assert.Equal(t, outcome, TestSuitesWritten)
+		data, err := os.ReadFile(filepath.Join(dir, ".circleci", "test-suites.yml"))
+		assert.NilError(t, err)
+		assert.Equal(t, string(data), TestSuitesTemplate(dir))
+	})
+
+	t.Run("leaves an existing file alone", func(t *testing.T) {
+		dir := t.TempDir()
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+		assert.NilError(t, os.Mkdir(filepath.Join(dir, ".circleci"), 0o755))
+		path := filepath.Join(dir, ".circleci", "test-suites.yml")
+		assert.NilError(t, os.WriteFile(path, []byte("mine\n"), 0o644))
+
+		outcome, err := WriteTestSuites(dir)
+		assert.NilError(t, err)
+		assert.Equal(t, outcome, TestSuitesExist)
+		data, err := os.ReadFile(path)
+		assert.NilError(t, err)
+		assert.Equal(t, string(data), "mine\n")
+	})
+
+	t.Run("writes nothing for an unknown toolchain", func(t *testing.T) {
+		dir := t.TempDir()
+
+		outcome, err := WriteTestSuites(dir)
+		assert.NilError(t, err)
+		assert.Equal(t, outcome, TestSuitesNoTemplate)
+		_, err = os.Stat(filepath.Join(dir, ".circleci"))
+		assert.Assert(t, os.IsNotExist(err))
+	})
+}
