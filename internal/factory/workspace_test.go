@@ -82,6 +82,18 @@ func TestWorkspaceCollectNeedsBaseline(t *testing.T) {
 	assert.ErrorContains(t, err, "no baseline")
 }
 
+func TestBaselineCommitScript(t *testing.T) {
+	script := BaselineCommitScript("/repos/my repo")
+	assert.Assert(t, strings.Contains(script, sidecar.ShellEscape("/repos/my repo")), script)
+	assert.Assert(t, strings.Contains(script, "--allow-empty"), script)
+	assert.Assert(t, strings.Contains(script, "--no-verify"), script)
+	assert.Assert(t, strings.Contains(script, gitIdentity), script)
+	assert.Assert(t, strings.Contains(script, "git rev-parse HEAD"), script)
+
+	escaped := BaselineCommitScript(`it's "quoted"`)
+	assert.Assert(t, strings.Contains(escaped, sidecar.ShellEscape(`it's "quoted"`)), escaped)
+}
+
 func TestRunValidation(t *testing.T) {
 	dir := t.TempDir()
 	entry := &sidecar.PoolEntry{ID: "impl", RepoPath: dir}
