@@ -45,7 +45,7 @@ func Start(ctx context.Context, root string, h Handoff) (Record, error) {
 	rec.Brief, rec.NeedsWork = handoffBrief(h.Prompt), true
 	err = applyDiff(ctx, wt, h.Diff)
 	if err == nil {
-		err = saveRecord(dataDir, rec)
+		err = SaveRecord(dataDir, rec)
 	}
 	if err != nil {
 		// A worktree no record points at could not be refined, so it goes,

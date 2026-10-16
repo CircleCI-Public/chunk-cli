@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
@@ -10,11 +11,14 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
@@ -234,6 +238,110 @@ func TestFactoryBuildRemoteRefusesAnUnsupportedFlagCombination(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	assert.Assert(t, strings.Contains(result.Stderr, "--verbose is not supported with --remote yet."), "stderr: %s", result.Stderr)
+}
+
+// Once the host is provisioned, chunk factory build --remote starts chunk
+// factory build on the host as one foreground exec and follows it: its
+// stderr reaches this terminal as it streams, and the run's record is saved
+// with Remote set before any of that output arrives. Ctrl-C only detaches -
+// it sends no cancel and no delete - and the command still exits 0.
+func TestFactoryBuildRemoteFollowsTheRunAndDetachesOnSIGINT(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{
+		CommandID: "cmd-1", Stdout: "deadbeef\n", Stderr: "building on the host\n",
+	}, "correctness")
+	// The baseline commit is the first exec; hold the second one's output -
+	// the run itself - until the client disconnects, so there is a genuine
+	// window to interrupt it in, rather than a race against a command that
+	// has already finished.
+	cci.HoldCommandOutputFromExec = 2
+
+	// The fake SSH server runs commands for real on this machine; $HOME there
+	// is redirected to the sidecar's home so --chunk-binary's upload lands in
+	// a temp dir rather than the real one.
+	sidecarHome := env.Extra["CHUNK_SIDECAR_HOME"]
+	t.Setenv("HOME", sidecarHome)
+	binPath := filepath.Join(t.TempDir(), "chunk-linux")
+	assert.NilError(t, os.WriteFile(binPath, []byte("#!/bin/sh\necho fake chunk\n"), 0o755))
+
+	cmd := exec.Command(binary.Path(), "--insecure-storage", "factory", "build",
+		"--remote", "--chunk-binary", binPath, "add a --verbose flag")
+	cmd.Dir = workDir
+	cmd.Env = env.Environ()
+	var stderr syncBuffer
+	cmd.Stderr = &stderr
+	cmd.Stdout = &syncBuffer{}
+	assert.NilError(t, cmd.Start())
+
+	waitForOutput(t, &stderr, "building on the host")
+
+	assert.NilError(t, cmd.Process.Signal(syscall.SIGINT))
+	waitErr := cmd.Wait()
+
+	assert.NilError(t, waitErr, "stderr: %s", stderr.String())
+	assert.Equal(t, cmd.ProcessState.ExitCode(), 0, "stderr: %s", stderr.String())
+	assert.Assert(t, strings.Contains(stderr.String(), "continues on sidecar"), "stderr: %s", stderr.String())
+	assert.Assert(t, strings.Contains(stderr.String(), "chunk factory pull"), "stderr: %s", stderr.String())
+
+	for _, r := range cci.Recorder.AllRequests() {
+		assert.Assert(t, r.Method != "DELETE" || !strings.HasPrefix(r.URL.Path, "/api/v3/sidecar/instances/"),
+			"a detached Ctrl-C must not delete the host sidecar: %v", r)
+	}
+
+	t.Setenv(config.EnvXDGDataHome, filepath.Join(env.HomeDir, ".local", "share"))
+	root := config.CanonicalProjectRoot(workDir)
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+	matches, err := filepath.Glob(filepath.Join(dataDir, "factory", "r-*.json"))
+	assert.NilError(t, err)
+	assert.Equal(t, len(matches), 1, "records: %v", matches)
+	data, err := os.ReadFile(matches[0])
+	assert.NilError(t, err)
+	var rec struct {
+		Remote *struct {
+			SidecarID string `json:"sidecar_id"`
+			CommandID string `json:"command_id"`
+			HostRepo  string `json:"host_repo"`
+		} `json:"remote"`
+	}
+	assert.NilError(t, json.Unmarshal(data, &rec))
+	assert.Assert(t, rec.Remote != nil, "record: %s", data)
+	assert.Assert(t, rec.Remote.SidecarID != "", "record: %s", data)
+	assert.Equal(t, rec.Remote.CommandID, "cmd-1")
+}
+
+// syncBuffer is a bytes.Buffer safe for a subprocess's output-copying
+// goroutine to write to while the test polls it from another.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitForOutput polls buf until it contains want, so a check that depends on
+// a subprocess's progress does not race it.
+func waitForOutput(t *testing.T, buf *syncBuffer, want string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if strings.Contains(buf.String(), want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %q; output so far: %s", want, buf.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func TestFactoryBuildRefusesChunkBinaryWithoutRemote(t *testing.T) {
