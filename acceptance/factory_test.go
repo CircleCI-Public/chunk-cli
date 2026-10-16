@@ -169,6 +169,73 @@ func TestFactoryWithNothingToCheck(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory bootstrap"), "stderr: %s", result.Stderr)
 }
 
+// chunk factory build --remote provisions a sidecar of its own for the run,
+// installs chunk on it with --chunk-binary, and makes the baseline commit
+// there, without starting the run itself.
+func TestFactoryBuildRemoteProvisionsAHostSidecar(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: "deadbeef\n"}, "correctness")
+
+	// The fake SSH server runs commands for real on this machine; $HOME there
+	// is redirected to the sidecar's home so the chunk binary --chunk-binary
+	// uploads lands in a temp dir rather than the real one.
+	sidecarHome := env.Extra["CHUNK_SIDECAR_HOME"]
+	t.Setenv("HOME", sidecarHome)
+
+	binContent := "#!/bin/sh\necho fake chunk\n"
+	binPath := filepath.Join(t.TempDir(), "chunk-linux")
+	assert.NilError(t, os.WriteFile(binPath, []byte(binContent), 0o755))
+
+	result := binary.RunCLI(t, []string{
+		"factory", "build", "--remote", "--chunk-binary", binPath, "--json", "add a --verbose flag",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	var report struct {
+		SidecarID string `json:"sidecar_id"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
+	assert.Assert(t, report.SidecarID != "", "stdout: %s", result.Stdout)
+
+	// The pool is created: a single sidecar for the one host.
+	creates := 0
+	for _, r := range cci.Recorder.AllRequests() {
+		if r.Method == "POST" && r.URL.Path == "/api/v3/sidecar/instances" {
+			creates++
+		}
+	}
+	assert.Equal(t, creates, 1, "requests: %v", cci.Recorder.AllRequests())
+
+	// The binary is installed on the host for real: --chunk-binary uploads it
+	// over the sidecar's SSH connection rather than installing a release.
+	data, err := os.ReadFile(filepath.Join(sidecarHome, "chunk"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), binContent)
+	info, err := os.Stat(filepath.Join(sidecarHome, "chunk"))
+	assert.NilError(t, err)
+	assert.Assert(t, info.Mode()&0o100 != 0, "the uploaded chunk should be executable")
+
+	// The baseline commit is exec'd on the host.
+	baselineExecs := 0
+	for _, r := range cci.Recorder.AllRequests() {
+		if strings.HasSuffix(r.URL.Path, "/exec") && strings.Contains(string(r.Body), "chunk factory baseline") {
+			baselineExecs++
+		}
+	}
+	assert.Equal(t, baselineExecs, 1, "requests: %v", cci.Recorder.AllRequests())
+}
+
+func TestFactoryBuildRemoteRefusesAnUnsupportedFlagCombination(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeChunkConfig(t, workDir, nil)
+	writePrompts(t, filepath.Join(workDir, ".chunk", "reviews"), "correctness")
+
+	result := binary.RunCLI(t, []string{"factory", "build", "--remote", "--verbose", "add a --verbose flag"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "--verbose is not supported with --remote yet."), "stderr: %s", result.Stderr)
+}
+
 func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {
 	answer, err := json.Marshal(map[string]any{
 		"type": "result", "subtype": "success", "is_error": false, "result": "done",

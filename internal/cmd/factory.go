@@ -66,8 +66,8 @@ func checkFactoryBuildFlags(cmd *cobra.Command, logFile string, draft, openPR bo
 
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, jsonOut, logOn, verbose, openPR, draft bool
-	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun string
+	var keepSidecars, noValidate, jsonOut, logOn, verbose, openPR, draft, remote bool
+	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, chunkBinary string
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
@@ -134,9 +134,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			streams := iostream.FromCmd(cmd)
 			var prompt string
 			var err error
-			// A continued run needs no prompt, so stdin is only read for one when
-			// asked for or redirected from a file.
-			if continueRun == "" || len(args) > 0 || redirectedFile(cmd.InOrStdin()) {
+			if factoryBuildNeedsPrompt(continueRun, args, cmd.InOrStdin()) {
 				prompt, err = factoryPrompt(cmd.InOrStdin(), args, logOn && logFile == "")
 				if err != nil {
 					return err
@@ -144,6 +142,22 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			}
 			if err := checkFactoryBuildFlags(cmd, logFile, draft, openPR, attempts); err != nil {
 				return err
+			}
+			// A remote run works on a sidecar of its own; the local daemon plays
+			// no part in it, so it branches off before anything that needs one.
+			if remote {
+				return runFactoryBuildRemote(cmd, factoryRemoteOptions{
+					prompt:      prompt,
+					orgID:       orgID,
+					image:       image,
+					chunkBinary: chunkBinary,
+					reviewsDir:  reviewsDir,
+					continueRun: continueRun,
+					logOn:       logOn,
+					logFile:     logFile,
+					verbose:     verbose,
+					jsonOut:     jsonOut,
+				})
 			}
 			if err := requireLocalDaemon(); err != nil {
 				return err
@@ -246,6 +260,10 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
 	cmd.Flags().BoolVar(&openPR, "open-pr", false, "when every check passes, push the branch to origin and open a pull request on GitHub")
 	cmd.Flags().BoolVar(&draft, "draft", false, "open the pull request as a draft (needs --open-pr)")
+	cmd.Flags().BoolVar(&remote, "remote", false, "provision a sidecar of its own for this run, so you can close your laptop")
+	_ = cmd.Flags().MarkHidden("remote")
+	cmd.Flags().StringVar(&chunkBinary, "chunk-binary", "", "Linux chunk build to upload to the remote sidecar with --remote (default: install the release matching this build)")
+	_ = cmd.Flags().MarkHidden("chunk-binary")
 	cmd.SetFlagErrorFunc(factoryFlagError)
 	return cmd
 }
@@ -306,6 +324,13 @@ func factoryPrompt(in io.Reader, args []string, bareLog bool) (string, error) {
 			withoutDetail()
 	}
 	return prompt, nil
+}
+
+// factoryBuildNeedsPrompt reports whether the build command should read a
+// prompt from the argument or stdin. A continued run needs no prompt, so
+// stdin is only read for one when asked for or redirected from a file.
+func factoryBuildNeedsPrompt(continueRun string, args []string, in io.Reader) bool {
+	return continueRun == "" || len(args) > 0 || redirectedFile(in)
 }
 
 // redirectedFile reports whether in is a regular file with something in it,
