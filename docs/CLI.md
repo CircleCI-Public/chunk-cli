@@ -192,7 +192,7 @@ chunk
 │       --grader-timeout <duration> # Max time for grading each case (default: 20m)
 │       --json                      # Output as JSON
 │
-├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
+├── watch [dir...]                  # Live TUI dashboard of chunk factory build runs
 │   --focus                         # Watch only the current directory instead of all known projects
 │
 ├── conflicts                       # Report whether this branch still merges cleanly into its merge target
@@ -586,10 +586,13 @@ chunk
   that ran. The command exits non-zero when no case could be scored; a run in
   which only some cases errored still succeeds, and `summary.errored` counts
   them.
-- **`watch` is organized around runs.** Factory runs are listed at the top of
-  the left pane, live ones first, then up to five that ended in the last day;
-  sidecars are listed below them, and `↑/↓` moves through both as one list. The
-  first poll selects the newest run. `/` searches the run list: type to narrow it
+- **`watch` is only about runs.** The left pane lists factory runs, live ones
+  first, then up to twenty that ended in the last day, and `↑/↓` moves through
+  them. The first poll selects the newest run. Sidecars have no rows: the
+  dashboard is for watching the work, not the infrastructure it borrows, so a
+  sidecar's sync, validate and resource activity is not shown at all. With no run
+  to list, the pane says where runs come from rather than sitting empty. `/`
+  searches the run list: type to narrow it
   to the runs whose title, project, branch or status contain every word typed
   (`Enter` keeps the filter, `Esc` drops it, and `Esc` again quits). A selected
   run's pane reads top to bottom: the prompt, a status line that says what the run is doing (or, once it
@@ -602,15 +605,14 @@ chunk
   duration), and `Space` or `Enter` on a round opens or closes it, so any number
   can be open. An open round shows the implementer's turn (duration, cost, diff
   stat), then its validation commands
-  and reviews under `validate`. What the run runs on (worktree, setup progress,
-  kept sidecars, the run's sidecars and their resources) is folded under
-  `infra`, which `i` opens. A factory review is a check: it passes unless it
+  and reviews under `validate`. Where the run put its work and what it said while
+  setting up (worktree, setup log, setup progress) are folded under
+  `details`, which `d` opens. A factory review is a check: it passes unless it
   found something worth changing (high or medium severity), so its row shows ✓ with any lesser
   issues noted ("2 issues, none worth changing"), or ✗ with how many of its issues are
   worth changing ("3 issues, 1 worth changing"). A line under the rounds says what
   is happening and whether there is anything to do ("Now: the implementer is making the
-  change. Nothing to do yet.", or, once the run ended, whether the checks passed). A factory run's own
-  sidecars are shown there rather than as rows of their own. `→` moves into
+  change. Nothing to do yet.", or, once the run ended, whether the checks passed). `→` moves into
   the pane, `↑/↓` picks a row and `Enter` opens it: a review's live log, a
   failed check's output, or the implementer's summary (on a round, it opens or
   closes the round). The summary and a
@@ -619,19 +621,18 @@ chunk
   selected, so `x` is gone once a run has ended. **`q` only detaches**: the run
   belongs to the daemon and carries on. The one key that stops it is `x`, and it
   needs a second `x` on the same run to confirm.
-- `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
+- `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls the daemon every 5 seconds. Use `j`/`k` or `↑`/`↓` to select a run, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a
   `project-root` breadcrumb in the same data directory) whether or not a daemon
   is running. The daemon discovers projects from those breadcrumbs and replays
-  each log from the start, so a sidecar run made with no dashboard open is there
-  in full the next time `watch` opens. A purely local run has no sidecar, so it
-  gets no row. (Remote command *output* is the exception: it is registered with
+  each log from the start. `watch` no longer draws those events — it lists runs
+  — but the daemon still reads them, and `chunk sidecar logs` still reaches the
+  output. (Remote command *output* is registered with
   the daemon live and buffered in memory, keyed by the same project root, so it
-  too is only listed for a project that has been registered.)
-- **`watch` can show a command's output.** In the activity pane, an invocation
-  marked `▤` has output the daemon still holds; `Enter` opens a scrollback view
-  of it. A command that is still running tails live — the pane polls every 200 ms
+  is only listed for a project that has been registered.)
+- **`watch` can show a command's output.** `Enter` on a review or check row in
+  the run pane opens a scrollback view of the output the daemon holds for it. A command that is still running tails live — the pane polls every 200 ms
   while it is open, and drops back to the 5 s snapshot tick when closed, so a tail
   never speeds up everything else. `↑`/`↓` and `PgUp`/`PgDn` scroll, `g` jumps to
   the top, `G` re-follows the end, and `Esc` closes the pane rather than quitting
@@ -644,13 +645,14 @@ chunk
     it were whole.
   - The daemon holds at most 20 commands per project, evicting the oldest
     *finished* one first. A running command is never evicted.
-  - Buffers are in memory only, so restarting the daemon loses them. `Enter` on an
-    invocation the daemon no longer knows about says so.
+  - Buffers are in memory only, so restarting the daemon loses them. `Enter` on a
+    row whose output the daemon no longer knows about says so.
   - Output streaming needs a CircleCI token. Without one the dashboard still works
     and shows a one-line hint in the footer; the daemon never prompts.
 - **`chunk sidecar logs <command-id>`** is the non-TUI door onto the same output,
-  for scripts and for agents with no terminal. Command IDs appear in the `watch`
-  dashboard. It reads the chunk daemon's buffer when the daemon has the command
+  for scripts and for agents with no terminal. Command IDs are the ones the chunk
+  daemon records for the commands it is buffering, and the ones a factory run
+  records for its reviews. It reads the chunk daemon's buffer when the daemon has the command
   and falls back to streaming from the API when it does not, so it works either
   way. `-f`/`--follow` keeps printing until the command exits.
   - Output goes to stdout and nothing else does, so it can be piped. A non-zero
@@ -658,23 +660,6 @@ chunk
   - `logs` itself exits non-zero only when *reading* failed. A failing command is
     not a failing read — conflating the two would make the exit status useless to
     a caller.
-- **`watch` shows live resource usage** for the selected sidecar — CPU, memory and
-  disk, sampled every 2 seconds. Sampling only runs while a dashboard is attached,
-  since each sampled sidecar is running a shell loop for it; close `watch` and it
-  stops. A
-  sample older than three intervals renders dimmed and marked `(stale)` rather
-  than disappearing, so a stalled sampler looks stalled instead of looking like an
-  idle sidecar. Memory is read from the sidecar's cgroup, not `/proc/meminfo`,
-  because the latter reports the host's memory.
-- **`watch` rows are per branch, except when they cannot be.** A branch's local runs
-  are folded into its sidecar's row, so one row shows both kinds of run along with
-  sync state. A branch with more than one sidecar — two agent sessions in one
-  working tree, which is the normal shape (see **Sidecar state is per agent
-  session**) — keeps a row each, with local runs as their own row, since folding
-  them together hid a session's row and listed its activity under the other
-  session's name. Rows that share a branch carry a label naming the session
-  (`⧉ session d7d915b2`), because the branch name no longer tells them apart and
-  generated sidecar names shorten to the repo name for all of them.
 - `chunk init` uses Claude to auto-detect the test command for the project.
   It generates `.claude/settings.json` with pre-commit hooks. It never touches
   CircleCI — tokens are prompted inline only when a command actually needs them.

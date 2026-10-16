@@ -4,9 +4,6 @@ package watch
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -15,26 +12,14 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
 
 const (
-	leftPaneWidth  = 28
-	divider        = " │ "
-	pollInterval   = 5 * time.Second
-	spinInterval   = 160 * time.Millisecond
-	runningTimeout = 5 * time.Minute
-	recentEvents   = 300
-
-	levelDone  = "done"
-	levelError = "error"
-
-	// levelAbandoned is not an event level: it marks an invocation whose process
-	// died before writing a terminal event, so nothing will ever close it.
-	levelAbandoned = "abandoned"
+	leftPaneWidth = 28
+	pollInterval  = 5 * time.Second
+	spinInterval  = 160 * time.Millisecond
 )
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -110,37 +95,6 @@ type ProjectEntry struct {
 	ProjectRoot string
 }
 
-// sidecarInfo holds display state for one sidecar.
-type sidecarInfo struct {
-	id   string
-	name string
-	// sessionID is the agent session owning this sidecar, empty for state
-	// written outside a session or before sidecars were session-scoped. Several
-	// sessions can hold sidecars for one worktree, so this is what distinguishes
-	// two otherwise identical rows.
-	sessionID    string
-	projectName  string
-	repoName     string    // basename of the main worktree (groups linked worktrees together)
-	projectPath  string    // absolute root of this worktree, "" when unknown
-	branch       string    // current git branch for this worktree
-	projectIdx   int       // index into Model.projects
-	snapshotName string    // name of the active snapshot for this project, if any
-	fileMtime    time.Time // mtime of the sidecar state file (fallback when no events yet)
-	running      bool
-	// verified reports that the API confirmed the sidecar exists. Sidecars it
-	// has confirmed gone never get this far, so false means unconfirmed: the
-	// daemon has no credentials, no org to ask about, or no answer yet.
-	verified bool
-	// members is every sidecar of a session's pool in this worktree when
-	// collapsePools folded them into this row; nil for a sidecar on its own.
-	members      []string
-	lastActivity time.Time
-	lastOp       eventlog.Op
-	lastResult   string // how the last validate or review run ended: levelDone, levelError, or "" for none
-	// resources is the latest resource sample, nil when the daemon has none.
-	resources *chunkd.Resources
-}
-
 // pane identifies which side of the split layout has keyboard focus.
 type pane int
 
@@ -156,11 +110,8 @@ type errMsg struct{ err error }
 
 type dataMsg struct {
 	projects []ProjectEntry
-	sidecars []sidecarInfo
-	events   [][]eventlog.Event // per-project; index matches Model.projects
 	branches []string
 	headRefs []string
-	commands [][]chunkd.CommandState
 	authErr  string
 	// sessions are the daemon's runs, and reviewAuthErr its reason for being
 	// unable to start one.
@@ -179,23 +130,11 @@ type Model struct {
 	headRefs []string // HEAD SHA per project, refreshed each poll
 
 	// watchAll, when set, means the poll loop should keep re-scanning for
-	// projects that saved their first sidecar state after this dashboard
-	// started, instead of only ever watching the projects it opened with.
+	// projects that started their first run after this dashboard started,
+	// instead of only ever watching the projects it opened with.
 	watchAll bool
 
-	sidecars    []sidecarInfo
-	selectedIdx int
-	selectedID  string             // id of the selected sidecar, so selection survives reordering
-	events      [][]eventlog.Event // per-project; index matches projects
-
-	focusedPane      pane
-	rightSelectedIdx int
-	toggledInvocs    map[time.Time]bool // invocations whose expand/collapse is flipped from default
-
-	// leftScrollOffset is the index of the first sidecar to render in the left
-	// pane. adjustLeftScroll keeps it in sync with selectedIdx after each
-	// navigation so rows above the viewport are reachable via arrow keys.
-	leftScrollOffset int
+	focusedPane pane
 
 	width      int
 	height     int
@@ -213,16 +152,6 @@ type Model struct {
 	// whether the daemon is one this machine runs.
 	relaunch bool
 
-	// ownSession is the session running this dashboard, empty when a human ran
-	// `chunk watch` from a plain shell. When it matches a row's session that row
-	// is labelled as the viewer's own, which is the fastest way to answer "which
-	// of these is mine" without reading UUIDs.
-	ownSession string
-
-	// commands is every command the daemon is buffering output for, per project;
-	// index matches projects. Used to resolve an invocation to a command ID.
-	commands [][]chunkd.CommandState
-
 	// output is the open scrollback pane, nil when none is open.
 	output *outputPane
 	// outputSeq increments on every pane opening, so a tick chain from a closed
@@ -237,33 +166,27 @@ type Model struct {
 	// whether the last poll reached it.
 	conn chunkd.Connection
 
-	// sessions are the runs the left pane lists, across projects, and
-	// runSidecars the sidecars of each factory run among them, by run ID. Those
-	// sidecars are shown with their run rather than as rows of their own.
-	sessions []sessionInfo
-	// allRuns is every run worth listing before the search filters it down to
-	// sessions. query is what the person typed after /, and searching is true
-	// while the keyboard goes to it.
-	allRuns   []sessionInfo
-	query     string
-	searching bool
-	// looseSidecars is every sidecar no run owns; sidecars is what the search
-	// leaves of them.
-	looseSidecars []sidecarInfo
-	runSidecars   map[string][]sidecarInfo
+	// sessions are the runs the left pane lists, across projects. allRuns is
+	// every run worth listing before the search filters it down to them; query
+	// is what the person typed after /, and searching is true while the
+	// keyboard goes to it.
+	sessions      []sessionInfo
+	allRuns       []sessionInfo
+	query         string
+	searching     bool
 	reviewAuthErr string
 
-	// selRun is the ID of the selected run, "" when a sidecar is selected
-	// instead. runItem is the selected row inside the run's pane; runConfirm is the
-	// run an 'x' has been pressed for once, and runNote what the last action on
-	// a run said.
+	// selRun is the ID of the selected run, "" when there is none to select.
+	// runItem is the selected row inside the run's pane; runConfirm is the run
+	// an 'x' has been pressed for once, and runNote what the last action on a
+	// run said.
 	selRun     string
 	runItem    int
 	runConfirm string
 	runNote    string
 	// runOpen is the rounds of each run (by run ID) the user opened or closed,
 	// over the default of showing only the round that matters. runDetails shows
-	// the infrastructure under a run: its worktree, sidecars and setup log.
+	// the detail under a run: its worktree and setup log.
 	runOpen    map[string]map[int]bool
 	runDetails bool
 	// spinning is true while a spinner tick chain is in flight, so a poll that
@@ -272,30 +195,21 @@ type Model struct {
 	spinning bool
 }
 
-// noSelection is the initial selectedID sentinel. It can never match a real
-// sidecar ID (UUID), so the first dataMsg always falls back to index 0 — the
-// most recently active sidecar.
-const noSelection = "\x00"
-
 // New creates a Model ready to run. When watchAll is true (the default for
 // `chunk watch`; `--focus` turns it off), each poll also checks for projects
-// that have saved a sidecar since the dashboard started and adds them, so a
-// sidecar started after the dashboard launches still shows up without a
-// restart.
+// that have started a run since the dashboard started and adds them, so a run
+// started after the dashboard launches still shows up without a restart.
 func New(projects []ProjectEntry, watchAll bool) Model {
 	return Model{
-		loadFn:        loadFromDaemon,
-		detailFn:      chunkd.FetchSession,
-		projects:      projects,
-		branches:      make([]string, len(projects)),
-		headRefs:      make([]string, len(projects)),
-		toggledInvocs: make(map[time.Time]bool),
-		selectedID:    noSelection,
-		watchAll:      watchAll,
-		ownSession:    session.IDFromEnv(),
-		hasDarkBG:     lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
-		conn:          chunkd.CurrentConnection(),
-		spinning:      true, // Init starts the first chain
+		loadFn:    loadFromDaemon,
+		detailFn:  chunkd.FetchSession,
+		projects:  projects,
+		branches:  make([]string, len(projects)),
+		headRefs:  make([]string, len(projects)),
+		watchAll:  watchAll,
+		hasDarkBG: lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
+		conn:      chunkd.CurrentConnection(),
+		spinning:  true, // Init starts the first chain
 	}
 }
 
@@ -362,36 +276,26 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if run != nil {
 			return m.openRunItem(run, m.runItems(run.s))
 		}
-		// Enter opens output when the invocation has any; otherwise it falls
-		// back to expand/collapse, so the key never feels dead.
-		if opened, cmd := m.openSelectedOutput(); opened != nil {
-			return *opened, cmd
-		}
-		m = m.toggleSelectedInvoc()
 	case key.Matches(msg, k.Copy):
 		return m.copyRunFailure(run)
 	case key.Matches(msg, k.Toggle):
 		if run != nil {
 			m = m.toggleRound(run)
-			break
 		}
-		m = m.toggleSelectedInvoc()
 	case key.Matches(msg, k.Details):
 		m.runDetails = !m.runDetails
 	}
 	return m, nil
 }
 
-// moveSelection moves whatever the focused pane selects: the left pane's run
-// or sidecar, the selected run's row, or the selected sidecar's invocation.
+// moveSelection moves whatever the focused pane selects: the left pane's run,
+// or the selected run's row.
 func (m Model) moveSelection(run *sessionInfo, delta int) Model {
-	switch {
-	case m.focusedPane == paneLeft:
-		return m.moveLeftSelection(delta)
-	case run != nil:
+	if m.focusedPane == paneLeft {
+		return m.moveRunSelection(delta)
+	}
+	if run != nil {
 		m.runItem = min(max(m.runItem+delta, 0), max(len(m.runItems(run.s))-1, 0))
-	default:
-		m.rightSelectedIdx = max(m.rightSelectedIdx+delta, 0)
 	}
 	return m
 }
@@ -408,7 +312,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.output != nil {
 			m.output.wrap(m.width - 1)
 		}
-		m = m.adjustLeftScroll()
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -420,20 +323,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateDashboardKey(msg)
 
-	case tea.MouseClickMsg:
-		// The output pane covers the dashboard, so a click here would move a
-		// selection and toggle invocations the reader cannot even see.
-		if m.output != nil {
-			return m, nil
-		}
-		if msg.Button == tea.MouseLeft {
-			m = m.withMouseClick(msg.X, msg.Y)
-		}
-		return m, nil
-
 	case errMsg:
 		m.daemonErr = msg.err
-		m = m.adjustLeftScroll() // the error line costs the pane a row
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 
 	case outputMsg:
@@ -464,23 +355,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dataMsg:
 		m.daemonErr = nil
 		m.projects = msg.projects
-		m.sidecars = msg.sidecars
-		m.events = msg.events
 		m.branches = msg.branches
 		m.headRefs = msg.headRefs
-		m.commands = msg.commands
 		m.authErr = msg.authErr
 		// A new round, or the run ending, can change which round is open by
 		// default and so add or drop rows above the selection: note which row
 		// it is before the poll and find that row again after.
 		prevRun, prevItem := m.selRun, m.selectedRunItem()
 		m.allRuns = visibleRuns(msg.sessions, time.Now())
-		// A hidden run's sidecars still belong to it, so they stay out of the
-		// sidecar list: split against every run, not just the listed ones.
-		m.looseSidecars, m.runSidecars = splitRunSidecars(m.sidecars, msg.sessions)
-		m.looseSidecars = collapsePools(m.looseSidecars)
-		m.sidecars = filterSidecarsByQuery(m.looseSidecars, m.query)
-		m.sessions = filterRuns(m.allRuns, m.query, m.runSidecars)
+		m.sessions = filterRuns(m.allRuns, m.query)
 		m.reviewAuthErr = msg.reviewAuthErr
 		m = m.reselectRun()
 		if run := m.selectedRun(); run != nil {
@@ -490,13 +373,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.runItem = min(m.runItem, max(len(m.runItems(run.s))-1, 0))
 			}
 		}
-		// Sidecars are re-sorted by recency each poll, so track the selection
-		// by id. An unknown id (first poll, or the sidecar aged out) falls back
-		// to index 0, the most recently active sidecar.
-		m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
-		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-		m.hasSpinner = anyRunning(msg.sidecars) || anySessionLive(m.allRuns)
-		m = m.adjustLeftScroll()
+		m.hasSpinner = anySessionLive(m.allRuns)
 		next := tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 		if m.hasSpinner && !m.spinning {
 			m.spinning = true
@@ -530,7 +407,6 @@ func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
 	v.WindowTitle = "chunk watch"
-	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -553,11 +429,8 @@ func (m Model) render() string {
 }
 
 func (m Model) renderHeader(st watchStyles) string {
-	n := len(m.sidecars)
-	count := fmt.Sprintf("%d sidecar", n)
-	if n != 1 {
-		count += "s"
-	}
+	n := len(m.sessions)
+	count := fmt.Sprintf("%d run%s", n, plural(n))
 
 	var contextTag string
 	if len(m.projects) > 1 {
@@ -571,9 +444,6 @@ func (m Model) renderHeader(st watchStyles) string {
 	}
 
 	clock := time.Now().Format("15:04:05")
-	if r := len(m.sessions); r > 0 {
-		count = fmt.Sprintf("%d run%s · %s", r, plural(r), count)
-	}
 	title := st.teal("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
 	right := m.runTag(st) + m.connectionTag(st) + "  " + st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
@@ -650,7 +520,7 @@ func (m Model) renderBody(st watchStyles) string {
 	if run := m.selectedRun(); run != nil {
 		rightLines = m.renderRunPane(st, *run, contentHeight)
 	} else {
-		rightLines = m.renderActivityPane(st, contentHeight)
+		rightLines = m.renderEmptyPane(st)
 	}
 
 	var b strings.Builder
@@ -673,39 +543,14 @@ func (m Model) renderBody(st watchStyles) string {
 	return b.String()
 }
 
-// rowStatus is the one-line state a sidecar row reports: what it is doing now,
-// or, when idle, how its last validate or review run ended. Split out of
-// renderSidecarPane so neither grows past the complexity limit.
-func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
-	switch {
-	case sc.running:
-		frame := spinFrames[m.spinIdx%len(spinFrames)]
-		return st.running(frame + " " + string(sc.lastOp) + "...")
-	case !sc.verified:
-		// Kept because nothing has shown it gone, but nothing has shown it
-		// alive either; calling it idle would claim more than is known.
-		return st.muted("? unconfirmed")
-	}
-	switch sc.lastResult {
-	case levelDone:
-		return st.success(ui.IconOK+" idle") + st.muted(" · last passed")
-	case levelError:
-		return st.err(ui.IconFail+" idle") + st.muted(" · last failed")
-	default:
-		return st.muted("idle")
-	}
-}
-
-// renderLeftPane is the runs, when there are any, above the sidecars.
+// renderLeftPane is the run list, windowed so the selected run stays on screen
+// when there are more runs than room.
 func (m Model) renderLeftPane(st watchStyles, maxLines int) []string {
 	runs := m.renderRunList(st)
-	if len(runs) >= maxLines {
-		if m.selRun == "" {
-			return m.renderSidecarPane(st, maxLines)
-		}
+	if len(runs) > maxLines {
 		return runListWindow(runs, maxLines, m.runIndex())
 	}
-	return append(runs, m.renderSidecarPane(st, maxLines-len(runs))...)
+	return runs
 }
 
 // runListWindow keeps the selected run visible when the complete run list is
@@ -726,603 +571,36 @@ func runListWindow(lines []string, maxLines, selected int) []string {
 	return append(out, lines[firstLine:lastLine]...)
 }
 
-func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
-	lines, _ := m.layoutSidecarPane(st, maxLines)
-	return lines
-}
-
-// layoutSidecarPane renders the sidecar pane and reports end, the index of the
-// first sidecar it had no room for (len(m.sidecars) when every row from
-// leftScrollOffset on was drawn). adjustLeftScroll scrolls by it, so the
-// viewport is judged by the rows actually drawn rather than an estimate of
-// their height.
-func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, end int) {
-	lines = make([]string, 0, maxLines)
-	add := func(s string) { lines = append(lines, s) }
-
-	// Runs show their own sidecars under infra, so with runs listed and no
-	// loose sidecar left there is nothing for this section to say.
-	if len(m.sidecars) == 0 && len(m.allRuns) > 0 {
-		return nil, 0
-	}
-
-	if m.focusedPane == paneLeft && m.selRun == "" {
-		add(st.emphasis("sidecars"))
-	} else {
-		add(st.vdim("sidecars"))
-	}
-	add("")
-
-	if len(m.sidecars) == 0 {
-		add(st.muted("no sidecars"))
-		add("")
-		add(st.dim("none of your projects"))
-		add(st.dim("has a live sidecar"))
-		return lines, 0
-	}
-
-	// Show how many rows are hidden above the viewport.
-	if m.leftScrollOffset > 0 {
-		add("  " + st.vdim(fmt.Sprintf("↑ %d more", m.leftScrollOffset)))
-	}
-
-	var lastRepo string
-	shared := sharedWorktrees(m.sidecars)
-	ambiguous := ambiguousBranches(m.sidecars)
-	dirLabels := worktreeLabels(m.sidecars, ambiguous)
-	lastGroup, haveGroup := groupKey{}, false
-
-	dropped := 0
-	for i := m.leftScrollOffset; i < len(m.sidecars); i++ {
-		sc := m.sidecars[i]
-		// Cost the row before committing to it. A row is three to six lines and
-		// renderBody clips whatever runs past maxLines, so a row begun without the
-		// room to finish loses its tail — the sync state and age it exists to
-		// report. Building it aside first lets the pane drop it whole instead.
-		var row []string
-		addRow := func(s string) { row = append(row, s) }
-
-		// Repo separator — groups all worktrees of the same repo under one header.
-		if sc.repoName != lastRepo {
-			if lastRepo != "" {
-				addRow("")
-			}
-			label := truncate(sc.repoName, leftPaneWidth-4)
-			addRow(st.vdim("── ") + st.emphasis(label))
-			lastRepo = sc.repoName
-			haveGroup = false
-		}
-
-		// A worktree driven by more than one session gets the branch printed
-		// once as a group header, and each row below it named by its session.
-		// Alone, a row keeps the branch as its own label: there is nothing to
-		// disambiguate, so it costs the reader nothing to know about sessions.
-		group := groupOf(sc)
-		multi := shared[group] > 1
-		// "" unless this branch lives in more than one directory.
-		dirLabel := ""
-		if ambiguous[worktreeKey{sc.repoName, sc.branch}] {
-			dirLabel = dirLabels[sc.projectIdx]
-		}
-		if multi && (!haveGroup || group != lastGroup) {
-			// A detached HEAD has no branch to name the worktree with, and a
-			// branch checked out twice names two of them; either way the
-			// directory is what the reader can act on.
-			label := sc.branch
-			if dirLabel != "" {
-				label = dirLabel
-			}
-			if label == "" {
-				label = sc.projectName
-			}
-			// The branch gets the full width: it is the thing the reader is
-			// looking for, and squeezing the count onto the same line would
-			// truncate a normal-length branch name to nothing.
-			addRow("  " + st.emphasis(truncate(label, leftPaneWidth-2)))
-			addRow("  " + st.vdim(fmt.Sprintf("%d sessions", shared[group])))
-		}
-		lastGroup, haveGroup = group, true
-
-		selected := i == m.selectedIdx && m.selRun == ""
-		label := m.rowLabel(sc, multi, dirLabel)
-		if n := len(sc.members); n > 1 {
-			label += fmt.Sprintf(" · %d sidecars", n)
-		}
-		nameLine := truncate(label, leftPaneWidth-3)
-
-		if selected {
-			if m.focusedPane == paneLeft {
-				addRow(st.success("▶ ") + st.emphasis(nameLine))
-			} else {
-				addRow(st.vdim("▶ ") + st.muted(nameLine))
-			}
-		} else {
-			addRow("  " + nameLine)
-		}
-
-		// A sidecar is a name and a line of status, with its age on that line
-		// when it fits. Its snapshot and resources are what the reader wants of
-		// the sidecar they are on, not of every one in the list, so only the
-		// selected row spends lines on them.
-		status := "  " + m.rowStatus(st, sc)
-		age := ""
-		if !sc.lastActivity.IsZero() {
-			age = st.vdim(ago(sc.lastActivity))
-		}
-		if age != "" && lipgloss.Width(status)+2+lipgloss.Width(age) <= leftPaneWidth {
-			addRow(status + "  " + age)
-			age = ""
-		} else {
-			addRow(status)
-		}
-		if selected {
-			if sc.snapshotName != "" {
-				addRow("   " + st.vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
-			}
-			if line := renderResources(st, sc.resources); line != "" {
-				addRow("  " + line)
-			}
-		}
-		if age != "" {
-			addRow("  " + age)
-		}
-
-		// Hold back a line for the hint whenever rows remain after this one.
-		budget := maxLines
-		if i < len(m.sidecars)-1 {
-			budget--
-		}
-		if len(lines)+len(row) > budget {
-			dropped = len(m.sidecars) - i
-			break
-		}
-		lines = append(lines, row...)
-	}
-	if dropped > 0 {
-		// Without this the rows simply stopped: a group's session count was the
-		// only clue that any were missing, and a dropped repo had none at all.
-		lines = append(lines, "  "+st.vdim(fmt.Sprintf("↓ %d more", dropped)))
-	}
-	return lines, len(m.sidecars) - dropped
-}
-
-// renderActivityPane renders the right-hand pane for the selected sidecar.
-//
-// The selection is bounded on both sides before it indexes m.sidecars. Update
-// keeps it in range, so a negative value should not arise — but a panic here
-// takes the terminal down with it, still in the alternate screen, and the cost
-// of the second comparison is nothing next to that.
-func (m Model) renderActivityPane(st watchStyles, maxLines int) []string {
-	lines := make([]string, 0, maxLines)
-
-	var title string
+// renderEmptyPane is the right-hand pane when there is no run to show. The
+// dashboard is about factory runs, so with none to draw it says so rather than
+// leaving the pane blank.
+func (m Model) renderEmptyPane(st watchStyles) []string {
+	title := st.vdim("run")
 	if m.focusedPane == paneRight {
-		title = st.emphasis("activity")
-	} else {
-		title = st.vdim("activity")
+		title = st.emphasis("run")
 	}
-	if m.selectedIdx >= 0 && m.selectedIdx < len(m.sidecars) {
-		sc := m.sidecars[m.selectedIdx]
-		branchLabel := sc.branch
-		if branchLabel == "" {
-			branchLabel = sidecarDisplayName(sc.name, sc.id)
-		}
-		if sc.repoName != "" {
-			title += "  " + st.muted(sc.repoName+"/"+branchLabel)
-		} else {
-			title += "  " + st.muted(branchLabel)
-		}
-		// Name the session as well as the sidecar. The left pane can be scrolled
-		// away from the selection, and with several sessions in one worktree the
-		// repo/branch above is no longer enough to say whose activity this is.
-		if sc.sessionID != "" {
-			if sc.sessionID == m.ownSession {
-				title += "  " + st.teal("● this session")
-			} else {
-				title += "  " + st.vdim("○ "+shortUUID(sc.sessionID))
-			}
-		}
-		if sc.id != "" && sc.branch != "" {
-			title += "  " + st.vdim(sidecarDisplayName(sc.name, sc.id))
-		}
-	}
+	lines := make([]string, 0, 5+len(logoLines))
 	lines = append(lines, title, "")
-
-	var filtered []eventlog.Event
-	if m.selectedIdx >= 0 && m.selectedIdx < len(m.sidecars) {
-		sc := m.sidecars[m.selectedIdx]
-		if sc.projectIdx < len(m.events) {
-			for _, e := range m.events[sc.projectIdx] {
-				if sc.owns(e.SidecarID) {
-					filtered = append(filtered, e)
-				}
-			}
-		}
+	if len(m.allRuns) > 0 {
+		lines = append(lines, st.muted("No run matches the search."), "")
+	} else {
+		lines = append(lines, st.muted("No runs yet."), st.dim("Start one with: chunk factory build \"<what to change>\""), "")
 	}
 
-	if len(filtered) == 0 {
-		// right pane width: total - 1 leading space - leftPaneWidth - 1 space - 1 divider - 1 space
-		rightWidth := m.width - leftPaneWidth - 4
-		logoMaxWidth := 0
-		for _, l := range logoLines {
-			if w := lipgloss.Width(l); w > logoMaxWidth {
-				logoMaxWidth = w
-			}
+	// right pane width: total - 1 leading space - leftPaneWidth - 1 space - 1 divider - 1 space
+	rightWidth := m.width - leftPaneWidth - 4
+	logoMaxWidth := 0
+	for _, l := range logoLines {
+		if w := lipgloss.Width(l); w > logoMaxWidth {
+			logoMaxWidth = w
 		}
-		pad := (rightWidth - logoMaxWidth) / 2
-		if pad < 0 {
-			pad = 0
-		}
-		padStr := strings.Repeat(" ", pad)
-		lines = append(lines, st.muted("No activity yet."), "")
-		for _, l := range logoLines {
-			lines = append(lines, padStr+st.vdim(l))
-		}
-		return lines
 	}
-
-	groups := groupByInvocation(filtered)
-	rightSel := m.rightSelectedIdx
-	if len(groups) > 0 && rightSel >= len(groups) {
-		rightSel = len(groups) - 1
-	}
-	body, remaining := m.buildCollapsibleLines(st, groups, rightSel, maxLines-2)
-	lines = append(lines, body...)
-	if remaining > 0 {
-		lines = append(lines, "  "+st.vdim(fmt.Sprintf("↓ %d more", remaining)))
+	pad := max((rightWidth-logoMaxWidth)/2, 0)
+	padStr := strings.Repeat(" ", pad)
+	for _, l := range logoLines {
+		lines = append(lines, padStr+st.vdim(l))
 	}
 	return lines
-}
-
-// buildCollapsibleLines renders invocation groups newest-first with expand/collapse state.
-// It returns the rendered lines and the count of groups that did not fit.
-func (m Model) buildCollapsibleLines(st watchStyles, groups []invocationGroup, rightSel, maxLines int) ([]string, int) {
-	rendered := make([]string, 0, maxLines)
-	add := func(s string) { rendered = append(rendered, s) }
-
-	// Hoisted: the groups all belong to this one row, and resolving it per
-	// header would repeat the lookup for every line drawn.
-	selected := m.selectedSidecar()
-
-	lastGI := -1
-	for gi := len(groups) - 1; gi >= 0 && len(rendered) < maxLines; gi-- {
-		ri := len(groups) - 1 - gi // right-pane index: 0 = most recent
-		isMostRecent := gi == len(groups)-1
-		expanded := m.invocExpanded(groups[gi], isMostRecent)
-		isSel := m.focusedPane == paneRight && ri == rightSel
-
-		if ri > 0 {
-			add("")
-		}
-		hasOutput := selected != nil && m.commandForInvocation(*selected, groups[gi]) != nil
-		add(renderInvocationHeader(st, groups[gi], expanded, isSel, hasOutput))
-		if expanded {
-			g := groups[gi]
-			for ei := len(g.events) - 1; ei >= 0 && len(rendered) < maxLines; ei-- {
-				e := g.events[ei]
-				if closesRun(e) {
-					continue // already shown in header
-				}
-				add("  " + renderEvent(st, e))
-			}
-		}
-		lastGI = gi
-	}
-	remaining := lastGI // groups at indices 0..lastGI-1 were not rendered
-	if remaining < 0 {
-		remaining = 0
-	}
-	return rendered, remaining
-}
-
-// invocExpanded reports whether an invocation should be shown expanded.
-// Most recent defaults to expanded; older default to collapsed. User toggles flip these.
-func (m Model) invocExpanded(g invocationGroup, isMostRecent bool) bool {
-	toggled := m.toggledInvocs[invocEndTime(g)]
-	if isMostRecent {
-		return !toggled
-	}
-	return toggled
-}
-
-// invocEndTime is the stable key for an invocation: timestamp of its last event.
-func invocEndTime(g invocationGroup) time.Time {
-	if len(g.events) == 0 {
-		return time.Time{}
-	}
-	return g.events[len(g.events)-1].Ts
-}
-
-// currentInvocGroups returns the invocation groups for the currently selected sidecar.
-// selectedSidecar is the row the dashboard is showing, or nil when the selection
-// is out of range. Callers that also need the row's invocations take it from
-// here so the two cannot come from different sidecars.
-func (m Model) selectedSidecar() *sidecarInfo {
-	if m.selectedIdx < 0 || m.selectedIdx >= len(m.sidecars) {
-		return nil
-	}
-	return &m.sidecars[m.selectedIdx]
-}
-
-func (m Model) currentInvocGroups() []invocationGroup {
-	if m.selectedIdx < 0 || m.selectedIdx >= len(m.sidecars) {
-		return nil
-	}
-	sc := m.sidecars[m.selectedIdx]
-	var filtered []eventlog.Event
-	if sc.projectIdx < len(m.events) {
-		for _, e := range m.events[sc.projectIdx] {
-			if sc.owns(e.SidecarID) {
-				filtered = append(filtered, e)
-			}
-		}
-	}
-	return groupByInvocation(filtered)
-}
-
-// toggleSelectedInvoc flips the expand/collapse state of the right-pane selected invocation.
-func (m Model) toggleSelectedInvoc() Model {
-	groups := m.currentInvocGroups()
-	ri := len(groups) - 1 - m.rightSelectedIdx
-	if ri < 0 || ri >= len(groups) {
-		return m
-	}
-	key := invocEndTime(groups[ri])
-	if m.toggledInvocs[key] {
-		delete(m.toggledInvocs, key)
-	} else {
-		m.toggledInvocs[key] = true
-	}
-	return m
-}
-
-// withMouseClick processes a left-click, toggling an invocation header if one was hit.
-// The right pane content starts at terminal column leftPaneWidth+4 and terminal row 4
-// (2 rows for header+separator, 2 rows for the activity pane title+blank).
-func (m Model) withMouseClick(x, y int) Model {
-	if x <= leftPaneWidth+2 || m.selRun != "" {
-		return m // click is in left pane or on divider
-	}
-	contentLine := y - 4 // 2 header rows + 2 activity title/blank rows
-	if contentLine < 0 {
-		return m
-	}
-	groups := m.currentInvocGroups()
-	ri := m.invocRiAtLine(groups, contentLine)
-	if ri < 0 {
-		return m
-	}
-	m.focusedPane = paneRight
-	m.rightSelectedIdx = ri
-	gi := len(groups) - 1 - ri
-	key := invocEndTime(groups[gi])
-	if m.toggledInvocs[key] {
-		delete(m.toggledInvocs, key)
-	} else {
-		m.toggledInvocs[key] = true
-	}
-	return m
-}
-
-// invocRiAtLine returns the right-pane index of the invocation whose header falls on
-// contentLine (0-indexed within buildCollapsibleLines output), or -1 if the line is
-// a blank separator or an event line.
-func (m Model) invocRiAtLine(groups []invocationGroup, contentLine int) int {
-	line := 0
-	for ri := 0; ri < len(groups); ri++ {
-		gi := len(groups) - 1 - ri
-		isMostRecent := gi == len(groups)-1
-		if ri > 0 {
-			if line == contentLine {
-				return -1 // blank separator
-			}
-			line++
-		}
-		if line == contentLine {
-			return ri // header line
-		}
-		line++
-		if m.invocExpanded(groups[gi], isMostRecent) {
-			nEvents := len(groups[gi].events)
-			if contentLine >= line && contentLine < line+nEvents {
-				return -1 // event line
-			}
-			line += nEvents
-		}
-	}
-	return -1
-}
-
-// invocationGroup holds all events belonging to one validate invocation.
-type invocationGroup struct {
-	events []eventlog.Event
-}
-
-// outcomeOf returns the icon, label, and terminal level of the invocation.
-// The label is the N/M count extracted from the summary event (e.g. "3/3").
-// Returns "" level when the invocation is still running, and levelAbandoned
-// when it has no summary and has been silent for longer than runningTimeout —
-// a process that died without reporting will never close its group, so without
-// this it would read as running forever.
-func outcomeOf(g invocationGroup) (icon, label, level string) {
-	for i := len(g.events) - 1; i >= 0; i-- {
-		e := g.events[i]
-		passed, total, ok := e.Outcome()
-		if !ok {
-			continue
-		}
-		count := fmt.Sprintf("%d/%d", passed, total)
-		if e.Level == levelDone {
-			return ui.IconOK, count, levelDone
-		}
-		return ui.IconFail, count, levelError
-	}
-	if n := len(g.events); n > 0 && time.Since(g.events[n-1].Ts) > runningTimeout {
-		return "⊘", "abandoned", levelAbandoned
-	}
-	return "●", "running", ""
-}
-
-// renderInvocationHeader renders a one-line summary for an invocation group.
-func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selected, hasOutput bool) string {
-	var arrow string
-	if expanded {
-		arrow = "▼ "
-	} else {
-		arrow = "▶ "
-	}
-	if selected {
-		arrow = st.emphasis(arrow)
-	} else {
-		arrow = st.vdim(arrow)
-	}
-
-	icon, label, level := outcomeOf(g)
-	var outcomeStr string
-	switch level {
-	case levelDone:
-		outcomeStr = st.success(icon + " " + label)
-	case levelError:
-		outcomeStr = st.err(icon + " " + label)
-	case levelAbandoned:
-		outcomeStr = st.warning(icon + " " + label)
-	default:
-		outcomeStr = st.running(icon + " " + label)
-	}
-
-	var ts time.Time
-	if n := len(g.events); n > 0 {
-		ts = g.events[n-1].Ts
-	}
-	tsStr := st.vdim(ts.Format("15:04:05"))
-
-	durStr := ""
-	if len(g.events) > 1 {
-		dur := g.events[len(g.events)-1].Ts.Sub(g.events[0].Ts).Round(time.Second)
-		if dur >= time.Second {
-			durStr = "  " + st.vdim("("+dur.String()+")")
-		}
-	}
-
-	// Marks an invocation whose output the daemon still holds, so "which of these
-	// can I actually read" is answerable without pressing Enter on each one.
-	outMark := ""
-	if hasOutput {
-		outMark = "  " + st.teal("▤")
-		if selected {
-			outMark = "  " + st.teal("▤ enter")
-		}
-	}
-
-	// A review run is its own kind of invocation; everything else here, hook
-	// runs included, is a validate.
-	name := "validate"
-	if n := len(g.events); n > 0 && g.events[n-1].Op == eventlog.OpReview {
-		name = string(eventlog.OpReview)
-	}
-	label2 := name + "  " + outcomeStr + "  " + tsStr + durStr + outMark
-	if selected {
-		label2 = st.emphasis(name) + "  " + outcomeStr + "  " + tsStr + durStr + outMark
-	}
-	return arrow + label2
-}
-
-// groupByInvocation collects events into invocation groups. An invocation ends
-// on the overall validate summary event ("N/M passed  Xs"), not on each
-// per-command done event. A trailing group is created for any events without a
-// terminal summary (the current in-progress invocation).
-func groupByInvocation(events []eventlog.Event) []invocationGroup {
-	var groups []invocationGroup
-	cur := make([]eventlog.Event, 0, len(events))
-	for _, e := range events {
-		cur = append(cur, e)
-		if closesRun(e) {
-			groups = append(groups, invocationGroup{events: cur})
-			cur = nil
-		}
-	}
-	if len(cur) > 0 {
-		groups = append(groups, invocationGroup{events: cur})
-	}
-	return groups
-}
-
-// closesRun reports whether e is the event that closes an invocation.
-func closesRun(e eventlog.Event) bool {
-	_, _, ok := e.Outcome()
-	return ok
-}
-
-// eventGroup is a slice of events from a single op-run.
-type eventGroup []eventlog.Event
-
-// groupEvents partitions events into op-runs. A run ends when a "done" or
-// "error" event arrives, or when the op changes.
-func groupEvents(events []eventlog.Event) []eventGroup {
-	var groups []eventGroup
-	cur := make(eventGroup, 0, len(events))
-	for _, e := range events {
-		if len(cur) > 0 && e.Op != cur[0].Op {
-			groups = append(groups, cur)
-			cur = make(eventGroup, 0)
-		}
-		cur = append(cur, e)
-		if e.Level == levelDone || e.Level == levelError {
-			groups = append(groups, cur)
-			cur = make(eventGroup, 0)
-		}
-	}
-	if len(cur) > 0 {
-		groups = append(groups, cur)
-	}
-	return groups
-}
-
-func renderEvent(st watchStyles, e eventlog.Event) string {
-	icon, msg := iconAndMsg(st, e)
-	if e.Op == eventlog.OpValidate {
-		// Op tag omitted — already implied by the invocation header.
-		return icon + "  " + msg
-	}
-	return opTag(st, e.Op) + "  " + icon + "  " + msg
-}
-
-func opTag(st watchStyles, op eventlog.Op) string {
-	switch op {
-	case eventlog.OpSync:
-		return st.running("sync    ")
-	case eventlog.OpValidate:
-		return "validate"
-	case eventlog.OpExec:
-		return st.teal("exec    ")
-	case eventlog.OpSetup:
-		return "setup   "
-	case eventlog.OpHook:
-		return "hook    "
-	case eventlog.OpReview:
-		return "review  "
-	default:
-		return st.muted(fmt.Sprintf("%-8s", string(op)))
-	}
-}
-
-func iconAndMsg(st watchStyles, e eventlog.Event) (string, string) {
-	// One event is one line in the pane, whatever the writer put in it: a
-	// message can carry an error, and errors wrap.
-	msg := strings.ReplaceAll(e.Msg, "\n", " ")
-	switch e.Level {
-	case levelDone:
-		return st.success(ui.IconOK), st.success(msg)
-	case "warn":
-		return st.warning(ui.IconWarn), st.warning(msg)
-	case levelError:
-		return st.err(ui.IconFail), st.err(msg)
-	default:
-		if cmd, ok := strings.CutPrefix(msg, "$ "); ok {
-			return st.muted("$"), st.muted(cmd)
-		}
-		return st.vdim("›"), st.muted(msg)
-	}
 }
 
 func (m Model) renderFooter(st watchStyles) string {
@@ -1383,398 +661,6 @@ func (m Model) loadData() tea.Msg {
 	return m.loadFn(m)
 }
 
-// sortByActivity puts the most recently active project first, and within a
-// project the most recently active sidecar first. Projects stay grouped so the
-// sidecar pane still renders one header per project.
-//
-// Worktree groups are the same story one level down: every row for a given
-// (repo, branch, project) sits together, ordered by the group's own most recent
-// activity. Without that tier the rows of a branch with two sessions could be
-// split apart by a busier branch in the same repo, and the pane could not label
-// the group once.
-func sortByActivity(sidecars []sidecarInfo, ownSession string) {
-	latestRepo := map[string]time.Time{}
-	latestGroup := map[groupKey]time.Time{}
-	for _, sc := range sidecars {
-		eff := effectiveActivity(sc)
-		if eff.After(latestRepo[sc.repoName]) {
-			latestRepo[sc.repoName] = eff
-		}
-		if k := groupOf(sc); eff.After(latestGroup[k]) {
-			latestGroup[k] = eff
-		}
-	}
-	sort.SliceStable(sidecars, func(i, j int) bool {
-		a, b := sidecars[i], sidecars[j]
-		if a.repoName != b.repoName {
-			return latestRepo[a.repoName].After(latestRepo[b.repoName])
-		}
-		ka, kb := groupOf(a), groupOf(b)
-		if ka != kb {
-			return latestGroup[ka].After(latestGroup[kb])
-		}
-		// Inside a group the viewer's own row leads. "Which of these is mine" is
-		// the first question a shared worktree raises, and a row that reshuffles
-		// by recency every poll makes the reader hunt for the answer the label
-		// was added to give. Ordering between the other rows is untouched.
-		if ownSession != "" {
-			aMine, bMine := a.sessionID == ownSession, b.sessionID == ownSession
-			if aMine != bMine {
-				return aMine
-			}
-		}
-		return effectiveActivity(a).After(effectiveActivity(b))
-	})
-}
-
-// groupKey identifies one worktree: every row sharing it is a different session
-// working in the same directory on the same branch.
-type groupKey struct {
-	repoName   string
-	branch     string
-	projectIdx int
-}
-
-func groupOf(sc sidecarInfo) groupKey {
-	return groupKey{sc.repoName, sc.branch, sc.projectIdx}
-}
-
-// sharedWorktrees counts the rows in each worktree group, so the pane can tell
-// a branch owned by one session from one several sessions are working in.
-// Every row is a sidecar and sidecars are session-scoped, so a group holding
-// more than one row is that many sessions in the same worktree.
-func sharedWorktrees(sidecars []sidecarInfo) map[groupKey]int {
-	counts := make(map[groupKey]int, len(sidecars))
-	for _, sc := range sidecars {
-		counts[groupOf(sc)]++
-	}
-	return counts
-}
-
-// worktreeKey identifies a branch within a repo, with no directory attached. Two
-// rows sharing one in different directories are two checkouts of the same
-// branch — a second clone, or a worktree that happens to be on the same branch —
-// and the branch name alone cannot tell them apart.
-type worktreeKey struct {
-	repoName string
-	branch   string
-}
-
-// ambiguousBranches reports which (repo, branch) pairs are checked out in more
-// than one directory. Those rows cannot be named by their branch: repoName is the
-// basename of the main worktree, so two clones collapse under one repo header and
-// would render as two identical branch rows, separable only by a truncated
-// sidecar UUID — the very confusion per-session labels were added to remove.
-//
-// A detached HEAD has no branch to be ambiguous about, and those rows are already
-// named by their directory, so they are left alone.
-func ambiguousBranches(sidecars []sidecarInfo) map[worktreeKey]bool {
-	dirs := map[worktreeKey]map[int]bool{}
-	for _, sc := range sidecars {
-		if sc.branch == "" {
-			continue
-		}
-		k := worktreeKey{sc.repoName, sc.branch}
-		if dirs[k] == nil {
-			dirs[k] = map[int]bool{}
-		}
-		dirs[k][sc.projectIdx] = true
-	}
-	out := make(map[worktreeKey]bool, len(dirs))
-	for k, seen := range dirs {
-		if len(seen) > 1 {
-			out[k] = true
-		}
-	}
-	return out
-}
-
-// worktreeLabels names each directory involved in an ambiguous branch. A row's
-// projectIdx fixes its repo and branch — a directory is only ever on one branch
-// at a time — so one label per index is unambiguous.
-func worktreeLabels(sidecars []sidecarInfo, ambiguous map[worktreeKey]bool) map[int]string {
-	paths := map[worktreeKey]map[int]string{}
-	for _, sc := range sidecars {
-		k := worktreeKey{sc.repoName, sc.branch}
-		if !ambiguous[k] {
-			continue
-		}
-		path := sc.projectPath
-		if path == "" {
-			path = sc.projectName
-		}
-		if paths[k] == nil {
-			paths[k] = map[int]string{}
-		}
-		paths[k][sc.projectIdx] = path
-	}
-
-	labels := map[int]string{}
-	for _, byIdx := range paths {
-		for idx, label := range shortestUniqueSuffixes(byIdx) {
-			labels[idx] = label
-		}
-	}
-	return labels
-}
-
-// shortestUniqueSuffixes labels each path with the fewest trailing segments that
-// tell them all apart, so the pane spends its 28 columns on the part that
-// differs. One segment is usually not enough: two clones of a repo share a
-// basename, which is what made the branch ambiguous in the first place.
-func shortestUniqueSuffixes(paths map[int]string) map[int]string {
-	segs := make(map[int][]string, len(paths))
-	longest := 1
-	for idx, path := range paths {
-		parts := strings.Split(strings.Trim(filepath.ToSlash(path), "/"), "/")
-		segs[idx] = parts
-		if len(parts) > longest {
-			longest = len(parts)
-		}
-	}
-
-	out := make(map[int]string, len(paths))
-	for n := 1; n <= longest; n++ {
-		counts := map[string]int{}
-		for idx, parts := range segs {
-			out[idx] = pathSuffix(parts, n)
-			counts[out[idx]]++
-		}
-		collision := false
-		for _, c := range counts {
-			if c > 1 {
-				collision = true
-				break
-			}
-		}
-		if !collision {
-			return out
-		}
-	}
-	// Identical paths cannot be told apart; the full path is the best available.
-	return out
-}
-
-func pathSuffix(parts []string, n int) string {
-	if n >= len(parts) {
-		return strings.Join(parts, "/")
-	}
-	return strings.Join(parts[len(parts)-n:], "/")
-}
-
-// rowLabel names a row in the left pane. Alone in its worktree a row is its
-// branch, as it has always been. Sharing one, the branch has moved to the group
-// header and the row names its session instead — the viewer's own session by
-// name, since "which of these is mine" is the first thing they need to know.
-func (m Model) rowLabel(sc sidecarInfo, multi bool, dirLabel string) string {
-	if !multi {
-		// dirLabel is set only where the branch is checked out in more than one
-		// directory, and there the directory is the only thing that distinguishes
-		// this row from its twin.
-		if dirLabel != "" {
-			return dirLabel
-		}
-		if sc.branch != "" {
-			return sc.branch
-		}
-		return sidecarDisplayName(sc.name, sc.id)
-	}
-	// The empty case is listed first deliberately: when the dashboard runs
-	// outside a session ownSession is empty too, and an unattributed row must
-	// not be mistaken for the viewer's own.
-	switch sc.sessionID {
-	case "":
-		// Sidecar state written outside a session or before sessions existed.
-		// The full UUID does not fit beside the short session labels this row
-		// sits next to, so abbreviate it the same way; the full value stays on
-		// the detail line.
-		return "○ " + shortUUID(sc.id)
-	case m.ownSession:
-		return "● this session"
-	default:
-		return "○ " + shortUUID(sc.sessionID)
-	}
-}
-
-// shortUUID abbreviates a session ID or sidecar UUID for display. Both are
-// UUIDs, and the first block is already enough to tell two of them apart on
-// screen — the pane is 28 columns wide, so a full one only truncates to noise.
-func shortUUID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
-}
-
-// effectiveActivity is the sidecar's last event time, falling back to the mtime
-// of its state file when no events survive in the window.
-func effectiveActivity(sc sidecarInfo) time.Time {
-	if !sc.lastActivity.IsZero() {
-		return sc.lastActivity
-	}
-	return sc.fileMtime
-}
-
-// owns reports whether id is this row's sidecar, or one folded into it.
-func (sc sidecarInfo) owns(id string) bool {
-	return id == sc.id || slices.Contains(sc.members, id)
-}
-
-// collapsePools folds the sidecars one session holds in one worktree into a
-// single row: a validate pool is several sidecars that all carry the session's
-// label, and listed apart they read as duplicates crowding the pane. The row
-// stands for the member active most recently, takes the place of the first,
-// and is running if any of them is.
-func collapsePools(sidecars []sidecarInfo) []sidecarInfo {
-	type key struct {
-		session string
-		group   groupKey
-	}
-	at := map[key]int{}
-	var out []sidecarInfo
-	for _, sc := range sidecars {
-		if sc.sessionID == "" {
-			out = append(out, sc)
-			continue
-		}
-		k := key{sc.sessionID, groupOf(sc)}
-		i, ok := at[k]
-		if !ok {
-			at[k] = len(out)
-			sc.members = []string{sc.id}
-			out = append(out, sc)
-			continue
-		}
-		row := out[i]
-		row.members = append(row.members, sc.id)
-		running := row.running || sc.running
-		// The row keeps the first member's id so a selection survives polls, and
-		// takes the status of whichever member did something last.
-		if effectiveActivity(sc).After(effectiveActivity(row)) {
-			row.lastActivity, row.fileMtime = sc.lastActivity, sc.fileMtime
-			row.lastOp, row.lastResult, row.resources = sc.lastOp, sc.lastResult, sc.resources
-			row.verified = sc.verified
-		}
-		row.running = running
-		out[i] = row
-	}
-	for i := range out {
-		if len(out[i].members) == 1 {
-			out[i].members = nil
-		}
-	}
-	return out
-}
-
-// indexOfSidecar returns the position of id, or 0 when it is absent.
-func indexOfSidecar(sidecars []sidecarInfo, id string) int {
-	for i, sc := range sidecars {
-		if sc.id == id {
-			return i
-		}
-	}
-	return 0
-}
-
-// selectedSidecarID returns the id at idx, or "" when idx is out of range.
-func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
-	if idx < 0 || idx >= len(sidecars) {
-		return ""
-	}
-	return sidecars[idx].id
-}
-
-// staleAfter bounds how long an unconfirmed sidecar keeps its row. A confirmed
-// sidecar is shown however long it has been idle — it is still running, and
-// still costing money — but one the API has not vouched for is only as good as
-// its state file, and a file nobody has touched in a day is more likely
-// leftover than live.
-const staleAfter = 24 * time.Hour
-
-// maxSidecarAge is how long a sidecar can sit untouched before the dashboard
-// stops listing it.
-const maxSidecarAge = 5 * 24 * time.Hour
-
-// filterSidecars drops sidecars with no activity or none within maxSidecarAge,
-// then keeps every one the API has confirmed, and unconfirmed ones only while
-// they have been active within staleAfter.
-func filterSidecars(sidecars []sidecarInfo) []sidecarInfo {
-	now := time.Now()
-	var kept []sidecarInfo
-	for _, sc := range sidecars {
-		// A sidecar that has never run anything has nothing to show on the right
-		// ("No activity yet."), so it is not worth a row on the left either.
-		if sc.lastActivity.IsZero() && !sc.running {
-			continue
-		}
-		// Whatever the API still lists, a sidecar nobody has touched for days is
-		// not what the dashboard is for.
-		if eff := effectiveActivity(sc); !eff.IsZero() && now.Sub(eff) > maxSidecarAge {
-			continue
-		}
-		if sc.verified || within(now, sc, staleAfter) {
-			kept = append(kept, sc)
-		}
-	}
-	return kept
-}
-
-// within reports whether the sidecar was active no longer than window ago.
-func within(now time.Time, sc sidecarInfo, window time.Duration) bool {
-	eff := effectiveActivity(sc)
-	return !eff.IsZero() && now.Sub(eff) <= window
-}
-
-// adjustLeftScroll keeps the selected sidecar on screen in the left pane.
-// Rows vary in height — repo and group headers, snapshot and resource lines,
-// the scroll hints themselves — so no fixed page size predicts what fits. It
-// lays the pane out at the current height instead and moves the offset until
-// the selected row is drawn in full.
-func (m Model) adjustLeftScroll() Model {
-	if m.selectedIdx < m.leftScrollOffset {
-		m.leftScrollOffset = max(m.selectedIdx, 0)
-	}
-	for m.leftScrollOffset < m.selectedIdx && m.selectedIdx >= m.sidecarPaneEnd() {
-		m.leftScrollOffset++
-	}
-	// Scroll back up while that still draws every remaining row. Without it a
-	// list that shrinks, or a terminal that grows, leaves rows parked above the
-	// viewport with empty space under the last one.
-	for m.leftScrollOffset > 0 {
-		prev := m
-		prev.leftScrollOffset--
-		if prev.sidecarPaneEnd() < len(prev.sidecars) {
-			break
-		}
-		m = prev
-	}
-	return m
-}
-
-// sidecarPaneEnd is the index of the first sidecar the left pane has no room
-// for at the current offset and height.
-func (m Model) sidecarPaneEnd() int {
-	height := m.contentHeight()
-	runs := len(m.renderRunList(m.styles()))
-	room := height
-	if runs < height {
-		room -= runs
-	} else if m.selRun != "" {
-		room = 0
-	}
-	_, end := m.layoutSidecarPane(m.styles(), room)
-	return end
-}
-
-func anyRunning(sidecars []sidecarInfo) bool {
-	for _, sc := range sidecars {
-		if sc.running {
-			return true
-		}
-	}
-	return false
-}
-
 func doSpin() tea.Cmd {
 	return tea.Tick(spinInterval, func(time.Time) tea.Msg { return spinMsg{} })
 }
@@ -1812,18 +698,6 @@ func truncate(s string, n int) string {
 		return string(runes[:n-1]) + "…"
 	}
 	return string(runes[:n])
-}
-
-// sidecarDisplayName returns the best identifier for a sidecar.
-// Prefers the UUID (id) for precise identification; falls back to name when id is empty.
-func sidecarDisplayName(name, id string) string {
-	if id != "" {
-		return id
-	}
-	if name != "" {
-		return name
-	}
-	return ""
 }
 
 // ago returns a human-readable duration since t.
