@@ -441,10 +441,61 @@ func TestRunItemsOpenTheirOutput(t *testing.T) {
 	assert.Assert(t, m.output == nil)
 	assert.Assert(t, strings.Contains(m.runNote, "no output kept"), m.runNote)
 
-	// A review opens its buffered Claude run.
+	// A finished review whose findings are not recorded yet opens its
+	// buffered Claude run.
+	m.detailFn = func(string) (chunkd.SessionDetail, error) { return chunkd.SessionDetail{}, nil }
 	m, cmd = press(m, tea.KeyDown, tea.KeyEnter)
-	assert.Assert(t, cmd != nil && m.output != nil)
+	assert.Assert(t, cmd != nil && m.output == nil)
+	m = update(m, cmd())
+	assert.Assert(t, m.output != nil)
 	assert.Equal(t, m.output.commandID, "cmd-r")
+}
+
+// A finished review's Claude run printed only a JSON result, so its pane shows
+// the findings the daemon parsed from it.
+func TestFinishedReviewOpensItsFindings(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionDone, time.Now())
+	r.s.Rounds = []chunkd.Round{{
+		Number: 1, State: chunkd.RoundDone,
+		Reviews: []chunkd.ReviewPrompt{{Name: "bugs", State: chunkd.PromptDone, CommandID: "cmd-r"}},
+	}}
+	m := sessModel(r)
+	m.selRun = "abc"
+	var asked string
+	m.detailFn = func(id string) (chunkd.SessionDetail, error) {
+		asked = id
+		return chunkd.SessionDetail{Details: []chunkd.RoundDetail{{Number: 1, Results: []chunkd.ReviewResult{{
+			Prompt: "bugs", Status: chunkd.CheckFailed,
+			Findings: []chunkd.Finding{{File: "app.go", Line: 3, Severity: "high", Body: "nil map write"}},
+		}}}}}, nil
+	}
+	m, _ = press(m, tea.KeyRight, tea.KeyDown)
+	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemReview, round: 0})
+
+	m, cmd := press(m, tea.KeyEnter)
+	m = update(m, cmd())
+	assert.Equal(t, asked, "abc")
+	assert.Assert(t, m.output != nil)
+	assert.Equal(t, m.output.text, "1 finding\n\n[high] app.go:3\nnil map write")
+
+	// An answer for a pane since replaced is dropped.
+	m, _ = press(m, tea.KeyEscape)
+	m, cmd = press(m, tea.KeyEnter)
+	msg := cmd()
+	m.outputSeq++
+	m = update(m, msg)
+	assert.Assert(t, m.output == nil)
+}
+
+func TestReviewTextSaysWhenThereIsNothing(t *testing.T) {
+	assert.Equal(t, reviewText(chunkd.ReviewResult{Status: chunkd.CheckPassed}), "No findings.")
+	assert.Equal(t, reviewText(chunkd.ReviewResult{Error: "timed out"}), "Could not run: timed out")
+}
+
+// update delivers msg to m.
+func update(m Model, msg tea.Msg) Model {
+	next, _ := m.Update(msg)
+	return next.(Model)
 }
 
 func TestRunKeysQuitDetachesCancelNeedsConfirmation(t *testing.T) {
