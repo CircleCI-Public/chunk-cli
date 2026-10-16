@@ -82,6 +82,21 @@ func TestWorkspaceCollectNeedsBaseline(t *testing.T) {
 	assert.ErrorContains(t, err, "no baseline")
 }
 
+// TestBaselineCommitScript runs the exported script for real, in a repo whose
+// path needs quoting, since a remote run makes this commit outside workspace.
+func TestBaselineCommitScript(t *testing.T) {
+	w, dir := newWorkspace(t)
+	quoted := filepath.Join(t.TempDir(), `my "quoted" repo's`)
+	assert.NilError(t, os.Rename(dir, quoted))
+	w.entry.RepoPath = quoted
+	writeFile(t, quoted, "mine.go", "package main\n")
+
+	assert.NilError(t, w.commitBaseline(context.Background()))
+	assert.Equal(t, w.baseline, gitOutput(t, quoted, "rev-parse", "HEAD"))
+	assert.Equal(t, gitOutput(t, quoted, "status", "--porcelain"), "")
+	assert.Equal(t, gitOutput(t, quoted, "log", "-1", "--format=%an <%ae> %s"), "chunk <chunk@circleci.com> chunk factory baseline")
+}
+
 func TestRunValidation(t *testing.T) {
 	dir := t.TempDir()
 	entry := &sidecar.PoolEntry{ID: "impl", RepoPath: dir}

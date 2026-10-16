@@ -37,13 +37,19 @@ func (c Change) Empty() bool {
 // an image may have no identity set, require signed commits, or install hooks.
 const gitIdentity = "git -c user.name=chunk -c user.email=chunk@circleci.com -c commit.gpgsign=false"
 
-// commitBaseline commits whatever the developer's synced tree holds, so their
-// own uncommitted work is part of the baseline rather than of the change the
-// reviewers see. The commit is made even when the tree is clean, so the
-// baseline is always a commit chunk made.
+// BaselineCommitScript is the commit that makes the developer's synced tree
+// the baseline, so their uncommitted work is part of what the reviewers
+// measure against rather than part of the change.
+func BaselineCommitScript(repoPath string) string {
+	return fmt.Sprintf(`cd %s && git add -A && %s commit -q --no-verify --allow-empty -m "chunk factory baseline" && git rev-parse HEAD`,
+		sidecar.ShellEscape(repoPath), gitIdentity)
+}
+
+// commitBaseline runs the baseline commit on the implementer's sidecar. It is
+// made even when the tree is clean, so the baseline is always a commit chunk
+// made.
 func (w *workspace) commitBaseline(ctx context.Context) error {
-	script := fmt.Sprintf(`cd %s && git add -A && %s commit -q --no-verify --allow-empty -m "chunk factory baseline" && git rev-parse HEAD`,
-		sidecar.ShellEscape(w.entry.RepoPath), gitIdentity)
+	script := BaselineCommitScript(w.entry.RepoPath)
 	out, err := w.run(ctx, script)
 	if err != nil {
 		return fmt.Errorf("commit baseline: %w", err)
