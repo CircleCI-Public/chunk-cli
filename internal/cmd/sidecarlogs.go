@@ -83,7 +83,7 @@ func newSidecarLogsCmd() *cobra.Command {
 				}
 				return &userError{
 					msg:        fmt.Sprintf("Could not read output for command %s.", commandID),
-					suggestion: "Check the command ID in the chunk watch dashboard.",
+					suggestion: "Check the command ID. Only commands the chunk daemon buffered, and the reviews of a factory run, have one to look up.",
 					err:        err,
 				}
 			}
