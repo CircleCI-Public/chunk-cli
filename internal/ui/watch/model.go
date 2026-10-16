@@ -170,7 +170,10 @@ type dataMsg struct {
 
 // Model is the BubbleTea model for the watch dashboard.
 type Model struct {
-	loadFn   func(Model) tea.Msg
+	loadFn func(Model) tea.Msg
+	// detailFn fetches a run with what its reviews said, read when a finished
+	// review is opened rather than carried in every poll.
+	detailFn func(id string) (chunkd.SessionDetail, error)
 	projects []ProjectEntry
 	branches []string // current branch per project, refreshed each poll
 	headRefs []string // HEAD SHA per project, refreshed each poll
@@ -282,6 +285,7 @@ const noSelection = "\x00"
 func New(projects []ProjectEntry, watchAll bool) Model {
 	return Model{
 		loadFn:        loadFromDaemon,
+		detailFn:      chunkd.FetchSession,
 		projects:      projects,
 		branches:      make([]string, len(projects)),
 		headRefs:      make([]string, len(projects)),
@@ -434,6 +438,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case outputMsg:
 		return m.withOutputChunk(msg)
+
+	case reviewDetailMsg:
+		return m.withReviewDetail(msg)
 
 	case outputTickMsg:
 		// Only the current pane's tick chain may continue. Without the sequence

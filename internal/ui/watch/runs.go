@@ -275,11 +275,18 @@ func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cm
 		return m.toggleRound(run), nil
 	case itemReview:
 		rv := r.Reviews[it.idx]
+		title := fmt.Sprintf("round %d review: %s", r.Number, rv.Name)
+		// A finished review's Claude run printed nothing but one JSON result,
+		// so what it found is read from the run's detail instead.
+		if rv.State == chunkd.PromptDone || rv.State == chunkd.PromptFailed {
+			m.outputSeq++
+			return m, fetchReviewDetail(m.detailFn, m.outputSeq, run.s.ID, r.Number, rv, title)
+		}
 		if rv.CommandID == "" {
 			m.runNote = "no output for this review yet"
 			return m, nil
 		}
-		return m.openOutput(rv.CommandID, fmt.Sprintf("round %d review: %s", r.Number, rv.Name), rv.State == chunkd.PromptRunning)
+		return m.openOutput(rv.CommandID, title, rv.State == chunkd.PromptRunning)
 	case itemCheck:
 		c := r.Checks[it.idx]
 		text := strings.TrimRight(c.Output, "\n")
@@ -399,6 +406,83 @@ func (m Model) openOutput(commandID, name string, running bool) (tea.Model, tea.
 	m.output = &outputPane{commandID: commandID, name: name, pinned: true, running: running}
 	m.outputSeq++
 	return m, tea.Batch(fetchOutput(commandID, 0), outputTick(m.outputSeq))
+}
+
+// reviewDetailMsg carries the run detail fetched to show a finished review.
+// seq is the pane opening it was fetched for, so an answer arriving after
+// another pane opened is dropped.
+type reviewDetailMsg struct {
+	seq    int
+	round  int // the round's Number
+	review chunkd.ReviewPrompt
+	title  string
+	detail chunkd.SessionDetail
+	err    error
+}
+
+func fetchReviewDetail(fetch func(string) (chunkd.SessionDetail, error), seq int, runID string, round int, rv chunkd.ReviewPrompt, title string) tea.Cmd {
+	return func() tea.Msg {
+		d, err := fetch(runID)
+		return reviewDetailMsg{seq: seq, round: round, review: rv, title: title, detail: d, err: err}
+	}
+}
+
+// withReviewDetail opens a finished review's findings. Until its round is
+// checked the daemon holds no findings for it, so the raw output is shown,
+// as it is while the review runs.
+func (m Model) withReviewDetail(msg reviewDetailMsg) (tea.Model, tea.Cmd) {
+	if msg.seq != m.outputSeq {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.runNote = "could not read the review: " + msg.err.Error()
+		return m, nil
+	}
+	if res, ok := reviewResult(msg.detail, msg.round, msg.review.Name); ok {
+		return m.openText(msg.title, reviewText(res)), nil
+	}
+	if msg.review.Error != "" {
+		return m.openText(msg.title, "Could not run: "+msg.review.Error), nil
+	}
+	if msg.review.CommandID == "" {
+		m.runNote = "no output for this review yet"
+		return m, nil
+	}
+	return m.openOutput(msg.review.CommandID, msg.title, false)
+}
+
+// reviewResult finds what the review named prompt said in round n.
+func reviewResult(d chunkd.SessionDetail, n int, prompt string) (chunkd.ReviewResult, bool) {
+	for _, rd := range d.Details {
+		if rd.Number != n {
+			continue
+		}
+		for _, res := range rd.Results {
+			if res.Prompt == prompt {
+				return res, true
+			}
+		}
+	}
+	return chunkd.ReviewResult{}, false
+}
+
+// reviewText is a review's outcome and findings as the pane shows them.
+func reviewText(res chunkd.ReviewResult) string {
+	if res.Error != "" {
+		return "Could not run: " + res.Error
+	}
+	if len(res.Findings) == 0 {
+		return "No findings."
+	}
+	parts := []string{fmt.Sprintf("%d finding%s", len(res.Findings), plural(len(res.Findings)))}
+	for _, f := range res.Findings {
+		part := fmt.Sprintf("[%s] %s\n%s", f.Severity, f.Location(), strings.TrimSpace(f.Body))
+		if p := strings.TrimRight(f.Patch, "\n"); p != "" {
+			part += "\n\n" + p
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // openText opens the output pane over text the snapshot already holds. With
