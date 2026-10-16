@@ -501,6 +501,9 @@ func TestFactoryEvalRefusesFlagsThatScoreNothing(t *testing.T) {
 		{[]string{"factory", "eval", "--commits", "3", "--no-grade"}, "[commits no-grade] were all set"},
 		{[]string{"factory", "eval", "--suite", t.TempDir(), "--commits", "3"}, "[commits suite] were all set"},
 		{[]string{"factory", "eval", "--suite", t.TempDir(), "--no-grade", "--grader-model", "x"}, "[grader-model no-grade] were all set"},
+		// The group is satisfied by --suite being given, so an empty one would
+		// otherwise fall through to the commits path and fail there.
+		{[]string{"factory", "eval", "--suite", ""}, "--suite needs a directory"},
 	} {
 		result := binary.RunCLI(t, tc.args, env, workDir)
 		assert.Assert(t, result.ExitCode != 0, "%v: expected non-zero exit code", tc.args)

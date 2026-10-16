@@ -75,11 +75,12 @@ func commitCase(ctx context.Context, git gitexec.Runner, sha string) (Case, bool
 	if len(parents) != 1 || isBot(author) || message == "" {
 		return Case{}, false, nil
 	}
-	names, err := git.Output(ctx, "diff", "--name-only", parents[0], sha)
+	// -z, so a path with a space in it stays one path and none is quoted.
+	names, err := git.Output(ctx, "diff", "--name-only", "-z", parents[0], sha)
 	if err != nil {
 		return Case{}, false, fmt.Errorf("list the files commit %s changes: %w", sha, err)
 	}
-	if !changesCode(strings.Fields(string(names))) {
+	if !changesCode(splitNUL(string(names))) {
 		return Case{}, false, nil
 	}
 	patch, err := git.Output(ctx, "diff", "--binary", parents[0], sha)
@@ -104,6 +105,11 @@ func commitCase(ctx context.Context, git gitexec.Runner, sha string) (Case, bool
 // renovate[bot]: its dependency bumps are not what review prompts are for.
 func isBot(author string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(author)), "[bot]")
+}
+
+// splitNUL is s split on NUL, without the empty field a trailing NUL leaves.
+func splitNUL(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == 0 })
 }
 
 // changesCode reports whether any of files is more than documentation.
