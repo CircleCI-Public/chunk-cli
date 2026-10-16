@@ -143,6 +143,12 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if err := checkFactoryBuildFlags(cmd, logFile, draft, openPR, attempts); err != nil {
 				return err
 			}
+			if chunkBinary != "" && !remote {
+				return newUserError("--chunk-binary needs --remote.").
+					withCode("command.invalid_flags").
+					withExitCode(ExitBadArgs).
+					withoutDetail()
+			}
 			// A remote run works on a sidecar of its own; the local daemon plays
 			// no part in it, so it branches off before anything that needs one.
 			if remote {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -141,7 +142,7 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 		if err := uploadBinary(ctx, client, entry.ID, opts.chunkBinary, streams); err != nil {
 			return &userError{msg: "Could not upload chunk to the host sidecar.", err: err}
 		}
-	} else if _, err := review.RunScript(ctx, sidecar.ClientExec, entry, review.InstallVersion("v"+version.Value), factoryRemoteScriptLimit); err != nil {
+	} else if _, err := review.RunScript(ctx, sidecar.ClientExec, entry, review.InstallVersion(remoteReleaseTag()), factoryRemoteScriptLimit); err != nil {
 		return &userError{msg: "Could not install chunk on the host sidecar.", err: err}
 	}
 
@@ -217,6 +218,13 @@ func checkFactoryRemotePreflight(root, reviewsDir, chunkBinary string) (*config.
 		}
 	}
 	return cfg, nil
+}
+
+// remoteReleaseTag is the release tag matching this build, which the host
+// installs when no --chunk-binary is given. The prefix is trimmed first so a
+// version set with or without its "v" names the same tag.
+func remoteReleaseTag() string {
+	return "v" + strings.TrimPrefix(version.Value, "v")
 }
 
 // remoteRunKey names a remote run's worktree, branch and pool. The "r-"

@@ -236,6 +236,18 @@ func TestFactoryBuildRemoteRefusesAnUnsupportedFlagCombination(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stderr, "--verbose is not supported with --remote yet."), "stderr: %s", result.Stderr)
 }
 
+func TestFactoryBuildRefusesChunkBinaryWithoutRemote(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeChunkConfig(t, workDir, nil)
+	writePrompts(t, filepath.Join(workDir, ".chunk", "reviews"), "correctness")
+
+	result := binary.RunCLI(t, []string{"factory", "build", "--chunk-binary", "dist/chunk-linux", "add a --verbose flag"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, strings.Contains(result.Stderr, "--chunk-binary needs --remote."), "stderr: %s", result.Stderr)
+}
+
 func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {
 	answer, err := json.Marshal(map[string]any{
 		"type": "result", "subtype": "success", "is_error": false, "result": "done",

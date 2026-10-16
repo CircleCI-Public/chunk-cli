@@ -197,7 +197,7 @@ func TestFactoryBuildRemoteInstallsThePinnedReleaseWithoutChunkBinary(t *testing
 	// The script reaches the sidecar as one string inside a JSON request
 	// body, so its quotes and newlines are JSON-escaped on the wire; compare
 	// against the same escaping rather than the raw script text.
-	want := review.InstallVersion("v" + version.Value)
+	want := review.InstallVersion("v1.2.3")
 	wantJSON, err := json.Marshal(want)
 	assert.NilError(t, err)
 	wantEscaped := string(wantJSON[1 : len(wantJSON)-1])
@@ -246,4 +246,13 @@ func TestFactoryBuildRemoteCleansUpAfterAFailedBaselineCommit(t *testing.T) {
 	assert.NilError(t, derr)
 	entries, rerr := os.ReadDir(filepath.Join(dataDir, "factory"))
 	assert.Assert(t, rerr != nil || len(entries) == 0, "expected no leftover worktree, found: %v", entries)
+}
+
+func TestRemoteReleaseTagAddsOneV(t *testing.T) {
+	orig := version.Value
+	t.Cleanup(func() { version.Value = orig })
+	for _, v := range []string{"1.2.3", "v1.2.3"} {
+		version.Value = v
+		assert.Equal(t, remoteReleaseTag(), "v1.2.3")
+	}
 }
