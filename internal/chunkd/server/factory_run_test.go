@@ -87,9 +87,11 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 		return run(ctx, opts)
 	})
 
+	// No pull request, so the record is only what the run itself did; what a
+	// run makes of its branch is covered in factory_pr_test.go.
 	sess, err := d.startFactory(chunkd.FactoryRequest{
 		ProjectRoot: root, Prompt: "  add a --verbose flag  ", Reviewers: 1,
-		ImplementerInstructions: "keep the change small",
+		ImplementerInstructions: "keep the change small", PullRequest: chunkd.PullRequestNone,
 	})
 	assert.NilError(t, err)
 	detail := waitForSessionEnd(t, d, sess.ID)

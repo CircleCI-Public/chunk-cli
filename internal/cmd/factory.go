@@ -39,20 +39,61 @@ func newFactoryCmd() *cobra.Command {
 	return cmd
 }
 
+// prFlags are the three flags that decide what a run does with its branch once
+// every check has passed.
+type prFlags struct {
+	// open is --open-pr, which insists on a pull request, and none is
+	// --no-open-pr, which wants none. With neither, a run opens one if the
+	// project can.
+	open, none, draft bool
+}
+
+// mode is what the daemon is asked for.
+func (f prFlags) mode() string {
+	switch {
+	case f.none:
+		return chunkd.PullRequestNone
+	case f.open:
+		return chunkd.PullRequestRequired
+	}
+	return chunkd.PullRequestAuto
+}
+
+// check rejects the combinations that contradict each other.
+func (f prFlags) check() error {
+	switch {
+	case f.open && f.none:
+		return newUserError("--open-pr and --no-open-pr ask for opposite things.").
+			withCode("command.invalid_flags").
+			withSuggestion("A run opens a pull request when its checks pass; leave both out for that, or keep only --no-open-pr.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	case f.draft && f.none:
+		return newUserError("--draft has nothing to open as a draft with --no-open-pr.").
+			withCode("command.invalid_flags").
+			withSuggestion("Drop --no-open-pr to open the pull request as a draft.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	return nil
+}
+
 // checkFactoryBuildFlags rejects flag combinations that cannot run, before the
 // daemon or the project is touched.
-func checkFactoryBuildFlags(cmd *cobra.Command, logFile string, draft, openPR bool, attempts int) error {
+func checkFactoryBuildFlags(cmd *cobra.Command, logFile string, pr prFlags, remote bool, attempts int) error {
 	switch {
+	// A remote run does not go through the local daemon, which is what opens the
+	// pull request, so asking for one would be quietly ignored.
+	case remote && (pr.open || pr.draft):
+		return newUserError("--open-pr and --draft do not work with --remote yet.").
+			withCode("command.invalid_flags").
+			withSuggestion("Drop them to run remotely, or drop --remote to open a pull request when the checks pass.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
 	case cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "":
 		return newUserError("--log-file needs a file.").
 			withCode("command.invalid_flags").
 			withSuggestion("Write --log-file FILE, or --log for the default log.").
-			withExitCode(ExitBadArgs).
-			withoutDetail()
-	case draft && !openPR:
-		return newUserError("--draft needs --open-pr.").
-			withCode("command.invalid_flags").
-			withSuggestion("Write --open-pr --draft to open the pull request as a draft.").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	case attempts < 1:
@@ -61,12 +102,13 @@ func checkFactoryBuildFlags(cmd *cobra.Command, logFile string, draft, openPR bo
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}
-	return nil
+	return pr.check()
 }
 
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, jsonOut, logOn, verbose, openPR, draft, remote bool
+	var keepSidecars, noValidate, jsonOut, logOn, verbose, remote bool
+	var pr prFlags
 	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun, chunkBinary string
 	var implementTimeout, reviewTimeout time.Duration
 
@@ -102,13 +144,16 @@ implementer is sent what failed, in a round that counts toward
 --max-attempts. Without a prompt in a terminal, it asks for one first, and
 Enter skips it.
 
-With --open-pr, once every check has passed the run pushes its branch to origin
-and opens a pull request on GitHub, ready for review (--draft opens a draft).
-It needs a GitHub token ('chunk auth set github' or GITHUB_TOKEN, then restart
-the daemon) with write access to pull requests, and an origin on GitHub. The
-pull request targets the branch you started the run from if origin has it, and
-otherwise the repository's default branch. A run whose checks did not pass
-pushes nothing and opens nothing.
+Once every check has passed the run pushes its branch to origin and opens a
+pull request on GitHub, ready for review (--draft opens a draft). That needs a
+GitHub token ('chunk auth set github' or GITHUB_TOKEN, then restart the daemon)
+with write access to pull requests, and an origin on GitHub; without them the
+run still runs and says why it opened none. The pull request targets the branch
+you started the run from if origin has it, and otherwise the repository's
+default branch. A run whose checks did not pass pushes nothing and opens
+nothing. --no-open-pr leaves the branch alone, and --open-pr insists on the
+pull request: a project that could not open one is refused before the run
+starts, rather than after the minutes it takes.
 
 With --log, the run keeps a plain-text log in
 ~/.local/share/chunk/repo-<id>/factory/<start time>.log, beside the run's
@@ -140,7 +185,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 					return err
 				}
 			}
-			if err := checkFactoryBuildFlags(cmd, logFile, draft, openPR, attempts); err != nil {
+			if err := checkFactoryBuildFlags(cmd, logFile, pr, remote, attempts); err != nil {
 				return err
 			}
 			if chunkBinary != "" && !remote {
@@ -229,8 +274,8 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 				Image:                   image,
 				Log:                     logArg,
 				Verbose:                 verbose,
-				OpenPR:                  openPR,
-				Draft:                   draft,
+				PullRequest:             pr.mode(),
+				Draft:                   pr.draft,
 			})
 			if err != nil {
 				return sessionError(err)
@@ -264,8 +309,9 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.local/share/chunk/repo-<id>/factory/<start time>.log")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
-	cmd.Flags().BoolVar(&openPR, "open-pr", false, "when every check passes, push the branch to origin and open a pull request on GitHub")
-	cmd.Flags().BoolVar(&draft, "draft", false, "open the pull request as a draft (needs --open-pr)")
+	cmd.Flags().BoolVar(&pr.open, "open-pr", false, "refuse to start the run unless its pull request could be opened")
+	cmd.Flags().BoolVar(&pr.none, "no-open-pr", false, "do not push the branch or open a pull request when every check passes")
+	cmd.Flags().BoolVar(&pr.draft, "draft", false, "open the pull request as a draft")
 	cmd.Flags().BoolVar(&remote, "remote", false, "provision a sidecar of its own for this run, so you can close your laptop")
 	_ = cmd.Flags().MarkHidden("remote")
 	cmd.Flags().StringVar(&chunkBinary, "chunk-binary", "", "Linux chunk build to upload to the remote sidecar with --remote (default: install the release matching this build)")
@@ -645,9 +691,9 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 	return reportPullRequest(f)
 }
 
-// printFactoryPullRequest says what became of the pull request a run was asked
-// to open, where the progress already shown has not. The run's progress said it
-// when one was opened or refused, as it happened, so only the rest is said here.
+// printFactoryPullRequest says what became of the run's pull request, where
+// the progress already shown has not. The run's progress said it when one was
+// opened or refused, as it happened, so only the rest is said here.
 func printFactoryPullRequest(f *chunkd.FactoryRun, status iostream.StatusFunc) {
 	pr := f.PullRequest
 	if pr == nil {
@@ -663,8 +709,9 @@ func printFactoryPullRequest(f *chunkd.FactoryRun, status iostream.StatusFunc) {
 }
 
 // reportPullRequest is an error when the checks passed but the pull request
-// the run was asked for could not be opened: the person asked for it, so a
-// script waiting on the command should not be told it worked. The work is safe
+// could not be opened: opening one is part of what the command does, so a
+// script waiting on it should not be told the run worked. A project with
+// nothing to open one with skips it instead, and is no error. The work is safe
 // on the branch either way.
 func reportPullRequest(f *chunkd.FactoryRun) error {
 	if f.PullRequest == nil || f.PullRequest.State != chunkd.PRFailed {

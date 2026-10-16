@@ -58,6 +58,7 @@ func NewFakeGitHub() *FakeGitHub {
 	r.GET("/user", f.handleUser)
 	r.GET("/repos/:owner/:repo", f.handleRepo)
 	r.POST("/repos/:owner/:repo/pulls", f.handleCreatePull)
+	r.GET("/repos/:owner/:repo/pulls", f.handleListPulls)
 	return f
 }
 
@@ -68,6 +69,16 @@ func (f *FakeGitHub) SetDefaultBranch(name string) { f.set(func() { f.defaultBra
 // given JSON body, as GitHub does for a token without access or a duplicate.
 func (f *FakeGitHub) RefusePullRequests(status int, body string) {
 	f.set(func() { f.pullRefusal = &pullRefusal{status: status, body: body} })
+}
+
+// AddPullRequest records a pull request as already open for head, as one the
+// branch was given before this run pushed to it again.
+func (f *FakeGitHub) AddPullRequest(owner, repo, head string) OpenedPullRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := OpenedPullRequest{Owner: owner, Repo: repo, Number: len(f.pulls) + 1, Head: head}
+	f.pulls = append(f.pulls, p)
+	return p
 }
 
 // PullRequests are the pull requests opened so far, oldest first.
@@ -119,6 +130,30 @@ func (f *FakeGitHub) handleCreatePull(c *gin.Context) {
 		"number":   number,
 		"html_url": "https://github.com/" + owner + "/" + repo + "/pull/" + strconv.Itoa(number),
 	})
+}
+
+// handleListPulls answers GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}
+// with the pull requests opened for that branch, as GitHub does.
+func (f *FakeGitHub) handleListPulls(c *gin.Context) {
+	if c.GetHeader("authorization") == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "Bad credentials"})
+		return
+	}
+	owner, repo := c.Param("owner"), c.Param("repo")
+	head := strings.TrimPrefix(c.Query("head"), owner+":")
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	out := []gin.H{}
+	for _, p := range f.pulls {
+		if p.Owner != owner || p.Repo != repo || (head != "" && p.Head != head) {
+			continue
+		}
+		out = append(out, gin.H{
+			"number":   p.Number,
+			"html_url": "https://github.com/" + owner + "/" + repo + "/pull/" + strconv.Itoa(p.Number),
+		})
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (f *FakeGitHub) handleUser(c *gin.Context) {

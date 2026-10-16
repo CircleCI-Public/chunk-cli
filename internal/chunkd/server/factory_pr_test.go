@@ -82,7 +82,7 @@ func (pd *prDaemon) remoteHas(t *testing.T, branch string) bool {
 func TestFactoryRunThatPassesPushesItsBranchAndOpensAPullRequest(t *testing.T) {
 	pd := newPRDaemon(t, factory.ResultPassed)
 
-	detail := pd.run(t, chunkd.FactoryRequest{OpenPR: true})
+	detail := pd.run(t, chunkd.FactoryRequest{})
 
 	pr := detail.Factory.PullRequest
 	assert.Assert(t, pr != nil)
@@ -106,20 +106,34 @@ func TestFactoryRunThatPassesPushesItsBranchAndOpensAPullRequest(t *testing.T) {
 	assert.Equal(t, detail.Factory.Result, chunkd.ResultPassed)
 }
 
+// --open-pr only insists on what a run does anyway, so a project that can open
+// one is not refused: it runs and opens it.
+func TestFactoryRunThatInsistsOnAPullRequestOpensIt(t *testing.T) {
+	pd := newPRDaemon(t, factory.ResultPassed)
+
+	detail := pd.run(t, chunkd.FactoryRequest{PullRequest: chunkd.PullRequestRequired})
+
+	assert.Assert(t, pd.ran, "a run that could open its pull request was refused")
+	assert.DeepEqual(t, *detail.Factory.PullRequest, chunkd.PullRequest{
+		State: chunkd.PROpened, Base: "main", URL: "https://github.com/acme/widgets/pull/1", Number: 1,
+	})
+	assert.Equal(t, len(pd.gh.PullRequests()), 1)
+}
+
 func TestFactoryRunOpensADraftWhenAskedTo(t *testing.T) {
 	pd := newPRDaemon(t, factory.ResultPassed)
 
-	detail := pd.run(t, chunkd.FactoryRequest{OpenPR: true, Draft: true})
+	detail := pd.run(t, chunkd.FactoryRequest{Draft: true})
 
 	assert.Equal(t, detail.Factory.PullRequest.State, chunkd.PROpened)
 	assert.Assert(t, detail.Factory.PullRequest.Draft)
 	assert.Equal(t, pd.gh.PullRequests()[0].Draft, true)
 }
 
-func TestFactoryRunNeverAskedForAPullRequestPushesNothing(t *testing.T) {
+func TestFactoryRunToldNotToOpenAPullRequestPushesNothing(t *testing.T) {
 	pd := newPRDaemon(t, factory.ResultPassed)
 
-	detail := pd.run(t, chunkd.FactoryRequest{})
+	detail := pd.run(t, chunkd.FactoryRequest{PullRequest: chunkd.PullRequestNone})
 
 	assert.Assert(t, detail.Factory.PullRequest == nil)
 	assert.Assert(t, !pd.remoteHas(t, detail.Factory.Branch), "the branch was pushed unasked")
@@ -131,7 +145,7 @@ func TestFactoryRunWhoseChecksFailOpensNoPullRequest(t *testing.T) {
 		t.Run(string(result), func(t *testing.T) {
 			pd := newPRDaemon(t, result)
 
-			detail := pd.run(t, chunkd.FactoryRequest{OpenPR: true})
+			detail := pd.run(t, chunkd.FactoryRequest{})
 
 			pr := detail.Factory.PullRequest
 			assert.Equal(t, pr.State, chunkd.PRSkipped)
@@ -148,7 +162,7 @@ func TestFactoryRunWhoseTokenCannotOpenPullRequestsKeepsItsPushedBranch(t *testi
 	pd := newPRDaemon(t, factory.ResultPassed)
 	pd.gh.RefusePullRequests(http.StatusForbidden, `{"message":"Resource not accessible by personal access token"}`)
 
-	detail := pd.run(t, chunkd.FactoryRequest{OpenPR: true})
+	detail := pd.run(t, chunkd.FactoryRequest{})
 
 	pr := detail.Factory.PullRequest
 	assert.Equal(t, pr.State, chunkd.PRFailed)
@@ -163,7 +177,7 @@ func TestFactoryRunTargetsTheDefaultBranchWhenItsOwnIsOnlyLocal(t *testing.T) {
 	pd.gh.SetDefaultBranch("trunk")
 	git(t, pd.root, "checkout", "-q", "-b", "topic")
 
-	detail := pd.run(t, chunkd.FactoryRequest{OpenPR: true})
+	detail := pd.run(t, chunkd.FactoryRequest{})
 
 	assert.Equal(t, detail.Factory.PullRequest.State, chunkd.PROpened)
 	assert.Equal(t, detail.Factory.PullRequest.Base, "trunk")
@@ -176,7 +190,7 @@ func TestFactoryRunTargetsTheBranchItStartedFromWhenTheRemoteHasIt(t *testing.T)
 	git(t, pd.root, "checkout", "-q", "-b", "topic")
 	git(t, pd.root, "push", "-q", "origin", "topic")
 
-	detail := pd.run(t, chunkd.FactoryRequest{OpenPR: true})
+	detail := pd.run(t, chunkd.FactoryRequest{})
 
 	assert.Equal(t, detail.Factory.PullRequest.Base, "topic")
 }
@@ -193,23 +207,29 @@ func TestStartFactoryRefusesAPullRequestItCannotOpen(t *testing.T) {
 		{
 			name:  "no GitHub token",
 			setup: func(_ *testing.T, pd *prDaemon) { pd.daemon.gh = nil },
-			req:   chunkd.FactoryRequest{OpenPR: true}, status: http.StatusServiceUnavailable, msg: "GITHUB_TOKEN",
+			req:   chunkd.FactoryRequest{PullRequest: chunkd.PullRequestRequired}, status: http.StatusServiceUnavailable, msg: "GITHUB_TOKEN",
 		},
 		{
 			name: "an origin that is not on GitHub",
 			setup: func(t *testing.T, pd *prDaemon) {
 				git(t, pd.root, "remote", "set-url", "origin", "git@gitlab.com:acme/widgets.git")
 			},
-			req: chunkd.FactoryRequest{OpenPR: true}, status: http.StatusBadRequest, msg: "must be on GitHub",
+			req: chunkd.FactoryRequest{PullRequest: chunkd.PullRequestRequired}, status: http.StatusBadRequest, msg: "must be on GitHub",
 		},
 		{
 			name:  "no origin",
 			setup: func(t *testing.T, pd *prDaemon) { git(t, pd.root, "remote", "remove", "origin") },
-			req:   chunkd.FactoryRequest{OpenPR: true}, status: http.StatusBadRequest, msg: "must be on GitHub",
+			req:   chunkd.FactoryRequest{PullRequest: chunkd.PullRequestRequired}, status: http.StatusBadRequest, msg: "must be on GitHub",
 		},
 		{
 			name: "a draft of nothing", setup: func(*testing.T, *prDaemon) {},
-			req: chunkd.FactoryRequest{Draft: true}, status: http.StatusBadRequest, msg: "draft only applies",
+			req:    chunkd.FactoryRequest{PullRequest: chunkd.PullRequestNone, Draft: true},
+			status: http.StatusBadRequest, msg: "draft only applies",
+		},
+		{
+			name: "a mode that is not one of the three", setup: func(*testing.T, *prDaemon) {},
+			req:    chunkd.FactoryRequest{PullRequest: "maybe"},
+			status: http.StatusBadRequest, msg: "unknown pull_request",
 		},
 	}
 	for _, tt := range tests {
@@ -227,4 +247,63 @@ func TestStartFactoryRefusesAPullRequestItCannotOpen(t *testing.T) {
 			assert.Assert(t, !pd.ran, "a run started that could not open its pull request")
 		})
 	}
+}
+
+// Opening a pull request is what a passing run does, but a project with
+// nothing to open one with still has work worth doing, so the run goes ahead
+// and its record says why it opened none.
+func TestFactoryRunRunsAnywayWhenItCannotOpenAPullRequest(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, pd *prDaemon)
+		msg   string
+	}{
+		{
+			name:  "no GitHub token",
+			setup: func(_ *testing.T, pd *prDaemon) { pd.daemon.gh = nil },
+			msg:   "GITHUB_TOKEN",
+		},
+		{
+			name: "an origin that is not on GitHub",
+			setup: func(t *testing.T, pd *prDaemon) {
+				git(t, pd.root, "remote", "set-url", "origin", "git@gitlab.com:acme/widgets.git")
+			},
+			msg: "must be on GitHub",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pd := newPRDaemon(t, factory.ResultPassed)
+			tt.setup(t, pd)
+
+			detail := pd.run(t, chunkd.FactoryRequest{})
+
+			assert.Assert(t, pd.ran, "the run was refused over a pull request nobody insisted on")
+			assert.Equal(t, detail.State, chunkd.SessionDone)
+			assert.Equal(t, detail.Factory.Result, chunkd.ResultPassed)
+			pr := detail.Factory.PullRequest
+			assert.Equal(t, pr.State, chunkd.PRSkipped)
+			assert.Assert(t, strings.Contains(pr.Message, tt.msg), pr.Message)
+			assert.Assert(t, !pd.remoteHas(t, detail.Factory.Branch), "a branch was pushed with nowhere to open a pull request")
+		})
+	}
+}
+
+// A continued run pushes the same branch again, so GitHub refuses a second
+// pull request for it. The push updated the one already open, which is where
+// this run's work is, so that is what the run records.
+func TestFactoryRunWhoseBranchAlreadyHasAPullRequestRecordsThatOne(t *testing.T) {
+	pd := newPRDaemon(t, factory.ResultPassed)
+	branch := "chunk/factory/add-a-verbose-flag/run-1"
+	pd.gh.AddPullRequest("acme", "widgets", branch)
+	pd.gh.RefusePullRequests(http.StatusUnprocessableEntity,
+		`{"message":"Validation Failed","errors":[{"message":"A pull request already exists for acme:`+branch+`."}]}`)
+
+	detail := pd.run(t, chunkd.FactoryRequest{})
+
+	assert.Equal(t, detail.Factory.Branch, branch)
+	assert.DeepEqual(t, *detail.Factory.PullRequest, chunkd.PullRequest{
+		State: chunkd.PROpened, Base: "main", URL: "https://github.com/acme/widgets/pull/1", Number: 1,
+	})
+	assert.Assert(t, pd.remoteHas(t, branch), "the branch was not pushed")
 }

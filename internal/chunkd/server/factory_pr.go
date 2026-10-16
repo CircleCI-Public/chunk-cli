@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -32,20 +33,65 @@ type pullRequestPlan struct {
 	localBranch string
 }
 
+// errNoGitHubToken is why a project cannot open a pull request when the daemon
+// was started without a token. It is the daemon's own setup rather than
+// anything wrong with the request, so a run that insisted on a pull request is
+// refused as unavailable and not as a bad request.
+var errNoGitHubToken = fmt.Errorf("the chunk daemon has no GitHub token: set %s or run 'chunk auth set github', then restart it", config.EnvGitHubToken)
+
 // planPullRequest checks what opening a pull request needs, before a run that
 // would take minutes to reach it starts: a GitHub token, and an origin on
-// GitHub to open it on.
+// GitHub to open it on. Its error says what is missing in terms that read both
+// as why a run opened no pull request and as why one that had to was refused.
 func (d *daemon) planPullRequest(ctx context.Context, root string, draft bool) (*pullRequestPlan, error) {
 	if d.gh == nil {
-		return nil, apiErr(http.StatusServiceUnavailable,
-			"opening a pull request needs a GitHub token: set %s or run 'chunk auth set github', then restart the chunk daemon",
-			config.EnvGitHubToken)
+		return nil, errNoGitHubToken
 	}
 	owner, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, root)
 	if err != nil {
-		return nil, apiErr(http.StatusBadRequest, "cannot open a pull request: this project's origin remote must be on GitHub (%v)", err)
+		return nil, fmt.Errorf("this project's origin remote must be on GitHub (%w)", err)
 	}
 	return &pullRequestPlan{owner: owner, repo: repo, draft: draft, localBranch: currentBranch(root)}, nil
+}
+
+// refusePullRequest turns a plan that could not be made into the refusal a run
+// that insisted on a pull request gets.
+func refusePullRequest(err error) error {
+	status := http.StatusBadRequest
+	if errors.Is(err, errNoGitHubToken) {
+		status = http.StatusServiceUnavailable
+	}
+	return apiErr(status, "cannot open a pull request: %v", err)
+}
+
+// factoryPullRequest settles what a starting run will do with its branch and
+// starts its record off. A run opens a pull request unless it was told not to,
+// so a project that cannot open one is only refused when the request insisted:
+// otherwise the run goes ahead and its record says why it opened none.
+func (d *daemon) factoryPullRequest(req chunkd.FactoryRequest, root string, record *chunkd.FactoryRun) (*pullRequestPlan, error) {
+	switch req.PullRequest {
+	case chunkd.PullRequestAuto, chunkd.PullRequestRequired:
+	case chunkd.PullRequestNone:
+		if req.Draft {
+			return nil, apiErr(http.StatusBadRequest, "draft only applies to a run that opens a pull request")
+		}
+		return nil, nil
+	default:
+		return nil, apiErr(http.StatusBadRequest, "unknown pull_request %q, want one of %q, %q or %q",
+			req.PullRequest, chunkd.PullRequestAuto, chunkd.PullRequestRequired, chunkd.PullRequestNone)
+	}
+	// Checked now, not after a run that takes minutes: the push and the pull
+	// request come last, and need things the run does not.
+	plan, err := d.planPullRequest(context.Background(), root, req.Draft)
+	switch {
+	case err == nil:
+		record.PullRequest = &chunkd.PullRequest{State: chunkd.PRPending, Draft: req.Draft}
+		return plan, nil
+	case req.PullRequest == chunkd.PullRequestRequired:
+		return nil, refusePullRequest(err)
+	}
+	record.PullRequest = &chunkd.PullRequest{State: chunkd.PRSkipped, Message: err.Error()}
+	return nil, nil
 }
 
 // setPullRequest updates the session's pull request record under its lock.
@@ -117,6 +163,17 @@ func (d *daemon) openPullRequest(ctx context.Context, entry *sessionEntry, opts 
 		Draft: plan.draft,
 	})
 	if err != nil {
+		// A continued run pushes the same branch a second time, so GitHub
+		// refuses a pull request that is already open for it. The push has
+		// just updated that one, which is the pull request this run's work is
+		// in, so it is the answer rather than the failure.
+		if open, lookupErr := d.gh.OpenPullRequestForBranch(openCtx, plan.owner, plan.repo, branch); lookupErr == nil && open != nil {
+			entry.setPullRequest(func(pr *chunkd.PullRequest) {
+				pr.State, pr.URL, pr.Number = chunkd.PROpened, open.URL, open.Number
+			})
+			opts.Status(iostream.LevelDone, "Updated pull request "+open.URL)
+			return
+		}
 		fail(err)
 		return
 	}

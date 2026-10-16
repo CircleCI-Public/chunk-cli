@@ -215,8 +215,8 @@ type FactoryRun struct {
 	// Progress is what the run said as it went: its sidecars being made
 	// ready and synced, and anything that went wrong cleaning up.
 	Progress Feed `json:"progress,omitzero"`
-	// PullRequest is the pull request the run was asked to open once its checks
-	// passed, nil when it was not asked to.
+	// PullRequest is the pull request the run opens once its checks pass, nil
+	// only when it was told not to open one.
 	PullRequest *PullRequest `json:"pull_request,omitempty"`
 }
 
@@ -236,9 +236,15 @@ type PullRequest struct {
 	Message string `json:"message,omitempty"`
 }
 
+// Opened reports whether the pull request is open, which is what makes its URL
+// and number worth showing.
+func (pr *PullRequest) Opened() bool {
+	return pr != nil && pr.State == PROpened && pr.URL != ""
+}
+
 // How far a run's pull request has got, as PullRequest.State.
 const (
-	// PRPending means one was asked for and the run has not ended.
+	// PRPending means the run has not ended, so nothing has been pushed yet.
 	PRPending = "pending"
 	// PRPushing means the run's branch is being pushed.
 	PRPushing = "pushing"
@@ -249,8 +255,24 @@ const (
 	// PRFailed means the run passed but the pull request could not be opened.
 	// Its work is still committed, and pushed if it got that far.
 	PRFailed = "failed"
-	// PRSkipped means the run did not end in a way that earns a pull request.
+	// PRSkipped means the run did not end in a way that earns a pull request,
+	// or the project has nothing to open one with.
 	PRSkipped = "skipped"
+)
+
+// What a run does with its branch once every check has passed, as
+// FactoryRequest.PullRequest.
+const (
+	// PullRequestAuto, the default, opens one when the project can. A project
+	// with no GitHub token or an origin that is not on GitHub still runs, and
+	// says why it opened none: the work is worth doing either way.
+	PullRequestAuto = ""
+	// PullRequestRequired opens one too, and refuses a run that could not,
+	// before it starts. It is what someone who asked for a pull request in so
+	// many words means.
+	PullRequestRequired = "required"
+	// PullRequestNone leaves the branch alone: nothing is pushed.
+	PullRequestNone = "none"
 )
 
 // Why a factory run's loop stopped, as FactoryRun.Result.
@@ -456,10 +478,11 @@ type FactoryRequest struct {
 	// to it and implies it; see factory.RunOptions.
 	Log     string `json:"log,omitempty"`
 	Verbose bool   `json:"verbose,omitempty"`
-	// OpenPR asks for the run's branch to be pushed and a pull request opened on
-	// GitHub once every check has passed. Draft opens it as a draft.
-	OpenPR bool `json:"open_pr,omitempty"`
-	Draft  bool `json:"draft,omitempty"`
+	// PullRequest says what to do with the run's branch once every check has
+	// passed: one of PullRequestAuto, PullRequestRequired or PullRequestNone.
+	// Draft opens the pull request as a draft.
+	PullRequest string `json:"pull_request,omitempty"`
+	Draft       bool   `json:"draft,omitempty"`
 }
 
 // SessionStartResponse answers an accepted POST /factory.

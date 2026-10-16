@@ -697,15 +697,20 @@ func runChip(st watchStyles, s chunkd.Session) string {
 	return st.Chip.Background(bg).Render(" " + text + " ")
 }
 
-// runDetail is runStatus without the word the chip already says.
+// runDetail is runStatus without the word the chip already says. An ended run
+// leads with its pull request, which is what there is to go and look at.
 func runDetail(s chunkd.Session) string {
 	if s.State == chunkd.SessionRunning {
 		return runStatus(s)
 	}
-	if s.EndedAt != nil {
-		return ago(*s.EndedAt)
+	var parts []string
+	if f := s.Factory; f != nil && f.PullRequest.Opened() {
+		parts = append(parts, fmt.Sprintf("PR #%d", f.PullRequest.Number))
 	}
-	return ""
+	if s.EndedAt != nil {
+		parts = append(parts, ago(*s.EndedAt))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // runOutcome is how an ended run came out, in a word or two.
