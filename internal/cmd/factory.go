@@ -369,9 +369,15 @@ func askContinueGuidance(in io.Reader, jsonOut bool) (string, error) {
 // checkFactoryContinue explains a run that cannot be continued before anything
 // starts. The daemon loads the run's record itself.
 func checkFactoryContinue(root, run string) error {
-	_, err := factory.LoadRecord(root, factory.ParseRunID(run))
+	rec, err := factory.LoadRecord(root, factory.ParseRunID(run))
 	switch {
 	case err == nil:
+		if rec.Remote != nil {
+			return newUserError(fmt.Sprintf("Factory run %s is on a sidecar; its work is not local yet.", factory.ParseRunID(run))).
+				withCode("command.invalid_args").
+				withExitCode(ExitBadArgs).
+				withoutDetail()
+		}
 		return nil
 	case errors.Is(err, factory.ErrNoRecord):
 		return newUserError(fmt.Sprintf("No factory run %s to continue in this project.", factory.ParseRunID(run))).

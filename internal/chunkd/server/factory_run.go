@@ -63,6 +63,9 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		if err != nil {
 			return chunkd.Session{}, apiErr(http.StatusBadRequest, "%v", err)
 		}
+		if from.Remote != nil {
+			return chunkd.Session{}, apiErr(http.StatusBadRequest, "factory run %s is on a sidecar; its work is not local yet", factory.ParseRunID(req.Continue))
+		}
 		cont = &factory.Continuation{From: from, Guidance: prompt}
 		record = &chunkd.FactoryRun{Prompt: from.Prompt, Guidance: prompt, ContinuesRunID: from.RunID}
 	}
