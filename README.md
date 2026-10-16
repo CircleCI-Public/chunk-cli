@@ -130,7 +130,7 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 
 ## Factory
 
-`chunk factory` has an implementer agent change your code on a sidecar, then reviews the result with each prompt in `.chunk/reviews/` and runs your validation commands, feeding failures back until every check passes or attempts run out. It works in a git worktree of its own, so your checkout is never touched, and you can follow a run in `chunk watch`.
+`chunk factory` has an implementer agent change your code on a sidecar, then reviews the result with each prompt in `.chunk/reviews/` and runs your validation commands, feeding failures back until every check passes or attempts run out. When they all pass, it pushes the run's branch and opens a pull request on GitHub, ready for review (`--no-open-pr` leaves the branch alone). It works in a git worktree of its own, so your checkout is never touched, and you can follow a run in `chunk watch`.
 
 ```bash
 # Write a first set of review prompts from your code and past PR review comments

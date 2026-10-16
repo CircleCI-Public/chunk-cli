@@ -98,3 +98,22 @@ func TestDefaultBranch(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, got, "trunk")
 }
+
+func TestOpenPullRequestForBranchFindsTheOneAlreadyOpen(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.AddPullRequest("acme", "widgets", "topic")
+	srv := httptest.NewServer(gh)
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	pr, err := c.OpenPullRequestForBranch(context.Background(), "acme", "widgets", "topic")
+	assert.NilError(t, err)
+	assert.Assert(t, pr != nil)
+	assert.Equal(t, pr.Number, 1)
+	assert.Equal(t, pr.URL, "https://github.com/acme/widgets/pull/1")
+
+	// A branch with none is no error: there is simply nothing open for it.
+	pr, err = c.OpenPullRequestForBranch(context.Background(), "acme", "widgets", "other")
+	assert.NilError(t, err)
+	assert.Assert(t, pr == nil)
+}

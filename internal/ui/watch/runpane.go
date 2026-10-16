@@ -498,6 +498,12 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) []string {
 		lines = append(lines, "  "+next)
 	}
 	if !s.State.Finished() {
+		// The branch is pushed and the pull request opened after the loop has
+		// ended but before the session settles, so it earns a line while the
+		// run is still shown as running.
+		if pr := f.PullRequest; pr != nil && pr.State != chunkd.PRPending {
+			lines = append(lines, "  "+st.vdim("pr      ")+prProgress(st, pr))
+		}
 		if feed := f.Progress.Lines; len(feed) > 0 {
 			if l := feed[len(feed)-1]; l.Level == chunkd.FeedWarn || l.Level == chunkd.FeedError {
 				lines = append(lines, "  "+feedText(st, l))
@@ -514,6 +520,9 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) []string {
 			}
 			lines = append(lines, "  "+st.vdim("branch  ")+st.muted(f.Branch)+"  "+st.dim(what))
 		}
+		if pr := f.PullRequest; pr != nil {
+			lines = append(lines, "  "+st.vdim("pr      ")+prProgress(st, pr))
+		}
 		if !f.Committed && f.Worktree != "" && !f.WorktreeRemoved {
 			lines = append(lines, "  "+st.vdim("work    ")+st.dim("not committed, in "+f.Worktree))
 		}
@@ -527,6 +536,31 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) []string {
 	return append([]string{""}, lines...)
 }
 
+// prProgress is where a run's pull request has got to, for the pr row: the
+// pull request itself once it is open, and otherwise what is being done about
+// it or why there is none.
+func prProgress(st watchStyles, pr *chunkd.PullRequest) string {
+	switch pr.State {
+	case chunkd.PRPending:
+		return st.dim("opens when the checks pass")
+	case chunkd.PRPushing:
+		return st.running("pushing the branch to origin...")
+	case chunkd.PROpening:
+		return st.running("opening on GitHub...")
+	case chunkd.PROpened:
+		line := st.muted(pr.URL)
+		if pr.Draft {
+			line += "  " + st.dim("draft")
+		}
+		return line
+	case chunkd.PRFailed:
+		return st.err("could not be opened: " + pr.Message)
+	case chunkd.PRSkipped:
+		return st.dim("none opened: " + pr.Message)
+	}
+	return st.dim(pr.State)
+}
+
 // nextStepLine tells a person watching the run what is happening and whether
 // there is anything for them to do, in plain terms rather than the run's
 // internals.
@@ -536,6 +570,13 @@ func nextStepLine(st watchStyles, s chunkd.Session) string {
 	}
 	last := s.Rounds[len(s.Rounds)-1]
 	if !s.State.Finished() {
+		// The pull request is the last thing a passing run does, after the
+		// rounds are over, so it is what is happening by then.
+		switch pr := s.Factory.PullRequest; {
+		case pr == nil:
+		case pr.State == chunkd.PRPushing, pr.State == chunkd.PROpening:
+			return st.dim("Now: the checks passed and the pull request is being opened. Nothing to do yet.")
+		}
 		switch last.State {
 		case chunkd.RoundStarted, chunkd.RoundImplementing:
 			return st.dim("Now: the implementer is making the change. Nothing to do yet.")
@@ -559,6 +600,14 @@ func nextStepLine(st watchStyles, s chunkd.Session) string {
 		}
 		if loopFailed(s) {
 			return st.err(ui.IconFail + " The run ended without its checks passing.")
+		}
+		switch pr := s.Factory.PullRequest; {
+		case pr.Opened():
+			// The pr row below carries the address; a second copy here only
+			// crowds the line out of the pane.
+			return st.success(ui.IconOK + " All checks passed. The pull request is open and ready for review.")
+		case pr != nil && pr.State == chunkd.PRFailed:
+			return st.err(ui.IconFail + " All checks passed, but the pull request could not be opened. The work is on the branch.")
 		}
 		return st.success(ui.IconOK + " All checks passed. The change is ready for you to look at.")
 	case chunkd.SessionRunning:

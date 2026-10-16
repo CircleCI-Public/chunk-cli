@@ -53,6 +53,27 @@ func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, in N
 	return &PullRequest{Number: out.Number, URL: out.HTMLURL}, nil
 }
 
+// OpenPullRequestForBranch is the open pull request whose head is branch on
+// owner/repo, or nil when there is none. It answers the question a refused
+// CreatePullRequest leaves: whether the branch already has one, which a branch
+// pushed a second time does.
+func (c *Client) OpenPullRequestForBranch(ctx context.Context, owner, repo, branch string) (*PullRequest, error) {
+	var out []struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+	}
+	req := hc.NewRequest(http.MethodGet, "/repos/"+owner+"/"+repo+"/pulls",
+		hc.QueryParam("head", owner+":"+branch), hc.QueryParam("state", "open"), hc.QueryParam("per_page", "1"),
+		hc.JSONDecoder(&out))
+	if _, err := c.http.Call(ctx, req); err != nil {
+		return nil, pullRequestErr("look for an open pull request", owner+"/"+repo, err)
+	}
+	if len(out) == 0 || out[0].HTMLURL == "" {
+		return nil, nil
+	}
+	return &PullRequest{Number: out[0].Number, URL: out[0].HTMLURL}, nil
+}
+
 // DefaultBranch is the branch owner/repo's pull requests target by default.
 func (c *Client) DefaultBranch(ctx context.Context, owner, repo string) (string, error) {
 	var out struct {

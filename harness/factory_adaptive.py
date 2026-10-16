@@ -95,8 +95,12 @@ def install_reviews(project: Path, pass_dir: Path, review_paths: list[str]) -> l
 def run_factory(binary: Path, prompt: str, pass_dir: Path, project: Path, profile: dict) -> int:
     # Popen is intentionally kept alive while stderr is streamed to two destinations.
     # pylint: disable=consider-using-with
+    # --no-open-pr: a pass works in a throwaway worktree of the real repository, so
+    # a pass whose checks pass would otherwise push its branch and open a pull
+    # request against it. The work here is scored and discarded.
     command = [str(binary), "factory", "build", "--max-attempts", str(profile["attempts"]), "--json", "--verbose",
-               "--log-file", str(pass_dir / 'factory.log'), "--reviews", ".chunk/factory-eval-reviews",
+               "--no-open-pr", "--log-file", str(pass_dir / 'factory.log'),
+               "--reviews", ".chunk/factory-eval-reviews",
                "--implementer-instructions", profile.get("implementer_instructions", "")]
     for key, flag in (("reviewers", "--reviewers"), ("model", "--model"),
                       ("implement_timeout", "--implement-timeout"), ("review_timeout", "--review-timeout")):

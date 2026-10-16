@@ -438,7 +438,7 @@ POST /factory              {project_root, prompt, reviews_dir?, no_validate?, at
                             open_pr?, draft?}
                            → 202 {id}   (409 a session is active, 404 unknown project,
                                          400 bad request or nothing to check, 503 no credential
-                                         or, with open_pr, no GitHub token)
+                                         or, with pull_request=required, no GitHub token)
 GET  /factory[?root=<path>] → {sessions: [Session...]}, newest first
 GET  /factory/{id}         → SessionDetail: the session plus each round's review findings
 POST /factory/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
@@ -452,12 +452,16 @@ implementer's summary, the diff stat so far), its `reviews` and its validation
 `checks`, and the session's `factory` field names the run's worktree and branch
 and why the loop stopped (`result`: `passed`, `exhausted`, `stuck` or
 `no_change`). A run that ends with its checks still failing is a `done` session
-with a `failed` stage. A request with `open_pr` has the daemon, once the loop
-passes, push the run's branch and open a pull request through its GitHub client
-(`daemon.gh`, the one `cmd/daemon.go` builds from the GitHub token at start); it
-records the outcome as `factory.pull_request` (`state`, `url`, `number`, `base`,
-`message`) and leaves the loop's result alone. The token and an `origin` on
-GitHub are checked when the request is accepted. Only the reviews' commands are
+with a `failed` stage. Once the loop passes, the daemon pushes the run's branch
+and opens a pull request through its GitHub client (`daemon.gh`, the one
+`cmd/daemon.go` builds from the GitHub token at start); it records the outcome
+as `factory.pull_request` (`state`, `url`, `number`, `base`, `message`) and
+leaves the loop's result alone. The token and an `origin` on GitHub are checked
+when the request is accepted: `pull_request=required` refuses a request that has
+neither, and the default records a `skipped` pull request and runs anyway.
+`pull_request=none` pushes nothing. A branch GitHub already has a pull request
+for — a continued run's — is recorded as `opened` with the one it found, since
+the push has just updated it. Only the reviews' commands are
 registered with the output store. The implementer's raw stream-json and the
 validation commands are not yet.
 
