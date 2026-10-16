@@ -456,10 +456,10 @@ with a `failed` stage. A request with `open_pr` has the daemon, once the loop
 passes, push the run's branch and open a pull request through its GitHub client
 (`daemon.gh`, the one `cmd/daemon.go` builds from the GitHub token at start); it
 records the outcome as `factory.pull_request` (`state`, `url`, `number`, `base`,
-`message`) and leaves the loop's result alone. The token and an `origin` on GitHub
-are checked when the request is accepted. Only the reviews' commands are registered with the
-output store. The implementer's raw stream-json and the validation commands are
-not yet.
+`message`) and leaves the loop's result alone. The token and an `origin` on
+GitHub are checked when the request is accepted. Only the reviews' commands are
+registered with the output store. The implementer's raw stream-json and the
+validation commands are not yet.
 
 **The record.** `Session` holds `stages` and `rounds`. The only stage is
 `factory_loop`, whose state is `running | done | failed` and whose note says

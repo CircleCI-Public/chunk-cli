@@ -362,27 +362,29 @@ chunk
   fixed safety prompt, which is useful for controlled harness experiments.
 - **`factory build --open-pr` opens a pull request once the checks pass.** When the
   loop ends with every check passed, the daemon pushes the run's branch to `origin`
-  (with the developer's own git credentials, never prompting) and opens a pull request
-  on GitHub, ready for review; `--draft` opens a draft instead. The title is the
-  prompt's first line, cut between words to 72 characters, and the description holds
-  the request, the diff stat and the checks that passed, with a note when the branch
-  also carries the uncommitted work the run started from. It targets the branch the run was started from if `origin` has
-  it, and the repository's default branch otherwise (a local-only branch, or a factory
-  branch, cannot be a target). A run whose checks did not pass, was cancelled or made
-  no changes pushes nothing and opens nothing. It needs a GitHub token with write
-  access to pull requests (`GITHUB_TOKEN` or `chunk auth set github`, then restart the
-  daemon, which reads it at start) and an `origin` on GitHub; both are checked
-  before the run starts, so a missing one costs nothing. `chunk auth` only checks that
-  a token works, not what it may do, so a read-only token is found when the pull
-  request is refused. An organization with single sign-on also refuses a token until
-  it is authorized there (GitHub's token page, Configure SSO), and the error says so. The branch includes the baseline commit when the run started
-  from uncommitted work, so that commit is part of the pull request. If the checks
-  passed but the pull request could not be opened (a refused token, a pull request that
-  already exists), the work stays committed, and pushed if the push got that far; the
-  command prints why, says where the work is, and exits non-zero. The session's
-  `factory.pull_request` records `state` (`pending`, `pushing`, `opening`, `opened`,
-  `failed` or `skipped`), `url`, `number`, `base` and a `message` for the last two, which
-  is what `chunk watch` reads. Only GitHub is supported.
+  (with the developer's own git credentials, never prompting) and opens a pull
+  request on GitHub, ready for review; `--draft` opens a draft instead. The title is
+  the prompt's first line, cut between words to 72 characters, and the description
+  holds the request, the diff stat and the checks that passed, with a note when the
+  branch also carries the uncommitted work the run started from. It targets the
+  branch the run was started from if `origin` has it, and the repository's default
+  branch otherwise (a local-only branch, or a factory branch, cannot be a target). A
+  run whose checks did not pass, was cancelled or made no changes pushes nothing and
+  opens nothing. It needs a GitHub token with write access to pull requests
+  (`GITHUB_TOKEN` or `chunk auth set github`, then restart the daemon, which reads
+  it at start) and an `origin` on GitHub; both are checked before the run starts, so
+  a missing one costs nothing. `chunk auth` only checks that a token works, not what
+  it may do, so a read-only token is found when the pull request is refused. An
+  organization with single sign-on also refuses a token until it is authorized there
+  (GitHub's token page, Configure SSO), and the error says so. The branch includes
+  the baseline commit when the run started from uncommitted work, so that commit is
+  part of the pull request. If the checks passed but the pull request could not be
+  opened (a refused token, a pull request that already exists), the work stays
+  committed, and pushed if the push got that far; the command prints why, says where
+  the work is, and exits non-zero. The session's `factory.pull_request` records
+  `state` (`pending`, `pushing`, `opening`, `opened`, `failed` or `skipped`), `url`,
+  `number`, `base` and a `message` for the last two, which is what `chunk watch`
+  reads. Only GitHub is supported.
 - **`factory build --continue` picks up a finished run's work.** A run whose checks
   still fail when it ends (exhausted or stuck) prints
   `chunk factory build --continue <run id>`. The continued run reopens the earlier
