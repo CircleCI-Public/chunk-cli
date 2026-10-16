@@ -151,6 +151,25 @@ func TestRecordRoundTrip(t *testing.T) {
 	assert.DeepEqual(t, got, want)
 }
 
+// A run on a per-run sidecar keeps where it is running, with no credentials,
+// so a continue can refuse it.
+func TestRecordRoundTripWithRemote(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := newProject(t)
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+	want := Record{
+		RunID: "run-3", Prompt: "add a flag",
+		Remote: &RemoteRun{SidecarID: "sc-1", CommandID: "cmd-1", HostRepo: "/data/repo"},
+	}
+
+	assert.NilError(t, saveRecord(dataDir, want))
+	got, err := LoadRecord(root, "run-3")
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, want)
+}
+
 func TestLoadRecordFallsBackToTheCheckoutsDataDir(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())

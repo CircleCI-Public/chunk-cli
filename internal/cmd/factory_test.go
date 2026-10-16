@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -15,10 +16,41 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
+
+// putRecord drops rec where chunk factory looks for a run's record, so a test
+// can check --continue against it without running a factory session.
+func putRecord(t *testing.T, root string, rec factory.Record) {
+	t.Helper()
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+	dir := filepath.Join(dataDir, "factory")
+	assert.NilError(t, os.MkdirAll(dir, 0o700))
+	b, err := json.Marshal(rec)
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, rec.RunID+".json"), b, 0o600))
+}
+
+// checkFactoryContinue refuses a run whose work is still on a per-run
+// sidecar: there is nothing local yet to continue.
+func TestCheckFactoryContinueRefusesARunOnASidecar(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := gitrepo.SetupGitRepo(t, "org", "repo")
+
+	putRecord(t, root, factory.Record{
+		RunID: "run-1", Prompt: "add a flag",
+		Remote: &factory.RemoteRun{SidecarID: "sc-1", CommandID: "cmd-1", HostRepo: "/data/repo"},
+	})
+	err := checkFactoryContinue(root, "run-1")
+	assert.ErrorContains(t, err, "is on a sidecar")
+
+	putRecord(t, root, factory.Record{RunID: "run-2", Prompt: "add a flag"})
+	assert.NilError(t, checkFactoryContinue(root, "run-2"))
+}
 
 // TestFactoryChecksOnlyToleratesMissingDefaultReviews guards against a
 // mistyped --reviews silently running no reviews at all.

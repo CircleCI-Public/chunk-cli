@@ -40,6 +40,18 @@ type Record struct {
 	// Result and Rounds are how the run ended, once it has.
 	Result Result `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
+	// Remote is where this run is happening, when it is on a per-run sidecar
+	// rather than local. A local run never sets it.
+	Remote *RemoteRun `json:"remote,omitempty"`
+}
+
+// RemoteRun is where a run that is happening on a per-run sidecar is running,
+// and where that host's checkout of the repository is. It holds no
+// credentials.
+type RemoteRun struct {
+	SidecarID string `json:"sidecar_id"`
+	CommandID string `json:"command_id"`
+	HostRepo  string `json:"host_repo"`
 }
 
 // ParseRunID accepts a run's ID or its branch, as chunk factory prints both.

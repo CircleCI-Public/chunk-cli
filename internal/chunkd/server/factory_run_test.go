@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -342,6 +344,30 @@ func TestStartFactoryRefusesABadRequest(t *testing.T) {
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae), "got %v", err)
 	assert.ErrorContains(t, ae, "nothing to check")
+}
+
+// A run whose record says it is still on a per-run sidecar has no local work
+// to continue, so the daemon refuses it however --continue reaches it.
+func TestStartFactoryRefusesToContinueARunOnASidecar(t *testing.T) {
+	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
+
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+	dir := filepath.Join(dataDir, "factory")
+	assert.NilError(t, os.MkdirAll(dir, 0o700))
+	rec := factory.Record{
+		RunID: "run-1", Prompt: "add a flag",
+		Remote: &factory.RemoteRun{SidecarID: "sc-1", CommandID: "cmd-1", HostRepo: "/data/repo"},
+	}
+	b, err := json.Marshal(rec)
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "run-1.json"), b, 0o600))
+
+	_, err = d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Continue: "run-1"})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae), "got %v", err)
+	assert.Equal(t, ae.status, http.StatusBadRequest)
+	assert.ErrorContains(t, ae, "is on a sidecar")
 }
 
 func TestFeedKeepsTheLatestLinesAndCountsThemAll(t *testing.T) {
