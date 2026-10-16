@@ -218,7 +218,7 @@ The sections below cover the sidecar workflow in more detail. Skip them until yo
 
 ### Syncing
 
-`chunk sidecar sync` mirrors your working tree to the sidecar with rsync over an SSH tunnel, skipping files matched by `.gitignore`. Uncommitted changes are included and later syncs transfer only what changed. The branch does not need to be pushed to GitHub.
+`chunk sidecar sync` mirrors your working tree to the sidecar with rsync over an SSH tunnel, skipping whatever git ignores. Ignored files already on the sidecar, such as a `.venv` it built, are kept between syncs. Uncommitted changes are included and later syncs transfer only what changed. The branch does not need to be pushed to GitHub.
 
 ```bash
 chunk sidecar sync
