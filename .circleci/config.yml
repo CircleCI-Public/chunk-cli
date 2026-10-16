@@ -11,6 +11,10 @@ parameters:
     type: enum
     enum: ["none", "check", "score"]
     default: "none"
+  # Set by the nightly scheduled pipeline to run the docs-sync workflow.
+  docs-sync:
+    type: boolean
+    default: false
 
 jobs:
   lint:
@@ -90,6 +94,24 @@ jobs:
                   echo "OK: project-scope skill content embedded correctly"
                   head -5 .claude/skills/chunk-review/SKILL.md
 
+  docs-sync:
+    docker:
+      - image: cimg/go:1.26-node
+    resource_class: medium
+    steps:
+      - checkout
+      - run: task mod-download
+      - run:
+          name: Install Claude Code and gh
+          command: |
+            npm install --global @anthropic-ai/claude-code
+            curl -fsSL https://github.com/cli/cli/releases/download/v2.63.2/gh_2.63.2_linux_amd64.tar.gz | tar -xz -C /tmp
+            sudo mv /tmp/gh_2.63.2_linux_amd64/bin/gh /usr/local/bin/gh
+      - run:
+          name: Update README and docs, open a PR if they changed
+          command: scripts/docs-sync.sh
+          no_output_timeout: 20m
+
   eval-check-tasks:
     docker:
       - image: cimg/go:1.26-node
@@ -165,7 +187,9 @@ jobs:
 workflows:
   ci:
     when:
-      equal: [none, << pipeline.parameters.eval >>]
+      and:
+        - equal: [none, << pipeline.parameters.eval >>]
+        - not: << pipeline.parameters.docs-sync >>
     jobs:
       - shellcheck/check
       - lint
@@ -181,6 +205,15 @@ workflows:
             - lint
             - test
             - acceptance-test
+
+  # Runs only from the nightly scheduled pipeline (or by hand) that sets
+  # `docs-sync: true`. Opens a PR; never pushes to main.
+  docs-sync:
+    when: << pipeline.parameters.docs-sync >>
+    jobs:
+      - docs-sync:
+          context:
+            - chunk-cli-docs-sync
 
   # The workflows below run only from a scheduled pipeline (or by hand) that sets
   # the `eval` parameter. See harness/README.md, "Running on CI".
