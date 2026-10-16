@@ -100,6 +100,18 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		attempts = DefaultAttempts
 	}
 	record.Attempts = attempts
+	if req.Draft && !req.OpenPR {
+		return chunkd.Session{}, apiErr(http.StatusBadRequest, "draft only applies to a run that opens a pull request")
+	}
+	var pr *pullRequestPlan
+	if req.OpenPR {
+		// Refused now, not after a run that takes minutes: the push and the pull
+		// request come last, and need things the run does not.
+		if pr, err = d.planPullRequest(context.Background(), ps.root, req.Draft); err != nil {
+			return chunkd.Session{}, err
+		}
+		record.PullRequest = &chunkd.PullRequest{State: chunkd.PRPending, Draft: req.Draft}
+	}
 
 	entry, ctx, busy := d.sessions.add(chunkd.Session{
 		ProjectRoot: ps.root,
@@ -110,6 +122,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 	if busy != "" {
 		return chunkd.Session{}, apiErr(http.StatusConflict, "%s", busy)
 	}
+	entry.pr = pr
 	opts := factory.RunOptions{
 		Root:                    ps.root,
 		Prompt:                  prompt,
@@ -159,6 +172,9 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	}
 	rep, err := run(ctx, opts)
 	rec.finish(rep, err)
+	if entry.pr != nil {
+		d.openPullRequest(ctx, entry, opts, rep, err)
+	}
 	d.settleSession(entry, err)
 }
 

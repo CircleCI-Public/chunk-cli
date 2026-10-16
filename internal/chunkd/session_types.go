@@ -197,7 +197,43 @@ type FactoryRun struct {
 	// Progress is what the run said as it went: its sidecars being made
 	// ready and synced, and anything that went wrong cleaning up.
 	Progress Feed `json:"progress,omitzero"`
+	// PullRequest is the pull request the run was asked to open once its checks
+	// passed, nil when it was not asked to.
+	PullRequest *PullRequest `json:"pull_request,omitempty"`
 }
+
+// PullRequest is where a run's pull request has got to.
+type PullRequest struct {
+	// State is one of the PR constants.
+	State string `json:"state"`
+	// Draft is whether it is opened as a draft.
+	Draft bool `json:"draft,omitempty"`
+	// Base is the branch it targets, once known.
+	Base string `json:"base,omitempty"`
+	// URL and Number name the pull request once it is open.
+	URL    string `json:"url,omitempty"`
+	Number int    `json:"number,omitempty"`
+	// Message says why no pull request was tried (PRSkipped) or why it could
+	// not be opened (PRFailed).
+	Message string `json:"message,omitempty"`
+}
+
+// How far a run's pull request has got, as PullRequest.State.
+const (
+	// PRPending means one was asked for and the run has not ended.
+	PRPending = "pending"
+	// PRPushing means the run's branch is being pushed.
+	PRPushing = "pushing"
+	// PROpening means the branch is pushed and the pull request is being opened.
+	PROpening = "opening"
+	// PROpened means the pull request is open.
+	PROpened = "opened"
+	// PRFailed means the run passed but the pull request could not be opened.
+	// Its work is still committed, and pushed if it got that far.
+	PRFailed = "failed"
+	// PRSkipped means the run did not end in a way that earns a pull request.
+	PRSkipped = "skipped"
+)
 
 // Why a factory run's loop stopped, as FactoryRun.Result.
 const (
@@ -402,6 +438,10 @@ type FactoryRequest struct {
 	// to it and implies it; see factory.RunOptions.
 	Log     string `json:"log,omitempty"`
 	Verbose bool   `json:"verbose,omitempty"`
+	// OpenPR asks for the run's branch to be pushed and a pull request opened on
+	// GitHub once every check has passed. Draft opens it as a draft.
+	OpenPR bool `json:"open_pr,omitempty"`
+	Draft  bool `json:"draft,omitempty"`
 }
 
 // SessionStartResponse answers an accepted POST /factory.
