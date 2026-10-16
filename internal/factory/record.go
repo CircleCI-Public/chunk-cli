@@ -102,9 +102,9 @@ func LoadRecord(root, runID string) (Record, error) {
 	return r, nil
 }
 
-// saveRecord writes r to the repository's data directory, replacing what an
+// SaveRecord writes r to the repository's data directory, replacing what an
 // earlier save wrote.
-func saveRecord(dataDir string, r Record) error {
+func SaveRecord(dataDir string, r Record) error {
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode the run's record: %w", err)

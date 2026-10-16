@@ -135,7 +135,7 @@ func TestRecordRoundTrip(t *testing.T) {
 	want := Record{RunID: "run-2", Prompt: "add a flag", Worktree: "/wt", Branch: "chunk/factory/run-1",
 		Baseline: "abc", Head: "def", ContinuesRunID: "run-1", Result: ResultPassed, Rounds: 2}
 
-	assert.NilError(t, saveRecord(dataDir, want))
+	assert.NilError(t, SaveRecord(dataDir, want))
 	got, err := LoadRecord(root, "run-2")
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got, want)
@@ -164,7 +164,7 @@ func TestRecordRoundTripWithRemote(t *testing.T) {
 		Remote: &RemoteRun{SidecarID: "sc-1", CommandID: "cmd-1", HostRepo: "/data/repo"},
 	}
 
-	assert.NilError(t, saveRecord(dataDir, want))
+	assert.NilError(t, SaveRecord(dataDir, want))
 	got, err := LoadRecord(root, "run-3")
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got, want)
@@ -176,7 +176,7 @@ func TestLoadRecordFallsBackToTheCheckoutsDataDir(t *testing.T) {
 	root := newProject(t)
 	legacyDir, err := config.ProjectDataDir(root)
 	assert.NilError(t, err)
-	assert.NilError(t, saveRecord(legacyDir, Record{RunID: "run-1", Prompt: "old"}))
+	assert.NilError(t, SaveRecord(legacyDir, Record{RunID: "run-1", Prompt: "old"}))
 
 	got, err := LoadRecord(root, "run-1")
 	assert.NilError(t, err)
@@ -184,7 +184,7 @@ func TestLoadRecordFallsBackToTheCheckoutsDataDir(t *testing.T) {
 
 	dataDir, err := config.RepoDataDir(root)
 	assert.NilError(t, err)
-	assert.NilError(t, saveRecord(dataDir, Record{RunID: "run-1", Prompt: "new"}))
+	assert.NilError(t, SaveRecord(dataDir, Record{RunID: "run-1", Prompt: "new"}))
 	got, err = LoadRecord(root, "run-1")
 	assert.NilError(t, err)
 	assert.Equal(t, got.Prompt, "new")
