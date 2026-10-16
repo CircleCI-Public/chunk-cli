@@ -39,6 +39,31 @@ func newFactoryCmd() *cobra.Command {
 	return cmd
 }
 
+// checkFactoryBuildFlags rejects flag combinations that cannot run, before the
+// daemon or the project is touched.
+func checkFactoryBuildFlags(cmd *cobra.Command, logFile string, draft, openPR bool, attempts int) error {
+	switch {
+	case cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "":
+		return newUserError("--log-file needs a file.").
+			withCode("command.invalid_flags").
+			withSuggestion("Write --log-file FILE, or --log for the default log.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	case draft && !openPR:
+		return newUserError("--draft needs --open-pr.").
+			withCode("command.invalid_flags").
+			withSuggestion("Write --open-pr --draft to open the pull request as a draft.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	case attempts < 1:
+		return newUserError("--max-attempts must be at least 1.").
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	return nil
+}
+
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, jsonOut, logOn, verbose, openPR, draft bool
@@ -117,25 +142,8 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 					return err
 				}
 			}
-			if cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "" {
-				return newUserError("--log-file needs a file.").
-					withCode("command.invalid_flags").
-					withSuggestion("Write --log-file FILE, or --log for the default log.").
-					withExitCode(ExitBadArgs).
-					withoutDetail()
-			}
-			if draft && !openPR {
-				return newUserError("--draft needs --open-pr.").
-					withCode("command.invalid_flags").
-					withSuggestion("Write --open-pr --draft to open the pull request as a draft.").
-					withExitCode(ExitBadArgs).
-					withoutDetail()
-			}
-			if attempts < 1 {
-				return newUserError("--max-attempts must be at least 1.").
-					withCode("command.invalid_args").
-					withExitCode(ExitBadArgs).
-					withoutDetail()
+			if err := checkFactoryBuildFlags(cmd, logFile, draft, openPR, attempts); err != nil {
+				return err
 			}
 			if err := requireLocalDaemon(); err != nil {
 				return err

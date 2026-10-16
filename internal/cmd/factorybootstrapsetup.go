@@ -236,7 +236,7 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 		Status:  status,
 	}, env)
 	if err != nil {
-		return "", sidecarSetupError(err, run.TokenSource)
+		return "", sidecarSetupError(ctx, err, run.TokenSource)
 	}
 
 	if err := checkClaudeInstalled(ctx, run.Client, run.TokenSource, sc.ID, image); err != nil {
@@ -330,7 +330,7 @@ func snapshotName(run sidecarImageRun) string {
 func checkClaudeInstalled(ctx context.Context, client *circleci.Client, tokenSource, sidecarID, image string) error {
 	session, err := sidecar.OpenSession(ctx, client, sidecarID, false)
 	if err != nil {
-		return sidecarSetupError(fmt.Errorf("open a session on the sidecar: %w", err), tokenSource)
+		return sidecarSetupError(ctx, fmt.Errorf("open a session on the sidecar: %w", err), tokenSource)
 	}
 	// The sidecar's SSH server runs a command without a shell, so the script
 	// gets one of its own, as the setup steps do.
