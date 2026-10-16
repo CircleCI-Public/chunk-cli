@@ -706,7 +706,12 @@ func (m Model) implementRow(st watchStyles, r chunkd.Round, impl *chunkd.RoundIm
 	case chunkd.ImplementRunning:
 		row.icon = m.spinner(st)
 		if !r.StartedAt.IsZero() {
-			row.detail = st.dim(ui.FormatDuration(time.Since(r.StartedAt).Truncate(time.Second)))
+			row.detail = st.dim(strings.Join(ui.TurnFacts(r, time.Now()), " · "))
+		}
+		// What the implementer last said, under the row: what it is doing,
+		// in its own words.
+		if said := impl.Progress.Said; said != "" {
+			row.extra = append(row.extra, "        "+st.muted(truncate(said, max(m.width-leftPaneWidth-16, 20))))
 		}
 	case chunkd.ImplementApplied:
 		row.icon = st.success(ui.IconOK)

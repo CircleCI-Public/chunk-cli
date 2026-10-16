@@ -175,6 +175,27 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 	}
 }
 
+// While the implementer works, its row says what it last did and how much it
+// has done, with what it last said under it.
+func TestRunningImplementerRowShowsItsProgress(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	r.s.Rounds = []chunkd.Round{{
+		Number: 1, State: chunkd.RoundImplementing, StartedAt: time.Now().Add(-2 * time.Minute),
+		Implement: &chunkd.RoundImplement{State: chunkd.ImplementRunning, Progress: chunkd.ImplementProgress{
+			Doing: "Run the tests", Said: "The flag is in; now its test.", Actions: 3, At: time.Now(),
+		}},
+	}}
+	m := sessModel(r)
+	m.selRun = "abc"
+	m.width, m.height = 160, 40
+
+	out := stripANSI(m.render())
+	for _, want := range []string{"implement", "Run the tests · 3 actions", "The flag is in; now its test."} {
+		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+	}
+	assert.Assert(t, !strings.Contains(out, "quiet"), out)
+}
+
 // A finished round opens and closes on Space, from its header or from a row
 // inside it, and the selection stays on the header.
 func TestRoundsOpenAndCloseAndKeepTheSelectionOnTheHeader(t *testing.T) {

@@ -464,7 +464,9 @@ validation commands are not yet.
 **The record.** `Session` holds `stages` and `rounds`. The only stage is
 `factory_loop`, whose state is `running | done | failed` and whose note says
 why the loop stopped. A `Round` carries its implementer turn (`implement`, in
-state `running | applied | empty | failed`), its reviews (the same
+state `running | applied | empty | failed`, with `progress`: the latest thing
+the implementer did and said, its tool count and when it last acted, each kept
+to its latest so a snapshot stays small), its reviews (the same
 `ReviewPrompt` rows `chunk review` draws), finding counts, and a note on how it
 went.
 

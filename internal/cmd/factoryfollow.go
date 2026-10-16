@@ -103,7 +103,15 @@ func printLostFactoryWork(streams iostream.Streams, f *chunkd.FactoryRun) {
 // followSession polls a factory session, reporting what changes, until it
 // ends. Ctrl-C cancels it and follows it until it has wound down.
 func followSession(ctx context.Context, streams iostream.Streams, id string, jsonOut bool) error {
-	rep := newSessionReporter(newStatusFunc(streams))
+	status := newStatusFunc(streams)
+	live := newImplementerLine(streams.Err, status)
+	defer live.clear()
+	// The progress line sits under the status lines, so it comes off the
+	// screen before each one is written.
+	rep := newSessionReporter(func(level iostream.Level, msg string) {
+		live.clear()
+		status(level, msg)
+	})
 	failures := 0
 	ticker := time.NewTicker(sessionPollInterval)
 	defer ticker.Stop()
@@ -115,10 +123,12 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 		var refused *chunkd.SessionRefused
 		switch {
 		case errors.As(err, &refused):
+			live.clear()
 			printLostFactoryWork(streams, lastFactory)
 			return sessionError(err)
 		case err != nil:
 			if failures++; failures >= maxSessionPollFailures {
+				live.clear()
 				printLostFactoryWork(streams, lastFactory)
 				return newUserError("Lost contact with the chunk daemon.").
 					withSuggestion(fmt.Sprintf("Run %s may still be running on the daemon. Follow it in 'chunk watch'.", id)).
@@ -130,12 +140,15 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 				lastFactory = detail.Factory
 			}
 			rep.report(detail)
+			live.update(detail)
 			if detail.State.Finished() {
+				live.clear()
 				return finishFactory(streams, detail, jsonOut)
 			}
 		}
 		select {
 		case <-ctx.Done():
+			live.clear()
 			if err := chunkd.CancelSession(id); err != nil {
 				return sessionError(err)
 			}

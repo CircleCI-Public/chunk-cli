@@ -15,6 +15,7 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -226,6 +227,38 @@ func TestFactorySessionWhoseImplementerFailsRecordsTheTurnFailed(t *testing.T) {
 	assert.Equal(t, round.State, chunkd.RoundFailed)
 	assert.Equal(t, round.Implement.State, chunkd.ImplementFailed)
 	assert.Assert(t, strings.Contains(round.Implement.Error, "claude exited 1"), round.Implement.Error)
+}
+
+// While the implementer works, its turn holds the latest thing it did and said,
+// short, and how many tools it has used. Nothing it does after the turn ends
+// changes them.
+func TestFactorySessionRecordsWhatTheImplementerIsDoing(t *testing.T) {
+	d, root := newFactoryDaemon(t, func(_ context.Context, opts factory.RunOptions) (factory.Report, error) {
+		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1, Prompt: opts.Prompt})
+		opts.OnActivity(claudecode.Activity{Tool: "Read", Detail: "/home/user/repo/internal/strs.go"})
+		opts.OnActivity(claudecode.Activity{Detail: "\n  I'll add the flag, then a test.\nIt goes in root.go."})
+		opts.OnActivity(claudecode.Activity{Tool: "Bash", Detail: "cd /home/user/repo; go test ./...", Description: "Run the tests"})
+		opts.OnEvent(factory.Event{Kind: factory.EventImplemented, Round: 1, Turn: factory.Turn{Summary: "added it"}})
+		opts.OnActivity(claudecode.Activity{Tool: "Bash", Detail: "late"})
+		return factory.Report{Started: true}, errors.New("stop here")
+	})
+
+	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+
+	p := detail.Rounds[0].Implement.Progress
+	assert.Equal(t, p.Doing, "Run the tests")
+	assert.Equal(t, p.Said, "I'll add the flag, then a test.")
+	assert.Equal(t, p.Actions, 2)
+	assert.Assert(t, !p.At.IsZero())
+}
+
+func TestActivityDoingFallsBackToTheToolAndItsTarget(t *testing.T) {
+	assert.Equal(t, activityDoing(claudecode.Activity{Tool: "Edit", Detail: "/repo/internal/strs.go"}), "Edit strs.go")
+	assert.Equal(t, activityDoing(claudecode.Activity{Tool: "Bash", Detail: "go  test\n ./..."}), "Bash go test ./...")
+	assert.Equal(t, activityDoing(claudecode.Activity{Tool: "TodoWrite"}), "TodoWrite")
+	assert.Equal(t, clip(strings.Repeat("é", 10), 5), "éééé…")
 }
 
 func TestFactorySessionCanBeCancelled(t *testing.T) {

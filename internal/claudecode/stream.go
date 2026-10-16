@@ -12,6 +12,9 @@ type Activity struct {
 	Tool string
 	// Detail is the tool's target (a file, a command) or the text.
 	Detail string
+	// Description is what claude said a tool call is for, such as "Run the
+	// tests", when the tool takes one. Bash does.
+	Description string
 }
 
 // structuredOutputTool is the tool Claude Code answers through when a schema
@@ -131,7 +134,7 @@ func (s *Stream) line(b []byte) {
 					s.onActivity(Activity{Detail: t})
 				}
 			case c.Type == "tool_use" && c.Name != structuredOutputTool:
-				s.onActivity(Activity{Tool: c.Name, Detail: toolDetail(c.Input)})
+				s.onActivity(Activity{Tool: c.Name, Detail: toolDetail(c.Input), Description: toolDescription(c.Input)})
 			}
 		}
 	}
@@ -149,4 +152,15 @@ func toolDetail(input json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+// toolDescription is the description claude gave a tool call, or "".
+func toolDescription(input json.RawMessage) string {
+	var in struct {
+		Description string `json:"description"`
+	}
+	if json.Unmarshal(input, &in) != nil {
+		return ""
+	}
+	return strings.TrimSpace(in.Description)
 }

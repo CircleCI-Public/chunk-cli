@@ -90,6 +90,24 @@ type RoundImplement struct {
 	// Stat summarizes the work so far against the run's baseline.
 	Stat  string `json:"stat,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Progress is what the turn has done so far, for a display to show while
+	// it runs.
+	Progress ImplementProgress `json:"progress,omitzero"`
+}
+
+// ImplementProgress is what an implementer turn has done so far. Each field
+// holds only the latest of its kind, so it stays the same size however long
+// the turn runs; the run's log keeps everything.
+type ImplementProgress struct {
+	// Doing is the last thing the implementer did, said short: a command's
+	// own description of itself, or the tool and what it acted on.
+	Doing string `json:"doing,omitempty"`
+	// Said is the first line of the last thing the implementer wrote.
+	Said string `json:"said,omitempty"`
+	// Actions counts the tools the implementer has used.
+	Actions int `json:"actions,omitempty"`
+	// At is when the implementer last did or said anything.
+	At time.Time `json:"at,omitzero"`
 }
 
 // Feed is the latest lines of a stream that can run long, such as a run's
