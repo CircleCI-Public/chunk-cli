@@ -274,10 +274,16 @@ func tail(s string, n int) string {
 // sh does not have on PATH.
 func Script(repoPath, prompt string, args []string) string {
 	encoded := base64.StdEncoding.EncodeToString([]byte(prompt))
+	return fmt.Sprintf("%s\ncd %s && echo %s | base64 -d | %s",
+		InstalledScript(), sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
+}
+
+// InstalledScript is a shell script that puts claude on PATH, as Script does,
+// and exits ExitMissing when there is no claude to put there. It checks that a
+// sidecar can run claude before anything relies on it.
+func InstalledScript() string {
 	return fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
-command -v claude >/dev/null 2>&1 || exit %d
-cd %s && echo %s | base64 -d | %s`,
-		ExitMissing, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
+command -v claude >/dev/null 2>&1 || exit %d`, ExitMissing)
 }
 
 // defaultBaseURL is where claude sends requests when no base URL is set.

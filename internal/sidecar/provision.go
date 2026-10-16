@@ -37,6 +37,10 @@ type ProvisionOptions struct {
 	Sidecar func(context.Context) (string, error)
 	// SkipSync leaves the sidecar's copy of the project as it is.
 	SkipSync bool
+	// Workspace is where the project is synced to and its setup steps run,
+	// for a sidecar that is not the active one. Empty uses the active
+	// sidecar's workspace, and saves the one the sync picks there.
+	Workspace string
 	// EnvVars are set for each setup step.
 	EnvVars map[string]string
 	// Streams receives the setup steps' output.
@@ -56,12 +60,16 @@ func Provision(ctx context.Context, opts ProvisionOptions, env *envbuilder.Envir
 		return err
 	}
 
-	var ws string
+	ws := opts.Workspace
 	if opts.SkipSync {
-		ws = savedWorkspace(ctx, sidecarID)
+		if ws == "" {
+			ws = savedWorkspace(ctx, sidecarID)
+		}
 	} else {
 		opts.Status(iostream.LevelStep, "Syncing files to sidecar...")
-		ws, err = rsyncTo(ctx, opts.Client, sidecarID, "", opts.Dir, true, false, opts.Status)
+		// A given workspace is another sidecar's, so the sync must not touch
+		// the active sidecar file.
+		ws, err = rsyncTo(ctx, opts.Client, sidecarID, opts.Workspace, opts.Dir, opts.Workspace == "", false, opts.Status)
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrSync, err)
 		}

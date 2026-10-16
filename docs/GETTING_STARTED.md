@@ -510,7 +510,7 @@ See [docs/HOOKS.md](HOOKS.md) for configuration details and [Result Caching](HOO
 
 ## Review prompts
 
-An additional tool, independent of the sidecar workflow above. `chunk factory bootstrap` has Claude Code read your project on a sidecar and write review prompts for it, one file per area in `.chunk/reviews/`. Run it once, read and edit what it writes, and commit it.
+An additional tool, independent of the sidecar workflow above. `chunk factory bootstrap` sets a project up for `chunk factory` in one command. It writes `.chunk/config.json` if there is none, sets up a sidecar with your project's environment, on an image that has Claude Code since `chunk factory` runs Claude there, and records a snapshot of it as `validation.sidecarImage` (`--skip-sidecar` leaves this out), and has Claude Code read your project on a sidecar and write review prompts for it, one file per area in `.chunk/reviews/`. It prints what it will do first and leaves out any part already done, so running it again finishes a setup that stopped partway. Read and edit the prompts it writes, and commit them with the config.
 
 ```bash
 chunk factory bootstrap

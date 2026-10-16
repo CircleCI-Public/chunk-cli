@@ -272,11 +272,11 @@ func newSidecarCreateCmd() *cobra.Command {
 				if err := notAuthorized("create sidecars", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
-				if err := sidecarCreateRejected("Could not create the sidecar.", resolvedOrgID, orgSource(orgID, cwd), image, imageSource, err); err != nil {
+				if err := sidecarCreateRejected(msgCouldNotCreateSidecar, resolvedOrgID, orgSource(orgID, cwd), image, imageSource, err); err != nil {
 					return err
 				}
 				return &userError{
-					msg:        "Could not create the sidecar.",
+					msg:        msgCouldNotCreateSidecar,
 					suggestion: suggestionNetworkRetry,
 					err:        err,
 				}
@@ -1313,7 +1313,7 @@ func sidecarSetupResolveSidecar(
 			return "", "", authErr
 		}
 		return "", "", &userError{
-			msg:        "Could not create the sidecar.",
+			msg:        msgCouldNotCreateSidecar,
 			suggestion: suggestionNetworkRetry,
 			err:        err,
 		}

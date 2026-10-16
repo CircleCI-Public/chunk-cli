@@ -58,6 +58,14 @@ func TestReviewNoPrompts(t *testing.T) {
 // fake CircleCI whose sidecars answer every exec with resp.
 func setupReviewProject(t *testing.T, resp *fakes.ExecResponse, prompts ...string) (*testenv.TestEnv, *fakes.FakeCircleCI, string) {
 	t.Helper()
+	env, cci, _, workDir := setupReviewProjectWithSSH(t, resp, prompts...)
+	return env, cci, workDir
+}
+
+// setupReviewProjectWithSSH is setupReviewProject, also returning the SSH
+// server the sidecars' commands run through.
+func setupReviewProjectWithSSH(t *testing.T, resp *fakes.ExecResponse, prompts ...string) (*testenv.TestEnv, *fakes.FakeCircleCI, *fakes.SSHServer, string) {
+	t.Helper()
 	env := testenv.NewTestEnv(t)
 	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
 
@@ -77,7 +85,7 @@ func setupReviewProject(t *testing.T, resp *fakes.ExecResponse, prompts ...strin
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeChunkConfig(t, workDir, nil)
 	writePrompts(t, filepath.Join(workDir, ".chunk", "reviews"), prompts...)
-	return env, cci, workDir
+	return env, cci, sshSrv, workDir
 }
 
 func TestReviewRunsEachPromptOnPool(t *testing.T) {

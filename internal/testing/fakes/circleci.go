@@ -145,6 +145,14 @@ func (f *FakeCircleCI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.Handler.ServeHTTP(w, r)
 }
 
+// AddSnapshot adds a snapshot to the org's list while the server is running,
+// which assigning to Snapshots would race with.
+func (f *FakeCircleCI) AddSnapshot(s Snapshot) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Snapshots = append(f.Snapshots, s)
+}
+
 func NewFakeCircleCI() *FakeCircleCI {
 	r, rec := newRouter()
 	f := &FakeCircleCI{
@@ -686,6 +694,14 @@ func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {
 	sidecarID := body.Data.References.SidecarInstance.ID
 
 	f.mu.Lock()
+	// Snapshot names are unique in an org, as the real API holds them to.
+	for _, s := range f.Snapshots {
+		if s.Name == body.Data.Attributes.Name {
+			f.mu.Unlock()
+			c.JSON(http.StatusConflict, gin.H{"error": gin.H{"id": "trace-1", "title": "a snapshot with this name already exists"}})
+			return
+		}
+	}
 	f.snapshotCounter++
 	snap := Snapshot{
 		ID:   fmt.Sprintf("snap-%d", f.snapshotCounter),

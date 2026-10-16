@@ -6,6 +6,7 @@ const (
 	msgCouldNotAccessConfig     = "Could not access configuration."
 	msgCouldNotDetermineWorkDir = "Could not determine working directory."
 	msgCouldNotLoadSidecar      = "Could not load the active sidecar."
+	msgCouldNotCreateSidecar    = "Could not create the sidecar."
 	msgHomeNotSet               = "HOME environment variable is not set."
 	errMsgHomeNotSet            = "HOME not set"
 	msgValidateNotConfigured    = "No validate commands configured."

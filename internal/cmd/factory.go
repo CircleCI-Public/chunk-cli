@@ -39,6 +39,31 @@ func newFactoryCmd() *cobra.Command {
 	return cmd
 }
 
+// checkFactoryBuildFlags rejects flag combinations that cannot run, before the
+// daemon or the project is touched.
+func checkFactoryBuildFlags(cmd *cobra.Command, logFile string, draft, openPR bool, attempts int) error {
+	switch {
+	case cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "":
+		return newUserError("--log-file needs a file.").
+			withCode("command.invalid_flags").
+			withSuggestion("Write --log-file FILE, or --log for the default log.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	case draft && !openPR:
+		return newUserError("--draft needs --open-pr.").
+			withCode("command.invalid_flags").
+			withSuggestion("Write --open-pr --draft to open the pull request as a draft.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	case attempts < 1:
+		return newUserError("--max-attempts must be at least 1.").
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	return nil
+}
+
 func newFactoryBuildCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, jsonOut, logOn, verbose, openPR, draft bool
@@ -117,25 +142,8 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 					return err
 				}
 			}
-			if cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "" {
-				return newUserError("--log-file needs a file.").
-					withCode("command.invalid_flags").
-					withSuggestion("Write --log-file FILE, or --log for the default log.").
-					withExitCode(ExitBadArgs).
-					withoutDetail()
-			}
-			if draft && !openPR {
-				return newUserError("--draft needs --open-pr.").
-					withCode("command.invalid_flags").
-					withSuggestion("Write --open-pr --draft to open the pull request as a draft.").
-					withExitCode(ExitBadArgs).
-					withoutDetail()
-			}
-			if attempts < 1 {
-				return newUserError("--max-attempts must be at least 1.").
-					withCode("command.invalid_args").
-					withExitCode(ExitBadArgs).
-					withoutDetail()
+			if err := checkFactoryBuildFlags(cmd, logFile, draft, openPR, attempts); err != nil {
+				return err
 			}
 			if err := requireLocalDaemon(); err != nil {
 				return err
@@ -144,14 +152,20 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return err
 			}
-			cfg, err := config.LoadProjectConfig(root)
+			cfg, err := loadFactoryConfig(root)
 			if err != nil {
-				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err, blocked: true}
+				return err
 			}
 			// The daemon loads these itself; loading them here first explains a
 			// mistake before anything starts.
 			if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
 				return err
+			}
+			// Not an error: a project whose commands need nothing installed
+			// runs fine on the default image. But one that does fails every
+			// round on a missing toolchain, so say why up front.
+			if image == "" && !cfg.HasSidecarImage() {
+				streams.ErrPrintln(ui.Dim("No validation.sidecarImage, so sidecars start from the default image. 'chunk factory bootstrap' sets one up."))
 			}
 			if continueRun != "" {
 				if err := checkFactoryContinue(root, continueRun); err != nil {
@@ -367,6 +381,20 @@ func checkFactoryContinue(root, run string) error {
 			withoutDetail()
 	}
 	return &userError{msg: fmt.Sprintf("Could not read factory run %s.", factory.ParseRunID(run)), err: err}
+}
+
+// loadFactoryConfig loads the project's config, pointing a project that has
+// none at bootstrap. One that is there but cannot be read is reported as such:
+// bootstrap would refuse it too, so it is not the way out.
+func loadFactoryConfig(root string) (*config.ProjectConfig, error) {
+	cfg, err := loadBootstrapConfig(root)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, &userError{msg: msgValidateNotConfigured, suggestion: "Run 'chunk factory bootstrap' to set the project up for chunk factory, or 'chunk init' for chunk validate alone.", err: os.ErrNotExist, hideDetail: true, blocked: true}
+	}
+	return cfg, nil
 }
 
 // factoryChecks loads what the implementer's work is checked with: the review

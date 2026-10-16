@@ -41,6 +41,9 @@ type SSHServer struct {
 	// runLocally, when set, executes each command on this machine instead of
 	// returning a canned result.
 	runLocally bool
+	// localOverride answers the commands it handles when runLocally is set,
+	// instead of running them.
+	localOverride func(command string) (stdout string, exitCode int, ok bool)
 }
 
 // GenerateSSHKeypair generates an ed25519 keypair, writes the private and public
@@ -218,6 +221,16 @@ func (s *SSHServer) RunLocally() {
 	s.runLocally = true
 }
 
+// OverrideLocally answers each command fn handles with the stdout and exit
+// code it returns, rather than running it on this machine as RunLocally does.
+// Use it for a command whose result would depend on what this machine has
+// installed.
+func (s *SSHServer) OverrideLocally(fn func(command string) (stdout string, exitCode int, ok bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.localOverride = fn
+}
+
 // Commands returns a copy of all exec command strings received so far.
 func (s *SSHServer) Commands() []string {
 	s.mu.Lock()
@@ -317,12 +330,17 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		exitCode := s.exitCode
 		resultFn := s.resultFn
 		runLocally := s.runLocally
+		localOverride := s.localOverride
 		s.mu.Unlock()
 
 		if req.WantReply {
 			_ = req.Reply(true, nil)
 		}
-		if runLocally {
+		overridden := false
+		if runLocally && localOverride != nil {
+			stdout, exitCode, overridden = localOverride(cmd)
+		}
+		if runLocally && !overridden {
 			exitCode = runCommand(ch, cmd)
 			exitPayload := make([]byte, 4)
 			binary.BigEndian.PutUint32(exitPayload, uint32(exitCode)) //nolint:gosec // exit codes are 0-255
@@ -332,7 +350,7 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		}
 		// Called after the lock is released so a resultFn that blocks — standing in
 		// for a command that never returns — does not stall the whole server.
-		if resultFn != nil {
+		if resultFn != nil && !overridden {
 			stdout, exitCode = resultFn(cmd)
 		}
 		if stdout != "" {

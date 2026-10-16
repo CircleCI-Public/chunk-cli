@@ -164,10 +164,12 @@ chunk
 │   ├── start [prompt|-]            # Hand the factory a diff and a prompt to refine
 │   │   --diff <file|->             # Start from a patch of work done elsewhere
 │   │   --json                      # Output as JSON
-│   ├── bootstrap                   # Write a first set of review prompts for this project
+│   ├── bootstrap                   # Set up this project for chunk factory: config, sidecar image, review prompts
 │   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
+│   │   --skip-sidecar              # Leave out setting up and recording the sidecar image
+│   │   --snapshot-name <name>      # Name the sidecar image's snapshot (default: <repo>-<YYYY-MM-DD>-<HHMMSS>)
 │   │   --org-id <id>               # Organization ID
-│   │   --image <id>                # Sidecar image with Claude Code (default: cimg-base:2026.09-claude)
+│   │   --image <id>                # Image with Claude Code, for both sidecars (default: cimg-base:2026.09-claude)
 │   │   --model <name>              # Claude model (default: Claude Code's default)
 │   │   --timeout <duration>        # Max time for writing the prompts (default: 30m)
 │   │   --no-history                # Leave out the team's review comments from GitHub
@@ -437,7 +439,42 @@ chunk
   new way to make a first pass does. Only the worktree's path goes to stdout,
   so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the record
   instead.
-- **`factory bootstrap` writes a project's first review prompts.** It runs
+- **`factory bootstrap` sets a project up for `chunk factory`.** It plans
+  three parts, prints the plan, and leaves out each part already done, so a
+  rerun finishes a setup that stopped partway; with nothing left to do it fails
+  as it does for existing prompts. Without `.chunk/config.json` it detects the
+  VCS, the validation commands and the org and writes the config, as
+  `chunk init` does, but without init's hooks, skills and completions, which
+  are for `chunk validate`. Without `validation.sidecarImage` (and unless
+  `--skip-sidecar`), it does what `sidecar setup` and then `sidecar snapshot
+  create` do, on a sidecar of its own rather than the active one: it starts the
+  sidecar from `cimg-base:2026.09-claude` (or `--image`) rather than the
+  provisioner's default `cimg-base`, which has no Claude Code, since
+  `chunk factory` runs its implementer and reviewers as Claude Code on sidecars
+  made from the snapshot. It syncs the project to `/home/user/<repo>`, runs the
+  environment's setup steps, checks that `claude` is on the sidecar's `PATH`
+  (with `~/.local/bin`, as every Claude run does) and stops without a snapshot
+  when it is not, then snapshots the sidecar as `<repo>-<YYYY-MM-DD>-<HHMMSS>` (`--snapshot-name` picks
+  another; a name the org already has is explained rather than left as a bare
+  409, and is looked for before the sidecar is made), records the snapshot as
+  `validation.sidecarImage`, marks the install and gate commands remote, and
+  deletes the sidecar.
+  An environment with no setup steps gets no sidecar or snapshot: it warns and
+  the default image stays. `--json` reports the snapshot as `sidecar_image`.
+  The sidecar image is set up first, its setup steps' output shown on stderr
+  as they run, and the review prompts are written after it. A sidecar image
+  that fails does not stop the prompts: it is warned of, the prompts are
+  written, and the command then fails with it, so a rerun has only the image
+  left to do. An image without Claude Code, or an interrupted run, stops the
+  prompts too, since they would fail the same way. With `--json`, what one part
+  made is reported even when the other fails.
+  Existing review prompts in `.chunk/reviews` are left out of the run; in an
+  `--output` directory they are an error. A prompts directory that cannot be read is
+  an error rather than taken for one with prompts. The plan is worked out from
+  local files and flags alone, so it is shown before any login prompt: without
+  a GitHub token it says up front that the team's review comments are left out.
+  A Claude credential is required even when the prompts exist, since
+  `chunk factory build` runs Claude on every change. The review prompts part runs
   Claude Code once, read-only, on a sidecar of its own (pool
   `factory-bootstrap`, destroyed when it ends). The sidecar runs the system image
   `cimg-base:2026.09-claude`, not the project's `validation.sidecarImage`:
