@@ -138,8 +138,10 @@ chunk factory bootstrap
 # Implement a prompt, then review and validate it until it passes
 chunk factory build "add a --verbose flag"
 
-# Or start from a diff of your own and have the factory refine it
-chunk factory start "add a --verbose flag"
+# Or make a first pass yourself in the run's worktree, then have the factory refine it
+cd "$(chunk factory start "add a --verbose flag")"
+# ...work on it...
+chunk factory build --continue <run-id>
 ```
 
 `factory bootstrap` only writes prompts when `.chunk/reviews/` has none, and the prompts are a starting point: read and edit them before relying on them.
