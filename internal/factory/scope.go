@@ -26,6 +26,10 @@ A change that meets the request and has no demonstrated problem should come back
 
 Report a given problem once.`
 
+// SeverityRubric is the rubric every review is held to, for whatever judges
+// reviews by the bar they were given, such as eval's grader.
+const SeverityRubric = severityScope
+
 // priorRound is what one reviewer found in one round, and how the implementer
 // answered. Each round's reviewer starts fresh, so without this a finding the
 // implementer already answered comes back, or the advice changes between rounds.

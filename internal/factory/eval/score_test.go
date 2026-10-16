@@ -145,7 +145,8 @@ func TestScoreRecordsReviewsThatFailed(t *testing.T) {
 
 func TestSummarize(t *testing.T) {
 	flag := Case{Name: "flag", Expect: []Expected{{File: "a.go", About: "bug"}, {File: "b.go", About: "untested"}}}
-	clean := Case{Name: "clean"}
+	clean := Case{Name: "clean", Clean: true}
+	unlabeled := Case{Name: "unlabeled"}
 	results := []CaseResult{
 		Score(flag, 1, []review.Result{
 			reviewed("bugs", finding("a.go", 1, review.SeverityHigh), finding("a.go", 2, review.SeverityHigh)),
@@ -157,31 +158,37 @@ func TestSummarize(t *testing.T) {
 		}),
 		Score(clean, 2, []review.Result{reviewed("bugs"), reviewed("tests", finding("c.go", 1, review.SeverityLow))}),
 		Score(clean, 3, []review.Result{reviewed("bugs"), {Prompt: "tests", Error: "timed out"}}),
+		// Unlabeled, its problem counts as reported but neither for nor
+		// against the labels.
+		Score(unlabeled, 1, []review.Result{reviewed("bugs", finding("d.go", 1, review.SeverityHigh)), reviewed("tests")}),
 	}
 
 	s := Summarize([]string{"bugs", "tests", "quiet"}, results)
 
-	assert.Equal(t, s.Runs, 4)
-	assert.Equal(t, s.Scored, 3)
+	assert.Equal(t, s.Runs, 5)
+	assert.Equal(t, s.Scored, 4)
+	assert.Equal(t, s.Labeled, 3)
 	assert.Equal(t, s.Errored, 1)
 	assert.Equal(t, s.Expected, 2)
 	assert.Equal(t, s.Caught, 1)
 	assert.Equal(t, *s.Recall, 0.5)
-	assert.Equal(t, s.Blocking, 5)
-	assert.Equal(t, s.Reported, 2)
+	assert.Equal(t, s.Blocking, 6)
+	assert.Equal(t, s.Reported, 3)
+	assert.Equal(t, s.ReportedLabeled, 2)
 	assert.Equal(t, s.Unexpected, 1)
 	assert.Equal(t, s.Repeats, 3)
 	assert.Equal(t, s.Shared, 2)
 	assert.Equal(t, *s.Precision, 0.5)
 	assert.Equal(t, s.Clean, 2)
 	assert.Equal(t, s.CleanPassed, 1)
-	assert.DeepEqual(t, *s.Prompts["bugs"], PromptSummary{Blocking: 3, Caught: 1, Unexpected: 1, OnClean: 1, Shared: 2})
+	assert.DeepEqual(t, *s.Prompts["bugs"], PromptSummary{Blocking: 4, Caught: 1, Unexpected: 1, OnClean: 1, Shared: 2})
 	assert.DeepEqual(t, *s.Prompts["tests"], PromptSummary{Blocking: 2, Caught: 1, Unexpected: 1, OnClean: 1, Shared: 2, Errors: 1})
 	assert.DeepEqual(t, *s.Prompts["quiet"], PromptSummary{})
+	assert.Assert(t, s.Graded == nil)
 }
 
 func TestSummarizeLeavesRatiosOutWithNothingToDivideBy(t *testing.T) {
-	s := Summarize([]string{"bugs"}, []CaseResult{Score(Case{Name: "clean"}, 1, []review.Result{reviewed("bugs")})})
+	s := Summarize([]string{"bugs"}, []CaseResult{Score(Case{Name: "clean", Clean: true}, 1, []review.Result{reviewed("bugs")})})
 	assert.Assert(t, s.Recall == nil)
 	assert.Assert(t, s.Precision == nil)
 	assert.Equal(t, s.CleanPassed, 1)

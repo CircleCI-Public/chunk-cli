@@ -55,14 +55,16 @@
       "revision": "e3a4d8aa7278de038dc710d020803b3fe82c7e56",
       "request": "Report a too-long watch daemon socket path up front (#654)\n\nA Unix socket path is limited to 104 bytes on macOS and 108 on Linux. When\nthe daemon directory made it longer, the daemon died with 'bind: invalid\nargument' in its log and the CLI only said it did not start within 5s.\nSocketPath now refuses such a path and names the path, its length, the limit\nand the fix (set CHUNK_WATCHD_DIR to a shorter directory).",
       "patch": "patches/daemon-socket-path.patch",
-      "source": "#654, commit 68c8bfe1"
+      "source": "#654, commit 68c8bfe1",
+      "clean": true
     },
     {
       "name": "init-hook-symlink",
       "revision": "460249d854344cefe9f492769dde68d4685c789a",
       "request": "init: skip pre-commit hook when it is a symlink (#616)\n\nWhen chunk init finds an existing .git/hooks/pre-commit it now calls\nos.Lstat (not os.Stat) before any write. If the path is a symlink \u2014\nas installed by hook managers like husky, lefthook, or pre-commit \u2014\nthe function warns and returns without touching the file. Previously\nos.WriteFile would silently replace the symlink with a regular file,\nbreaking the hook manager's setup.",
       "patch": "patches/init-hook-symlink.patch",
-      "source": "#616, commit 13416b75"
+      "source": "#616, commit 13416b75",
+      "clean": true
     }
   ]
 }
