@@ -18,8 +18,8 @@ type keyMap struct {
 	Search      key.Binding
 	// Keep and Clear end a search: Enter keeps its filter, Esc drops it.
 	Keep, Clear key.Binding
-	// The new run's step keys are written "key = action", so a new user
-	// reads them as the key to press. New opens a prompt for Claude to draft
+	// The new run's step keys are drawn bold in the accent colour, so a new
+	// user reads them as the key to press. New opens a prompt for Claude to draft
 	// a change, and Send and Discard
 	// end it: Enter has Claude draft it, Esc drops the prompt. StopDraft stops
 	// Claude while it drafts. Once the draft is shown, ViewDiff opens its
@@ -55,12 +55,12 @@ func (m Model) keys() keyMap {
 		Clear:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "clear")),
 		Details:   key.NewBinding(key.WithKeys("d", "i"), key.WithHelp("d", "details")),
 		New:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new run")),
-		Send:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "= go to step 2")),
-		Discard:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "= cancel")),
-		StopDraft: key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "= stop Claude")),
-		ViewDiff:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "= view the draft's diff")),
-		SendDraft: key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "= send to factory (last step)")),
-		KeepDraft: key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "= keep for later")),
+		Send:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "go to step 2")),
+		Discard:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "cancel")),
+		StopDraft: key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "stop Claude")),
+		ViewDiff:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "view the draft's diff")),
+		SendDraft: key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "send to factory (last step)")),
+		KeepDraft: key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "keep for later")),
 		Cancel:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
 		Back:      key.NewBinding(key.WithKeys("esc")),
 		Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
@@ -78,7 +78,7 @@ func (m Model) keys() keyMap {
 	k.SendDraft.SetEnabled(changed)
 	k.KeepDraft.SetEnabled(m.draft == draftReady)
 	if m.draft == draftReady && !changed {
-		k.KeepDraft.SetHelp("Esc", "= close")
+		k.KeepDraft.SetHelp("Esc", "close")
 	}
 	k.Left.SetEnabled(right)
 	k.Right.SetEnabled(!right && run != nil)

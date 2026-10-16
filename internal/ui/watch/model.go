@@ -654,7 +654,13 @@ func (m Model) renderFooter(st watchStyles) string {
 	// fixed-height reasoning as the notice below: a wrapped footer costs a line
 	// the layout did not budget for, which is worse than a hint the reader can
 	// find by pressing the key.
-	bar := newHelp(st, m.width-2).View(m.keys())
+	help := newHelp(st, m.width-2)
+	if m.draft != draftNone {
+		// A new run's keys are the ones a new user is told to press, so they
+		// stand out from the actions they name.
+		help.Styles.ShortKey = st.Teal.Bold(true)
+	}
+	bar := help.View(m.keys())
 	// help adds a hint that overflows when there is no room left for its
 	// ellipsis, so the clip below is still needed.
 	bar = clip(bar, m.width-2)
