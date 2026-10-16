@@ -14,8 +14,8 @@ import (
 // The run pane reads top to bottom as the run does: what was asked, where the
 // run stands, each round, then where the work ended up. Rounds that are done
 // collapse to a line, so the one that matters — the latest, or on a run that
-// ended failing the one that failed — has the room. What the run runs on
-// (worktree, sidecars, what it said while setting up) is behind "infra".
+// ended failing the one that failed — has the room. Where the run put its work
+// and what it said while setting up are behind "details".
 
 // maxGoalLines caps how much of the prompt the pane spends lines on.
 const maxGoalLines = 3
@@ -709,48 +709,32 @@ func nextStepLine(st watchStyles, s chunkd.Session) string {
 	return ""
 }
 
-// runDetailLines are what the run runs on: its worktree, what it said while
-// setting up and its sidecars. They are the least of what a person watching a
-// run wants, so they stay folded until asked for.
+// runDetailLines are where the run put its work and what it said while setting
+// up. They are the least of what a person watching a run wants, so they stay
+// folded until asked for.
 func (m Model) runDetailLines(st watchStyles, run sessionInfo) []string {
-	s := run.s
-	var lines []string
-	if f := s.Factory; f != nil {
-		if f.Worktree != "" && !f.WorktreeRemoved {
-			lines = append(lines, "    "+st.vdim("worktree ")+st.dim(f.Worktree))
-		}
-		if f.Log != "" {
-			lines = append(lines, "    "+st.vdim("log      ")+st.dim(f.Log))
-		}
-		if len(f.KeptSidecars) > 0 {
-			lines = append(lines, "    "+st.vdim("kept     ")+st.dim(strings.Join(f.KeptSidecars, ", ")))
-		}
-		if feed := f.Progress.Lines; len(feed) > 0 {
-			lines = append(lines, "    "+st.vdim("progress"))
-			for _, l := range feed[max(len(feed)-5, 0):] {
-				lines = append(lines, "      "+feedText(st, l))
-			}
-		}
+	f := run.s.Factory
+	if f == nil {
+		return nil
 	}
-	if scs := m.runSidecars[s.ID]; len(scs) > 0 {
-		lines = append(lines, "    "+st.vdim("sidecars"))
-		for _, sc := range scs {
-			name := sc.name
-			if name == "" {
-				name = sc.id
-			}
-			line := "      " + st.muted(name) + "  " + st.vdim(shortUUID(sc.id)) + "  " + m.rowStatus(st, sc)
-			if res := renderResources(st, sc.resources); res != "" {
-				line += "  " + res
-			}
-			lines = append(lines, line)
+	var lines []string
+	if f.Worktree != "" && !f.WorktreeRemoved {
+		lines = append(lines, "    "+st.vdim("worktree ")+st.dim(f.Worktree))
+	}
+	if f.Log != "" {
+		lines = append(lines, "    "+st.vdim("log      ")+st.dim(f.Log))
+	}
+	if feed := f.Progress.Lines; len(feed) > 0 {
+		lines = append(lines, "    "+st.vdim("progress"))
+		for _, l := range feed[max(len(feed)-5, 0):] {
+			lines = append(lines, "      "+feedText(st, l))
 		}
 	}
 	if len(lines) == 0 {
 		return nil
 	}
 	if !m.runDetails {
-		return []string{"", "  " + st.vdim("▸ infra")}
+		return []string{"", "  " + st.vdim("▸ details")}
 	}
-	return append([]string{"", "  " + st.vdim("▾ infra")}, lines...)
+	return append([]string{"", "  " + st.vdim("▾ details")}, lines...)
 }

@@ -30,7 +30,7 @@ func newWatchCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "watch [dir...]",
-		Short:        "Live dashboard for active pools and recent activity",
+		Short:        "Live dashboard of chunk factory build runs",
 		SilenceUsage: true,
 		Args:         cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

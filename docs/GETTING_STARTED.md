@@ -276,101 +276,6 @@ chunk validate --remote --env MY_VAR=value
 
 Variables from `--env` flags take precedence over those in `--env-file`. `.env.local` is gitignored by convention, so it's a safe place to store project-specific secrets.
 
-### Monitoring sidecars with chunk watch
-
-`chunk watch` opens a live TUI dashboard that shows all your sidecars and their activity in real time. Run it in any project directory while a sync or validation is in progress:
-
-```bash
-chunk watch
-```
-
-The dashboard refreshes every 5 seconds. The left pane lists the sidecars that actually exist, grouped by project: the daemon checks each one against the CircleCI API and drops any that have expired or been deleted, as long as the sidecar's state recorded which org it belongs to. State written before the org was recorded can't rule a sidecar out, so those sidecars stay listed until they age out. Each row shows what the sidecar is doing — running a command, or idle along with how its last run ended — and its last activity time. A sidecar the API hasn't confirmed yet (for example, when you're not authenticated) is shown as `unconfirmed`. The right pane shows the activity log — sync, validate, exec, and setup events — for the selected sidecar.
-
-When the daemon has `chunk factory build` runs, they are listed above the sidecars, and selecting one shows it in the right pane: each round's implementer turn, validation commands and reviews, the run's progress, its sidecars, and once it ends, the branch and worktree its work is on and the pull request it opened. The `pr` row follows the pull request as the run pushes and opens it, and ends on its address, or on why there is none; the run list puts `PR #<n>` beside a run that opened one. Press `→` to move into the run, `Enter` to open a row's output, `c` to copy a failure report (what failed, its error and the end of its output) to paste into an agent, and `x` twice to cancel the run. While the implementer works, its row shows what it last did and how many tools it has used, with what it last said under it. A failed check shows the last few lines of its output under its row. `c` copies through the terminal (OSC 52), so a terminal that doesn't support it won't receive the copy. `q` only closes the dashboard; the run carries on.
-
-```
-chunk watch  1 sidecar  main@a3f9e12                      15:04:32
-──────────────────────────────────────────────────────────────────
- sidecars              │ activity  chunk-cli/my-sidecar
-                       │
-── chunk-cli           │ 14:58:01  sync      ✓  done
-▶ my-sidecar           │ 14:55:12  validate  ✓  done
-  ✓ idle · last passed │ 14:52:44  sync      ✓  done
-  6m ago               │
-──────────────────────────────────────────────────────────────────
-  ↑/↓ j/k  select  ·  q  quit
-```
-
-`watch` shows every project you've watched or validated in before, not just the current one:
-
-```bash
-chunk watch                   # all projects chunk has seen
-chunk watch --focus           # current directory only
-chunk watch /path/to/other    # add another project
-```
-
-You don't have to have the dashboard open at the time. Every sidecar `chunk validate`
-run records its results to disk, so runs you made with no dashboard open are waiting
-for you the next time you open one. Purely local runs have no sidecar, so they don't
-get a row.
-
-`watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).
-
-#### Reading a command's output
-
-An invocation marked `▤` in the activity pane has output the chunk daemon still
-holds. Press `Enter` on it to open a scrollback view: a command that is still
-running tails live, and one that has already finished is replayed from the
-buffer. This is the answer to "the hook ran validate, it failed, and the output
-is gone" — the daemon keeps a copy even though the process that ran the command
-has exited.
-
-```
-output  go test ./...  ✗ exit 1
-──────────────────────────────────────────────────────────────────
- --- FAIL: TestSyncSkipsIgnoredFiles (0.03s)
-     sync_test.go:112: expected 3 files, got 4
- FAIL
-──────────────────────────────────────────────────────────────────
- esc back  ↑/↓ scroll  g/G top/follow  ctrl-c quit
-```
-
-Scrolling up detaches from the bottom so arriving output does not yank the view
-away from what you are reading; scroll back to the end (or press `G`) to follow
-again. `Esc` closes the pane and returns to the dashboard.
-
-Output is capped at 256 KiB per command and 20 commands per project, keeping the
-most recent of each — the pane says `(earlier output dropped)` rather than
-presenting a partial run as if it were whole. Buffers live in memory, so
-restarting the daemon clears them.
-
-For scripts and for agents with no terminal, the same output is available without
-the TUI:
-
-```bash
-chunk sidecar logs <command-id>        # command IDs appear in the dashboard
-chunk sidecar logs <command-id> -f     # keep printing until the command exits
-```
-
-Output goes to stdout so it can be piped; a non-zero remote status is reported on
-stderr as `exit status N`. `logs` itself fails only when *reading* failed.
-
-#### Live resource usage
-
-While the dashboard is open, each sidecar row also shows CPU, memory and disk,
-sampled every 2 seconds:
-
-```
-▶ my-sidecar           │ 14:55:12  validate  ⣟  running
-  ⣟ validate...        │
-  cpu  87%  mem  41%  disk  12%
-```
-
-Sampling runs only while `watch` is attached — close the dashboard and it stops.
-A reading older than a few intervals is dimmed and marked `(stale)` rather than
-disappearing, so a sampler that has stalled looks stalled instead of looking like
-an idle sidecar.
-
 ### Snapshots
 
 Capture a configured environment so future sidecars boot fast:
@@ -407,6 +312,104 @@ git commit -m "Regenerate lock file on Linux"
 ```
 
 > **Note:** `chunk sidecar sync` is one-way (local → sidecar). Step 3 manually pulls only the lock file back; it does not affect any other files. Run this workflow whenever you add or upgrade a dependency on macOS before pushing to CI.
+
+---
+
+## Watching factory runs with chunk watch
+
+`chunk watch` opens a live TUI dashboard of the `chunk factory build` runs the
+daemon is driving. It is about the runs themselves, not the infrastructure under
+them: sidecars, their sync and validate activity and their resource usage have no
+rows here. Run it in any project directory:
+
+```bash
+chunk watch
+```
+
+The dashboard refreshes every 5 seconds. The left pane lists every run the daemon
+is tracking — the live ones first, then recent finished ones — each with a state
+chip and how far it has got. Selecting one shows it in the right pane: each
+round's implementer turn, validation commands and reviews, the run's progress,
+and once it ends, the branch and worktree its work is on.
+
+Press `→` to move into the run, `Enter` to open a row's output, `Space` to open or
+close a round, `d` for the run's details (its worktree and setup log), `c` to copy
+a failure report (what failed, its error and the end of its output) to paste into
+an agent, and `x` twice to cancel the run. While the implementer works, its row shows what it last did and how many tools it has used, with what it last said under it. A failed check shows the last few lines
+of its output under its row. `c` copies through the terminal (OSC 52), so a
+terminal that doesn't support it won't receive the copy. `q` only closes the
+dashboard; the run carries on.
+
+```
+chunk watch  2 runs  main@a3f9e12                        15:04:32
+──────────────────────────────────────────────────────────────────
+ runs                  │ run  chunk-cli · chunk/factory/abc · 0123456
+ ⌕ search runs      /  │   ⠋ Round 2 (max 3) · implementing  1m0s · $0.41
+▶ ⠋ Add a --verbose fl │   # Add a --verbose flag to chunk validate
+    running  round 2/3 │
+  ✓ Fix the flaky test │   ▸ Round 1  ✗  1 of 3 checks passed  ·  1m0s
+    passed  10m ago    │
+                       │   ▾ Round 2  implementing
+                       │     ⠋  implement
+──────────────────────────────────────────────────────────────────
+  ↑/↓ select · → run · Enter output · / search runs · q quit
+```
+
+Press `/` to search the runs: the list narrows as you type, matching a run's
+prompt, project, branch or state. `Enter` keeps the filter, `Esc` drops it.
+
+`watch` shows every project you've watched or run in before, not just the current
+one:
+
+```bash
+chunk watch                   # all projects chunk has seen
+chunk watch --focus           # current directory only
+chunk watch /path/to/other    # add another project
+```
+
+You don't have to have the dashboard open while a run goes: the daemon owns the
+run, so one started before you opened the dashboard is listed in full, and
+closing the dashboard leaves it running.
+
+`watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).
+
+### Reading a command's output
+
+Press `Enter` on a review or check row in the run pane to open a scrollback view
+of its output: a command that is still running tails live, and one that has
+already finished is replayed from the buffer. This is the answer to "the reviewer
+failed and the output is gone" — the daemon keeps a copy even though the process
+that ran the command has exited.
+
+```
+output  go test ./...  ✗ exit 1
+──────────────────────────────────────────────────────────────────
+ --- FAIL: TestSyncSkipsIgnoredFiles (0.03s)
+     sync_test.go:112: expected 3 files, got 4
+ FAIL
+──────────────────────────────────────────────────────────────────
+ esc back  ↑/↓ scroll  g/G top/follow  ctrl-c quit
+```
+
+Scrolling up detaches from the bottom so arriving output does not yank the view
+away from what you are reading; scroll back to the end (or press `G`) to follow
+again. `Esc` closes the pane and returns to the dashboard.
+
+Output is capped at 256 KiB per command and 20 commands per project, keeping the
+most recent of each — the pane says `(earlier output dropped)` rather than
+presenting a partial run as if it were whole. Buffers live in memory, so
+restarting the daemon clears them.
+
+For scripts and for agents with no terminal, the same output is available without
+the TUI:
+
+```bash
+chunk sidecar logs <command-id>        # command IDs appear in the dashboard
+chunk sidecar logs <command-id> -f     # keep printing until the command exits
+```
+
+Output goes to stdout so it can be piped; a non-zero remote status is reported on
+stderr as `exit status N`. `logs` itself fails only when *reading* failed.
 
 ---
 
@@ -556,7 +559,7 @@ Make changes
 Validate on a sidecar
     └─ chunk sidecar sync + chunk validate --remote   (or locally: chunk validate)
     └─ or hand it to the agent: "validate on the sidecar"
-    └─ chunk watch   (optional: live dashboard to see sync/validate progress)
+    └─ chunk watch   (optional: live dashboard of chunk factory build runs)
 
 Before committing
     └─ Hook runs chunk validate automatically

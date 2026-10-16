@@ -330,8 +330,9 @@ The split is in the imports, not yet everywhere at runtime:
 - **Projects are registered by writing a file, not by asking the daemon.**
   `chunk watch`, `chunk validate` and `chunk review` write the breadcrumbs
   `AllProjectRoots` reads, and the daemon finds projects by scanning them.
-- **The snapshot is the dashboard's view.** It carries each project's raw
-  `eventlog.Event`s, and `chunk watch` works out from them what happened.
+- **The snapshot carries more than the dashboard draws.** It holds each
+  project's sidecars, raw `eventlog.Event`s and buffered commands as well as its
+  sessions; `chunk watch` lists the sessions and ignores the rest.
 - **`chunk factory build` reads the daemon's files to check a request.** With
   `--continue`, `checkFactoryContinue` loads the earlier run's record from the
   repository's data directory before asking the daemon, which loads it again.

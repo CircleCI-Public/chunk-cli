@@ -4,13 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
-	"charm.land/lipgloss/v2"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
-
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
 
 func TestResolveCR(t *testing.T) {
@@ -248,108 +244,4 @@ func TestOutputPaneVisibleLinesHandlesDegenerateSizes(t *testing.T) {
 	lines, atEnd = empty.visibleLines(5)
 	assert.Check(t, cmp.Len(lines, 0))
 	assert.Check(t, atEnd)
-}
-
-func TestRenderResources(t *testing.T) {
-	now := time.Now()
-	tests := []struct {
-		name      string
-		in        *chunkd.Resources
-		wantEmpty bool
-		contains  []string
-	}{
-		{
-			name:      "nil sample renders nothing",
-			in:        nil,
-			wantEmpty: true,
-		},
-		{
-			name:      "zero timestamp renders nothing",
-			in:        &chunkd.Resources{CPUPercent: 50},
-			wantEmpty: true,
-		},
-		{
-			name: "percentages when limits are known",
-			in: &chunkd.Resources{
-				CPUPercent: 42, MemUsedBytes: 512, MemLimitBytes: 1024,
-				DiskUsedBytes: 30, DiskTotalBytes: 100, SampledAt: now,
-			},
-			contains: []string{"cpu", "42%", "mem", "50%", "disk", "30%"},
-		},
-		{
-			name: "absolute memory when no limit is known",
-			in: &chunkd.Resources{
-				CPUPercent: 10, MemUsedBytes: 5 * 1024 * 1024, SampledAt: now,
-			},
-			contains: []string{"mem", "5.0M"},
-		},
-		{
-			name: "stale sample is marked rather than hidden",
-			in: &chunkd.Resources{
-				CPUPercent: 42, MemUsedBytes: 512, MemLimitBytes: 1024,
-				SampledAt: now.Add(-10 * chunkd.StaleSamples * chunkd.SampleInterval),
-			},
-			contains: []string{"stale"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := renderResources(newWatchStyles(false), tt.in)
-			if tt.wantEmpty {
-				assert.Check(t, cmp.Equal(got, ""))
-				return
-			}
-			for _, want := range tt.contains {
-				assert.Check(t, cmp.Contains(got, want))
-			}
-		})
-	}
-}
-
-// The line is drawn indented two columns into the left pane. A typical reading
-// has to fit whole, or the disk figure — last on the line — is what gets clipped.
-func TestRenderResourcesFitsTheSidecarPane(t *testing.T) {
-	r := &chunkd.Resources{
-		CPUPercent: 42, MemUsedBytes: 512, MemLimitBytes: 1024,
-		DiskUsedBytes: 51, DiskTotalBytes: 100, SampledAt: time.Now(),
-	}
-	got := renderResources(newWatchStyles(false), r)
-	assert.Check(t, lipgloss.Width(got) <= leftPaneWidth-2, "%q is %d columns", got, lipgloss.Width(got))
-	assert.Check(t, cmp.Contains(got, "disk 51%"))
-}
-
-// TestStaleBudgetOutlivesAPollCycle guards the relationship that makes the
-// (stale) marker mean anything. A sample is already a sampler round-trip old when
-// the daemon serves it, and the dashboard then holds that one snapshot for a
-// whole pollInterval while re-evaluating its age on every frame. The budget has
-// to cover both, or a healthy sampler renders as stale for the tail of every
-// cycle — which trains the reader to ignore the marker entirely.
-func TestStaleBudgetOutlivesAPollCycle(t *testing.T) {
-	// Worst arrival age seen against real sidecars, measured when the daemon
-	// served the sample rather than when the sampler produced it.
-	const arrivalAge = 6 * time.Second
-
-	budget := chunkd.StaleSamples * chunkd.SampleInterval
-	assert.Assert(t, budget > pollInterval+arrivalAge,
-		"stale budget %s must outlast one poll cycle (%s) plus sampler latency (%s)",
-		budget, pollInterval, arrivalAge)
-}
-
-func TestHumanBytes(t *testing.T) {
-	tests := []struct {
-		in   int64
-		want string
-	}{
-		{0, "0B"},
-		{512, "512B"},
-		{1024, "1.0K"},
-		{1536, "1.5K"},
-		{20 * 1024, "20K"},
-		{5 * 1024 * 1024, "5.0M"},
-		{3 * 1024 * 1024 * 1024, "3.0G"},
-	}
-	for _, tt := range tests {
-		got := humanBytes(tt.in)
-		assert.Check(t, cmp.Equal(got, tt.want), "humanBytes(%d)", tt.in)
-	}
 }

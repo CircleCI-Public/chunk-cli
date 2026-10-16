@@ -4,13 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -25,93 +23,6 @@ func clip(s string, width int) string {
 		return s
 	}
 	return lipgloss.NewStyle().MaxWidth(width).Render(s)
-}
-
-// commandForInvocation resolves which buffered command produced an invocation.
-//
-// The join is a heuristic: match the sidecar, then take the command whose submit
-// time falls inside the invocation's span. It holds because a sidecar runs its
-// validate commands sequentially, so overlapping candidates are rare. When
-// nothing matches, no output affordance is shown — which is the honest outcome,
-// since the daemon genuinely has nothing for that invocation.
-//
-// Recording the command ID on the events themselves would make this exact rather
-// than probable; that is what the event log's command_id field is for once it
-// lands.
-//
-// The sidecar is a parameter rather than read from m.selectedIdx: resolving it
-// here while taking g from the caller let the two disagree, so a call for any
-// invocation other than the selected one would have matched against the wrong
-// sidecar and returned a confidently wrong command. Both callers pass the row
-// the group came from, and now they cannot do otherwise.
-func (m Model) commandForInvocation(sc sidecarInfo, g invocationGroup) *chunkd.CommandState {
-	if len(g.events) == 0 || sc.projectIdx >= len(m.commands) {
-		return nil
-	}
-	start := g.events[0].Ts
-	end := invocEndTime(g)
-
-	var best *chunkd.CommandState
-	for i := range m.commands[sc.projectIdx] {
-		cs := &m.commands[sc.projectIdx][i]
-		if cs.SidecarID != sc.id {
-			continue
-		}
-		// Submitted within the invocation's span, allowing a small margin at the
-		// front: the "$ <cmd>" status event is written just before submission.
-		if cs.SubmittedAt.Before(start.Add(-2*time.Second)) || cs.SubmittedAt.After(end.Add(2*time.Second)) {
-			continue
-		}
-		// Latest match wins, so a re-run inside one group resolves to the newer.
-		if best == nil || cs.SubmittedAt.After(best.SubmittedAt) {
-			best = cs
-		}
-	}
-	return best
-}
-
-// openSelectedOutput opens the scrollback pane for the right-pane selection.
-// Returns nil when the selected invocation has no buffered output.
-func (m Model) openSelectedOutput() (*Model, tea.Cmd) {
-	groups := m.currentInvocGroups()
-	gi := len(groups) - 1 - m.rightSelectedIdx
-	if gi < 0 || gi >= len(groups) {
-		return nil, nil
-	}
-	sc := m.selectedSidecar()
-	if sc == nil {
-		return nil, nil
-	}
-	cs := m.commandForInvocation(*sc, groups[gi])
-	if cs == nil {
-		return nil, nil
-	}
-	name := cs.Name
-	if name == "" {
-		name = invocLabel(groups[gi])
-	}
-	m.output = &outputPane{
-		commandID: cs.CommandID,
-		name:      name,
-		pinned:    true,
-		running:   cs.Running,
-		exitCode:  cs.ExitCode,
-	}
-	m.outputSeq++
-	return &m, tea.Batch(fetchOutput(cs.CommandID, 0), outputTick(m.outputSeq))
-}
-
-// invocLabel names an invocation for the pane header, falling back to its op.
-func invocLabel(g invocationGroup) string {
-	for _, e := range g.events {
-		if strings.HasPrefix(e.Msg, "$ ") {
-			return strings.TrimPrefix(e.Msg, "$ ")
-		}
-	}
-	if len(g.events) > 0 {
-		return string(g.events[0].Op)
-	}
-	return "command"
 }
 
 // updateOutputKey handles keys while the output pane is open.

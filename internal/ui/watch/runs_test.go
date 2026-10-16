@@ -99,33 +99,6 @@ func TestVisibleRunsKeepsLiveOnesAndCapsRecentEndedOnes(t *testing.T) {
 	assert.Equal(t, got[0].s.ID, "live")
 }
 
-func TestSplitRunSidecarsAttachesAFactoryRunsPoolToTheRun(t *testing.T) {
-	run := factoryRun("abc", chunkd.SessionRunning, time.Now())
-	run.s.Factory.SidecarIDs = []string{"1", "2", "3"}
-	sidecars := []sidecarInfo{
-		{id: "1", name: "anything"},
-		{id: "2", name: "factory-abc-rebuilt-123"},
-		{id: "3", name: "factory-abc"},
-		{id: "4", name: "factory-other-1"},
-		{id: "5", name: "my-sidecar"},
-	}
-	rest, byRun := splitRunSidecars(sidecars, []sessionInfo{run})
-	assert.Equal(t, len(byRun["abc"]), 3)
-	assert.Equal(t, len(rest), 2, "a pool of a run that is not listed keeps its rows: it may still be running")
-}
-
-func TestSplitRunSidecarsDoesNotMixRunsWithTheSameFactoryID(t *testing.T) {
-	a := factoryRun("same", chunkd.SessionRunning, time.Now())
-	b := factoryRun("same", chunkd.SessionRunning, time.Now())
-	a.s.ID, a.s.Factory.SidecarIDs = "session-a", []string{"sidecar-a"}
-	b.s.ID, b.s.Factory.SidecarIDs = "session-b", []string{"sidecar-b"}
-
-	rest, byRun := splitRunSidecars([]sidecarInfo{{id: "sidecar-a"}, {id: "sidecar-b"}}, []sessionInfo{a, b})
-	assert.Equal(t, len(rest), 0)
-	assert.Equal(t, byRun["session-a"][0].id, "sidecar-a")
-	assert.Equal(t, byRun["session-b"][0].id, "sidecar-b")
-}
-
 // The factory run's pane says where the run stands, shows the round that
 // matters in full and the finished ones in a line, keeps the infrastructure
 // folded until asked for, and fits the screen however short it is.
@@ -158,18 +131,18 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 		}
 		for _, want := range []string{
 			"Add a --verbose flag", "Round 2 (max 3) · implementing", "$0.41",
-			"Round 1", "1 of 3 checks passed", "2 issues, 1 worth changing", "Round 2", "implement", "▸ infra",
+			"Round 1", "1 of 3 checks passed", "2 issues, 1 worth changing", "Round 2", "implement", "▸ details",
 		} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 		}
-		// The finished round is a line; infrastructure is folded.
+		// The finished round is a line; the run's details are folded.
 		for _, absent := range []string{"review: bugs", "lint", "/tmp/wt/abc", "syncing the implementer", "not built yet"} {
 			assert.Assert(t, !strings.Contains(out, absent), "unexpected %q:\n%s", absent, out)
 		}
 
-		m, _ = press(m, 'i')
+		m, _ = press(m, 'd')
 		out = m.render()
-		for _, want := range []string{"▾ infra", "/tmp/wt/abc", "syncing the implementer"} {
+		for _, want := range []string{"▾ details", "/tmp/wt/abc", "syncing the implementer"} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 		}
 	}
@@ -457,110 +430,38 @@ func TestEndedFactoryRunSaysWhereItsWorkIs(t *testing.T) {
 	for _, want := range []string{"still failing", "checks still failed after 3 round(s)", "chunk/factory/abc", "committed · 2 files changed, 10 insertions(+)", "chunk factory build --continue abc"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 	}
-	m, _ = press(m, 'i')
-	assert.Assert(t, strings.Contains(m.render(), "/tmp/run.log"), "the log is under infra:\n%s", m.render())
+	m, _ = press(m, 'd')
+	assert.Assert(t, strings.Contains(m.render(), "/tmp/run.log"), "the log is under details:\n%s", m.render())
 }
 
-func TestNoRunsLeavesTheSidecarPaneAsItWas(t *testing.T) {
-	m := sessModel()
-	m.selRun = ""
-	m.sidecars = []sidecarInfo{{id: "sc-1", name: "box", repoName: "repo", branch: "main", verified: true}}
-	out := strings.Join(m.renderLeftPane(m.styles(), 30), "\n")
-	assert.Assert(t, !strings.Contains(out, "runs"), out)
-	assert.Assert(t, strings.HasPrefix(out, m.styles().emphasis("sidecars")), out)
-}
-
-func TestRunsWithoutLooseSidecarsDrawNoSidecarSection(t *testing.T) {
-	m := sessModel(factoryRun("a", chunkd.SessionRunning, time.Now()))
-	m.sidecars = nil
-	out := strings.Join(m.renderLeftPane(m.styles(), 30), "\n")
-	assert.Assert(t, !strings.Contains(out, "sidecars"), out)
-}
-
-func TestSearchFindsARunByItsSidecar(t *testing.T) {
+// The run list is the whole left pane, and the selection stops at either end
+// of it rather than wrapping or falling off.
+func TestSelectionMovesThroughTheRunList(t *testing.T) {
 	m := sessModel(factoryRun("a", chunkd.SessionRunning, time.Now()), factoryRun("b", chunkd.SessionDone, time.Now()))
-	m.allRuns = m.sessions
-	m.runSidecars = map[string][]sidecarInfo{"b": {{id: "sc-9", name: "needle-box"}}}
-	m = m.setQuery("needle")
-	assert.Equal(t, len(m.sessions), 1)
-	assert.Equal(t, m.sessions[0].s.ID, "b")
-}
-
-func TestHiddenRunsSidecarsStayOutOfTheSidecarList(t *testing.T) {
-	old := factoryRun("old", chunkd.SessionDone, time.Now().Add(-30*24*time.Hour))
-	ended := time.Now().Add(-30 * 24 * time.Hour)
-	old.s.EndedAt = &ended
-	old.s.Factory.SidecarIDs = []string{"sc-run"}
-	m := sessModel()
-	next, _ := m.Update(dataMsg{
-		sessions: []sessionInfo{old},
-		sidecars: []sidecarInfo{{id: "sc-run", lastActivity: time.Now(), verified: true}, {id: "sc-loose", lastActivity: time.Now(), verified: true}},
-	})
-	m = next.(Model)
-	assert.Equal(t, len(m.sessions), 0, "the old run is not listed")
-	assert.Equal(t, len(m.sidecars), 1)
-	assert.Equal(t, m.sidecars[0].id, "sc-loose")
-}
-
-func TestSidecarsInARunsWorktreeBelongToTheRun(t *testing.T) {
-	run := factoryRun("a", chunkd.SessionRunning, time.Now())
-	run.s.Factory.Worktree = "/data/wt/a"
-	rest, by := splitRunSidecars([]sidecarInfo{
-		{id: "in-wt", projectPath: "/data/wt/a"},
-		{id: "elsewhere", projectPath: "/repo"},
-	}, []sessionInfo{run})
-	assert.Equal(t, len(rest), 1)
-	assert.Equal(t, rest[0].id, "elsewhere")
-	assert.Equal(t, by["a"][0].id, "in-wt")
-}
-
-func TestOneSessionsPoolIsOneRow(t *testing.T) {
-	now := time.Now()
-	got := collapsePools([]sidecarInfo{
-		{id: "a", sessionID: "s1", projectIdx: 0, lastActivity: now.Add(-time.Minute), lastResult: levelError},
-		{id: "b", sessionID: "s1", projectIdx: 0, lastActivity: now, lastResult: levelDone, verified: true},
-		{id: "c", sessionID: "s2", projectIdx: 0, lastActivity: now},
-		{id: "d", sessionID: "s1", projectIdx: 1, lastActivity: now},
-		{id: "e", lastActivity: now},
-	})
-	assert.Equal(t, len(got), 4)
-	assert.Equal(t, got[0].id, "a")
-	assert.DeepEqual(t, got[0].members, []string{"a", "b"})
-	assert.Equal(t, got[0].lastResult, levelDone, "the newest member's result")
-	assert.Assert(t, got[0].verified, "the newest member's confirmation")
-	assert.Assert(t, got[0].owns("b"))
-	assert.Equal(t, len(got[1].members), 0, "a lone sidecar is not a pool")
-}
-
-func TestSearchFiltersSidecarsToo(t *testing.T) {
-	m := sessModel(factoryRun("a", chunkd.SessionRunning, time.Now()))
-	m.looseSidecars = []sidecarInfo{{id: "sc-1", name: "box", repoName: "alpha"}, {id: "sc-2", name: "box2", repoName: "beta"}}
-	m = m.setQuery("beta")
-	assert.Equal(t, len(m.sidecars), 1)
-	assert.Equal(t, m.sidecars[0].id, "sc-2")
-	m = m.setQuery("")
-	assert.Equal(t, len(m.sidecars), 2)
-}
-
-// Runs and sidecars are one list to the selection: down off the last run
-// lands on the first sidecar, and up off it goes back.
-func TestSelectionMovesFromRunsToSidecarsAndBack(t *testing.T) {
-	m := sessModel(factoryRun("a", chunkd.SessionRunning, time.Now()), factoryRun("b", chunkd.SessionDone, time.Now()))
-	m.sidecars = []sidecarInfo{{id: "sc-1", name: "box"}, {id: "sc-2", name: "box2"}}
 	m = m.reselectRun()
 	assert.Equal(t, m.selRun, "a", "the first poll lands on the newest run")
 
 	m, _ = press(m, tea.KeyDown)
 	assert.Equal(t, m.selRun, "b")
 	m, _ = press(m, tea.KeyDown)
-	assert.Equal(t, m.selRun, "")
-	assert.Equal(t, m.selectedID, "sc-1")
-	m, _ = press(m, tea.KeyDown)
-	assert.Equal(t, m.selectedID, "sc-2")
-	m, _ = press(m, tea.KeyUp, tea.KeyUp)
-	assert.Equal(t, m.selRun, "b")
-	m, _ = press(m, tea.KeyUp, tea.KeyUp)
+	assert.Equal(t, m.selRun, "b", "down stops at the last run")
+	m, _ = press(m, tea.KeyUp)
+	assert.Equal(t, m.selRun, "a")
+	m, _ = press(m, tea.KeyUp)
 	assert.Equal(t, m.selRun, "a", "up stops at the first run")
+}
+
+// With no runs there is nothing to select, and the pane says where runs come
+// from instead of sitting empty.
+func TestNoRunsSaysWhereRunsComeFrom(t *testing.T) {
+	m := sessModel()
+	out := stripANSI(strings.Join(m.renderLeftPane(m.styles(), 30), "\n"))
+	assert.Assert(t, strings.Contains(out, "no runs yet"), out)
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "chunk factory build"), "the empty pane says where runs come from")
+
+	m, _ = press(m, tea.KeyDown)
+	assert.Equal(t, m.selRun, "")
+	assert.Assert(t, m.selectedRun() == nil)
 }
 
 func TestShortDashboardKeepsItsSelectionVisible(t *testing.T) {
@@ -576,12 +477,6 @@ func TestShortDashboardKeepsItsSelectionVisible(t *testing.T) {
 	out := m.render()
 	assert.Assert(t, strings.Count(out, "\n") <= m.height, out)
 	assert.Assert(t, strings.Contains(out, runTitle(runs[len(runs)-1].s)), "selected run is not visible:\n%s", out)
-
-	m.selRun = ""
-	m.sidecars = []sidecarInfo{{id: "selected", name: "selected", repoName: "repo", verified: true}}
-	m.selectedID = "selected"
-	out = m.render()
-	assert.Assert(t, strings.Contains(out, "selected"), "selected sidecar is not visible:\n%s", out)
 }
 
 func TestRunItemsOpenTheirOutput(t *testing.T) {
@@ -1011,20 +906,20 @@ func TestLiveRunShowsItsLatestSetupWarning(t *testing.T) {
 		m := sessModel(r)
 		m.selRun = "abc"
 		out := stripANSI(m.render())
-		assert.Assert(t, strings.Contains(out, "▸ infra"), out)
+		assert.Assert(t, strings.Contains(out, "▸ details"), out)
 		assert.Equal(t, strings.Contains(out, "sidecar slow to start"), tc.shown, "%s:\n%s", tc.level, out)
 	}
 }
 
-// i is offered only when the run has something under infra.
-func TestFooterOffersInfraOnlyWhenThereIsSome(t *testing.T) {
+// The details key is offered only when the run has something to show under it.
+func TestFooterOffersDetailsOnlyWhenThereAreSome(t *testing.T) {
 	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
 	m := sessModel(r).reselectRun()
-	assert.Assert(t, strings.Contains(m.renderFooter(m.styles()), "infra"))
+	assert.Assert(t, strings.Contains(m.renderFooter(m.styles()), "details"))
 
 	r.s.Factory.Worktree = ""
 	m = sessModel(r).reselectRun()
-	assert.Assert(t, !strings.Contains(m.renderFooter(m.styles()), "infra"))
+	assert.Assert(t, !strings.Contains(m.renderFooter(m.styles()), "details"))
 }
 
 func TestCheckRowShowsFailureTail(t *testing.T) {
@@ -1241,11 +1136,11 @@ func TestPollKeepsTheRunFilter(t *testing.T) {
 	assert.Equal(t, len(m.allRuns), 2)
 	assert.Equal(t, len(m.sessions), 1)
 	assert.Equal(t, m.selRun, "bbb")
-	assert.Equal(t, len(filterRuns(all, "CACHE flaky", nil)), 1, "every word must match, ignoring case")
+	assert.Equal(t, len(filterRuns(all, "CACHE flaky")), 1, "every word must match, ignoring case")
 }
 
-// A filter narrows the list, not what the header and sidecar pane know: a
-// hidden run still counts as running, and its sidecars are not loose ones.
+// A filter narrows the list, not what the header knows: a hidden run still
+// counts as running.
 func TestFilterDoesNotHideRunsFromTheHeader(t *testing.T) {
 	live := liveSession("live", chunkd.SessionRunning, time.Now())
 	m := sessModel(live)
@@ -1253,19 +1148,6 @@ func TestFilterDoesNotHideRunsFromTheHeader(t *testing.T) {
 	assert.Equal(t, len(m.sessions), 0)
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "1 running"), "a hidden live run is still in flight:\n%s", out)
-	assert.Assert(t, !strings.Contains(strings.Join(m.renderLeftPane(m.styles(), 30), "\n"), "sidecars"), out)
-}
-
-// A sidecar nobody has touched for days is not listed, even though the API
-// still knows it.
-func TestFilterSidecarsDropsOnesOlderThanFiveDays(t *testing.T) {
-	now := time.Now()
-	kept := filterSidecars([]sidecarInfo{
-		{id: "fresh", verified: true, lastActivity: now.Add(-2 * time.Hour)},
-		{id: "old", verified: true, lastActivity: now.Add(-6 * 24 * time.Hour)},
-	})
-	assert.Equal(t, len(kept), 1)
-	assert.Equal(t, kept[0].id, "fresh")
 }
 
 // The run list leads a run with its state as a block, then says when or how far.
