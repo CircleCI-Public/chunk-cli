@@ -13,6 +13,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 func TestDetachScript(t *testing.T) {
@@ -118,6 +119,17 @@ func TestUploadInstallReplacesTheBinaryInPlace(t *testing.T) {
 	// Writing over a running chunk fails; a new file moved over it does not.
 	assert.Assert(t, strings.Contains(UploadInstall, `mv -f "$HOME/chunk.new" "$HOME/chunk"`), UploadInstall)
 	assert.Assert(t, !strings.Contains(UploadInstall, `> "$HOME/chunk" `), UploadInstall)
+}
+
+func TestInstallVersionFetchesTheTaggedRelease(t *testing.T) {
+	script := InstallVersion("v1.2.3")
+	assert.Assert(t, strings.Contains(script, `/releases/download/"'v1.2.3'"/chunk-cli_Linux_${A}.tar.gz`), script)
+	assert.Assert(t, !strings.Contains(script, "latest"), script)
+}
+
+func TestInstallVersionEscapesTheTag(t *testing.T) {
+	script := InstallVersion("v1.2.3'; rm -rf /")
+	assert.Assert(t, strings.Contains(script, sidecar.ShellEscape("v1.2.3'; rm -rf /")), script)
 }
 
 // runDetachScript runs the detach script in a shell whose home holds the given
