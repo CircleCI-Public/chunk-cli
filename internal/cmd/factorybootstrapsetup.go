@@ -39,6 +39,9 @@ type bootstrapPlan struct {
 	Prompts bool
 	// History gives Claude the team's review comments for the prompts.
 	History bool
+	// Score runs factory eval on the prompts the run writes, over this many
+	// recent commits. Zero leaves it out.
+	Score int
 	// skipped says why each part left out is.
 	skipped []string
 }
@@ -57,6 +60,8 @@ type planInputs struct {
 	// GitHubToken is whether a GitHub token is set, without which there is no
 	// review history to fetch.
 	GitHubToken bool
+	// EvalCommits is --eval-commits: how many commits to score the prompts on.
+	EvalCommits int
 }
 
 // planBootstrap works out what a bootstrap run does.
@@ -84,6 +89,18 @@ func planBootstrap(in planInputs) bootstrapPlan {
 	default:
 		p.History = true
 	}
+	switch {
+	case in.EvalCommits == 0:
+	case !p.Prompts:
+		// Only the prompts this run writes are scored: the ones already there
+		// are scored by factory eval itself.
+		p.skipped = append(p.skipped, fmt.Sprintf("scoring: %s already has review prompts. Score them with chunk factory eval --commits %d.", in.PromptsDir, in.EvalCommits))
+	case in.SkipSidecar && !in.Cfg.HasSidecarImage():
+		// The eval runs on validation.sidecarImage, and nothing will set it.
+		p.skipped = append(p.skipped, "scoring: --skip-sidecar, and validation.sidecarImage is not set to score the prompts on")
+	default:
+		p.Score = in.EvalCommits
+	}
 	return p
 }
 
@@ -108,6 +125,9 @@ func printBootstrapPlan(streams iostream.Streams, p bootstrapPlan, promptsDir st
 			from = "the code and the team's review comments"
 		}
 		streams.ErrPrintln(fmt.Sprintf("  • Write review prompts to %s from %s", promptsDir, from))
+	}
+	if p.Score > 0 {
+		streams.ErrPrintln(fmt.Sprintf("  • Score the review prompts with factory eval on %d recent commit(s)", p.Score))
 	}
 	for _, s := range p.skipped {
 		streams.ErrPrintln(ui.Dim("  Skipping: " + s))

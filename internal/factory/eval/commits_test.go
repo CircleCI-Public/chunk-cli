@@ -75,7 +75,8 @@ func TestCommitsRefusesWhatIsNotAHistory(t *testing.T) {
 	root, _ := newRepo(t)
 
 	_, err := Commits(ctx, root, "HEAD", 3)
-	assert.ErrorContains(t, err, "no commit on HEAD makes a case")
+	assert.ErrorIs(t, err, ErrNoCases)
+	assert.ErrorContains(t, err, "no commit makes a case on HEAD")
 	_, err = Commits(ctx, root, "--all", 3)
 	assert.ErrorContains(t, err, "must not start with -")
 	_, err = Commits(ctx, root, "nope", 3)

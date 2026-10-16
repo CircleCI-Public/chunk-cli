@@ -16,7 +16,9 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory/eval"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/reviewhistory"
@@ -27,7 +29,7 @@ import (
 func newFactoryBootstrapCmd() *cobra.Command {
 	var orgID, image, model, output, since, template, snapshotName string
 	var timeout time.Duration
-	var top int
+	var top, evalCommits int
 	var jsonOut, noHistory, skipSidecar bool
 
 	cmd := &cobra.Command{
@@ -74,7 +76,15 @@ prompts are a starting point; read them and edit them before relying on them.
 
 --template writes a standard set of prompts instead, such as python or
 go-service, without a sidecar or Claude. It suits a new project that has
-little for Claude to read yet.`,
+little for Claude to read yet.
+
+--eval-commits scores the new prompts once they are written, as chunk
+factory eval --commits does: each of this many recent commits is reviewed
+with them on the project's sidecar image, and a grader judges what they
+find. It costs far more than writing the prompts. Prompts already in
+.chunk/reviews are not scored; chunk factory eval scores them. Prompts
+written from the team's review comments are scored on the changes those
+comments were left on, so with history the scores flatter them.`,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -92,12 +102,9 @@ little for Claude to read yet.`,
 			// Flags are checked before anything that can fail on the project,
 			// so a bad flag is reported as one rather than behind whatever the
 			// project happens to be missing.
-			historyOpts, err := historyOptions(since, top)
+			historyOpts, err := checkBootstrapFlags(since, top, snapshotName, cmd.Flags().Changed("eval-commits"), evalCommits)
 			if err != nil {
 				return err
-			}
-			if len(snapshotName) > 255 {
-				return &userError{msg: fmt.Sprintf("--snapshot-name must be 255 characters or fewer, not %d.", len(snapshotName)), errMsg: "invalid --snapshot-name"}
 			}
 			// Checked before any sidecar boots, so a project that has prompts
 			// costs nothing.
@@ -121,9 +128,10 @@ little for Claude to read yet.`,
 				SkipSidecar:  skipSidecar,
 				NoHistory:    noHistory,
 				GitHubToken:  rc.GitHubToken != "",
+				EvalCommits:  evalCommits,
 			})
 			if plan.empty() {
-				return promptsExistError(dir, factory.ErrPromptsExist)
+				return nothingToDoError(dir, evalCommits)
 			}
 			// Checked before any prompt or sidecar, so a project without a
 			// GitHub origin costs nothing.
@@ -132,6 +140,12 @@ little for Claude to read yet.`,
 				if owner, repo, err = bootstrapOrigin(ctx, workDir); err != nil {
 					return err
 				}
+			}
+			// The commits are made into cases before any prompt or sidecar, so
+			// a history with none to score costs nothing.
+			scoring, err := bootstrapEval(ctx, workDir, plan.Score)
+			if err != nil {
+				return err
 			}
 			printBootstrapPlan(streams, plan, relPath(workDir, dir))
 
@@ -203,6 +217,20 @@ little for Claude to read yet.`,
 				}
 			}
 			out, err := runBootstrapParts(ctx, streams, sidecarRun, prompts, statusFn)
+			// Read after the parts: the sidecar image part may just have
+			// recorded the image the eval runs on.
+			scoring = readyScoring(scoring, out, err, evalRun{
+				PromptsDir:  dir,
+				Client:      client,
+				TokenSource: rc.CircleCITokenSource,
+				OrgID:       resolvedOrgID,
+				Image:       resolveImage("", cfg),
+				Credential:  cred,
+				CredSource:  credSource,
+				BaseURL:     rc.AnthropicBaseURL,
+				Review:      review.Options{Credential: cred, BaseURL: rc.AnthropicBaseURL},
+				Grade:       &eval.GradeOptions{Credential: cred, BaseURL: rc.AnthropicBaseURL},
+			})
 			if jsonOut {
 				// A part that failed does not hide what the other made: a
 				// rerun skips that part, so this is the only report of it.
@@ -211,6 +239,7 @@ little for Claude to read yet.`,
 				}
 				report := newBootstrapReport(workDir, out.paths, out.result, history)
 				report.SidecarImage = out.snapshotID
+				report.Eval = scorePrompts(ctx, streams, scoring, statusFn)
 				if jsonErr := iostream.PrintJSON(streams.Out, report); jsonErr != nil {
 					return jsonErr
 				}
@@ -220,6 +249,7 @@ little for Claude to read yet.`,
 			if err != nil {
 				return err
 			}
+			printBootstrapScore(ctx, streams, scoring, statusFn)
 			bootstrapNextStep(streams, workDir)
 			return nil
 		},
@@ -239,10 +269,13 @@ little for Claude to read yet.`,
 	cmd.Flags().StringVar(&snapshotName, "snapshot-name", "", "Name for the sidecar image's snapshot (default: <repo>-<YYYY-MM-DD>-<HHMMSS>)")
 	cmd.MarkFlagsMutuallyExclusive("skip-sidecar", "snapshot-name")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().IntVar(&evalCommits, "eval-commits", 0, "Run factory eval on the new prompts, reviewing this many recent commits")
+	// Hidden while factory eval is.
+	_ = cmd.Flags().MarkHidden("eval-commits")
 	cmd.Flags().StringVar(&template, "template", "", "Write a standard set of prompts instead ("+strings.Join(factory.Templates(), ", ")+")")
 	// A template is written locally, so the sidecar, Claude and history flags do
 	// nothing with it.
-	markExclusiveWith(cmd, "template", "org-id", "image", "model", "timeout", "no-history", "since", "top", "skip-sidecar", "snapshot-name")
+	markExclusiveWith(cmd, "template", "org-id", "image", "model", "timeout", "no-history", "since", "top", "skip-sidecar", "snapshot-name", "eval-commits")
 	return cmd
 }
 
@@ -460,6 +493,112 @@ func writeBootstrapPrompts(ctx context.Context, run promptsRun, statusFn iostrea
 	return paths, result, nil
 }
 
+// checkBootstrapFlags checks the flags whose values can be wrong on their
+// own, and returns the history options --since and --top make.
+func checkBootstrapFlags(since string, top int, snapshotName string, evalCommitsSet bool, evalCommits int) (reviewhistory.Options, error) {
+	opts, err := historyOptions(since, top)
+	switch {
+	case err != nil:
+		return opts, err
+	case len(snapshotName) > 255:
+		return opts, &userError{msg: fmt.Sprintf("--snapshot-name must be 255 characters or fewer, not %d.", len(snapshotName)), errMsg: "invalid --snapshot-name"}
+	case evalCommitsSet && evalCommits < 1:
+		return opts, &userError{msg: fmt.Sprintf("--eval-commits must be at least 1, not %d.", evalCommits), errMsg: "invalid --eval-commits"}
+	}
+	return opts, nil
+}
+
+// nothingToDoError is the error for a project bootstrap has already set up.
+// The plan, which says why scoring is skipped, is not shown then, so with
+// --eval-commits the error says it instead.
+func nothingToDoError(dir string, evalCommits int) error {
+	if evalCommits == 0 {
+		return promptsExistError(dir, factory.ErrPromptsExist)
+	}
+	return &userError{
+		msg:        fmt.Sprintf("%s already has review prompts, and --eval-commits only scores the ones bootstrap writes.", dir),
+		suggestion: fmt.Sprintf("Score them with chunk factory eval --commits %d.", evalCommits),
+		hideDetail: true,
+		blocked:    true,
+		err:        factory.ErrPromptsExist,
+	}
+}
+
+// bootstrapEval makes cases of the n most recent commits in the repository
+// workDir is in, for scoring the prompts bootstrap writes, or returns nil
+// when n is zero. The rest of the run is filled in by readyScoring.
+func bootstrapEval(ctx context.Context, workDir string, n int) (*evalRun, error) {
+	if n == 0 {
+		return nil, nil
+	}
+	root, err := gitutil.RepoRoot(workDir)
+	if err != nil {
+		return nil, &userError{msg: "--eval-commits needs a git repository.", err: err}
+	}
+	suite, err := eval.Commits(ctx, root, "HEAD", n)
+	if errors.Is(err, eval.ErrNoCases) {
+		return nil, &userError{msg: "--eval-commits found no commits on HEAD to score the prompts with.", err: err}
+	}
+	if err != nil {
+		return nil, &userError{msg: "--eval-commits could not read the commits on HEAD.", err: err}
+	}
+	return &evalRun{Root: root, Suite: suite, Source: fmt.Sprintf("%d commit(s) on HEAD", len(suite.Cases))}, nil
+}
+
+// readyScoring fills in the rest of the scoring run from run, or returns nil
+// when there is nothing to score: none was asked for, or a part of bootstrap
+// failed or wrote no prompts.
+func readyScoring(scoring *evalRun, out bootstrapOutcome, partsErr error, run evalRun) *evalRun {
+	if scoring == nil || partsErr != nil || out.paths == nil {
+		return nil
+	}
+	run.Root, run.Suite, run.Source = scoring.Root, scoring.Suite, scoring.Source
+	return &run
+}
+
+// printBootstrapScore scores the prompts bootstrap wrote, when scoring is set,
+// and shows the summary.
+func printBootstrapScore(ctx context.Context, streams iostream.Streams, scoring *evalRun, statusFn iostream.StatusFunc) {
+	if scoring == nil {
+		return
+	}
+	streams.ErrPrintln("")
+	if report := scorePrompts(ctx, streams, scoring, statusFn); report != nil {
+		printEvalSummary(streams, report.Summary)
+	}
+}
+
+// scorePrompts scores the prompts bootstrap wrote, as factory eval reads them,
+// or returns nil when scoring is nil. The prompts are written whatever the
+// score, so a failure is a warning, and the report has whatever cases were
+// scored before it.
+func scorePrompts(ctx context.Context, streams iostream.Streams, scoring *evalRun, statusFn iostream.StatusFunc) *evalReport {
+	if scoring == nil {
+		return nil
+	}
+	r := *scoring
+	// An environment with no setup steps records no image, and the
+	// provisioner's default has no Claude Code to review with.
+	if r.Image == "" {
+		statusFn(iostream.LevelWarn, "Could not score the prompts: validation.sidecarImage is not set. Set it, then run chunk factory eval --commits.")
+		return nil
+	}
+	prompts, err := review.LoadPrompts(r.PromptsDir)
+	if err != nil {
+		warnUserError(streams, "Could not score the prompts: ", err)
+		return nil
+	}
+	r.Prompts = prompts
+	report, err := runEval(ctx, r, statusFn)
+	if err == nil && report != nil {
+		err = noneScored(report.Summary)
+	}
+	if err != nil {
+		warnUserError(streams, "Could not score the prompts: ", err)
+	}
+	return report
+}
+
 // historyOptions checks the --since and --top flags.
 func historyOptions(since string, top int) (reviewhistory.Options, error) {
 	opts := reviewhistory.Options{Top: top}
@@ -563,6 +702,8 @@ type bootstrapReport struct {
 	// SidecarImage is the snapshot recorded as validation.sidecarImage, when
 	// the run set one up.
 	SidecarImage string `json:"sidecar_image,omitempty"`
+	// Eval scores the prompts, with --eval-commits.
+	Eval *evalReport `json:"eval,omitempty"`
 }
 
 func newBootstrapReport(workDir string, paths []string, result factory.Bootstrap, history *reviewhistory.History) bootstrapReport {

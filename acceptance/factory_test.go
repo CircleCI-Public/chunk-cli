@@ -354,6 +354,31 @@ func TestFactoryBootstrapRejectsBadHistoryFlags(t *testing.T) {
 	}
 }
 
+// --eval-commits that cannot score anything fails before any sidecar boots,
+// including when the history has no commit to make a case of.
+func TestFactoryBootstrapRefusesEvalCommitsThatScoreNothing(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "zero", args: []string{"--eval-commits", "0"}, want: "--eval-commits must be at least 1, not 0."},
+		{name: "template", args: []string{"--eval-commits", "3", "--template", "generic"}, want: "[eval-commits template] were all set"},
+		{name: "no usable commits", args: []string{"--eval-commits", "3", "--no-history"}, want: "--eval-commits found no commits on HEAD to score the prompts with."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env, cci, workDir := setupReviewProject(t, nil)
+
+			result := binary.RunCLI(t, append([]string{"factory", "bootstrap"}, tt.args...), env, workDir)
+
+			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+			assert.Assert(t, strings.Contains(result.Stderr, tt.want), "stderr: %s", result.Stderr)
+			assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+		})
+	}
+}
+
 // Without a GitHub token there is no history to fetch, and bootstrap goes on
 // from the code alone.
 func TestFactoryBootstrapGoesOnWithoutAGitHubToken(t *testing.T) {

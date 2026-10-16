@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory/eval"
@@ -136,62 +137,31 @@ The sidecars are deleted when the eval ends.`,
 				image = resolveImage("", cfg)
 			}
 
-			statusFn := newStatusFunc(streams)
-			size := review.PoolSize(parallelism, len(prompts))
-			statusFn(iostream.LevelStep, fmt.Sprintf("Preparing %d sidecar(s) for %d case(s) and %d prompt(s)...", size, len(suite.Cases), len(prompts)))
-			pool, err := newPool(ctx, client, sidecar.PoolOptions{
-				Size:    size,
-				Name:    evalPoolName,
-				OrgID:   resolvedOrgID,
-				Image:   image,
-				WorkDir: root,
-			}, "eval sidecars", rc.CircleCITokenSource, statusFn)
-			if err != nil {
-				return err
-			}
-			defer closePool(ctx, pool, true, statusFn)
-			if err := waitPoolReady(ctx, pool, "eval sidecars"); err != nil {
-				return err
-			}
-			var entries []*sidecar.PoolEntry
-			defer func() {
-				for _, e := range entries {
-					pool.Release(e)
-				}
-			}()
-			for range size {
-				e, err := pool.Acquire(ctx)
-				if err != nil {
-					return &userError{msg: "Could not get the eval sidecars.", err: err}
-				}
-				entries = append(entries, e)
-			}
-
 			var grade *eval.GradeOptions
 			if !noGrade {
 				grade = &eval.GradeOptions{Credential: cred, BaseURL: rc.AnthropicBaseURL, Model: graderModel, Timeout: graderTimeout}
 			}
-			results, runErr := eval.Run(ctx, eval.Options{
-				Root:    root,
-				Suite:   suite,
-				Prompts: prompts,
-				Runs:    runs,
-				Entries: entries,
-				Exec:    sidecar.ClientExec,
-				Sync: func(ctx context.Context, e *sidecar.PoolEntry, dir string) error {
-					return sidecar.RsyncSyncEphemeral(ctx, e.Client, e.ID, e.RepoPath, dir, func(iostream.Level, string) {})
-				},
-				Review: review.Options{Credential: cred, BaseURL: rc.AnthropicBaseURL, Model: model, Timeout: timeout},
-				Grade:  grade,
-				Status: statusFn,
-				OnCase: func(r eval.CaseResult) { statusFn(caseLevel(r), caseLine(r)) },
-			})
-
-			names := make([]string, len(prompts))
-			for i, p := range prompts {
-				names[i] = p.Name
+			report, runErr := runEval(ctx, evalRun{
+				Root:        root,
+				Suite:       suite,
+				Source:      source,
+				PromptsDir:  dir,
+				Prompts:     prompts,
+				Runs:        runs,
+				Parallelism: parallelism,
+				Client:      client,
+				TokenSource: rc.CircleCITokenSource,
+				OrgID:       resolvedOrgID,
+				Image:       image,
+				Credential:  cred,
+				CredSource:  credSource,
+				BaseURL:     rc.AnthropicBaseURL,
+				Review:      review.Options{Credential: cred, BaseURL: rc.AnthropicBaseURL, Model: model, Timeout: timeout},
+				Grade:       grade,
+			}, newStatusFunc(streams))
+			if report == nil {
+				return runErr
 			}
-			report := evalReport{Suite: source, Prompts: dir, Summary: eval.Summarize(names, results), Cases: results}
 			if output != "" {
 				data, err := json.MarshalIndent(report, "", "  ")
 				if err == nil {
@@ -209,15 +179,10 @@ The sidecars are deleted when the eval ends.`,
 				printEvalSummary(streams, report.Summary)
 			}
 			// The cases scored before the suite stopped are reported above.
-			switch {
-			case runErr == nil:
-				return noneScored(report.Summary)
-			case errors.Is(runErr, claudecode.ErrMissing):
-				return agentNotInstalled("the eval sidecars", runErr)
-			case errors.Is(runErr, claudecode.ErrCredentialRejected):
-				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, runErr)
+			if runErr != nil {
+				return runErr
 			}
-			return &userError{msg: "The suite stopped early.", err: runErr}
+			return noneScored(report.Summary)
 		},
 	}
 
@@ -242,6 +207,100 @@ The sidecars are deleted when the eval ends.`,
 	cmd.MarkFlagsMutuallyExclusive("commits", "no-grade")
 	markExclusiveWith(cmd, "no-grade", "grader-model", "grader-timeout")
 	return cmd
+}
+
+// evalRun is one eval of a set of prompts, once the credential, CircleCI
+// client and org are resolved.
+type evalRun struct {
+	// Root is the local repository the cases are changes to.
+	Root  string
+	Suite eval.Suite
+	// Source and PromptsDir name where the cases and prompts came from, for
+	// the report.
+	Source      string
+	PromptsDir  string
+	Prompts     []review.Prompt
+	Runs        int
+	Parallelism int
+
+	Client      *circleci.Client
+	TokenSource string
+	OrgID       string
+	Image       string
+
+	// Credential, CredSource and BaseURL explain a rejected credential.
+	Credential claudecode.Credential
+	CredSource string
+	BaseURL    string
+	Review     review.Options
+	Grade      *eval.GradeOptions
+}
+
+// runEval reviews r's cases with its prompts on a pool of their own, deleted
+// when it ends, and scores them. The report is nil when no case could start,
+// such as when the pool fails; otherwise it has every case scored before the
+// suite stopped, and the error is why it stopped.
+func runEval(ctx context.Context, r evalRun, statusFn iostream.StatusFunc) (*evalReport, error) {
+	size := review.PoolSize(r.Parallelism, len(r.Prompts))
+	statusFn(iostream.LevelStep, fmt.Sprintf("Preparing %d sidecar(s) for %d case(s) and %d prompt(s)...", size, len(r.Suite.Cases), len(r.Prompts)))
+	pool, err := newPool(ctx, r.Client, sidecar.PoolOptions{
+		Size:    size,
+		Name:    evalPoolName,
+		OrgID:   r.OrgID,
+		Image:   r.Image,
+		WorkDir: r.Root,
+	}, "eval sidecars", r.TokenSource, statusFn)
+	if err != nil {
+		return nil, err
+	}
+	defer closePool(ctx, pool, true, statusFn)
+	if err := waitPoolReady(ctx, pool, "eval sidecars"); err != nil {
+		return nil, err
+	}
+	var entries []*sidecar.PoolEntry
+	defer func() {
+		for _, e := range entries {
+			pool.Release(e)
+		}
+	}()
+	for range size {
+		e, err := pool.Acquire(ctx)
+		if err != nil {
+			return nil, &userError{msg: "Could not get the eval sidecars.", err: err}
+		}
+		entries = append(entries, e)
+	}
+
+	results, runErr := eval.Run(ctx, eval.Options{
+		Root:    r.Root,
+		Suite:   r.Suite,
+		Prompts: r.Prompts,
+		Runs:    r.Runs,
+		Entries: entries,
+		Exec:    sidecar.ClientExec,
+		Sync: func(ctx context.Context, e *sidecar.PoolEntry, dir string) error {
+			return sidecar.RsyncSyncEphemeral(ctx, e.Client, e.ID, e.RepoPath, dir, func(iostream.Level, string) {})
+		},
+		Review: r.Review,
+		Grade:  r.Grade,
+		Status: statusFn,
+		OnCase: func(c eval.CaseResult) { statusFn(caseLevel(c), caseLine(c)) },
+	})
+
+	names := make([]string, len(r.Prompts))
+	for i, p := range r.Prompts {
+		names[i] = p.Name
+	}
+	report := &evalReport{Suite: r.Source, Prompts: r.PromptsDir, Summary: eval.Summarize(names, results), Cases: results}
+	switch {
+	case runErr == nil:
+		return report, nil
+	case errors.Is(runErr, claudecode.ErrMissing):
+		return report, agentNotInstalled("the eval sidecars", runErr)
+	case errors.Is(runErr, claudecode.ErrCredentialRejected):
+		return report, credentialRejected(r.Credential, r.CredSource, r.BaseURL, runErr)
+	}
+	return report, &userError{msg: "The suite stopped early.", err: runErr}
 }
 
 // evalSuite is the cases to review, from the suite in suiteDir or the commits
