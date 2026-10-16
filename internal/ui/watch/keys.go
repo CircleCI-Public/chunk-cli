@@ -18,8 +18,18 @@ type keyMap struct {
 	Search      key.Binding
 	// Keep and Clear end a search: Enter keeps its filter, Esc drops it.
 	Keep, Clear key.Binding
-	Details     key.Binding
-	Cancel      key.Binding
+	// The new run's step keys are drawn bold in the accent colour, so a new
+	// user reads them as the key to press. New opens a prompt for Claude to draft
+	// a change, and Send and Discard
+	// end it: Enter has Claude draft it, Esc drops the prompt. StopDraft stops
+	// Claude while it drafts. Once the draft is shown, ViewDiff opens its
+	// diff, SendDraft hands it to the factory and KeepDraft leaves it for
+	// later.
+	New, Send, Discard             key.Binding
+	StopDraft                      key.Binding
+	ViewDiff, SendDraft, KeepDraft key.Binding
+	Details                        key.Binding
+	Cancel                         key.Binding
 	// Back is Esc: back to the list from the right pane, and quit from the
 	// list. It goes unlisted, since q and ← already say both.
 	Back      key.Binding
@@ -44,6 +54,13 @@ func (m Model) keys() keyMap {
 		Keep:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "keep filter")),
 		Clear:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "clear")),
 		Details:   key.NewBinding(key.WithKeys("d", "i"), key.WithHelp("d", "details")),
+		New:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new run")),
+		Send:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "go to step 2")),
+		Discard:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+		StopDraft: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop Claude")),
+		ViewDiff:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "view the draft's diff")),
+		SendDraft: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send to factory (last step)")),
+		KeepDraft: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "keep for later")),
 		Cancel:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
 		Back:      key.NewBinding(key.WithKeys("esc")),
 		Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
@@ -52,6 +69,17 @@ func (m Model) keys() keyMap {
 	k.Search.SetEnabled(!right && len(m.allRuns) > 0)
 	k.Keep.SetEnabled(m.searching)
 	k.Clear.SetEnabled(m.searching)
+	k.New.SetEnabled(m.drafter != nil && m.sender != nil && m.startRoot() != "")
+	k.Send.SetEnabled(m.draft == draftPrompting)
+	k.Discard.SetEnabled(m.draft == draftPrompting)
+	k.StopDraft.SetEnabled(m.draft == draftWorking)
+	changed := m.draft == draftReady && m.draftResult.Stat != ""
+	k.ViewDiff.SetEnabled(changed)
+	k.SendDraft.SetEnabled(changed)
+	k.KeepDraft.SetEnabled(m.draft == draftReady)
+	if m.draft == draftReady && !changed {
+		k.KeepDraft.SetHelp("esc", "close")
+	}
 	k.Left.SetEnabled(right)
 	k.Right.SetEnabled(!right && run != nil)
 	k.Open.SetEnabled(right && run != nil)
@@ -66,9 +94,11 @@ func (m Model) keys() keyMap {
 	if run != nil {
 		k.Toggle.SetHelp("Space", "expand/collapse")
 	}
-	if m.searching {
-		// Typing goes to the search, so no other key does anything.
-		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.Copy, &k.Toggle, &k.Search, &k.Details, &k.Cancel, &k.Quit} {
+	if m.searching || m.draft != draftNone {
+		// Typing goes to the search or the prompt, and a draft being made or
+		// shown has keys of its own, so no other key does anything: d is the
+		// draft's diff then, not a run's details.
+		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.Copy, &k.Toggle, &k.Search, &k.New, &k.Details, &k.Cancel, &k.Quit} {
 			b.SetEnabled(false)
 		}
 	}
@@ -77,7 +107,7 @@ func (m Model) keys() keyMap {
 
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Keep, k.Clear, k.Up, k.Right, k.Open, k.Copy, k.Toggle, k.Search, k.Details, k.Cancel, k.Left, k.Quit}
+	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ViewDiff, k.KeepDraft, k.Keep, k.Clear, k.New, k.Up, k.Right, k.Open, k.Copy, k.Toggle, k.Search, k.Details, k.Cancel, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

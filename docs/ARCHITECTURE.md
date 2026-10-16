@@ -443,9 +443,34 @@ POST /factory              {project_root, prompt, reviews_dir?, no_validate?, at
 GET  /factory[?root=<path>] → {sessions: [Session...]}, newest first
 GET  /factory/{id}         → SessionDetail: the session plus each round's review findings
 POST /factory/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
+POST /factory/warm         {project_root, run_id} → 202: make the sidecars a run
+                             continuing run_id would use, from its baseline, before
+                             that run starts (503 no credential or not authenticated,
+                             404 unknown project or run)
+POST /factory/warm/{run}/cancel → 202: delete those sidecars (idempotent)
 GET  /snapshot             → each project carries `sessions` (state only), and the
                              top level a `review_auth_error`
 ```
+
+**Warm sidecars.** A factory run's sidecars take the better part of a minute
+to start (a seed, a snapshot, then a clone per reviewer). A run continuing a
+started run syncs its sidecars from that run's baseline, which is fixed when
+the run is started, and lays the work on the implementer's afterwards. So
+`chunk watch` asks for them with `POST /factory/warm` as soon as Claude starts a
+draft, and the daemon makes them (`factory.NewWarmPool`) from a detached
+checkout of the baseline beside the run's record while the draft is written
+and read. The next `POST /factory` continuing that run takes them, waiting for
+any still being made, and uses them in place of making its own when they suit
+it (same reviewers, org and image); the pool is then the run's, re-pointed at
+its worktree for any sidecar it replaces, and the checkout goes. Sidecars no
+run takes within 15 minutes, a draft with no changes, a failed draft and the
+daemon shutting down all delete them. New sidecars also start cold: build and
+lint caches empty, dependencies uninstalled. So once they are made, the daemon
+checks out the member the run's implementer will hold and runs the project's
+validation commands on it once (`WarmPool.WarmUp`), keeping none of their
+results; the run is handed that member as its implementer, where its checks
+run, and waits for the warm-up to finish before it starts, so nothing it runs
+overlaps the warm-up's commands.
 
 **Factory runs.** The daemon runs `factory.Run` in a goroutine. Each factory
 round is a `Round` with an `implement` turn (state, duration, cost, the

@@ -74,9 +74,13 @@ type RunOptions struct {
 	Status iostream.StatusFunc
 	// The rest report what the run is doing, and may be nil. OnStart is
 	// called once the run's worktree exists.
-	OnStart          func(runID string, wt Worktree)
-	OnEvent          func(Event)
-	OnActivity       func(claudecode.Activity)
+	OnStart    func(runID string, wt Worktree)
+	OnEvent    func(Event)
+	OnActivity func(claudecode.Activity)
+	// Warm is sidecars made ahead of a continued run, which it uses instead
+	// of making its own when they are for the run it continues. The run owns
+	// them from then on.
+	Warm             *WarmPool
 	OnReviewProgress func(review.ProgressEvent)
 	OnCheck          func(Check)
 }
@@ -188,51 +192,20 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 			keepRecord(dataDir, rec, status)
 		}
 	}()
-	// A continued run's sidecars are synced from the baseline's files, and
-	// the work is laid on the implementer's afterwards, so the reviewers see
-	// the whole change rather than only what this run adds.
-	showingBaseline := false
-	if cont != nil {
-		if err := wt.showBaseline(ctx); err != nil {
-			return rep, err
-		}
-		showingBaseline = true
-		defer func() {
-			if showingBaseline {
-				restoreWorktree(ctx, wt, status)
-			}
-		}()
+	pool, impl, err := runPool(ctx, opts, cont, wt, dataDir, rep.RunID, status)
+	if pool != nil {
+		defer func() { rep.KeptSidecars = closePool(ctx, pool, opts.KeepSidecars, status) }()
 	}
-
-	status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", opts.Reviewers))
-	pool, err := sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{
-		Size:  PoolSize(opts.Reviewers),
-		Name:  PoolName(rep.RunID),
-		OrgID: opts.OrgID,
-		Image: opts.Image,
-		// The sidecars start from the worktree, and their state is kept
-		// beside the run's record, where the dashboard finds it.
-		WorkDir:   wt.Path,
-		StatePath: PoolStatePath(dataDir, rep.RunID),
-	}, status)
 	if err != nil {
-		return rep, fmt.Errorf("create the run's sidecars: %w", err)
-	}
-	defer func() { rep.KeptSidecars = closePool(ctx, pool, opts.KeepSidecars, status) }()
-	// The run's pool is new, so NewPool has synced the worktree to its first
-	// member before returning, and the rest are cloned from a snapshot of it
-	// rather than synced: the worktree can have the work back now.
-	if showingBaseline {
-		showingBaseline = false
-		if err := wt.restoreWork(ctx); err != nil {
-			return rep, err
-		}
+		return rep, err
 	}
 	// The implementer holds the first member ready for the whole run, and
-	// starts without waiting for the rest; reviews are handed those.
-	impl, err := pool.Acquire(ctx)
-	if err != nil {
-		return rep, fmt.Errorf("check out the implementer's sidecar: %w", err)
+	// starts without waiting for the rest; reviews are handed those. Sidecars
+	// made ahead may have one warmed up for it already.
+	if impl == nil {
+		if impl, err = pool.Acquire(ctx); err != nil {
+			return rep, fmt.Errorf("check out the implementer's sidecar: %w", err)
+		}
 	}
 
 	exec := opts.Exec
@@ -293,6 +266,62 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		rep.Stat, rep.StatErr = workStat(ctx, wt)
 	}
 	return rep, err
+}
+
+// runPool is the run's sidecars: those made ahead of a continued run while
+// its work was drafted, with the implementer's member when one was warmed up
+// for it, or a pool of its own, made now. The pool is returned with an error
+// when the run has it but cannot go on.
+func runPool(ctx context.Context, opts RunOptions, cont *Continuation, wt Worktree, dataDir, runID string, status iostream.StatusFunc) (*sidecar.Pool, *sidecar.PoolEntry, error) {
+	if w := opts.Warm; w != nil && cont != nil && w.RunID == cont.From.RunID {
+		status(iostream.LevelStep, fmt.Sprintf("Using the implementer sidecar and %d reviewer sidecar(s) made while the work was drafted", opts.Reviewers))
+		if w.warmed != nil {
+			select {
+			case <-w.warmed:
+			default:
+				status(iostream.LevelInfo, "Waiting for the checks warming the implementer's sidecar to finish")
+			}
+		}
+		pool, impl, err := w.claim(ctx, wt.Path)
+		if err != nil {
+			return pool, nil, fmt.Errorf("wait for the implementer's sidecar to warm up: %w", err)
+		}
+		return pool, impl, nil
+	}
+	// A continued run's sidecars are synced from the baseline's files, and
+	// the work is laid on the implementer's afterwards, so the reviewers see
+	// the whole change rather than only what this run adds.
+	if cont != nil {
+		if err := wt.showBaseline(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
+	status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", opts.Reviewers))
+	pool, err := sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{
+		Size:  PoolSize(opts.Reviewers),
+		Name:  PoolName(runID),
+		OrgID: opts.OrgID,
+		Image: opts.Image,
+		// The sidecars start from the worktree, and their state is kept
+		// beside the run's record, where the dashboard finds it.
+		WorkDir:   wt.Path,
+		StatePath: PoolStatePath(dataDir, runID),
+	}, status)
+	// The pool is new, so NewPool has synced the worktree to its first member
+	// before returning, and the rest are cloned from a snapshot of it rather
+	// than synced: the worktree can have the work back now, whether or not
+	// the sidecars could be made.
+	if cont != nil {
+		if err != nil {
+			restoreWorktree(ctx, wt, status)
+		} else if rerr := wt.restoreWork(ctx); rerr != nil {
+			return pool, nil, rerr
+		}
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("create the run's sidecars: %w", err)
+	}
+	return pool, nil, nil
 }
 
 // describeWork is how a run's work is shown, from its stat.

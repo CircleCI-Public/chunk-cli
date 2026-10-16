@@ -2,6 +2,7 @@
 package watch
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -189,6 +190,31 @@ type Model struct {
 	// the detail under a run: its worktree and setup log.
 	runOpen    map[string]map[int]bool
 	runDetails bool
+	// drafter has Claude draft a prompt typed after n, in startDir's project
+	// when there is one, and sender hands the draft to the factory. draft is
+	// where that has got to: prompt is what is being typed, draftRoot the
+	// project Claude is drafting in, and draftResult what it made. draftCancel
+	// stops Claude, whose activity arrives on draftActivity until draftWait
+	// ends; draftLatest is the last of it. draftNote is what the last step
+	// said, and pendingRun the factory run just started, selected once a poll
+	// lists it.
+	draftCtx      context.Context
+	drafter       Drafter
+	sender        Sender
+	startDir      string
+	draft         draftState
+	prompt        string
+	draftRoot     string
+	draftResult   Draft
+	draftCancel   context.CancelFunc
+	draftWait     context.Context
+	draftActivity chan string
+	draftLatest   string
+	draftNote     string
+	pendingRun    string
+	// bottomMargin is how many of the terminal's last rows are left blank, for
+	// a terminal that reports more rows than it shows.
+	bottomMargin int
 	// spinning is true while a spinner tick chain is in flight, so a poll that
 	// finds something running after a quiet spell can start one without doubling
 	// up on a chain that never stopped.
@@ -221,6 +247,14 @@ func (m Model) WithConnection(conn chunkd.Connection) Model {
 	return m
 }
 
+// WithBottomMargin returns a copy of m that leaves the terminal's last rows
+// blank. Editors' built-in terminals can report a row or two more than they
+// show, and the rows they hide are the footer's.
+func (m Model) WithBottomMargin(rows int) Model {
+	m.bottomMargin = max(rows, 0)
+	return m
+}
+
 // WithRelaunch returns a copy of m that starts the daemon again when a poll
 // finds it gone.
 func (m Model) WithRelaunch() Model {
@@ -244,6 +278,10 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// A pending cancel is withdrawn by any key but the one that confirms it.
 	wasConfirm := m.runConfirm
 	m.runConfirm = ""
+	if m.draft != draftNone {
+		return m.updateDraftKey(msg)
+	}
+	m.draftNote = ""
 	if m.searching {
 		return m.updateSearchKey(msg)
 	}
@@ -251,6 +289,8 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Search):
 		m.searching = true
 		m.focusedPane = paneLeft
+	case key.Matches(msg, k.New):
+		m.draft, m.prompt = draftPrompting, ""
 	case key.Matches(msg, k.Quit, k.ForceQuit):
 		return m, tea.Quit
 	case key.Matches(msg, k.Back):
@@ -308,7 +348,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.height = msg.Height
+		m.height = max(msg.Height-m.bottomMargin, 1)
 		if m.output != nil {
 			m.output.wrap(m.width - 1)
 		}
@@ -322,6 +362,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateOutputKey(msg)
 		}
 		return m.updateDashboardKey(msg)
+
+	case tea.PasteMsg, draftActivityMsg, draftDoneMsg, runStartedMsg:
+		return m.updateDraftMsg(msg)
 
 	case errMsg:
 		m.daemonErr = msg.err
@@ -365,7 +408,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.allRuns = visibleRuns(msg.sessions, time.Now())
 		m.sessions = filterRuns(m.allRuns, m.query)
 		m.reviewAuthErr = msg.reviewAuthErr
-		m = m.reselectRun()
+		m = m.reselectRun().selectPendingRun()
 		if run := m.selectedRun(); run != nil {
 			if run.s.ID == prevRun && prevItem != nil {
 				m.runItem = m.findRunItem(run.s, *prevItem)
@@ -502,9 +545,12 @@ func (m Model) contentHeight() int {
 	if m.daemonErr != nil {
 		h--
 	}
-	// So does a run's confirmation or note.
+	// So does a run's confirmation or note, and a new run takes draftLines.
 	if m.runLine() != "" {
 		h--
+	}
+	if m.draft != draftNone {
+		h -= draftLines - 1
 	}
 	if h < 1 {
 		h = 1
@@ -608,7 +654,13 @@ func (m Model) renderFooter(st watchStyles) string {
 	// fixed-height reasoning as the notice below: a wrapped footer costs a line
 	// the layout did not budget for, which is worse than a hint the reader can
 	// find by pressing the key.
-	bar := newHelp(st, m.width-2).View(m.keys())
+	help := newHelp(st, m.width-2)
+	if m.draft != draftNone {
+		// A new run's keys are the ones a new user is told to press, so they
+		// stand out from the actions they name.
+		help.Styles.ShortKey = st.Teal.Bold(true)
+	}
+	bar := help.View(m.keys())
 	// help adds a hint that overflows when there is no room left for its
 	// ellipsis, so the clip below is still needed.
 	bar = clip(bar, m.width-2)
@@ -631,7 +683,14 @@ func (m Model) renderFooter(st watchStyles) string {
 	}
 
 	footer := m.renderFrameEdge(st, '╰', '┴', '╯') + "  " + bar + "\n"
+	if m.draft != draftNone {
+		// A new run's keys go last, under the step they are for.
+		footer = m.renderFrameEdge(st, '╰', '┴', '╯') + m.draftFooter(st, bar)
+	}
 	switch {
+	case m.draft != draftNone:
+	case m.draftNote != "":
+		footer += "  " + st.muted(clip(m.draftNote, m.width-2)) + "\n"
 	case m.runConfirm != "" && m.runLine() != "":
 		footer += "  " + st.warning(clip(m.runLine(), m.width-2)) + "\n"
 	case m.runLine() != "":
@@ -648,6 +707,10 @@ func (m Model) renderFooter(st watchStyles) string {
 func (m Model) runLine() string {
 	run := m.selectedRun()
 	switch {
+	case m.draft != draftNone:
+		return "draft"
+	case m.draftNote != "":
+		return m.draftNote
 	case run == nil:
 		return ""
 	case m.runConfirm == run.s.ID:

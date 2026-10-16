@@ -340,6 +340,12 @@ of its output under its row. `c` copies through the terminal (OSC 52), so a
 terminal that doesn't support it won't receive the copy. `q` only closes the
 dashboard; the run carries on.
 
+Press `n` to start a run from the dashboard, in three steps the footer walks you
+through: type the change you want and press `Enter`; Claude Code drafts it on
+your machine, in a copy of the project, while the factory's sidecars start;
+then `d` shows the draft's diff, and `Enter` sends the draft and your prompt to
+the factory to finish (`Esc` keeps the draft for later).
+
 ```
 chunk watch  2 runs  main@a3f9e12                        15:04:32
 ──────────────────────────────────────────────────────────────────
