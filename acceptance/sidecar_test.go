@@ -826,6 +826,31 @@ func TestPruneForceSkipsConfirmation(t *testing.T) {
 	assert.Equal(t, len(cci.Sidecars), 0, "expected sidecars to be pruned")
 }
 
+// TestPruneSkipInUseKeepsLocallyReferencedSidecars verifies that --skip-in-use
+// deletes only the sidecars no local state refers to.
+func TestPruneSkipInUseKeepsLocallyReferencedSidecars(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Sidecars = []fakes.Sidecar{
+		{ID: "sb-in-use", Name: "pool-sidecar", OrgID: "org-ddd"},
+		{ID: "sb-idle", Name: "stray-sidecar", OrgID: "org-ddd"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	pool := filepath.Join(env.HomeDir, ".local", "share", "chunk", "proj", "pools", "validate.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(pool), 0o755))
+	assert.NilError(t, os.WriteFile(pool, []byte(`{"sidecar_ids":["sb-in-use"]}`), 0o644))
+
+	result := binary.RunCLI(t, []string{"prune", "--org-id", "org-ddd", "--force", "--skip-in-use"}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Kept pool-sidecar"), result.Stderr)
+	assert.Equal(t, len(cci.Sidecars), 1)
+	assert.Equal(t, cci.Sidecars[0].ID, "sb-in-use")
+}
+
 // filterByMethod returns requests matching both method and path prefix.
 func filterByMethod(reqs []recorder.RecordedRequest, method, pathPrefix string) []recorder.RecordedRequest {
 	var out []recorder.RecordedRequest
