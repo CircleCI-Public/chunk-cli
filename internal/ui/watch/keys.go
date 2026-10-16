@@ -36,14 +36,14 @@ func (m Model) keys() keyMap {
 		Up:        key.NewBinding(key.WithKeys("up", "k", "w"), key.WithHelp("↑/↓", "select")),
 		Down:      key.NewBinding(key.WithKeys("down", "j", "s")),
 		Left:      key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "back")),
-		Right:     key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "details")),
+		Right:     key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "run")),
 		Open:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
 		Copy:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy failure")),
 		Toggle:    key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
 		Search:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search runs")),
 		Keep:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "keep filter")),
 		Clear:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "clear")),
-		Details:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "infra")),
+		Details:   key.NewBinding(key.WithKeys("d", "i"), key.WithHelp("d", "details")),
 		Cancel:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
 		Back:      key.NewBinding(key.WithKeys("esc")),
 		Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
@@ -53,22 +53,18 @@ func (m Model) keys() keyMap {
 	k.Keep.SetEnabled(m.searching)
 	k.Clear.SetEnabled(m.searching)
 	k.Left.SetEnabled(right)
-	k.Right.SetEnabled(!right)
-	k.Open.SetEnabled(right)
+	k.Right.SetEnabled(!right && run != nil)
+	k.Open.SetEnabled(right && run != nil)
 	k.Copy.SetEnabled(right && run != nil)
-	k.Toggle.SetEnabled(right)
-	// A run with nothing under infra yet (it failed before its worktree was
-	// made, say) draws no infra row, so i would do nothing.
+	k.Toggle.SetEnabled(right && run != nil)
+	k.Up.SetEnabled(len(m.sessions) > 0)
+	k.Down.SetEnabled(len(m.sessions) > 0)
+	// A run with nothing to detail yet (it failed before its worktree was
+	// made, say) draws no details row, so the key would do nothing.
 	k.Details.SetEnabled(run != nil && m.runDetailLines(m.styles(), *run) != nil)
 	k.Cancel.SetEnabled(run != nil && !run.s.State.Finished())
 	if run != nil {
 		k.Toggle.SetHelp("Space", "expand/collapse")
-	}
-	if run == nil {
-		k.Right.SetHelp("→", "activity")
-		if right {
-			k.Up.SetHelp("↑/↓", "navigate")
-		}
 	}
 	if m.searching {
 		// Typing goes to the search, so no other key does anything.

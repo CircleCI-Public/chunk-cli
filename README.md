@@ -8,7 +8,7 @@ On top of sidecars, chunk provides:
 
 - **`chunk validate`** to run your test, lint and format checks locally, on a sidecar, or in the background.
 - **`chunk factory`** to have an implementer agent make a change on a sidecar while reviewers check it against the prompts in `.chunk/reviews/`, until the checks pass.
-- **`chunk watch`** for a live dashboard of your sidecar pools, factory runs and recent activity.
+- **`chunk watch`** for a live dashboard of your factory runs.
 - **`chunk mutate`** to find test coverage gaps with mutation testing.
 
 ## Why chunk?
@@ -83,7 +83,7 @@ chunk validate --remote
 chunk sidecar ssh
 chunk sidecar ssh -- make test
 
-# Read the output of a command that ran on a sidecar (IDs show in `chunk watch`)
+# Read the output of a command that ran on a sidecar
 chunk sidecar logs <command-id> --follow
 
 # Delete your sidecars created more than 24h ago (without --before, all of them;
@@ -150,7 +150,7 @@ chunk factory build --continue <run-id>
 ## Other Tools
 
 ```bash
-chunk watch                  # live dashboard of pools and recent activity (--focus: this directory only)
+chunk watch                  # live dashboard of factory runs (--focus: this directory only)
 chunk mutate ./internal --parallel 4   # find coverage gaps; see docs/MUTATE.md
 chunk conflicts              # does this branch still merge cleanly? (advisory, always exits 0)
 chunk validate --async       # run in the background, then `chunk validate results`
@@ -174,7 +174,7 @@ chunk config set|show                      Manage configuration
 chunk validate [name]                      Run quality checks
 chunk validate results|variants            Background run results; validate code variants
 chunk factory bootstrap|build|start        Implement and review changes on sidecars
-chunk watch                                Live dashboard of pools and activity
+chunk watch                                Live dashboard of factory runs
 chunk mutate [path]                        Find test coverage gaps via mutation testing
 chunk conflicts                            Report whether this branch merges cleanly
 chunk hook disable|enable|status           Manage hook execution

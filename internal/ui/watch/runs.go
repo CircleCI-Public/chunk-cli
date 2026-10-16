@@ -15,16 +15,19 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-// maxRuns caps the runs the left pane lists. Live runs are always listed; the
-// ended ones fill what is left, newest first, so a day of factory runs does
-// not push every sidecar off the screen.
-const maxRuns = 5
+// maxRuns caps the ended runs the left pane lists. Live runs are always
+// listed; the ended ones fill what is left, newest first, so a long day's
+// history does not bury the runs that are still going.
+const maxRuns = 20
+
+// staleAfter is how long an ended run keeps its place in the list. A run
+// nobody has looked at for a day is history, not something to watch.
+const staleAfter = 24 * time.Hour
 
 // sessionInfo is one of the daemon's runs with the project it belongs to.
 type sessionInfo struct {
-	s          chunkd.Session
-	label      string
-	projectIdx int // index into Model.projects, for finding the run's commands
+	s     chunkd.Session
+	label string
 }
 
 // sessionActionMsg reports the outcome of a cancel request.
@@ -47,13 +50,13 @@ func cancelSessionCmd(id string) tea.Cmd {
 // newest first.
 func collectSessions(projects []chunkd.ProjectSnapshot) []sessionInfo {
 	var out []sessionInfo
-	for i, p := range projects {
+	for _, p := range projects {
 		label := p.RepoName
 		if label == "" {
 			label = filepath.Base(p.Root)
 		}
 		for _, s := range p.Sessions {
-			out = append(out, sessionInfo{s: s, label: label, projectIdx: i})
+			out = append(out, sessionInfo{s: s, label: label})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -86,44 +89,6 @@ func visibleRuns(all []sessionInfo, now time.Time) []sessionInfo {
 	return out
 }
 
-// splitRunSidecars takes the sidecars the daemon assigned to listed factory
-// runs out of the sidecar list. Shown as rows of their own they would read as
-// loose sidecars nobody owns. A sidecar in a run's worktree counts as the
-// run's too.
-func splitRunSidecars(sidecars []sidecarInfo, runs []sessionInfo) (rest []sidecarInfo, byRun map[string][]sidecarInfo) {
-	owners := map[string]string{}
-	worktrees := map[string]string{}
-	for _, r := range runs {
-		f := r.s.Factory
-		if f == nil {
-			continue
-		}
-		for _, id := range f.SidecarIDs {
-			owners[id] = r.s.ID
-		}
-		if f.Worktree != "" {
-			worktrees[filepath.Clean(f.Worktree)] = r.s.ID
-		}
-	}
-	byRun = map[string][]sidecarInfo{}
-	for _, sc := range sidecars {
-		if id, ok := owners[sc.id]; ok {
-			byRun[id] = append(byRun[id], sc)
-			continue
-		}
-		// A sidecar made from inside a run's worktree, by validation the agent
-		// ran there, belongs to the run even though its pool never named it.
-		if sc.projectPath != "" {
-			if id, ok := worktrees[filepath.Clean(sc.projectPath)]; ok {
-				byRun[id] = append(byRun[id], sc)
-				continue
-			}
-		}
-		rest = append(rest, sc)
-	}
-	return rest, byRun
-}
-
 // anySessionLive reports whether a run is running (the spinner runs for it).
 func anySessionLive(sessions []sessionInfo) bool {
 	for _, s := range sessions {
@@ -134,8 +99,8 @@ func anySessionLive(sessions []sessionInfo) bool {
 	return false
 }
 
-// selectedRun is the run the dashboard is showing, or nil when a sidecar is
-// selected.
+// selectedRun is the run the dashboard is showing, or nil when there is none
+// to show.
 func (m Model) selectedRun() *sessionInfo {
 	if i := m.runIndex(); i >= 0 {
 		return &m.sessions[i]
@@ -156,17 +121,9 @@ func (m Model) runIndex() int {
 	return -1
 }
 
-// reselectRun keeps the selection valid after a poll. Until a sidecar has
-// been selected, or while there are none, the newest run is; a run that has
-// dropped off the list gives way to the newest run, or to the sidecars when
-// there are none.
+// reselectRun keeps the selection valid after a poll: the newest run until
+// one has been chosen, and again when the chosen one drops off the list.
 func (m Model) reselectRun() Model {
-	if m.selRun == "" {
-		if len(m.sessions) > 0 && (m.selectedID == noSelection || len(m.sidecars) == 0) {
-			m.selRun = m.sessions[0].s.ID
-		}
-		return m
-	}
 	if m.runIndex() >= 0 {
 		return m
 	}
@@ -177,44 +134,23 @@ func (m Model) reselectRun() Model {
 	return m
 }
 
-// selectRun moves the selection to run i, or to the first sidecar when i is
-// past the last run.
+// selectRun moves the selection to run i, if there is one there.
 func (m Model) selectRun(i int) Model {
-	m.runItem, m.runConfirm, m.runNote = 0, "", ""
-	if i >= 0 && i < len(m.sessions) {
-		m.selRun = m.sessions[i].s.ID
+	if i < 0 || i >= len(m.sessions) {
 		return m
 	}
-	m.selRun = ""
+	m.runItem, m.runConfirm, m.runNote = 0, "", ""
+	m.selRun = m.sessions[i].s.ID
 	return m
 }
 
-// moveLeftSelection steps through the left pane, runs first and sidecars after
-// them, as one list.
-func (m Model) moveLeftSelection(delta int) Model {
-	if i := m.runIndex(); i >= 0 {
-		next := i + delta
-		switch {
-		case next < 0:
-			return m
-		case next < len(m.sessions):
-			return m.selectRun(next)
-		case len(m.sidecars) == 0:
-			return m
-		}
-		m = m.selectRun(-1)
-		m.selectedIdx = 0
-		m.selectedID = selectedSidecarID(m.sidecars, 0)
-		m.rightSelectedIdx = 0
-		return m.adjustLeftScroll()
+// moveRunSelection steps through the run list, stopping at either end.
+func (m Model) moveRunSelection(delta int) Model {
+	i := m.runIndex()
+	if i < 0 {
+		return m.selectRun(0)
 	}
-	if delta < 0 && m.selectedIdx == 0 && len(m.sessions) > 0 {
-		return m.selectRun(len(m.sessions) - 1)
-	}
-	m.selectedIdx = min(max(m.selectedIdx+delta, 0), max(len(m.sidecars)-1, 0))
-	m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-	m.rightSelectedIdx = 0
-	return m.adjustLeftScroll()
+	return m.selectRun(i + delta)
 }
 
 // requestRunCancel implements the two-press cancel. The first press asks, the
@@ -496,20 +432,15 @@ func (m Model) openText(name, text string) Model {
 }
 
 // filterRuns keeps the runs whose title, project, branch or status contains
-// every word of query, ignoring case, or that of one of its own sidecars
-// (bySidecars, by run ID). An empty query keeps them all.
-func filterRuns(all []sessionInfo, query string, bySidecars map[string][]sidecarInfo) []sessionInfo {
+// every word of query, ignoring case. An empty query keeps them all.
+func filterRuns(all []sessionInfo, query string) []sessionInfo {
 	words := strings.Fields(strings.ToLower(query))
 	if len(words) == 0 {
 		return all
 	}
 	var out []sessionInfo
 	for _, r := range all {
-		parts := []string{runTitle(r.s), r.label, r.s.Branch, runStatus(r.s)}
-		for _, sc := range bySidecars[r.s.ID] {
-			parts = append(parts, sidecarHaystack(sc))
-		}
-		hay := strings.ToLower(strings.Join(parts, " "))
+		hay := strings.ToLower(strings.Join([]string{runTitle(r.s), r.label, r.s.Branch, runStatus(r.s)}, " "))
 		match := true
 		for _, w := range words {
 			if !strings.Contains(hay, w) {
@@ -524,50 +455,17 @@ func filterRuns(all []sessionInfo, query string, bySidecars map[string][]sidecar
 	return out
 }
 
-// sidecarHaystack is the text a search looks through for a sidecar.
-func sidecarHaystack(sc sidecarInfo) string {
-	return strings.Join([]string{sc.repoName, sc.branch, sc.projectName, sc.name, sc.id, sc.sessionID}, " ")
-}
-
-// filterSidecarsByQuery keeps the sidecars whose repo, branch, name or session
-// contains every word of query, so the search reaches them as it does runs.
-func filterSidecarsByQuery(all []sidecarInfo, query string) []sidecarInfo {
-	words := strings.Fields(strings.ToLower(query))
-	if len(words) == 0 {
-		return all
-	}
-	var out []sidecarInfo
-	for _, sc := range all {
-		hay := strings.ToLower(sidecarHaystack(sc))
-		match := true
-		for _, w := range words {
-			if !strings.Contains(hay, w) {
-				match = false
-				break
-			}
-		}
-		if match {
-			out = append(out, sc)
-		}
-	}
-	return out
-}
-
 // setQuery filters the run list by query and keeps the selection on a run
 // that is still listed.
 func (m Model) setQuery(query string) Model {
 	m.query = query
-	m.sessions = filterRuns(m.allRuns, query, m.runSidecars)
-	m.sidecars = filterSidecarsByQuery(m.looseSidecars, query)
-	m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
-	m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-	m.leftScrollOffset = 0
+	m.sessions = filterRuns(m.allRuns, query)
 	prev := m.selRun
 	m = m.reselectRun()
 	if m.selRun != prev {
 		m.runItem, m.runConfirm, m.runNote = 0, "", ""
 	}
-	return m.adjustLeftScroll()
+	return m
 }
 
 // updateSearchKey handles a key while the run search has the keyboard: text
@@ -596,15 +494,15 @@ func (m Model) updateSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // ---- left pane: the run list ---------------------------------------------------
 
-// renderRunList draws the runs at the top of the left pane, or nothing when
-// there are none, so a dashboard with no runs looks as it always has.
+// renderRunList draws the left pane: every run the daemon is tracking, or,
+// when there are none, where runs come from.
 func (m Model) renderRunList(st watchStyles) []string {
-	if len(m.allRuns) == 0 {
-		return nil
-	}
 	head := st.vdim("runs")
-	if m.focusedPane == paneLeft && m.selRun != "" {
+	if m.focusedPane == paneLeft {
 		head = st.emphasis("runs")
+	}
+	if len(m.allRuns) == 0 {
+		return []string{head, "", st.muted("no runs yet"), ""}
 	}
 	lines := []string{head, m.searchRow(st)}
 	if len(m.sessions) == 0 {

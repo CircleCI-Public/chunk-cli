@@ -12,131 +12,23 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 )
 
-// modelWithInvocation builds a model holding one sidecar, one invocation, and
-// optionally a buffered command matching it.
-func modelWithInvocation(t *testing.T, cmds []chunkd.CommandState) Model {
+// paneModel builds the dashboard the output pane is opened over: one factory
+// run, selected, with the right pane focused.
+func paneModel(t *testing.T) Model {
 	t.Helper()
-	start := time.Now().Add(-time.Minute)
-	events := []eventlog.Event{
-		{Ts: start, SidecarID: "sc-1", Op: eventlog.OpValidate, Level: "info", Msg: "$ go test ./..."},
-		{Ts: start.Add(5 * time.Second), SidecarID: "sc-1", Op: eventlog.OpValidate, Level: "error", Msg: "1/2 passed  5.0s"},
-	}
-	return Model{
-		width:  120,
-		height: 40,
-		sidecars: []sidecarInfo{{
-			id:         "sc-1",
-			projectIdx: 0,
-		}},
-		events:      [][]eventlog.Event{events},
-		commands:    [][]chunkd.CommandState{cmds},
-		focusedPane: paneRight,
-	}
-}
-
-func TestCommandForInvocationMatchesOnSidecarAndTime(t *testing.T) {
-	submitted := time.Now().Add(-time.Minute).Add(time.Second)
-	m := modelWithInvocation(t, []chunkd.CommandState{{
-		CommandID:   "cmd-1",
-		SidecarID:   "sc-1",
-		SubmittedAt: submitted,
-	}})
-
-	groups := m.currentInvocGroups()
-	assert.Assert(t, cmp.Len(groups, 1))
-	got := m.commandForInvocation(*m.selectedSidecar(), groups[0])
-	assert.Assert(t, got != nil)
-	assert.Check(t, cmp.Equal(got.CommandID, "cmd-1"))
-}
-
-func TestCommandForInvocationIgnoresOtherSidecar(t *testing.T) {
-	submitted := time.Now().Add(-time.Minute).Add(time.Second)
-	m := modelWithInvocation(t, []chunkd.CommandState{{
-		CommandID:   "cmd-other",
-		SidecarID:   "sc-2",
-		SubmittedAt: submitted,
-	}})
-
-	groups := m.currentInvocGroups()
-	got := m.commandForInvocation(*m.selectedSidecar(), groups[0])
-	assert.Check(t, cmp.Nil(got), "a command from another sidecar must not be offered")
-}
-
-func TestCommandForInvocationIgnoresCommandOutsideSpan(t *testing.T) {
-	m := modelWithInvocation(t, []chunkd.CommandState{{
-		CommandID:   "cmd-old",
-		SidecarID:   "sc-1",
-		SubmittedAt: time.Now().Add(-2 * time.Hour),
-	}})
-
-	groups := m.currentInvocGroups()
-	got := m.commandForInvocation(*m.selectedSidecar(), groups[0])
-	assert.Check(t, cmp.Nil(got), "a command from a different run must not be joined to this one")
-}
-
-func TestCommandForInvocationPrefersLatestMatch(t *testing.T) {
-	base := time.Now().Add(-time.Minute)
-	m := modelWithInvocation(t, []chunkd.CommandState{
-		{CommandID: "cmd-first", SidecarID: "sc-1", SubmittedAt: base.Add(time.Second)},
-		{CommandID: "cmd-second", SidecarID: "sc-1", SubmittedAt: base.Add(3 * time.Second)},
-	})
-
-	groups := m.currentInvocGroups()
-	got := m.commandForInvocation(*m.selectedSidecar(), groups[0])
-	assert.Assert(t, got != nil)
-	assert.Check(t, cmp.Equal(got.CommandID, "cmd-second"), "a re-run inside one group resolves to the newer command")
-}
-
-func TestOpenSelectedOutputRequiresACommand(t *testing.T) {
-	m := modelWithInvocation(t, nil)
-	opened, cmd := m.openSelectedOutput()
-	assert.Check(t, cmp.Nil(opened), "with no buffered command there is nothing to open")
-	assert.Check(t, cmp.Nil(cmd))
-}
-
-func TestOpenSelectedOutputSetsUpPane(t *testing.T) {
-	submitted := time.Now().Add(-time.Minute).Add(time.Second)
-	exit := 1
-	m := modelWithInvocation(t, []chunkd.CommandState{{
-		CommandID:   "cmd-1",
-		SidecarID:   "sc-1",
-		Name:        "go test ./...",
-		SubmittedAt: submitted,
-		ExitCode:    &exit,
-	}})
-
-	opened, cmd := m.openSelectedOutput()
-	assert.Assert(t, opened != nil)
-	assert.Assert(t, opened.output != nil)
-	assert.Check(t, cmp.Equal(opened.output.commandID, "cmd-1"))
-	assert.Check(t, cmp.Equal(opened.output.name, "go test ./..."))
-	assert.Check(t, opened.output.pinned, "a freshly opened pane follows the end")
-	assert.Check(t, cmd != nil)
-	assert.Check(t, opened.outputSeq > m.outputSeq, "opening must advance the tick generation")
-}
-
-func TestOpenSelectedOutputFallsBackToInvocationLabel(t *testing.T) {
-	submitted := time.Now().Add(-time.Minute).Add(time.Second)
-	m := modelWithInvocation(t, []chunkd.CommandState{{
-		CommandID:   "cmd-1",
-		SidecarID:   "sc-1",
-		SubmittedAt: submitted,
-	}})
-
-	opened, _ := m.openSelectedOutput()
-	assert.Assert(t, opened != nil)
-	// Taken from the "$ ..." status event when the registration carried no name.
-	assert.Check(t, cmp.Equal(opened.output.name, "go test ./..."))
+	m := sessModel(factoryRun("abc", chunkd.SessionRunning, time.Now()))
+	m.width, m.height = 120, 40
+	m.focusedPane = paneRight
+	return m.reselectRun()
 }
 
 // Closing must not schedule a dashboard tick: the dashboard's own poll chain ran
 // throughout, so starting another leaves two chains polling and doubles the rate
 // on every open/close cycle.
 func TestClosingOutputPaneDoesNotStartASecondPollChain(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-1"}
 
 	next, cmd := m.updateOutputKey(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -149,7 +41,7 @@ func TestClosingOutputPaneDoesNotStartASecondPollChain(t *testing.T) {
 // A tick belonging to a previous pane opening must die rather than poll
 // alongside the current one.
 func TestStaleOutputTickIsDropped(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	// Running, so that the reschedule turns on the sequence check alone — a
 	// finished pane stops for its own reason and would not test this.
 	m.output = &outputPane{commandID: "cmd-2", running: true}
@@ -163,26 +55,13 @@ func TestStaleOutputTickIsDropped(t *testing.T) {
 }
 
 func TestOutputTickStopsWhenPaneClosed(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	_, cmd := m.Update(outputTickMsg{seq: 0})
 	assert.Check(t, cmp.Nil(cmd))
 }
 
-// With the pane covering the dashboard, a click would move a selection the
-// reader cannot see.
-func TestMouseClickIgnoredWhileOutputPaneOpen(t *testing.T) {
-	m := modelWithInvocation(t, nil)
-	m.rightSelectedIdx = 3
-	m.output = &outputPane{commandID: "cmd-1"}
-
-	next, _ := m.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 90, Y: 6})
-	nm, ok := next.(Model)
-	assert.Assert(t, ok)
-	assert.Check(t, cmp.Equal(nm.rightSelectedIdx, 3), "selection must not move behind the pane")
-}
-
 func TestWithOutputChunkIgnoresChunkForAnotherCommand(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-current"}
 
 	next, _ := m.Update(outputMsg{
@@ -196,7 +75,7 @@ func TestWithOutputChunkIgnoresChunkForAnotherCommand(t *testing.T) {
 }
 
 func TestWithOutputChunkReportsMissingCommand(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-1"}
 
 	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{Found: false}})
@@ -206,7 +85,7 @@ func TestWithOutputChunkReportsMissingCommand(t *testing.T) {
 }
 
 func TestWithOutputChunkAdvancesOffsetAndState(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-1", pinned: true}
 	exit := 2
 
@@ -225,7 +104,7 @@ func TestWithOutputChunkAdvancesOffsetAndState(t *testing.T) {
 // truncated must latch: a later chunk that happens not to be truncated does not
 // mean the earlier gap healed.
 func TestWithOutputChunkKeepsTruncatedLatched(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-1", truncated: true}
 
 	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{
@@ -238,7 +117,7 @@ func TestWithOutputChunkKeepsTruncatedLatched(t *testing.T) {
 
 // The daemon explaining why a stream broke is worth nothing if the pane drops it.
 func TestWithOutputChunkSurfacesStreamError(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-1"}
 
 	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{
@@ -257,7 +136,7 @@ func TestWithOutputChunkSurfacesStreamError(t *testing.T) {
 }
 
 func TestWithOutputChunkClearsStreamErrorWhenItResolves(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-1"}
 
 	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{
@@ -274,7 +153,7 @@ func TestWithOutputChunkClearsStreamErrorWhenItResolves(t *testing.T) {
 }
 
 func TestRenderOutputPaneShowsStatusAndHints(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	exit := 1
 	m.output = &outputPane{
 		commandID: "cmd-1",
@@ -294,13 +173,13 @@ func TestRenderOutputPaneShowsStatusAndHints(t *testing.T) {
 }
 
 func TestRenderUsesOutputPaneWhenOpen(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-1", name: "lint", lines: []string{"only-in-output-pane"}}
 
 	out := m.render()
 	assert.Check(t, cmp.Contains(out, "only-in-output-pane"))
 	// The two-pane dashboard must not also be drawn.
-	assert.Check(t, !strings.Contains(out, "sidecars"), "the dashboard should be replaced, not appended")
+	assert.Check(t, !strings.Contains(out, "runs"), "the dashboard should be replaced, not appended")
 }
 
 // TestOutputPaneHoldsTheDashboardHeight pins the layout budget. The pane replaces
@@ -308,7 +187,7 @@ func TestRenderUsesOutputPaneWhenOpen(t *testing.T) {
 // the terminal on every render — and an error line added on top of a full
 // scrollback is exactly how that happens.
 func TestOutputPaneHoldsTheDashboardHeight(t *testing.T) {
-	dashboard := modelWithInvocation(t, nil)
+	dashboard := paneModel(t)
 	want := strings.Count(dashboard.render(), "\n")
 
 	// Enough output to fill the pane, so nothing is absorbed by blank padding.
@@ -318,11 +197,11 @@ func TestOutputPaneHoldsTheDashboardHeight(t *testing.T) {
 		return p
 	}
 
-	quiet := modelWithInvocation(t, nil)
+	quiet := paneModel(t)
 	quiet.output = filled()
 	assert.Check(t, cmp.Equal(strings.Count(quiet.render(), "\n"), want))
 
-	failed := modelWithInvocation(t, nil)
+	failed := paneModel(t)
 	failed.output = filled()
 	failed.output.err = errors.New("stream ended early")
 	assert.Check(t, cmp.Equal(strings.Count(failed.render(), "\n"), want),
@@ -331,7 +210,7 @@ func TestOutputPaneHoldsTheDashboardHeight(t *testing.T) {
 
 func TestOutputPaneRendersAtDegenerateHeights(t *testing.T) {
 	for _, height := range []int{0, 1, 2, 5, 6} {
-		m := modelWithInvocation(t, nil)
+		m := paneModel(t)
 		m.height = height
 		m.output = &outputPane{commandID: "cmd-1", name: "go test", pinned: true}
 		m.output.feed([]byte("one\ntwo\n"))
@@ -347,7 +226,7 @@ func TestOutputPaneRendersAtDegenerateHeights(t *testing.T) {
 // long as someone is reading it, and at 200ms that is a socket round trip five
 // times a second for output that cannot move.
 func TestOutputTickStopsOnceTheCommandFinishes(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-1", running: true}
 	m.outputSeq = 1
 
@@ -372,7 +251,7 @@ func TestOutputTickStopsOnceTheCommandFinishes(t *testing.T) {
 // An evicted buffer is not coming back, so the tail has nothing to wait for.
 // Without this the chain polls forever for a command the daemon has forgotten.
 func TestOutputTickStopsWhenTheBufferWasEvicted(t *testing.T) {
-	m := modelWithInvocation(t, nil)
+	m := paneModel(t)
 	m.output = &outputPane{commandID: "cmd-1", running: true}
 	m.outputSeq = 1
 
@@ -439,32 +318,4 @@ func TestVisibleLinesDoesNotWriteIntoTheScrollback(t *testing.T) {
 	assert.Check(t, cmp.Len(p.lines, 2))
 	assert.Check(t, cmp.Equal(p.lines[:cap(p.lines)][2], ""),
 		"the pending line leaked into the backing array")
-}
-
-// The join must follow the sidecar it is handed, not whichever row happens to
-// be selected. Before the sidecar became a parameter these two came from
-// different places, so a call for a non-selected invocation matched against the
-// wrong row and returned a command that never produced that output.
-func TestCommandForInvocationUsesTheSidecarItIsGiven(t *testing.T) {
-	submitted := time.Now().Add(-time.Minute).Add(time.Second)
-	m := modelWithInvocation(t, []chunkd.CommandState{{
-		CommandID:   "cmd-1",
-		SidecarID:   "sc-1",
-		SubmittedAt: submitted,
-	}})
-	groups := m.currentInvocGroups()
-	assert.Assert(t, cmp.Len(groups, 1))
-
-	// The selected row still matches, as before.
-	sel := m.selectedSidecar()
-	assert.Assert(t, sel != nil)
-	got := m.commandForInvocation(*sel, groups[0])
-	assert.Assert(t, got != nil)
-	assert.Check(t, cmp.Equal(got.CommandID, "cmd-1"))
-
-	// A row holding a different sidecar matches nothing, whatever is selected.
-	other := *sel
-	other.id = "sc-elsewhere"
-	assert.Check(t, cmp.Nil(m.commandForInvocation(other, groups[0])),
-		"the answer must follow the row passed in, not m.selectedIdx")
 }
