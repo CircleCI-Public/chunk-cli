@@ -34,8 +34,8 @@ func CommonDirCtx(ctx context.Context, dir string) (string, error) {
 		// as given lands in the wrong place when a symlink stands for a
 		// directory deeper than itself.
 		base := dir
-		if real, err := filepath.EvalSymlinks(dir); err == nil {
-			base = real
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			base = resolved
 		}
 		common = filepath.Join(base, common)
 	}
@@ -43,11 +43,12 @@ func CommonDirCtx(ctx context.Context, dir string) (string, error) {
 }
 
 // HookOutcome is what EnsurePreCommit did to the pre-commit hook.
+// The zero value is no outcome, so an unset result never reads as success.
 type HookOutcome int
 
 const (
 	// HookCreated means there was no pre-commit hook and one was written.
-	HookCreated HookOutcome = iota
+	HookCreated HookOutcome = iota + 1
 	// HookAppended means the command was added to the end of the hook.
 	HookAppended
 	// HookUpToDate means the hook already ran the command.

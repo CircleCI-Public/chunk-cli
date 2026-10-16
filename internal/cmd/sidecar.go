@@ -1112,15 +1112,18 @@ Example:
 				cfg = &config.ProjectConfig{}
 			}
 
-			env, envCached, runErr := loadEnvironment(ctx, dir, cfg, force, status)
-			if envCached {
-				streams.ErrPrintln(msgUsingSavedEnvironment)
-			}
-			if runErr == nil && !envCached {
-				saveConfigOrWarn(dir, cfg, status)
-			}
-			if runErr == nil {
-				runErr = provisionSidecar(ctx, env, sidecar.ProvisionOptions{
+			env, envCached, runErr := func() (*envbuilder.Environment, bool, error) {
+				env, envCached, err := loadEnvironment(ctx, dir, cfg, force, status)
+				if err != nil {
+					return nil, false, err
+				}
+				if envCached {
+					streams.ErrPrintln(msgUsingSavedEnvironment)
+				} else {
+					saveConfigOrWarn(dir, cfg, status)
+				}
+
+				err = provisionSidecar(ctx, env, sidecar.ProvisionOptions{
 					Dir:      dir,
 					Client:   client,
 					SkipSync: skipSync,
@@ -1134,19 +1137,22 @@ Example:
 						return id, err
 					},
 				}, envFile, envVarsFlag)
-			}
-			if runErr == nil && cfg.MarkRemoteCommandsForSidecarSetup() && saveConfigOrWarn(dir, cfg, status) {
-				// Plain and flush left, as it was before the steps moved; no
-				// status level prints that.
-				streams.ErrPrintln("Marked install and gate commands as remote in .chunk/config.json")
-			}
-			if runErr == nil {
+				if err != nil {
+					return env, envCached, err
+				}
+
+				if cfg.MarkRemoteCommandsForSidecarSetup() && saveConfigOrWarn(dir, cfg, status) {
+					// Plain and flush left, as it was before the steps moved; no
+					// status level prints that.
+					streams.ErrPrintln("Marked install and gate commands as remote in .chunk/config.json")
+				}
 				streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it\n")
 				streams.ErrPrintf("to record it as the project's sidecar image:\n")
 				streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n")
 				streams.ErrPrintf("  chunk sidecar snapshot list              # list snapshot IDs for your org\n\n")
-			}
-			runErr = sidecarSetupError(runErr, rc.CircleCITokenSource)
+				return env, envCached, nil
+			}()
+			runErr = sidecarSetupError(ctx, runErr, rc.CircleCITokenSource)
 
 			outcome := "success"
 			if runErr != nil {
@@ -1238,12 +1244,16 @@ func saveConfigOrWarn(dir string, cfg *config.ProjectConfig, status iostream.Sta
 }
 
 // sidecarSetupError phrases an error from sidecar setup for the user. Errors
-// that are already phrased, such as from resolving the sidecar, pass through.
-func sidecarSetupError(err error, tokenSource string) error {
+// that are already phrased, such as from resolving the sidecar, pass through,
+// as do errors from a cancelled ctx, so a Ctrl-C reads as one.
+func sidecarSetupError(ctx context.Context, err error, tokenSource string) error {
 	if err == nil {
 		return nil
 	}
 	if _, ok := errors.AsType[*userError](err); ok {
+		return err
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return err
 	}
 	if ue := sshSessionError(err); ue != nil {

@@ -16,11 +16,12 @@ import (
 type ConfirmFunc func(path, diff string) (bool, error)
 
 // Outcome is what writing an agent's hook file did.
+// The zero value is no outcome, so an unset result never reads as success.
 type Outcome int
 
 const (
 	// Created means the file did not exist and was written.
-	Created Outcome = iota
+	Created Outcome = iota + 1
 	// Updated means the user agreed to merge chunk's hooks into the file.
 	Updated
 	// UpToDate means the file already had chunk's hooks.

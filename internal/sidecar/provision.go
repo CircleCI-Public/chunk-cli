@@ -56,14 +56,29 @@ func Provision(ctx context.Context, opts ProvisionOptions, env *envbuilder.Envir
 		return err
 	}
 
-	if !opts.SkipSync {
+	var ws string
+	if opts.SkipSync {
+		ws = savedWorkspace(ctx, sidecarID)
+	} else {
 		opts.Status(iostream.LevelStep, "Syncing files to sidecar...")
-		if err := RsyncSync(ctx, opts.Client, sidecarID, "", opts.Dir, opts.Status); err != nil {
+		ws, err = rsyncTo(ctx, opts.Client, sidecarID, "", opts.Dir, true, false, opts.Status)
+		if err != nil {
 			return fmt.Errorf("%w: %w", ErrSync, err)
 		}
 	}
 
-	return runSetupSteps(ctx, opts, sidecarID, env)
+	return runSetupSteps(ctx, opts, sidecarID, ws, env)
+}
+
+// savedWorkspace is the workspace saved for sidecarID by an earlier sync, or
+// "" when there is none. Only the active sidecar has one saved, so any other
+// sidecar has none.
+func savedWorkspace(ctx context.Context, sidecarID string) string {
+	active, err := LoadActive(ctx)
+	if err != nil || active.ID() != sidecarID {
+		return ""
+	}
+	return active.Workspace
 }
 
 func ensureSSHKey(status iostream.StatusFunc) error {
@@ -82,18 +97,12 @@ func ensureSSHKey(status iostream.StatusFunc) error {
 }
 
 // runSetupSteps runs env's setup steps on the sidecar over SSH, one session
-// each, stopping at the first that fails.
-func runSetupSteps(ctx context.Context, opts ProvisionOptions, sidecarID string, env *envbuilder.Environment) error {
+// each, stopping at the first that fails. They run in ws, the synced
+// workspace, unless it is "".
+func runSetupSteps(ctx context.Context, opts ProvisionOptions, sidecarID, ws string, env *envbuilder.Environment) error {
 	if len(env.Setup) == 0 {
 		opts.Status(iostream.LevelInfo, "No setup steps detected, skipping")
 		return nil
-	}
-
-	// ws is non-empty only when re-attaching to a pre-existing sidecar that had a
-	// workspace saved; for freshly created sidecars it stays "".
-	var ws string
-	if active, err := LoadActive(ctx); err == nil && active != nil {
-		ws = active.Workspace
 	}
 
 	for _, step := range env.Setup {

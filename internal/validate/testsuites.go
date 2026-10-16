@@ -28,11 +28,12 @@ func TestSuitesTemplate(workDir string) string {
 }
 
 // TestSuitesOutcome is what WriteTestSuites did.
+// The zero value is no outcome, so an unset result never reads as success.
 type TestSuitesOutcome int
 
 const (
 	// TestSuitesWritten means .circleci/test-suites.yml was written.
-	TestSuitesWritten TestSuitesOutcome = iota
+	TestSuitesWritten TestSuitesOutcome = iota + 1
 	// TestSuitesExist means the project already had a test-suites.yml, which
 	// was left alone.
 	TestSuitesExist

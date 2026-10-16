@@ -40,7 +40,7 @@ func detectVCS(ctx context.Context, dir string, status iostream.StatusFunc) (*co
 		status(iostream.LevelWarn, fmt.Sprintf("Could not detect VCS info: %v", err))
 		return nil, nil
 	}
-	status(iostream.LevelStep, fmt.Sprintf("Detected repository: %s/%s", org, repo))
+	status(iostream.LevelStep, "Detected repository: "+ui.Bold(org+"/"+repo))
 	return &config.VCSConfig{Org: org, Repo: repo}, nil
 }
 
@@ -70,7 +70,7 @@ func detectCommands(ctx context.Context, claude *anthropic.Client, dir string, s
 // between a surprising config and an explicable one.
 func reportDetectionSource(det validate.Detection, status iostream.StatusFunc) {
 	if det.Source != "" {
-		status(iostream.LevelStep, "Detected commands from "+det.Source)
+		status(iostream.LevelStep, "Detected commands from "+ui.Bold(det.Source))
 	}
 	// With nothing detected, the notes are all detection has to say — and they
 	// are what explains a CircleCI config that exists but could not be used.

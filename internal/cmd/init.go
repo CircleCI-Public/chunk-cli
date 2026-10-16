@@ -185,7 +185,7 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 	if !opts.skipOrgID && cfg.OrgID == "" {
 		if orgID := detectOrgID(ctx, rc, streams); orgID != "" {
 			cfg.OrgID = orgID
-			status(iostream.LevelStep, "Org ID: "+orgID)
+			status(iostream.LevelStep, "Org ID: "+ui.Bold(orgID))
 		}
 	}
 

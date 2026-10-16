@@ -96,3 +96,35 @@ func TestProvisionSkipsTheTestStep(t *testing.T) {
 	assert.Assert(t, strings.Contains(cmds[0], "npm install"), "got: %s", cmds[0])
 	assert.Assert(t, !strings.Contains(cmds[0], "npm test"), "got: %s", cmds[0])
 }
+
+func TestProvisionRunsInTheSavedWorkspaceOnlyForItsSidecar(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		activeID string
+		wantCD   bool
+	}{
+		{name: "active sidecar", activeID: "sidecar-123", wantCD: true},
+		{name: "another sidecar", activeID: "sidecar-other", wantCD: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(config.EnvHome, t.TempDir())
+			t.Setenv(config.EnvXDGDataHome, t.TempDir())
+			ctx := context.Background()
+			assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{tc.activeID}, Workspace: "/home/user/widget"}))
+
+			sshSrv := fakes.NewSSHServerAcceptingAnyKey(t)
+			sshSrv.SetResult("", 0)
+			cci := fakes.NewFakeCircleCI()
+			cci.AddKeyURL = sshSrv.Addr()
+
+			opts := provisionOptions(t, newProvisionClient(t, cci))
+			opts.SkipSync = true
+			env := &envbuilder.Environment{Setup: []envbuilder.Step{{Name: "install", Command: "npm install"}}}
+			assert.NilError(t, Provision(ctx, opts, env))
+
+			cmds := sshSrv.Commands()
+			assert.Equal(t, len(cmds), 1, "got: %v", cmds)
+			assert.Equal(t, strings.Contains(cmds[0], "/home/user/widget"), tc.wantCD, "got: %s", cmds[0])
+		})
+	}
+}

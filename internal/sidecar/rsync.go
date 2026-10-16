@@ -37,7 +37,8 @@ func RsyncSync(ctx context.Context,
 	client *circleci.Client, sidecarID, workdir, cwd string,
 	status iostream.StatusFunc) error {
 
-	return rsyncTo(ctx, client, sidecarID, workdir, cwd, true, false, status)
+	_, err := rsyncTo(ctx, client, sidecarID, workdir, cwd, true, false, status)
+	return err
 }
 
 // RsyncSyncEphemeral syncs like RsyncSync but neither reads nor writes the
@@ -49,7 +50,8 @@ func RsyncSyncEphemeral(ctx context.Context,
 	if workdir == "" {
 		return fmt.Errorf("rsync: workdir is required for an ephemeral sync")
 	}
-	return rsyncTo(ctx, client, sidecarID, workdir, cwd, false, false, status)
+	_, err := rsyncTo(ctx, client, sidecarID, workdir, cwd, false, false, status)
+	return err
 }
 
 // rsyncPoolSidecar syncs the local tree at cwd to one pool member's repoPath.
@@ -60,16 +62,18 @@ func rsyncPoolSidecar(ctx context.Context, client *circleci.Client,
 	sidecarID string, retryOn404 bool, repoPath, cwd string,
 	status iostream.StatusFunc) error {
 
-	return rsyncTo(ctx, client, sidecarID, repoPath, cwd, false, retryOn404, status)
+	_, err := rsyncTo(ctx, client, sidecarID, repoPath, cwd, false, retryOn404, status)
+	return err
 }
 
+// rsyncTo syncs cwd to the sidecar and returns the workspace it synced to.
 func rsyncTo(ctx context.Context, client *circleci.Client,
 	sidecarID, workdir, cwd string, persist, retryOn404 bool,
-	status iostream.StatusFunc) error {
+	status iostream.StatusFunc) (string, error) {
 
 	sess, err := OpenSession(ctx, client, sidecarID, retryOn404)
 	if err != nil {
-		return fmt.Errorf("rsync: open session: %w", err)
+		return "", fmt.Errorf("rsync: open session: %w", err)
 	}
 
 	// Detect a git worktree by walking up from cwd to find the git root, then
@@ -92,7 +96,7 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 		originURL, execErr := gitremote.URL(ctx, gitRoot, "origin")
 		if execErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return fmt.Errorf("rsync: read git remote origin: %w", ctxErr)
+				return "", fmt.Errorf("rsync: read git remote origin: %w", ctxErr)
 			}
 			status(iostream.LevelWarn, fmt.Sprintf("Could not read git remote origin: %v", execErr))
 		} else {
@@ -104,7 +108,7 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	if persist {
 		repoPath, err = rsyncWorkspace(ctx, workdir, cwd, worktreeOriginURL, isWorktree, status)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if err := persistWorkspace(ctx, repoPath); err != nil {
 			status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))
@@ -114,13 +118,13 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	status(iostream.LevelInfo, fmt.Sprintf("Syncing workspace %s...", repoPath))
 
 	if err := ensureRemoteRsync(ctx, sess); err != nil {
-		return err
+		return "", err
 	}
 
 	if result, err := ExecOverSSH(ctx, sess, "mkdir -p "+ShellEscape(repoPath), nil, nil); err != nil {
-		return fmt.Errorf("rsync: mkdir: %w", err)
+		return "", fmt.Errorf("rsync: mkdir: %w", err)
 	} else if result.ExitCode != 0 {
-		return fmt.Errorf("rsync: mkdir %s: %s", repoPath, result.Stderr)
+		return "", fmt.Errorf("rsync: mkdir %s: %s", repoPath, result.Stderr)
 	}
 
 	flags := mirrorFlags()
@@ -140,17 +144,17 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	}
 	src := strings.TrimRight(cwd, "/") + "/"
 	if err := runRsync(ctx, sess, flags, src, remotePath(repoPath)); err != nil {
-		return err
+		return "", err
 	}
 
 	if isWorktree {
 		if err := initWorktreeGitRepo(ctx, sess, repoPath, worktreeOriginURL); err != nil {
-			return fmt.Errorf("rsync: %w", err)
+			return "", fmt.Errorf("rsync: %w", err)
 		}
 	}
 
 	status(iostream.LevelDone, "Synced")
-	return nil
+	return repoPath, nil
 }
 
 // RsyncPull copies a sidecar's workspace at repoPath into localDir, the reverse

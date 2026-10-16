@@ -49,7 +49,7 @@ func TestDetectVCS(t *testing.T) {
 	vcs, err := detectVCS(context.Background(), gitRepo(t, "https://github.com/acme/widget.git"), status)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, vcs, &config.VCSConfig{Org: "acme", Repo: "widget"})
-	assert.Assert(t, strings.Contains(out.String(), "Detected repository: acme/widget"), out.String())
+	assert.Assert(t, strings.Contains(out.String(), "Detected repository: "+ui.Bold("acme/widget")), out.String())
 }
 
 func TestDetectVCSWithoutOrigin(t *testing.T) {

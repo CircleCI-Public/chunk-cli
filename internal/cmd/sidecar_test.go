@@ -272,30 +272,40 @@ func TestRecordSnapshotImageWithInvalidConfig(t *testing.T) {
 }
 
 func TestSidecarSetupError(t *testing.T) {
-	assert.NilError(t, sidecarSetupError(nil, ""))
+	ctx := context.Background()
+	assert.NilError(t, sidecarSetupError(ctx, nil, ""))
 
 	phrased := &userError{msg: "Could not create the sidecar."}
-	assert.Equal(t, sidecarSetupError(phrased, ""), error(phrased))
+	assert.Equal(t, sidecarSetupError(ctx, phrased, ""), error(phrased))
 
-	step, ok := errors.AsType[*userError](sidecarSetupError(&sidecar.SetupStepError{Step: "install", ExitCode: 1}, ""))
+	step, ok := errors.AsType[*userError](sidecarSetupError(ctx, &sidecar.SetupStepError{Step: "install", ExitCode: 1}, ""))
 	assert.Assert(t, ok)
 	assert.Equal(t, step.msg, `Setup step "install" exited with status 1.`)
 
-	denied, ok := errors.AsType[*userError](sidecarSetupError(fmt.Errorf("%w: %w", sidecar.ErrSync, circleci.ErrNotAuthorized), "env"))
+	denied, ok := errors.AsType[*userError](sidecarSetupError(ctx, fmt.Errorf("%w: %w", sidecar.ErrSync, circleci.ErrNotAuthorized), "env"))
 	assert.Assert(t, ok)
 	assert.Equal(t, denied.msg, "Not authorized to sync files.")
 
-	denied, ok = errors.AsType[*userError](sidecarSetupError(fmt.Errorf("open a session on the sidecar: %w", circleci.ErrNotAuthorized), "env"))
+	denied, ok = errors.AsType[*userError](sidecarSetupError(ctx, fmt.Errorf("open a session on the sidecar: %w", circleci.ErrNotAuthorized), "env"))
 	assert.Assert(t, ok)
 	assert.Equal(t, denied.msg, "Not authorized to run setup steps.")
 
-	syncFailed, ok := errors.AsType[*userError](sidecarSetupError(fmt.Errorf("%w: rsync exited 23", sidecar.ErrSync), ""))
+	syncFailed, ok := errors.AsType[*userError](sidecarSetupError(ctx, fmt.Errorf("%w: rsync exited 23", sidecar.ErrSync), ""))
 	assert.Assert(t, ok)
 	assert.Equal(t, syncFailed.msg, "Could not sync files to the sidecar.")
 
-	key, ok := errors.AsType[*userError](sidecarSetupError(fmt.Errorf("%w: generate key: permission denied", sidecar.ErrSSHKey), ""))
+	key, ok := errors.AsType[*userError](sidecarSetupError(ctx, fmt.Errorf("%w: generate key: permission denied", sidecar.ErrSSHKey), ""))
 	assert.Assert(t, ok)
 	assert.Equal(t, key.msg, "Could not prepare the SSH key.")
+
+	// A Ctrl-C reads as a cancellation, not as the step it interrupted failing.
+	canceled := fmt.Errorf("%w: rsync: %w", sidecar.ErrSync, context.Canceled)
+	assert.Equal(t, sidecarSetupError(ctx, canceled, ""), canceled)
+
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	interrupted := errors.New("run setup step \"install\": ssh: connection closed")
+	assert.Equal(t, sidecarSetupError(cancelledCtx, interrupted, ""), interrupted)
 }
 
 func TestLoadEnvironmentUsesSavedEnvironment(t *testing.T) {
