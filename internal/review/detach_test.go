@@ -120,6 +120,34 @@ func TestUploadInstallReplacesTheBinaryInPlace(t *testing.T) {
 	assert.Assert(t, !strings.Contains(UploadInstall, `> "$HOME/chunk" `), UploadInstall)
 }
 
+func TestInstallVersionFetchesTheTaggedRelease(t *testing.T) {
+	script := InstallVersion("v1.2.3")
+	assert.Assert(t, strings.Contains(script, `/releases/download/"'v1.2.3'"/chunk-cli_Linux_${A}.tar.gz`), script)
+	assert.Assert(t, !strings.Contains(script, "latest"), script)
+}
+
+// A tag carrying shell metacharacters must reach curl as one literal path
+// segment, so the script is run with a curl stand-in that records its URL.
+func TestInstallVersionEscapesTheTag(t *testing.T) {
+	home, bin := t.TempDir(), t.TempDir()
+	stub := func(name, body string) {
+		assert.NilError(t, os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755))
+	}
+	stub("uname", "echo x86_64")
+	stub("curl", `for a; do u="$a"; done; printf '%s' "$u" > "$HOME/url"`)
+
+	tag := `v1.2.3'; touch "$HOME/pwned" #`
+	cmd := exec.Command("sh", "-c", InstallVersion(tag))
+	cmd.Env = []string{"HOME=" + home, "PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+	_ = cmd.Run() // tar fails on the stand-in's empty output; only the URL matters
+
+	url, err := os.ReadFile(filepath.Join(home, "url"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(url), "https://github.com/CircleCI-Public/chunk-cli/releases/download/"+tag+"/chunk-cli_Linux_x86_64.tar.gz")
+	_, err = os.Stat(filepath.Join(home, "pwned"))
+	assert.Assert(t, os.IsNotExist(err), "the tag ran as shell")
+}
+
 // runDetachScript runs the detach script in a shell whose home holds the given
 // stand-in for chunk, and returns the script's exit code.
 func runDetachScript(t *testing.T, chunk string) int {

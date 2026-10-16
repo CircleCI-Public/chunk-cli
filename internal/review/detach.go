@@ -27,10 +27,22 @@ const (
 	PidFile    = "pid"         // the run's shell; lets a reader tell a dead run from a live one
 )
 
+// archCase picks arm64 or x86_64 into $A from uname -m.
+const archCase = `case "$(uname -m)" in aarch64|arm64) A=arm64;; *) A=x86_64;; esac`
+
 // InstallRelease is the shell that installs the latest released chunk into
 // $HOME on a Linux sidecar. Used when no local binary is uploaded.
-const InstallRelease = `case "$(uname -m)" in aarch64|arm64) A=arm64;; *) A=x86_64;; esac
-curl -fsSL "https://github.com/CircleCI-Public/chunk-cli/releases/latest/download/chunk-cli_Linux_${A}.tar.gz" | tar -xz -C "$HOME" chunk`
+const InstallRelease = archCase + "\n" +
+	`curl -fsSL "https://github.com/CircleCI-Public/chunk-cli/releases/latest/download/chunk-cli_Linux_${A}.tar.gz" | tar -xz -C "$HOME" chunk`
+
+// InstallVersion is the shell that installs the chunk release tagged v, exactly
+// as given, into $HOME on a Linux sidecar. v is shell-escaped before it reaches
+// the URL, so it is safe even when it is not a well-formed tag.
+func InstallVersion(v string) string {
+	return archCase + "\n" + fmt.Sprintf(
+		`curl -fsSL "https://github.com/CircleCI-Public/chunk-cli/releases/download/"%s"/chunk-cli_Linux_${A}.tar.gz" | tar -xz -C "$HOME" chunk`,
+		sidecar.ShellEscape(v))
+}
 
 // UploadInstall is the shell that installs a binary streamed on stdin, gzipped,
 // as $HOME/chunk. It writes a new file and moves it into place, because writing
