@@ -131,7 +131,7 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	if gitRoot != "" {
 		excludeFile, err := localExcludeFile(ctx, cwd)
 		if err != nil {
-			return err
+			return "", err
 		}
 		defer func() { _ = os.Remove(excludeFile) }()
 		flags = append(flags, "--exclude-from="+excludeFile)
