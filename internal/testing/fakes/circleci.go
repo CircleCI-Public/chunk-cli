@@ -85,8 +85,18 @@ type FakeCircleCI struct {
 	RunResponse     *RunResponse
 	AddKeyURL       string
 	ExecResponse    *ExecResponse
-	CommandResponse *CommandResponse
-	RunStatusCode   int // override status code for trigger run endpoint
+	// ExecResponses, when non-empty, answers each exec call in order
+	// (0-indexed, across every sidecar) instead of the single ExecResponse,
+	// so an earlier exec can succeed while a later one on the same sidecar
+	// reports a different result. A call past the end of the slice falls
+	// back to ExecResponse.
+	ExecResponses []*ExecResponse
+	// execResponsesByID remembers which response answered which command, so
+	// handleCommandOutput can serve the right one when ExecResponses varies
+	// them instead of every command sharing ExecResponse.
+	execResponsesByID map[string]*ExecResponse
+	CommandResponse   *CommandResponse
+	RunStatusCode     int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
 	CurrentUserStatusCode    int                     // override for GET /me
@@ -112,18 +122,25 @@ type FakeCircleCI struct {
 	// (status 200, no body) before serving the real stream. This simulates an
 	// interrupted connection where no SSE frames arrive at all, which the client
 	// must treat as a resume trigger rather than a failure.
-	EmptyStreamsBeforeExit   int
-	AddKeyStatusCode         int             // override for POST /sidecar/instances/:id/ssh/add-key
-	StaleIDs                 map[string]bool // IDs that return 404 from the add-key endpoint
-	NotFoundBeforeAddKey     map[string]int  // initial add-key calls that return 404 before succeeding
-	OutdatedIDs              map[string]bool // IDs that return an out-of-date 410 from the add-key endpoint
-	StaleAfterAddKey         map[string]int  // successful add-key calls allowed before an ID returns 404
-	addKeyCalls              map[string]int
-	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
-	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
-	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
-	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
-	CreateOrgStatusCode      int // override for POST /api/v2/organization
+	EmptyStreamsBeforeExit int
+	// HoldCommandOutputFromExec, when positive, makes the output stream for
+	// the exec call numbered this or later (1-indexed, across every exec on
+	// every sidecar) hang after delivering its stdout and stderr, instead of
+	// sending a terminal event, until the client disconnects. It lets a test
+	// interrupt a command genuinely partway through streaming rather than
+	// racing to interrupt one that already finished.
+	HoldCommandOutputFromExec int
+	AddKeyStatusCode          int             // override for POST /sidecar/instances/:id/ssh/add-key
+	StaleIDs                  map[string]bool // IDs that return 404 from the add-key endpoint
+	NotFoundBeforeAddKey      map[string]int  // initial add-key calls that return 404 before succeeding
+	OutdatedIDs               map[string]bool // IDs that return an out-of-date 410 from the add-key endpoint
+	StaleAfterAddKey          map[string]int  // successful add-key calls allowed before an ID returns 404
+	addKeyCalls               map[string]int
+	CreateSnapshotStatusCode  int // override for POST /sidecar/snapshots
+	GetSnapshotStatusCode     int // override for GET /sidecar/snapshots/:id
+	ListSnapshotsStatusCode   int // override for GET /sidecar/snapshots
+	GetCommandStatusCode      int // override for GET /sidecar/commands/:id
+	CreateOrgStatusCode       int // override for POST /api/v2/organization
 
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.
@@ -432,6 +449,9 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 	}
 	f.mu.Lock()
 	resp := f.ExecResponse
+	if f.execCalls < len(f.ExecResponses) {
+		resp = f.ExecResponses[f.execCalls]
+	}
 	statusCode := f.ExecStatusCode
 	msg := f.ExecMessage
 	transitioning := f.execCalls < f.TransitioningBeforeExec
@@ -463,6 +483,13 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 		}
 	}
 
+	f.mu.Lock()
+	if f.execResponsesByID == nil {
+		f.execResponsesByID = map[string]*ExecResponse{}
+	}
+	f.execResponsesByID[resp.CommandID] = resp
+	f.mu.Unlock()
+
 	// Async: return 202 with command ID; output is streamed via GET /commands/:id/output.
 	c.JSON(http.StatusAccepted, gin.H{
 		"data": gin.H{
@@ -480,7 +507,10 @@ func (f *FakeCircleCI) handleCommandOutput(c *gin.Context) {
 		return
 	}
 	f.mu.RLock()
-	resp := f.ExecResponse
+	resp := f.execResponsesByID[c.Param("id")]
+	if resp == nil {
+		resp = f.ExecResponse
+	}
 	statusCode := f.CommandOutputStatusCode
 	msg := f.CommandOutputMessage
 	f.mu.RUnlock()
@@ -553,6 +583,13 @@ func (f *FakeCircleCI) handleCommandOutput(c *gin.Context) {
 		return
 	}
 
+	if f.holdOutput() {
+		// Deliver nothing further until the client disconnects, so a test can
+		// interrupt a command while it is genuinely still streaming.
+		<-c.Request.Context().Done()
+		return
+	}
+
 	exit, _ := json.Marshal(map[string]any{
 		"exit_code": resp.ExitCode,
 		"pid":       resp.PID,
@@ -571,6 +608,15 @@ func (f *FakeCircleCI) dropBeforeExit() bool {
 	}
 	f.DropStreamsBeforeExit--
 	return true
+}
+
+// holdOutput reports whether this request belongs to the exec call numbered
+// HoldCommandOutputFromExec or later, and so should hang rather than send a
+// terminal event.
+func (f *FakeCircleCI) holdOutput() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.HoldCommandOutputFromExec > 0 && f.execCalls >= f.HoldCommandOutputFromExec
 }
 
 // emptyStreamBeforeExit reports whether this request should return an empty

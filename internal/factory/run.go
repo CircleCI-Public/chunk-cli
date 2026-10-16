@@ -360,7 +360,7 @@ func newRecord(runID, prompt string, wt Worktree) Record {
 // keepRecord saves the run's record, so a later run can continue it. A run
 // that cannot save one still runs; it just cannot be continued.
 func keepRecord(dataDir string, rec Record, status iostream.StatusFunc) {
-	if err := saveRecord(dataDir, rec); err != nil {
+	if err := SaveRecord(dataDir, rec); err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("this run cannot be continued later: %v", err))
 	}
 }
