@@ -350,7 +350,7 @@ func TestOneSessionsPoolIsOneRow(t *testing.T) {
 	now := time.Now()
 	got := collapsePools([]sidecarInfo{
 		{id: "a", sessionID: "s1", projectIdx: 0, lastActivity: now.Add(-time.Minute), lastResult: levelError},
-		{id: "b", sessionID: "s1", projectIdx: 0, lastActivity: now, lastResult: levelDone},
+		{id: "b", sessionID: "s1", projectIdx: 0, lastActivity: now, lastResult: levelDone, verified: true},
 		{id: "c", sessionID: "s2", projectIdx: 0, lastActivity: now},
 		{id: "d", sessionID: "s1", projectIdx: 1, lastActivity: now},
 		{id: "e", lastActivity: now},
@@ -359,6 +359,7 @@ func TestOneSessionsPoolIsOneRow(t *testing.T) {
 	assert.Equal(t, got[0].id, "a")
 	assert.DeepEqual(t, got[0].members, []string{"a", "b"})
 	assert.Equal(t, got[0].lastResult, levelDone, "the newest member's result")
+	assert.Assert(t, got[0].verified, "the newest member's confirmation")
 	assert.Assert(t, got[0].owns("b"))
 	assert.Equal(t, len(got[1].members), 0, "a lone sidecar is not a pool")
 }

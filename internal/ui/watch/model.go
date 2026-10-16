@@ -1646,6 +1646,7 @@ func collapsePools(sidecars []sidecarInfo) []sidecarInfo {
 		if effectiveActivity(sc).After(effectiveActivity(row)) {
 			row.lastActivity, row.fileMtime = sc.lastActivity, sc.fileMtime
 			row.lastOp, row.lastResult, row.resources = sc.lastOp, sc.lastResult, sc.resources
+			row.verified = sc.verified
 		}
 		row.running = running
 		out[i] = row
@@ -1687,8 +1688,9 @@ const staleAfter = 24 * time.Hour
 // stops listing it.
 const maxSidecarAge = 5 * 24 * time.Hour
 
-// filterSidecars drops sidecars with no activity, then keeps every one the API has confirmed, and unconfirmed
-// ones only while they have been active within staleAfter.
+// filterSidecars drops sidecars with no activity or none within maxSidecarAge,
+// then keeps every one the API has confirmed, and unconfirmed ones only while
+// they have been active within staleAfter.
 func filterSidecars(sidecars []sidecarInfo) []sidecarInfo {
 	now := time.Now()
 	var kept []sidecarInfo

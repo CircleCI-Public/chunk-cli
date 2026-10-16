@@ -539,7 +539,7 @@ func (m Model) renderRunList(st watchStyles) []string {
 		}
 		status := runDetail(r.s)
 		if len(m.projects) > 1 {
-			status = r.label + " · " + status
+			status = strings.TrimSuffix(r.label+" · "+status, " · ")
 		}
 		chip := runChip(st, r.s)
 		lines = append(lines, "    "+chip+" "+st.vdim(truncate(status, leftPaneWidth-5-lipgloss.Width(chip))))
