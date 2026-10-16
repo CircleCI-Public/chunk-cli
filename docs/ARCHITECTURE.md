@@ -464,7 +464,13 @@ any still being made, and uses them in place of making its own when they suit
 it (same reviewers, org and image); the pool is then the run's, re-pointed at
 its worktree for any sidecar it replaces, and the checkout goes. Sidecars no
 run takes within 15 minutes, a draft with no changes, a failed draft and the
-daemon shutting down all delete them.
+daemon shutting down all delete them. New sidecars also start cold: build and
+lint caches empty, dependencies uninstalled. So once they are made, the daemon
+checks out the member the run's implementer will hold and runs the project's
+validation commands on it once (`WarmPool.WarmUp`), keeping none of their
+results; the run is handed that member as its implementer, where its checks
+run, and waits for the warm-up to finish before it starts, so nothing it runs
+overlaps the warm-up's commands.
 
 **Factory runs.** The daemon runs `factory.Run` in a goroutine. Each factory
 round is a `Round` with an `implement` turn (state, duration, cost, the

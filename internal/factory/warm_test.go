@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
@@ -117,8 +119,9 @@ func TestAContinuedRunTakesItsWarmSidecars(t *testing.T) {
 	assert.NilError(t, err)
 
 	opts := RunOptions{Root: wt.root, Client: wt.client, OrgID: "org-1", Image: "img", Reviewers: 1, Warm: w}
-	pool, err := runPool(ctx, opts, &Continuation{From: wt.rec}, wtree, dataDir, "run-2", func(iostream.Level, string) {})
+	pool, impl, err := runPool(ctx, opts, &Continuation{From: wt.rec}, wtree, dataDir, "run-2", func(iostream.Level, string) {})
 	assert.NilError(t, err)
+	assert.Assert(t, impl == nil, "nothing was warmed up, so the run checks out its own implementer")
 	t.Cleanup(func() { _ = pool.Destroy(context.Background()) })
 
 	assert.Assert(t, w.Claimed())
@@ -145,7 +148,7 @@ func TestARunIgnoresWarmSidecarsMadeForAnother(t *testing.T) {
 	opts := RunOptions{Root: wt.root, Client: wt.client, OrgID: "org-1", Image: "img", Reviewers: 1, Warm: w}
 	// The run makes sidecars of its own, which these fake ones cannot hold a
 	// repository for; only that it left the warm ones alone matters here.
-	if pool, err := runPool(ctx, opts, &Continuation{From: other}, wtree, dataDir, "run-2", func(iostream.Level, string) {}); err == nil {
+	if pool, _, err := runPool(ctx, opts, &Continuation{From: other}, wtree, dataDir, "run-2", func(iostream.Level, string) {}); err == nil {
 		t.Cleanup(func() { _ = pool.Destroy(context.Background()) })
 	}
 
@@ -171,4 +174,99 @@ func TestDiscardingAWarmPoolDeletesItsSidecars(t *testing.T) {
 	_, err = os.Stat(w.dir)
 	assert.Assert(t, os.IsNotExist(err))
 	assert.Assert(t, !strings.Contains(gitOutput(t, wt.root, "worktree", "list"), "-baseline"), "the checkout is no longer a worktree")
+}
+
+// recordingExec is an Execer that records which sidecar ran which script, and
+// holds each script until release is closed or its context ends.
+type recordingExec struct {
+	mu      sync.Mutex
+	ran     []string // "<sidecar> <script>"
+	release chan struct{}
+}
+
+func (r *recordingExec) exec(ctx context.Context, e *sidecar.PoolEntry, script string, _ map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
+	r.mu.Lock()
+	r.ran = append(r.ran, e.ID+" "+script)
+	r.mu.Unlock()
+	select {
+	case <-r.release:
+		return 0, nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+func (r *recordingExec) scripts() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.ran...)
+}
+
+var warmCommands = []config.Command{{Name: "lint", Run: "task lint"}, {Name: "test", Run: "task test"}}
+
+// The validation commands warm up the very sidecar the run then uses as its
+// implementer, where its checks run, and the run waits for them before it
+// starts, so nothing it runs overlaps them.
+func TestTheRunsImplementerIsTheWarmedUpSidecar(t *testing.T) {
+	wt := newWarmTest(t)
+	ctx := context.Background()
+	w, err := NewWarmPool(ctx, wt.client, wt.root, wt.rec, 1, "org-1", "img", func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	rec := &recordingExec{release: make(chan struct{})}
+	assert.NilError(t, w.WarmUp(ctx, rec.exec, warmCommands, func(iostream.Level, string) {}))
+	wtree, err := openWorktree(ctx, wt.root, wt.rec, "run-2")
+	assert.NilError(t, err)
+	dataDir, err := runsDir(wt.root)
+	assert.NilError(t, err)
+
+	type claimed struct {
+		pool *sidecar.Pool
+		impl *sidecar.PoolEntry
+		err  error
+	}
+	done := make(chan claimed, 1)
+	go func() {
+		opts := RunOptions{Root: wt.root, Client: wt.client, OrgID: "org-1", Image: "img", Reviewers: 1, Warm: w}
+		pool, impl, err := runPool(ctx, opts, &Continuation{From: wt.rec}, wtree, dataDir, "run-2", func(iostream.Level, string) {})
+		done <- claimed{pool, impl, err}
+	}()
+	select {
+	case <-done:
+		t.Fatal("the run started before the warm-up finished")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(rec.release)
+	got := <-done
+	assert.NilError(t, got.err)
+	t.Cleanup(func() { _ = got.pool.Destroy(context.Background()) })
+
+	assert.Assert(t, got.impl != nil)
+	ran := rec.scripts()
+	assert.Equal(t, len(ran), 2, "%q", ran)
+	for i, c := range warmCommands {
+		assert.Assert(t, strings.HasPrefix(ran[i], got.impl.ID+" "), "%s warmed another sidecar: %q", c.Name, ran[i])
+		assert.Assert(t, strings.HasSuffix(ran[i], c.Run), "%q", ran[i])
+	}
+}
+
+// Discarding sidecars no run took stops their warm-up.
+func TestDiscardingStopsAWarmUp(t *testing.T) {
+	wt := newWarmTest(t)
+	ctx := context.Background()
+	w, err := NewWarmPool(ctx, wt.client, wt.root, wt.rec, 1, "org-1", "img", func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	rec := &recordingExec{release: make(chan struct{})}
+	assert.NilError(t, w.WarmUp(ctx, rec.exec, warmCommands, func(iostream.Level, string) {}))
+	for deadline := time.Now().Add(10 * time.Second); len(rec.scripts()) == 0; time.Sleep(10 * time.Millisecond) {
+		assert.Assert(t, time.Now().Before(deadline), "the warm-up never started")
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- w.Discard(ctx) }()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("discarding waited on the warm-up")
+	}
+	assert.Equal(t, len(rec.scripts()), 1, "the warm-up stopped at its first command")
 }

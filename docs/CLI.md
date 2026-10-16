@@ -610,7 +610,9 @@ chunk
   implementer and reviewers, with the factory's checks still deciding when it
   is done. The factory's sidecars are started while Claude drafts, from the
   files the draft started from, so the run starts on them at once rather than
-  waiting about a minute for its own; ones never used are deleted. The
+  waiting about a minute for its own, and the project's checks are run once on
+  the implementer's sidecar meanwhile, so the run's own checks start with warm
+  caches; sidecars never used are deleted. The
   factory run is selected once the next poll lists it; `Esc` keeps the draft
   for later and says how to send it. A draft with no changes can only be
   closed. The draft is in the project the dashboard was opened in, or the

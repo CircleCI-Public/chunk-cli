@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -173,7 +174,7 @@ func (d *daemon) warmFactory(req chunkd.WarmRequest) error {
 	if err != nil {
 		return apiErr(http.StatusBadRequest, "%v", err)
 	}
-	prompts, _, err := factory.LoadChecks(dir, true, cfg, false)
+	prompts, commands, err := factory.LoadChecks(dir, true, cfg, false)
 	if err != nil {
 		return apiErr(http.StatusBadRequest, "%v", err)
 	}
@@ -184,9 +185,22 @@ func (d *daemon) warmFactory(req chunkd.WarmRequest) error {
 	reviewers := factory.ReviewerCount(0, prompts)
 	root := ps.root
 	d.warm.start(rec.RunID, func(ctx context.Context) (*factory.WarmPool, error) {
-		return factory.NewWarmPool(ctx, d.client, root, rec, reviewers, orgID, image, func(_ iostream.Level, msg string) {
+		status := func(_ iostream.Level, msg string) {
 			log.Printf("chunkd: sidecars ahead of run %s: %s", rec.RunID, msg)
-		})
+		}
+		w, err := factory.NewWarmPool(ctx, d.client, root, rec, reviewers, orgID, image, status)
+		if err != nil {
+			return nil, err
+		}
+		// The run's checks start cold on new sidecars: build and lint caches
+		// empty, dependencies uninstalled. Running them once now, while the
+		// work is drafted, leaves the implementer's sidecar warm. Their output
+		// is bookkeeping, not worth a log pane.
+		exec := d.execerFor(root, func(string, string) string { return "" })
+		if err := w.WarmUp(ctx, exec, commands, status); err != nil {
+			status(iostream.LevelWarn, fmt.Sprintf("the implementer's sidecar was not warmed up: %v", err))
+		}
+		return w, nil
 	})
 	return nil
 }

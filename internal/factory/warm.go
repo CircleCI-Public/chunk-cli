@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -36,6 +38,12 @@ type WarmPool struct {
 	root    string
 	dir     string
 	claimed atomic.Bool
+
+	// impl is the member WarmUp checked out for the run's implementer, and
+	// warmed is closed once WarmUp's commands have run on it.
+	impl       *sidecar.PoolEntry
+	warmed     chan struct{}
+	stopWarmUp context.CancelFunc
 }
 
 // warmRepoPath, when set, is where on a warm pool's sidecars the repository
@@ -74,20 +82,63 @@ func NewWarmPool(ctx context.Context, client *circleci.Client, root string, rec 
 	return w, nil
 }
 
+// WarmUp checks out the member the run's implementer will hold and runs cmds,
+// the run's validation commands, on it once in the background, keeping none
+// of their results: what they leave behind (build and lint caches, installed
+// dependencies) makes the run's own first checks quick rather than cold. The
+// run waits for them before it starts, so nothing it runs overlaps them.
+func (w *WarmPool) WarmUp(ctx context.Context, exec sidecar.Execer, cmds []config.Command, status iostream.StatusFunc) error {
+	impl, err := w.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("check out the implementer's sidecar: %w", err)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	w.impl, w.warmed, w.stopWarmUp = impl, make(chan struct{}), cancel
+	go func() {
+		defer close(w.warmed)
+		for _, c := range cmds {
+			if ctx.Err() != nil {
+				return
+			}
+			check := runCommand(ctx, exec, impl, c)
+			status(iostream.LevelInfo, fmt.Sprintf("warmed the implementer's sidecar with %s (%s in %s)", c.Name, check.Status, check.Duration.Round(time.Second)))
+		}
+	}()
+	return nil
+}
+
+// waitWarmedUp waits for WarmUp's commands to finish, or ctx to end.
+func (w *WarmPool) waitWarmedUp(ctx context.Context) error {
+	if w.warmed == nil {
+		return nil
+	}
+	select {
+	case <-w.warmed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Fits reports whether a run with these reviewers, organization and image can
 // use the sidecars.
 func (w *WarmPool) Fits(reviewers int, orgID, image string) bool {
 	return w.Reviewers == reviewers && w.OrgID == orgID && w.Image == image
 }
 
-// claim hands the sidecars to a run working in workDir. From then on the
-// pool is the run's, and any sidecar it replaces is synced from the run's
-// worktree, as it would be for sidecars the run made itself.
-func (w *WarmPool) claim(ctx context.Context, workDir string) *sidecar.Pool {
+// claim hands the sidecars to a run working in workDir, once any warm-up has
+// finished, with the member warmed up for its implementer, or nil when there
+// is none. From then on the pool is the run's, and any sidecar it replaces is
+// synced from the run's worktree, as it would be for sidecars the run made
+// itself.
+func (w *WarmPool) claim(ctx context.Context, workDir string) (*sidecar.Pool, *sidecar.PoolEntry, error) {
 	w.claimed.Store(true)
 	w.pool.SetWorkDir(workDir)
 	w.removeCheckout(ctx)
-	return w.pool
+	if err := w.waitWarmedUp(ctx); err != nil {
+		return w.pool, nil, err
+	}
+	return w.pool, w.impl, nil
 }
 
 // Claimed reports whether a run took the sidecars, which are then the run's to
@@ -97,6 +148,10 @@ func (w *WarmPool) Claimed() bool { return w.claimed.Load() }
 // Discard deletes the sidecars of a warm pool no run used, and the checkout
 // they were made from.
 func (w *WarmPool) Discard(ctx context.Context) error {
+	if w.stopWarmUp != nil {
+		w.stopWarmUp()
+		<-w.warmed
+	}
 	var err error
 	if w.pool != nil {
 		err = w.pool.Destroy(ctx)
