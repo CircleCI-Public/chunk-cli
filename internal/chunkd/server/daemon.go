@@ -89,6 +89,9 @@ type daemon struct {
 	// the daemon has no client (unauthenticated), in which case POST /sidecar
 	// returns 503.
 	prov *provisioner
+	// warm keeps the sidecars made ahead of factory runs while their work is
+	// drafted. Nil in daemons built without one, which then make none.
+	warm *warmStore
 	// claims tracks which sessions are actively validating which paths, for
 	// advisory cross-agent coordination.
 	claims *claimStore
@@ -208,6 +211,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		claims:    newClaimStore(),
 		live:      newLivenessChecker(listFor(client)),
 		sessions:  newSessionStore(ctx),
+		warm:      newWarmStore(ctx),
 		rcfg:      dopts.review,
 		gh:        ghClient,
 	}
@@ -221,6 +225,8 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	defer d.res.stopAll()
 	defer d.tasks.stopAll()
 	defer d.sessions.stopAll()
+	// Before the sessions stop: a run waiting for warm sidecars is let go.
+	defer d.warm.stopAll()
 	if prov != nil {
 		defer prov.stopAll(context.Background())
 	}

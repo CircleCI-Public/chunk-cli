@@ -594,7 +594,32 @@ chunk
   to list, the pane says where runs come from rather than sitting empty. `/`
   searches the run list: type to narrow it
   to the runs whose title, project, branch or status contain every word typed
-  (`Enter` keeps the filter, `Esc` drops it, and `Esc` again quits). A selected
+  (`Enter` keeps the filter, `Esc` drops it, and `Esc` again quits). `n` starts
+  a change without leaving the dashboard: it opens a prompt in the footer,
+  naming the project it is for, and `Enter` has Claude Code draft it on this
+  machine, in a factory run's worktree, as `chunk factory start` does with a
+  draft made in it (`claude -p --model sonnet` with the developer's own
+  login, edits accepted, anything else left to their own Claude Code permissions, chunk's
+  hooks off). The footer shows what Claude is doing, and `Esc` stops it,
+  keeping what it did. The draft is then summarized in the footer: `d` opens
+  its diff, with what Claude said it did, in the scrollable viewer; `Enter`
+  sends the diff and the prompt to the factory, as `chunk factory build
+  --continue <run> --model sonnet "Finish the draft…"` would: the guidance
+  starts the implementer on the draft at once instead of after a round of
+  checks on it, and Sonnet is quicker than Claude Code's default for the
+  implementer and reviewers, with the factory's checks still deciding when it
+  is done. The factory's sidecars are started while Claude drafts, from the
+  files the draft started from, so the run starts on them at once rather than
+  waiting about a minute for its own; ones never used are deleted. The
+  factory run is selected once the next poll lists it; `Esc` keeps the draft
+  for later and says how to send it. A draft with no changes can only be
+  closed. The draft is in the project the dashboard was opened in, or the
+  selected run's when it was opened outside one. What build checks first (an
+  `origin` remote, validation commands or review prompts, Claude Code being
+  installed) is checked before Claude starts, and why there is no draft, or
+  why it could not be sent, is shown in the footer. Closing the dashboard
+  stops a draft still being made. `n` is not offered against a remote daemon,
+  since a factory run works from files on this machine. A selected
   run's pane reads top to bottom: the prompt, a status line that says what the run is doing (or, once it
   ended, how it ended, what blocked it and what it cost), then each round, then
   where the work is (branch, whether it was committed) and, for a run that
@@ -621,7 +646,7 @@ chunk
   selected, so `x` is gone once a run has ended. **`q` only detaches**: the run
   belongs to the daemon and carries on. The one key that stops it is `x`, and it
   needs a second `x` on the same run to confirm.
-- `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls the daemon every 5 seconds. Use `j`/`k` or `↑`/`↓` to select a run, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
+- `watch` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It polls the daemon every 5 seconds. Use `j`/`k` or `↑`/`↓` to select a run, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a
   `project-root` breadcrumb in the same data directory) whether or not a daemon

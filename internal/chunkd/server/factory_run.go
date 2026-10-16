@@ -148,13 +148,19 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		Log:                     req.Log,
 		Verbose:                 req.Verbose,
 	}
-	go d.executeFactory(ctx, entry, opts)
+	// Taken only now that the run is accepted: a refused one leaves them for
+	// the next.
+	var warm *warmEntry
+	if cont != nil {
+		warm = d.warm.take(cont.From.RunID)
+	}
+	go d.executeFactory(ctx, entry, opts, warm)
 	return entry.snapshot(), nil
 }
 
 // executeFactory runs a factory session and settles it. It always closes
 // entry.done.
-func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts factory.RunOptions) {
+func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts factory.RunOptions, warm *warmEntry) {
 	defer close(entry.done)
 	defer entry.cancel()
 
@@ -170,6 +176,7 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	opts.OnActivity = rec.activity
 	opts.OnReviewProgress = rec.reviewProgress
 	opts.OnCheck = rec.checked
+	defer d.claimWarm(ctx, warm, &opts, opts.Status)()
 
 	run := d.rcfg.RunFactory
 	if run == nil {
