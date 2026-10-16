@@ -33,6 +33,14 @@ Pass --skip-in-use to keep any sidecar chunk's state on this machine refers to:
 active sidecars, pools, factory runs and detached reviews. Sidecars in use from
 another machine are not known here and are still deleted.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if skipInUse && before != "" {
+				return &userError{
+					msg:        "--skip-in-use cannot be combined with --before.",
+					suggestion: "The sidecar list carries no creation time, so pick one.",
+					errMsg:     "--skip-in-use with --before",
+				}
+			}
+
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -47,14 +55,6 @@ another machine are not known here and are still deleted.`,
 			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource, io))
 			if err != nil {
 				return err
-			}
-
-			if skipInUse && before != "" {
-				return &userError{
-					msg:        "--skip-in-use cannot be combined with --before.",
-					suggestion: "The sidecar list carries no creation time, so pick one.",
-					errMsg:     "--skip-in-use with --before",
-				}
 			}
 
 			var cutoff *time.Time

@@ -33,7 +33,7 @@ func InUseIDs() (map[string]bool, error) {
 		}
 		if d.IsDir() {
 			if d.Name() == "validate-cache" {
-				return filepath.SkipDir
+				return fs.SkipDir
 			}
 			return nil
 		}
