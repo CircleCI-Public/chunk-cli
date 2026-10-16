@@ -342,7 +342,11 @@ chunk
   implementer's reply to them, so it checks whether they were fixed rather than
   raising them again or contradicting itself. As it follows the run it prints the sidecars being
   prepared and each round's findings, with the end of any failed validation
-  command's output.
+  command's output. While the implementer works, a terminal shows one line,
+  redrawn in place, of how long the turn has run, what the implementer last did
+  and said, and how many tools it has used, with `quiet <n>m` once it has done
+  nothing for five minutes; without a terminal the same is printed every two
+  minutes.
   Factory branches are named `chunk/factory/<description>/<run id>`. The
   description is a short slug made from the prompt's first line, while the
   final segment remains the stable run ID. When the run ends it prints that

@@ -27,6 +27,17 @@ func TestStreamReassemblesSplitLines(t *testing.T) {
 	assert.Equal(t, s.SessionID(), "s-1")
 }
 
+// A Bash call says what it is for as well as what it runs. The description is
+// what a display shows; the command is what a log keeps.
+func TestStreamReportsAToolsDescription(t *testing.T) {
+	var acts []Activity
+	s := NewStream(func(a Activity) { acts = append(acts, a) })
+
+	s.Write([]byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./...","description":" Run the tests "}}]}}` + "\n"))
+
+	assert.DeepEqual(t, acts, []Activity{{Tool: "Bash", Detail: "go test ./...", Description: "Run the tests"}})
+}
+
 // With a schema, Claude Code answers through a StructuredOutput tool call. That
 // is the answer arriving, not something claude did.
 func TestStreamLeavesOutTheStructuredAnswer(t *testing.T) {

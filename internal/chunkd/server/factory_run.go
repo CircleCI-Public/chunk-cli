@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -163,6 +164,7 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	opts.Exec = d.execerFor(root, rec.attribute)
 	opts.OnStart = rec.started
 	opts.OnEvent = rec.event
+	opts.OnActivity = rec.activity
 	opts.OnReviewProgress = rec.reviewProgress
 	opts.OnCheck = rec.checked
 
@@ -278,6 +280,68 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		round.State, round.EndedAt = chunkd.RoundDone, &now
 		round.Note = fmt.Sprintf("%d of %d checks passed", passed, len(ev.Checks))
 	}
+}
+
+// activity records the latest thing the implementer did or said in the turn in
+// progress. It is called from the implementer's output stream as it arrives.
+func (r *factoryRecorder) activity(a claudecode.Activity) {
+	e := r.entry
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if r.cur >= len(e.s.Rounds) {
+		return
+	}
+	impl := e.s.Rounds[r.cur].Implement
+	if impl == nil || impl.State != chunkd.ImplementRunning {
+		return
+	}
+	p := &impl.Progress
+	p.At = time.Now()
+	if a.Tool == "" {
+		p.Said = clip(firstLine(a.Detail), maxSaidText)
+		return
+	}
+	p.Actions++
+	p.Doing = clip(activityDoing(a), maxDoingText)
+}
+
+// maxDoingText and maxSaidText cap what a turn's progress holds of the
+// implementer's last action and remark: a command can be a whole script, and a
+// remark a paragraph.
+const (
+	maxDoingText = 80
+	maxSaidText  = 160
+)
+
+// activityDoing says short what a tool call did: the description claude gave
+// it, or else the tool and what it acted on, a file by its name alone.
+func activityDoing(a claudecode.Activity) string {
+	if a.Description != "" {
+		return a.Description
+	}
+	detail := strings.Join(strings.Fields(a.Detail), " ")
+	if filepath.IsAbs(detail) {
+		detail = filepath.Base(detail)
+	}
+	return strings.TrimSpace(a.Tool + " " + detail)
+}
+
+// firstLine is the first line of s that is not blank.
+func firstLine(s string) string {
+	for l := range strings.Lines(s) {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// clip shortens s to n runes, marking where it was cut.
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 // recordReviewsLocked stores the findings of a round's reviews.
