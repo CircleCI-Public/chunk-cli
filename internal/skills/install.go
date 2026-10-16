@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/skills"
 )
 
@@ -12,10 +13,10 @@ import (
 type Scope string
 
 const (
-	// ScopeUser installs into the user's agent config directories (~/.claude, ~/.agents).
+	// ScopeUser installs into the user's agent config directories (~/.claude, ~/.agents, $XDG_CONFIG_HOME/opencode or ~/.config/opencode).
 	// Agents whose config directories do not exist are skipped.
 	ScopeUser Scope = "user"
-	// ScopeProject installs into the project's agent config directories (.claude, .agents).
+	// ScopeProject installs into the project's agent config directories (.claude, .agents, .opencode).
 	// Directories are created as needed; no pre-existing config dir is required.
 	ScopeProject Scope = "project"
 )
@@ -77,6 +78,16 @@ type Agent struct {
 // For ScopeProject, baseDir is the project root directory.
 func agents(scope Scope, baseDir string) []Agent {
 	skipIfAbsent := scope == ScopeUser
+	// opencode's config dir differs per scope: ~/.config/opencode at user
+	// level (honouring XDG_CONFIG_HOME), .opencode at project level.
+	opencodeConfigDir := filepath.Join(baseDir, ".opencode")
+	if scope == ScopeUser {
+		configHome := filepath.Join(baseDir, ".config")
+		if v := os.Getenv(config.EnvXDGConfigHome); v != "" {
+			configHome = v
+		}
+		opencodeConfigDir = filepath.Join(configHome, "opencode")
+	}
 	return []Agent{
 		{
 			Name:         "claude",
@@ -88,6 +99,12 @@ func agents(scope Scope, baseDir string) []Agent {
 			Name:         "codex",
 			ConfigDir:    filepath.Join(baseDir, ".agents"),
 			SkillsDir:    filepath.Join(baseDir, ".agents", "skills"),
+			SkipIfAbsent: skipIfAbsent,
+		},
+		{
+			Name:         "opencode",
+			ConfigDir:    opencodeConfigDir,
+			SkillsDir:    filepath.Join(opencodeConfigDir, "skills"),
 			SkipIfAbsent: skipIfAbsent,
 		},
 	}
