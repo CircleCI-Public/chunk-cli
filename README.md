@@ -86,7 +86,8 @@ chunk sidecar ssh -- make test
 # Read the output of a command that ran on a sidecar (IDs show in `chunk watch`)
 chunk sidecar logs <command-id> --follow
 
-# Delete your old sidecars (default: created more than 1h ago)
+# Delete your sidecars created more than 24h ago (without --before, all of them;
+# --skip-in-use keeps those this machine still refers to)
 chunk prune --before 24h
 ```
 

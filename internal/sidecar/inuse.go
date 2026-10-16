@@ -12,7 +12,8 @@ import (
 
 // InUseIDs returns the IDs of every sidecar that chunk's local state on this
 // machine refers to: active sidecars, pools, factory runs and detached
-// reviews. Sidecars used only from another machine are not known here.
+// reviews. Sidecars used only from another machine are not known here, and
+// the repository checkouts of factory runs are not read.
 func InUseIDs() (map[string]bool, error) {
 	root, err := config.AppData()
 	if err != nil {
@@ -33,6 +34,11 @@ func InUseIDs() (map[string]bool, error) {
 		}
 		if d.IsDir() {
 			if d.Name() == "validate-cache" {
+				return fs.SkipDir
+			}
+			// A factory run's checkout is a whole repository; its state sits
+			// beside it, and any JSON inside is the project's, not chunk's.
+			if _, err := r.Stat(filepath.Join(path, ".git")); err == nil {
 				return fs.SkipDir
 			}
 			return nil

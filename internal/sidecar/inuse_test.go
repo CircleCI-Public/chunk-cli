@@ -22,6 +22,8 @@ func TestInUseIDsReadsEveryKindOfLocalState(t *testing.T) {
 		"proj/snapshot.json":                  `{"id":"a-snapshot"}`,
 		"proj/validate-cache/k.json":          `{"sidecar_id":"cached"}`,
 		"proj/broken.json":                    `{`,
+		"repo-x/factory/20261015-1/.git":      "gitdir: elsewhere\n",
+		"repo-x/factory/20261015-1/t/s.json":  `{"sidecar_id":"in-a-checkout"}`,
 	}
 	for rel, body := range files {
 		p := filepath.Join(root, rel)
