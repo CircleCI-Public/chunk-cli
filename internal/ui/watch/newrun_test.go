@@ -91,9 +91,9 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "› add a --verbose flag▏"), out)
 	assert.Assert(t, !strings.Contains(out, "type the change you want"), "the placeholder goes once something is typed:\n%s", out)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	assert.Equal(t, strings.TrimSpace(lines[len(lines)-1]), "Enter go to step 2  ·  Esc cancel", "the keys are the bottom line:\n%s", out)
+	assert.Equal(t, strings.TrimSpace(lines[len(lines)-1]), "enter go to step 2  ·  esc cancel", "the keys are the bottom line:\n%s", out)
 	assert.Assert(t, strings.Contains(m.render(), m.styles().teal(stepsMap(1))), "the map of steps is in the accent colour")
-	assert.Assert(t, strings.Contains(m.render(), m.styles().Teal.Bold(true).Render("Enter")), "the step's keys are bold in the accent colour")
+	assert.Assert(t, strings.Contains(m.render(), m.styles().Teal.Bold(true).Render("enter")), "the step's keys are bold in the accent colour")
 	// The prompt is a field across the footer, so where to type stands out.
 	for _, l := range lines {
 		if strings.Contains(l, "› ▏") {
@@ -108,17 +108,17 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 	m, cmd = press(m, tea.KeyEnter)
 	assert.Equal(t, m.draft, draftWorking)
 	assert.Assert(t, strings.Contains(view(m), "Step 2 of 3: Claude is drafting the code change on your machine, in a copy of your repo\n  1. write a prompt → [2. Claude drafts the change] → 3. send to the factory (last step)\n  › Claude is working…"), view(m))
-	assert.Assert(t, strings.Contains(view(m), "Esc stop Claude"), view(m))
+	assert.Assert(t, strings.Contains(view(m), "esc stop Claude"), view(m))
 	m = deliver(t, m, cmd)
 	assert.Equal(t, f.root, "/src/chunk-cli")
 	assert.Equal(t, f.prompt, "add a --verbose flag")
 
 	assert.Equal(t, m.draft, draftReady)
 	out = view(m)
-	assert.Assert(t, strings.Contains(out, "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change\n  1. write a prompt → 2. Claude drafts the change → [3. send to the factory (last step)]\n  › Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-) · press d to view the change\n  Enter send to factory (last step)  ·  d view the draft's diff  ·  Esc keep for later"), out)
-	assert.Assert(t, strings.Contains(out, "Enter send to factory (last step)"), out)
+	assert.Assert(t, strings.Contains(out, "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change\n  1. write a prompt → 2. Claude drafts the change → [3. send to the factory (last step)]\n  › Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-) · press d to view the change\n  enter send to factory (last step)  ·  d view the draft's diff  ·  esc keep for later"), out)
+	assert.Assert(t, strings.Contains(out, "enter send to factory (last step)"), out)
 	assert.Assert(t, strings.Contains(out, "d view the draft's diff"), out)
-	assert.Assert(t, strings.Contains(out, "Esc keep for later"), out)
+	assert.Assert(t, strings.Contains(out, "esc keep for later"), out)
 
 	// d opens the diff, with what Claude said it did; closing it comes back
 	// to the draft.
@@ -187,8 +187,8 @@ func TestADraftWithNoChangesCanOnlyBeClosed(t *testing.T) {
 
 	out := view(m)
 	assert.Assert(t, strings.Contains(out, "› Claude made no changes, so there is nothing to send"), out)
-	assert.Assert(t, !strings.Contains(out, "Enter send to factory"), out)
-	assert.Assert(t, strings.Contains(out, "Esc close"), out)
+	assert.Assert(t, !strings.Contains(out, "enter send to factory"), out)
+	assert.Assert(t, strings.Contains(out, "esc close"), out)
 
 	m, cmd = press(m, tea.KeyEnter)
 	assert.Assert(t, cmd == nil, "Enter sends nothing")
