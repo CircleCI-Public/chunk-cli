@@ -508,7 +508,26 @@ chunk
   for a new project with little for Claude to read: no sidecar starts, no
   credential is needed, and the same overwrite refusal applies. An unknown name
   is refused with the list of sets. It cannot be combined with `--org-id`,
-  `--image`, `--model` or `--timeout`.
+  `--image`, `--model`, `--timeout` or `--eval-commits`.
+- **`factory bootstrap --eval-commits <n>` scores the prompts it writes, and is
+  hidden** while `factory eval` is. Once the prompts are written, it runs
+  `factory eval --commits <n>` on them: the `n` most recent usable commits on
+  `HEAD` are made into cases before any sidecar starts, so a history with none
+  fails then, and the cases are reviewed and graded on `factory-eval` sidecars
+  from the project's `validation.sidecarImage`, not bootstrap's Claude image,
+  so they review as factory would. Scoring runs after both of bootstrap's
+  parts, so it uses an image the run has just recorded, and bootstrap's own
+  sidecar is destroyed first. It is only for the prompts the run writes: when
+  the prompts already exist, or `--skip-sidecar` leaves no image to score on,
+  the plan says scoring is skipped, and `factory eval --commits <n>` scores
+  existing prompts. A run whose sidecar image or prompts part fails is not
+  scored.
+  Reviews and the grader use Claude Code's default model and timeouts. The
+  prompts are kept whatever the score: an eval that fails or scores no case is
+  a warning, and the command still succeeds. The summary follows the list of
+  prompts; `--json` reports it as `eval`, in `factory eval`'s report format.
+  With history, the prompts come from comments on the same recent changes the
+  commits are, so the scores flatter them.
 - **`factory eval` scores review prompts, and is hidden.** It is for tuning
   prompts and what writes them, such as bootstrap, not for everyday use. It
   reviews a set of cases, each a change to the repository at a pinned revision

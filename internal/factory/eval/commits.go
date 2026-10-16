@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -18,6 +19,9 @@ const (
 	// commits, so a history of skipped ones is not walked to its root.
 	commitScanFactor = 10
 )
+
+// ErrNoCases is returned by Commits when no commit it looked at makes a case.
+var ErrNoCases = errors.New("no commit makes a case")
 
 // Commits makes cases of the n most recent usable commits on the first-parent
 // history of rev: each is its diff against its parent, with its message as the
@@ -55,7 +59,7 @@ func Commits(ctx context.Context, root, rev string, n int) (Suite, error) {
 		}
 	}
 	if len(cases) == 0 {
-		return Suite{}, fmt.Errorf("no commit on %s makes a case", rev)
+		return Suite{}, fmt.Errorf("%w on %s", ErrNoCases, rev)
 	}
 	return Suite{Cases: cases}, nil
 }

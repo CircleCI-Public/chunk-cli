@@ -36,6 +36,24 @@ func TestPlanBootstrap(t *testing.T) {
 			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: validation.sidecarImage is snap-1"},
 		},
 		{
+			name:        "--eval-commits scores the prompts the run writes",
+			in:          planInputs{Cfg: withImage, NoHistory: true, EvalCommits: 3},
+			want:        bootstrapPlan{Prompts: true, Score: 3},
+			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: validation.sidecarImage is snap-1"},
+		},
+		{
+			name:        "--eval-commits leaves existing prompts to factory eval",
+			in:          planInputs{Cfg: withImage, PromptsExist: true, PromptsDir: ".chunk/reviews", EvalCommits: 3},
+			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: validation.sidecarImage is snap-1", ".chunk/reviews already has review prompts", "scoring: .chunk/reviews already has review prompts. Score them with chunk factory eval --commits 3."},
+			empty:       true,
+		},
+		{
+			name:        "--eval-commits needs an image --skip-sidecar will not record",
+			in:          planInputs{Cfg: &config.ProjectConfig{}, SkipSidecar: true, NoHistory: true, EvalCommits: 3},
+			want:        bootstrapPlan{Prompts: true},
+			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: --skip-sidecar", "scoring: --skip-sidecar, and validation.sidecarImage is not set to score the prompts on"},
+		},
+		{
 			name:        "--skip-sidecar leaves the image out",
 			in:          planInputs{SkipSidecar: true, GitHubToken: true},
 			want:        bootstrapPlan{Config: true, Prompts: true, History: true},
@@ -74,6 +92,7 @@ func TestPlanBootstrap(t *testing.T) {
 			assert.Equal(t, got.Sidecar, tt.want.Sidecar)
 			assert.Equal(t, got.Prompts, tt.want.Prompts)
 			assert.Equal(t, got.History, tt.want.History)
+			assert.Equal(t, got.Score, tt.want.Score)
 			assert.Equal(t, got.empty(), tt.empty)
 		})
 	}
