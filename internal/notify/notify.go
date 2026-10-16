@@ -36,8 +36,8 @@ func Send(title, body string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = cmd.Start()
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
+		done := make(chan struct{})
+		go func() { _ = cmd.Wait(); close(done) }()
 		select {
 		case <-ctx.Done():
 			_ = cmd.Process.Kill()
