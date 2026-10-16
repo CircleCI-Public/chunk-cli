@@ -247,9 +247,7 @@ The sidecars are deleted when the eval ends.`,
 // evalSuite is the cases to review, from the suite in suiteDir or the commits
 // most recent on from, and a name for where they came from. Every case is
 // checked against the repository before any sidecar boots, so a stale one
-// costs nothing.
-// evalSuite is the suite to run: the one in suiteDir, or cases made of the
-// commits on from. suiteGiven says --suite was passed, so an empty one is
+// costs nothing. suiteGiven says --suite was passed, so an empty one is
 // refused rather than read as the commits path - MarkFlagsOneRequired only
 // asks that one of the group was given, not that it says anything.
 func evalSuite(ctx context.Context, root, suiteDir, from string, commits int, suiteGiven bool) (eval.Suite, string, error) {
