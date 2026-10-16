@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -92,7 +93,7 @@ The sidecars are deleted when the eval ends.`,
 					err:        err,
 				}
 			}
-			suite, source, err := evalSuite(ctx, root, suiteDir, from, commits)
+			suite, source, err := evalSuite(ctx, root, suiteDir, from, commits, cmd.Flags().Changed("suite"))
 			if err != nil {
 				return err
 			}
@@ -246,8 +247,13 @@ The sidecars are deleted when the eval ends.`,
 // evalSuite is the cases to review, from the suite in suiteDir or the commits
 // most recent on from, and a name for where they came from. Every case is
 // checked against the repository before any sidecar boots, so a stale one
-// costs nothing.
-func evalSuite(ctx context.Context, root, suiteDir, from string, commits int) (eval.Suite, string, error) {
+// costs nothing. suiteGiven says --suite was passed, so an empty one is
+// refused rather than read as the commits path - MarkFlagsOneRequired only
+// asks that one of the group was given, not that it says anything.
+func evalSuite(ctx context.Context, root, suiteDir, from string, commits int, suiteGiven bool) (eval.Suite, string, error) {
+	if suiteGiven && strings.TrimSpace(suiteDir) == "" {
+		return eval.Suite{}, "", &userError{msg: "--suite needs a directory.", errMsg: "empty --suite"}
+	}
 	if suiteDir == "" {
 		suite, err := eval.Commits(ctx, root, from, commits)
 		if err != nil {

@@ -83,3 +83,21 @@ func TestCommitsRefusesWhatIsNotAHistory(t *testing.T) {
 	_, err = Commits(ctx, root, "HEAD", 0)
 	assert.ErrorContains(t, err, "at least one commit")
 }
+
+// git diff --name-only writes a path with a space in it unquoted, so splitting
+// its output on whitespace turned one docs file into two tokens, one of them
+// extensionless, and the commit read as code.
+func TestCommitsSkipsDocsWhosePathHasASpace(t *testing.T) {
+	ctx := context.Background()
+	root, _ := newRepo(t)
+	writeFile(t, root, "pkg/a.go", "package pkg\n\nvar A = 1\n")
+	commit(t, root, "Dev", "Add A")
+	writeFile(t, root, "docs/my notes.md", "# notes\n")
+	commit(t, root, "Dev", "Write up the notes")
+
+	s, err := Commits(ctx, root, "HEAD", 5)
+
+	assert.NilError(t, err)
+	assert.Equal(t, len(s.Cases), 1)
+	assert.Equal(t, s.Cases[0].Request, "Add A")
+}
