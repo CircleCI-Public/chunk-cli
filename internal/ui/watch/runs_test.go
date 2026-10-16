@@ -302,6 +302,78 @@ func TestNoRunsLeavesTheSidecarPaneAsItWas(t *testing.T) {
 	assert.Assert(t, strings.HasPrefix(out, m.styles().emphasis("sidecars")), out)
 }
 
+func TestRunsWithoutLooseSidecarsDrawNoSidecarSection(t *testing.T) {
+	m := sessModel(factoryRun("a", chunkd.SessionRunning, time.Now()))
+	m.sidecars = nil
+	out := strings.Join(m.renderLeftPane(m.styles(), 30), "\n")
+	assert.Assert(t, !strings.Contains(out, "sidecars"), out)
+}
+
+func TestSearchFindsARunByItsSidecar(t *testing.T) {
+	m := sessModel(factoryRun("a", chunkd.SessionRunning, time.Now()), factoryRun("b", chunkd.SessionDone, time.Now()))
+	m.allRuns = m.sessions
+	m.runSidecars = map[string][]sidecarInfo{"b": {{id: "sc-9", name: "needle-box"}}}
+	m = m.setQuery("needle")
+	assert.Equal(t, len(m.sessions), 1)
+	assert.Equal(t, m.sessions[0].s.ID, "b")
+}
+
+func TestHiddenRunsSidecarsStayOutOfTheSidecarList(t *testing.T) {
+	old := factoryRun("old", chunkd.SessionDone, time.Now().Add(-30*24*time.Hour))
+	ended := time.Now().Add(-30 * 24 * time.Hour)
+	old.s.EndedAt = &ended
+	old.s.Factory.SidecarIDs = []string{"sc-run"}
+	m := sessModel()
+	next, _ := m.Update(dataMsg{
+		sessions: []sessionInfo{old},
+		sidecars: []sidecarInfo{{id: "sc-run", lastActivity: time.Now(), verified: true}, {id: "sc-loose", lastActivity: time.Now(), verified: true}},
+	})
+	m = next.(Model)
+	assert.Equal(t, len(m.sessions), 0, "the old run is not listed")
+	assert.Equal(t, len(m.sidecars), 1)
+	assert.Equal(t, m.sidecars[0].id, "sc-loose")
+}
+
+func TestSidecarsInARunsWorktreeBelongToTheRun(t *testing.T) {
+	run := factoryRun("a", chunkd.SessionRunning, time.Now())
+	run.s.Factory.Worktree = "/data/wt/a"
+	rest, by := splitRunSidecars([]sidecarInfo{
+		{id: "in-wt", projectPath: "/data/wt/a"},
+		{id: "elsewhere", projectPath: "/repo"},
+	}, []sessionInfo{run})
+	assert.Equal(t, len(rest), 1)
+	assert.Equal(t, rest[0].id, "elsewhere")
+	assert.Equal(t, by["a"][0].id, "in-wt")
+}
+
+func TestOneSessionsPoolIsOneRow(t *testing.T) {
+	now := time.Now()
+	got := collapsePools([]sidecarInfo{
+		{id: "a", sessionID: "s1", projectIdx: 0, lastActivity: now.Add(-time.Minute), lastResult: levelError},
+		{id: "b", sessionID: "s1", projectIdx: 0, lastActivity: now, lastResult: levelDone, verified: true},
+		{id: "c", sessionID: "s2", projectIdx: 0, lastActivity: now},
+		{id: "d", sessionID: "s1", projectIdx: 1, lastActivity: now},
+		{id: "e", lastActivity: now},
+	})
+	assert.Equal(t, len(got), 4)
+	assert.Equal(t, got[0].id, "a")
+	assert.DeepEqual(t, got[0].members, []string{"a", "b"})
+	assert.Equal(t, got[0].lastResult, levelDone, "the newest member's result")
+	assert.Assert(t, got[0].verified, "the newest member's confirmation")
+	assert.Assert(t, got[0].owns("b"))
+	assert.Equal(t, len(got[1].members), 0, "a lone sidecar is not a pool")
+}
+
+func TestSearchFiltersSidecarsToo(t *testing.T) {
+	m := sessModel(factoryRun("a", chunkd.SessionRunning, time.Now()))
+	m.looseSidecars = []sidecarInfo{{id: "sc-1", name: "box", repoName: "alpha"}, {id: "sc-2", name: "box2", repoName: "beta"}}
+	m = m.setQuery("beta")
+	assert.Equal(t, len(m.sidecars), 1)
+	assert.Equal(t, m.sidecars[0].id, "sc-2")
+	m = m.setQuery("")
+	assert.Equal(t, len(m.sidecars), 2)
+}
+
 // Runs and sidecars are one list to the selection: down off the last run
 // lands on the first sidecar, and up off it goes back.
 func TestSelectionMovesFromRunsToSidecarsAndBack(t *testing.T) {
@@ -898,7 +970,7 @@ func searchModel() Model {
 // moves to one that is still listed, Enter keeps the filter and Esc drops it.
 func TestSlashSearchesTheRunList(t *testing.T) {
 	m := searchModel()
-	assert.Assert(t, strings.Contains(stripANSI(m.render()), "/ to search"), "the search is discoverable before it is used:\n%s", m.render())
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "search runs"), "the search is discoverable before it is used:\n%s", m.render())
 	m, _ = press(m, '/')
 	assert.Assert(t, m.searching)
 
@@ -906,7 +978,7 @@ func TestSlashSearchesTheRunList(t *testing.T) {
 	assert.Equal(t, len(m.sessions), 1)
 	assert.Equal(t, m.selRun, "bbb", "the selection follows to a run that is still listed")
 	out := stripANSI(m.render())
-	assert.Assert(t, strings.Contains(out, "/cache▏"), "the query is shown:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "⌕ cache▏"), "the query is shown:\n%s", out)
 	assert.Assert(t, !strings.Contains(out, "webhook"), "the other run is hidden:\n%s", out)
 
 	// While searching, keys are text: q does not quit.
@@ -950,7 +1022,7 @@ func TestPollKeepsTheRunFilter(t *testing.T) {
 	assert.Equal(t, len(m.allRuns), 2)
 	assert.Equal(t, len(m.sessions), 1)
 	assert.Equal(t, m.selRun, "bbb")
-	assert.Equal(t, len(filterRuns(all, "CACHE flaky")), 1, "every word must match, ignoring case")
+	assert.Equal(t, len(filterRuns(all, "CACHE flaky", nil)), 1, "every word must match, ignoring case")
 }
 
 // A filter narrows the list, not what the header and sidecar pane know: a
@@ -962,5 +1034,42 @@ func TestFilterDoesNotHideRunsFromTheHeader(t *testing.T) {
 	assert.Equal(t, len(m.sessions), 0)
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "1 running"), "a hidden live run is still in flight:\n%s", out)
-	assert.Assert(t, strings.Contains(out, "no other sidecars"), out)
+	assert.Assert(t, !strings.Contains(strings.Join(m.renderLeftPane(m.styles(), 30), "\n"), "sidecars"), out)
+}
+
+// A sidecar nobody has touched for days is not listed, even though the API
+// still knows it.
+func TestFilterSidecarsDropsOnesOlderThanFiveDays(t *testing.T) {
+	now := time.Now()
+	kept := filterSidecars([]sidecarInfo{
+		{id: "fresh", verified: true, lastActivity: now.Add(-2 * time.Hour)},
+		{id: "old", verified: true, lastActivity: now.Add(-6 * 24 * time.Hour)},
+	})
+	assert.Equal(t, len(kept), 1)
+	assert.Equal(t, kept[0].id, "fresh")
+}
+
+// The run list leads a run with its state as a block, then says when or how far.
+func TestRunListLeadsWithAStateChip(t *testing.T) {
+	r := factoryRun("aaa", chunkd.SessionDone, time.Now().Add(-time.Hour))
+	ended := time.Now().Add(-10 * time.Minute)
+	r.s.EndedAt = &ended
+	m := sessModel(r)
+	m.selRun = "aaa"
+	out := stripANSI(strings.Join(m.renderRunList(m.styles()), "\n"))
+	assert.Assert(t, strings.Contains(out, " done  10m ago"), out)
+}
+
+// An open round's checks and reviews hang off one tree, the last on └─.
+func TestOpenRoundDrawsATree(t *testing.T) {
+	r := factoryRun("aaa", chunkd.SessionRunning, time.Now())
+	r.s.Rounds = []chunkd.Round{{
+		Number: 1, State: chunkd.RoundChecking,
+		Checks: []chunkd.RoundCheck{{Name: "lint", Status: chunkd.CheckPassed}, {Name: "test", Status: chunkd.CheckPassed}},
+	}}
+	m := sessModel(r)
+	m.selRun = "aaa"
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "├─ ✓  lint"), out)
+	assert.Assert(t, strings.Contains(out, "└─ ✓  test"), out)
 }

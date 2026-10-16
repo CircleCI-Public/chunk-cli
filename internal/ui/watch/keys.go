@@ -119,7 +119,7 @@ func (k outputKeyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.Shor
 func newHelp(st watchStyles, width int) help.Model {
 	h := help.New()
 	h.ShortSeparator = "  ·  "
-	h.Styles.ShortKey = st.VDim
+	h.Styles.ShortKey = st.Teal
 	h.Styles.ShortDesc = st.Dim
 	h.Styles.ShortSeparator = st.VDim
 	h.Styles.Ellipsis = st.VDim

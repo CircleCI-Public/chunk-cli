@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
@@ -87,14 +88,21 @@ func visibleRuns(all []sessionInfo, now time.Time) []sessionInfo {
 
 // splitRunSidecars takes the sidecars the daemon assigned to listed factory
 // runs out of the sidecar list. Shown as rows of their own they would read as
-// loose sidecars nobody owns.
+// loose sidecars nobody owns. A sidecar in a run's worktree counts as the
+// run's too.
 func splitRunSidecars(sidecars []sidecarInfo, runs []sessionInfo) (rest []sidecarInfo, byRun map[string][]sidecarInfo) {
 	owners := map[string]string{}
+	worktrees := map[string]string{}
 	for _, r := range runs {
-		if f := r.s.Factory; f != nil {
-			for _, id := range f.SidecarIDs {
-				owners[id] = r.s.ID
-			}
+		f := r.s.Factory
+		if f == nil {
+			continue
+		}
+		for _, id := range f.SidecarIDs {
+			owners[id] = r.s.ID
+		}
+		if f.Worktree != "" {
+			worktrees[filepath.Clean(f.Worktree)] = r.s.ID
 		}
 	}
 	byRun = map[string][]sidecarInfo{}
@@ -102,6 +110,14 @@ func splitRunSidecars(sidecars []sidecarInfo, runs []sessionInfo) (rest []sideca
 		if id, ok := owners[sc.id]; ok {
 			byRun[id] = append(byRun[id], sc)
 			continue
+		}
+		// A sidecar made from inside a run's worktree, by validation the agent
+		// ran there, belongs to the run even though its pool never named it.
+		if sc.projectPath != "" {
+			if id, ok := worktrees[filepath.Clean(sc.projectPath)]; ok {
+				byRun[id] = append(byRun[id], sc)
+				continue
+			}
 		}
 		rest = append(rest, sc)
 	}
@@ -396,15 +412,20 @@ func (m Model) openText(name, text string) Model {
 }
 
 // filterRuns keeps the runs whose title, project, branch or status contains
-// every word of query, ignoring case. An empty query keeps them all.
-func filterRuns(all []sessionInfo, query string) []sessionInfo {
+// every word of query, ignoring case, or that of one of its own sidecars
+// (bySidecars, by run ID). An empty query keeps them all.
+func filterRuns(all []sessionInfo, query string, bySidecars map[string][]sidecarInfo) []sessionInfo {
 	words := strings.Fields(strings.ToLower(query))
 	if len(words) == 0 {
 		return all
 	}
 	var out []sessionInfo
 	for _, r := range all {
-		hay := strings.ToLower(strings.Join([]string{runTitle(r.s), r.label, r.s.Branch, runStatus(r.s)}, " "))
+		parts := []string{runTitle(r.s), r.label, r.s.Branch, runStatus(r.s)}
+		for _, sc := range bySidecars[r.s.ID] {
+			parts = append(parts, sidecarHaystack(sc))
+		}
+		hay := strings.ToLower(strings.Join(parts, " "))
 		match := true
 		for _, w := range words {
 			if !strings.Contains(hay, w) {
@@ -419,11 +440,44 @@ func filterRuns(all []sessionInfo, query string) []sessionInfo {
 	return out
 }
 
+// sidecarHaystack is the text a search looks through for a sidecar.
+func sidecarHaystack(sc sidecarInfo) string {
+	return strings.Join([]string{sc.repoName, sc.branch, sc.projectName, sc.name, sc.id, sc.sessionID}, " ")
+}
+
+// filterSidecarsByQuery keeps the sidecars whose repo, branch, name or session
+// contains every word of query, so the search reaches them as it does runs.
+func filterSidecarsByQuery(all []sidecarInfo, query string) []sidecarInfo {
+	words := strings.Fields(strings.ToLower(query))
+	if len(words) == 0 {
+		return all
+	}
+	var out []sidecarInfo
+	for _, sc := range all {
+		hay := strings.ToLower(sidecarHaystack(sc))
+		match := true
+		for _, w := range words {
+			if !strings.Contains(hay, w) {
+				match = false
+				break
+			}
+		}
+		if match {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
 // setQuery filters the run list by query and keeps the selection on a run
 // that is still listed.
 func (m Model) setQuery(query string) Model {
 	m.query = query
-	m.sessions = filterRuns(m.allRuns, query)
+	m.sessions = filterRuns(m.allRuns, query, m.runSidecars)
+	m.sidecars = filterSidecarsByQuery(m.looseSidecars, query)
+	m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
+	m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
+	m.leftScrollOffset = 0
 	prev := m.selRun
 	m = m.reselectRun()
 	if m.selRun != prev {
@@ -468,16 +522,7 @@ func (m Model) renderRunList(st watchStyles) []string {
 	if m.focusedPane == paneLeft && m.selRun != "" {
 		head = st.emphasis("runs")
 	}
-	if m.searching || m.query != "" {
-		cursor := ""
-		if m.searching {
-			cursor = "▏"
-		}
-		head += "  " + st.muted(truncate("/"+m.query, leftPaneWidth-8)+cursor)
-	} else {
-		head += "  " + st.vdim("/ to search")
-	}
-	lines := []string{head, ""}
+	lines := []string{head, m.searchRow(st)}
 	if len(m.sessions) == 0 {
 		return append(lines, "  "+st.dim("no runs match"), "")
 	}
@@ -492,13 +537,27 @@ func (m Model) renderRunList(st watchStyles) []string {
 		default:
 			lines = append(lines, "  "+icon+" "+title)
 		}
-		status := runStatus(r.s)
+		status := runDetail(r.s)
 		if len(m.projects) > 1 {
-			status = r.label + " · " + status
+			status = strings.TrimSuffix(r.label+" · "+status, " · ")
 		}
-		lines = append(lines, "    "+st.vdim(truncate(status, leftPaneWidth-4)))
+		chip := runChip(st, r.s)
+		lines = append(lines, "    "+chip+" "+st.vdim(truncate(status, leftPaneWidth-5-lipgloss.Width(chip))))
 	}
 	return append(lines, "")
+}
+
+// searchRow is the line under the runs heading that is always there, so the
+// search can be found before it is used: a hint, then what is being typed, then
+// the filter that is kept.
+func (m Model) searchRow(st watchStyles) string {
+	switch {
+	case m.searching:
+		return st.teal("⌕ ") + truncate(m.query, leftPaneWidth-4) + st.teal("▏")
+	case m.query != "":
+		return st.teal("⌕ ") + st.muted(truncate(m.query, leftPaneWidth-14)) + "  " + st.vdim("Esc clear")
+	}
+	return st.vdim("⌕ search runs") + "  " + st.vdim("/")
 }
 
 // runTitle names a run by the first line of its prompt.
@@ -533,13 +592,45 @@ func runStatus(s chunkd.Session) string {
 	return out
 }
 
+// outcomeFailed is how a run that failed is named in the run list.
+const outcomeFailed = "failed"
+
+// runChip is the run's state as a coloured block: the one thing in the run
+// list the eye should find first.
+func runChip(st watchStyles, s chunkd.Session) string {
+	text, bg := "running", chunkYellow
+	if s.State != chunkd.SessionRunning {
+		text = truncate(runOutcome(s), 14)
+		switch text {
+		case "cancelled", "no change", "stuck":
+			bg = lipgloss.Color("3")
+		case outcomeFailed, "still failing":
+			bg = lipgloss.Color("1")
+		default:
+			bg = chunkGreen
+		}
+	}
+	return st.Chip.Background(bg).Render(" " + text + " ")
+}
+
+// runDetail is runStatus without the word the chip already says.
+func runDetail(s chunkd.Session) string {
+	if s.State == chunkd.SessionRunning {
+		return runStatus(s)
+	}
+	if s.EndedAt != nil {
+		return ago(*s.EndedAt)
+	}
+	return ""
+}
+
 // runOutcome is how an ended run came out, in a word or two.
 func runOutcome(s chunkd.Session) string {
 	switch s.State {
 	case chunkd.SessionCancelled:
 		return "cancelled"
 	case chunkd.SessionFailed:
-		return "failed"
+		return outcomeFailed
 	case chunkd.SessionRunning, chunkd.SessionDone:
 	}
 	if f := s.Factory; f != nil {
@@ -555,7 +646,7 @@ func runOutcome(s chunkd.Session) string {
 		}
 	}
 	if loopFailed(s) {
-		return "failed"
+		return outcomeFailed
 	}
 	return "done"
 }

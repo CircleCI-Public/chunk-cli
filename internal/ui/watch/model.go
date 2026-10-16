@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -66,6 +67,8 @@ type watchStyles struct {
 	Error    lipgloss.Style
 	Muted    lipgloss.Style
 	VDim     lipgloss.Style
+	// Chip is the base of a coloured label; the caller sets its background.
+	Chip lipgloss.Style
 }
 
 func (s watchStyles) dim(text string) string      { return s.Dim.Render(text) }
@@ -78,18 +81,27 @@ func (s watchStyles) err(text string) string      { return s.Error.Render(text) 
 func (s watchStyles) muted(text string) string    { return s.Muted.Render(text) }
 func (s watchStyles) vdim(text string) string     { return s.VDim.Render(text) }
 
+// Chunk brand colours. The accent is navy on a light terminal, where yellow
+// would vanish, and yellow on a dark one.
+var (
+	chunkYellow = lipgloss.Color("#FFF700")
+	chunkNavy   = lipgloss.Color("#2E3C52")
+	chunkGreen  = lipgloss.Color("#00DB73")
+)
+
 func newWatchStyles(hasDark bool) watchStyles {
 	ld := lipgloss.LightDark(hasDark)
 	return watchStyles{
 		Dim:      lipgloss.NewStyle().Foreground(ld(lipgloss.Color("248"), lipgloss.Color("246"))),
 		Emphasis: lipgloss.NewStyle().Bold(true),
-		Success:  lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
+		Success:  lipgloss.NewStyle().Foreground(chunkGreen),
 		Warning:  lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
 		Running:  lipgloss.NewStyle().Foreground(lipgloss.Color("4")),
-		Teal:     lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
+		Teal:     lipgloss.NewStyle().Foreground(ld(chunkNavy, chunkYellow)),
 		Error:    lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
 		Muted:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("252"), lipgloss.Color("250"))),
 		VDim:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242"))),
+		Chip:     lipgloss.NewStyle().Bold(true).Foreground(chunkNavy),
 	}
 }
 
@@ -118,7 +130,10 @@ type sidecarInfo struct {
 	// verified reports that the API confirmed the sidecar exists. Sidecars it
 	// has confirmed gone never get this far, so false means unconfirmed: the
 	// daemon has no credentials, no org to ask about, or no answer yet.
-	verified     bool
+	verified bool
+	// members is every sidecar of a session's pool in this worktree when
+	// collapsePools folded them into this row; nil for a sidecar on its own.
+	members      []string
 	lastActivity time.Time
 	lastOp       eventlog.Op
 	lastResult   string // how the last validate or review run ended: levelDone, levelError, or "" for none
@@ -226,9 +241,12 @@ type Model struct {
 	// allRuns is every run worth listing before the search filters it down to
 	// sessions. query is what the person typed after /, and searching is true
 	// while the keyboard goes to it.
-	allRuns       []sessionInfo
-	query         string
-	searching     bool
+	allRuns   []sessionInfo
+	query     string
+	searching bool
+	// looseSidecars is every sidecar no run owns; sidecars is what the search
+	// leaves of them.
+	looseSidecars []sidecarInfo
 	runSidecars   map[string][]sidecarInfo
 	reviewAuthErr string
 
@@ -450,10 +468,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// it is before the poll and find that row again after.
 		prevRun, prevItem := m.selRun, m.selectedRunItem()
 		m.allRuns = visibleRuns(msg.sessions, time.Now())
-		m.sessions = filterRuns(m.allRuns, m.query)
 		// A hidden run's sidecars still belong to it, so they stay out of the
-		// sidecar list.
-		m.sidecars, m.runSidecars = splitRunSidecars(m.sidecars, m.allRuns)
+		// sidecar list: split against every run, not just the listed ones.
+		m.looseSidecars, m.runSidecars = splitRunSidecars(m.sidecars, msg.sessions)
+		m.looseSidecars = collapsePools(m.looseSidecars)
+		m.sidecars = filterSidecarsByQuery(m.looseSidecars, m.query)
+		m.sessions = filterRuns(m.allRuns, m.query, m.runSidecars)
 		m.reviewAuthErr = msg.reviewAuthErr
 		m = m.reselectRun()
 		if run := m.selectedRun(); run != nil {
@@ -520,7 +540,7 @@ func (m Model) render() string {
 		return m.renderHeader(st) + m.renderSeparator(st) + m.renderOutputPane(st)
 	}
 	return m.renderHeader(st) +
-		m.renderSeparator(st) +
+		m.renderFrameEdge(st, '╭', '┬', '╮') +
 		m.renderBody(st) +
 		m.renderFooter(st)
 }
@@ -547,7 +567,7 @@ func (m Model) renderHeader(st watchStyles) string {
 	if r := len(m.sessions); r > 0 {
 		count = fmt.Sprintf("%d run%s · %s", r, plural(r), count)
 	}
-	title := st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
+	title := st.teal("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
 	right := m.runTag(st) + m.connectionTag(st) + "  " + st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
@@ -568,6 +588,26 @@ func (m Model) connectionTag(st watchStyles) string {
 		return st.err(ui.IconFail + " " + label + " unreachable")
 	}
 	return st.success(ui.IconOK) + " " + st.muted(label)
+}
+
+// frameStyle colours a part of the frame around the two panes: the focused
+// pane's edges are drawn in the accent colour and the other pane's stay quiet.
+// The divider is the focused pane's edge whichever pane that is.
+func (m Model) frameStyle(st watchStyles, rightPane bool) func(string) string {
+	if (m.focusedPane == paneRight) == rightPane {
+		return st.teal
+	}
+	return st.vdim
+}
+
+// renderFrameEdge is the top or bottom of the frame around the two panes, with
+// a junction over the divider.
+func (m Model) renderFrameEdge(st watchStyles, left, junction, right rune) string {
+	leftW := leftPaneWidth + 1 // the pane and the space before the divider
+	rightW := max(m.width-leftW-3, 0)
+	l, r := m.frameStyle(st, false), m.frameStyle(st, true)
+	return l(string(left)+strings.Repeat("─", leftW)) + st.teal(string(junction)) +
+		r(strings.Repeat("─", rightW)+string(right)) + "\n"
 }
 
 func (m Model) renderSeparator(st watchStyles) string {
@@ -617,14 +657,11 @@ func (m Model) renderBody(st watchStyles) string {
 			r = rightLines[i]
 		}
 		lPad := padLine(l, leftPaneWidth)
-		div := st.vdim("│")
-		if m.focusedPane == paneRight {
-			div = st.muted("│")
-		}
 		// Clip rather than let a long line wrap: the two panes are drawn as one
 		// fixed-height block, so a line that wraps shifts everything below it and
 		// the layout no longer matches the height it was built for.
-		b.WriteString(" " + lPad + " " + div + " " + clip(r, m.width-leftPaneWidth-4) + "\n")
+		rPad := padLine(clip(r, m.width-leftPaneWidth-5), m.width-leftPaneWidth-5)
+		b.WriteString(m.frameStyle(st, false)("│") + lPad + " " + st.teal("│") + " " + rPad + m.frameStyle(st, true)("│") + "\n")
 	}
 	return b.String()
 }
@@ -696,6 +733,12 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 	lines = make([]string, 0, maxLines)
 	add := func(s string) { lines = append(lines, s) }
 
+	// Runs show their own sidecars under infra, so with runs listed and no
+	// loose sidecar left there is nothing for this section to say.
+	if len(m.sidecars) == 0 && len(m.allRuns) > 0 {
+		return nil, 0
+	}
+
 	if m.focusedPane == paneLeft && m.selRun == "" {
 		add(st.emphasis("sidecars"))
 	} else {
@@ -703,10 +746,6 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 	}
 	add("")
 
-	if len(m.sidecars) == 0 && len(m.allRuns) > 0 {
-		add(st.muted("no other sidecars"))
-		return lines, 0
-	}
 	if len(m.sidecars) == 0 {
 		add(st.muted("no sidecars"))
 		add("")
@@ -778,7 +817,11 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 		lastGroup, haveGroup = group, true
 
 		selected := i == m.selectedIdx && m.selRun == ""
-		nameLine := truncate(m.rowLabel(sc, multi, dirLabel), leftPaneWidth-3)
+		label := m.rowLabel(sc, multi, dirLabel)
+		if n := len(sc.members); n > 1 {
+			label += fmt.Sprintf(" · %d sidecars", n)
+		}
+		nameLine := truncate(label, leftPaneWidth-3)
 
 		if selected {
 			if m.focusedPane == paneLeft {
@@ -790,25 +833,31 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 			addRow("  " + nameLine)
 		}
 
-		if sc.snapshotName != "" {
-			addRow("   " + st.vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
-		}
-
-		addRow("  " + m.rowStatus(st, sc))
-
-		if line := renderResources(st, sc.resources); line != "" {
-			addRow("  " + line)
-		}
-
+		// A sidecar is a name and a line of status, with its age on that line
+		// when it fits. Its snapshot and resources are what the reader wants of
+		// the sidecar they are on, not of every one in the list, so only the
+		// selected row spends lines on them.
+		status := "  " + m.rowStatus(st, sc)
+		age := ""
 		if !sc.lastActivity.IsZero() {
-			addRow("  " + st.vdim(ago(sc.lastActivity)))
-		} else {
-			addRow("")
+			age = st.vdim(ago(sc.lastActivity))
 		}
-
-		// Divider between sidecars in the same repo group.
-		if i < len(m.sidecars)-1 && m.sidecars[i+1].repoName == sc.repoName {
-			addRow(st.vdim(strings.Repeat("·", leftPaneWidth)))
+		if age != "" && lipgloss.Width(status)+2+lipgloss.Width(age) <= leftPaneWidth {
+			addRow(status + "  " + age)
+			age = ""
+		} else {
+			addRow(status)
+		}
+		if selected {
+			if sc.snapshotName != "" {
+				addRow("   " + st.vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
+			}
+			if line := renderResources(st, sc.resources); line != "" {
+				addRow("  " + line)
+			}
+		}
+		if age != "" {
+			addRow("  " + age)
 		}
 
 		// Hold back a line for the hint whenever rows remain after this one.
@@ -877,7 +926,7 @@ func (m Model) renderActivityPane(st watchStyles, maxLines int) []string {
 		sc := m.sidecars[m.selectedIdx]
 		if sc.projectIdx < len(m.events) {
 			for _, e := range m.events[sc.projectIdx] {
-				if e.SidecarID == sc.id {
+				if sc.owns(e.SidecarID) {
 					filtered = append(filtered, e)
 				}
 			}
@@ -996,7 +1045,7 @@ func (m Model) currentInvocGroups() []invocationGroup {
 	var filtered []eventlog.Event
 	if sc.projectIdx < len(m.events) {
 		for _, e := range m.events[sc.projectIdx] {
-			if e.SidecarID == sc.id {
+			if sc.owns(e.SidecarID) {
 				filtered = append(filtered, e)
 			}
 		}
@@ -1296,7 +1345,7 @@ func (m Model) renderFooter(st watchStyles) string {
 		}
 	}
 
-	footer := st.vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
+	footer := m.renderFrameEdge(st, '╰', '┴', '╯') + "  " + bar + "\n"
 	switch {
 	case m.runConfirm != "" && m.runLine() != "":
 		footer += "  " + st.warning(clip(m.runLine(), m.width-2)) + "\n"
@@ -1559,6 +1608,57 @@ func effectiveActivity(sc sidecarInfo) time.Time {
 	return sc.fileMtime
 }
 
+// owns reports whether id is this row's sidecar, or one folded into it.
+func (sc sidecarInfo) owns(id string) bool {
+	return id == sc.id || slices.Contains(sc.members, id)
+}
+
+// collapsePools folds the sidecars one session holds in one worktree into a
+// single row: a validate pool is several sidecars that all carry the session's
+// label, and listed apart they read as duplicates crowding the pane. The row
+// stands for the member active most recently, takes the place of the first,
+// and is running if any of them is.
+func collapsePools(sidecars []sidecarInfo) []sidecarInfo {
+	type key struct {
+		session string
+		group   groupKey
+	}
+	at := map[key]int{}
+	var out []sidecarInfo
+	for _, sc := range sidecars {
+		if sc.sessionID == "" {
+			out = append(out, sc)
+			continue
+		}
+		k := key{sc.sessionID, groupOf(sc)}
+		i, ok := at[k]
+		if !ok {
+			at[k] = len(out)
+			sc.members = []string{sc.id}
+			out = append(out, sc)
+			continue
+		}
+		row := out[i]
+		row.members = append(row.members, sc.id)
+		running := row.running || sc.running
+		// The row keeps the first member's id so a selection survives polls, and
+		// takes the status of whichever member did something last.
+		if effectiveActivity(sc).After(effectiveActivity(row)) {
+			row.lastActivity, row.fileMtime = sc.lastActivity, sc.fileMtime
+			row.lastOp, row.lastResult, row.resources = sc.lastOp, sc.lastResult, sc.resources
+			row.verified = sc.verified
+		}
+		row.running = running
+		out[i] = row
+	}
+	for i := range out {
+		if len(out[i].members) == 1 {
+			out[i].members = nil
+		}
+	}
+	return out
+}
+
 // indexOfSidecar returns the position of id, or 0 when it is absent.
 func indexOfSidecar(sidecars []sidecarInfo, id string) int {
 	for i, sc := range sidecars {
@@ -1584,12 +1684,27 @@ func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
 // leftover than live.
 const staleAfter = 24 * time.Hour
 
-// filterSidecars keeps every sidecar the API has confirmed, and unconfirmed
-// ones only while they have been active within staleAfter.
+// maxSidecarAge is how long a sidecar can sit untouched before the dashboard
+// stops listing it.
+const maxSidecarAge = 5 * 24 * time.Hour
+
+// filterSidecars drops sidecars with no activity or none within maxSidecarAge,
+// then keeps every one the API has confirmed, and unconfirmed ones only while
+// they have been active within staleAfter.
 func filterSidecars(sidecars []sidecarInfo) []sidecarInfo {
 	now := time.Now()
 	var kept []sidecarInfo
 	for _, sc := range sidecars {
+		// A sidecar that has never run anything has nothing to show on the right
+		// ("No activity yet."), so it is not worth a row on the left either.
+		if sc.lastActivity.IsZero() && !sc.running {
+			continue
+		}
+		// Whatever the API still lists, a sidecar nobody has touched for days is
+		// not what the dashboard is for.
+		if eff := effectiveActivity(sc); !eff.IsZero() && now.Sub(eff) > maxSidecarAge {
+			continue
+		}
 		if sc.verified || within(now, sc, staleAfter) {
 			kept = append(kept, sc)
 		}
