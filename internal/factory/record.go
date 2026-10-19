@@ -104,11 +104,12 @@ func LoadRecord(root, runID string) (Record, error) {
 
 // HostRecordScript finds a per-run remote host's own factory run record and
 // prints it: on a per-run box there is exactly one *.json under its data
-// directory that is not a *.pool.json. A pull reads the host's worktree from
-// it rather than from anything the run itself printed, so it works however
-// little output the server still has.
+// directory that is not a *.pool.json. The data directory is found the way
+// config.AppData finds it, XDG_DATA_HOME first. A pull reads the host's
+// worktree from it rather than from anything the run itself printed, so it
+// works however little output the server still has.
 func HostRecordScript() string {
-	return `f=$(find "$HOME/.local/share/chunk" -path '*/factory/*.json' ! -name '*.pool.json' 2>/dev/null)
+	return `f=$(find "${XDG_DATA_HOME:-$HOME/.local/share}/chunk" -path '*/factory/*.json' ! -name '*.pool.json' 2>/dev/null)
 n=$(printf '%s\n' "$f" | grep -c .)
 if [ "$n" -ne 1 ]; then echo "found $n factory run record(s) on the host, want exactly 1" >&2; exit 1; fi
 cat "$f"`
