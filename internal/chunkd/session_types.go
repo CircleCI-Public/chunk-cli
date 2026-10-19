@@ -462,6 +462,14 @@ type FactoryRequest struct {
 	Draft  bool `json:"draft,omitempty"`
 }
 
+// WarmRequest asks the daemon to make the sidecars a factory run continuing
+// RunID would use, before that run is started, so it can start without
+// waiting for them.
+type WarmRequest struct {
+	ProjectRoot string `json:"project_root"`
+	RunID       string `json:"run_id"`
+}
+
 // SessionStartResponse answers an accepted POST /factory.
 type SessionStartResponse struct {
 	ID string `json:"id"`

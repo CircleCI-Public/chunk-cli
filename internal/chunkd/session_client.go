@@ -112,3 +112,16 @@ func ListSessions(root string) ([]Session, error) {
 func CancelSession(id string) error {
 	return sessionCall(http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/cancel", nil, nil)
 }
+
+// WarmFactory asks the daemon to make the sidecars a factory run continuing
+// req.RunID would use, without waiting for them. The run started next for it
+// uses them; if none is started soon, the daemon deletes them.
+func WarmFactory(req WarmRequest) error {
+	return sessionCall(http.MethodPost, "/factory/warm", req, nil)
+}
+
+// CancelWarm deletes the sidecars made ahead of a run continuing runID, for
+// work that will not be handed to the factory after all.
+func CancelWarm(runID string) error {
+	return sessionCall(http.MethodPost, "/factory/warm/"+neturl.PathEscape(runID)+"/cancel", nil, nil)
+}

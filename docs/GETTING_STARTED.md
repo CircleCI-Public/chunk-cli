@@ -330,7 +330,8 @@ The dashboard refreshes every 5 seconds. The left pane lists every run the daemo
 is tracking — the live ones first, then recent finished ones — each with a state
 chip and how far it has got. Selecting one shows it in the right pane: each
 round's implementer turn, validation commands and reviews, the run's progress,
-and once it ends, the branch and worktree its work is on.
+and once it ends, the branch and worktree its work is on, with the change
+itself shown under them.
 
 Press `→` to move into the run, `Enter` to open a row's output, `Space` to open or
 close a round, `d` for the run's details (its worktree and setup log), `c` to copy
@@ -339,6 +340,13 @@ an agent, and `x` twice to cancel the run. While the implementer works, its row 
 of its output under its row. `c` copies through the terminal (OSC 52), so a
 terminal that doesn't support it won't receive the copy. `q` only closes the
 dashboard; the run carries on.
+
+Press `n` to start a run from the dashboard, in three steps the footer walks you
+through: type the change you want and press `Enter`; Claude Code drafts it on
+your machine, in a copy of the project, while the factory's sidecars start;
+then the draft's diff is shown in the right pane (`↑/↓` scrolls it), and
+`Enter` sends the draft and your prompt to the factory to finish (`Esc` keeps
+the draft for later).
 
 ```
 chunk watch  2 runs  main@a3f9e12                        15:04:32
