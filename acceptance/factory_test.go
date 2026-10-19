@@ -19,6 +19,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
@@ -362,6 +363,132 @@ func TestFactoryBuildRefusesChunkBinaryWithoutRemote(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	assert.Assert(t, strings.Contains(result.Stderr, "--chunk-binary needs --remote."), "stderr: %s", result.Stderr)
+}
+
+// pullTestRepo creates a plain git repo, independent of the project's own
+// checkout, with one commit holding the baseline files a pull test edits
+// against: a run's worktree, local or on the host, is never the project
+// itself.
+func pullTestRepo(t *testing.T, name string) string {
+	t.Helper()
+	dir := gitrepo.SetupGitRepo(t, "test-org", name)
+	for file, content := range map[string]string{
+		"keep.txt":   "keep\n",
+		"edit.txt":   "original\n",
+		"delete.txt": "delete me\n",
+	} {
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644))
+	}
+	gitrepo.AddFile(t, dir, ".")
+	cmd := exec.Command("git", "commit", "-q", "-m", "baseline")
+	cmd.Dir = dir
+	cmd.Env = gitrepo.GitEnv(dir)
+	out, err := cmd.CombinedOutput()
+	assert.NilError(t, err, string(out))
+	return dir
+}
+
+// chunk factory pull brings a finished remote run's work back: it reads the
+// host's own run record over SSH for its worktree - not anything the run
+// printed - rsyncs it into this run's local worktree, stages what it added so
+// 'git diff' shows it rather than "??", and only then tears the host down.
+func TestFactoryPullBringsAFinishedRunsWorkBackAndTearsDownTheHost(t *testing.T) {
+	env, cci, _, workDir := setupReviewProjectWithSSH(t, nil, "correctness")
+
+	// The record this test writes, and the one 'chunk factory pull' reads
+	// back afterward, must land in the same data directory the spawned
+	// binary uses.
+	t.Setenv(config.EnvXDGDataHome, filepath.Join(env.HomeDir, ".local", "share"))
+	root := config.CanonicalProjectRoot(workDir)
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+
+	localWT := pullTestRepo(t, "local-wt")
+	hostWT := pullTestRepo(t, "host-wt")
+
+	// What the run did on the host: edited a file, added one, deleted one,
+	// and added a binary file, exactly as an implementer's workspace keeps
+	// its work - uncommitted changes on top of the baseline.
+	assert.NilError(t, os.WriteFile(filepath.Join(hostWT, "edit.txt"), []byte("edited!\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(hostWT, "new.txt"), []byte("new file\n"), 0o644))
+	assert.NilError(t, os.Remove(filepath.Join(hostWT, "delete.txt")))
+	binaryContent := []byte{0x00, 0x01, 0xff, 0xfe, 'P', 'N', 'G'}
+	assert.NilError(t, os.WriteFile(filepath.Join(hostWT, "binary.bin"), binaryContent, 0o644))
+
+	// The host's own run record, read over SSH rather than parsed from any
+	// output: it names the worktree the host's 'factory build' actually made.
+	hostRec := factory.Record{RunID: "host-run", Worktree: hostWT}
+	hostRecJSON, err := json.Marshal(hostRec)
+	assert.NilError(t, err)
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-record-read", Stdout: string(hostRecJSON)}
+
+	// The host's 'chunk factory build' has already finished, successfully.
+	ended := "2026-01-15T10:05:00.000Z"
+	exitCode := 0
+	cci.CommandResponse = &fakes.CommandResponse{
+		CreatedAt: "2026-01-15T10:00:00.000Z", EndedAt: &ended, ExitCode: &exitCode, Phase: "ended", SidecarID: "sidecar-host-1",
+	}
+
+	rec := factory.Record{
+		RunID:    "r-pulltest",
+		Prompt:   "add a feature",
+		Worktree: localWT,
+		Branch:   "chunk/factory/add-a-feature/r-pulltest",
+		Baseline: "deadbeef",
+		Head:     "deadbeef",
+		Remote:   &factory.RemoteRun{SidecarID: "sidecar-host-1", CommandID: "cmd-build-1", HostRepo: "/home/user/test-repo"},
+	}
+	assert.NilError(t, factory.SaveRecord(dataDir, rec))
+
+	result := binary.RunCLI(t, []string{"factory", "pull", rec.RunID}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	// The pulled tree: the edit landed, the new and binary files are there,
+	// the deleted one is gone, and an untouched file stayed as it was.
+	assertFileContent(t, localWT, "edit.txt", "edited!\n")
+	assertFileContent(t, localWT, "new.txt", "new file\n")
+	assertFileContent(t, localWT, "keep.txt", "keep\n")
+	data, err := os.ReadFile(filepath.Join(localWT, "binary.bin"))
+	assert.NilError(t, err)
+	assert.DeepEqual(t, data, binaryContent)
+	_, err = os.Stat(filepath.Join(localWT, "delete.txt"))
+	assert.Assert(t, os.IsNotExist(err), "the deleted file should be gone from the pulled tree")
+
+	// The new and binary files were staged with 'git add -A -N', so they show
+	// up in 'git diff' rather than as untracked.
+	diffCmd := exec.Command("git", "diff", "--name-only")
+	diffCmd.Dir = localWT
+	diffCmd.Env = gitrepo.GitEnv(localWT)
+	diffOut, err := diffCmd.CombinedOutput()
+	assert.NilError(t, err, string(diffOut))
+	for _, want := range []string{"edit.txt", "new.txt", "binary.bin"} {
+		assert.Assert(t, strings.Contains(string(diffOut), want), "git diff --name-only: %s", diffOut)
+	}
+
+	assert.Assert(t, strings.Contains(result.Stderr, localWT), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "git -C "+localWT+" diff"), "stderr: %s", result.Stderr)
+
+	// Only once the work is local is the host torn down: its sidecar deleted
+	// and the record's remote run cleared.
+	var deleted bool
+	for _, r := range cci.Recorder.AllRequests() {
+		if r.Method == "DELETE" && r.URL.Path == "/api/v3/sidecar/instances/sidecar-host-1" {
+			deleted = true
+		}
+	}
+	assert.Assert(t, deleted, "expected the host sidecar to be deleted; requests: %v", cci.Recorder.AllRequests())
+
+	saved, err := factory.LoadRecord(root, rec.RunID)
+	assert.NilError(t, err)
+	assert.Assert(t, saved.Remote == nil, "record: %+v", saved)
+	assert.Equal(t, saved.Worktree, localWT)
+}
+
+func assertFileContent(t *testing.T, dir, name, want string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), want)
 }
 
 func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {

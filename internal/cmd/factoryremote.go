@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -209,40 +209,11 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 	}
 
 	pullHint := "chunk factory pull " + key
-	statusFn(iostream.LevelStep, fmt.Sprintf("Following the run on sidecar %s. Ctrl-C detaches without stopping it.", entry.ID))
-	var stdout bytes.Buffer
-	stderrTail := newTailWriter(factoryRemoteStderrCap)
-	res, streamErr := entry.Client.StreamOutput(ctx, commandID, "", func(stream string, data []byte) {
-		if stream == circleci.StreamStderr {
-			_, _ = streams.Err.Write(data)
-			_, _ = stderrTail.Write(data)
-			return
-		}
-		// The host's --json result. Nothing reads it yet - 'chunk factory
-		// pull' will - but it must not land on this terminal as stdout.
-		stdout.Write(data)
-	})
-
-	if streamErr != nil {
-		// A stream broken by this process's own Ctrl-C detaches rather than
-		// reporting a failure; any other break is a genuine lost connection,
-		// whether or not Ctrl-C also happened to land at the same moment.
-		if ctx.Err() != nil {
-			streams.ErrPrintf("\nDetaching. The run continues on sidecar %s. Run %s once it's done to bring the work back.\n", entry.ID, pullHint)
+	if err := followRemoteBuild(ctx, entry.Client, entry.ID, commandID, streams, statusFn, pullHint); err != nil {
+		if errors.Is(err, errDetached) {
 			return nil
 		}
-		return &userError{
-			msg:        fmt.Sprintf("Lost the host's output partway through the run on sidecar %s.", entry.ID),
-			suggestion: fmt.Sprintf("The run may still be going. Inspect it with: chunk sidecar ssh --sidecar-id %s", entry.ID),
-			err:        streamErr,
-		}
-	}
-	if res.ExitCode != 0 {
-		return &userError{
-			msg:        fmt.Sprintf("The run failed on sidecar %s.", entry.ID),
-			suggestion: fmt.Sprintf("Inspect it with: chunk sidecar ssh --sidecar-id %s", entry.ID),
-			err:        fmt.Errorf("exit %d: %s", res.ExitCode, review.Tail(strings.TrimSpace(stderrTail.String()), factoryRemoteStderrTailLen)),
-		}
+		return err
 	}
 
 	statusFn(iostream.LevelDone, fmt.Sprintf("The run finished on sidecar %s.", entry.ID))
@@ -251,6 +222,55 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 		return iostream.PrintJSON(streams.Out, factoryRemoteResult{SidecarID: entry.ID})
 	}
 	streams.Printf("%s\n", entry.ID)
+	return nil
+}
+
+// errDetached is what followRemoteBuild returns when Ctrl-C detaches from the
+// host's run rather than it failing or finishing: nothing was stopped, and
+// nothing was pulled.
+var errDetached = errors.New("detached from the remote run")
+
+// followRemoteBuild streams a host's 'chunk factory build' run, identified by
+// commandID on sidecarID, until it ends: the host's stderr reaches the
+// terminal as it arrives, and nothing from its stdout does. Ctrl-C detaches -
+// it sends no cancel and pulls nothing - and returns errDetached, which a
+// caller treats as success rather than failure. It is used both right after
+// starting a remote run and by 'chunk factory pull' to wait out a run that
+// has not ended yet, so there is exactly one place this behaves that way.
+func followRemoteBuild(
+	ctx context.Context, client *circleci.Client, sidecarID, commandID string,
+	streams iostream.Streams, statusFn iostream.StatusFunc, pullHint string,
+) error {
+	statusFn(iostream.LevelStep, fmt.Sprintf("Following the run on sidecar %s. Ctrl-C detaches without stopping it.", sidecarID))
+	stderrTail := newTailWriter(factoryRemoteStderrCap)
+	res, streamErr := client.StreamOutput(ctx, commandID, "", func(stream string, data []byte) {
+		if stream == circleci.StreamStderr {
+			_, _ = streams.Err.Write(data)
+			_, _ = stderrTail.Write(data)
+		}
+	})
+
+	if streamErr != nil {
+		// A stream broken by this process's own Ctrl-C detaches rather than
+		// reporting a failure; any other break is a genuine lost connection,
+		// whether or not Ctrl-C also happened to land at the same moment.
+		if ctx.Err() != nil {
+			streams.ErrPrintf("\nDetaching. The run continues on sidecar %s. Run %s once it's done to bring the work back.\n", sidecarID, pullHint)
+			return errDetached
+		}
+		return &userError{
+			msg:        fmt.Sprintf("Lost the host's output partway through the run on sidecar %s.", sidecarID),
+			suggestion: fmt.Sprintf("The run may still be going. Inspect it with: chunk sidecar ssh --sidecar-id %s", sidecarID),
+			err:        streamErr,
+		}
+	}
+	if res.ExitCode != 0 {
+		return &userError{
+			msg:        fmt.Sprintf("The run failed on sidecar %s.", sidecarID),
+			suggestion: fmt.Sprintf("Inspect it with: chunk sidecar ssh --sidecar-id %s", sidecarID),
+			err:        fmt.Errorf("exit %d: %s", res.ExitCode, review.Tail(strings.TrimSpace(stderrTail.String()), factoryRemoteStderrTailLen)),
+		}
+	}
 	return nil
 }
 

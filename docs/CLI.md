@@ -161,6 +161,9 @@ chunk
 │   │   --open-pr                   # Refuse to start the run unless its pull request could be opened
 │   │   --no-open-pr                # Do not push the branch or open a pull request when every check passes
 │   │   --draft                     # Open the pull request as a draft
+│   │   --remote                    # Provision a sidecar of its own for the run; bring the work back with 'chunk factory pull'
+│   │   --json                      # Output as JSON
+│   ├── pull [run id]               # Bring a --remote run's work back (default: the most recently started remote run)
 │   │   --json                      # Output as JSON
 │   ├── start [prompt|-]            # Hand the factory a diff and a prompt to refine
 │   │   --diff <file|->             # Start from a patch of work done elsewhere
@@ -424,6 +427,40 @@ chunk
   by every checkout of the repository, which is what `--continue` reads, so a run can be continued after the daemon
   restarts; runs from before records were kept cannot be continued. The
   session's record names the run it continues as `continues_run_id`.
+- **`factory build --remote` runs the build on a sidecar of its own, so you can
+  close your laptop; `chunk factory pull` brings the work back.** It makes the
+  run's worktree and record locally, as a plain build does, then provisions a
+  one-sidecar pool for the host, installs chunk there (the release matching
+  this build, unless `--chunk-binary` uploads a Linux build of your own -
+  hidden, for testing), makes the baseline commit, and execs `chunk factory
+  build` on the host as one foreground command, with the flags that mean
+  something there forwarded (`--max-attempts`, `--image`, `--reviewers`,
+  `--reviews`, `--no-validate`, `--keep-sidecars`, `--model`,
+  `--implementer-instructions`, `--implement-timeout`, `--review-timeout`) and
+  always `--no-open-pr`: a remote run does not go through the local daemon,
+  so it opens no pull request, and `--open-pr`/`--draft` are refused with it.
+  `--continue`, `--log`, `--log-file` and `--verbose` are refused too, since
+  none have meaning without the local daemon. The host's stderr streams to the
+  terminal as the run goes; Ctrl-C only detaches - it sends no cancel and
+  deletes nothing - and prints `chunk factory pull <run id>`. The record is
+  saved once the host's own exec is submitted, with `remote` set to
+  `sidecar_id`, `command_id` and `host_repo` (the synced checkout, not where
+  the work ends up).
+  `chunk factory pull [run id]` brings that work back: with no run id, the
+  most recently saved record with `remote` set, and with one, that run; a
+  record with no remote run is refused. It waits out the host's run if it has
+  not ended yet (following it exactly as `--remote` does), then reads the
+  host's own run record over SSH - not anything the build printed, so it
+  works however little output the server still has - for the worktree the
+  host's `factory build` actually made (there is exactly one non-pool `*.json`
+  under the host's data directory; `Remote.HostRepo` is only the synced
+  checkout). It rsyncs that worktree into this run's local one and runs
+  `git add -A -N` there, so files the run added show up in `git diff` rather
+  than as untracked. Only once the work is local does it tear the host down:
+  the sidecar is deleted, the pool's state file removed, and `remote` cleared
+  from the record, leaving an ordinary local run pointing at the pulled
+  worktree. A failure before the work is local changes nothing - neither the
+  sidecar nor the record - so a pull is always safe to run again.
 - **`factory start` hands the factory a diff and a prompt.** The factory's
   input is a diff, a first pass at the change, and the prompt it is for, not
   where the work was done (`factory.Handoff`). Not every change starts as a

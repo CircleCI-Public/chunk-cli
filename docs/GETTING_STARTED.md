@@ -534,6 +534,18 @@ review PR #123
 
 The agent runs one reviewer per prompt over the diff and returns the combined findings (High and Medium issues, capped at 10).
 
+`chunk factory build "<prompt>"` runs the same checks yourself: an implementer agent makes the change on a sidecar, then reviewers and your validation commands check it, feeding back until it passes or attempts run out. Add `--remote` to run it on a sidecar of its own instead of the local daemon, so you can close your laptop or lose your connection without stopping it:
+
+```bash
+chunk factory build --remote "add a --verbose flag"
+
+# Later, or after Ctrl-C detached from it:
+chunk factory pull                 # bring the most recently started remote run's work back
+chunk factory pull <run id>        # or a specific one
+```
+
+`chunk factory pull` waits out the run if it is still going, then pulls the implementer's worktree from the host into a worktree on this machine and stages the files it added, so `git diff` there shows the whole change. It only deletes the host's sidecar once the work is safely local, so it is always safe to run again if anything goes wrong first.
+
 ---
 
 ## Typical day-to-day workflow

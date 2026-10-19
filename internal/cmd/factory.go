@@ -33,6 +33,7 @@ func newFactoryCmd() *cobra.Command {
 		RunE:  groupRunE,
 	}
 	cmd.AddCommand(newFactoryBuildCmd())
+	cmd.AddCommand(newFactoryPullCmd())
 	cmd.AddCommand(newFactoryStartCmd())
 	cmd.AddCommand(newFactoryBootstrapCmd())
 	cmd.AddCommand(newFactoryEvalCmd())
@@ -162,7 +163,17 @@ the implementer is sent and what it did and said, each review's findings in
 full, and each validation command's output when it failed. --log-file FILE keeps the log in FILE instead, and on its own
 turns the log on. --verbose adds the review prompts, the output of commands
 that passed, and a check each round that every reviewer has the implementer's
-change, and also shows the log here as the run writes it; it implies --log.`,
+change, and also shows the log here as the run writes it; it implies --log.
+
+--remote provisions a sidecar of its own for the run instead of using the
+local daemon, and execs this same command on it, so you can close your laptop
+or lose your connection without stopping the run. Its stderr streams to this
+terminal as it goes; Ctrl-C detaches rather than stopping it, and
+'chunk factory pull' brings the work back later, whether you detached or let
+it run to completion. --continue, --log, --log-file and --verbose are not
+supported with it yet, and it always leaves the branch alone (--open-pr and
+--draft are refused): a remote run does not go through the local daemon,
+which is what pushes and opens the pull request.`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
@@ -320,8 +331,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().BoolVar(&pr.open, "open-pr", false, "refuse to start the run unless its pull request could be opened")
 	cmd.Flags().BoolVar(&pr.none, "no-open-pr", false, "do not push the branch or open a pull request when every check passes")
 	cmd.Flags().BoolVar(&pr.draft, "draft", false, "open the pull request as a draft")
-	cmd.Flags().BoolVar(&remote, "remote", false, "provision a sidecar of its own for this run, so you can close your laptop")
-	_ = cmd.Flags().MarkHidden("remote")
+	cmd.Flags().BoolVar(&remote, "remote", false, "provision a sidecar of its own for this run, so you can close your laptop; bring the work back with 'chunk factory pull'")
 	cmd.Flags().StringVar(&chunkBinary, "chunk-binary", "", "Linux chunk build to upload to the remote sidecar with --remote (default: install the release matching this build)")
 	_ = cmd.Flags().MarkHidden("chunk-binary")
 	cmd.SetFlagErrorFunc(factoryFlagError)

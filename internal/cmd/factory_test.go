@@ -35,6 +35,21 @@ func putRecord(t *testing.T, root string, rec factory.Record) {
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, rec.RunID+".json"), b, 0o600))
 }
 
+// --remote is a supported, documented flag now that chunk factory pull can
+// bring its work back, so it must no longer be hidden; --chunk-binary is for
+// testing a dev build on the host and stays hidden.
+func TestFactoryBuildRemoteFlagIsVisibleAndChunkBinaryStaysHidden(t *testing.T) {
+	flags := newFactoryBuildCmd().Flags()
+
+	remote := flags.Lookup("remote")
+	assert.Assert(t, remote != nil)
+	assert.Assert(t, !remote.Hidden, "--remote should be visible")
+
+	chunkBinary := flags.Lookup("chunk-binary")
+	assert.Assert(t, chunkBinary != nil)
+	assert.Assert(t, chunkBinary.Hidden, "--chunk-binary should stay hidden")
+}
+
 // checkFactoryContinue refuses a run whose work is still on a per-run
 // sidecar: there is nothing local yet to continue.
 func TestCheckFactoryContinueRefusesARunOnASidecar(t *testing.T) {
