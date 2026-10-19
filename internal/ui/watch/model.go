@@ -583,7 +583,9 @@ func (m Model) renderBody(st watchStyles) string {
 
 	leftLines := m.renderLeftPane(st, contentHeight)
 	var rightLines []string
-	if m.draft == draftWorking || m.draft == draftReady {
+	if m.draft == draftPrompting {
+		rightLines = m.renderNewRunPane(st)
+	} else if m.draft == draftWorking || m.draft == draftReady {
 		rightLines = m.renderDraftPane(st, contentHeight)
 	} else if m.handingOff() {
 		rightLines = m.renderSentPane(st, contentHeight)

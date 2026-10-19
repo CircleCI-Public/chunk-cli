@@ -545,3 +545,17 @@ func (m Model) scrollDraft(delta int) Model {
 	m.draftScroll = min(max(m.draftScroll+delta, 0), limit)
 	return m
 }
+
+// renderNewRunPane is the right pane while a prompt is typed: a clean page
+// for the new run, saying what happens next, rather than the last run still
+// on show behind the prompt.
+func (m Model) renderNewRunPane(st watchStyles) []string {
+	key := st.Teal.Bold(true).Render
+	return []string{
+		st.vdim("new run  ") + st.muted(filepath.Base(m.startRoot())),
+		"",
+		st.muted("Describe the change you want below, then press ") + key("enter") + st.muted("."),
+		st.muted("Claude drafts it on your machine, you check the diff here,"),
+		st.muted("then send it to the factory."),
+	}
+}

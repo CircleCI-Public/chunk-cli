@@ -424,3 +424,20 @@ func TestAKeyLeavesTheSentDraft(t *testing.T) {
 	m = poll(m, started, m.allRuns[0], m.allRuns[1])
 	assert.Equal(t, m.selRun, "factory-run")
 }
+
+// Pressing n clears the right pane for the new run, rather than leaving the
+// last run on show behind the prompt.
+func TestNClearsThePaneForTheNewRun(t *testing.T) {
+	m := draftModel(t, &fakeDrafts{})
+	before := view(m)
+	assert.Assert(t, strings.Contains(before, "run  repo"), "the selected run is in the pane first: %s", before)
+
+	m, _ = press(m, 'n')
+	out := view(m)
+	assert.Assert(t, strings.Contains(out, "new run  chunk-cli"), out)
+	assert.Assert(t, strings.Contains(out, "Describe the change you want below, then press enter."), out)
+	assert.Assert(t, !strings.Contains(out, "run  repo"), "the last run is no longer in the pane: %s", out)
+
+	m, _ = press(m, tea.KeyEscape)
+	assert.Assert(t, strings.Contains(view(m), "run  repo"), "esc brings the run back to the pane")
+}
