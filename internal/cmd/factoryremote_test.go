@@ -35,8 +35,6 @@ func TestCheckFactoryRemoteFlagsRefusesEachUnsupportedFlag(t *testing.T) {
 		{name: "log", opts: factoryRemoteOptions{logOn: true}, want: "--log is not supported with --remote yet."},
 		{name: "log-file", opts: factoryRemoteOptions{logFile: "out.log"}, want: "--log-file is not supported with --remote yet."},
 		{name: "verbose", opts: factoryRemoteOptions{verbose: true}, want: "--verbose is not supported with --remote yet."},
-		{name: "open-pr", opts: factoryRemoteOptions{openPR: true}, want: "--open-pr is not supported with --remote yet."},
-		{name: "draft", opts: factoryRemoteOptions{draft: true}, want: "--draft is not supported with --remote yet."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := checkFactoryRemoteFlags(tc.opts)
@@ -365,7 +363,7 @@ func TestRemoteBuildScriptIncludesPassThroughFlags(t *testing.T) {
 	script := remoteBuildScript("/repo", "org-aaa", opts)
 
 	for _, want := range []string{
-		"--org-id", "--image", "--reviewers", "--reviews", "--no-validate",
+		"--no-open-pr", "--org-id", "--image", "--reviewers", "--reviews", "--no-validate",
 		"--keep-sidecars", "--model", "--implementer-instructions",
 		"--implement-timeout", "--review-timeout", "--max-attempts",
 	} {
@@ -427,7 +425,7 @@ func TestRemoteBuildScriptEscapesEveryValueAndPassesThePromptAfterDashDash(t *te
 
 	got := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 	want := []string{
-		"factory", "build", "--json",
+		"factory", "build", "--json", "--no-open-pr",
 		"--org-id", "org's id",
 		"--max-attempts", "5",
 		"--implement-timeout", "1m30s",

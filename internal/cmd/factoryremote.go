@@ -36,8 +36,6 @@ type factoryRemoteOptions struct {
 	logFile     string
 	verbose     bool
 	jsonOut     bool
-	openPR      bool
-	draft       bool
 	// The rest are build flags that mean something on the host's own
 	// 'factory build': forwarded through the exec script rather than acted on
 	// here.
@@ -87,6 +85,14 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 	if err != nil {
 		return err
 	}
+	// The host runs from its own checkout, so --reviews reaches it relative
+	// to the project root rather than as typed here, where it may be relative
+	// to another directory or an absolute path on this machine.
+	relReviews, err := factoryReviewsDir(root, opts.reviewsDir)
+	if err != nil {
+		return err
+	}
+	opts.reviewsDir = filepath.ToSlash(relReviews)
 
 	key := remoteRunKey()
 	dataDir, err := config.RepoDataDir(root)
@@ -289,10 +295,13 @@ func (w *tailWriter) String() string { return string(w.buf) }
 // the exec API takes no shell of its own and rejects a command with spaces.
 // Only the build flags that mean something on the host are forwarded; the
 // rest (--continue, the log flags, --open-pr, --draft) are refused before
-// this is ever built.
+// this is ever built. The host is always given --no-open-pr: a run there
+// would otherwise open a pull request whenever it could, and pushing from
+// the host needs a GitHub credential in its exec environment that is not
+// plumbed and is a decision of its own.
 func remoteBuildScript(hostRepo, orgID string, opts factoryRemoteOptions) string {
 	args := []string{
-		"factory", "build", "--json",
+		"factory", "build", "--json", "--no-open-pr",
 		"--org-id", orgID,
 		"--max-attempts", strconv.Itoa(opts.attempts),
 		"--implement-timeout", opts.implementTimeout.String(),
@@ -330,9 +339,8 @@ func remoteBuildScript(hostRepo, orgID string, opts factoryRemoteOptions) string
 
 // checkFactoryRemoteFlags refuses flag combinations --remote does not support
 // yet: a continued run and the log options, since none of them have meaning
-// without the local daemon that would otherwise carry them out, and opening a
-// pull request, which would need a GitHub token in the host's exec
-// environment that is not plumbed and is a credential decision of its own.
+// without the local daemon that would otherwise carry them out. --open-pr and
+// --draft are refused earlier, by checkFactoryBuildFlags.
 func checkFactoryRemoteFlags(opts factoryRemoteOptions) error {
 	switch {
 	case opts.continueRun != "":
@@ -343,10 +351,6 @@ func checkFactoryRemoteFlags(opts factoryRemoteOptions) error {
 		return remoteUnsupportedFlag("--log-file")
 	case opts.verbose:
 		return remoteUnsupportedFlag("--verbose")
-	case opts.openPR:
-		return remoteUnsupportedFlag("--open-pr")
-	case opts.draft:
-		return remoteUnsupportedFlag("--draft")
 	}
 	return nil
 }

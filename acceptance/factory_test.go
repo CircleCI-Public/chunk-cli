@@ -263,8 +263,11 @@ func TestFactoryBuildRemoteFollowsTheRunAndDetachesOnSIGINT(t *testing.T) {
 	binPath := filepath.Join(t.TempDir(), "chunk-linux")
 	assert.NilError(t, os.WriteFile(binPath, []byte("#!/bin/sh\necho fake chunk\n"), 0o755))
 
+	// --reviews is given as an absolute path on this machine; the host has
+	// its own checkout, so it must be told the project-relative one.
 	cmd := exec.Command(binary.Path(), "--insecure-storage", "factory", "build",
-		"--remote", "--chunk-binary", binPath, "add a --verbose flag")
+		"--remote", "--chunk-binary", binPath,
+		"--reviews", filepath.Join(workDir, ".chunk", "reviews"), "add a --verbose flag")
 	cmd.Dir = workDir
 	cmd.Env = env.Environ()
 	var stderr syncBuffer
@@ -282,10 +285,15 @@ func TestFactoryBuildRemoteFollowsTheRunAndDetachesOnSIGINT(t *testing.T) {
 	assert.Assert(t, strings.Contains(stderr.String(), "continues on sidecar"), "stderr: %s", stderr.String())
 	assert.Assert(t, strings.Contains(stderr.String(), "chunk factory pull"), "stderr: %s", stderr.String())
 
+	var runScript string
 	for _, r := range cci.Recorder.AllRequests() {
 		assert.Assert(t, r.Method != "DELETE" || !strings.HasPrefix(r.URL.Path, "/api/v3/sidecar/instances/"),
 			"a detached Ctrl-C must not delete the host sidecar: %v", r)
+		if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/exec") && strings.Contains(string(r.Body), "factory") {
+			runScript = string(r.Body)
+		}
 	}
+	assert.Assert(t, strings.Contains(runScript, `'--reviews' '.chunk/reviews'`), "run exec: %s", runScript)
 
 	t.Setenv(config.EnvXDGDataHome, filepath.Join(env.HomeDir, ".local", "share"))
 	root := config.CanonicalProjectRoot(workDir)
