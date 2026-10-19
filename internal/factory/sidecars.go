@@ -85,6 +85,10 @@ type Sidecars struct {
 	// OnCheck is called as each validation command finishes. Reviews report
 	// their progress through Review.ProgressFn.
 	OnCheck func(Check)
+	// BeforeValidate, when set, is waited for before the validation commands
+	// run, such as commands warming up the implementer's sidecar that must
+	// not overlap them.
+	BeforeValidate func(context.Context) error
 	// OnReviewerTree, when set, is called each round for every reviewer, in
 	// Reviewers order, with whether the change it is about to review is the
 	// implementer's. It is a canary for the relay; a mismatch does not stop the
@@ -211,6 +215,10 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		// The reviews need nothing from it, so only the commands wait.
+		if s.BeforeValidate != nil {
+			_ = s.BeforeValidate(ctx)
+		}
 		validation = runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnCheck)
 	}()
 	wg.Wait()

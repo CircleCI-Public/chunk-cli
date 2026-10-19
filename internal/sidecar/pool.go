@@ -352,7 +352,7 @@ func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.Sta
 		return err
 	}
 
-	if err := poolSync(ctx, p.client, sc.ID, true, dead.RepoPath, p.workDir, status); err != nil {
+	if err := poolSync(ctx, p.client, sc.ID, true, dead.RepoPath, p.dir(), status); err != nil {
 		_ = p.client.DeleteSidecar(cleanupCtx, sc.ID)
 		err = fmt.Errorf("replace: sync sidecar: %w", err)
 		p.retire(dead, err)
@@ -538,6 +538,22 @@ func (p *Pool) persistState() error {
 	return savePoolState(p.statePath, state)
 }
 
+// SetWorkDir makes dir the tree a member the pool makes from now on is synced
+// from, such as a replacement for one that died: for a pool made from one
+// tree and handed to work in another.
+func (p *Pool) SetWorkDir(dir string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.workDir = dir
+}
+
+// dir is the tree members are synced from.
+func (p *Pool) dir() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.workDir
+}
+
 func (p *Pool) Acquire(ctx context.Context) (*PoolEntry, error) {
 	for {
 		p.mu.Lock()
@@ -721,7 +737,7 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, fre
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			err := poolSync(ctx, p.client, id, freshIDs[id], entry.RepoPath, p.workDir, status)
+			err := poolSync(ctx, p.client, id, freshIDs[id], entry.RepoPath, p.dir(), status)
 			if isStaleSyncError(err) {
 				stale := entry
 				entry, err = p.replaceStaleEntry(ctx, stale, status)
@@ -772,7 +788,7 @@ func (p *Pool) replaceStaleEntry(ctx context.Context, stale *PoolEntry, status i
 		return stale, fmt.Errorf("replace stale sidecar: create: %w", err)
 	}
 	replacement := &PoolEntry{ID: sc.ID, RepoPath: stale.RepoPath, Client: p.client}
-	if err := poolSync(ctx, p.client, replacement.ID, true, stale.RepoPath, p.workDir, status); err != nil {
+	if err := poolSync(ctx, p.client, replacement.ID, true, stale.RepoPath, p.dir(), status); err != nil {
 		_ = p.client.DeleteSidecar(context.Background(), replacement.ID)
 		return stale, fmt.Errorf("replace stale sidecar: sync: %w", err)
 	}

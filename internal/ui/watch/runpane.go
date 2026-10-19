@@ -425,7 +425,10 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 		body = body[first:min(first+room, len(body))]
 	}
 	out := make([]string, 0, len(head)+len(body)+len(tail))
-	return append(append(append(out, head[:]...), body...), tail...)
+	out = append(append(append(out, head[:]...), body...), tail...)
+	// A finished run's change fills the room left under its outcome, so it
+	// is read where the run is shown, without a key to press.
+	return append(out, m.runChangeLines(st, run, maxLines-len(out))...)
 }
 
 // sessionTitle is the run's project, branch and starting commit.
