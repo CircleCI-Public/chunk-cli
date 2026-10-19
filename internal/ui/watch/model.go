@@ -209,6 +209,7 @@ type Model struct {
 	prompt        string
 	draftRoot     string
 	draftResult   Draft
+	draftDiff     *diffCache
 	draftCancel   context.CancelFunc
 	draftWait     context.Context
 	draftActivity chan string

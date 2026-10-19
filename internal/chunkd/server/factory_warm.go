@@ -213,6 +213,17 @@ func (d *daemon) claimWarm(ctx context.Context, e *warmEntry, opts *factory.RunO
 		return func() {}
 	}
 	pool := e.wait(ctx)
+	if pool == nil {
+		// The run ended before the sidecars were made. The entry is no longer
+		// in the store, so nothing else will delete them once they are.
+		go func() {
+			<-e.done
+			if e.pool != nil {
+				_ = e.pool.Discard(context.Background())
+			}
+		}()
+		e.cancel()
+	}
 	if pool != nil && !pool.Fits(opts.Reviewers, opts.OrgID, opts.Image) {
 		status(iostream.LevelInfo, "The sidecars made ahead of this run do not suit it, so it makes its own")
 		_ = pool.Discard(context.Background())

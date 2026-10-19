@@ -61,8 +61,11 @@ func NewWarmPool(ctx context.Context, client *circleci.Client, root string, rec 
 	}
 	dir := filepath.Join(dataDir, rec.RunID+"-baseline")
 	git := gitexec.Runner{Dir: root}
-	// A checkout left by an earlier attempt would make worktree add fail.
+	// A checkout left by an earlier attempt, or by a daemon that died before it
+	// removed it, would make worktree add fail, registered or not.
 	_, _ = git.CombinedOutput(ctx, "worktree", "remove", "--force", dir)
+	_ = os.RemoveAll(dir)
+	_, _ = git.CombinedOutput(ctx, "worktree", "prune")
 	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--detach", dir, rec.Baseline); err != nil {
 		return nil, fmt.Errorf("check out the baseline of run %s: %w: %s", rec.RunID, err, strings.TrimSpace(string(out)))
 	}

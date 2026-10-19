@@ -18,6 +18,30 @@ type runChange struct {
 	loaded bool
 	diff   string
 	err    error
+	lines  *diffCache
+}
+
+// diffCache keeps a diff's coloured, wrapped lines, which are costly to make
+// for a large change and would otherwise be made again on every redraw. It
+// holds one diff, so a new diff gets a new cache.
+type diffCache struct {
+	compact, dark bool
+	width, size   int
+	lines         []string
+}
+
+// diffLines is diffLines of diff, made again only when the pane's width,
+// colours or the way the diff is cut have changed. A nil cache makes it every
+// time.
+func (c *diffCache) diffLines(st watchStyles, dark bool, diff string, compact bool, width int) []string {
+	if c == nil {
+		return diffLines(st, diff, compact, width)
+	}
+	if c.lines == nil || c.compact != compact || c.dark != dark || c.width != width || c.size != len(diff) {
+		c.compact, c.dark, c.width, c.size = compact, dark, width, len(diff)
+		c.lines = diffLines(st, diff, compact, width)
+	}
+	return c.lines
 }
 
 // runChangeMsg is a run's change, read.
@@ -30,11 +54,12 @@ type runChangeMsg struct {
 // The daemon reports only its size; the change itself is on this machine, on
 // the run's branch. Swapped out in tests.
 var readRunChange = func(root, baseline, branch string) (string, error) {
-	out, err := (gitexec.Runner{Dir: root}).Output(context.Background(), "diff", baseline, branch)
+	args := append([]string{"diff"}, gitexec.PatchFlags...)
+	out, err := (gitexec.Runner{Dir: root}).Output(context.Background(), append(args, baseline, branch, "--")...)
 	if err != nil {
 		return "", fmt.Errorf("read the change: %w", err)
 	}
-	return string(out), nil
+	return gitexec.CapPatch(string(out)), nil
 }
 
 // loadSelectedChange starts reading the selected run's change, if it has
@@ -67,6 +92,7 @@ func (m Model) withRunChange(msg runChangeMsg) Model {
 	if m.runChanges == nil {
 		m.runChanges = map[string]runChange{}
 	}
+	msg.change.lines = &diffCache{}
 	m.runChanges[msg.id] = msg.change
 	return m
 }
@@ -91,7 +117,7 @@ func (m Model) runChangeLines(st watchStyles, run sessionInfo, room int) []strin
 		}
 		lines = append(lines, "  "+label+st.muted(l))
 	}
-	diff := diffLines(st, c.diff, true, width)
+	diff := c.lines.diffLines(st, m.hasDarkBG, c.diff, true, width)
 	if fit := room - len(lines); len(diff) > fit {
 		// How to see the rest wraps too, so the diff gives up as many lines
 		// as it takes.
@@ -128,20 +154,30 @@ func diffLines(st watchStyles, diff string, compact bool, width int) []string {
 		}
 	}
 	plain := func(s string) string { return s }
+	// A file's lines before its first hunk are git's headers; after it every
+	// line starting with + or - is content, even one like "-- comment" that
+	// looks like a header.
+	inHunk := false
 	for _, l := range strings.Split(strings.TrimRight(diff, "\n"), "\n") {
 		l = strings.ReplaceAll(l, "\t", "    ")
+		if strings.HasPrefix(l, "diff --git") {
+			inHunk = false
+		}
 		switch {
+		case inHunk && strings.HasPrefix(l, "+"):
+			add(st.success, l)
+		case inHunk && strings.HasPrefix(l, "-"):
+			add(st.err, l)
+		case inHunk && !strings.HasPrefix(l, "@@"):
+			add(plain, l)
+		case strings.HasPrefix(l, "@@"):
+			inHunk = true
+			add(st.teal, l)
 		case compact && (strings.HasPrefix(l, "diff --git") || strings.HasPrefix(l, "index ") || strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "new file mode") || strings.HasPrefix(l, "deleted file mode")):
 		case compact && strings.HasPrefix(l, "+++ "):
 			add(st.emphasis, strings.TrimPrefix(strings.TrimPrefix(l, "+++ "), "b/"))
 		case strings.HasPrefix(l, "+++"), strings.HasPrefix(l, "---"), strings.HasPrefix(l, "diff --git"), strings.HasPrefix(l, "index "):
 			add(st.emphasis, l)
-		case strings.HasPrefix(l, "@@"):
-			add(st.teal, l)
-		case strings.HasPrefix(l, "+"):
-			add(st.success, l)
-		case strings.HasPrefix(l, "-"):
-			add(st.err, l)
 		default:
 			add(plain, l)
 		}

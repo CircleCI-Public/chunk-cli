@@ -211,7 +211,15 @@ func (d *watchDrafts) draft(ctx context.Context, root, prompt string, activity f
 	// them while Claude drafts and the developer reads the draft; the run
 	// that finishes it takes them ready. A daemon that cannot just leaves the
 	// run to make its own.
-	go func() { _ = chunkd.WarmFactory(chunkd.WarmRequest{ProjectRoot: root, RunID: rec.RunID}) }()
+	// A cancel below waits for this, or it could reach the daemon first and
+	// find nothing to cancel.
+	warmed := make(chan struct{})
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		defer close(warmed)
+		_ = chunkd.WarmFactory(chunkd.WarmRequest{ProjectRoot: root, RunID: rec.RunID})
+	}()
 	draft := watch.Draft{RunID: rec.RunID}
 	// Claude names files by their path in the run's worktree, which is long
 	// and says nothing a path in the repo does not. Claude may spell the
@@ -238,7 +246,12 @@ func (d *watchDrafts) draft(ctx context.Context, root, prompt string, activity f
 	// A draft with nothing in it, or none at all, will not be sent, so its
 	// sidecars go now rather than when the daemon gives up waiting.
 	if stat == "" || err != nil && !errors.Is(err, context.Canceled) {
-		go func() { _ = chunkd.CancelWarm(rec.RunID) }()
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			<-warmed
+			_ = chunkd.CancelWarm(rec.RunID)
+		}()
 	}
 	return draft, err
 }
