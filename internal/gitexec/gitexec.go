@@ -4,6 +4,7 @@ package gitexec
 import (
 	"context"
 	"os/exec"
+	"strings"
 )
 
 // Runner executes git commands in Dir.
@@ -35,4 +36,25 @@ func (r Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 		cmd.Env = r.Env
 	}
 	return cmd
+}
+
+// PatchFlags make git's diff output a plain patch, whatever the user's git
+// configuration says about colour, external diff tools and text conversion.
+var PatchFlags = []string{"--no-color", "--no-ext-diff", "--no-textconv"}
+
+// MaxPatchBytes is the most of a patch shown to a reader. Past it, the patch is
+// cut, as a lockfile or generated code can make one tens of megabytes.
+const MaxPatchBytes = 1 << 20
+
+// CapPatch cuts a patch to MaxPatchBytes at a line boundary, saying so when it
+// had to.
+func CapPatch(patch string) string {
+	if len(patch) <= MaxPatchBytes {
+		return patch
+	}
+	cut := patch[:MaxPatchBytes]
+	if i := strings.LastIndexByte(cut, '\n'); i >= 0 {
+		cut = cut[:i]
+	}
+	return cut + "\n… the rest of the diff is too long to show\n"
 }

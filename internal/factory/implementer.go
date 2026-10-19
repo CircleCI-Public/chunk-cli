@@ -3,7 +3,6 @@ package factory
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -103,24 +102,31 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	}
 	turn := Turn{Summary: res.Result, Duration: time.Since(start), CostUSD: res.CostUSD}
 
+	return turn, turnError(ctx, "implementer", timeout, code, err, res, sawResult, stderr.String())
+}
+
+// turnError is why a claude turn failed, or nil when it did not, from how the
+// process ended (code, err), the result claude reported and what it wrote to
+// stderr. who names the agent that ran it.
+func turnError(ctx context.Context, who string, timeout time.Duration, code int, err error, res claudecode.StreamResult, sawResult bool, stderr string) error {
 	// claude puts why a turn failed in its result, so that explains a failed
 	// exit before stderr does.
 	explain := res.Result
 	if strings.TrimSpace(explain) == "" {
-		explain = stderr.String()
+		explain = stderr
 	}
 	// explain stands in for stderr, so stderr goes in with the result for the
 	// credential check: a 401 there must not hide behind a result that says
 	// something else.
-	switch err := claudecode.RunError(ctx, timeout, code, err, res.Result+"\n"+stderr.String(), explain); {
+	switch err := claudecode.RunError(ctx, timeout, code, err, res.Result+"\n"+stderr, explain); {
 	case err != nil:
-		return turn, fmt.Errorf("implementer: %w", err)
+		return fmt.Errorf("%s: %w", who, err)
 	case res.IsError:
-		return turn, fmt.Errorf("implementer: %s", review.Tail(strings.TrimSpace(explain), 2000))
+		return fmt.Errorf("%s: %s", who, review.Tail(strings.TrimSpace(explain), 2000))
 	case !sawResult:
-		return turn, errors.New("implementer ended without a result")
+		return fmt.Errorf("%s ended without a result", who)
 	}
-	return turn, nil
+	return nil
 }
 
 // script builds the shell script for one turn.

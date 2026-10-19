@@ -13,7 +13,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
 // firstPassSystemPrompt keeps a first pass where the run that refines it
@@ -91,19 +90,7 @@ func FirstPass(ctx context.Context, rec Record, model string, onActivity func(cl
 	if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
 		code, runErr = exitErr.ExitCode(), nil
 	}
-	explain := res.Result
-	if strings.TrimSpace(explain) == "" {
-		explain = stderr.String()
-	}
-	switch err := claudecode.RunError(ctx, DefaultImplementTimeout, code, runErr, res.Result+"\n"+stderr.String(), explain); {
-	case err != nil:
-		return turn, fmt.Errorf("first pass: %w", err)
-	case res.IsError:
-		return turn, fmt.Errorf("first pass: %s", review.Tail(strings.TrimSpace(explain), 2000))
-	case !sawResult:
-		return turn, errors.New("first pass ended without a result")
-	}
-	return turn, nil
+	return turn, turnError(ctx, "first pass", DefaultImplementTimeout, code, runErr, res, sawResult, stderr.String())
 }
 
 // WorkStat is git's per-file summary of a started run's work so far, committed
@@ -116,7 +103,8 @@ func WorkStat(ctx context.Context, rec Record) (string, error) {
 // WorkDiff is a started run's work so far, committed or not, as a patch
 // against its baseline, for the developer to read before handing it over.
 func WorkDiff(ctx context.Context, rec Record) (string, error) {
-	return workDiff(ctx, rec)
+	out, err := workDiff(ctx, rec, gitexec.PatchFlags...)
+	return gitexec.CapPatch(out), err
 }
 
 // workDiff diffs the run's work against its baseline. It stages the work
@@ -126,7 +114,7 @@ func workDiff(ctx context.Context, rec Record, args ...string) (string, error) {
 	if out, err := git.CombinedOutput(ctx, "add", "-A"); err != nil {
 		return "", fmt.Errorf("stage the work: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	out, err := git.Output(ctx, append(append([]string{"diff", "--cached"}, args...), rec.Baseline)...)
+	out, err := git.Output(ctx, append(append([]string{"diff", "--cached"}, args...), rec.Baseline, "--")...)
 	if err != nil {
 		return "", fmt.Errorf("summarize the work: %w", err)
 	}

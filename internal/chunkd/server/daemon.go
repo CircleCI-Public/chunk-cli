@@ -517,6 +517,19 @@ func (d *daemon) withSessions(root string, p chunkd.ProjectSnapshot, sidecarPool
 			byPool[name] = i
 		}
 	}
+	// A run continuing another can take over the sidecars made ahead of it
+	// under the continued run's ID, so a pool no run of that name owns belongs
+	// to the newest run continuing it.
+	for i := range p.Sessions {
+		f := p.Sessions[i].Factory
+		if f == nil || f.ContinuesRunID == "" {
+			continue
+		}
+		name := factory.PoolName(f.ContinuesRunID)
+		if _, exists := byPool[name]; !exists {
+			byPool[name] = i
+		}
+	}
 	for _, sc := range p.Sidecars {
 		if i, ok := byPool[sidecarPools[sc.ID]]; ok {
 			p.Sessions[i].Factory.SidecarIDs = append(p.Sessions[i].Factory.SidecarIDs, sc.ID)

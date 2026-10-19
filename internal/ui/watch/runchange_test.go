@@ -168,3 +168,13 @@ func TestAWideChangeLineWrapsToThePane(t *testing.T) {
 		assert.Assert(t, lipgloss.Width(line) <= m.width, "line %d is %d columns: %s", i, lipgloss.Width(line), line)
 	}
 }
+
+func TestDiffLinesKeepsContentThatLooksLikeAHeader(t *testing.T) {
+	diff := "diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,2 @@\n--- old comment\n+++ new comment\n ctx\n"
+	got := strings.Join(diffLines(newWatchStyles(false), diff, true, 80), "\n")
+	for _, want := range []string{"q.sql", "--- old comment", "+++ new comment", "ctx"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("compact diff lost %q:\n%s", want, got)
+		}
+	}
+}

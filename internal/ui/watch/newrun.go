@@ -137,7 +137,7 @@ func (m Model) updateDraftKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.draft, m.draftNote, m.sendingDraft = draftNone, "sending the draft to the factory…", true
 			return m, sendDraftCmd(m.sender, m.draftRoot, m.draftResult.RunID)
 		case key.Matches(msg, k.KeepDraft):
-			m.draft = draftNone
+			m.draft, m.draftNote = draftNone, ""
 			if m.draftResult.Stat != "" {
 				m.draftNote = "kept the draft; send it later with chunk factory build --continue " + m.draftResult.RunID
 			}
@@ -254,7 +254,7 @@ func (m Model) withDraftDone(msg draftDoneMsg) Model {
 		m.draftCancel()
 		m.draftCancel = nil
 	}
-	m.draftResult = msg.draft
+	m.draftResult, m.draftDiff = msg.draft, &diffCache{}
 	if !m.draftStarted.IsZero() {
 		m.draftTook = time.Since(m.draftStarted)
 	}
@@ -279,7 +279,10 @@ func (m Model) withDraftDone(msg draftDoneMsg) Model {
 func (m Model) withRunStarted(msg runStartedMsg) Model {
 	m.sendingDraft = false
 	if msg.err != nil {
-		m.draftNote = "could not send the draft to the factory: " + msg.err.Error()
+		// The draft stays in view to send again, rather than being lost
+		// with only a note that goes at the next key.
+		m.draft = draftReady
+		m.draftNote = "could not send the draft to the factory: " + msg.err.Error() + " · press enter to try again, or later with chunk factory build --continue " + m.draftResult.RunID
 		return m
 	}
 	m.draftNote = "sent the draft and your prompt to the factory in " + msg.label + "; its run appears in the list in a moment"
@@ -363,7 +366,10 @@ func (m Model) draftFooter(st watchStyles, bar string) string {
 	case draftReady:
 		step = 3
 		line := "Claude made no changes, so there is nothing to send"
-		if m.draftResult.Stat != "" {
+		switch {
+		case m.draftNote != "":
+			line = m.draftNote
+		case m.draftResult.Stat != "":
 			line = "Draft ready: " + lastLine(m.draftResult.Stat) + " · the change is shown above"
 		}
 		last = st.muted(clip("› "+line, m.width-2))
@@ -534,7 +540,7 @@ func (m Model) draftBody(st watchStyles, width int) []string {
 		lines = append(lines, st.muted(l))
 	}
 	lines = append(lines, "")
-	lines = append(lines, diffLines(st, d.Diff, false, width)...)
+	lines = append(lines, m.draftDiff.diffLines(st, m.hasDarkBG, d.Diff, false, width)...)
 	return lines
 }
 
