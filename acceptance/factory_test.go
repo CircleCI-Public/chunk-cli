@@ -440,6 +440,14 @@ func TestFactoryPullBringsAFinishedRunsWorkBackAndTearsDownTheHost(t *testing.T)
 	}
 	assert.NilError(t, factory.SaveRecord(dataDir, rec))
 
+	// The run's one-sidecar pool left a state file behind; pulling must clean
+	// it up along with the sidecar.
+	poolDataDir, err := config.ProjectDataDir(root)
+	assert.NilError(t, err)
+	poolStatePath := filepath.Join(poolDataDir, "pools", "factory-remote-"+rec.RunID+".json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(poolStatePath), 0o755))
+	assert.NilError(t, os.WriteFile(poolStatePath, []byte("{}"), 0o644))
+
 	result := binary.RunCLI(t, []string{"factory", "pull", rec.RunID}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
@@ -455,18 +463,24 @@ func TestFactoryPullBringsAFinishedRunsWorkBackAndTearsDownTheHost(t *testing.T)
 	assert.Assert(t, os.IsNotExist(err), "the deleted file should be gone from the pulled tree")
 
 	// The new and binary files were staged with 'git add -A -N', so they show
-	// up in 'git diff' rather than as untracked.
-	diffCmd := exec.Command("git", "diff", "--name-only")
+	// up in 'git diff HEAD' rather than as untracked - and so does the
+	// deletion, which staging with '-A' would otherwise hide from a plain
+	// 'git diff' by removing it from the index too.
+	diffCmd := exec.Command("git", "diff", "HEAD", "--name-only")
 	diffCmd.Dir = localWT
 	diffCmd.Env = gitrepo.GitEnv(localWT)
 	diffOut, err := diffCmd.CombinedOutput()
 	assert.NilError(t, err, string(diffOut))
-	for _, want := range []string{"edit.txt", "new.txt", "binary.bin"} {
-		assert.Assert(t, strings.Contains(string(diffOut), want), "git diff --name-only: %s", diffOut)
+	for _, want := range []string{"edit.txt", "new.txt", "binary.bin", "delete.txt"} {
+		assert.Assert(t, strings.Contains(string(diffOut), want), "git diff HEAD --name-only: %s", diffOut)
 	}
 
 	assert.Assert(t, strings.Contains(result.Stderr, localWT), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "git -C "+localWT+" diff"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "git -C "+localWT+" diff HEAD"), "stderr: %s", result.Stderr)
+	// The record's own Baseline and Branch are the host's and mean nothing
+	// here; the printed hint must not mention them.
+	assert.Assert(t, !strings.Contains(result.Stderr, rec.Baseline), "stderr should not print the host's baseline: %s", result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stderr, rec.Branch), "stderr should not print the host's branch: %s", result.Stderr)
 
 	// Only once the work is local is the host torn down: its sidecar deleted
 	// and the record's remote run cleared.
@@ -477,6 +491,9 @@ func TestFactoryPullBringsAFinishedRunsWorkBackAndTearsDownTheHost(t *testing.T)
 		}
 	}
 	assert.Assert(t, deleted, "expected the host sidecar to be deleted; requests: %v", cci.Recorder.AllRequests())
+
+	_, err = os.Stat(poolStatePath)
+	assert.Assert(t, os.IsNotExist(err), "expected the pool's state file to be removed: %v", err)
 
 	saved, err := factory.LoadRecord(root, rec.RunID)
 	assert.NilError(t, err)

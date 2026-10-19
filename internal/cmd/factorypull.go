@@ -41,7 +41,7 @@ without stopping the run or pulling anything. Once the run has finished, its
 work is found by reading the host's own run record over SSH, not by parsing
 anything it printed, and pulled from the host's worktree into this run's
 worktree. Files the run added are then staged with 'git add -A -N', so they
-show up in 'git diff' rather than as untracked.
+show up in 'git diff HEAD' rather than as untracked.
 
 Only once the work is local does this tear the host down: its sidecar is
 deleted, the pool's state file removed, and the record's remote run cleared,
@@ -221,7 +221,7 @@ func pullRemoteRun(
 	}
 
 	statusFn(iostream.LevelDone, fmt.Sprintf("Pulled the work from sidecar %s.", remote.SidecarID))
-	streams.ErrPrintf("  Worktree: %s\n  See it with: git -C %s diff\n", rec.Worktree, rec.Worktree)
+	streams.ErrPrintf("  Worktree: %s\n  See it with: git -C %s diff HEAD\n", rec.Worktree, rec.Worktree)
 
 	// The work is local now: what is left is cleaning up the host, which is
 	// best-effort. A hiccup here is only warned about, since rec.Remote is

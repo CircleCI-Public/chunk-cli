@@ -544,7 +544,7 @@ chunk factory pull                 # bring the most recently started remote run'
 chunk factory pull <run id>        # or a specific one
 ```
 
-`chunk factory pull` waits out the run if it is still going, then pulls the implementer's worktree from the host into a worktree on this machine and stages the files it added, so `git diff` there shows the whole change. It only deletes the host's sidecar once the work is safely local, so it is always safe to run again if anything goes wrong first.
+`chunk factory pull` waits out the run if it is still going, then pulls the implementer's worktree from the host into a worktree on this machine and stages the files it added, so `git diff HEAD` there shows the whole change. It only deletes the host's sidecar once the work is safely local, so it is always safe to run again if anything goes wrong first.
 
 ---
 

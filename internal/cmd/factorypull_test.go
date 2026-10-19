@@ -238,6 +238,119 @@ func TestPullRemoteRunFollowsAnUnfinishedHostRunThenPullsItsWork(t *testing.T) {
 	assert.Assert(t, rec.Remote == nil, "Remote should be cleared once the work is local")
 }
 
+// Once the work is local, pull must remove the local pool state file the
+// run's one-sidecar pool left behind, at the exact path
+// factoryremote.go's remotePoolStatePath computes - not just tolerate it
+// already being gone.
+func TestPullRemoteRunRemovesThePoolStateFile(t *testing.T) {
+	root, _ := factoryPullTestRepo(t)
+	cci, client := newPullSSHClient(t)
+
+	localWT := pullWorktreeRepo(t, "local-wt-pool")
+	hostWT := pullWorktreeRepo(t, "host-wt-pool")
+
+	hostRec := factory.Record{RunID: "host-run", Worktree: hostWT}
+	hostRecJSON, err := json.Marshal(hostRec)
+	assert.NilError(t, err)
+	cci.CommandResponse = endedCommand(0)
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-record", Stdout: string(hostRecJSON), ExitCode: 0}
+
+	rec := factory.Record{
+		RunID:    "r-pool-test",
+		Worktree: localWT,
+		Remote:   &factory.RemoteRun{SidecarID: "sidecar-host-1", CommandID: "cmd-build-1"},
+	}
+	statePath, perr := remotePoolStatePath(root, "factory-remote-"+rec.RunID)
+	assert.NilError(t, perr)
+	assert.NilError(t, os.MkdirAll(filepath.Dir(statePath), 0o755))
+	assert.NilError(t, os.WriteFile(statePath, []byte("{}"), 0o644))
+
+	streams := iostream.Streams{Err: &bytes.Buffer{}}
+	err = pullRemoteRun(context.Background(), client, root, streams, func(iostream.Level, string) {}, &rec)
+
+	assert.NilError(t, err)
+	_, statErr := os.Stat(statePath)
+	assert.Assert(t, os.IsNotExist(statErr), "expected the pool state file to be removed: %v", statErr)
+}
+
+// If RsyncPull itself fails - here because the local worktree is unset, which
+// it refuses outright - the pull must stop there: nothing is deleted and
+// rec.Remote stays set. This is the step right after the host's worktree is
+// found, so a mutation that ignored RsyncPull's error would otherwise fall
+// through to tearing the host down on a run whose work never actually landed.
+func TestPullRemoteRunLeavesTheSidecarAndRecordAloneWhenRsyncPullFails(t *testing.T) {
+	root, _ := factoryPullTestRepo(t)
+	cci := fakes.NewFakeCircleCI()
+	cci.CommandResponse = endedCommand(0)
+
+	hostRec := factory.Record{RunID: "host-run", Worktree: "/home/user/host-wt"}
+	hostRecJSON, err := json.Marshal(hostRec)
+	assert.NilError(t, err)
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-record", Stdout: string(hostRecJSON), ExitCode: 0}
+	client := newPullTestClient(t, cci)
+
+	var out iostream.Streams
+	rec := factory.Record{
+		RunID: "r-test",
+		// No Worktree: RsyncPull refuses an empty local directory outright,
+		// without ever opening a session.
+		Remote: &factory.RemoteRun{SidecarID: "sb-1", CommandID: "cmd-1"},
+	}
+	wantRemote := *rec.Remote
+
+	err = pullRemoteRun(context.Background(), client, root, out, func(iostream.Level, string) {}, &rec)
+
+	assert.Assert(t, err != nil, "expected the pull to fail")
+	assert.Assert(t, rec.Remote != nil, "Remote must not be cleared on failure")
+	assert.Equal(t, *rec.Remote, wantRemote)
+	for _, r := range cci.Recorder.AllRequests() {
+		assert.Assert(t, r.Method != "DELETE", "a failed pull must not delete anything: %v", r)
+	}
+}
+
+// If staging the pulled work fails - here because something else is already
+// writing to the local worktree's index - the pull must stop there too, even
+// though RsyncPull itself has already copied the host's files down.
+func TestPullRemoteRunLeavesTheSidecarAndRecordAloneWhenStagingFails(t *testing.T) {
+	root, _ := factoryPullTestRepo(t)
+	cci, client := newPullSSHClient(t)
+
+	localWT := pullWorktreeRepo(t, "local-wt-locked")
+	hostWT := pullWorktreeRepo(t, "host-wt-locked")
+	assert.NilError(t, os.WriteFile(filepath.Join(hostWT, "new.txt"), []byte("new file\n"), 0o644))
+
+	hostRec := factory.Record{RunID: "host-run", Worktree: hostWT}
+	hostRecJSON, err := json.Marshal(hostRec)
+	assert.NilError(t, err)
+	cci.CommandResponse = endedCommand(0)
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-record", Stdout: string(hostRecJSON), ExitCode: 0}
+
+	// 'git add' refuses to run while another index.lock exists; RsyncPull's
+	// own git ls-files is read-only and does not mind it, so this only ever
+	// blocks the staging step.
+	assert.NilError(t, os.WriteFile(filepath.Join(localWT, ".git", "index.lock"), []byte(""), 0o644))
+
+	var out iostream.Streams
+	rec := factory.Record{
+		RunID:    "r-test",
+		Worktree: localWT,
+		Remote:   &factory.RemoteRun{SidecarID: "sidecar-host-1", CommandID: "cmd-build-1"},
+	}
+	wantRemote := *rec.Remote
+
+	err = pullRemoteRun(context.Background(), client, root, out, func(iostream.Level, string) {}, &rec)
+
+	assert.Assert(t, err != nil, "expected the pull to fail")
+	data, rerr := os.ReadFile(filepath.Join(localWT, "new.txt"))
+	assert.NilError(t, rerr, "RsyncPull should have copied the host's file down before staging failed")
+	assert.Equal(t, string(data), "new file\n")
+	assert.Assert(t, rec.Remote != nil, "Remote must not be cleared on failure")
+	assert.Equal(t, *rec.Remote, wantRemote)
+	for _, r := range cci.Recorder.AllRequests() {
+		assert.Assert(t, r.Method != "DELETE", "a failed pull must not delete anything: %v", r)
+	}
+}
+
 // Ctrl-C on an unfinished run detaches exactly as --remote does: nothing is
 // pulled and nothing is torn down.
 func TestPullRemoteRunDetachesWithoutPullingWhenAnUnfinishedRunIsInterrupted(t *testing.T) {

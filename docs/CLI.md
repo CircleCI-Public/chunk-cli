@@ -455,8 +455,8 @@ chunk
   host's `factory build` actually made (there is exactly one non-pool `*.json`
   under the host's data directory; `Remote.HostRepo` is only the synced
   checkout). It rsyncs that worktree into this run's local one and runs
-  `git add -A -N` there, so files the run added show up in `git diff` rather
-  than as untracked. Only once the work is local does it tear the host down:
+  `git add -A -N` there, so files the run added show up in `git diff HEAD`
+  rather than as untracked. Only once the work is local does it tear the host down:
   the sidecar is deleted, the pool's state file removed, and `remote` cleared
   from the record, leaving an ordinary local run pointing at the pulled
   worktree. A failure before the work is local changes nothing - neither the
