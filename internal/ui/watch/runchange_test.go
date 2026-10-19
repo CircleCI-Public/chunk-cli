@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
@@ -146,4 +147,24 @@ func TestNoChangeIsShownWithoutOneToShow(t *testing.T) {
 	stubRunChange(t, "", errors.New("unknown revision"))
 	m := pollAndRead(t, sessModel(), finishedRun("gone"))
 	assert.Assert(t, !strings.Contains(view(m), "change  "), view(m))
+}
+
+// A change line wider than the pane wraps rather than being cut at its edge:
+// every word of it is on screen, and no line is wider than the terminal.
+func TestAWideChangeLineWrapsToThePane(t *testing.T) {
+	long := "`chunk factory` has an implementer agent change your code on a sidecar, then reviews the result with each prompt in `.chunk/reviews/` and runs your validation commands, feeding failures back"
+	stubRunChange(t, "+++ b/README.md\n@@ -1 +1 @@\n+"+long+"\n+\tindented with a tab\n", nil)
+	m := sessModel()
+	m.width = 80
+
+	m = pollAndRead(t, m, finishedRun("run-1"))
+
+	out := view(m)
+	for _, w := range strings.Fields(long) {
+		assert.Assert(t, strings.Contains(out, w), "%q is shown: %s", w, out)
+	}
+	assert.Assert(t, strings.Contains(out, "feeding failures back"), out)
+	for i, line := range strings.Split(m.render(), "\n") {
+		assert.Assert(t, lipgloss.Width(line) <= m.width, "line %d is %d columns: %s", i, lipgloss.Width(line), line)
+	}
 }

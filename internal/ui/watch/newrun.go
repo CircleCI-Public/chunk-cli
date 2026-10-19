@@ -534,7 +534,7 @@ func (m Model) draftBody(st watchStyles, width int) []string {
 		lines = append(lines, st.muted(l))
 	}
 	lines = append(lines, "")
-	lines = append(lines, diffLines(st, d.Diff, false)...)
+	lines = append(lines, diffLines(st, d.Diff, false, width)...)
 	return lines
 }
 

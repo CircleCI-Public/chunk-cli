@@ -7,6 +7,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -366,6 +368,32 @@ func (m Model) renderTaskRows(st watchStyles, s chunkd.Session, first, sel int, 
 	return lines, at, end, 1
 }
 
+// wrapPane wraps each line to width columns, keeping its colours, with what
+// a line wraps to continuing two columns in from where the line starts. at[i]
+// is where line i starts in what it returns, and at[len(lines)] is its length.
+func wrapPane(lines []string, width int) (out []string, at []int) {
+	at = make([]int, 0, len(lines)+1)
+	for _, l := range lines {
+		at = append(at, len(out))
+		if width < 1 || lipgloss.Width(l) <= width {
+			out = append(out, l)
+			continue
+		}
+		n := len(l) - len(strings.TrimLeft(l, " "))
+		if n > width/2 {
+			n = 0
+		}
+		for i, w := range strings.Split(lipgloss.Wrap(l[n:], width-n-2, ""), "\n") {
+			if i == 0 {
+				out = append(out, strings.Repeat(" ", n)+w)
+				continue
+			}
+			out = append(out, strings.Repeat(" ", n+2)+w)
+		}
+	}
+	return out, append(at, len(out))
+}
+
 // ---- right pane: the selected run ----------------------------------------------
 
 // renderRunPane draws the selected run. Its title and status stay put and its
@@ -409,8 +437,16 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 	}
 	body = append(body, m.runDetailLines(st, run)...)
 
-	tail := m.runOutcomeLines(st, s)
-	room := maxLines - len(head)
+	// Every line is wrapped to the pane rather than cut at its edge, and the
+	// selected row's span is carried over to the lines it wrapped to.
+	width := m.width - leftPaneWidth - 5
+	headLines, _ := wrapPane(head[:], width)
+	body, at := wrapPane(body, width)
+	if selStart >= 0 {
+		selStart, selEnd = at[selStart], at[selEnd]
+	}
+	tail, _ := wrapPane(m.runOutcomeLines(st, s), width)
+	room := maxLines - len(headLines)
 	if len(tail) > 0 && room-len(tail) >= minBodyLines {
 		room -= len(tail)
 	} else {
@@ -424,8 +460,8 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 		}
 		body = body[first:min(first+room, len(body))]
 	}
-	out := make([]string, 0, len(head)+len(body)+len(tail))
-	out = append(append(append(out, head[:]...), body...), tail...)
+	out := make([]string, 0, len(headLines)+len(body)+len(tail))
+	out = append(append(append(out, headLines...), body...), tail...)
 	// A finished run's change fills the room left under its outcome, so it
 	// is read where the run is shown, without a key to press.
 	return append(out, m.runChangeLines(st, run, maxLines-len(out))...)
