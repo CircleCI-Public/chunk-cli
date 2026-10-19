@@ -216,10 +216,12 @@ func (d *daemon) claimWarm(ctx context.Context, e *warmEntry, opts *factory.RunO
 	if pool == nil {
 		// The run ended before the sidecars were made. The entry is no longer
 		// in the store, so nothing else will delete them once they are.
+		// ctx has ended, but the delete must outlive it.
+		discardCtx := context.WithoutCancel(ctx)
 		go func() {
 			<-e.done
 			if e.pool != nil {
-				_ = e.pool.Discard(context.Background())
+				_ = e.pool.Discard(discardCtx)
 			}
 		}()
 		e.cancel()
