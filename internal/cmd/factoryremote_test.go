@@ -12,12 +12,14 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
@@ -161,6 +163,7 @@ func factoryRemoteTestEnv(t *testing.T) (*fakes.FakeCircleCI, string) {
 	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
 	t.Setenv(config.EnvCircleToken, "fake-token")
 	t.Setenv(config.EnvCircleCIOrgID, "org-aaa")
+	t.Setenv(config.EnvAnthropicAPIKey, "sk-ant-fake-key")
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, ".chunk", "reviews"), 0o755))
@@ -246,6 +249,222 @@ func TestFactoryBuildRemoteCleansUpAfterAFailedBaselineCommit(t *testing.T) {
 	assert.NilError(t, derr)
 	entries, rerr := os.ReadDir(filepath.Join(dataDir, "factory"))
 	assert.Assert(t, rerr != nil || len(entries) == 0, "expected no leftover worktree, found: %v", entries)
+}
+
+// Once the exec for the run itself has been submitted, a failure belongs to
+// the run, not to provisioning: the sidecar and the worktree must be kept for
+// inspection, not torn down, and the error must carry the host's stderr tail
+// and point at 'chunk sidecar ssh'. This is the opposite case from
+// TestFactoryBuildRemoteCleansUpAfterAFailedBaselineCommit, which fails
+// before the run's own exec is ever submitted.
+func TestFactoryBuildRemoteKeepsTheSidecarWhenTheRunItselfFails(t *testing.T) {
+	cci, workDir := factoryRemoteTestEnv(t)
+	// The baseline commit (the first exec, since --chunk-binary skips the
+	// install exec) succeeds; the run's own exec (the second) fails with a
+	// distinct exit code and stderr so the failure can only have come from it.
+	cci.ExecResponses = []*fakes.ExecResponse{
+		{CommandID: "cmd-baseline", Stdout: "deadbeef\n"},
+		{CommandID: "cmd-run", ExitCode: 7, Stderr: "boom: something went wrong\n"},
+	}
+
+	binPath := filepath.Join(t.TempDir(), "chunk-linux")
+	assert.NilError(t, os.WriteFile(binPath, []byte("#!/bin/sh\necho fake chunk\n"), 0o755))
+
+	cmd, errOut := newFactoryRemoteTestCmd()
+	err := runFactoryBuildRemote(cmd, factoryRemoteOptions{prompt: "add a feature", chunkBinary: binPath})
+	assert.Assert(t, err != nil, "expected the run itself to fail")
+
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Assert(t, strings.Contains(ue.UserMessage(), "The run failed on sidecar"), "message: %s", ue.UserMessage())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar ssh --sidecar-id"), "suggestion: %s", ue.Suggestion())
+	assert.Assert(t, strings.Contains(err.Error(), "exit 7"), "error: %v", err)
+	assert.Assert(t, strings.Contains(err.Error(), "boom: something went wrong"), "error: %v", err)
+
+	for _, r := range cci.Recorder.AllRequests() {
+		assert.Assert(t, r.Method != "DELETE" || !strings.HasPrefix(r.URL.Path, "/api/v3/sidecar/instances/"),
+			"a failure in the run itself must not delete the host sidecar: %v; stderr: %s", r, errOut.String())
+	}
+
+	root := config.CanonicalProjectRoot(workDir)
+	dataDir, derr := config.RepoDataDir(root)
+	assert.NilError(t, derr)
+	entries, rerr := os.ReadDir(filepath.Join(dataDir, "factory"))
+	assert.NilError(t, rerr)
+	assert.Assert(t, len(entries) > 0, "expected the worktree to be kept for inspection")
+
+	matches, gerr := filepath.Glob(filepath.Join(dataDir, "factory", "r-*.json"))
+	assert.NilError(t, gerr)
+	assert.Equal(t, len(matches), 1, "records: %v", matches)
+	data, rerr2 := os.ReadFile(matches[0])
+	assert.NilError(t, rerr2)
+	var rec struct {
+		Remote *struct {
+			SidecarID string `json:"sidecar_id"`
+			CommandID string `json:"command_id"`
+		} `json:"remote"`
+	}
+	assert.NilError(t, json.Unmarshal(data, &rec))
+	assert.Assert(t, rec.Remote != nil && rec.Remote.SidecarID != "", "record: %s", data)
+	assert.Equal(t, rec.Remote.CommandID, "cmd-run")
+}
+
+// The host's --json result arrives on the exec's stdout, which must only be
+// buffered, never written to this process's own stdout: a success prints
+// exactly one JSON value (this command's own factoryRemoteResult), and a
+// mistake that forwarded the host's stdout too would show up either as a
+// second concatenated JSON value or as the host's text inside the printed
+// one.
+func TestFactoryBuildRemoteDoesNotLeakTheHostsStdout(t *testing.T) {
+	cci, _ := factoryRemoteTestEnv(t)
+	cci.ExecResponses = []*fakes.ExecResponse{
+		{CommandID: "cmd-baseline", Stdout: "deadbeef\n"},
+		{CommandID: "cmd-run", Stdout: `{"result":"host-finished"}` + "\n", Stderr: "host progress\n"},
+	}
+
+	binPath := filepath.Join(t.TempDir(), "chunk-linux")
+	assert.NilError(t, os.WriteFile(binPath, []byte("#!/bin/sh\necho fake chunk\n"), 0o755))
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+
+	err := runFactoryBuildRemote(cmd, factoryRemoteOptions{prompt: "add a feature", chunkBinary: binPath, jsonOut: true})
+	assert.NilError(t, err, "stderr: %s", errOut.String())
+
+	assert.Assert(t, strings.Contains(errOut.String(), "host progress"), "stderr: %s", errOut.String())
+	assert.Assert(t, !strings.Contains(out.String(), "host-finished"),
+		"the host's own --json result leaked onto this process's stdout: %s", out.String())
+
+	var report factoryRemoteResult
+	assert.NilError(t, json.Unmarshal(out.Bytes(), &report), "stdout was not exactly one JSON value: %s", out.String())
+	assert.Assert(t, report.SidecarID != "", "stdout: %s", out.String())
+}
+
+// The script built for the host's exec names every build flag that means
+// something there, keeps the prompt last, and starts the chunk on the host
+// with 'exec' so it stays the tracked foreground process.
+func TestRemoteBuildScriptIncludesPassThroughFlags(t *testing.T) {
+	opts := factoryRemoteOptions{
+		prompt:                  "add a feature",
+		image:                   "snap-1",
+		reviewers:               2,
+		reviewsDir:              ".chunk/reviews",
+		noValidate:              true,
+		keepSidecars:            true,
+		model:                   "claude-x",
+		implementerInstructions: "be terse",
+		implementTimeout:        5 * time.Minute,
+		reviewTimeout:           3 * time.Minute,
+		attempts:                4,
+	}
+	script := remoteBuildScript("/repo", "org-aaa", opts)
+
+	for _, want := range []string{
+		"--no-open-pr", "--org-id", "--image", "--reviewers", "--reviews", "--no-validate",
+		"--keep-sidecars", "--model", "--implementer-instructions",
+		"--implement-timeout", "--review-timeout", "--max-attempts",
+	} {
+		assert.Assert(t, strings.Contains(script, want), "missing %s in %q", want, script)
+	}
+	assert.Assert(t, strings.HasPrefix(script, "cd "+sidecar.ShellEscape("/repo")+" && exec \"$HOME/chunk\" "), "script: %q", script)
+}
+
+// An optional flag left at its zero value is left out, so the host falls
+// back to its own default rather than being told to use an empty one.
+func TestRemoteBuildScriptOmitsUnsetOptionalFlags(t *testing.T) {
+	script := remoteBuildScript("/repo", "org-aaa", factoryRemoteOptions{prompt: "add a feature"})
+
+	for _, unwanted := range []string{
+		"--image", "--reviewers", "--reviews", "--no-validate",
+		"--keep-sidecars", "--model", "--implementer-instructions",
+	} {
+		assert.Assert(t, !strings.Contains(script, unwanted), "unexpected %s in %q", unwanted, script)
+	}
+}
+
+// Every value interpolated into the script - the host repo path, each flag's
+// value and the prompt - is shell-escaped, so none of it is read as shell
+// syntax of its own, and the prompt arrives after a literal --. This runs the
+// script for real, through sh, rather than inspecting its text, since that is
+// the only way to prove the escaping round-trips.
+func TestRemoteBuildScriptEscapesEveryValueAndPassesThePromptAfterDashDash(t *testing.T) {
+	for _, bin := range []string{"sh"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is not installed", bin)
+		}
+	}
+	home := t.TempDir()
+	chunkPath := filepath.Join(home, "chunk")
+	assert.NilError(t, os.WriteFile(chunkPath, []byte("#!/bin/sh\nfor a; do printf '%s\\n' \"$a\"; done\n"), 0o755))
+
+	hostRepo := filepath.Join(t.TempDir(), "repo with spaces & 'quotes'")
+	assert.NilError(t, os.MkdirAll(hostRepo, 0o755))
+
+	opts := factoryRemoteOptions{
+		prompt:                  "add a feature; rm -rf / # $(whoami) `id`",
+		image:                   "it's a 'snapshot'",
+		reviewers:               3,
+		reviewsDir:              "reviews dir",
+		noValidate:              true,
+		keepSidecars:            true,
+		model:                   "model $HOME",
+		implementerInstructions: `don't "quote" me`,
+		implementTimeout:        90 * time.Second,
+		reviewTimeout:           2 * time.Minute,
+		attempts:                5,
+	}
+	script := remoteBuildScript(hostRepo, "org's id", opts)
+
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	assert.NilError(t, err, string(out))
+
+	got := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	want := []string{
+		"factory", "build", "--json", "--no-open-pr",
+		"--org-id", "org's id",
+		"--max-attempts", "5",
+		"--implement-timeout", "1m30s",
+		"--review-timeout", "2m0s",
+		"--image", "it's a 'snapshot'",
+		"--reviewers", "3",
+		"--reviews", "reviews dir",
+		"--no-validate",
+		"--keep-sidecars",
+		"--model", "model $HOME",
+		"--implementer-instructions", `don't "quote" me`,
+		"--", opts.prompt,
+	}
+	assert.DeepEqual(t, got, want)
+}
+
+// tailWriter must keep the genuine tail of what is written to it - the bytes
+// that explain a failure - rather than stopping at its cap and freezing on
+// whatever arrived first, which a long run's stderr would otherwise do.
+func TestTailWriterKeepsTheMostRecentBytes(t *testing.T) {
+	w := newTailWriter(8)
+	_, err := w.Write([]byte("0123456789"))
+	assert.NilError(t, err)
+	assert.Equal(t, w.String(), "23456789")
+
+	_, err = w.Write([]byte("AB"))
+	assert.NilError(t, err)
+	assert.Equal(t, w.String(), "456789AB")
+}
+
+// The same eviction must hold across many small writes, which is how it is
+// actually used: one call per chunk of streamed output, not one giant write.
+func TestTailWriterKeepsTheTailAcrossManySmallWrites(t *testing.T) {
+	w := newTailWriter(4)
+	for _, b := range []byte("abcdefgh") {
+		_, err := w.Write([]byte{b})
+		assert.NilError(t, err)
+	}
+	assert.Equal(t, w.String(), "efgh")
 }
 
 func TestRemoteReleaseTagAddsOneV(t *testing.T) {

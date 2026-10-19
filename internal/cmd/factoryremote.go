@@ -1,14 +1,18 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -32,6 +36,17 @@ type factoryRemoteOptions struct {
 	logFile     string
 	verbose     bool
 	jsonOut     bool
+	// The rest are build flags that mean something on the host's own
+	// 'factory build': forwarded through the exec script rather than acted on
+	// here.
+	reviewers               int
+	noValidate              bool
+	keepSidecars            bool
+	model                   string
+	implementerInstructions string
+	implementTimeout        time.Duration
+	reviewTimeout           time.Duration
+	attempts                int
 }
 
 // factoryRemoteResult is chunk factory build --remote's --json output.
@@ -45,11 +60,14 @@ const factoryRemoteScriptLimit = 64 << 10
 
 // runFactoryBuildRemote provisions a sidecar of its own for one factory build
 // run — a worktree here, a one-sidecar pool, chunk installed on it, and the
-// baseline commit made there — so the run can later go in the foreground on
-// that sidecar instead of the local daemon. It does not start the run itself;
-// that is a later change. Any failure, and Ctrl-C before the run starts,
-// leaves nothing behind: the pool is destroyed, not kept, and the worktree
-// removed.
+// baseline commit made there — then starts 'chunk factory build' on the host
+// as one foreground exec, which is what keeps the sandbox awake, and follows
+// its output. Any failure before that exec is submitted, and Ctrl-C before
+// then, leaves nothing behind: the pool is destroyed, not kept, and the
+// worktree removed. From the moment the exec is submitted the sidecar and the
+// worktree belong to the run instead: a failure leaves them for inspection,
+// and Ctrl-C only detaches, printing how to bring the work back later rather
+// than cancelling or deleting anything.
 func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err error) {
 	ctx := cmd.Context()
 	streams := iostream.FromCmd(cmd)
@@ -67,6 +85,14 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 	if err != nil {
 		return err
 	}
+	// The host runs from its own checkout, so --reviews reaches it relative
+	// to the project root rather than as typed here, where it may be relative
+	// to another directory or an absolute path on this machine.
+	relReviews, err := factoryReviewsDir(root, opts.reviewsDir)
+	if err != nil {
+		return err
+	}
+	opts.reviewsDir = filepath.ToSlash(relReviews)
 
 	key := remoteRunKey()
 	dataDir, err := config.RepoDataDir(root)
@@ -90,6 +116,12 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 	}()
 
 	rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
+	// The run's implementer needs Claude on the host, so a missing credential
+	// is found out before any sidecar is provisioned for it.
+	cred, _, err := reviewCredential(rc)
+	if err != nil {
+		return err
+	}
 	client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 	if err != nil {
 		return err
@@ -151,7 +183,70 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 		return &userError{msg: "Could not make the baseline commit on the host.", err: err}
 	}
 
+	statusFn(iostream.LevelStep, "Starting the run on the host...")
+	script := remoteBuildScript(entry.RepoPath, resolvedOrgID, opts)
+	env := review.DetachEnv(rc.CircleCIToken, review.Options{Credential: cred, BaseURL: rc.AnthropicBaseURL})
+	commandID, err := entry.Client.SubmitExec(ctx, entry.ID, "sh", []string{"-c", script}, env)
+	if err != nil {
+		return &userError{msg: "Could not start the run on the host sidecar.", err: err}
+	}
+	// The run is going: from here, the sidecar and the worktree belong to it,
+	// not to this command's own cleanup. A failure or a detach below leaves
+	// them as they are.
 	cleanupWorktree, destroyPool = false, false
+
+	rec := factory.Record{
+		RunID:    key,
+		Prompt:   opts.prompt,
+		Worktree: wt.Path,
+		Branch:   wt.Branch,
+		Baseline: wt.Baseline,
+		Head:     wt.Head,
+		Remote:   &factory.RemoteRun{SidecarID: entry.ID, CommandID: commandID, HostRepo: entry.RepoPath},
+	}
+	if err := factory.SaveRecord(dataDir, rec); err != nil {
+		statusFn(iostream.LevelWarn, fmt.Sprintf("could not save the run's record: %v", err))
+	}
+
+	pullHint := "chunk factory pull " + key
+	statusFn(iostream.LevelStep, fmt.Sprintf("Following the run on sidecar %s. Ctrl-C detaches without stopping it.", entry.ID))
+	var stdout bytes.Buffer
+	stderrTail := newTailWriter(factoryRemoteStderrCap)
+	res, streamErr := entry.Client.StreamOutput(ctx, commandID, "", func(stream string, data []byte) {
+		if stream == circleci.StreamStderr {
+			_, _ = streams.Err.Write(data)
+			_, _ = stderrTail.Write(data)
+			return
+		}
+		// The host's --json result. Nothing reads it yet - 'chunk factory
+		// pull' will - but it must not land on this terminal as stdout.
+		stdout.Write(data)
+	})
+
+	if streamErr != nil {
+		// A stream broken by this process's own Ctrl-C detaches rather than
+		// reporting a failure; any other break is a genuine lost connection,
+		// whether or not Ctrl-C also happened to land at the same moment.
+		if ctx.Err() != nil {
+			streams.ErrPrintf("\nDetaching. The run continues on sidecar %s. Run %s once it's done to bring the work back.\n", entry.ID, pullHint)
+			return nil
+		}
+		return &userError{
+			msg:        fmt.Sprintf("Lost the host's output partway through the run on sidecar %s.", entry.ID),
+			suggestion: fmt.Sprintf("The run may still be going. Inspect it with: chunk sidecar ssh --sidecar-id %s", entry.ID),
+			err:        streamErr,
+		}
+	}
+	if res.ExitCode != 0 {
+		return &userError{
+			msg:        fmt.Sprintf("The run failed on sidecar %s.", entry.ID),
+			suggestion: fmt.Sprintf("Inspect it with: chunk sidecar ssh --sidecar-id %s", entry.ID),
+			err:        fmt.Errorf("exit %d: %s", res.ExitCode, review.Tail(strings.TrimSpace(stderrTail.String()), factoryRemoteStderrTailLen)),
+		}
+	}
+
+	statusFn(iostream.LevelDone, fmt.Sprintf("The run finished on sidecar %s.", entry.ID))
+	streams.ErrPrintf("Run %s to bring the work back.\n", pullHint)
 	if opts.jsonOut {
 		return iostream.PrintJSON(streams.Out, factoryRemoteResult{SidecarID: entry.ID})
 	}
@@ -159,9 +254,93 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 	return nil
 }
 
+// factoryRemoteStderrCap bounds how much of the host's stderr tailWriter
+// keeps: the rest has already reached the terminal as it streamed, and is
+// dropped from the front as more arrives, so a run that logs well past this
+// many bytes over hours still reports the lines that explain a failure
+// rather than some from early in the run.
+const factoryRemoteStderrCap = 256 << 10
+
+// factoryRemoteStderrTailLen is how much of that stderr a failure's error
+// message carries.
+const factoryRemoteStderrTailLen = 2000
+
+// tailWriter keeps the last cap bytes written to it, evicting from the front
+// as more arrives, so a long-running command's full output can be written to
+// without growing without bound while what it ends with - the lines a
+// failure needs - is never the part dropped.
+type tailWriter struct {
+	buf     []byte
+	maxSize int
+}
+
+func newTailWriter(maxSize int) *tailWriter {
+	return &tailWriter{maxSize: maxSize}
+}
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	if excess := len(w.buf) - w.maxSize; excess > 0 {
+		w.buf = append(w.buf[:0], w.buf[excess:]...)
+	}
+	return len(p), nil
+}
+
+func (w *tailWriter) String() string { return string(w.buf) }
+
+// remoteBuildScript is the script exec'd on the host: its own 'chunk factory
+// build', run with 'exec' so this one process stays the tracked foreground
+// command that keeps the sandbox awake. Every interpolated value - the host's
+// checkout path, each flag's value and the prompt - is shell-escaped, since
+// the exec API takes no shell of its own and rejects a command with spaces.
+// Only the build flags that mean something on the host are forwarded; the
+// rest (--continue, the log flags, --open-pr, --draft) are refused before
+// this is ever built. The host is always given --no-open-pr: a run there
+// would otherwise open a pull request whenever it could, and pushing from
+// the host needs a GitHub credential in its exec environment that is not
+// plumbed and is a decision of its own.
+func remoteBuildScript(hostRepo, orgID string, opts factoryRemoteOptions) string {
+	args := []string{
+		"factory", "build", "--json", "--no-open-pr",
+		"--org-id", orgID,
+		"--max-attempts", strconv.Itoa(opts.attempts),
+		"--implement-timeout", opts.implementTimeout.String(),
+		"--review-timeout", opts.reviewTimeout.String(),
+	}
+	if opts.image != "" {
+		args = append(args, "--image", opts.image)
+	}
+	if opts.reviewers > 0 {
+		args = append(args, "--reviewers", strconv.Itoa(opts.reviewers))
+	}
+	if opts.reviewsDir != "" {
+		args = append(args, "--reviews", opts.reviewsDir)
+	}
+	if opts.noValidate {
+		args = append(args, "--no-validate")
+	}
+	if opts.keepSidecars {
+		args = append(args, "--keep-sidecars")
+	}
+	if opts.model != "" {
+		args = append(args, "--model", opts.model)
+	}
+	if opts.implementerInstructions != "" {
+		args = append(args, "--implementer-instructions", opts.implementerInstructions)
+	}
+	args = append(args, "--", opts.prompt)
+
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = sidecar.ShellEscape(a)
+	}
+	return fmt.Sprintf(`cd %s && exec "$HOME/chunk" %s`, sidecar.ShellEscape(hostRepo), strings.Join(quoted, " "))
+}
+
 // checkFactoryRemoteFlags refuses flag combinations --remote does not support
-// yet: a continued run, and the log options, since none of them have meaning
-// without the local daemon that would otherwise carry them out.
+// yet: a continued run and the log options, since none of them have meaning
+// without the local daemon that would otherwise carry them out. --open-pr and
+// --draft are refused earlier, by checkFactoryBuildFlags.
 func checkFactoryRemoteFlags(opts factoryRemoteOptions) error {
 	switch {
 	case opts.continueRun != "":
