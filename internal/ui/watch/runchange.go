@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 )
@@ -79,39 +81,93 @@ func (m Model) runChangeLines(st watchStyles, run sessionInfo, room int) []strin
 	if f == nil || !ok || !c.loaded || c.err != nil || strings.TrimSpace(c.diff) == "" || room < 3 {
 		return nil
 	}
-	head := "  " + st.vdim("change  ") + st.muted(lastLine(f.Stat))
-	diff := diffLines(st, c.diff, true)
-	lines := []string{"", head}
+	// The pane is the width renderBody clips it to; the change is indented two.
+	width := m.width - leftPaneWidth - 5 - 2
+	lines := []string{""}
+	for i, l := range wrapText(lastLine(f.Stat), width-len("change  ")) {
+		label := st.vdim("change  ")
+		if i > 0 {
+			label = strings.Repeat(" ", len("change  "))
+		}
+		lines = append(lines, "  "+label+st.muted(l))
+	}
+	diff := diffLines(st, c.diff, true, width)
 	if fit := room - len(lines); len(diff) > fit {
-		shown := max(fit-1, 0)
+		// How to see the rest wraps too, so the diff gives up as many lines
+		// as it takes.
+		more := func(shown int) []string {
+			return wrapText(fmt.Sprintf("… %d more lines · git diff %s %s", len(diff)-shown, shortSHA(f.Baseline), f.Branch), width)
+		}
+		shown := max(fit-len(more(max(fit-1, 0))), 0)
 		lines = append(lines, indent(diff[:shown])...)
-		return append(lines, "  "+st.vdim(fmt.Sprintf("… %d more lines · git diff %s %s", len(diff)-shown, shortSHA(f.Baseline), f.Branch)))
+		for _, l := range more(shown) {
+			lines = append(lines, "  "+st.vdim(l))
+		}
+		return lines[:min(len(lines), room)]
 	}
 	return append(lines, indent(diff)...)
 }
 
-// diffLines colours a diff as git does. Compact cuts each file's headers to
-// its name.
-func diffLines(st watchStyles, diff string, compact bool) []string {
+// wrapText wraps s to width columns, at spaces where it can and mid-word
+// where a word is wider than that.
+func wrapText(s string, width int) []string {
+	if width < 1 {
+		return []string{s}
+	}
+	return strings.Split(ansi.Wrap(s, width, ""), "\n")
+}
+
+// diffLines colours a diff as git does, wrapped to width columns so no line
+// is cut at the pane's edge. A wrapped line continues under its text, past
+// its +/- marker. Compact cuts each file's headers to its name.
+func diffLines(st watchStyles, diff string, compact bool, width int) []string {
 	var lines []string
+	add := func(style func(string) string, l string) {
+		for _, w := range wrapDiffLine(l, width) {
+			lines = append(lines, style(w))
+		}
+	}
+	plain := func(s string) string { return s }
 	for _, l := range strings.Split(strings.TrimRight(diff, "\n"), "\n") {
+		l = strings.ReplaceAll(l, "\t", "    ")
 		switch {
 		case compact && (strings.HasPrefix(l, "diff --git") || strings.HasPrefix(l, "index ") || strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "new file mode") || strings.HasPrefix(l, "deleted file mode")):
 		case compact && strings.HasPrefix(l, "+++ "):
-			lines = append(lines, st.emphasis(strings.TrimPrefix(strings.TrimPrefix(l, "+++ "), "b/")))
+			add(st.emphasis, strings.TrimPrefix(strings.TrimPrefix(l, "+++ "), "b/"))
 		case strings.HasPrefix(l, "+++"), strings.HasPrefix(l, "---"), strings.HasPrefix(l, "diff --git"), strings.HasPrefix(l, "index "):
-			lines = append(lines, st.emphasis(l))
+			add(st.emphasis, l)
 		case strings.HasPrefix(l, "@@"):
-			lines = append(lines, st.teal(l))
+			add(st.teal, l)
 		case strings.HasPrefix(l, "+"):
-			lines = append(lines, st.success(l))
+			add(st.success, l)
 		case strings.HasPrefix(l, "-"):
-			lines = append(lines, st.err(l))
+			add(st.err, l)
 		default:
-			lines = append(lines, l)
+			add(plain, l)
 		}
 	}
 	return lines
+}
+
+// wrapDiffLine wraps a diff line to width columns, at spaces where it can.
+// A line's continuations are indented one column, so they sit under its text
+// rather than under its +/- marker.
+func wrapDiffLine(l string, width int) []string {
+	if width < 2 || ansi.StringWidth(l) <= width {
+		return []string{l}
+	}
+	_, n := utf8.DecodeRuneInString(l)
+	head, rest := l[:n], l[n:]
+	wrapped := wrapText(rest, width-1)
+	out := make([]string, len(wrapped))
+	for i, w := range wrapped {
+		if i == 0 {
+			out[i] = head + w
+			continue
+		}
+		out[i] = " " + w
+	}
+	return out
 }
 
 func indent(lines []string) []string {
