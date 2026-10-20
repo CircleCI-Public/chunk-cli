@@ -281,17 +281,15 @@ func TestShortTerminalKeepsStatusAndOutcomeInView(t *testing.T) {
 // of the pane runs past the terminal.
 func TestLongPromptWrapsAndPaneStaysWithinTheTerminal(t *testing.T) {
 	r := failedRun()
-	r.s.Factory.Prompt = strings.Repeat("refactor the helper so that ", 12)
+	r.s.Factory.Prompt = strings.Repeat("refactor the helper so that ", 20)
 	for _, width := range []int{70, 110, 160} {
 		m := sessModel(r)
 		m.selRun = "abc"
 		m.width = width
 		out := m.render()
 		assert.Assert(t, strings.Count(out, "refactor the helper") > 1, "the prompt is wrapped over lines:\n%s", out)
-		// The single source line is short of maxGoalLines, so the task shows in
-		// full; the "…" here is the run list's own title truncation, unrelated
-		// to the task body.
-		assert.Assert(t, strings.Contains(out, "…"), "the run list still truncates its title:\n%s", out)
+		assert.Assert(t, strings.Contains(stripANSI(out), "Space to read all"),
+			"a one-paragraph prompt past three wrapped lines is collapsed:\n%s", out)
 		for i, line := range strings.Split(out, "\n") {
 			assert.Assert(t, lipgloss.Width(line) <= width, "width %d line %d is %d columns", width, i, lipgloss.Width(line))
 		}

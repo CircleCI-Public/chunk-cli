@@ -314,26 +314,22 @@ func wrapLine(s string, width int) []string {
 }
 
 // taskLines is the task row's content: the prompt's lines word-wrapped to
-// width, one rendered line per source line so a line break, heading or list
-// item lands exactly where the prompt has it. Collapsed, only the prompt's
-// first maxGoalLines source lines are kept, with a marker naming how many
-// there are to read in place of the rest; a prompt of maxGoalLines source
-// lines or fewer is shown in full either way, since there is nothing past
-// them to mark.
+// width, so a line break, heading or list item lands exactly where the prompt
+// has it. Collapsed, only the first maxGoalLines wrapped lines are kept, with
+// a marker naming how many there are to read in place of the rest. The cap is
+// on wrapped lines rather than the prompt's own, since a one-paragraph prompt
+// is a single source line and would otherwise fill the pane uncollapsed.
 func taskLines(prompt string, width int, expanded bool) []string {
 	src := strings.Split(prompt, "\n")
-	n := len(src)
-	if !expanded && n > maxGoalLines {
-		src = src[:maxGoalLines]
-	}
-	var lines []string
+	lines := make([]string, 0, len(src))
 	for _, l := range src {
 		lines = append(lines, wrapLine(l, width)...)
 	}
-	if !expanded && n > maxGoalLines {
-		lines = append(lines, fmt.Sprintf("… (Space to read all, %d lines)", n))
+	if expanded || len(lines) <= maxGoalLines {
+		return lines
 	}
-	return lines
+	return append(lines[:maxGoalLines:maxGoalLines],
+		fmt.Sprintf("… (Space to read all, %d lines)", len(lines)))
 }
 
 // renderTaskRows draws the task row at the top of the run pane: the prompt,
