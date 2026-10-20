@@ -103,15 +103,89 @@ func TestFactoryPrompt(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := factoryPrompt(strings.NewReader(tc.stdin), tc.args, false)
+			got, origin, err := factoryPrompt("chunk factory build", strings.NewReader(tc.stdin), tc.args, false)
 			if tc.wantErr != "" {
 				assert.ErrorContains(t, err, tc.wantErr)
 				return
 			}
 			assert.NilError(t, err)
 			assert.Equal(t, got, tc.want)
+			assert.Equal(t, origin, "")
 		})
 	}
+}
+
+// A sole argument naming an existing file is read as the prompt, wherever
+// the file is, and its path is returned as the origin.
+func TestFactoryPromptReadsAFileArgument(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spec.md")
+	assert.NilError(t, os.WriteFile(path, []byte("# Task\n\nadd a flag\n"), 0o644))
+
+	got, origin, err := factoryPrompt("chunk factory build", strings.NewReader(""), []string{path}, false)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "# Task\n\nadd a flag\n")
+	assert.Equal(t, origin, path)
+}
+
+// A word with no whitespace that is not an existing file, and has no
+// extension chunk treats as a spec file, is literal prompt text, as always.
+func TestFactoryPromptTreatsAnUnknownMissingWordAsLiteralText(t *testing.T) {
+	got, origin, err := factoryPrompt("chunk factory build", strings.NewReader(""), []string{"deploy-api"}, false)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "deploy-api")
+	assert.Equal(t, origin, "")
+}
+
+// A quoted sentence stays literal even when it mentions a file by name,
+// since it has whitespace.
+func TestFactoryPromptQuotedSentenceMentioningAFileStaysLiteral(t *testing.T) {
+	got, origin, err := factoryPrompt("chunk factory build", strings.NewReader(""), []string{"fix README.md typos"}, false)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "fix README.md typos")
+	assert.Equal(t, origin, "")
+}
+
+// A missing path with a spec-like extension is an error, not literal text:
+// that is a far more likely mistyped path than a prompt.
+func TestFactoryPromptRefusesAMissingMarkdownPath(t *testing.T) {
+	_, _, err := factoryPrompt("chunk factory build", strings.NewReader(""), []string{"missing-spec.md"}, false)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), "missing-spec.md: file not found.")
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk factory build < file.md"), ue.Suggestion())
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+}
+
+func TestFactoryPromptRefusesADirectory(t *testing.T) {
+	dir := t.TempDir()
+	_, _, err := factoryPrompt("chunk factory build", strings.NewReader(""), []string{dir}, false)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), dir+" is a directory.")
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+}
+
+func TestFactoryPromptRefusesABinaryFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spec.md")
+	assert.NilError(t, os.WriteFile(path, []byte("binary\x00data"), 0o644))
+	_, _, err := factoryPrompt("chunk factory build", strings.NewReader(""), []string{path}, false)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), path+" looks like a binary file.")
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+}
+
+func TestFactoryPromptRefusesAnOversizeFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spec.txt")
+	assert.NilError(t, os.WriteFile(path, make([]byte, maxPromptFileSize+1), 0o644))
+	_, _, err := factoryPrompt("chunk factory build", strings.NewReader(""), []string{path}, false)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Assert(t, strings.Contains(ue.UserMessage(), "too large"), ue.UserMessage())
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
 }
 
 // A prompt argument with a file redirected to stdin would silently drop the
@@ -130,24 +204,36 @@ func TestFactoryPromptRefusesAnArgumentAndARedirectedFile(t *testing.T) {
 		return f
 	}
 
-	_, err := factoryPrompt(open(promptFile), []string{"/tmp/run.log"}, true)
+	_, _, err := factoryPrompt("chunk factory build", open(promptFile), []string{"/tmp/run.log"}, true)
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), `Got the prompt "/tmp/run.log" as an argument and another prompt on stdin.`)
 	assert.Equal(t, ue.Suggestion(), "--log takes no file. To log to /tmp/run.log, write --log-file /tmp/run.log.")
 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
 
-	_, err = factoryPrompt(open(promptFile), []string{"add a flag"}, false)
+	// A stray word that happens to end in a spec-like extension, as in
+	// --log run.txt < prompt.md, is still the specific "got it twice"
+	// mistake, not a "file not found" about a path that was never meant as
+	// one: redirected stdin is checked before the argument is read as a file.
+	_, _, err = factoryPrompt("chunk factory build", open(promptFile), []string{"run.txt"}, true)
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), `Got the prompt "run.txt" as an argument and another prompt on stdin.`)
+	assert.Equal(t, ue.Suggestion(), "--log takes no file. To log to run.txt, write --log-file run.txt.")
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+
+	_, _, err = factoryPrompt("chunk factory build", open(promptFile), []string{"add a flag"}, false)
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.Suggestion(), "Pass the prompt as the argument or on stdin, not both.")
 
-	got, err := factoryPrompt(open(promptFile), []string{"-"}, false)
+	got, origin, err := factoryPrompt("chunk factory build", open(promptFile), []string{"-"}, false)
 	assert.NilError(t, err)
 	assert.Equal(t, got, "# Task\n\nadd a flag\n")
+	assert.Equal(t, origin, "")
 
-	got, err = factoryPrompt(open(emptyFile), []string{"add a flag"}, true)
+	got, origin, err = factoryPrompt("chunk factory build", open(emptyFile), []string{"add a flag"}, true)
 	assert.NilError(t, err)
 	assert.Equal(t, got, "add a flag")
+	assert.Equal(t, origin, "")
 }
 
 func TestFactoryArgs(t *testing.T) {

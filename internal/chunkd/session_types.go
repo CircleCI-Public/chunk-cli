@@ -181,6 +181,9 @@ type FactoryRun struct {
 	Guidance string `json:"guidance,omitempty"`
 	// ContinuesRunID is the run whose work this one picked up, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
+	// SpecOrigin is the path of the file Prompt was read from, when it was a
+	// file rather than literal text given on the command line or stdin.
+	SpecOrigin string `json:"spec_origin,omitempty"`
 	// Attempts is the most rounds the run checks.
 	Attempts int    `json:"attempts,omitempty"`
 	RunID    string `json:"run_id,omitempty"`
@@ -451,6 +454,9 @@ type FactoryRequest struct {
 	// Prompt is what the implementer is asked to do. Required unless Continue
 	// is set, when it is optional guidance added to the earlier run's request.
 	Prompt string `json:"prompt"`
+	// SpecOrigin is the path Prompt was read from, when the prompt argument
+	// named a file rather than being literal text.
+	SpecOrigin string `json:"spec_origin,omitempty"`
 	// Continue is the ID of an earlier run to pick up the work of, or empty to
 	// start from the project's files.
 	Continue string `json:"continue,omitempty"`

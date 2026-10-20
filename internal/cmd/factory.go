@@ -114,7 +114,7 @@ func newFactoryBuildCmd() *cobra.Command {
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "build [prompt|-]",
+		Use:   "build [prompt|file|-]",
 		Short: "Implement a prompt on a sidecar, then review and validate it until it passes",
 		Long: `Send a prompt to an implementer agent running on a sidecar, then loop:
 review its work with each prompt in the reviews directory, each on its own
@@ -130,6 +130,16 @@ chunk/factory/<description>/<run id>. It starts from your files as they are,
 uncommitted changes included. Your checkout is never touched. The implementer's
 work is synced into the worktree each round and committed there when the run
 ends; the worktree is kept so you can look at it or carry on in it.
+
+A single argument with no spaces that names an existing file is read as the
+prompt, wherever the file is: chunk factory build ../notes/spec.md reads that
+file and still runs on this repo, never the file's own. The run's record
+keeps the file's path as where the prompt came from, shown in 'chunk watch'
+too. A missing .md, .markdown or .txt path is an error rather than literal
+text, since that is a far likelier mistyped path than a prompt; a directory, a
+binary file and a file over 1 MiB are refused the same way. Anything else,
+such as a quoted sentence, is the prompt itself, even one that names a file:
+chunk factory build "fix README.md typos".
 
 With no prompt argument, the prompt is read from redirected stdin. A - prompt
 selects stdin explicitly: chunk factory build < prompt.md or chunk factory build - < prompt.md.
@@ -188,10 +198,10 @@ which is what pushes and opens the pull request.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
-			var prompt string
+			var prompt, specOrigin string
 			var err error
 			if factoryBuildNeedsPrompt(continueRun, args, cmd.InOrStdin()) {
-				prompt, err = factoryPrompt(cmd.InOrStdin(), args, logOn && logFile == "")
+				prompt, specOrigin, err = factoryPrompt("chunk factory build", cmd.InOrStdin(), args, logOn && logFile == "")
 				if err != nil {
 					return err
 				}
@@ -279,6 +289,7 @@ which is what pushes and opens the pull request.`,
 			id, err := chunkd.StartFactory(chunkd.FactoryRequest{
 				ProjectRoot:             root,
 				Prompt:                  prompt,
+				SpecOrigin:              specOrigin,
 				Continue:                continueRun,
 				ReviewsDir:              relReviews,
 				NoValidate:              noValidate,
@@ -360,40 +371,155 @@ func factoryFlagError(cmd *cobra.Command, err error) error {
 	return err
 }
 
-// factoryPrompt is the prompt the implementer is sent: the sole argument when
-// it is not -, and stdin otherwise. With no argument, terminal stdin is refused
-// rather than waited on, since a missing redirect is the likelier mistake. An
-// explicit - may read a terminal because the caller asked for stdin.
+// factoryPrompt is the prompt the implementer is sent, and where it came
+// from: the sole argument when it is not -, and stdin otherwise. With no
+// argument, terminal stdin is refused rather than waited on, since a missing
+// redirect is the likelier mistake. An explicit - may read a terminal because
+// the caller asked for stdin. use is the command's own invocation ("chunk
+// factory build" or "chunk factory start"), named in error suggestions.
 //
 // An argument with a file redirected to stdin is refused too: the argument
 // would win and the file's prompt be silently dropped. It is usually a word
 // meant for a flag, as in --log run.log < prompt.md; bareLog says --log was
 // given without --log-file, to point at that. Only a non-empty regular file
 // counts, since a pipe or /dev/null is what scripts often inherit as stdin.
-func factoryPrompt(in io.Reader, args []string, bareLog bool) (string, error) {
+func factoryPrompt(use string, in io.Reader, args []string, bareLog bool) (prompt, specOrigin string, err error) {
 	if len(args) == 1 && args[0] != "-" {
+		// Checked before the argument is resolved: a stray word meant for a
+		// flag, as in --log run.log < prompt.md, should get the specific
+		// "got a prompt twice" message, not be judged as a possible file path
+		// in its own right just because it happens to end in .md or .txt.
 		if redirectedFile(in) {
-			return "", promptTwiceError(args[0], bareLog)
+			return "", "", promptTwiceError(args[0], bareLog)
 		}
-		return args[0], nil
+		var argErr error
+		prompt, specOrigin, argErr = promptFromArg(use, args[0])
+		if argErr != nil {
+			return "", "", argErr
+		}
+		return prompt, specOrigin, nil
 	}
 	if len(args) == 0 {
 		if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-			return "", missingFactoryPromptError()
+			return "", "", missingFactoryPromptError()
 		}
 	}
 	b, err := io.ReadAll(in)
 	if err != nil {
-		return "", &userError{msg: "Could not read the prompt from stdin.", err: err}
+		return "", "", &userError{msg: "Could not read the prompt from stdin.", err: err}
 	}
-	prompt := string(b)
+	prompt = string(b)
 	if strings.TrimSpace(prompt) == "" {
-		return "", newUserError("The prompt on stdin is empty.").
+		return "", "", newUserError("The prompt on stdin is empty.").
 			withCode("command.invalid_args").
 			withExitCode(ExitBadArgs).
 			withoutDetail()
 	}
+	return prompt, "", nil
+}
+
+// maxPromptFileSize caps how much of a file build and start will read as a
+// prompt: comfortably more than anyone writes by hand, so a bigger file is
+// more likely the wrong path than a very long prompt.
+const maxPromptFileSize = 1 << 20 // 1 MiB
+
+// promptFileExtensions are the extensions that make a missing word an error
+// rather than literal text: typing the wrong path to a spec is a more likely
+// mistake than wanting one of these literally in a prompt.
+var promptFileExtensions = []string{".md", ".markdown", ".txt"}
+
+// promptFromArg resolves build and start's sole prompt argument. A word with
+// no whitespace that names an existing regular file is read as the prompt,
+// wherever the file is - inside the project, a sibling repository or
+// anywhere else - and specOrigin is its path; the run still works on the
+// project where the command ran, and the file's own repository, if it has
+// one, is never touched or synced. A word with no whitespace and a
+// promptFileExtensions extension that does not exist is an error, never a
+// prompt: that is a far likelier mistyped path than literal text. Anything
+// else - an argument with whitespace, or a single word that is not an
+// existing file - is literal prompt text, as always.
+func promptFromArg(use, arg string) (prompt, specOrigin string, err error) {
+	if hasWhitespace(arg) {
+		return arg, "", nil
+	}
+	info, statErr := os.Stat(arg)
+	switch {
+	case statErr == nil && info.IsDir():
+		return "", "", promptPathError(use, fmt.Sprintf("%s is a directory.", arg))
+	case statErr == nil && info.Mode().IsRegular():
+		filePrompt, fileErr := readPromptFile(use, arg, info)
+		return filePrompt, arg, fileErr
+	case statErr == nil:
+		return "", "", promptPathError(use, fmt.Sprintf("%s is not a regular file.", arg))
+	case os.IsNotExist(statErr) && hasPromptFileExtension(arg):
+		return "", "", promptPathError(use, fmt.Sprintf("%s: file not found.", arg))
+	}
+	return arg, "", nil
+}
+
+// hasWhitespace reports whether s contains a whitespace rune, which rules out
+// its being a single word, let alone a plausible file path.
+func hasWhitespace(s string) bool {
+	return strings.IndexFunc(s, unicode.IsSpace) >= 0
+}
+
+// hasPromptFileExtension reports whether path's extension names it as a
+// prompt file, case-insensitively.
+func hasPromptFileExtension(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	for _, e := range promptFileExtensions {
+		if ext == e {
+			return true
+		}
+	}
+	return false
+}
+
+// readPromptFile reads path, already known to be a regular file, as a
+// prompt. info is its os.Stat, reused to check the size cap without a second
+// stat.
+func readPromptFile(use, path string, info os.FileInfo) (string, error) {
+	if info.Size() > maxPromptFileSize {
+		return "", promptPathError(use, fmt.Sprintf("%s is over %s, too large to read as a prompt.", path, formatByteSize(maxPromptFileSize)))
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", &userError{msg: fmt.Sprintf("Could not read %s.", path), err: err}
+	}
+	if isBinaryPromptFile(b) {
+		return "", promptPathError(use, fmt.Sprintf("%s looks like a binary file.", path))
+	}
+	prompt := string(b)
+	if strings.TrimSpace(prompt) == "" {
+		return "", promptPathError(use, fmt.Sprintf("%s is empty.", path))
+	}
 	return prompt, nil
+}
+
+// isBinaryPromptFile reports whether b looks like a binary file: a NUL byte
+// in its first chunk, the heuristic git and most editors use, since a text
+// file never contains one.
+func isBinaryPromptFile(b []byte) bool {
+	return bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0
+}
+
+// formatByteSize renders n for a person, in whole mebibytes since that is the
+// only size chunk ever caps a prompt file at.
+func formatByteSize(n int64) string {
+	return fmt.Sprintf("%d MiB", n/(1<<20))
+}
+
+// promptPathError reports that arg could not be read as a prompt file, for
+// the reason in msg, before anything else about the run starts. The
+// suggestion always offers the same two escape hatches: quote it as literal
+// text, or read a file on stdin instead, which works whatever about the path
+// made it unusable.
+func promptPathError(use, msg string) error {
+	return newUserError(msg).
+		withCode("command.invalid_args").
+		withSuggestion(fmt.Sprintf(`Quote it if you meant that as literal text, or send a file on stdin instead: %s < file.md`, use)).
+		withExitCode(ExitBadArgs).
+		withoutDetail()
 }
 
 // factoryBuildNeedsPrompt reports whether the build command should read a

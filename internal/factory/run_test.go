@@ -90,6 +90,24 @@ func TestContinuedRunThatFailsBeforeTheImplementerKeepsTheWork(t *testing.T) {
 	assert.Equal(t, gitOutput(t, root, "rev-parse", rec.Branch), tip)
 }
 
+// A fresh run's record keeps where its own prompt came from. A continued
+// run's keeps the original run's instead, from its own record, not whatever
+// specOrigin was passed for this round's guidance.
+func TestRecordForKeepsTheContinuedRunsSpecOrigin(t *testing.T) {
+	wt := Worktree{Path: "/wt", Branch: "chunk/factory/run-1", Baseline: "abc", Head: "def"}
+
+	rec := recordFor("run-1", "add a flag", wt, nil, "spec.md")
+	assert.Equal(t, rec.Prompt, "add a flag")
+	assert.Equal(t, rec.SpecOrigin, "spec.md")
+	assert.Equal(t, rec.ContinuesRunID, "")
+
+	cont := &Continuation{From: Record{RunID: "run-1", Prompt: "add a flag", SpecOrigin: "spec.md"}, Guidance: "add tests"}
+	rec = recordFor("run-2", cont.request(), wt, cont, "guidance.md")
+	assert.Equal(t, rec.Prompt, "add a flag", "the original run's prompt, not the continuation's request text")
+	assert.Equal(t, rec.SpecOrigin, "spec.md", "the original run's spec origin, not the guidance's own")
+	assert.Equal(t, rec.ContinuesRunID, "run-1")
+}
+
 func TestReviewerCount(t *testing.T) {
 	prompts := []review.Prompt{{Name: "a"}, {Name: "b"}, {Name: "c"}}
 	assert.Equal(t, ReviewerCount(0, prompts), 3, "one per prompt by default")
