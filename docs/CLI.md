@@ -196,7 +196,7 @@ chunk
 │       --grader-timeout <duration> # Max time for grading each case (default: 20m)
 │       --json                      # Output as JSON
 │
-├── watch [dir...]                  # Live TUI dashboard of chunk factory build runs
+├── watch [dir...]                  # Follow and manage your factory runs live
 │   --focus                         # Watch only the current directory instead of all known projects
 │
 ├── conflicts                       # Report whether this branch still merges cleanly into its merge target
