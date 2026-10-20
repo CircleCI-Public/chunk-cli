@@ -153,6 +153,11 @@ jobs:
       - checkout
       - run: task mod-download
       - run:
+          name: Install rsync
+          # chunk syncs the checkout to each factory sidecar with rsync, and
+          # the cimg image does not ship it.
+          command: sudo apt-get update && sudo apt-get install -y rsync
+      - run:
           name: Install uv and Claude Code
           command: |
             curl -LsSf https://astral.sh/uv/install.sh | sh
