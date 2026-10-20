@@ -206,7 +206,7 @@ func TestRoundsOpenAndCloseAndKeepTheSelectionOnTheHeader(t *testing.T) {
 	run := m.selectedRun()
 	// The ended run opens its failing round, 2, and no other.
 	assert.Assert(t, !m.roundOpen(run.s, 0) && m.roundOpen(run.s, 1) && !m.roundOpen(run.s, 2))
-	assert.Equal(t, len(m.runItems(run.s)), 3+3, "three headers and round 2's implementer and two checks")
+	assert.Equal(t, len(m.runItems(run.s)), 3+3+1, "three headers, round 2's implementer and two checks, and the branch")
 
 	m, _ = press(m, ' ')
 	assert.Assert(t, m.roundOpen(m.selectedRun().s, 0), "space on the first header opens it")
@@ -257,7 +257,7 @@ func TestEndedFailedRunNamesTheBlockerAndTheNextStep(t *testing.T) {
 	for _, want := range []string{
 		"checks still failed after 3 round(s) · blocked by lint", "$1.50",
 		"▾ Round 2", "▸ Round 1", "▸ Round 3",
-		"branch", "chunk/factory/abc", "next", "chunk factory build --continue abc",
+		"Branch: chunk/factory/abc", "next", "chunk factory build --continue abc",
 	} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 	}
@@ -765,7 +765,9 @@ func TestNextStepLineSaysWhatToDo(t *testing.T) {
 	assert.Equal(t, nextStepLine(st, chunkd.Session{}), "")
 }
 
-func stripANSI(s string) string { return regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(s, "") }
+func stripANSI(s string) string {
+	return regexp.MustCompile("\x1b\\[[0-9;]*m|\x1b\\]8;[^\x07\x1b]*(\x07|\x1b\\\\)").ReplaceAllString(s, "")
+}
 
 // poll delivers the daemon's runs as the dashboard's poll does.
 func poll(m Model, runs ...sessionInfo) Model {

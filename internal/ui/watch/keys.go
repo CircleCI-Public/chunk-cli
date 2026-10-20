@@ -13,9 +13,12 @@ type keyMap struct {
 	Up, Down    key.Binding
 	Left, Right key.Binding
 	Open        key.Binding
-	Copy        key.Binding
-	Toggle      key.Binding
-	Search      key.Binding
+	// OpenPR opens the run's pull request from anywhere in the run pane. It is
+	// not listed in the footer: on the pull request row Open's hint names it.
+	OpenPR key.Binding
+	Copy   key.Binding
+	Toggle key.Binding
+	Search key.Binding
 	// Keep and Clear end a search: Enter keeps its filter, Esc drops it.
 	Keep, Clear key.Binding
 	Details     key.Binding
@@ -38,6 +41,7 @@ func (m Model) keys() keyMap {
 		Left:      key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "back")),
 		Right:     key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "details")),
 		Open:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
+		OpenPR:    key.NewBinding(key.WithKeys("o", "super+enter")),
 		Copy:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy failure")),
 		Toggle:    key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
 		Search:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search runs")),
@@ -54,8 +58,24 @@ func (m Model) keys() keyMap {
 	k.Clear.SetEnabled(m.searching)
 	k.Left.SetEnabled(right)
 	k.Right.SetEnabled(!right)
-	k.Open.SetEnabled(right)
+	item := m.selectedRunItem()
+	onPR := right && item != nil && item.kind == itemPR
+	onBranch := right && item != nil && item.kind == itemBranch
+	// Enter on the branch has nothing to do, so it is not offered there.
+	k.Open.SetEnabled(right && !onBranch)
+	k.OpenPR.SetEnabled(right && run != nil && run.s.Factory != nil && run.s.Factory.PullRequest.Opened())
 	k.Copy.SetEnabled(right && run != nil)
+	switch {
+	case onPR:
+		hint := "Enter/o"
+		if m.superEnter {
+			hint = "Enter/⌘Enter/o"
+		}
+		k.Open.SetHelp(hint, "open")
+		k.Copy.SetHelp("c", "copy URL")
+	case onBranch:
+		k.Copy.SetHelp("c", "copy branch")
+	}
 	k.Toggle.SetEnabled(right)
 	// A run with nothing under infra yet (it failed before its worktree was
 	// made, say) draws no infra row, so i would do nothing.
@@ -72,7 +92,7 @@ func (m Model) keys() keyMap {
 	}
 	if m.searching {
 		// Typing goes to the search, so no other key does anything.
-		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.Copy, &k.Toggle, &k.Search, &k.Details, &k.Cancel, &k.Quit} {
+		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.OpenPR, &k.Copy, &k.Toggle, &k.Search, &k.Details, &k.Cancel, &k.Quit} {
 			b.SetEnabled(false)
 		}
 	}
