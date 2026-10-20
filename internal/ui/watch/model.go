@@ -67,6 +67,9 @@ type watchStyles struct {
 	Error    lipgloss.Style
 	Muted    lipgloss.Style
 	VDim     lipgloss.Style
+	// Border is the frame around the panes; BorderDim is an unfocused edge of it.
+	Border    lipgloss.Style
+	BorderDim lipgloss.Style
 	// Chip is the base of a coloured label; the caller sets its background.
 	Chip lipgloss.Style
 }
@@ -81,12 +84,21 @@ func (s watchStyles) err(text string) string      { return s.Error.Render(text) 
 func (s watchStyles) muted(text string) string    { return s.Muted.Render(text) }
 func (s watchStyles) vdim(text string) string     { return s.VDim.Render(text) }
 
+func (s watchStyles) border(text string) string    { return s.Border.Render(text) }
+func (s watchStyles) borderDim(text string) string { return s.BorderDim.Render(text) }
+
 // Chunk brand colours. The accent is navy on a light terminal, where yellow
 // would vanish, and yellow on a dark one.
 var (
 	chunkYellow = lipgloss.Color("#FFF700")
 	chunkNavy   = lipgloss.Color("#2E3C52")
 	chunkGreen  = lipgloss.Color("#00DB73")
+	// The frame is red: deeper on a light terminal, where a bright red washes
+	// out, and softened where a pane is not the focused one.
+	chunkRed      = lipgloss.Color("#E5484D")
+	chunkRedDeep  = lipgloss.Color("#C62A2F")
+	chunkRedSoft  = lipgloss.Color("#B4686B")
+	chunkRedFaint = lipgloss.Color("#8C4A4D")
 )
 
 func newWatchStyles(hasDark bool) watchStyles {
@@ -102,6 +114,9 @@ func newWatchStyles(hasDark bool) watchStyles {
 		Muted:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("252"), lipgloss.Color("250"))),
 		VDim:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242"))),
 		Chip:     lipgloss.NewStyle().Bold(true).Foreground(chunkNavy),
+
+		Border:    lipgloss.NewStyle().Foreground(ld(chunkRedDeep, chunkRed)),
+		BorderDim: lipgloss.NewStyle().Foreground(ld(chunkRedSoft, chunkRedFaint)),
 	}
 }
 
@@ -598,13 +613,13 @@ func (m Model) connectionTag(st watchStyles) string {
 }
 
 // frameStyle colours a part of the frame around the two panes: the focused
-// pane's edges are drawn in the accent colour and the other pane's stay quiet.
-// The divider is the focused pane's edge whichever pane that is.
+// pane's edges are drawn in full red and the other pane's in a dimmer red.
+// The divider is full red whichever pane is focused.
 func (m Model) frameStyle(st watchStyles, rightPane bool) func(string) string {
 	if (m.focusedPane == paneRight) == rightPane {
-		return st.teal
+		return st.border
 	}
-	return st.vdim
+	return st.borderDim
 }
 
 // renderFrameEdge is the top or bottom of the frame around the two panes, with
@@ -613,7 +628,7 @@ func (m Model) renderFrameEdge(st watchStyles, left, junction, right rune) strin
 	leftW := leftPaneWidth + 1 // the pane and the space before the divider
 	rightW := max(m.width-leftW-3, 0)
 	l, r := m.frameStyle(st, false), m.frameStyle(st, true)
-	return l(string(left)+strings.Repeat("─", leftW)) + st.teal(string(junction)) +
+	return l(string(left)+strings.Repeat("─", leftW)) + st.border(string(junction)) +
 		r(strings.Repeat("─", rightW)+string(right)) + "\n"
 }
 
@@ -668,7 +683,7 @@ func (m Model) renderBody(st watchStyles) string {
 		// fixed-height block, so a line that wraps shifts everything below it and
 		// the layout no longer matches the height it was built for.
 		rPad := padLine(clip(r, m.width-leftPaneWidth-5), m.width-leftPaneWidth-5)
-		b.WriteString(m.frameStyle(st, false)("│") + lPad + " " + st.teal("│") + " " + rPad + m.frameStyle(st, true)("│") + "\n")
+		b.WriteString(m.frameStyle(st, false)("│") + lPad + " " + st.border("│") + " " + rPad + m.frameStyle(st, true)("│") + "\n")
 	}
 	return b.String()
 }
