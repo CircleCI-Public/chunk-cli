@@ -622,6 +622,7 @@ func (m Model) connectionTag(st watchStyles) string {
 // frameStyle colours a part of the frame around the two panes: the focused
 // pane's edges are drawn in the accent colour and the other pane's stay quiet.
 // The divider is the focused pane's edge whichever pane that is.
+// The frame is the colour of the dashboard's border.
 func (m Model) frameStyle(st watchStyles, rightPane bool) func(string) string {
 	if (m.focusedPane == paneRight) == rightPane {
 		return st.teal
