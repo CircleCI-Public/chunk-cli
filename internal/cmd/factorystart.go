@@ -108,6 +108,7 @@ the same way.`,
 			if err != nil {
 				return err
 			}
+			printRunStartMessage(streams, jsonOut, factoryStartMessage(diffFile != ""))
 			rec, err := factory.Start(ctx, root, factory.Handoff{Prompt: prompt, SpecOrigin: specOrigin, Diff: diff})
 			if errors.Is(err, factory.ErrDiffAlreadyApplied) {
 				return newUserError("The diff is already in your files, so the worktree starts with it.").

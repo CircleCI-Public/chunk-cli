@@ -46,6 +46,9 @@ func TestFactoryStartPrintsTheWorktreeAndHowToContinue(t *testing.T) {
 	assert.Assert(t, rec.NeedsWork)
 	assert.Equal(t, rec.Prompt, "add a --verbose flag")
 	assert.Assert(t, strings.Contains(stderr, "chunk factory build --continue "+runID), stderr)
+	// This test's stderr is a bytes.Buffer, never a terminal, so the new
+	// run-start message stays out of it, same as every other TTY-only line.
+	assert.Assert(t, !strings.Contains(stderr, "Chunk will set up a worktree"), stderr)
 }
 
 // A lone argument naming an existing file, in another repository entirely,
@@ -87,6 +90,7 @@ func TestFactoryStartJSON(t *testing.T) {
 	stored, err := factory.LoadRecord(project, rec.RunID)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, stored, rec)
+	assert.Assert(t, !strings.Contains(stderr, "Chunk will set up a worktree"), stderr)
 }
 
 func TestFactoryStartRequiresAPrompt(t *testing.T) {
@@ -122,6 +126,7 @@ func TestFactoryStartFromADiffOnStdin(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(strings.TrimSpace(out.String()), "flag.go"))
 	assert.NilError(t, err)
 	assert.Equal(t, string(got), "package main\n")
+	assert.Assert(t, !strings.Contains(errOut.String(), "Chunk will set up a worktree"), errOut.String())
 }
 
 // A missing path with a spec-like extension, a directory, a binary file and

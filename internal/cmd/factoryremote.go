@@ -72,6 +72,7 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 	ctx := cmd.Context()
 	streams := iostream.FromCmd(cmd)
 	statusFn := newStatusFunc(streams)
+	printRunStartMessage(streams, opts.jsonOut, runStartMessage(prFlags{}, true, false))
 
 	if err := checkFactoryRemoteFlags(opts); err != nil {
 		return err
