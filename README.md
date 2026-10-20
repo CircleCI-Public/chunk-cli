@@ -8,7 +8,7 @@ On top of sidecars, chunk provides:
 
 - **`chunk validate`** to run your test, lint and format checks locally, on a sidecar, or in the background.
 - **`chunk factory`** to have an implementer agent make a change on a sidecar while reviewers check it against the prompts in `.chunk/reviews/`, until the checks pass.
-- **`chunk watch`** for a live dashboard of your factory runs.
+- **`chunk watch`** to follow and manage your factory runs live.
 - **`chunk mutate`** to find test coverage gaps with mutation testing.
 
 ## Why chunk?
@@ -159,7 +159,7 @@ chunk factory build --continue <run-id>
 ## Other Tools
 
 ```bash
-chunk watch                  # live dashboard of factory runs (--focus: this directory only)
+chunk watch                  # follow and manage your factory runs live (--focus: this directory only)
 chunk mutate ./internal --parallel 4   # find coverage gaps; see docs/MUTATE.md
 chunk conflicts              # does this branch still merge cleanly? (advisory, always exits 0)
 chunk validate --async       # run in the background, then `chunk validate results`
@@ -183,7 +183,7 @@ chunk config set|show                      Manage configuration
 chunk validate [name]                      Run quality checks
 chunk validate results|variants            Background run results; validate code variants
 chunk factory bootstrap|build|start        Implement and review changes on sidecars
-chunk watch                                Live dashboard of factory runs
+chunk watch                                Follow and manage your factory runs live
 chunk mutate [path]                        Find test coverage gaps via mutation testing
 chunk conflicts                            Report whether this branch merges cleanly
 chunk hook disable|enable|status           Manage hook execution
