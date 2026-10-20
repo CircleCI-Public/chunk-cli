@@ -27,6 +27,7 @@ type FakeGitHub struct {
 	defaultBranch string
 	pullRefusal   *pullRefusal
 	pulls         []OpenedPullRequest
+	progress      map[int]string // pull request number → its JSON for the progress query
 }
 
 type pullRefusal struct {
@@ -169,6 +170,19 @@ func (f *FakeGitHub) SetOrgRepos(resp string)      { f.set(func() { f.orgRepos =
 func (f *FakeGitHub) SetReviewActivity(repo string, resp string) {
 	f.set(func() { f.reviewActivity[repo] = resp })
 }
+
+// SetPullRequestProgress sets the pullRequest object the progress query returns
+// for a pull request number, as JSON. A pull request not set is open with no
+// reviews, threads or checks.
+func (f *FakeGitHub) SetPullRequestProgress(number int, pr string) {
+	f.set(func() {
+		if f.progress == nil {
+			f.progress = map[int]string{}
+		}
+		f.progress[number] = pr
+	})
+}
+
 func (f *FakeGitHub) SetRateLimit(resp string) { f.set(func() { f.rateLimit = resp }) }
 func (f *FakeGitHub) SetRepoError(repo string, resp string) {
 	f.set(func() { f.errorRepos[repo] = resp })
@@ -231,6 +245,14 @@ func (f *FakeGitHub) handleGraphQL(c *gin.Context) {
 				"organization": gin.H{"login": org},
 			},
 		})
+
+	case strings.Contains(query, "pullRequest(number:"):
+		number, _ := body.Variables["number"].(float64)
+		pr, ok := f.progress[int(number)]
+		if !ok {
+			pr = `{"state":"OPEN","isDraft":false,"reviewRequests":{"totalCount":0},"reviews":{"totalCount":0,"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}}`
+		}
+		c.Data(http.StatusOK, "application/json", []byte(`{"data":{"repository":{"pullRequest":`+pr+`}}}`))
 
 	case strings.Contains(query, "pullRequests("):
 		repo, _ := body.Variables["repo"].(string)

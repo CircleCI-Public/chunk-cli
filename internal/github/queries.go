@@ -68,6 +68,34 @@ const branchPRQuery = `
   }
 `
 
+// pullRequestProgressQuery fetches what a reviewer would look at on one pull
+// request: whether it is merged, who has reviewed it, and how its checks stand.
+const pullRequestProgressQuery = `
+  query PullRequestProgress($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        state
+        isDraft
+        reviewRequests(first: 1) { totalCount }
+        reviews(last: 20) {
+          totalCount
+          nodes { state author { login } }
+        }
+        reviewThreads(first: 50) {
+          nodes { isResolved }
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup { state }
+            }
+          }
+        }
+      }
+    }
+  }
+`
+
 const reviewActivityQuery = `
   query RepoReviewActivity($org: String!, $repo: String!, $cursor: String) {
     repository(owner: $org, name: $repo) {
