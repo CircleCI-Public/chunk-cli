@@ -196,6 +196,9 @@ func TestFactoryBuildRemoteInstallsThePinnedReleaseWithoutChunkBinary(t *testing
 	cmd, errOut := newFactoryRemoteTestCmd()
 	err := runFactoryBuildRemote(cmd, factoryRemoteOptions{prompt: "add a feature", jsonOut: true})
 	assert.NilError(t, err, "stderr: %s", errOut.String())
+	// --json and this test's non-terminal stderr both leave the run-start
+	// message out.
+	assert.Assert(t, !strings.Contains(errOut.String(), "Chunk will implement this change"), errOut.String())
 
 	// The script reaches the sidecar as one string inside a JSON request
 	// body, so its quotes and newlines are JSON-escaped on the wire; compare

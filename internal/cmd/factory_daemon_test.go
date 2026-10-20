@@ -98,6 +98,10 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 
 	_, stderr, err := runFactoryBuildCmd(t, "add a --verbose flag")
 	assert.NilError(t, err, stderr)
+	// The command's stderr here is a bytes.Buffer, never a terminal, so the
+	// new run-start message must stay out of it exactly as every other line
+	// not meant for a log file or CI does.
+	assert.Assert(t, !strings.Contains(stderr, "Chunk will implement this change"), stderr)
 
 	for _, want := range []string{
 		"started on the chunk daemon",
@@ -272,6 +276,9 @@ func TestFactoryJSONWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	assert.Equal(t, detail.Factory.Result, "exhausted")
 	// Progress still goes to stderr, but the closing report is the JSON.
 	assert.Assert(t, !bytes.Contains([]byte(stderr), []byte("The run took")), stderr)
+	// --json is a program's input; the run-start message is new output meant
+	// for a person, so it stays out.
+	assert.Assert(t, !bytes.Contains([]byte(stderr), []byte("Chunk will implement this change")), stderr)
 }
 
 // Ctrl-C stops the run rather than leaving it running, and the work done so

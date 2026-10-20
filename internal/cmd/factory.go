@@ -310,6 +310,7 @@ which is what pushes and opens the pull request.`,
 			if err != nil {
 				return sessionError(err)
 			}
+			printRunStartMessage(streams, jsonOut, runStartMessage(pr, false, continueRun != ""))
 			streams.ErrPrintf("Factory run %s started on the chunk daemon. Ctrl-C stops it.\n", id)
 			if logArg != "" {
 				streams.ErrPrintf("Logging to %s\n", logArg)

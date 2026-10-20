@@ -339,6 +339,24 @@ chunk
   any sidecar is created. Anything else — an argument with spaces, or a
   single word that is not an existing file — is literal prompt text, even one
   that names a file: `chunk factory build "fix README.md typos"`.
+- **`factory build` (and `factory build --remote`) say what they are about to do
+  before any of their plumbing.** On a terminal, before the run ID and
+  "started on the chunk daemon" (or, with `--remote`, before the sidecar is
+  provisioned), it prints a plain-language line: that chunk implements the
+  change (or, with `--continue`, reviews the existing work), reviews it and
+  runs the project's checks until they pass, what the run ends with, and that
+  you do not have to stay — follow along with `chunk watch`, or leave it
+  running. What it says the run ends with matches the flags: a pull request by
+  default (hedged, since a project with no GitHub token or origin still runs
+  and opens none), the pull request with `--open-pr`, a draft pull request
+  with `--draft` and `--open-pr` together (hedged the same way as the default
+  when `--draft` is given alone, since `--draft` by itself still resolves to
+  the same auto mode as the default and can likewise end with none), none with
+  `--no-open-pr` (the work stays on the local branch), and with `--remote`,
+  that it keeps running on its own sidecar, `chunk factory pull` brings the
+  work back, and it opens no pull request yet.
+  This line is left out with `--json`, and when stderr is not a terminal (a
+  log file, a pipe, CI), so neither changes anything already being parsed.
 - **`factory build` runs on the local daemon, in the background.** `chunk factory build "<prompt>"` (or
   `chunk factory build < prompt.md`; `chunk factory build - < prompt.md` is the explicit
   form; a prompt argument with a non-empty file on stdin is refused, so a
@@ -479,7 +497,13 @@ chunk
   input is a diff, a first pass at the change, and the prompt it is for, not
   where the work was done (`factory.Handoff`). Not every change starts as a
   prompt fired at the cloud: some developers work out a first pass with an
-  agent first. `chunk factory start "<prompt>"` makes a run's worktree and
+  agent first. Before it does anything, on a terminal it prints a line saying
+  it is only setting up a worktree and branch for the change (starting from
+  the diff, when `--diff` is given), that nothing is reviewed or pushed yet,
+  and that `chunk factory build --continue` is what reviews the work, runs the
+  checks, and, by default, opens the pull request — the same rule as
+  `factory build`'s own message about `--json` and a non-terminal stderr
+  applies here too. `chunk factory start "<prompt>"` makes a run's worktree and
   branch, `chunk/factory/<description>/<run id>`, from the developer's files as
   they are (uncommitted changes in the baseline, as for a build), and keeps the
   run's record. The diff is made one of two ways: in the worktree, with Claude
