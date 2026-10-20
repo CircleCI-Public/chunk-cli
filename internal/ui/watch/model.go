@@ -507,9 +507,8 @@ func (m Model) renderHeader(st watchStyles) string {
 		}
 	}
 
-	clock := time.Now().Format("15:04:05")
 	title := st.teal("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
-	right := m.runTag(st) + m.connectionTag(st) + "  " + st.vdim(clock)
+	right := m.runTag(st) + m.connectionTag(st)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1

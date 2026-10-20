@@ -2,6 +2,7 @@ package watch
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -19,4 +20,15 @@ func TestRenderHeader_flagsAnUnreachableRemoteDaemon(t *testing.T) {
 
 	header := m.renderHeader(m.styles())
 	assert.Assert(t, strings.Contains(header, "remote 10.0.0.5:7777 unreachable"), header)
+}
+
+// The header's clock only moved when the user poked the TUI (scrolling,
+// pressing a key), which made it look live when it wasn't. It's gone now.
+func TestRenderHeader_hasNoClock(t *testing.T) {
+	m := sessModel()
+	m.width = 100
+
+	header := m.renderHeader(m.styles())
+
+	assert.Assert(t, !regexp.MustCompile(`\d{2}:\d{2}:\d{2}`).MatchString(header), header)
 }
