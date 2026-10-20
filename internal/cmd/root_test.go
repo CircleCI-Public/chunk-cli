@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/segmentio/analytics-go/v3"
@@ -10,6 +12,67 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 )
+
+// TestRootHelp_StartHereThenOtherCommands asserts the shape required by
+// FACT-576: an exact, ordered "Start here" list of four commands, ahead of
+// every other command still listed (just under a different heading) so none
+// of them disappear, with the Short line and reference sections intact.
+func TestRootHelp_StartHereThenOtherCommands(t *testing.T) {
+	root := newTestRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--help"})
+
+	assert.NilError(t, root.Execute())
+	help := out.String()
+
+	wantShort := "Hand work to agents and review it before you push"
+	assert.Equal(t, root.Short, wantShort)
+	assert.Assert(t, strings.HasPrefix(help, wantShort), "help should open with the root Short text:\n%s", help)
+	assert.Assert(t, !strings.Contains(help, "Generate AI review context and trigger AI coding tasks"),
+		"help should no longer carry the old root Short text:\n%s", help)
+
+	startHere := strings.Index(help, "Start here")
+	otherCommands := strings.Index(help, "Other commands")
+	assert.Assert(t, startHere >= 0, "help should contain a Start here section:\n%s", help)
+	assert.Assert(t, otherCommands > startHere, "Other commands should come after Start here:\n%s", help)
+
+	startHereSection := help[startHere:otherCommands]
+	wantOrder := []string{"chunk init", "chunk factory start", "chunk factory build", "chunk watch"}
+	lastIdx := -1
+	for _, want := range wantOrder {
+		idx := strings.Index(startHereSection, want)
+		assert.Assert(t, idx >= 0, "Start here should list %q:\n%s", want, startHereSection)
+		assert.Assert(t, idx > lastIdx, "%q should come after the previous Start here entry:\n%s", want, startHereSection)
+		lastIdx = idx
+	}
+
+	// Count command lines directly rather than just checking substring order,
+	// so an extra entry slipped into the block (e.g. "chunk auth login")
+	// fails the test even though it wouldn't break the ordering checks above.
+	var commandLines []string
+	for _, line := range strings.Split(startHereSection, "\n") {
+		if strings.HasPrefix(line, "  chunk ") {
+			commandLines = append(commandLines, strings.TrimSpace(line))
+		}
+	}
+	assert.Equal(t, len(commandLines), len(wantOrder), "Start here should list exactly these commands, got:\n%s", startHereSection)
+
+	assert.Assert(t, !strings.Contains(startHereSection, "task config"), "task config should not be in Start here:\n%s", startHereSection)
+	assert.Assert(t, !strings.Contains(startHereSection, "task run"), "task run should not be in Start here:\n%s", startHereSection)
+
+	otherCommandsSection := help[otherCommands:]
+	assert.Assert(t, strings.Contains(otherCommandsSection, "task"), "task should still be listed under Other commands:\n%s", otherCommandsSection)
+
+	assert.Assert(t, strings.Contains(help, "Environment Variables:"), "help should keep the Environment Variables section:\n%s", help)
+	assert.Assert(t, strings.Contains(help, "Configuration:"), "help should keep the Configuration section:\n%s", help)
+
+	envIdx := strings.Index(help, "Environment Variables:")
+	configIdx := strings.Index(help, "Configuration:")
+	assert.Assert(t, envIdx > otherCommands, "Environment Variables should come after Other commands:\n%s", help)
+	assert.Assert(t, configIdx > envIdx, "Configuration should come after Environment Variables:\n%s", help)
+}
 
 // flushRecordingDestination records whether the Sender was flushed, and what
 // it was holding at the time.
