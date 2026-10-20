@@ -1,0 +1,13 @@
+diff --git a/README.md b/README.md
+index 4e92a05..251e407 100644
+--- a/README.md
++++ b/README.md
+@@ -10,6 +10,8 @@ As AI churns out more and more code, CI pipelines get flooded with commits that
+ 
+ Chunk sidecars fix this by running lightweight microbuilds to validate inside the inner loop — while the agent is still working — ensuring basic checks pass before anything hits CI. Save the CI for the integration and release work that gets code to production.
+ 
++The fastest CI run is the one you never have to re-run.
++
+ ## Requirements
+ 
+ - **macOS** (arm64 or x86_64), **Linux** (arm64 or x86_64), or **Windows** (arm64 or x86_64)

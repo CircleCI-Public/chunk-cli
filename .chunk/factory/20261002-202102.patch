@@ -1,0 +1,919 @@
+diff --git a/go.mod b/go.mod
+index f391dffc..8b97e979 100644
+--- a/go.mod
++++ b/go.mod
+@@ -9,6 +9,7 @@ require (
+ 	github.com/BurntSushi/toml v1.6.0
+ 	github.com/Masterminds/semver/v3 v3.5.0
+ 	github.com/aymanbagabas/go-udiff v0.4.1
++	github.com/charmbracelet/x/ansi v0.11.8
+ 	github.com/coder/websocket v1.8.15
+ 	github.com/dustinkirkland/golang-petname v0.0.0-20260929120758-6e3915f1a6a8
+ 	github.com/gin-gonic/gin v1.12.0
+@@ -82,7 +83,6 @@ require (
+ 	github.com/charithe/durationcheck v0.0.11 // indirect
+ 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
+ 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
+-	github.com/charmbracelet/x/ansi v0.11.8 // indirect
+ 	github.com/charmbracelet/x/term v0.2.2 // indirect
+ 	github.com/charmbracelet/x/termios v0.1.1 // indirect
+ 	github.com/charmbracelet/x/windows v0.2.2 // indirect
+diff --git a/internal/cmd/factory.go b/internal/cmd/factory.go
+index 969133b5..8d081223 100644
+--- a/internal/cmd/factory.go
++++ b/internal/cmd/factory.go
+@@ -8,7 +8,10 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 	"time"
++	"unicode"
++	"unicode/utf8"
+ 
++	"github.com/charmbracelet/x/ansi"
+ 	"github.com/spf13/cobra"
+ 
+ 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+@@ -204,10 +207,16 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
+ 	return prompts, commands, nil
+ }
+ 
++// patchWriter writes the implementer's work to a path. It is the one thing
++// saveFactoryPatch needs of *factory.Sidecars.
++type patchWriter interface {
++	WritePatch(ctx context.Context, path string) error
++}
++
+ // saveFactoryPatch writes the implementer's work to a patch under
+ // .chunk/factory. It runs on the way out, after a failure too, so it gets its
+ // own deadline rather than the run's possibly canceled context.
+-func saveFactoryPatch(ctx context.Context, steps *factory.Sidecars, workDir string, change factory.Change, status iostream.StatusFunc, streams iostream.Streams) {
++func saveFactoryPatch(ctx context.Context, steps patchWriter, workDir string, change factory.Change, status iostream.StatusFunc, streams iostream.Streams) {
+ 	path := filepath.Join(workDir, ".chunk", "factory", time.Now().UTC().Format("20060102-150405")+".patch")
+ 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+ 	defer cancel()
+@@ -249,7 +258,7 @@ func printEvent(status iostream.StatusFunc, attempts int, e factory.Event) {
+ 			status(iostream.LevelWarn, "no changes")
+ 			return
+ 		}
+-		status(iostream.LevelInfo, e.Change.Stat)
++		status(iostream.LevelInfo, sanitizeText(e.Change.Stat))
+ 	case factory.EventChecking:
+ 		status(iostream.LevelStep, fmt.Sprintf("Round %d/%d: reviewing and validating...", e.Round, attempts))
+ 	case factory.EventChecked:
+@@ -267,7 +276,7 @@ func printActivity(status iostream.StatusFunc, a factory.Activity) {
+ 	if a.Tool == "" {
+ 		return
+ 	}
+-	status(iostream.LevelInfo, fmt.Sprintf("  %s %s", a.Tool, oneLineSummary(a.Detail)))
++	status(iostream.LevelInfo, fmt.Sprintf("  %s %s", sanitizeText(a.Tool), oneLineSummary(a.Detail)))
+ }
+ 
+ func printReviewProgress(status iostream.StatusFunc, e review.ProgressEvent) {
+@@ -276,7 +285,7 @@ func printReviewProgress(status iostream.StatusFunc, e review.ProgressEvent) {
+ 	case review.StateRunning:
+ 		status(iostream.LevelInfo, fmt.Sprintf("  review %s started on %s", e.Prompt, e.SidecarID))
+ 	case review.StateFailed:
+-		status(iostream.LevelWarn, fmt.Sprintf("  review %s could not run: %s", e.Prompt, e.Error))
++		status(iostream.LevelWarn, fmt.Sprintf("  review %s could not run: %s", e.Prompt, sanitizeText(e.Error)))
+ 	case review.StateDone:
+ 		status(iostream.LevelInfo, fmt.Sprintf("  review %s finished in %s", e.Prompt, e.Duration.Round(time.Second)))
+ 	}
+@@ -289,7 +298,7 @@ func printCheck(status iostream.StatusFunc, c factory.Check) {
+ 	case factory.StatusFailed:
+ 		status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, c.Duration.Round(time.Second)))
+ 	case factory.StatusErrored:
+-		status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
++		status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, sanitizeText(c.Error)))
+ 	}
+ }
+ 
+@@ -302,14 +311,23 @@ func reportOutcome(status iostream.StatusFunc, o factory.Outcome) error {
+ 		}
+ 		switch c.Status {
+ 		case factory.StatusPassed:
+-			status(iostream.LevelDone, fmt.Sprintf("review %s: no findings", c.Name))
++			// A review passes with findings when all of them are too minor to
++			// send the implementer round again. They are still worth showing.
++			if len(c.Findings) == 0 {
++				status(iostream.LevelDone, fmt.Sprintf("review %s: no findings", c.Name))
++				break
++			}
++			status(iostream.LevelDone, fmt.Sprintf("review %s: %d minor finding(s)", c.Name, len(c.Findings)))
++			for _, f := range c.Findings {
++				status(iostream.LevelInfo, findingLine(f))
++			}
+ 		case factory.StatusFailed:
+ 			status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)", c.Name, len(c.Findings)))
+ 			for _, f := range c.Findings {
+-				status(iostream.LevelInfo, fmt.Sprintf("  [%s] %s:%d %s", f.Severity, f.File, f.Line, oneLineSummary(f.Body)))
++				status(iostream.LevelInfo, findingLine(f))
+ 			}
+ 		case factory.StatusErrored:
+-			status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", c.Name, c.Error))
++			status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", c.Name, sanitizeText(c.Error)))
+ 		}
+ 	}
+ 	switch o.Result {
+@@ -325,11 +343,47 @@ func reportOutcome(status iostream.StatusFunc, o factory.Outcome) error {
+ 	return &userError{msg: fmt.Sprintf("Checks still failed after %d round(s).", o.Rounds), hideDetail: true, errMsg: "attempts exhausted"}
+ }
+ 
+-// oneLineSummary collapses text to one line short enough for a status line.
++// findingLine renders one finding for a status line. Every field of it was
++// written by the reviewer, so every field is sanitized.
++func findingLine(f review.Finding) string {
++	loc := sanitizeText(f.File)
++	if f.Line > 0 {
++		loc = fmt.Sprintf("%s:%d", loc, f.Line)
++	}
++	return fmt.Sprintf("  [%s] %s %s", sanitizeText(f.Severity), loc, oneLineSummary(f.Body))
++}
++
++// sanitizeText makes text written by an agent, or quoted from a command it
++// ran, safe to print in a status line: escape sequences and characters that do
++// not show as themselves are dropped, and whitespace is collapsed so one
++// message stays on one line. It does not shorten the text; oneLineSummary
++// does that.
++func sanitizeText(s string) string {
++	return strings.Join(strings.Fields(strings.Map(dropUnprintable, ansi.Strip(s))), " ")
++}
++
++// dropUnprintable drops what would reach the terminal as something other than
++// itself: control characters, and the format characters (category Cf) that
++// reorder a line, such as U+202E RIGHT-TO-LEFT OVERRIDE, or carry directional
++// state into whatever is printed next, such as an unterminated bidi isolate.
++// Whitespace is kept for sanitizeText to collapse, and so is U+200D ZERO WIDTH
++// JOINER, which holds an emoji sequence together rather than hiding anything.
++func dropUnprintable(r rune) rune {
++	if r == '\u200d' || unicode.IsSpace(r) {
++		return r
++	}
++	if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
++		return -1
++	}
++	return r
++}
++
++// oneLineSummary sanitizes text and shortens it to fit a status line. The
++// limit counts runes, so truncation never splits one.
+ func oneLineSummary(s string) string {
+-	s = strings.Join(strings.Fields(s), " ")
+-	if len(s) > 160 {
+-		return s[:157] + "..."
++	s = sanitizeText(s)
++	if utf8.RuneCountInString(s) <= 160 {
++		return s
+ 	}
+-	return s
++	return string([]rune(s)[:157]) + "..."
+ }
+diff --git a/internal/cmd/factory_test.go b/internal/cmd/factory_test.go
+new file mode 100644
+index 00000000..99e691e2
+--- /dev/null
++++ b/internal/cmd/factory_test.go
+@@ -0,0 +1,744 @@
++package cmd
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"io"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++	"unicode/utf8"
++
++	"gotest.tools/v3/assert"
++
++	"github.com/CircleCI-Public/chunk-cli/internal/config"
++	"github.com/CircleCI-Public/chunk-cli/internal/factory"
++	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
++	"github.com/CircleCI-Public/chunk-cli/internal/review"
++)
++
++func TestOneLineSummary(t *testing.T) {
++	tests := []struct {
++		name string
++		in   string
++		want string
++	}{
++		{
++			name: "empty",
++			in:   "",
++			want: "",
++		},
++		{
++			name: "collapses whitespace to one line",
++			in:   "  first line\n\tsecond   line  ",
++			want: "first line second line",
++		},
++		{
++			name: "short ascii is unchanged",
++			in:   "a short summary",
++			want: "a short summary",
++		},
++		{
++			name: "exactly 160 ascii characters is unchanged",
++			in:   strings.Repeat("a", 160),
++			want: strings.Repeat("a", 160),
++		},
++		{
++			name: "161 ascii characters is truncated",
++			in:   strings.Repeat("a", 161),
++			want: strings.Repeat("a", 157) + "...",
++		},
++		{
++			name: "exactly 160 multi-byte characters is unchanged",
++			in:   strings.Repeat("é", 160),
++			want: strings.Repeat("é", 160),
++		},
++		{
++			name: "multi-byte characters truncate on rune boundaries",
++			in:   strings.Repeat("é", 200),
++			want: strings.Repeat("é", 157) + "...",
++		},
++		{
++			name: "emoji truncate on rune boundaries",
++			in:   strings.Repeat("🙂", 200),
++			want: strings.Repeat("🙂", 157) + "...",
++		},
++		{
++			name: "mixed ascii and multi-byte truncates on rune boundaries",
++			in:   strings.Repeat("aé", 100),
++			want: strings.Repeat("aé", 78) + "a" + "...",
++		},
++		{
++			// Command output quoted by an agent carries colour sequences; they
++			// must not reach the terminal that prints the status line.
++			name: "ansi escape sequences are stripped",
++			in:   "\x1b[31mfailed\x1b[0m test output",
++			want: "failed test output",
++		},
++		{
++			name: "control characters are dropped",
++			in:   "bell\a and a null\x00 byte",
++			want: "bell and a null byte",
++		},
++		{
++			// A cleared line or a moved cursor would corrupt output printed
++			// after the status line, not just the line itself.
++			name: "cursor and erase sequences are stripped",
++			in:   "before\x1b[2K\x1b[1;1Hafter",
++			want: "beforeafter",
++		},
++		{
++			// ansi.Strip reads the byte after ESC as the sequence, so a stray
++			// ESC takes its neighbour with it rather than reaching the terminal.
++			name: "a lone escape is consumed with the byte after it",
++			in:   "lone \x1b escape",
++			want: "lone scape",
++		},
++		{
++			name: "a truncated sequence is dropped",
++			in:   "a\x1b[3",
++			want: "a",
++		},
++		{
++			name: "an OSC hyperlink keeps only its label",
++			in:   "\x1b]8;;https://example.invalid\x07label\x1b]8;;\x07",
++			want: "label",
++		},
++		{
++			// Quoted command output is bytes, not necessarily text.
++			name: "invalid utf-8 bytes are dropped",
++			in:   "bad\xff\xfe bytes",
++			want: "bad bytes",
++		},
++		{
++			// U+202E would reverse the rest of the line, including the
++			// file:line prefix reportOutcome puts in front of a finding.
++			name: "a right-to-left override is dropped",
++			in:   "internal/cmd/a\u202eb.go",
++			want: "internal/cmd/ab.go",
++		},
++		{
++			// An unclosed isolate would carry direction into later output, and
++			// a zero-width space hides a word boundary.
++			name: "bidi isolates and zero-width spaces are dropped",
++			in:   "x\u2066y\u200bz\u2069w",
++			want: "xyzw",
++		},
++		{
++			// The joiner is the one format character that shows as part of
++			// what it joins, so dropping it would split emoji into pieces.
++			name: "a zero width joiner is kept so emoji stay whole",
++			in:   "🙂\u200d🙂",
++			want: "🙂\u200d🙂",
++		},
++		{
++			name: "stripping happens before the limit is measured",
++			in:   "\x1b[31m" + strings.Repeat("a", 160) + "\x1b[0m",
++			want: strings.Repeat("a", 160),
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			got := oneLineSummary(tt.in)
++			assert.Equal(t, got, tt.want)
++			assert.Assert(t, utf8.ValidString(got), "result is not valid UTF-8: %q", got)
++			assert.Assert(t, utf8.RuneCountInString(got) <= 160, "result is %d runes, want <= 160", utf8.RuneCountInString(got))
++			assert.Assert(t, !strings.ContainsRune(got, '\x1b'), "result still carries an escape: %q", got)
++		})
++	}
++}
++
++// statusLine is one message reportOutcome reported, with the level it chose.
++type statusLine struct {
++	Level iostream.Level
++	Msg   string
++}
++
++// recordStatus returns a status func that collects what it is told, and the
++// slice it collects into.
++func recordStatus() (iostream.StatusFunc, *[]statusLine) {
++	var lines []statusLine
++	return func(level iostream.Level, msg string) {
++		lines = append(lines, statusLine{Level: level, Msg: msg})
++	}, &lines
++}
++
++func TestReportOutcome(t *testing.T) {
++	// A finding body spanning several lines must reach the status line as one
++	// line, which is what oneLineSummary is there for.
++	multiLine := review.Finding{File: "internal/cmd/factory.go", Line: 12, Severity: "high", Body: "first line\n\nsecond   line"}
++	second := review.Finding{File: "internal/cmd/root.go", Line: 3, Severity: "medium", Body: "another finding"}
++	// A review that found only minor things passes but keeps them, so what
++	// the user is told about them is decided here rather than by the loop.
++	minor := factory.FromReview(review.Result{Prompt: "style", Parsed: review.Parsed{Findings: []review.Finding{
++		{File: "a.go", Line: 4, Severity: review.SeverityLow, Body: "naming"},
++		{File: "b.go", Severity: review.SeverityInfo, Body: "nit"},
++	}}})
++
++	tests := []struct {
++		name      string
++		outcome   factory.Outcome
++		wantLines []statusLine
++		// wantErrMsg is the userError's errMsg; empty means no error.
++		wantErrMsg  string
++		wantUserErr string
++	}{
++		{
++			name:    "passed",
++			outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 2},
++			wantLines: []statusLine{
++				{Level: iostream.LevelDone, Msg: "All checks passed after 2 round(s)."},
++			},
++		},
++		{
++			name:        "no change",
++			outcome:     factory.Outcome{Result: factory.ResultNoChange, Rounds: 1},
++			wantErrMsg:  "no changes",
++			wantUserErr: "The implementer made no changes.",
++		},
++		{
++			name:        "stuck",
++			outcome:     factory.Outcome{Result: factory.ResultStuck, Rounds: 2},
++			wantErrMsg:  "stuck",
++			wantUserErr: "The implementer stopped changing the code after round 2, with checks still failing.",
++		},
++		{
++			name:        "exhausted",
++			outcome:     factory.Outcome{Result: factory.ResultExhausted, Rounds: 3},
++			wantErrMsg:  "attempts exhausted",
++			wantUserErr: "Checks still failed after 3 round(s).",
++		},
++		{
++			// An unset Result falls through the switch rather than reporting
++			// success, so a new result added upstream cannot pass by default.
++			name:        "zero value result falls through to exhausted",
++			outcome:     factory.Outcome{Rounds: 1},
++			wantErrMsg:  "attempts exhausted",
++			wantUserErr: "Checks still failed after 1 round(s).",
++		},
++		{
++			name: "failed review lists its findings on one line each",
++			outcome: factory.Outcome{
++				Result: factory.ResultExhausted,
++				Rounds: 1,
++				Checks: []factory.Check{{
++					Name:     "bugs",
++					Kind:     factory.KindReview,
++					Status:   factory.StatusFailed,
++					Findings: []review.Finding{multiLine, second},
++				}},
++			},
++			wantLines: []statusLine{
++				{Level: iostream.LevelError, Msg: "review bugs: 2 finding(s)"},
++				{Level: iostream.LevelInfo, Msg: "  [high] internal/cmd/factory.go:12 first line second line"},
++				{Level: iostream.LevelInfo, Msg: "  [medium] internal/cmd/root.go:3 another finding"},
++			},
++			wantErrMsg:  "attempts exhausted",
++			wantUserErr: "Checks still failed after 1 round(s).",
++		},
++		{
++			name: "passed review reports no findings",
++			outcome: factory.Outcome{
++				Result: factory.ResultPassed,
++				Rounds: 1,
++				Checks: []factory.Check{{Name: "bugs", Kind: factory.KindReview, Status: factory.StatusPassed}},
++			},
++			wantLines: []statusLine{
++				{Level: iostream.LevelDone, Msg: "review bugs: no findings"},
++				{Level: iostream.LevelDone, Msg: "All checks passed after 1 round(s)."},
++			},
++		},
++		{
++			name: "errored review warns with why it could not run",
++			outcome: factory.Outcome{
++				Result: factory.ResultExhausted,
++				Rounds: 1,
++				Checks: []factory.Check{{Name: "bugs", Kind: factory.KindReview, Status: factory.StatusErrored, Error: "timed out"}},
++			},
++			wantLines: []statusLine{
++				{Level: iostream.LevelWarn, Msg: "review bugs could not run: timed out"},
++			},
++			wantErrMsg:  "attempts exhausted",
++			wantUserErr: "Checks still failed after 1 round(s).",
++		},
++		{
++			name: "a passed review still lists the minor findings it kept",
++			outcome: factory.Outcome{
++				Result: factory.ResultPassed,
++				Rounds: 1,
++				Checks: []factory.Check{minor},
++			},
++			wantLines: []statusLine{
++				{Level: iostream.LevelDone, Msg: "review style: 2 minor finding(s)"},
++				{Level: iostream.LevelInfo, Msg: "  [low] a.go:4 naming"},
++				{Level: iostream.LevelInfo, Msg: "  [info] b.go nit"},
++				{Level: iostream.LevelDone, Msg: "All checks passed after 1 round(s)."},
++			},
++		},
++		{
++			// File and Severity come from the same reviewer JSON as Body, and
++			// review.cleanRepoPath does not reject escape sequences in a path.
++			name: "escape sequences in a finding's file and severity are stripped",
++			outcome: factory.Outcome{
++				Result: factory.ResultExhausted,
++				Rounds: 1,
++				Checks: []factory.Check{{
++					Name:   "bugs",
++					Kind:   factory.KindReview,
++					Status: factory.StatusFailed,
++					Findings: []review.Finding{{
++						File:     "internal/cmd/a\x1b[2K\x1b[1;1Hb.go",
++						Line:     7,
++						Severity: "hi\x1b[31mgh",
++						Body:     "body",
++					}},
++				}},
++			},
++			wantLines: []statusLine{
++				{Level: iostream.LevelError, Msg: "review bugs: 1 finding(s)"},
++				{Level: iostream.LevelInfo, Msg: "  [high] internal/cmd/ab.go:7 body"},
++			},
++			wantErrMsg:  "attempts exhausted",
++			wantUserErr: "Checks still failed after 1 round(s).",
++		},
++		{
++			// A review that exits non-zero carries the sidecar's stderr as its
++			// error, colour codes and all.
++			name: "an errored review's sidecar output is stripped",
++			outcome: factory.Outcome{
++				Result: factory.ResultExhausted,
++				Rounds: 1,
++				Checks: []factory.Check{{
++					Name:   "bugs",
++					Kind:   factory.KindReview,
++					Status: factory.StatusErrored,
++					Error:  "exited 1: \x1b[31mfatal\x1b[0m\nno credential",
++				}},
++			},
++			wantLines: []statusLine{
++				{Level: iostream.LevelWarn, Msg: "review bugs could not run: exited 1: fatal no credential"},
++			},
++			wantErrMsg:  "attempts exhausted",
++			wantUserErr: "Checks still failed after 1 round(s).",
++		},
++		{
++			// Validation commands are reported as they finish, so the summary
++			// covers reviews only.
++			name: "validation checks produce no review lines",
++			outcome: factory.Outcome{
++				Result: factory.ResultPassed,
++				Rounds: 1,
++				Checks: []factory.Check{
++					{Name: "test", Kind: factory.KindValidate, Status: factory.StatusFailed, Feedback: "FAIL"},
++					{Name: "lint", Kind: factory.KindValidate, Status: factory.StatusErrored, Error: "no sidecar"},
++				},
++			},
++			wantLines: []statusLine{
++				{Level: iostream.LevelDone, Msg: "All checks passed after 1 round(s)."},
++			},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			status, lines := recordStatus()
++
++			err := reportOutcome(status, tt.outcome)
++
++			assert.DeepEqual(t, *lines, tt.wantLines)
++			for _, l := range *lines {
++				assert.Assert(t, !strings.ContainsRune(l.Msg, '\x1b'), "status line still carries an escape: %q", l.Msg)
++			}
++			if tt.wantErrMsg == "" {
++				assert.NilError(t, err)
++				return
++			}
++			var ue *userError
++			assert.Assert(t, errors.As(err, &ue), "error is not a userError: %v", err)
++			assert.Equal(t, ue.errMsg, tt.wantErrMsg)
++			assert.Equal(t, ue.msg, tt.wantUserErr)
++			assert.Assert(t, ue.hideDetail)
++		})
++	}
++}
++
++// writePrompt writes a review prompt file, creating its directory.
++func writePrompt(t *testing.T, dir, name, body string) {
++	t.Helper()
++	assert.NilError(t, os.MkdirAll(dir, 0o755))
++	assert.NilError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
++}
++
++func TestFactoryChecks(t *testing.T) {
++	validate := []config.Command{{Name: "test", Run: "task test"}}
++
++	tests := []struct {
++		name string
++		// setup prepares workDir and returns the reviews directory to ask for.
++		setup        func(t *testing.T, workDir string) string
++		cfg          *config.ProjectConfig
++		noValidate   bool
++		wantPrompts  []review.Prompt
++		wantCommands []config.Command
++		// wantErr is the user-facing message a userError must contain.
++		wantErr string
++	}{
++		{
++			name: "missing reviews directory leaves the validation commands",
++			setup: func(_ *testing.T, workDir string) string {
++				return filepath.Join(workDir, "nowhere")
++			},
++			cfg:          &config.ProjectConfig{Commands: validate},
++			wantCommands: validate,
++		},
++		{
++			name: "reviews directory holding no prompts leaves the validation commands",
++			setup: func(t *testing.T, workDir string) string {
++				dir := filepath.Join(workDir, "reviews")
++				writePrompt(t, dir, "notes.json", `{"not":"a prompt"}`)
++				return dir
++			},
++			cfg:          &config.ProjectConfig{Commands: validate},
++			wantCommands: validate,
++		},
++		{
++			name: "reviews path that is a file is an error",
++			setup: func(t *testing.T, workDir string) string {
++				path := filepath.Join(workDir, "reviews")
++				assert.NilError(t, os.WriteFile(path, []byte("not a directory"), 0o644))
++				return path
++			},
++			cfg:     &config.ProjectConfig{Commands: validate},
++			wantErr: "Could not read review prompts from",
++		},
++		{
++			name: "prompts alone are enough when validation is skipped",
++			setup: func(t *testing.T, workDir string) string {
++				dir := filepath.Join(workDir, "reviews")
++				writePrompt(t, dir, "bugs.md", "look for bugs")
++				return dir
++			},
++			cfg:         &config.ProjectConfig{Commands: validate},
++			noValidate:  true,
++			wantPrompts: []review.Prompt{{Name: "bugs", Body: "look for bugs"}},
++		},
++		{
++			name: "default reviews directory is read from the work directory",
++			setup: func(t *testing.T, workDir string) string {
++				writePrompt(t, filepath.Join(workDir, review.DefaultDir), "bugs.md", "look for bugs")
++				return ""
++			},
++			cfg:          &config.ProjectConfig{Commands: validate},
++			wantPrompts:  []review.Prompt{{Name: "bugs", Body: "look for bugs"}},
++			wantCommands: validate,
++		},
++		{
++			name: "no prompts and no validation is an error",
++			setup: func(_ *testing.T, workDir string) string {
++				return filepath.Join(workDir, "nowhere")
++			},
++			cfg:        &config.ProjectConfig{Commands: validate},
++			noValidate: true,
++			wantErr:    "Nothing to check the implementer's work with.",
++		},
++		{
++			// Every configured command is one ValidationCommands filters out,
++			// so the run would have nothing to check the work against.
++			name: "no prompts and only unrunnable commands is an error",
++			setup: func(_ *testing.T, workDir string) string {
++				return filepath.Join(workDir, "nowhere")
++			},
++			cfg: &config.ProjectConfig{Commands: []config.Command{
++				{Name: "fmt", Run: "task fmt", Role: "autofix"},
++				{Name: "local", Run: "task local", Local: true},
++				{Name: "templated", Run: "task test -- {{.Files}}"},
++			}},
++			wantErr: "Nothing to check the implementer's work with.",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			workDir := t.TempDir()
++			reviewsDir := tt.setup(t, workDir)
++
++			prompts, commands, err := factoryChecks(workDir, reviewsDir, tt.cfg, tt.noValidate)
++
++			if tt.wantErr != "" {
++				var ue *userError
++				assert.Assert(t, errors.As(err, &ue), "error is not a userError: %v", err)
++				assert.Assert(t, strings.Contains(ue.msg, tt.wantErr), "message %q does not contain %q", ue.msg, tt.wantErr)
++				assert.Assert(t, prompts == nil)
++				assert.Assert(t, commands == nil)
++				return
++			}
++			assert.NilError(t, err)
++			assert.DeepEqual(t, prompts, tt.wantPrompts)
++			assert.DeepEqual(t, commands, tt.wantCommands)
++		})
++	}
++}
++
++// TestFactoryChecksNothingToCheckSuggestsWhereToLook pins the guidance on the
++// error that stops a run from passing whatever the implementer wrote.
++func TestFactoryChecksNothingToCheckSuggestsWhereToLook(t *testing.T) {
++	_, _, err := factoryChecks(t.TempDir(), "", &config.ProjectConfig{}, false)
++
++	var ue *userError
++	assert.Assert(t, errors.As(err, &ue), "error is not a userError: %v", err)
++	assert.Assert(t, ue.hideDetail)
++	assert.Assert(t, strings.Contains(ue.Suggestion(), review.DefaultDir), "suggestion %q does not name the reviews directory", ue.Suggestion())
++}
++
++func TestPrintActivity(t *testing.T) {
++	tests := []struct {
++		name      string
++		activity  factory.Activity
++		wantLines []statusLine
++	}{
++		{
++			// Text the implementer wrote carries no tool, and is not printed:
++			// the status line follows what it did, not what it said.
++			name:     "prose without a tool is not printed",
++			activity: factory.Activity{Detail: "I will start by reading the tests."},
++		},
++		{
++			name:      "a tool and its target are printed on one line",
++			activity:  factory.Activity{Tool: "Read", Detail: "internal/cmd/factory.go"},
++			wantLines: []statusLine{{Level: iostream.LevelInfo, Msg: "  Read internal/cmd/factory.go"}},
++		},
++		{
++			// Both halves come from claude's stream, so both are stripped.
++			name:      "escape sequences in the tool name and detail are stripped",
++			activity:  factory.Activity{Tool: "Ba\x1b[31msh", Detail: "task test\n  --race"},
++			wantLines: []statusLine{{Level: iostream.LevelInfo, Msg: "  Bash task test --race"}},
++		},
++		{
++			name:      "a long detail is shortened",
++			activity:  factory.Activity{Tool: "Bash", Detail: strings.Repeat("a", 200)},
++			wantLines: []statusLine{{Level: iostream.LevelInfo, Msg: "  Bash " + strings.Repeat("a", 157) + "..."}},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			status, lines := recordStatus()
++
++			printActivity(status, tt.activity)
++
++			assert.DeepEqual(t, *lines, tt.wantLines)
++		})
++	}
++}
++
++func TestPrintEvent(t *testing.T) {
++	const attempts = 3
++
++	tests := []struct {
++		name      string
++		event     factory.Event
++		wantLines []statusLine
++	}{
++		{
++			name:      "the first round is not numbered",
++			event:     factory.Event{Kind: factory.EventImplementing, Round: 1},
++			wantLines: []statusLine{{Level: iostream.LevelStep, Msg: "Implementing..."}},
++		},
++		{
++			name:      "a later round says it is fixing failures",
++			event:     factory.Event{Kind: factory.EventImplementing, Round: 2},
++			wantLines: []statusLine{{Level: iostream.LevelStep, Msg: "Round 2/3: fixing failed checks..."}},
++		},
++		{
++			name:  "a finished turn reports its cost and summary",
++			event: factory.Event{Kind: factory.EventImplemented, Turn: factory.Turn{Summary: "added\na test", Duration: 2 * time.Second, CostUSD: 0.5}},
++			wantLines: []statusLine{
++				{Level: iostream.LevelDone, Msg: "implementer finished in 2s ($0.50)"},
++				{Level: iostream.LevelInfo, Msg: "added a test"},
++			},
++		},
++		{
++			name:  "a turn with no summary reports only the cost",
++			event: factory.Event{Kind: factory.EventImplemented, Turn: factory.Turn{Duration: time.Second}},
++			wantLines: []statusLine{
++				{Level: iostream.LevelDone, Msg: "implementer finished in 1s ($0.00)"},
++			},
++		},
++		{
++			name:      "collecting nothing warns",
++			event:     factory.Event{Kind: factory.EventCollected},
++			wantLines: []statusLine{{Level: iostream.LevelWarn, Msg: "no changes"}},
++		},
++		{
++			name:      "a collected change is reported by its stat",
++			event:     factory.Event{Kind: factory.EventCollected, Change: factory.Change{Stat: "2 files changed, \x1b[32m40 insertions(+)\x1b[0m"}},
++			wantLines: []statusLine{{Level: iostream.LevelInfo, Msg: "2 files changed, 40 insertions(+)"}},
++		},
++		{
++			name:      "checking names the round",
++			event:     factory.Event{Kind: factory.EventChecking, Round: 2},
++			wantLines: []statusLine{{Level: iostream.LevelStep, Msg: "Round 2/3: reviewing and validating..."}},
++		},
++		{
++			// Only passed counts towards the tally; errored checks say nothing
++			// about the code and must not be counted as if they did.
++			name: "checked counts the passed checks",
++			event: factory.Event{Kind: factory.EventChecked, Checks: []factory.Check{
++				{Name: "test", Status: factory.StatusPassed},
++				{Name: "lint", Status: factory.StatusFailed},
++				{Name: "bugs", Status: factory.StatusErrored},
++			}},
++			wantLines: []statusLine{{Level: iostream.LevelInfo, Msg: "1 of 3 checks passed"}},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			status, lines := recordStatus()
++
++			printEvent(status, attempts, tt.event)
++
++			assert.DeepEqual(t, *lines, tt.wantLines)
++		})
++	}
++}
++
++func TestPrintCheck(t *testing.T) {
++	tests := []struct {
++		name      string
++		check     factory.Check
++		wantLines []statusLine
++	}{
++		{
++			name:      "passed",
++			check:     factory.Check{Name: "test", Status: factory.StatusPassed, Duration: 3 * time.Second},
++			wantLines: []statusLine{{Level: iostream.LevelDone, Msg: "  test passed in 3s"}},
++		},
++		{
++			name:      "failed",
++			check:     factory.Check{Name: "test", Status: factory.StatusFailed, Duration: 3 * time.Second},
++			wantLines: []statusLine{{Level: iostream.LevelError, Msg: "  test failed in 3s"}},
++		},
++		{
++			// The error quotes whatever the command printed before it died.
++			name:      "errored output is stripped",
++			check:     factory.Check{Name: "test", Status: factory.StatusErrored, Error: "\x1b[2Kexited 127:\nnot found"},
++			wantLines: []statusLine{{Level: iostream.LevelWarn, Msg: "  test could not run: exited 127: not found"}},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			status, lines := recordStatus()
++
++			printCheck(status, tt.check)
++
++			assert.DeepEqual(t, *lines, tt.wantLines)
++		})
++	}
++}
++
++func TestPrintReviewProgress(t *testing.T) {
++	tests := []struct {
++		name      string
++		event     review.ProgressEvent
++		wantLines []statusLine
++	}{
++		{
++			// A queued review has not reached a sidecar yet, so there is
++			// nothing to report about it.
++			name:  "queued is silent",
++			event: review.ProgressEvent{Prompt: "bugs", State: review.StateQueued},
++		},
++		{
++			name:      "running names the sidecar",
++			event:     review.ProgressEvent{Prompt: "bugs", SidecarID: "sc-1", State: review.StateRunning},
++			wantLines: []statusLine{{Level: iostream.LevelInfo, Msg: "  review bugs started on sc-1"}},
++		},
++		{
++			name:      "done reports how long it took",
++			event:     review.ProgressEvent{Prompt: "bugs", State: review.StateDone, Duration: 90 * time.Second},
++			wantLines: []statusLine{{Level: iostream.LevelInfo, Msg: "  review bugs finished in 1m30s"}},
++		},
++		{
++			name:      "failed output is stripped",
++			event:     review.ProgressEvent{Prompt: "bugs", State: review.StateFailed, Error: "\x1b[31mexited 1\x1b[0m\nno credential"},
++			wantLines: []statusLine{{Level: iostream.LevelWarn, Msg: "  review bugs could not run: exited 1 no credential"}},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			status, lines := recordStatus()
++
++			printReviewProgress(status, tt.event)
++
++			assert.DeepEqual(t, *lines, tt.wantLines)
++		})
++	}
++}
++
++// fakePatchWriter records how WritePatch was called, including the state of
++// the context it was given.
++type fakePatchWriter struct {
++	err         error
++	called      bool
++	path        string
++	ctxErr      error
++	deadline    time.Time
++	hasDeadline bool
++}
++
++func (f *fakePatchWriter) WritePatch(ctx context.Context, path string) error {
++	f.called, f.path, f.ctxErr = true, path, ctx.Err()
++	f.deadline, f.hasDeadline = ctx.Deadline()
++	return f.err
++}
++
++// TestSaveFactoryPatchSurvivesACancelledRun pins the reason the patch is
++// written with a detached context: the work is saved after ^C too, which is
++// exactly when losing it would hurt most.
++func TestSaveFactoryPatchSurvivesACancelledRun(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	w := &fakePatchWriter{}
++	status, lines := recordStatus()
++
++	saveFactoryPatch(ctx, w, t.TempDir(), factory.Change{Stat: "1 file changed"}, status, discardStreams())
++
++	assert.Assert(t, w.called, "the patch was not written")
++	assert.NilError(t, w.ctxErr)
++	assert.Assert(t, w.hasDeadline, "the write has no deadline of its own")
++	assert.Assert(t, time.Until(w.deadline) <= 2*time.Minute, "deadline is %s away, want at most 2m", time.Until(w.deadline))
++	assert.Assert(t, time.Until(w.deadline) > time.Minute, "deadline is %s away, want about 2m", time.Until(w.deadline))
++	assert.Equal(t, len(*lines), 1)
++}
++
++func TestSaveFactoryPatch(t *testing.T) {
++	workDir := t.TempDir()
++	w := &fakePatchWriter{}
++	status, lines := recordStatus()
++	var stderr bytes.Buffer
++
++	saveFactoryPatch(context.Background(), w, workDir, factory.Change{Stat: "2 files changed"}, status, iostream.Streams{Out: io.Discard, Err: &stderr})
++
++	assert.Equal(t, filepath.Dir(w.path), filepath.Join(workDir, ".chunk", "factory"))
++	assert.Assert(t, strings.HasSuffix(w.path, ".patch"), "patch path %q has the wrong suffix", w.path)
++	assert.DeepEqual(t, *lines, []statusLine{{Level: iostream.LevelDone, Msg: "Saved 2 files changed to " + w.path}})
++	assert.Equal(t, stderr.String(), "  Apply it with: git apply "+w.path+"\n")
++}
++
++func TestSaveFactoryPatchFailureWarns(t *testing.T) {
++	w := &fakePatchWriter{err: errors.New("sidecar gone")}
++	status, lines := recordStatus()
++	var stderr bytes.Buffer
++
++	saveFactoryPatch(context.Background(), w, t.TempDir(), factory.Change{Stat: "2 files changed"}, status, iostream.Streams{Out: io.Discard, Err: &stderr})
++
++	assert.DeepEqual(t, *lines, []statusLine{{Level: iostream.LevelWarn, Msg: "could not save the implementer's work: sidecar gone"}})
++	assert.Equal(t, stderr.String(), "")
++}
