@@ -247,32 +247,36 @@ func (m Model) withSessionAction(msg sessionActionMsg) Model {
 type runItemKind int
 
 const (
-	itemImplement runItemKind = iota
+	// itemTask is the run's prompt, shown collapsed or in full.
+	itemTask runItemKind = iota
+	itemImplement
 	itemCheck
 	itemReview
 	itemRound
 )
 
-// runItem is one selectable row of the run pane: a round, which opens and
-// closes, or a row inside an open one.
+// runItem is one selectable row of the run pane: the task, a round, both of
+// which open and close, or a row inside an open round.
 type runItem struct {
 	kind  runItemKind
-	round int // index into Session.Rounds
+	round int // index into Session.Rounds, unused for itemTask
 	idx   int // index into the round's Checks or Reviews
 }
 
 // openRunItem opens the output behind the selected row: a review's buffered
 // Claude run, a check's kept output, or the implementer's account of its
-// turn.
+// turn. On the task or a round's header it expands or collapses it instead,
+// since there is no output behind either.
 func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cmd) {
 	if m.runItem >= len(items) {
 		return m, nil
 	}
 	it := items[m.runItem]
+	if it.kind == itemTask || it.kind == itemRound {
+		return m.toggleRunRow(run), nil
+	}
 	r := run.s.Rounds[it.round]
-	switch it.kind {
-	case itemRound:
-		return m.toggleRound(run), nil
+	switch it.kind { //nolint:exhaustive // itemTask and itemRound are handled above
 	case itemReview:
 		rv := r.Reviews[it.idx]
 		title := fmt.Sprintf("round %d review: %s", r.Number, rv.Name)
@@ -316,14 +320,19 @@ func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cm
 }
 
 // copyRunFailure puts a report of the selected row's failure on the clipboard,
-// ready to paste to an agent; on a round's header, the round's failures. A
-// row that did not fail falls back to the failures in the latest round, since
-// an earlier round's were what the next one set out to fix. The copy travels as an OSC 52 escape sequence, so it
-// reaches the user's clipboard over SSH, though a terminal that ignores OSC 52
-// drops it silently.
+// ready to paste to an agent; on a round's header, the round's failures, and
+// on the task row, the task's full prompt. A row that did not fail falls back
+// to the failures in the latest round, since an earlier round's were what the
+// next one set out to fix. The copy travels as an OSC 52 escape sequence, so
+// it reaches the user's clipboard over SSH, though a terminal that ignores
+// OSC 52 drops it silently.
 func (m Model) copyRunFailure(run *sessionInfo) (tea.Model, tea.Cmd) {
 	if run == nil {
 		return m, nil
+	}
+	if items := m.runItems(run.s); m.runItem < len(items) && items[m.runItem].kind == itemTask {
+		m.runNote = "copied task to clipboard"
+		return m, tea.SetClipboard(run.s.Factory.Prompt)
 	}
 	// roundReports is every failure in round ri, folded or not.
 	roundReports := func(ri int) []string {
@@ -364,9 +373,12 @@ func (m Model) copyRunFailure(run *sessionInfo) (tea.Model, tea.Cmd) {
 // itemFailureReport describes why a run row failed, in text to paste to an
 // agent, or "" when the row did not fail.
 func itemFailureReport(s chunkd.Session, it runItem) string {
+	if it.kind == itemTask || it.kind == itemRound {
+		return ""
+	}
 	r := s.Rounds[it.round]
 	var title, reason, output string
-	switch it.kind {
+	switch it.kind { //nolint:exhaustive // itemTask and itemRound return above
 	case itemCheck:
 		c := r.Checks[it.idx]
 		if c.Status != chunkd.CheckFailed && c.Status != chunkd.CheckErrored {
@@ -389,8 +401,6 @@ func itemFailureReport(s chunkd.Session, it runItem) string {
 			return ""
 		}
 		title, reason = "implementer", r.Implement.Error
-	case itemRound:
-		return ""
 	}
 	out := fmt.Sprintf("Round %d %s failed", r.Number, title)
 	if reason = strings.TrimSpace(reason); reason != "" {

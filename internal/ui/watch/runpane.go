@@ -79,10 +79,20 @@ func (m Model) roundOpen(s chunkd.Session, ri int) bool {
 	return ri == defaultOpenRound(s)
 }
 
+// hasTask reports whether s has a prompt worth a task row. Older runs carry
+// none.
+func hasTask(s chunkd.Session) bool {
+	return s.Factory != nil && s.Factory.Prompt != ""
+}
+
 // runItems lists a run's selectable rows in the order the pane draws them:
-// each round's header, then, when it is open, its rows.
+// the task, when there is one, then each round's header, then, when it is
+// open, its rows.
 func (m Model) runItems(s chunkd.Session) []runItem {
 	var items []runItem
+	if hasTask(s) {
+		items = append(items, runItem{kind: itemTask})
+	}
 	for ri := range s.Rounds {
 		items = append(items, runItem{kind: itemRound, round: ri})
 		if m.roundOpen(s, ri) {
@@ -162,6 +172,37 @@ func (m Model) toggleRound(run *sessionInfo) Model {
 	m.runOpen = byRun
 	m.runItem = m.findRunItem(run.s, runItem{kind: itemRound, round: ri})
 	return m
+}
+
+// taskExpanded reports whether runID's task row is read in full.
+func (m Model) taskExpanded(runID string) bool {
+	return m.taskOpen[runID]
+}
+
+// toggleTask flips whether runID's task is read in full. The state is kept
+// for as long as the dashboard runs, by run ID, so switching to another run
+// and back leaves it as it was.
+func (m Model) toggleTask(runID string) Model {
+	open := maps.Clone(m.taskOpen)
+	if open == nil {
+		open = map[string]bool{}
+	}
+	open[runID] = !m.taskExpanded(runID)
+	m.taskOpen = open
+	return m
+}
+
+// toggleRunRow flips the expand state of the selected row: the task, when
+// that is what is selected, or its round otherwise.
+func (m Model) toggleRunRow(run *sessionInfo) Model {
+	items := m.runItems(run.s)
+	if m.runItem >= len(items) {
+		return m
+	}
+	if items[m.runItem].kind == itemTask {
+		return m.toggleTask(run.s.ID)
+	}
+	return m.toggleRound(run)
 }
 
 // ---- status ------------------------------------------------------------------
@@ -245,9 +286,14 @@ func (m Model) runStatusLine(st watchStyles, s chunkd.Session) string {
 	return line
 }
 
-// wrapWords wraps s to width columns and at most maxLines lines, ending the
-// last with an ellipsis when there was more.
-func wrapWords(s string, width, maxLines int) []string {
+// wrapLine word-wraps s to width columns without truncating it: a blank
+// line stays blank, and a single word longer than width is kept whole on its
+// own line rather than split, since breaking it would trade one overflow for
+// another.
+func wrapLine(s string, width int) []string {
+	if s == "" {
+		return []string{""}
+	}
 	var lines []string
 	cur := ""
 	for _, w := range strings.Fields(s) {
@@ -264,14 +310,60 @@ func wrapWords(s string, width, maxLines int) []string {
 	if cur != "" {
 		lines = append(lines, cur)
 	}
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-		lines[maxLines-1] = truncate(lines[maxLines-1]+"…", width)
-	}
-	for i, l := range lines {
-		lines[i] = truncate(l, width)
-	}
 	return lines
+}
+
+// taskLines is the task row's content: the prompt's lines word-wrapped to
+// width, so a line break, heading or list item lands exactly where the prompt
+// has it. Collapsed, only the first maxGoalLines wrapped lines are kept, with
+// a marker naming how many there are to read in place of the rest. The cap is
+// on wrapped lines rather than the prompt's own, since a one-paragraph prompt
+// is a single source line and would otherwise fill the pane uncollapsed.
+func taskLines(prompt string, width int, expanded bool) []string {
+	src := strings.Split(prompt, "\n")
+	lines := make([]string, 0, len(src))
+	for _, l := range src {
+		lines = append(lines, wrapLine(l, width)...)
+	}
+	if expanded || len(lines) <= maxGoalLines {
+		return lines
+	}
+	return append(lines[:maxGoalLines:maxGoalLines],
+		fmt.Sprintf("… (Space to read all, %d lines)", len(lines)))
+}
+
+// renderTaskRows draws the task row at the top of the run pane: the prompt,
+// collapsed to its first lines or expanded in full depending on whether the
+// run's task was toggled open. first is the run-wide index of the task row
+// and sel the run-wide selected index; at and end mark the selected row's
+// lines within the returned slice the same way renderRunRound does, so an
+// expanded prompt longer than the pane scrolls into view the same way an
+// open round does. n is 1 when the run has a task row, 0 when it has none.
+func (m Model) renderTaskRows(st watchStyles, s chunkd.Session, first, sel int, focused bool) (lines []string, at, end, n int) {
+	at, end = -1, -1
+	if !hasTask(s) {
+		return nil, at, end, 0
+	}
+	width := max(m.width-leftPaneWidth-8, 20)
+	var rows []string
+	if o := s.Factory.SpecOrigin; o != "" {
+		rows = append(rows, st.vdim(truncate("from "+o, width)))
+	}
+	for _, l := range taskLines(s.Factory.Prompt, width, m.taskExpanded(s.ID)) {
+		rows = append(rows, st.muted(l))
+	}
+	marker := "  "
+	if first == sel {
+		at, end = 0, len(rows)
+		if focused {
+			marker = st.success("› ")
+		}
+	}
+	lines = append(lines, marker+rows[0])
+	for _, l := range rows[1:] {
+		lines = append(lines, "  "+l)
+	}
+	return lines, at, end, 1
 }
 
 // ---- right pane: the selected run ----------------------------------------------
@@ -289,22 +381,21 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 	head := [2]string{title, m.runStatusLine(st, s)}
 
 	var body []string
-	if f := s.Factory; f != nil {
-		width := max(m.width-leftPaneWidth-8, 20)
-		if f.SpecOrigin != "" {
-			body = append(body, "  "+st.vdim(truncate("from "+f.SpecOrigin, width)))
+	focused := m.focusedPane == paneRight
+	selStart, selEnd := -1, -1
+	item := 0
+
+	if rows, at, end, n := m.renderTaskRows(st, s, item, m.runItem, focused); n > 0 {
+		if at >= 0 {
+			selStart, selEnd = len(body)+at, len(body)+end
 		}
-		for _, l := range wrapWords(f.Prompt, width, maxGoalLines) {
-			body = append(body, "  "+st.muted(l))
-		}
+		body = append(body, rows...)
+		item += n
 	}
 	if s.Error != "" {
 		body = append(body, "  "+st.err(truncate(strings.Join(strings.Fields(s.Error), " "), 200)))
 	}
 
-	focused := m.focusedPane == paneRight
-	selStart, selEnd := -1, -1
-	item := 0
 	for ri := range s.Rounds {
 		if ri == 0 || m.roundOpen(s, ri) {
 			body = append(body, "")

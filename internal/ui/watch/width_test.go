@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
@@ -38,6 +39,31 @@ func TestDashboardNeverExceedsItsWidth(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// The task row wraps a long prompt to the pane without breaking a line
+// mid-word — the one exception is a word longer than the pane itself, which
+// has nowhere else to go.
+func TestTaskLinesWrapAtEightyColumnsWithoutBreakingWords(t *testing.T) {
+	const width = 80
+	longWord := strings.Repeat("x", width+20)
+	prompt := "Please " + strings.Repeat("refactor the helper so it stops throwing on empty input. ", 8) + longWord
+
+	lines := taskLines(prompt, width, true)
+
+	var gotWords []string
+	for _, l := range lines {
+		gotWords = append(gotWords, strings.Fields(l)...)
+	}
+	// Every word survives, in order and whole: wrapping only moves line
+	// breaks, it never splits or drops a word.
+	assert.DeepEqual(t, gotWords, strings.Fields(prompt))
+
+	for _, l := range lines {
+		if w := lipgloss.Width(l); w > width && l != longWord {
+			t.Errorf("line %q is %d columns, wider than the pane (%d)", l, w, width)
 		}
 	}
 }
