@@ -577,7 +577,7 @@ func runStatus(s chunkd.Session) string {
 		return strings.Join(append(parts, ui.FormatDuration(sessionElapsed(s).Truncate(time.Second))), " · ")
 	case chunkd.SessionDone, chunkd.SessionFailed, chunkd.SessionCancelled:
 	}
-	out := runOutcome(s)
+	out := runLabel(s)
 	if s.EndedAt != nil {
 		out += " · " + ago(*s.EndedAt)
 	}
@@ -592,12 +592,14 @@ const outcomeFailed = "failed"
 func runChip(st watchStyles, s chunkd.Session) string {
 	text, bg := "running", chunkYellow
 	if s.State != chunkd.SessionRunning {
-		text = truncate(runOutcome(s), 14)
+		text = truncate(runLabel(s), 14)
 		switch text {
-		case "cancelled", "no change", "stuck":
+		case "cancelled", "no change", "stuck", prLabelFeedback, prLabelClosed:
 			bg = lipgloss.Color("3")
-		case outcomeFailed, "still failing":
+		case outcomeFailed, "still failing", prLabelChecksFailing:
 			bg = lipgloss.Color("1")
+		case prLabelMerged:
+			bg = lipgloss.Color("5")
 		default:
 			bg = chunkGreen
 		}
@@ -619,6 +621,52 @@ func runDetail(s chunkd.Session) string {
 		parts = append(parts, ago(*s.EndedAt))
 	}
 	return strings.Join(parts, " · ")
+}
+
+// How the run list names a pull request that has got somewhere, for
+// prLabel. They are chip text, so each fits in the chip.
+const (
+	prLabelUp            = "PR up"
+	prLabelInReview      = "in review"
+	prLabelFeedback      = "feedback"
+	prLabelChecksFailing = "checks failing"
+	prLabelMerged        = "merged"
+	prLabelClosed        = "closed"
+)
+
+// prLabel names where a run's open pull request stands, "" when it is not
+// open or the daemon has not looked it up yet.
+func prLabel(pr *chunkd.PullRequest) string {
+	if !pr.Opened() {
+		return ""
+	}
+	switch pr.Status {
+	case chunkd.PRStatusUp:
+		return prLabelUp
+	case chunkd.PRStatusInReview:
+		return prLabelInReview
+	case chunkd.PRStatusFeedback:
+		return prLabelFeedback
+	case chunkd.PRStatusChecksFailing:
+		return prLabelChecksFailing
+	case chunkd.PRStatusMerged:
+		return prLabelMerged
+	case chunkd.PRStatusClosed:
+		return prLabelClosed
+	}
+	return ""
+}
+
+// runLabel is what the run list says of an ended run: where its pull request
+// stands once there is one, which is what happens to the work after the run,
+// and otherwise how the run came out.
+func runLabel(s chunkd.Session) string {
+	if s.State == chunkd.SessionDone && s.Factory != nil && !loopFailed(s) {
+		if l := prLabel(s.Factory.PullRequest); l != "" {
+			return l
+		}
+	}
+	return runOutcome(s)
 }
 
 // runOutcome is how an ended run came out, in a word or two.

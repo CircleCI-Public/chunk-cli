@@ -237,12 +237,39 @@ type PullRequest struct {
 	// Message says why no pull request was tried (PRSkipped) or why it could
 	// not be opened (PRFailed).
 	Message string `json:"message,omitempty"`
+	// Status is where the open pull request stands with its reviewers, one of
+	// the PRStatus constants, "" until the daemon has looked it up. It is not
+	// State: that is how far opening it got, this is what became of it.
+	Status string `json:"status,omitempty"`
 }
 
 // Opened reports whether the pull request is open, which is what makes its URL
 // and number worth showing.
 func (pr *PullRequest) Opened() bool {
 	return pr != nil && pr.State == PROpened && pr.URL != ""
+}
+
+// Where an open pull request stands, as PullRequest.Status.
+const (
+	// PRStatusUp means it is open and nobody has reviewed it or been asked to.
+	PRStatusUp = "up"
+	// PRStatusInReview means a review has been asked for or has begun.
+	PRStatusInReview = "in_review"
+	// PRStatusFeedback means a reviewer asked for changes or left comments
+	// still to be resolved.
+	PRStatusFeedback = "feedback"
+	// PRStatusChecksFailing means its checks on GitHub are failing.
+	PRStatusChecksFailing = "checks_failing"
+	// PRStatusMerged means it was merged.
+	PRStatusMerged = "merged"
+	// PRStatusClosed means it was closed without being merged.
+	PRStatusClosed = "closed"
+)
+
+// Settled reports whether the pull request's status can no longer change, so
+// there is no point asking GitHub about it again.
+func (pr *PullRequest) Settled() bool {
+	return pr != nil && (pr.Status == PRStatusMerged || pr.Status == PRStatusClosed)
 }
 
 // How far a run's pull request has got, as PullRequest.State.

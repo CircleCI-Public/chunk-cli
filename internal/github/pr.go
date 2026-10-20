@@ -175,3 +175,98 @@ func (c *Client) FetchPRForBranch(ctx context.Context, owner, repo, branch strin
 
 	return info, nil
 }
+
+// PRProgress is where one pull request stands, as returned by FetchPRProgress.
+type PRProgress struct {
+	State            string // OPEN, MERGED or CLOSED
+	Draft            bool
+	ReviewRequested  bool // someone was asked to review it and has not yet
+	Reviewed         bool // at least one review was left
+	ChangesRequested bool
+	OpenThreads      int    // review threads not yet resolved
+	CheckState       string // rollup: SUCCESS, FAILURE, PENDING, ERROR, EXPECTED; "" with no checks
+}
+
+type pullRequestProgressData struct {
+	Repository *struct {
+		PullRequest *struct {
+			State          string `json:"state"`
+			IsDraft        bool   `json:"isDraft"`
+			ReviewRequests struct {
+				TotalCount int `json:"totalCount"`
+			} `json:"reviewRequests"`
+			Reviews struct {
+				TotalCount int `json:"totalCount"`
+				Nodes      []struct {
+					State  string  `json:"state"`
+					Author *Author `json:"author"`
+				} `json:"nodes"`
+			} `json:"reviews"`
+			ReviewThreads struct {
+				Nodes []struct {
+					IsResolved bool `json:"isResolved"`
+				} `json:"nodes"`
+			} `json:"reviewThreads"`
+			Commits struct {
+				Nodes []struct {
+					Commit struct {
+						StatusCheckRollup *struct {
+							State string `json:"state"`
+						} `json:"statusCheckRollup"`
+					} `json:"commit"`
+				} `json:"nodes"`
+			} `json:"commits"`
+		} `json:"pullRequest"`
+	} `json:"repository"`
+}
+
+// FetchPRProgress returns where pull request number stands, merged and closed
+// ones included. It returns nil, nil when the repo or the pull request cannot
+// be seen.
+func (c *Client) FetchPRProgress(ctx context.Context, owner, repo string, number int) (*PRProgress, error) {
+	var resp graphQLResponse[pullRequestProgressData]
+	vars := map[string]any{"owner": owner, "repo": repo, "number": number}
+	if err := c.doWithRetry(ctx, pullRequestProgressQuery, vars, &resp); err != nil {
+		return nil, err
+	}
+	if hasResolutionError(resp.Errors) || resp.Data == nil || resp.Data.Repository == nil || resp.Data.Repository.PullRequest == nil {
+		return nil, nil
+	}
+	pr := resp.Data.Repository.PullRequest
+
+	out := &PRProgress{
+		State:           pr.State,
+		Draft:           pr.IsDraft,
+		ReviewRequested: pr.ReviewRequests.TotalCount > 0,
+		Reviewed:        pr.Reviews.TotalCount > 0,
+	}
+	// A reviewer's latest verdict stands: one who asked for changes and then
+	// approved no longer blocks. Comments and pending reviews are not verdicts.
+	verdicts := map[string]string{}
+	for _, r := range pr.Reviews.Nodes {
+		if r.State != "CHANGES_REQUESTED" && r.State != "APPROVED" && r.State != "DISMISSED" {
+			continue
+		}
+		login := ""
+		if r.Author != nil {
+			login = r.Author.Login
+		}
+		verdicts[login] = r.State
+	}
+	for _, v := range verdicts {
+		if v == "CHANGES_REQUESTED" {
+			out.ChangesRequested = true
+		}
+	}
+	for _, t := range pr.ReviewThreads.Nodes {
+		if !t.IsResolved {
+			out.OpenThreads++
+		}
+	}
+	if len(pr.Commits.Nodes) > 0 {
+		if rollup := pr.Commits.Nodes[0].Commit.StatusCheckRollup; rollup != nil {
+			out.CheckState = rollup.State
+		}
+	}
+	return out, nil
+}

@@ -757,6 +757,9 @@ func prProgress(st watchStyles, pr *chunkd.PullRequest) string {
 		if pr.Draft {
 			line += "  " + st.dim("draft")
 		}
+		if l := prLabel(pr); l != "" {
+			line += "  " + st.dim("· "+l)
+		}
 		return line
 	case chunkd.PRFailed:
 		return st.err("could not be opened: " + pr.Message)
@@ -807,6 +810,16 @@ func nextStepLine(st watchStyles, s chunkd.Session) string {
 			return st.err(ui.IconFail + " The run ended without its checks passing.")
 		}
 		switch pr := s.Factory.PullRequest; {
+		case pr.Opened() && pr.Status == chunkd.PRStatusMerged:
+			return st.success(ui.IconOK + " The pull request was merged.")
+		case pr.Opened() && pr.Status == chunkd.PRStatusClosed:
+			return st.warning(ui.IconWarn + " The pull request was closed without being merged.")
+		case pr.Opened() && pr.Status == chunkd.PRStatusFeedback:
+			return st.warning(ui.IconWarn + " Reviewers left feedback on the pull request. It is waiting on you.")
+		case pr.Opened() && pr.Status == chunkd.PRStatusChecksFailing:
+			return st.err(ui.IconFail + " The pull request's checks on GitHub are failing.")
+		case pr.Opened() && pr.Status == chunkd.PRStatusInReview:
+			return st.success(ui.IconOK + " All checks passed. The pull request is in review.")
 		case pr.Opened():
 			// The pr row below carries the address; a second copy here only
 			// crowds the line out of the pane.
