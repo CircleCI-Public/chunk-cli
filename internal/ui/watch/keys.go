@@ -63,6 +63,9 @@ func (m Model) keys() keyMap {
 	k.Cancel.SetEnabled(run != nil && !run.s.State.Finished())
 	if run != nil {
 		k.Toggle.SetHelp("Space", "expand/collapse")
+		if it := m.selectedRunItem(); it != nil && it.kind == itemTask {
+			k.Copy.SetHelp("c", "copy task")
+		}
 	}
 	if run == nil {
 		k.Right.SetHelp("→", "activity")

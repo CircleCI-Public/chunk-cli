@@ -262,9 +262,12 @@ type Model struct {
 	runConfirm string
 	runNote    string
 	// runOpen is the rounds of each run (by run ID) the user opened or closed,
-	// over the default of showing only the round that matters. runDetails shows
-	// the infrastructure under a run: its worktree, sidecars and setup log.
+	// over the default of showing only the round that matters. taskOpen is
+	// whether each run's task row (by run ID) was expanded, over the default of
+	// collapsed. runDetails shows the infrastructure under a run: its worktree,
+	// sidecars and setup log.
 	runOpen    map[string]map[int]bool
+	taskOpen   map[string]bool
 	runDetails bool
 	// spinning is true while a spinner tick chain is in flight, so a poll that
 	// finds something running after a quiet spell can start one without doubling
@@ -372,7 +375,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.copyRunFailure(run)
 	case key.Matches(msg, k.Toggle):
 		if run != nil {
-			m = m.toggleRound(run)
+			m = m.toggleRunRow(run)
 			break
 		}
 		m = m.toggleSelectedInvoc()

@@ -202,11 +202,11 @@ func TestRoundsOpenAndCloseAndKeepTheSelectionOnTheHeader(t *testing.T) {
 	r := failedRun()
 	m := sessModel(r)
 	m.selRun = "abc"
-	m, _ = press(m, tea.KeyRight)
+	m, _ = press(m, tea.KeyRight, tea.KeyDown) // past the task row, to round 1's header
 	run := m.selectedRun()
 	// The ended run opens its failing round, 2, and no other.
 	assert.Assert(t, !m.roundOpen(run.s, 0) && m.roundOpen(run.s, 1) && !m.roundOpen(run.s, 2))
-	assert.Equal(t, len(m.runItems(run.s)), 3+3, "three headers and round 2's implementer and two checks")
+	assert.Equal(t, len(m.runItems(run.s)), 1+3+3, "the task, three headers, and round 2's implementer and two checks")
 
 	m, _ = press(m, ' ')
 	assert.Assert(t, m.roundOpen(m.selectedRun().s, 0), "space on the first header opens it")
@@ -288,7 +288,10 @@ func TestLongPromptWrapsAndPaneStaysWithinTheTerminal(t *testing.T) {
 		m.width = width
 		out := m.render()
 		assert.Assert(t, strings.Count(out, "refactor the helper") > 1, "the prompt is wrapped over lines:\n%s", out)
-		assert.Assert(t, strings.Contains(out, "…"), "a prompt past three lines is cut with an ellipsis:\n%s", out)
+		// The single source line is short of maxGoalLines, so the task shows in
+		// full; the "…" here is the run list's own title truncation, unrelated
+		// to the task body.
+		assert.Assert(t, strings.Contains(out, "…"), "the run list still truncates its title:\n%s", out)
 		for i, line := range strings.Split(out, "\n") {
 			assert.Assert(t, lipgloss.Width(line) <= width, "width %d line %d is %d columns", width, i, lipgloss.Width(line))
 		}
@@ -313,6 +316,132 @@ func TestFactoryRunPaneShowsTheSpecOriginAboveThePrompt(t *testing.T) {
 	pane = strings.Join(m.renderRunPane(newWatchStyles(false), r, 40), "\n")
 	assert.Assert(t, !strings.Contains(pane, "from ../notes/spec.md"), "a run with no spec origin shows no origin line:\n%s", pane)
 	assert.Assert(t, strings.Contains(pane, "add a --verbose flag"), "missing the prompt:\n%s", pane)
+}
+
+// ---- task row -----------------------------------------------------------------
+
+// A prompt of maxGoalLines or fewer source lines is shown in full: there is
+// nothing past it to mark.
+func TestTaskRowShowsShortPromptInFullWithNoMarker(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Factory.Prompt = "Fix the login bug\n\nIt happens on retry"
+	m := sessModel(r)
+	m.selRun = "abc"
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "Fix the login bug") && strings.Contains(out, "It happens on retry"), out)
+	assert.Assert(t, !strings.Contains(out, "Space to read all"), out)
+}
+
+// A prompt past maxGoalLines source lines is collapsed to the first of them,
+// with a marker naming how many lines there are to read.
+func TestTaskRowCollapsesLongPromptWithALineCountMarker(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Factory.Prompt = "Line one\nLine two\nLine three\nLine four\nLine five"
+	m := sessModel(r)
+	m.selRun = "abc"
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "Line one") && strings.Contains(out, "Line two") && strings.Contains(out, "Line three"), out)
+	assert.Assert(t, !strings.Contains(out, "Line four") && !strings.Contains(out, "Line five"), out)
+	assert.Assert(t, strings.Contains(out, "… (Space to read all, 5 lines)"), out)
+}
+
+// Space on the task row reads it in full, and a second Space folds it back.
+func TestSpaceExpandsAndCollapsesTheTaskRow(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Factory.Prompt = "Line one\nLine two\nLine three\nLine four\nLine five"
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight) // select the task row
+	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemTask})
+
+	m, _ = press(m, ' ')
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "Line four") && strings.Contains(out, "Line five"), out)
+	assert.Assert(t, !strings.Contains(out, "Space to read all"), out)
+
+	m, _ = press(m, ' ')
+	out = stripANSI(m.render())
+	assert.Assert(t, !strings.Contains(out, "Line four"), out)
+	assert.Assert(t, strings.Contains(out, "… (Space to read all, 5 lines)"), out)
+}
+
+// Expanded, the task keeps the prompt's line breaks, blank lines and list
+// items exactly where the prompt has them, rather than folding them into one
+// paragraph.
+func TestExpandedTaskPreservesLineBreaksBlankLinesAndListItems(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Factory.Prompt = "# Add retries\n\n- handle timeouts\n- handle 500s\n\nKeep it simple."
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight, ' ') // select and expand the task row
+
+	lines := strings.Split(stripANSI(m.render()), "\n")
+	heading := indexOfLine(lines, "# Add retries")
+	item1 := indexOfLine(lines, "- handle timeouts")
+	item2 := indexOfLine(lines, "- handle 500s")
+	last := indexOfLine(lines, "Keep it simple.")
+	assert.Assert(t, heading >= 0 && item1 == heading+2 && item2 == item1+1 && last == item2+2,
+		"line breaks and blank lines were not preserved (heading=%d item1=%d item2=%d last=%d):\n%s",
+		heading, item1, item2, last, strings.Join(lines, "\n"))
+}
+
+// indexOfLine is the index of the first line containing want.
+func indexOfLine(lines []string, want string) int {
+	for i, l := range lines {
+		if strings.Contains(l, want) {
+			return i
+		}
+	}
+	return -1
+}
+
+// The expand state is kept per run for as long as the dashboard is open, so
+// switching to another run and back leaves it as it was.
+func TestTaskExpandStateSurvivesSwitchingRuns(t *testing.T) {
+	a := factoryRun("a", chunkd.SessionRunning, time.Now())
+	a.s.Factory.Prompt = "Line one\nLine two\nLine three\nLine four"
+	b := factoryRun("b", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	m := sessModel(a, b)
+	m.selRun = "a"
+	m, _ = press(m, tea.KeyRight, ' ') // expand a's task row
+	assert.Assert(t, m.taskExpanded("a"))
+
+	m, _ = press(m, tea.KeyEscape, tea.KeyDown) // back to the list, down to run b
+	assert.Equal(t, m.selRun, "b")
+	m, _ = press(m, tea.KeyUp) // back up to run a
+	assert.Equal(t, m.selRun, "a")
+	assert.Assert(t, m.taskExpanded("a"), "the task row is still expanded after switching away and back")
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "Line four"), "the task is drawn expanded")
+}
+
+// c on the task row copies the full prompt, the same way it copies a
+// failure elsewhere in the run.
+func TestCopyOnTheTaskRowCopiesTheFullPrompt(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Factory.Prompt = "# Add retries\n\nhandle timeouts and 500s"
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight) // select the task row
+	assert.Assert(t, strings.Contains(m.renderFooter(m.styles()), "copy task"))
+
+	m, cmd := press(m, 'c')
+	assert.Assert(t, cmd != nil, "nothing was copied")
+	assert.Equal(t, fmt.Sprint(cmd()), r.s.Factory.Prompt)
+	assert.Equal(t, m.runNote, "copied task to clipboard")
+}
+
+// A run with no prompt (an older run, from before the task row existed) has
+// no task row to select.
+func TestRunWithNoPromptHasNoTaskRow(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Factory.Prompt = ""
+	m := sessModel(r)
+	m.selRun = "abc"
+
+	for _, it := range m.runItems(r.s) {
+		assert.Assert(t, it.kind != itemTask, "no task row when the prompt is empty")
+	}
+	assert.Assert(t, !strings.Contains(stripANSI(m.render()), "Space to read all"))
 }
 
 func TestEndedFactoryRunSaysWhereItsWorkIs(t *testing.T) {
@@ -467,7 +596,7 @@ func TestRunItemsOpenTheirOutput(t *testing.T) {
 	}}
 	m := sessModel(r)
 	m.selRun = "abc"
-	m, _ = press(m, tea.KeyRight, tea.KeyDown) // past the round's header
+	m, _ = press(m, tea.KeyRight, tea.KeyDown, tea.KeyDown) // past the task row and the round's header
 
 	// The implementer's turn and a failed check open what the snapshot holds.
 	m, cmd := press(m, tea.KeyEnter)
@@ -510,7 +639,7 @@ func TestFinishedReviewOpensItsFindings(t *testing.T) {
 			Findings: []chunkd.Finding{{File: "app.go", Line: 3, Severity: "high", Body: "nil map write"}},
 		}}}}}, nil
 	}
-	m, _ = press(m, tea.KeyRight, tea.KeyDown)
+	m, _ = press(m, tea.KeyRight, tea.KeyDown, tea.KeyDown) // past the task row and the round's header
 	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemReview, round: 0})
 
 	m, cmd := press(m, tea.KeyEnter)
@@ -812,7 +941,7 @@ func TestSelectionInARoundThatFoldsMovesToItsHeader(t *testing.T) {
 	r.s.Rounds = []chunkd.Round{liveRound(1, "failed")}
 	m := sessModel(r)
 	m.selRun = "abc"
-	m, _ = press(m, tea.KeyRight, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown)
+	m, _ = press(m, tea.KeyRight, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown) // past the task row, to the review
 	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemReview, round: 0})
 
 	r.s.Rounds = append(r.s.Rounds, liveRound(2, "passed"))
@@ -829,7 +958,7 @@ func TestSelectionKeepsItsRowWhenRowsOpenAboveIt(t *testing.T) {
 	m := sessModel(r)
 	m.selRun = "abc"
 	// Pin round 2 open (close, then open), then walk to its review.
-	m, _ = press(m, tea.KeyRight, tea.KeyDown, ' ', ' ')
+	m, _ = press(m, tea.KeyRight, tea.KeyDown, tea.KeyDown, ' ', ' ') // past the task row, to round 2's header
 	for *m.selectedRunItem() != (runItem{kind: itemReview, round: 1}) {
 		m, _ = press(m, tea.KeyDown)
 	}
@@ -972,7 +1101,7 @@ func TestCopyFailureCopiesTheSelectedOrLatestRoundsFailures(t *testing.T) {
 	}
 	m := sessModel(r)
 	m.selRun = "abc"
-	m, _ = press(m, tea.KeyRight)
+	m, _ = press(m, tea.KeyRight, tea.KeyDown) // past the task row, to round 1's header
 	assert.Assert(t, strings.Contains(m.renderFooter(m.styles()), "copy failure"))
 
 	m, cmd := press(m, 'c')
@@ -995,7 +1124,7 @@ func TestCopyFailureCopiesTheSelectedOrLatestRoundsFailures(t *testing.T) {
 	// A run that failed before any round copies its error.
 	m.sessions[0].s.Rounds = nil
 	m.sessions[0].s.State, m.sessions[0].s.Error = chunkd.SessionFailed, "no sidecar image"
-	m.runItem = 0
+	m.runItem = 1 // past the task row; there is nothing else to select
 	_, cmd = press(m, 'c')
 	got = clipboard(cmd)
 	assert.Assert(t, strings.HasPrefix(got, "chunk factory run failed ("), got)
@@ -1011,7 +1140,7 @@ func TestCopyFailureReachesAFoldedLatestRound(t *testing.T) {
 	m := sessModel(r)
 	m.selRun = "abc"
 	m.runOpen = map[string]map[int]bool{"abc": {2: false}}
-	m, _ = press(m, tea.KeyRight) // round 1's header; round 1 passed
+	m, _ = press(m, tea.KeyRight, tea.KeyDown) // past the task row, to round 1's header; round 1 passed
 
 	_, cmd := press(m, 'c')
 	assert.Assert(t, cmd != nil, "nothing was copied")
@@ -1033,7 +1162,7 @@ func TestSelectedFailedCheckKeepsItsTailInView(t *testing.T) {
 	m.selRun = "abc"
 	m.height = 16
 	m, _ = press(m, tea.KeyRight)
-	m.runItem = len(checks) // past the round's header, the last check
+	m.runItem = len(checks) + 1 // past the task row and the round's header, the last check
 
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "last tail line"), out)
