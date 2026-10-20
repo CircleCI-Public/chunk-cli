@@ -39,7 +39,7 @@
     "repo": "chunk-cli"
   },
   "validation": {
-    "sidecarImage": "4115ea13-52e8-4fdf-bd60-d4d86a1d2bfe"
+    "sidecarImage": "59aa3b19-8c7a-4a89-80e5-42661a341654"
   },
   "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
   "environment": {
@@ -47,7 +47,7 @@
     "setup": [
       {
         "name": "runtime",
-        "command": "curl -fsSL https://go.dev/dl/go1.26.2.linux-$(dpkg --print-architecture).tar.gz | sudo tar -C /usr/local -xzf -"
+        "command": "curl -fsSL https://go.dev/dl/go1.26.10.linux-$(dpkg --print-architecture).tar.gz | sudo tar -C /usr/local -xzf -"
       },
       {
         "name": "system",
@@ -63,6 +63,6 @@
       }
     ],
     "image": "cimg/go",
-    "image_version": "1.26.2"
+    "image_version": "1.26.10"
   }
 }
