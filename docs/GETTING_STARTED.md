@@ -437,7 +437,7 @@ By default, `chunk init` detects `go.mod` or `pyproject.toml` and writes a match
 ---
 name: <suite-name>
 discover: <shell command that prints one test atom per line>
-run: <shell command that runs atoms in << test.atoms >>, writing junit XML to << outputs.junit >>>
+run: <shell command that runs atoms in << test.atoms >>, writing junit XML to << outputs.junit >>
 outputs:
   junit: <path/to/junit.xml>
 ```
