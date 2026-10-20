@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -50,7 +49,7 @@ type implementerLine struct {
 // otherwise.
 func newImplementerLine(w io.Writer, status iostream.StatusFunc) *implementerLine {
 	l := &implementerLine{w: w, status: status, now: time.Now, width: func() int { return defaultLineWidth }}
-	if f, ok := w.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+	if f, ok := terminalFile(w); ok {
 		l.tty = true
 		l.width = func() int {
 			if w, _, err := term.GetSize(int(f.Fd())); err == nil && w > 0 {

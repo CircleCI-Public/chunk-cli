@@ -74,16 +74,16 @@ func factoryStartMessage(diff bool) string {
 // file, a pipe, CI), which must keep exactly the output it had before this
 // message existed.
 func printRunStartMessage(streams iostream.Streams, jsonOut bool, msg string) {
-	if jsonOut || !isTerminalWriter(streams.Err) {
+	if _, ok := terminalFile(streams.Err); jsonOut || !ok {
 		return
 	}
 	streams.ErrPrintf("%s\n", msg)
 }
 
-// isTerminalWriter reports whether w is a terminal, the same check
-// newImplementerLine uses to decide whether to draw its progress line in
-// place or fall back to status lines.
-func isTerminalWriter(w io.Writer) bool {
+// terminalFile is the file w writes to and whether that file is a terminal.
+// The file comes back too because a caller that draws in place needs it to ask
+// the terminal's width.
+func terminalFile(w io.Writer) (*os.File, bool) {
 	f, ok := w.(*os.File)
-	return ok && term.IsTerminal(int(f.Fd()))
+	return f, ok && term.IsTerminal(int(f.Fd()))
 }

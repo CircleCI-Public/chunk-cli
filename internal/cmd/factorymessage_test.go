@@ -165,19 +165,21 @@ func TestPrintRunStartMessageSkipsJSONAndNonTTY(t *testing.T) {
 	}
 }
 
-// A bytes.Buffer fails the isTerminalWriter's *os.File assertion outright, so
-// it alone cannot tell "not a *os.File" apart from "a *os.File that is not a
-// terminal" (a redirected log file, a pipe, CI's captured stderr) — the exact
-// case the request says must keep today's output byte for byte. A pipe is a
-// real *os.File, so it exercises term.IsTerminal itself; a mutant that
-// dropped that check and returned true for any *os.File would print here.
-func TestIsTerminalWriterRejectsANonTTYFile(t *testing.T) {
+// A bytes.Buffer fails terminalFile's *os.File assertion outright, so it alone
+// cannot tell "not a *os.File" apart from "a *os.File that is not a terminal"
+// (a redirected log file, a pipe, CI's captured stderr) — the exact case the
+// request says must keep today's output byte for byte. A pipe is a real
+// *os.File, so it exercises term.IsTerminal itself; a mutant that dropped that
+// check and returned true for any *os.File would print here.
+func TestTerminalFileRejectsANonTTYFile(t *testing.T) {
 	r, w, err := os.Pipe()
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = r.Close() })
 	t.Cleanup(func() { _ = w.Close() })
 
-	assert.Assert(t, !isTerminalWriter(w), "a pipe must not read as a terminal")
+	gotFile, isTTY := terminalFile(w)
+	assert.Assert(t, !isTTY, "a pipe must not read as a terminal")
+	assert.Equal(t, gotFile, w, "the file comes back either way, for a caller that needs its width")
 
 	streams := iostream.Streams{Out: io.Discard, Err: w}
 	printRunStartMessage(streams, false, "Chunk will implement this change.")
