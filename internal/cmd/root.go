@@ -81,6 +81,12 @@ Other commands
 {{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}  {{rpad .Name .NamePadding}} {{.Short}}
 {{end}}{{end}}
 Run 'chunk commands' to list every command.
+
+Usage:
+  {{.CommandPath}} [command]
+
+Flags:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}
 {{end}}
 Environment Variables:
   CIRCLECI_TOKEN                  CircleCI API token (also: CIRCLE_TOKEN)

@@ -65,6 +65,13 @@ func TestRootHelp_StartHereThenOtherCommands(t *testing.T) {
 	otherCommandsSection := help[otherCommands:]
 	assert.Assert(t, strings.Contains(otherCommandsSection, "task"), "task should still be listed under Other commands:\n%s", otherCommandsSection)
 
+	// The root template replaces cobra's own usage block, so the flags only a
+	// reader of this help would ever find have to be put back by hand.
+	assert.Assert(t, strings.Contains(help, "Usage:"), "help should say how to invoke chunk:\n%s", help)
+	for _, flag := range []string{"-h, --help", "-v, --version", "--no-daemon"} {
+		assert.Assert(t, strings.Contains(help, flag), "help should list %s:\n%s", flag, help)
+	}
+
 	assert.Assert(t, strings.Contains(help, "Environment Variables:"), "help should keep the Environment Variables section:\n%s", help)
 	assert.Assert(t, strings.Contains(help, "Configuration:"), "help should keep the Configuration section:\n%s", help)
 
