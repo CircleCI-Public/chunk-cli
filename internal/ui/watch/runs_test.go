@@ -37,6 +37,8 @@ func liveSession(id string, state chunkd.SessionState, started time.Time) sessio
 func sessModel(sessions ...sessionInfo) Model {
 	m := New(nil, true).WithConnection(chunkd.Connection{})
 	m.width, m.height = 110, 40
+	// Most tests are about finished runs, which the default view hides.
+	m.showEnded = true
 	m.sessions, m.allRuns = sessions, sessions
 	return m
 }
@@ -1289,4 +1291,73 @@ func TestNotStartedRoundExplainsWhenItBegins(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "both begin when the implementer finishes"), out)
 	out = renderRound(t, threeAndThree(chunkd.RoundChecking))
 	assert.Assert(t, !strings.Contains(out, "both begin"), out)
+}
+
+func endedRun(id string) sessionInfo {
+	r := factoryRun(id, chunkd.SessionDone, time.Now().Add(-time.Hour))
+	ended := time.Now().Add(-30 * time.Minute)
+	r.s.EndedAt = &ended
+	return r
+}
+
+func listedIDs(m Model) []string {
+	var ids []string
+	for _, r := range m.sessions {
+		ids = append(ids, r.s.ID)
+	}
+	return ids
+}
+
+func TestDefaultViewListsOnlyLiveRuns(t *testing.T) {
+	m := sessModel()
+	m.showEnded = false
+	m = poll(m, factoryRun("live", chunkd.SessionRunning, time.Now()), endedRun("old"))
+	assert.DeepEqual(t, listedIDs(m), []string{"live"})
+	assert.Equal(t, m.selRun, "live")
+}
+
+func TestEShowsAndHidesFinishedRuns(t *testing.T) {
+	m := sessModel()
+	m.showEnded = false
+	m = poll(m, factoryRun("live", chunkd.SessionRunning, time.Now()), endedRun("old"))
+
+	m, _ = press(m, 'e')
+	assert.DeepEqual(t, listedIDs(m), []string{"live", "old"})
+	m, _ = press(m, 'e')
+	assert.DeepEqual(t, listedIDs(m), []string{"live"})
+}
+
+func TestSelectedRunStaysListedWhenItEnds(t *testing.T) {
+	m := sessModel()
+	m.showEnded = false
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	m = poll(m, r)
+	r = endedRun("abc")
+	m = poll(m, r)
+	assert.DeepEqual(t, listedIDs(m), []string{"abc"})
+}
+
+func TestDeleteNeedsTwoPressesAndOnlyAppliesToFinishedRuns(t *testing.T) {
+	m := sessModel(endedRun("old"))
+	m.selRun = "old"
+	m, cmd := press(m, 'D')
+	assert.Assert(t, cmd == nil)
+	assert.Equal(t, m.runLine(), "press D again to delete this run's record")
+	m, cmd = press(m, 'D')
+	assert.Assert(t, cmd != nil)
+
+	live := sessModel(factoryRun("live", chunkd.SessionRunning, time.Now()))
+	live.selRun = "live"
+	live, cmd = press(live, 'D')
+	assert.Assert(t, cmd == nil)
+	assert.Equal(t, live.runConfirm, "")
+}
+
+func TestDeletedRunLeavesTheList(t *testing.T) {
+	m := sessModel(endedRun("a"), endedRun("b"))
+	m.selRun = "a"
+	next, _ := m.Update(sessionActionMsg{id: "a", note: "deleted", deleted: true})
+	m = next.(Model)
+	assert.DeepEqual(t, listedIDs(m), []string{"b"})
+	assert.Equal(t, m.selRun, "b")
 }

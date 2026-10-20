@@ -29,6 +29,8 @@ type keyMap struct {
 	ScrollDraft, SendDraft, KeepDraft key.Binding
 	Details                           key.Binding
 	Cancel                            key.Binding
+	// ToggleEnded shows or hides finished runs, and Delete forgets one.
+	ToggleEnded, Delete key.Binding
 	// Back is Esc: back to the list from the right pane, and quit from the
 	// list. It goes unlisted, since q and ← already say both.
 	Back      key.Binding
@@ -61,6 +63,8 @@ func (m Model) keys() keyMap {
 		SendDraft:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send to factory (last step)")),
 		KeepDraft:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "keep for later")),
 		Cancel:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
+		ToggleEnded: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "show finished")),
+		Delete:      key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete run")),
 		Back:        key.NewBinding(key.WithKeys("esc")),
 		Quit:        key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		ForceQuit:   key.NewBinding(key.WithKeys("ctrl+c")),
@@ -90,6 +94,11 @@ func (m Model) keys() keyMap {
 	// made, say) draws no details row, so the key would do nothing.
 	k.Details.SetEnabled(run != nil && m.runDetailLines(m.styles(), *run) != nil)
 	k.Cancel.SetEnabled(run != nil && !run.s.State.Finished())
+	k.Delete.SetEnabled(run != nil && run.s.State.Finished())
+	k.ToggleEnded.SetEnabled(m.endedCount() > 0 || m.showEnded)
+	if m.showEnded {
+		k.ToggleEnded.SetHelp("e", "hide finished")
+	}
 	if run != nil {
 		k.Toggle.SetHelp("Space", "expand/collapse")
 		if it := m.selectedRunItem(); it != nil && it.kind == itemTask {
@@ -100,7 +109,7 @@ func (m Model) keys() keyMap {
 		// Typing goes to the search or the prompt, and a draft being made or
 		// shown has keys of its own, so no other key does anything: d is the
 		// draft's diff then, not a run's details.
-		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.Copy, &k.Toggle, &k.Search, &k.New, &k.Details, &k.Cancel, &k.Quit} {
+		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.Copy, &k.Toggle, &k.Search, &k.New, &k.Details, &k.Cancel, &k.Delete, &k.ToggleEnded, &k.Quit} {
 			b.SetEnabled(false)
 		}
 	}
@@ -109,7 +118,7 @@ func (m Model) keys() keyMap {
 
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.KeepDraft, k.Keep, k.Clear, k.New, k.Up, k.Right, k.Open, k.Copy, k.Toggle, k.Search, k.Details, k.Cancel, k.Left, k.Quit}
+	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.KeepDraft, k.Keep, k.Clear, k.New, k.Up, k.Right, k.Open, k.Copy, k.Toggle, k.Search, k.Details, k.Cancel, k.Delete, k.ToggleEnded, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

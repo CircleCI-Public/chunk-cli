@@ -278,6 +278,31 @@ func TestFactorySessionCanBeCancelled(t *testing.T) {
 	assert.Equal(t, waitForSessionEnd(t, d, sess.ID).State, chunkd.SessionCancelled)
 }
 
+func TestFinishedSessionCanBeDeleted(t *testing.T) {
+	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
+
+	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	waitForSessionEnd(t, d, sess.ID)
+
+	found, removed := d.sessions.deleteSession(sess.ID)
+	assert.Assert(t, found && removed)
+	assert.Assert(t, d.sessions.get(sess.ID) == nil)
+	assert.Equal(t, len(d.sessions.forProject(root)), 0)
+
+	found, _ = d.sessions.deleteSession(sess.ID)
+	assert.Assert(t, !found)
+}
+
+func TestRunningSessionIsNotDeleted(t *testing.T) {
+	s := newSessionStore(context.Background())
+	e, _, _ := s.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
+
+	found, removed := s.deleteSession(e.snapshot().ID)
+	assert.Assert(t, found && !removed)
+	assert.Assert(t, s.get(e.snapshot().ID) != nil)
+}
+
 // One session at a time per project.
 func TestFactorySessionsTakeTurns(t *testing.T) {
 	s := newSessionStore(context.Background())
