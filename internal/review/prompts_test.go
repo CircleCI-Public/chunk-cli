@@ -26,8 +26,8 @@ func TestLoadPrompts(t *testing.T) {
 	got, err := LoadPrompts(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got, []Prompt{
-		{Name: "api", Body: "check the API shape"},
-		{Name: "security", Body: "check for injection"},
+		{Name: "api", Body: "check the API shape", File: "api.TXT"},
+		{Name: "security", Body: "check for injection", File: "security.md"},
 	})
 }
 

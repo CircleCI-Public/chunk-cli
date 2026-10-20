@@ -98,9 +98,10 @@ func TestFactoryRunThatPassesPushesItsBranchAndOpensAPullRequest(t *testing.T) {
 	assert.Equal(t, got.Base, "main")
 	assert.Equal(t, got.Title, "Add a --verbose flag")
 	assert.Equal(t, got.Draft, false)
-	assert.Assert(t, strings.Contains(got.Body, "> Add a --verbose flag"), got.Body)
-	assert.Assert(t, strings.Contains(got.Body, "1 file changed"), got.Body)
-	assert.Assert(t, strings.Contains(got.Body, "- bugs (review)"), got.Body)
+	assert.Assert(t, strings.HasPrefix(got.Body, "Add a --verbose flag\n"), got.Body)
+	assert.Assert(t, !strings.Contains(got.Body, "## Changes"), got.Body)
+	assert.Assert(t, strings.Contains(got.Body, "- bugs"), got.Body)
+	assert.Assert(t, strings.Contains(got.Body, "Assembled with care by **chunk factory 🏭**"), got.Body)
 	// Opening it does not change how the run ended.
 	assert.Equal(t, detail.State, chunkd.SessionDone)
 	assert.Equal(t, detail.Factory.Result, chunkd.ResultPassed)

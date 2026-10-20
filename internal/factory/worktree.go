@@ -140,6 +140,16 @@ func (w Worktree) Commit(ctx context.Context, message string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Tip is the commit the worktree's branch is at now.
+func (w Worktree) Tip(ctx context.Context) (string, error) {
+	git := gitexec.Runner{Dir: w.Path}
+	out, err := git.Output(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("resolve the branch's commit: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // Stat is git's one-line summary of the branch's work since the baseline, such
 // as "3 files changed, 40 insertions(+)", or "" when there is none.
 func (w Worktree) Stat(ctx context.Context) (string, error) {

@@ -27,6 +27,9 @@ var ErrNoPrompts = errors.New("no prompts found")
 type Prompt struct {
 	Name string
 	Body string
+	// File is the prompt's file name, extension included, in the directory it
+	// was loaded from.
+	File string
 }
 
 // IsPromptFile reports whether name has an extension that LoadPrompts reads.
@@ -61,7 +64,7 @@ func LoadPrompts(dir string) ([]Prompt, error) {
 		if body == "" {
 			continue
 		}
-		prompts = append(prompts, Prompt{Name: strings.TrimSuffix(e.Name(), ext), Body: body})
+		prompts = append(prompts, Prompt{Name: strings.TrimSuffix(e.Name(), ext), Body: body, File: e.Name()})
 	}
 	if len(prompts) == 0 {
 		return nil, ErrNoPrompts
