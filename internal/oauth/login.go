@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/term"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/browser"
 )
 
 const (
@@ -66,7 +68,7 @@ func Login(ctx context.Context, cfg LoginConfig, status io.Writer) (string, erro
 	// Under an agent or a script stdin is not a terminal, and opening a window
 	// unprompted gives the user no say in where they are being sent.
 	if !cfg.NoBrowser && stdinIsTerminal() && waitForEnter(ctx, status) {
-		if err := OpenBrowser(authorizeURL); err != nil {
+		if err := browser.Open(authorizeURL); err != nil {
 			w("Could not open browser - use the URL above.")
 		}
 	}

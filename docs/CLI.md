@@ -658,7 +658,18 @@ chunk
   sidecars are shown there rather than as rows of their own. `→` moves into
   the pane, `↑/↓` picks a row and `Enter` opens it: a review's live log, a
   failed check's output, or the implementer's summary (on a round, it opens or
-  closes the round). The summary and a
+  closes the round). Once the run has ended, its `Branch:` row takes the cursor,
+  and so does its `Pull request:` row once the pull request is open (a pull
+  request that is still being pushed, failed or was skipped has no link to act
+  on, so it cannot be selected). `c` copies what has the cursor, the branch
+  name or the full URL, and says `copied` under the row for a few seconds. On
+  the pull request row `Enter` or `o` opens it in the default browser
+  (`o` works from any row of the run), and so does `Cmd+Enter` in terminals
+  that report it (kitty keyboard protocol: kitty, Ghostty, WezTerm, iTerm2 when
+  enabled), which the footer advertises only then. The row says `opened in your
+  browser`, or `could not open a browser, URL copied` when there is none (over
+  SSH, say) and the URL is copied instead. The URL is an OSC 8 hyperlink, so
+  Cmd+click works in terminals that support it. The summary and a
   check's output are word-wrapped to the screen; a log keeps one line per line
   of output. The footer only lists keys that do something for what is
   selected, so `x` is gone once a run has ended. **`q` only detaches**: the run

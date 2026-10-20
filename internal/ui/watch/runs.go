@@ -251,6 +251,10 @@ const (
 	itemCheck
 	itemReview
 	itemRound
+	// itemBranch and itemPR are the run's branch and pull request, under its
+	// rounds.
+	itemBranch
+	itemPR
 )
 
 // runItem is one selectable row of the run pane: a round, which opens and
@@ -269,8 +273,16 @@ func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cm
 		return m, nil
 	}
 	it := items[m.runItem]
+	if it.kind == itemPR {
+		return m.openPullRequest(run)
+	}
+	if it.round < 0 {
+		return m, nil // the branch: nothing to open
+	}
 	r := run.s.Rounds[it.round]
 	switch it.kind {
+	case itemBranch, itemPR:
+		return m, nil
 	case itemRound:
 		return m.toggleRound(run), nil
 	case itemReview:
@@ -364,9 +376,14 @@ func (m Model) copyRunFailure(run *sessionInfo) (tea.Model, tea.Cmd) {
 // itemFailureReport describes why a run row failed, in text to paste to an
 // agent, or "" when the row did not fail.
 func itemFailureReport(s chunkd.Session, it runItem) string {
+	if it.round < 0 {
+		return ""
+	}
 	r := s.Rounds[it.round]
 	var title, reason, output string
 	switch it.kind {
+	case itemBranch, itemPR:
+		return ""
 	case itemCheck:
 		c := r.Checks[it.idx]
 		if c.Status != chunkd.CheckFailed && c.Status != chunkd.CheckErrored {
@@ -954,4 +971,93 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// ---- the branch and pull request ---------------------------------------------
+
+// rowNoteFor is how long a row says what was done with it.
+const rowNoteFor = 4 * time.Second
+
+// rowNote is what the last open or copy of a run's branch or pull request
+// said, shown on that row until it expires.
+type rowNote struct {
+	runID string
+	kind  runItemKind
+	text  string
+	seq   int
+}
+
+// rowNoteExpiredMsg clears the row note numbered seq.
+type rowNoteExpiredMsg struct{ seq int }
+
+// prOpenedMsg is the outcome of asking the browser to open a pull request.
+type prOpenedMsg struct {
+	runID, url string
+	err        error
+}
+
+// noteRow shows text on run's row of the given kind for a few seconds.
+func (m Model) noteRow(runID string, kind runItemKind, text string) (Model, tea.Cmd) {
+	m.noteSeq++
+	seq := m.noteSeq
+	m.rowNote = rowNote{runID: runID, kind: kind, text: text, seq: seq}
+	return m, tea.Tick(rowNoteFor, func(time.Time) tea.Msg { return rowNoteExpiredMsg{seq: seq} })
+}
+
+// openPullRequest opens the run's pull request in the browser. A run with no
+// open pull request has nothing to open.
+func (m Model) openPullRequest(run *sessionInfo) (tea.Model, tea.Cmd) {
+	if run == nil || run.s.Factory == nil || !run.s.Factory.PullRequest.Opened() {
+		return m, nil
+	}
+	id, url, open := run.s.ID, run.s.Factory.PullRequest.URL, m.openURL
+	return m, func() tea.Msg { return prOpenedMsg{runID: id, url: url, err: open(url)} }
+}
+
+// withPullRequestOpened says on the pull request's row how opening it went. With
+// no browser to open it in (over SSH, say), it copies the link instead.
+func (m Model) withPullRequestOpened(msg prOpenedMsg) (tea.Model, tea.Cmd) {
+	if msg.err == nil {
+		return m.noteRow(msg.runID, itemPR, "opened in your browser")
+	}
+	next, cmd := m.noteRow(msg.runID, itemPR, "could not open a browser, URL copied")
+	return next, tea.Batch(tea.SetClipboard(msg.url), cmd)
+}
+
+// copyRunItem copies what has the cursor: the pull request's URL, the
+// branch's name, or for any other row the failure it stands for.
+func (m Model) copyRunItem(run *sessionInfo) (tea.Model, tea.Cmd) {
+	it := m.selectedRunItem()
+	if run == nil || run.s.Factory == nil || it == nil {
+		return m.copyRunFailure(run)
+	}
+	var text string
+	switch it.kind {
+	case itemPR:
+		text = run.s.Factory.PullRequest.URL
+	case itemBranch:
+		text = run.s.Factory.Branch
+	case itemImplement, itemCheck, itemReview, itemRound:
+		return m.copyRunFailure(run)
+	}
+	next, cmd := m.noteRow(run.s.ID, it.kind, "copied")
+	return next, tea.Batch(tea.SetClipboard(text), cmd)
+}
+
+// updateRowNote handles what the branch and pull request rows hear about: what
+// the terminal can send, how opening the pull request went, and a note's timer.
+func (m Model) updateRowNote(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyboardEnhancementsMsg:
+		// A terminal that disambiguates modified keys sends Cmd+Enter as its own
+		// key; the rest keep it for themselves.
+		m.superEnter = msg.SupportsKeyDisambiguation()
+	case prOpenedMsg:
+		return m.withPullRequestOpened(msg)
+	case rowNoteExpiredMsg:
+		if m.rowNote.seq == msg.seq {
+			m.rowNote = rowNote{}
+		}
+	}
+	return m, nil
 }
