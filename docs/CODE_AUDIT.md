@@ -8,11 +8,16 @@ conventions in [AGENTS.md](../AGENTS.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 **Re-audited at:** `0f3882a` (main, 2026-09-22). Every `file:line` below was re-derived
 against that commit. Line numbers drift — treat them as a starting point, not a contract.
 
-**Findings re-checked at:** `c0246dc` (main, 2026-10-02). Every open finding above section 3
-was confirmed to still hold; line numbers were not re-derived.
+**Findings re-checked at:** `13eeff0` (main, 2026-10-20). Every open finding was re-read
+against the code and every `file:line` re-derived. Closed since the previous check: 3.3, 2.3's
+headline path, 3.12's `hooks-disabled` sentinel, and the swallowed config-load error in
+section 8. Half closed: 6.2, 6.3, and three of 3.12's rows. Everything else holds, and five
+findings have got *worse* on their own terms — see section 9.
 
-Findings marked **[fixed]** were resolved between the two audits; where a specific commit
-is known it is cited. Everything else is still open.
+Findings marked **[fixed]** are resolved; where a specific commit is known it is cited.
+Everything else is still open. A count in a finding (18 sites, 143 literals) is the figure at
+the audit that first recorded it, with the current figure beside it where the two differ —
+the drift is often the point.
 
 ## How to read this
 
@@ -20,9 +25,10 @@ Findings are grouped by kind and ordered by severity within each group. Each one
 defect, why it matters, and the fix. Where a finding is a symptom of a deeper one it says so,
 so the same thing does not get fixed twice.
 
-Items marked **[swept]** came from a broad automated sweep and were not individually
-re-verified by hand. Everything else was confirmed by reading the code. Two findings were
-confirmed by running code rather than reading it, and say so explicitly.
+Items marked **[swept]** came from a broad automated sweep rather than from reading each site.
+Everything else was confirmed by reading the code; every `file:line` in the document was
+re-derived at the most recent re-check. Two findings were confirmed by running code rather than
+reading it, and say so explicitly.
 
 ---
 
@@ -92,11 +98,10 @@ to `ErrNotFound`.
 
 ### 1.7 Colour global is raced by the spinner goroutine
 
-`internal/ui/colors.go` was replaced by `internal/ui/styles.go` in commit `33ee96a` (PR #543,
-lipgloss migration). The underlying race survives: `_colorEnabled` at `styles.go:22` is still a
-plain package variable, `SetColorEnabled` (`:62`) still writes it without synchronisation, and
-`Spinner.render` (`internal/ui/spinner.go:122`) still reads it via `ErrDim` from the goroutine
-started at `spinner.go:54`.
+`_colorEnabled` at `internal/ui/styles.go:22` is a plain package variable, `SetColorEnabled`
+(`:63`) writes it without synchronisation, and `Spinner.render`
+(`internal/ui/spinner.go:122`) reads it via `ErrDim` from the goroutine started at
+`spinner.go:54`.
 
 Unsynchronised read/write on a shared global, detectable under `-race`.
 
@@ -130,10 +135,11 @@ keep-alive connection blocks teardown of the login flow indefinitely.
 
 ### 1.11 `chunk upgrade` cannot be interrupted or timed out
 
-`internal/upgrade/upgrade.go:108` builds requests with `http.NewRequest` (not
+`internal/upgrade/upgrade.go:173` builds requests with `http.NewRequest` (not
 `NewRequestWithContext`), takes no `ctx`, and is handed `http.DefaultClient` — which has no
-`Timeout` — from `internal/cmd/upgrade.go`. An unresponsive GitHub hangs the command with no
-way out. See also 3.7.
+`Timeout` — from `internal/cmd/upgrade.go:40`. An unresponsive GitHub hangs the command with
+no way out. `downloadAndReplace` (`:209`) is worse still: a bare `client.Get(url)`. See also
+3.7.
 
 **Fix:** route through `internal/httpcl`, which every other caller already uses.
 
@@ -141,10 +147,10 @@ way out. See also 3.7.
 
 Two places decide behaviour by grepping error text rather than inspecting typed errors:
 
-- `main.go:98` (`errorSuggestion`, now at `:97`) matches `"authentication"`, `"401"`,
-  `"dial tcp"`.
+- `main.go:98` (`errorSuggestion`) matches `"authentication"`, `"401"`, `"dial tcp"`.
 - `internal/github/retry.go:29` (`isRetryable`) matches `"timeout"`, `"ETIMEDOUT"`,
-  `"invalid character '<'"` (now at `:44-57`).
+  `"invalid character '<'"` at `:42-57`, after a typed `hc.HTTPError` 5xx check — so the
+  typed path and the substring path sit side by side in one function.
 
 `circleci.StatusError` and `httpcl.HTTPError` both exist and carry status codes. Substring
 matching breaks silently whenever an upstream message is reworded, and the repo enables
@@ -154,13 +160,13 @@ matching breaks silently whenever an upstream message is reworded, and the repo 
 
 ### 1.13 `config.Resolve` returns a half-built config with a discarded error
 
-`internal/config/config.go:377` (`Resolve`) captures the error from `Load()`, carries on
-building `rc` regardless, and returns `rc, err` at the end. Its sibling `ResolveCircleCI`
-(`internal/config/config.go:419`) returns early on the identical failure — the two constructors
-disagree about whether a config-load failure is fatal.
+`internal/config/config.go:411` (`Resolve`) captures the error from `Load()` at `:412`, carries
+on building `rc` regardless, and returns `rc, err` at `:446`. Its sibling `ResolveCircleCI`
+(`internal/config/config.go:451`) returns early on the identical failure at `:452-455` — the two
+constructors disagree about whether a config-load failure is fatal.
 
-Every call site then discards it: `rc, _ := config.Resolve(...)`, still scattered across
-`internal/cmd` (e.g. `auth.go:50`, `:67`, `:117`, `:477`, `:540`, `:677`). A corrupt
+Nearly every call site then discards it: `rc, _ := config.Resolve(...)` at `internal/cmd/auth.go:55`,
+`:72`, `:128`, `:570`, `:634`, `:706` and `:843`. Only `:464` keeps it. A corrupt
 `~/.config/chunk/config.json` produces a partially populated config and no diagnostic
 anywhere.
 
@@ -174,11 +180,12 @@ which switches on it to bypass the keychain. The parameter is honoured.
 
 ### 1.15 JSON:API decoding by type-assertion ladder silently drops fields
 
-`internal/circleci/client.go:85` types the resource envelope as `Attributes any` /
-`References any`. `ListSidecars` (`:129-140`) and `ListSnapshots` (`:614-626`) therefore
+`internal/circleci/client.go:85-87` types the resource envelope as `Attributes any` /
+`References any`. `ListSidecars` (`:128-143`) and `ListSnapshots` (`:641-659`) therefore
 hand-roll nested `map[string]any` assertion ladders to get at fields.
 
-The package **already has the right typed structs** nearby in the same file.
+The package **already has the right typed structs** nearby in the same file, and already uses
+them for the same resource: `CreateSidecar` (`:155`) decodes into `sidecarAttrs` / `orgUserRefs`.
 
 This is worse than verbose. An assertion ladder drops a field silently when the type does not
 match; a typed decode errors. The two blocks are also a confirmed 19-line duplicate.
@@ -193,12 +200,12 @@ match; a typed decode errors. The two blocks are also a confirmed 19-line duplic
 
 Two independent detectors map project marker files to test commands:
 
-| | `internal/validate/setup.go:187` | `envbuilder/envbuilder.go:1219` |
+| | `internal/validate/setup.go:205` | `envbuilder/envbuilder.go:1238` |
 |---|---|---|
 | shape | flat `switch` on marker files | scored detection, workspace aware |
-| Python | `pytest` | `uv run pytest` / `pipenv run pytest` / `pytest` by lockfile |
-| Go | `go test ./...` | `go test -p 1 ./...` |
-| Rust | `cargo test` | `cargo test --workspace` with excludes |
+| Python | `pytest` (`:239`) | `uv run pytest` on a `uv.lock` (`:1247`) |
+| Go | `go test ./...` (`:229`) | `go test -p 1 ./...` (`:1298`) |
+| Rust | `cargo test` (`:236`) | `cargo test --workspace` with excludes (`:1382`) |
 
 So on a `uv` project `chunk init` writes `pytest` while the sidecar image builds
 `uv run pytest`. Which answer a user gets depends on which command they ran. This is the
@@ -211,26 +218,26 @@ lines and the divergence with it.
 
 The same derivation — `sha256(sessionID + ":" + branch)`, first four bytes as hex — appears at:
 
-- `internal/sidecar/active.go:95` (`sidecarFileName`) — names the **state file**
-- `internal/cmd/validate.go:1425` — names the **sidecar**
+- `internal/sidecar/active.go:87`, in `sidecarFileName` (`:80`) — names the **state file**
+- `internal/cmd/validate.go:1778-1779` — names the **sidecar**
 
 Change the scheme in one and the state file silently stops corresponding to the sidecar it
 points at.
 
 **Fix:** one exported `sidecar.SessionBranchKey(sessionID, branch)`.
 
-### 2.3 `chunk skill list` prints a path that does not exist
+### 2.3 Skill name and description are declared twice **[path fixed]**
 
-`internal/skills/install.go:47` hard-codes the description string
-`"...review standards from .chunk/review-prompt.md."`. The real path, everywhere else in the
-repo — all five `SKILL.md` files, `AGENTS.md`, and the output of `chunk build-prompt` — is
-`.chunk/context/review-prompt.md`.
+The bad path is gone: `internal/skills/install.go:47` now reads "review prompts in
+`.chunk/reviews/`", which exists. Fixed by `2ab63f9` (#723), which folded `build-prompt` into
+`factory bootstrap` and took `.chunk/context/review-prompt.md` with it.
 
-The underlying cause is that skill name and description are declared **twice**:
+The cause survives. Skill name and description are declared **twice**:
 `internal/skills/install.go:40` in Go, and the `description:` frontmatter of each
 `skills/<name>/SKILL.md`. Both are embedded in the binary. They have already diverged in
-trigger phrases too: the Go copy for `chunk-sidecar` is missing "sidecar dev loop", "validate
-remotely", "scaffold test-suites.yml" and "set up smarter testing".
+trigger phrases too: the Go copy for `chunk-sidecar` (`install.go:52`) is still missing
+"sidecar dev loop", "validate remotely", "scaffold test-suites.yml" and "set up smarter
+testing", all four of which are in `skills/chunk-sidecar/SKILL.md:3`.
 
 **Fix:** parse the frontmatter from `skills.Content` and delete the Go copies.
 
@@ -252,7 +259,8 @@ repo hashing apart. What remains is the five ways of *finding* the root in the f
 ### 2.5 `isRetryable` twice, same name, different contract
 
 `internal/github/retry.go:29` is a retry policy for idempotent requests.
-`internal/circleci/client.go:476` is a resume policy for a cursor-based stream. Both are
+`internal/circleci/client.go:504` is a resume policy for a cursor-based stream — it returns
+true for any non-HTTP error. Both are
 correct for their own purpose; sharing a name across sibling packages invites someone to
 "unify" them.
 
@@ -264,23 +272,24 @@ correct for their own purpose; sharing a name across sibling packages invites so
 
 Ordered by how much code the fix removes.
 
-### 3.1 The auth provider matrix, written out 18 times
+### 3.1 The auth provider matrix, written out 22 times
 
-Three providers (CircleCI, Anthropic, GitHub) times six operations, hand-written across three
-files:
+Four credential kinds (CircleCI, Anthropic, GitHub, and now Claude OAuth) times six
+operations, hand-written across three files:
 
 | operation | sites |
 |---|---|
-| `authSet*` | `internal/cmd/auth.go:142`, `:201`, `:592` |
-| `authRemove*` | `internal/cmd/auth.go:466`, `:529`, `:666` — around 63 lines **each** |
-| `hasStored*` | `internal/cmd/auth.go:439`, `:448`, `:457` — 9 lines each, differing only in the keyring service function and the config field |
-| `ensure*Client` | `internal/cmd/authhelper.go:57`, `:143`, `:205` |
-| `Save*` | `internal/authprompt/authprompt.go:123`, `:140`, `:157` |
-| `Validate*` | `internal/authprompt/authprompt.go:25`, `:47`, `:174` |
+| `authSet*` | `internal/cmd/auth.go:157`, `:216`, `:299`, `:768` |
+| `authRemove*` | `internal/cmd/auth.go:381`, `:633`, `:705`, `:842` — around 63 lines **each** |
+| `hasStored*` | `internal/cmd/auth.go:599`, `:608`, `:619`, `:624` — 9 lines each, differing only in the keyring service function and the config field |
+| `ensure*Client` | `internal/cmd/authhelper.go:60`, `:192`, `:254` |
+| `Save*` | `internal/authprompt/authprompt.go:144`, `:161`, `:179`, `:185` |
+| `Validate*` | `internal/authprompt/authprompt.go:28`, `:57`, `:202` |
 
-`internal/cmd/auth.go` is 737 lines and almost all of it is this. The `Save*` trio is a
-confirmed three-way duplicate; `internal/authprompt/authprompt.go:85-94` and `:110-119` are
-another confirmed pair.
+`internal/cmd/auth.go` is 903 lines and almost all of it is this. The count has gone from 18 to
+22 since the first audit, because a fourth credential kind cost six hand-written functions —
+which is the finding. The `Save*` trio is a confirmed duplicate; the `Resolve*Client` trio at
+`internal/authprompt/authprompt.go:95`, `:119` and `:131` is another.
 
 **Fix:** one descriptor plus a table:
 
@@ -295,30 +304,27 @@ type provider struct {
 var providers = []provider{ /* circleci, anthropic, github */ }
 ```
 
-Adding a fourth provider becomes one table entry instead of six hand-written functions.
+Adding a credential kind becomes one table entry instead of six hand-written functions.
 Largest single win in the repo, and it wants its own PR.
 
-### 3.2 `ExecOverSSH` boilerplate, 17 times in one file [swept]
+### 3.2 `ExecOverSSH` boilerplate, repeated at every call site [swept]
 
-The shape `ExecOverSSH` then check `err` then check `ExitCode != 0` then wrap, repeats 15 times
-in `internal/sidecar/sync.go` (was 17; two sites were removed with the rsync refactor), plus 4
-in `internal/variants/variants.go` and 1 in `internal/cmd/sidecar.go`.
-`initRemoteWorkspace` and `syncWorkspace` also repeat the same mkdir-parent-then-test-directory
-pair verbatim.
+The shape `ExecOverSSH` then check `err` then check `ExitCode != 0` then wrap. `sync.go`, where
+the first audit found 15 of these, was deleted in `c0246dc` (#667) and replaced by
+`internal/sidecar/rsync.go`, which carries 9 of them (`:124`, `:219`, `:315`, `:322`, `:327`,
+`:437`, `:444`, `:449`, `:460`). The rest are spread over `internal/variants/variants.go:186`,
+`:262`, `:274`, `internal/sidecar/provision.go:140`, `internal/sidecar/writefile.go:27`,
+`internal/sidecar/sidecar.go:56` and `internal/cmd/factorybootstrapsetup.go:357`.
 
 **Fix:** `sidecar.mustExec(ctx, sess, label, cmd, stdin)` in `internal/sidecar/ssh.go`.
 Around 90 lines.
 
-### 3.3 `writeSettings` and `writeCodexHooks` are the same 90 lines twice
+### 3.3 `writeSettings` and `writeCodexHooks` are the same 90 lines twice **[fixed]**
 
-`internal/cmd/init.go:43` and `internal/cmd/init.go:151` differ only in the build function,
-directory name, file name, merge function, example-writer function and two blurb strings. The
-doc comment on the second one admits it: "Uses the same merge/confirm/fallback pattern as
-writeSettings."
-
-The coloured unified-diff printing loop is verbatim in both.
-
-**Fix:** one helper taking a small descriptor. Move the diff-printing loop into `internal/ui`.
+Collapsed into exactly the shape this finding asked for: one `writeAgentFile` in
+`internal/settings/write.go`, driven by an `agentFile` descriptor (`dir`, `name`, `example`,
+`build`, `merge`), with `WriteClaude` and `WriteCodex` as two-line wrappers. The diff-printing
+loop is now a single `confirmDiff` at `internal/cmd/init.go:45`.
 
 ### 3.4 Git-repo test setup, still duplicated [swept]
 
@@ -343,9 +349,9 @@ everything else lives under `config.ProjectDataDir`.
 
 ### 3.6 The three keyring timeout wrappers
 
-`internal/keyring/keyring.go:48`, `:70` and `:84` (`Get`, `Set`, `Delete`) are three copies of
-the same goroutine plus `select` plus `time.After` wrapper (timers at lines `:64`, `:78`,
-`:96`). None takes a `ctx`, so the signal context wired up in `main.go` cannot cancel them, and
+`internal/keyring/keyring.go:54`, `:76` and `:90` (`Get`, `Set`, `Delete`) are three copies of
+the same goroutine plus `select` plus `time.After` wrapper (timers at lines `:70`, `:84`,
+`:102`). None takes a `ctx`, so the signal context wired up in `main.go` cannot cancel them, and
 `time.After` leaks its timer at all three sites.
 
 `internal/variants/variants.go` already does this correctly: `time.NewTimer` with
@@ -355,9 +361,9 @@ the same goroutine plus `select` plus `time.After` wrapper (timers at lines `:64
 
 ### 3.7 Two ad-hoc HTTP paths beside the canonical client
 
-`internal/upgrade/upgrade.go:108` takes a raw `*http.Client` and hand-builds requests with
-manual status checks. `internal/oauth/exchange.go:36` uses `http.DefaultClient`, so no timeout
-at all. Every other caller — `circleci`, `github`, `anthropic`, `envbuilder` — goes through
+`internal/upgrade/upgrade.go:81` takes a raw `*http.Client` and hand-builds the request at
+`:173` with manual status checks at `:185` and `:215`. `internal/oauth/exchange.go:36` uses
+`http.DefaultClient`, so no timeout at all. Every other caller — `circleci`, `github`, `anthropic`, `envbuilder` — goes through
 `internal/httpcl`.
 
 **Fix:** both onto `httpcl`. `oauth` needs a form-body option adding to
@@ -373,8 +379,9 @@ and `internal/circleci/client.go:650` (the same core plus 401/403 and 410 handli
 ### 3.9 One text-input model, implemented twice
 
 `internal/ui/input.go:14` (`hiddenInputModel`) and `internal/ui/text.go:10`
-(`textInputModel`) have identical `Init` and `Update`. (Paths changed from `internal/tui/` in
-commit `33ee96a`; the duplicate itself was not resolved.) Confirmed duplicate, 22 lines.
+(`textInputModel`) have character-identical `Init` and `Update` (`input.go:34-59`,
+`text.go:29-54`); the structs differ only in name. (Paths changed from `internal/tui/` in
+commit `33ee96a`; the duplicate itself was not resolved.) Confirmed duplicate, 26 lines.
 
 **Fix:** one model with a `hidden bool`.
 
@@ -388,8 +395,8 @@ Three call sites also bypass the constants that already exist:
 `"GITHUB_API_URL"`, `internal/cmd/usererr.go:228` uses `"CI"`.
 
 Three more have no constant at all: `CHUNK_TELEMETRY_LOG` (`internal/cmd/root.go`),
-`CHUNK_INSTALL_PATH` (`internal/cmd/upgrade.go`), `CHUNK_SIDECAR_HOME`
-(`internal/sidecar/sync.go`).
+`CHUNK_INSTALL_PATH` (`internal/cmd/upgrade.go:27`), `CHUNK_SIDECAR_HOME`
+(`internal/sidecar/workspace.go:13`).
 
 **Fix:** constants win; `LoadEnv` populates via explicit `os.Getenv(EnvX)` lookups.
 
@@ -407,16 +414,16 @@ text can lie.
 
 | what | sites | canonical |
 |---|---|---|
-| `FormatDuration` / `formatElapsed`, character-identical | `internal/ui/format.go:35`, `internal/validate/validate.go:18` | `ui.FormatDuration` (already imported by `internal/cmd/validate.go`) |
-| POSIX single-quote escape, identical bodies, one test each | `internal/sidecar/ssh.go:35`, `internal/validate/validate.go:47` | one of them; no import cycle blocks it |
-| `.chunk` as a bare literal | `internal/cmd/hook.go:54`, `:74`, `internal/config/project.go:57`, `:168`, `internal/task/config.go:39`, `:70`, `:97`, `internal/validate/validate.go:315` | a constant plus path helpers in `internal/config` |
-| `hooks-disabled` sentinel path built independently by writer and reader | `internal/cmd/hook.go:54`, `internal/validate/validate.go:315` | one function |
-| ed25519 keypair generation | `internal/sidecar/session.go:40`, `internal/testing/fakes/ssh.go:41`, `acceptance/validate_test.go:213` | first two; delete the third |
-| `iostream.Level` to string | `internal/eventlog/eventlog.go`, `internal/tui/watch/model.go` (with a raw `"warn"` literal), `internal/validate/validate_test.go` | a `String()` method on `iostream.Level` |
-| recorded-request filters | `acceptance/sidecar_test.go:691`, `acceptance/validate_variants_test.go:49` (byte-identical), `acceptance/build_prompt_test.go:1377`, `:1387` | methods on `internal/testing/recorder` |
-| `isolateConfig` + `randToken` | `internal/authprompt/authprompt_test.go:20`, `:28`, `internal/cmd/authhelper_test.go:23`, `:30` | `internal/testing/env` |
-| verbatim block | `internal/cmd/auth.go:328-344` and `:349-365` | — |
-| verbatim block | `internal/testing/fakes/github.go:94-104` and `:128-138` | — |
+| `FormatDuration` / `FormatElapsed`, character-identical — **one of the three went, two remain** | `internal/ui/format.go:35`, `internal/commandutil/commandutil.go:16` (`internal/validate/validate.go:21` now delegates) | still `ui.FormatDuration` |
+| POSIX single-quote escape, identical bodies, one test each | `internal/sidecar/ssh.go:36`, `internal/validate/validate.go:50` | one of them; no import cycle blocks it |
+| `.chunk` as a bare literal — **8 sites at the first audit, 11 now** | `internal/cmd/reviewdetach.go:279`, `internal/cmd/validate.go:524`, `internal/validate/validate.go:354`, `internal/chunkd/paths.go:107`, `internal/chunkd/server/load.go:101`, `internal/config/project.go:106`, `:211`, `internal/task/config.go:39`, `:70`, `:97`, `internal/sidecar/pool.go:100` | a constant plus path helpers in `internal/config` |
+| ~~`hooks-disabled` sentinel path built independently by writer and reader~~ **[fixed]** | one `validate.HooksDisabledPaths` at `internal/validate/validate.go:347`; the writer (`internal/cmd/hook.go:61`) and remover (`:88`) both call it | — |
+| ed25519 keypair generation — **3 sites at the first audit, 6 now** | `internal/sidecar/session.go:47`, `internal/testing/fakes/ssh.go:55`, `:96`, `:405`, `internal/sidecar/ssh_test.go:378`, `acceptance/validate_test.go:268` | the `sidecar` and `fakes` ones; the test copies should borrow |
+| `iostream.Level` to string — still no `String()` on `Level` (`internal/iostream/status.go:4`) | `internal/eventlog/eventlog.go:360` (`levelStr`), `internal/factory/log.go:294` (`levelName`, raw `"warn"` at `:299`), `internal/validate/validate_test.go:70` | a `String()` method on `iostream.Level` |
+| recorded-request filters — **partly consolidated** | the byte-identical pair survives at `acceptance/sidecar_test.go:855` (`filterByMethod`) and `acceptance/validate_variants_test.go:49` (`filterVariantRequests`); `acceptance/requests_test.go:9`, `:19` now share `filterByPath` / `filterByPathPrefix` | still `internal/testing/recorder`; the shared half went into the `acceptance` package instead |
+| `isolateConfig` + `randToken` | `internal/authprompt/authprompt_test.go:21`, `:28`, `internal/cmd/authhelper_test.go:24`, `:69` | `internal/testing/env`, which exists and neither uses |
+| verbatim block: already-stored / `force` / `nonInteractive` / `ui.Confirm("Do you want to replace it?")` / keeping-existing — **2 sites at the first audit, 4 now** | `internal/cmd/auth.go:175-190`, `:233-246`, `:321-335`, `:786-799` | part of 3.1 |
+| verbatim block — **the 11-line pair went, a 4-line one spread** | the `authorization == ""` → 401 "Bad credentials" guard at `internal/testing/fakes/github.go:92`, `:102`, `:138`, `:160`, `:185` | one guard helper |
 
 ---
 
@@ -424,15 +431,16 @@ text can lie.
 
 ### 4.1 `envbuilder` is three parallel switches over one axis
 
-`envbuilder/envbuilder.go` is 2722 lines in a single file with two `//nolint:gocyclo`
-suppressions. The root cause of both: **31 stack-conditional branches over the same 14 stack
-constants** (`envbuilder/envbuilder.go:22-36`), spread across exactly three functions.
+`envbuilder/envbuilder.go` is 2756 lines in a single file with two `//nolint:gocyclo`
+suppressions. The root cause of both: **stack-conditional branches over the same 14 stack
+constants** (`envbuilder/envbuilder.go:21-35`, 113 references to them), spread across exactly
+three functions.
 
-| function | lines | stack branches |
+| function | lines | nolint |
 |---|---|---|
-| `detectCommands` `:1219` | 378 | 13 |
-| `dockerfileContent` `:444` | 271 | 9 |
-| `detectImageVersion` `:2460` | 118 | 9 |
+| `detectCommands` `:1238` | 331 | yes |
+| `dockerfileContent` `:457` | 269 | yes |
+| `detectImageVersion` `:2495` | 115 | no |
 
 Plus 29 loose `detect*` helpers, most of them per-stack: `detectNodeTestCommand`,
 `detectGradleJavaVersion`, `detectSBTTestCommand`, `detectDotNetVersion`,
@@ -462,36 +470,42 @@ switches in three separate places.
 
 > `config/` is a leaf — no imports from other `internal/` packages
 
-`internal/config/config.go` imports `internal/keyring`. That dependency is what turned a pure
-resolver into something that performs blocking inter-process communication on every `Resolve`
-call, and it is the root cause of the ctx-less keyring problem in 3.6 rather than a separate
-issue.
+It imports three: `internal/keyring` (`internal/config/config.go:16`), `internal/envspec`
+(`internal/config/project.go:12`) and `internal/gitexec` (`internal/config/paths.go:12`). The
+keyring one is what turned a pure resolver into something that performs blocking inter-process
+communication on every `Resolve` call, and it is the root cause of the ctx-less keyring problem
+in 3.6 rather than a separate issue. The other two arrived after the first audit, so the gap
+between the doc and the code is widening, not closing.
 
 **Fix:** invert it — the caller reads the keychain and passes credentials in — or amend
 `ARCHITECTURE.md` to describe what is actually true.
 
-### 4.3 `internal/cmd/sidecar.go` is 1294 lines
+### 4.3 `internal/cmd/sidecar.go` is 1326 lines
 
-Twenty cobra constructors plus setup orchestration in one file, now 1323 lines (was 1294).
+Twenty cobra constructors plus setup orchestration in one file. 1294 lines at the first audit,
+1326 now.
 
 **Fix:** split into `sidecar_setup.go` / `sidecar_snapshot.go` / `sidecar_env.go`, and move the
 orchestration down into `internal/sidecar` where it can be tested without cobra.
 
-### 4.4 The `userError` error code is empty for ~85% of errors
+### 4.4 The `userError` error code is empty for ~80% of errors
 
-`internal/cmd` constructs `userError` two ways: 26 builder calls and 143 struct literals.
-**Not one** of the 143 struct literals sets `code:`, so the namespaced `ErrorCode` that
-`main.go:90` reads is empty for the overwhelming majority of user-facing errors.
+`internal/cmd` constructs `userError` two ways: 69 builder calls (63 of which reach
+`.withCode(`) and 248 struct literals. **Exactly one** of the 248 struct literals sets `code:`
+(`internal/cmd/org.go:146`, `"org.none_found"`), so 64 of 317 constructions carry a code and
+the namespaced `ErrorCode` that `main.go:91` reads is empty for about 80% of user-facing
+errors. The type is at `internal/cmd/usererr.go:226`, `ErrorCode()` at `:290`.
 
 **Fix:** pick one construction style. If the code field is meant to be machine-parseable, make
 it required by construction.
 
 ### 4.5 `HeadRef` / `HeadRefCtx` twins
 
-`internal/gitutil/gitutil.go:54` (`HeadRef`) and `:60` (`HeadRefCtx`). Both now take a `cwd`
-argument — the original ctx-less callers in `sync.go` and the watch model were fixed — but
-`HeadRef` still exists as a thin wrapper. The two call sites in `sync.go:234` and the watch
-model (now at `internal/ui/watch/`) could share a single ctx-taking function.
+`internal/gitutil/gitutil.go:61` (`HeadRef`) is still a `context.Background()` wrapper over
+`:67` (`HeadRefCtx`). The call sites this finding originally named are gone: the only remaining
+`HeadRef` caller is `internal/gitutil/fingerprint.go:74`, and `HeadRefCtx` is called from
+`internal/chunkd/server/conflicts.go:187` and `internal/chunkd/server/load.go:182`. One caller
+is all that stands between the wrapper and deletion.
 
 ### 4.6 Naming that stutters against the repo's own rule [swept]
 
@@ -524,16 +538,21 @@ Purely mechanical.
 The linter runs clean today, which makes the gaps in its configuration the reason several
 findings above went unnoticed.
 
-- **`dupl` is not enabled.** It independently confirms 3.9, 3.1's `Save*` trio, 1.15, and both
-  verbatim blocks in 3.12. Enabling it would have caught them at review time.
-- **`gocyclo` has no `min-complexity`** (`.golangci.yml:167`), so it defaults to 30. That is why
-  a 378-line function needs only a `nolint` comment.
+- **`dupl` is not enabled** — absent from the `enable:` list at `.golangci.yml:154-180`. It
+  independently confirms 3.9, 3.1's `Save*` trio, 1.15, and both verbatim blocks in 3.12.
+  Enabling it would have caught them at review time.
+- **`gocyclo` has no `min-complexity`.** There is no `gocyclo:` key under `linters.settings`
+  (`.golangci.yml:19-35`), only the enable entry at `:167`, so it defaults to 30. That is why a
+  331-line function needs only a `nolint` comment.
 - **`funlen` is excluded for tests at `.golangci.yml:120` but never enabled.** Dead
   configuration.
-- **`govet` is disabled wholesale for `_test.go`** (`.golangci.yml:118-127`), which switches off
+- **`govet` is disabled wholesale for `_test.go`** — listed at `.golangci.yml:124` inside the
+  `path: _test\.go` block (`:116-125`), against `enable-all: true` at `:28`. That switches off
   `printf` checking across the entire test suite.
-- **Eight per-path `goconst` exclusions**, which whitelist repeated domain literals rather than
-  hoisting them. 3.10 and 3.11 live inside those exclusions.
+- **Eight per-path `goconst` exclusions** (`.golangci.yml:130`, `:132`, `:134`, `:136`, `:138`,
+  `:140`, `:142`, `:146`), which whitelist repeated domain literals rather than hoisting them.
+  3.10 and 3.11 live inside those exclusions, as do `envbuilder/`, `internal/config/config.go`
+  and `internal/settings/`.
 
 Suggested: enable `dupl`, set `gocyclo` `min-complexity`, enable `funlen` or drop its dead
 exclusion, and narrow the `govet` test exclusion to the specific checks that are noisy.
@@ -544,25 +563,38 @@ exclusion, and narrow the `govet` test exclusion to the specific checks that are
 
 ### 6.1 The envbuilder end-to-end suite never runs
 
-`acceptance/sidecars_build_e2e_test.go` gates the whole suite on
-`CHUNK_ENV_BUILDER_ACCEPTANCE`, which is set **nowhere** in `.circleci/config.yml` or
-`Taskfile.yml`. The largest and most branch-heavy file in the repo has 56.1% unit coverage and
-no end-to-end coverage in CI at all.
+`acceptance/sidecars_build_e2e_test.go:92` gates the whole suite on
+`CHUNK_ENV_BUILDER_ACCEPTANCE`. A repo-wide grep over `.go`, `.yml` and `.sh` finds that name
+in that one file and nowhere else — nothing in `.circleci/config.yml` or `Taskfile.yml` sets
+it. The largest and most branch-heavy file in the repo has 63.4% unit coverage and no
+end-to-end coverage in CI at all.
 
 **Fix:** either run it on a schedule with the variable set, or delete it so the gap is visible.
 
-### 6.2 `task test` can pass from cache
+### 6.2 `task test` can pass from cache **[half fixed]**
 
-`Taskfile.yml:19` runs `gotestsum -- -race` with no `-count=1`; `ci:test` has both. The repo
-embeds `skills/*.md`, so a local run can report PASS from cache after a change that CI will
-then fail on.
+`task acceptance-test` has been fixed: `Taskfile.yml:62` now runs `-race -count=1`, with a
+comment saying why. `task test` has not: `Taskfile.yml:19` still runs `gotestsum -- -race`
+with no `-count=1`. The repo embeds `skills/*.md`, so a local `task test` can still report PASS
+from cache after a change that CI will then fail on.
 
-**Fix:** add `-count=1` to `task test` and `task acceptance-test` (`Taskfile.yml:59`).
+**Fix:** add `-count=1` to `task test`, the same way `acceptance-test` now has it.
 
-### 6.3 Coverage concentrates away from where the logic is
+### 6.3 Coverage concentrates away from where the logic is **[largely closed]**
 
-`internal/cmd` 35.5% across 8181 lines, `internal/tui/watch` 17.9%, `internal/ui` 37.8%,
-`internal/validate` 50.8%, `envbuilder` 56.1%.
+Most of this has reversed since the first audit:
+
+| package | first audit | now |
+|---|---|---|
+| `internal/ui/watch` (was `internal/tui/watch`) | 17.9% | 90.2% |
+| `internal/validate` | 50.8% | 81.5% |
+| `internal/cmd` | 35.5% | 49.8% |
+| `envbuilder` | 56.1% | 63.4% |
+| `internal/ui` | 37.8% | 20.9% |
+
+`internal/ui` went the other way, and `internal/ui/promptrows` is at 0.0%. `envbuilder` is still
+the one that matters, because it is also the most branch-heavy file in the repo and its
+end-to-end suite does not run (6.1).
 
 Acceptance tests drive the real binary, so effective `internal/cmd` coverage is higher than the
 unit figure suggests. The low number is a symptom rather than a finding in itself: logic sitting
@@ -578,17 +610,20 @@ following.
 
 - **`chunk sidecar delete` is absent entirely.** The tree jumps from `create`
   (`docs/CLI.md:93`) to `use` (`:97`). It is the one destructive sidecar command, and it is the
-  one that is undocumented. Real flag: `--sidecar-id`.
-- **Three flags appear nowhere:** `init --skip-git-hook`, `init --skip-org-id`, and
-  `skill --user` (on both `install` and `list`).
-- **`--insecure-storage` is documented but hidden** at `internal/cmd/root.go:93`
-  (`MarkHidden`), and the document does not say so, which makes it read as discoverable.
-- **`docs/SKILLS.md` tells users to run `cat ~/.claude/skills/chunk-review.md`.** Installs write
-  `~/.claude/skills/<name>/SKILL.md` — the directory form, as the CI smoke test in
-  `.circleci/config.yml` confirms. The documented command fails as written.
-- **Two production env vars are undocumented** in the `ARCHITECTURE.md` list:
-  `CHUNK_INSTALL_PATH` (`internal/cmd/upgrade.go`) and `CHUNK_SIDECAR_HOME`
-  (`internal/sidecar/sync.go`).
+  one that is undocumented. It lives at `internal/cmd/sidecar.go:306` and takes `--sidecar-id`
+  and `--force`.
+- **Three flags appear nowhere:** `init --skip-git-hook` (`internal/cmd/init.go:257`),
+  `init --skip-org-id` (`:262`), and `skill --user` on both `install` and `list`
+  (`internal/cmd/skills.go:80`, `:129`).
+- **`--insecure-storage` is documented but hidden** at `internal/cmd/root.go:137-138`
+  (`MarkHidden`), and `docs/CLI.md:222` does not say so, which makes it read as discoverable.
+- **`docs/SKILLS.md:212-213` tells users to run `cat ~/.claude/skills/chunk-review.md`.**
+  Installs write `filepath.Join(skillsDir, s.Name, "SKILL.md")`
+  (`internal/skills/install.go:115`) — the directory form, as the CI smoke test at
+  `.circleci/config.yml:90` confirms. The documented command fails as written.
+- **Two production env vars are undocumented** in the `ARCHITECTURE.md` env tables (`:196-210`,
+  `:352-355`): `CHUNK_INSTALL_PATH` (`internal/cmd/upgrade.go:27`) and `CHUNK_SIDECAR_HOME`
+  (`internal/sidecar/workspace.go:13`).
 
 A caution for anyone repeating this check: `docs/CLI.md` renders as a tree diagram, so
 `chunk auth status` appears as `│   ├── status`. A naive substring search reports 16 false
@@ -606,24 +641,29 @@ Recorded so nobody spends time re-checking.
 - **Output discipline holds.** Domain packages write to an injected `iostream` or a
   `strings.Builder`, never `os.Stdout` directly.
 - **No sentinel errors compared with `==`** anywhere. No genuine `defer` inside a loop body.
-- **Test skips are all justified**: 12 in total, covering root-bypasses-permissions, a missing
-  `op`/docker/git binary, and the opt-in end-to-end suite.
-- **`internal/gitutil` is not over-exported**: 10 exported functions, every one used.
-- **One stale TODO** in the tree, at `acceptance/sidecar_test.go:526`.
-- `internal/cmd/validate.go:115`'s `_ = json.NewDecoder(r).Decode(&p)` is correct by design —
+- **Test skips are all justified**: 37 across 20-odd files, covering root-bypasses-permissions,
+  a missing `op`/docker/git binary, and the opt-in end-to-end suites. 12 at the first audit —
+  the growth is new suites, not new evasion.
+- **`internal/gitutil` is not over-exported**: 20 exported functions, every one used. The
+  thinnest case is `HeadRef`, down to a single caller; see 4.5.
+- **One stale TODO** in the tree, at `acceptance/sidecar_test.go:548`. (A `grep` for TODO also
+  hits `internal/testing/fixtures/github.go:164`, which is review-comment fixture data, not a
+  TODO.)
+- `internal/cmd/validate.go:179`'s `_ = json.NewDecoder(r).Decode(&p)` is correct by design —
   a non-hook invocation with piped stdin decodes to nothing and the empty `SessionID` is the
   signal.
 - Best-effort silent renames in `internal/config/paths.go` and `internal/eventlog/eventlog.go`
   are deliberate and commented.
 - Goroutines in `internal/variants/variants.go` and `internal/cmd/task.go` are correct and
-  well-commented; `watchWindowSize` in `internal/sidecar/terminal.go` owns its signal channel
-  and lifecycle properly.
+  well-commented; `watchWindowSize` (`internal/sidecar/terminal_unix.go:18`, with a polling
+  Windows twin) owns its signal channel and lifecycle properly.
 - `internal/sidecar/env.go` is the single source for env-pair and dotenv parsing, and
   `internal/cmd/env.go` delegates to it correctly.
 - `internal/testing/fakes` is the only set of fake CircleCI/GitHub/Anthropic/SSH servers; there
   is no second implementation.
-- `internal/cmd/validate.go:74` swallowing a config-load error into an empty config is real but
-  **already addressed by #497** — do not fix it twice.
+- Every `config.LoadProjectConfig` call in `internal/cmd/validate.go` now keeps its error
+  (`:235`, `:253`, `:863`, `:918`, `:1735`). The swallowed-config-load finding from the first
+  audit is closed.
 
 ---
 
@@ -634,12 +674,17 @@ Cheap and high value first, so the linter starts catching the rest.
 1. `DisableRetries: true` — 1.1. One field.
 2. `errors.As` in `main.go` — 1.2. Five call sites.
 3. Linter configuration — section 5. Enables `dupl` to police the rest.
-4. `-count=1` on `task test` — 6.2.
-5. `docs/CLI.md` and `docs/SKILLS.md` corrections — section 7.
+4. `-count=1` on `task test` — 6.2. `acceptance-test` already has it; copy that line.
+5. `docs/CLI.md` and `docs/SKILLS.md` corrections — section 7. All five still stand.
 6. Small duplicate collapses — 3.9, 3.12's `FormatDuration` and shell-escape rows.
 7. Keyring: error classification plus the generic wrapper — 1.6 and 3.6.
 8. Reconcile the two stack detectors — 2.1. Own PR.
-9. The auth provider table — 3.1. Own PR.
+9. The auth provider table — 3.1. Own PR, and the most urgent of the three: it is the only
+   finding that has measurably worsened on its own terms, 18 hand-written functions to 22,
+   because a fourth credential kind cost six.
 10. Split `envbuilder` by stack — 4.1. Own PR.
 
-Items 1.3, 1.4, 1.5, and 1.14 from the original list are done.
+Done since the first audit: 1.3, 1.4, 1.5, 1.14, 3.3, 3.12's `hooks-disabled` sentinel, 2.3's
+bad path, and the swallowed config-load error. 6.2 and 6.3 are half done. Going the wrong way
+on their own terms: 3.1 (18 → 22), 4.2 (one stray import → three), 3.12's `.chunk` literal
+(8 → 11), ed25519 keygen (3 → 6) and the auth confirm block (2 → 4).
