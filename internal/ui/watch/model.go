@@ -220,6 +220,13 @@ type Model struct {
 	// far the shown draft is scrolled.
 	draftLog    []string
 	draftScroll int
+	// draftFocus is which of the draft-ready view's two sections (Plan,
+	// Changes) Space expands or collapses and Tab/Shift+Tab move between.
+	// draftPlanOpen and draftChangesOpen track each section's own state,
+	// reset on every new draft: Plan starts open, Changes starts collapsed.
+	draftFocus       draftSection
+	draftPlanOpen    bool
+	draftChangesOpen bool
 	// draftStarted is when Claude started the draft, and draftTook how long
 	// it took, shown so the speed is seen.
 	draftStarted time.Time

@@ -36,6 +36,15 @@ type Drafter func(ctx context.Context, root, prompt string, activity func(string
 // run's session ID.
 type Sender func(root, runID string) (string, error)
 
+// draftSection is one of the draft-ready view's two collapsible sections:
+// the Plan (Claude's summary) and the Changes (the diffstat and diff).
+type draftSection int
+
+const (
+	draftSectionPlan draftSection = iota
+	draftSectionChanges
+)
+
 // draftState is where a prompt typed after n has got to.
 type draftState int
 
@@ -123,6 +132,12 @@ func (m Model) updateDraftKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case draftReady:
 		switch {
+		case key.Matches(msg, k.ToggleSection):
+			return m.toggleDraftSection(), nil
+		case key.Matches(msg, k.FocusNextSection):
+			return m.focusDraftSection(1), nil
+		case key.Matches(msg, k.FocusPrevSection):
+			return m.focusDraftSection(-1), nil
 		case key.Matches(msg, k.ScrollDraft):
 			switch msg.String() {
 			case "up", "k":
@@ -160,6 +175,7 @@ func (m Model) updatePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.draftRoot, m.prompt = m.startRoot(), ""
 		m.draft, m.draftLatest, m.draftNote = draftWorking, "", ""
 		m.draftLog, m.draftScroll = nil, 0
+		m.draftFocus, m.draftPlanOpen, m.draftChangesOpen = draftSectionPlan, true, false
 		m.draftStarted, m.draftTook = time.Now(), 0
 		base := m.draftCtx
 		if base == nil {
@@ -520,36 +536,114 @@ func (m Model) draftAction(st watchStyles) []string {
 	}
 }
 
-// draftBody is the draft as the pane shows it: Claude's summary wrapped to
-// the pane, then the per-file summary and the diff, coloured as git colours
-// them.
+// draftBody is the draft as the pane shows it. With a change to show, it is
+// split into a Plan section (Claude's summary) and a Changes section (the
+// per-file summary and the diff, coloured as git colours them), each shown
+// as a ▸/▾ header and, when expanded, its content. With no change, there is
+// nothing to split, so the summary alone is shown.
 func (m Model) draftBody(st watchStyles, width int) []string {
 	d := m.draftResult
-	var lines []string
-	lines = append(lines, "")
-	if s := strings.TrimSpace(d.Summary); s != "" {
-		for _, l := range strings.Split(ansi.Wordwrap(s, width-2, ""), "\n") {
-			lines = append(lines, "  "+l)
-		}
-		lines = append(lines, "")
-	}
 	if d.Stat == "" {
+		var lines []string
+		lines = append(lines, "")
+		if s := strings.TrimSpace(d.Summary); s != "" {
+			for _, l := range strings.Split(ansi.Wordwrap(s, width-2, ""), "\n") {
+				lines = append(lines, "  "+l)
+			}
+		}
 		return lines
 	}
-	for _, l := range strings.Split(d.Stat, "\n") {
-		lines = append(lines, st.muted(l))
-	}
+	lines := append([]string{""}, m.draftSectionLines(st, draftSectionPlan, width)...)
 	lines = append(lines, "")
-	lines = append(lines, m.draftDiff.diffLines(st, m.hasDarkBG, d.Diff, false, width)...)
+	return append(lines, m.draftSectionLines(st, draftSectionChanges, width)...)
+}
+
+// draftSectionLines draws one of the draft's two sections: a header with ▸
+// or ▾ for collapsed or expanded, highlighted when it has focus, and its
+// content when expanded.
+func (m Model) draftSectionLines(st watchStyles, sec draftSection, width int) []string {
+	d := m.draftResult
+	open := m.draftSectionOpen(sec)
+	arrow := "▸"
+	if open {
+		arrow = "▾"
+	}
+	title := "Plan"
+	if sec == draftSectionChanges {
+		title = "Changes · " + lastLine(d.Stat)
+	}
+	header := arrow + " " + title
+	if sec == m.draftFocus {
+		header = st.emphasis(header)
+	} else {
+		header = st.vdim(header)
+	}
+	lines := []string{"  " + header}
+	if !open {
+		return lines
+	}
+	switch sec {
+	case draftSectionPlan:
+		if s := strings.TrimSpace(d.Summary); s != "" {
+			lines = append(lines, "")
+			for _, l := range strings.Split(ansi.Wordwrap(s, width-2, ""), "\n") {
+				lines = append(lines, "  "+l)
+			}
+		}
+	case draftSectionChanges:
+		lines = append(lines, "")
+		for _, l := range strings.Split(d.Stat, "\n") {
+			lines = append(lines, st.muted(l))
+		}
+		lines = append(lines, "")
+		lines = append(lines, m.draftDiff.diffLines(st, m.hasDarkBG, d.Diff, false, width)...)
+	}
 	return lines
+}
+
+// draftSectionOpen reports whether sec is expanded.
+func (m Model) draftSectionOpen(sec draftSection) bool {
+	if sec == draftSectionPlan {
+		return m.draftPlanOpen
+	}
+	return m.draftChangesOpen
+}
+
+// toggleDraftSection expands or collapses whichever section has focus,
+// clamping the scroll so collapsing it never leaves the view scrolled past
+// the new, shorter end.
+func (m Model) toggleDraftSection() Model {
+	switch m.draftFocus {
+	case draftSectionPlan:
+		m.draftPlanOpen = !m.draftPlanOpen
+	case draftSectionChanges:
+		m.draftChangesOpen = !m.draftChangesOpen
+	}
+	return m.clampDraftScroll()
+}
+
+// focusDraftSection moves focus between the draft's two sections by delta
+// (±1), wrapping.
+func (m Model) focusDraftSection(delta int) Model {
+	const sections = 2
+	m.draftFocus = draftSection((int(m.draftFocus) + delta + sections) % sections)
+	return m
+}
+
+// clampDraftScroll keeps the draft's scroll offset within its current body,
+// so a shorter body (from collapsing a section) never leaves the view
+// scrolled past its end.
+func (m Model) clampDraftScroll() Model {
+	room := max(m.contentHeight()-draftPaneTop, 1)
+	limit := max(len(m.draftBody(m.styles(), m.draftPaneWidth()))-room, 0)
+	m.draftScroll = min(max(m.draftScroll, 0), limit)
+	return m
 }
 
 // scrollDraft moves the shown draft by delta lines, kept within it.
 func (m Model) scrollDraft(delta int) Model {
-	room := max(m.contentHeight()-draftPaneTop, 1)
-	limit := max(len(m.draftBody(m.styles(), m.draftPaneWidth()))-room, 0)
-	m.draftScroll = min(max(m.draftScroll+delta, 0), limit)
-	return m
+	m.draftScroll += delta
+	return m.clampDraftScroll()
 }
 
 // renderNewRunPane is the right pane while a prompt is typed: a clean page

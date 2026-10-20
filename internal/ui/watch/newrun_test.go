@@ -121,17 +121,20 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 
 	assert.Equal(t, m.draft, draftReady)
 	out = view(m)
-	assert.Assert(t, strings.Contains(out, "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change\n  1. write a prompt → 2. Claude drafts the change → [3. send to the factory (last step)]\n  › Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-) · the change is shown above\n  enter send to factory (last step)  ·  ↑/↓ scroll the change  ·  esc keep for later"), out)
+	assert.Assert(t, strings.Contains(out, "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change\n  1. write a prompt → 2. Claude drafts the change → [3. send to the factory (last step)]\n  › Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-) · the change is shown above\n  enter send to factory (last step)  ·  ↑/↓ scroll the change  ·  Space expand/collapse  ·  esc keep for later"), out)
 
 	// The change is shown in the right pane as soon as it is ready, with what
-	// Claude said it did: there is no key to press to see it.
+	// Claude said it did: there is no key to press to see it. The Plan is
+	// open by default and the Changes collapsed to its stat line.
 	assert.Assert(t, strings.Contains(out, "draft  chunk-cli · drafted in "), "the draft says how long it took: %s", out)
 	assert.Assert(t, strings.Contains(out, "✓ Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-)"), "the pane says the draft is ready: %s", out)
 	assert.Assert(t, strings.Contains(out, "press enter to send it to the factory (last step)"), "the pane says what to press: %s", out)
 	assert.Assert(t, strings.Contains(out, "↑/↓ scroll the change  ·  esc keeps it for later"), out)
 	assert.Assert(t, strings.Count(m.render(), m.styles().Teal.Bold(true).Render("enter")) >= 2, "enter stands out in the pane as in the footer")
+	assert.Assert(t, strings.Contains(out, "▾ Plan"), "the Plan section is open by default: %s", out)
 	assert.Assert(t, strings.Contains(out, "Added a --verbose flag."), out)
-	assert.Assert(t, strings.Contains(out, "verbose bool"), "the diff is shown: %s", out)
+	assert.Assert(t, strings.Contains(out, "▸ Changes · 1 file changed, 10 insertions(+), 2 deletions(-)"), "the Changes section is collapsed by default, showing only its stat: %s", out)
+	assert.Assert(t, !strings.Contains(out, "verbose bool"), "the diff is hidden while Changes is collapsed: %s", out)
 	assert.Assert(t, m.output == nil, "no other view was opened")
 
 	m, cmd = press(m, tea.KeyEnter)
@@ -143,7 +146,7 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 	assert.Assert(t, strings.Contains(view(m), "sent the draft and your prompt to the factory in chunk-cli"))
 	out = view(m)
 	assert.Assert(t, strings.Contains(out, "✓ Sent to the factory: your draft and prompt are on their way"), "the pane says it was sent: %s", out)
-	assert.Assert(t, strings.Contains(out, "verbose bool"), "the draft stays in view until the run is listed: %s", out)
+	assert.Assert(t, strings.Contains(out, "Added a --verbose flag."), "the draft stays in view until the run is listed: %s", out)
 
 	started := factoryRun("factory-run", chunkd.SessionRunning, time.Now())
 	m = poll(m, started, m.allRuns[0], m.allRuns[1])
@@ -367,6 +370,9 @@ func TestALongDraftScrolls(t *testing.T) {
 	m = typeText(m, "add lines")
 	m, cmd := press(m, tea.KeyEnter)
 	m = deliver(t, m, cmd)
+	// Changes starts collapsed, so it is focused and expanded before it can
+	// be scrolled.
+	m, _ = press(m, tea.KeyTab, ' ')
 	assert.Assert(t, strings.Contains(view(m), "↓ more"), view(m))
 	assert.Assert(t, !strings.Contains(view(m), "+line 79"), "the end is not in view yet")
 
@@ -380,6 +386,167 @@ func TestALongDraftScrolls(t *testing.T) {
 
 	m, _ = press(m, tea.KeyUp)
 	assert.Assert(t, strings.Contains(view(m), "↓ more"), "↑ scrolls back")
+}
+
+// The draft-ready view splits into a Plan and a Changes section: Plan starts
+// open and focused, Changes starts collapsed. Space toggles whichever has
+// focus, and Tab/Shift+Tab move focus between them.
+func TestSpaceTogglesTheFocusedSectionAndTabMovesFocus(t *testing.T) {
+	m, _ := press(draftModel(t, &fakeDrafts{draft: sampleDraft}), 'n')
+	m = typeText(m, "add a flag")
+	m, cmd := press(m, tea.KeyEnter)
+	m = deliver(t, m, cmd)
+
+	out := view(m)
+	assert.Assert(t, strings.Contains(out, "▾ Plan"), "Plan starts open: %s", out)
+	assert.Assert(t, strings.Contains(out, "▸ Changes"), "Changes starts collapsed: %s", out)
+	assert.Equal(t, m.draftFocus, draftSectionPlan, "Plan has focus first")
+
+	m, _ = press(m, ' ')
+	out = view(m)
+	assert.Assert(t, strings.Contains(out, "▸ Plan"), "space collapses the focused Plan: %s", out)
+	assert.Assert(t, !strings.Contains(out, "Added a --verbose flag."), "its content is hidden once collapsed: %s", out)
+
+	m, _ = press(m, tea.KeyTab)
+	assert.Equal(t, m.draftFocus, draftSectionChanges, "tab moves focus to Changes")
+
+	m, _ = press(m, ' ')
+	out = view(m)
+	assert.Assert(t, strings.Contains(out, "▾ Changes"), "space expands the focused Changes: %s", out)
+	assert.Assert(t, strings.Contains(out, "verbose bool"), "its diff is shown once expanded: %s", out)
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	m = next.(Model)
+	assert.Equal(t, m.draftFocus, draftSectionPlan, "shift+tab moves focus back to Plan")
+}
+
+// The focused section's header is drawn emphasised, and the other dimmed, so
+// which one Space and the scroll keys act on is seen, not just inferred from
+// the arrow.
+func TestTheFocusedSectionsHeaderIsHighlighted(t *testing.T) {
+	m, _ := press(draftModel(t, &fakeDrafts{draft: sampleDraft}), 'n')
+	m = typeText(m, "add a flag")
+	m, cmd := press(m, tea.KeyEnter)
+	m = deliver(t, m, cmd)
+	st := m.styles()
+	changesHeader := "▸ Changes · " + lastLine(sampleDraft.Stat)
+
+	raw := m.render()
+	assert.Assert(t, strings.Contains(raw, st.emphasis("▾ Plan")), "Plan, focused by default, is emphasised:\n%s", raw)
+	assert.Assert(t, strings.Contains(raw, st.vdim(changesHeader)), "Changes, not focused, is dimmed:\n%s", raw)
+
+	m, _ = press(m, tea.KeyTab)
+	raw = m.render()
+	assert.Assert(t, strings.Contains(raw, st.vdim("▾ Plan")), "Plan loses its emphasis once focus moves away:\n%s", raw)
+	assert.Assert(t, strings.Contains(raw, st.emphasis(changesHeader)), "Changes gains it once focused:\n%s", raw)
+}
+
+// A window resize does not touch a draft's sections: open/collapsed and
+// focus survive it exactly as they were.
+func TestAWindowResizeKeepsTheDraftSectionsAsTheyWere(t *testing.T) {
+	m, _ := press(draftModel(t, &fakeDrafts{draft: sampleDraft}), 'n')
+	m = typeText(m, "add a flag")
+	m, cmd := press(m, tea.KeyEnter)
+	m = deliver(t, m, cmd)
+
+	// Leave the sections away from their defaults: Plan collapsed, Changes
+	// expanded and focused.
+	m, _ = press(m, ' ')
+	m, _ = press(m, tea.KeyTab, ' ')
+	assert.Equal(t, m.draftPlanOpen, false)
+	assert.Equal(t, m.draftChangesOpen, true)
+	assert.Equal(t, m.draftFocus, draftSectionChanges)
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 30})
+	m = next.(Model)
+
+	assert.Equal(t, m.draftPlanOpen, false, "resizing must not reopen Plan")
+	assert.Equal(t, m.draftChangesOpen, true, "resizing must not collapse Changes")
+	assert.Equal(t, m.draftFocus, draftSectionChanges, "resizing must not move focus")
+	out := view(m)
+	assert.Assert(t, strings.Contains(out, "▸ Plan"), "Plan is still collapsed after the resize: %s", out)
+	assert.Assert(t, strings.Contains(out, "▾ Changes"), "Changes is still expanded after the resize: %s", out)
+}
+
+// The open/collapsed and focus state of a draft's sections is not carried
+// over to the next one: each new draft starts Plan-open, Changes-collapsed,
+// Plan-focused, however the previous draft was left.
+func TestANewDraftResetsTheSectionsToTheirDefaults(t *testing.T) {
+	f := &fakeDrafts{draft: sampleDraft}
+	m, _ := press(draftModel(t, f), 'n')
+	m = typeText(m, "add a flag")
+	m, cmd := press(m, tea.KeyEnter)
+	m = deliver(t, m, cmd)
+
+	// Leave the first draft with its sections flipped from the defaults:
+	// Plan collapsed, Changes expanded and focused.
+	m, _ = press(m, ' ')
+	m, _ = press(m, tea.KeyTab, ' ')
+	out := view(m)
+	assert.Assert(t, strings.Contains(out, "▸ Plan"), "Plan is collapsed before keeping the draft: %s", out)
+	assert.Assert(t, strings.Contains(out, "▾ Changes"), "Changes is expanded before keeping the draft: %s", out)
+	assert.Equal(t, m.draftFocus, draftSectionChanges)
+
+	// Keep it for later, then start a second draft.
+	m, _ = press(m, tea.KeyEscape)
+	assert.Equal(t, m.draft, draftNone)
+	m, _ = press(m, 'n')
+	m = typeText(m, "add a second flag")
+	m, cmd = press(m, tea.KeyEnter)
+	m = deliver(t, m, cmd)
+
+	out = view(m)
+	assert.Assert(t, strings.Contains(out, "▾ Plan"), "the second draft's Plan starts open: %s", out)
+	assert.Assert(t, strings.Contains(out, "▸ Changes"), "the second draft's Changes starts collapsed: %s", out)
+	assert.Assert(t, !strings.Contains(out, "verbose bool"), "the diff is hidden until Changes is expanded again: %s", out)
+	assert.Equal(t, m.draftFocus, draftSectionPlan, "the second draft starts with Plan focused")
+}
+
+// Collapsing a section shortens the body; the scroll offset is clamped so
+// the view is never left scrolled past the new, shorter end.
+func TestCollapsingASectionClampsTheScroll(t *testing.T) {
+	var diff strings.Builder
+	for i := range 80 {
+		fmt.Fprintf(&diff, "+line %02d\n", i)
+	}
+	d := Draft{RunID: "run-1", Stat: " a.go | 80 +\n 1 file changed, 80 insertions(+)", Diff: diff.String()}
+	m, _ := press(draftModel(t, &fakeDrafts{draft: d}), 'n')
+	m = typeText(m, "add lines")
+	m, cmd := press(m, tea.KeyEnter)
+	m = deliver(t, m, cmd)
+
+	// Expand Changes and scroll to its end.
+	m, _ = press(m, tea.KeyTab, ' ')
+	for range 200 {
+		m, _ = press(m, tea.KeyDown)
+	}
+	assert.Assert(t, strings.Contains(view(m), "+line 79"), "scrolled to the end")
+	assert.Assert(t, m.draftScroll > 0, "the view is scrolled")
+
+	// Collapsing it shrinks the body; nothing should be left scrolled past it.
+	m, _ = press(m, ' ')
+	out := view(m)
+	assert.Assert(t, strings.Contains(out, "▸ Changes"), "Changes is collapsed: %s", out)
+	assert.Equal(t, strings.Count(m.render(), "\n"), m.height, "the pane stays within the screen: %s", out)
+}
+
+// The draft-ready view fits a narrow, 80-column terminal.
+func TestTheDraftSectionsFitEightyColumns(t *testing.T) {
+	m, _ := press(draftModel(t, &fakeDrafts{draft: sampleDraft}), 'n')
+	m.width = 80
+	m = typeText(m, "add a flag")
+	m, cmd := press(m, tea.KeyEnter)
+	m = deliver(t, m, cmd)
+
+	out := view(m)
+	assert.Assert(t, strings.Contains(out, "▾ Plan"), out)
+	assert.Assert(t, strings.Contains(out, "▸ Changes"), out)
+	assert.Equal(t, strings.Count(m.render(), "\n"), m.height, out)
+
+	m, _ = press(m, tea.KeyTab, ' ')
+	out = view(m)
+	assert.Assert(t, strings.Contains(out, "▾ Changes"), out)
+	assert.Equal(t, strings.Count(m.render(), "\n"), m.height, out)
 }
 
 // The draft is timed: a clock counts up while Claude drafts, and the draft
