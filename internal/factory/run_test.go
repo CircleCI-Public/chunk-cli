@@ -184,7 +184,7 @@ func TestRunKeepsItsLog(t *testing.T) {
 	for _, want := range []string{
 		"info  run " + rep.RunID + "\n",
 		"info  prompt:\n    add a --verbose flag\n",
-		"step  Preparing an implementer sidecar and 0 reviewer sidecar(s)...\n",
+		"step  Preparing sandboxes (implementer + 0 reviewers)...\n",
 		"end   stopped: create the run's sidecars: ",
 	} {
 		assert.Assert(t, strings.Contains(got, want), "missing %q in:\n%s", want, got)

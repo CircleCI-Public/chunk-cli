@@ -11,6 +11,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 var ansiCodes = regexp.MustCompile("\x1b\\[[0-9;]*m")
@@ -75,6 +76,32 @@ func TestImplementerLineRedrawsInPlaceOnATerminal(t *testing.T) {
 	assert.Equal(t, out.String(), "", "a line not drawn is not cleared")
 }
 
+// setupLine redraws its spinner line in place, the way implementerLine does,
+// and clear() erases it, leaving nothing in the scrollback.
+func TestSetupLineRedrawsInPlace(t *testing.T) {
+	var out bytes.Buffer
+	l := &setupLine{w: &out, width: func() int { return 80 }}
+
+	l.update()
+	assert.Assert(t, l.drawn)
+	first := out.String()
+	assert.Equal(t, first, "\r\x1b[2K⠋ Setting up sandboxes...")
+	assert.Assert(t, !strings.Contains(first, "\n"), "the line never adds to the scrollback")
+
+	out.Reset()
+	l.update()
+	assert.Equal(t, out.String(), "\r\x1b[2K⠙ Setting up sandboxes...", "the spinner frame advances on redraw")
+
+	out.Reset()
+	l.clear()
+	assert.Equal(t, out.String(), "\r\x1b[2K")
+	assert.Assert(t, !l.drawn)
+
+	out.Reset()
+	l.clear()
+	assert.Equal(t, out.String(), "", "a line not drawn is not cleared")
+}
+
 func TestTurnLineFitsTheTerminal(t *testing.T) {
 	r := turnDetail(chunkd.ImplementRunning, chunkd.ImplementProgress{
 		Doing: "Run the tests", Said: strings.Repeat("word ", 40), At: turnStart,
@@ -87,8 +114,73 @@ func TestTurnLineFitsTheTerminal(t *testing.T) {
 	assert.Assert(t, strings.HasSuffix(line, "…"), line)
 	assert.Equal(t, len([]rune(line)), 59, "the last column is left empty")
 
-	// Too narrow for it, the remark is left out; narrower still, the facts are
-	// cut.
+	// Too narrow for it, the remark is left out; narrower still, the
+	// "implementing" label gives way, then the doing text is shortened too,
+	// but the elapsed time never is, and the last column is still empty.
 	assert.Equal(t, turnLine("⠋", r, now, 45), "⠋ implementing 10.0s · Run the tests")
-	assert.Equal(t, turnLine("⠋", r, now, 20), "⠋ implementing 10.…")
+	line20 := turnLine("⠋", r, now, 20)
+	assert.Equal(t, line20, "⠋ 10.0s · Run the …")
+	assert.Equal(t, len([]rune(line20)), 19, "the last column is left empty")
+}
+
+// The elapsed time and the action count must stay visible no matter how long
+// the doing text is or how narrow the terminal; the doing text is shortened
+// instead, and the line still fits.
+func TestTurnLineKeepsTheElapsedTimeAndActionCountVisible(t *testing.T) {
+	r := turnDetail(chunkd.ImplementRunning, chunkd.ImplementProgress{
+		Doing: strings.Repeat("word ", 40), Actions: 1234, At: turnStart,
+	}).Rounds[0]
+	now := turnStart.Add(10 * time.Second)
+
+	line := ansiCodes.ReplaceAllString(turnLine("⠋", r, now, 80), "")
+	assert.Assert(t, strings.Contains(line, "10.0s"), line)
+	assert.Assert(t, strings.Contains(line, "1234 actions"), line)
+	assert.Assert(t, len([]rune(line)) <= 79, line)
+}
+
+// Even with no doing text to shorten, a long action count must not push the
+// line past the terminal's width: the "implementing" label gives way first.
+func TestTurnLineShrinksTheLabelBeforeOverflowingOnActionsAlone(t *testing.T) {
+	r := turnDetail(chunkd.ImplementRunning, chunkd.ImplementProgress{
+		Actions: 1234, At: turnStart,
+	}).Rounds[0]
+	now := turnStart.Add(10 * time.Second)
+
+	line := turnLine("⠋", r, now, 30)
+	assert.Assert(t, strings.Contains(line, "10.0s"), line)
+	assert.Assert(t, strings.Contains(line, "1234 actions"), line)
+	assert.Assert(t, len([]rune(line)) <= 29, line)
+}
+
+// A terminal too narrow for even the elapsed time and the action count still
+// gets a line that leaves its last column empty.
+func TestTurnLineNeverOverflowsANarrowTerminal(t *testing.T) {
+	r := turnDetail(chunkd.ImplementRunning, chunkd.ImplementProgress{
+		Actions: 1234, Doing: "editing go.mod", At: turnStart,
+	}).Rounds[0]
+	now := turnStart.Add(10 * time.Second)
+
+	for _, width := range []int{1, 10, 20, 22} {
+		line := turnLine("⠋", r, now, width)
+		assert.Assert(t, len([]rune(line)) <= max(width-1, 1), "width %d: %q", width, line)
+	}
+}
+
+// The quiet marker is the next thing dropped, before the line is ever
+// allowed past the terminal's width: the elapsed time and the action count
+// still come first.
+func TestTurnLineDropsTheQuietMarkerBeforeOverflowing(t *testing.T) {
+	r := turnDetail(chunkd.ImplementRunning, chunkd.ImplementProgress{
+		Actions: 1234, At: turnStart,
+	}).Rounds[0]
+	now := turnStart.Add(6 * time.Minute)
+
+	// Sanity check: at this gap the facts do include the quiet marker.
+	assert.DeepEqual(t, ui.TurnFacts(r, now), []string{"6m0s", "1234 actions", "quiet 6m"})
+
+	line := turnLine("⠋", r, now, 30)
+	assert.Assert(t, strings.Contains(line, "6m0s"), line)
+	assert.Assert(t, strings.Contains(line, "1234 actions"), line)
+	assert.Assert(t, !strings.Contains(line, "quiet"), line)
+	assert.Assert(t, len([]rune(line)) <= 29, line)
 }

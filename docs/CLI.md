@@ -407,6 +407,10 @@ chunk
   terminal as the run writes it, and implies `--log`.
   `--implementer-instructions` appends run-specific guidance to the implementer's
   fixed safety prompt, which is useful for controlled harness experiments.
+  A terminal collapses the sidecars being prepared and synced into a single
+  spinner line, replaced with how long it took once the first round starts;
+  `--verbose`, `chunk watch` (press `d`) and the log still show every line, and
+  a setup failure before any round prints what was hidden before the error.
 - **`factory build` opens a pull request once the checks pass.** When the loop
   ends with every check passed, the daemon pushes the run's branch to `origin`
   (with the developer's own git credentials, never prompting) and opens a pull

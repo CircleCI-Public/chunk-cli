@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,6 +89,27 @@ func sessionProject(t *testing.T) string {
 	return dir
 }
 
+// followSession's gating for collapsing setup noise must hold for every
+// combination of flags: a person on a terminal gets it, but --verbose,
+// --json and a non-terminal (chunk watch and --log see a non-terminal too)
+// must always see every line, even when run on a real terminal.
+func TestCollapseSetupNoiseGating(t *testing.T) {
+	for _, tc := range []struct {
+		tty, jsonOut, verbose bool
+		want                  bool
+	}{
+		{tty: true, want: true},
+		{tty: false, want: false},
+		{tty: true, jsonOut: true, want: false},
+		{tty: true, verbose: true, want: false},
+		{tty: true, jsonOut: true, verbose: true, want: false},
+		{tty: false, jsonOut: true, verbose: true, want: false},
+	} {
+		got := collapseSetupNoise(tc.tty, tc.jsonOut, tc.verbose)
+		assert.Equal(t, got, tc.want, "tty=%v jsonOut=%v verbose=%v", tc.tty, tc.jsonOut, tc.verbose)
+	}
+}
+
 // The project needs an origin remote for its sidecars to clone, so a project
 // without one is refused before anything is started or registered.
 func TestFactoryWithoutAnOriginRemoteFailsBeforeAnySandboxWork(t *testing.T) {
@@ -158,4 +182,118 @@ func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
 		"  [high] main.go:3 nil deref",
 	)
 	assert.DeepEqual(t, lines, want)
+}
+
+// setupProgress is the noise a factory run says while its sandboxes are made
+// and synced, before any round: the step line announcing it, then a sidecar
+// pool's own lines.
+func setupProgress(reviewers int) chunkd.Feed {
+	lines := []chunkd.FeedLine{
+		{Level: chunkd.FeedStep, Text: fmt.Sprintf("Preparing sandboxes (implementer + %d reviewers)...", reviewers)},
+		{Level: chunkd.FeedInfo, Text: "created sidecar 1 (sc-1)"},
+		{Level: chunkd.FeedInfo, Text: "created sidecar 2 (sc-2)"},
+		{Level: chunkd.FeedInfo, Text: "Syncing workspace /repo..."},
+		{Level: chunkd.FeedDone, Text: "Synced"},
+		{Level: chunkd.FeedInfo, Text: "created seed snapshot sc-3"},
+	}
+	return chunkd.Feed{Lines: lines, Total: len(lines)}
+}
+
+// A terminal following a run without --verbose or --json holds its setup
+// noise back rather than saying it, down to the step line that announces it
+// starting, and says it is ready once the first round appears.
+func TestSessionReporterCollapsesSetupOnATerminal(t *testing.T) {
+	setup := chunkd.SessionDetail{Session: chunkd.Session{
+		State: chunkd.SessionRunning, Factory: &chunkd.FactoryRun{Progress: setupProgress(2), Attempts: 3},
+	}}
+	ready := setup
+	ready.Rounds = []chunkd.Round{{Number: 1, State: chunkd.RoundStarted}}
+
+	var lines []string
+	rep := newSessionReporter(func(_ iostream.Level, msg string) { lines = append(lines, msg) })
+	start := time.Now().Add(-42 * time.Second)
+	rep.collapseSetup(start)
+
+	rep.report(setup)
+	assert.DeepEqual(t, lines, []string{"Preparing sandboxes (implementer + 2 reviewers)..."})
+	assert.Assert(t, rep.settingUp())
+
+	rep.report(ready)
+	for _, notWant := range []string{"created sidecar", "Syncing", "Synced", "created seed snapshot"} {
+		for _, l := range lines {
+			assert.Assert(t, !strings.Contains(l, notWant), "unexpected %q among %v", notWant, lines)
+		}
+	}
+	assert.Assert(t, !rep.settingUp())
+	found := false
+	for _, l := range lines {
+		if strings.Contains(l, "Sandboxes ready in") {
+			found = true
+		}
+	}
+	assert.Assert(t, found, "missing a \"Sandboxes ready in\" line among %v", lines)
+	assert.Assert(t, strings.Contains(lines[len(lines)-1], "round 1/"), "the round line comes after setup is said: %v", lines)
+}
+
+// A session that ends before any round appears must still show what its
+// setup said, since that is the only clue to why it failed.
+func TestSessionReporterSaysHeldSetupLinesBeforeAFailure(t *testing.T) {
+	failed := chunkd.SessionDetail{Session: chunkd.Session{
+		State:   chunkd.SessionFailed,
+		Factory: &chunkd.FactoryRun{Progress: setupProgress(1)},
+	}}
+
+	var lines []string
+	rep := newSessionReporter(func(_ iostream.Level, msg string) { lines = append(lines, msg) })
+	rep.collapseSetup(time.Now())
+
+	rep.report(failed)
+	assert.DeepEqual(t, lines, []string{
+		"Preparing sandboxes (implementer + 1 reviewers)...",
+		"created sidecar 1 (sc-1)",
+		"created sidecar 2 (sc-2)",
+		"Syncing workspace /repo...",
+		"Synced",
+		"created seed snapshot sc-3",
+	})
+	assert.Assert(t, !rep.settingUp())
+}
+
+// followSession's two "lost contact" branches (a refused session, and too
+// many poll failures in a row) both go through reportLostContact so a
+// failure never hides what a run's setup was holding back: this exercises
+// that one shared function directly, the exact code both branches call.
+func TestReportLostContactFlushesHeldSetupLines(t *testing.T) {
+	var errOut bytes.Buffer
+	streams := iostream.Streams{Out: io.Discard, Err: &errOut}
+
+	var lines []string
+	rep := newSessionReporter(func(_ iostream.Level, msg string) { lines = append(lines, msg) })
+	rep.collapseSetup(time.Now())
+	rep.sayProgress(iostream.LevelInfo, "created sidecar 1 (sc-1)")
+	rep.sayProgress(iostream.LevelInfo, "Syncing workspace /repo...")
+	assert.Equal(t, len(lines), 0, "progress is held while setup is open")
+
+	f := &chunkd.FactoryRun{Worktree: "/data/run-1", Branch: "chunk/factory/run-1", Baseline: "base", Head: "head"}
+	reportLostContact(streams, rep, f)
+
+	assert.DeepEqual(t, lines, []string{"created sidecar 1 (sc-1)", "Syncing workspace /repo..."})
+	assert.Assert(t, !rep.settingUp())
+	assert.Assert(t, strings.Contains(errOut.String(), "/data/run-1"), errOut.String())
+}
+
+// Without a terminal, or with --verbose or --json, every setup line is said
+// as it arrives, exactly as chunk watch and --log always see it: nothing is
+// held back since collapseSetup is never called.
+func TestSessionReporterSaysEverySetupLineWithoutCollapsing(t *testing.T) {
+	setup := chunkd.SessionDetail{Session: chunkd.Session{Factory: &chunkd.FactoryRun{Progress: setupProgress(3)}}}
+	lines := reportedLines(setup)
+	assert.DeepEqual(t, lines, []string{
+		"Preparing sandboxes (implementer + 3 reviewers)...",
+		"created sidecar 1 (sc-1)",
+		"created sidecar 2 (sc-2)",
+		"Syncing workspace /repo...",
+		"Synced",
+		"created seed snapshot sc-3",
+	})
 }

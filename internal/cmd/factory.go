@@ -320,7 +320,7 @@ which is what pushes and opens the pull request.`,
 			if verbose && !jsonOut {
 				defer tailLog(logArg, logFrom, streams.Err)()
 			}
-			return followSession(ctx, streams, id, jsonOut)
+			return followSession(ctx, streams, id, jsonOut, verbose)
 		},
 	}
 

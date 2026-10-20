@@ -100,18 +100,54 @@ func printLostFactoryWork(streams iostream.Streams, f *chunkd.FactoryRun) {
 		f.Worktree, f.Branch, keepWorkHint(f))
 }
 
+// reportLostContact says what following a factory run lost when it can no
+// longer be followed: any setup lines it was holding back, said first so a
+// failure during setup is never hidden, then where its work was last seen.
+func reportLostContact(streams iostream.Streams, rep *sessionReporter, f *chunkd.FactoryRun) {
+	rep.flushSetup()
+	printLostFactoryWork(streams, f)
+}
+
+// collapseSetupNoise reports whether a factory run's setup progress should be
+// held back behind a spinner rather than said line by line: only for a
+// person watching a terminal, who gets nothing else to see it by. --verbose,
+// --json and a non-terminal (chunk watch and --log share one, so this also
+// leaves them alone) must still see every line.
+func collapseSetupNoise(tty, jsonOut, verbose bool) bool {
+	return tty && !jsonOut && !verbose
+}
+
 // followSession polls a factory session, reporting what changes, until it
 // ends. Ctrl-C cancels it and follows it until it has wound down.
-func followSession(ctx context.Context, streams iostream.Streams, id string, jsonOut bool) error {
+func followSession(ctx context.Context, streams iostream.Streams, id string, jsonOut, verbose bool) error {
 	status := newStatusFunc(streams)
 	live := newImplementerLine(streams.Err, status)
 	defer live.clear()
-	// The progress line sits under the status lines, so it comes off the
+	// Setup noise — the sidecars a run makes and syncs before its first round
+	// — is only collapsed for a person watching a terminal; --verbose, --json
+	// and the log (and a non-terminal, which chunk watch and --log share with)
+	// must still see every line.
+	_, tty := terminalFile(streams.Err)
+	var setup *setupLine
+	if collapseSetupNoise(tty, jsonOut, verbose) {
+		setup = newSetupLine(streams.Err)
+	}
+	// Both progress lines sit under the status lines, so they come off the
 	// screen before each one is written.
-	rep := newSessionReporter(func(level iostream.Level, msg string) {
+	clearLive := func() {
 		live.clear()
+		if setup != nil {
+			setup.clear()
+		}
+	}
+	defer clearLive()
+	rep := newSessionReporter(func(level iostream.Level, msg string) {
+		clearLive()
 		status(level, msg)
 	})
+	if setup != nil {
+		rep.collapseSetup(time.Now())
+	}
 	failures := 0
 	ticker := time.NewTicker(sessionPollInterval)
 	defer ticker.Stop()
@@ -123,13 +159,13 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 		var refused *chunkd.SessionRefused
 		switch {
 		case errors.As(err, &refused):
-			live.clear()
-			printLostFactoryWork(streams, lastFactory)
+			clearLive()
+			reportLostContact(streams, rep, lastFactory)
 			return sessionError(err)
 		case err != nil:
 			if failures++; failures >= maxSessionPollFailures {
-				live.clear()
-				printLostFactoryWork(streams, lastFactory)
+				clearLive()
+				reportLostContact(streams, rep, lastFactory)
 				return newUserError("Lost contact with the chunk daemon.").
 					withSuggestion(fmt.Sprintf("Run %s may still be running on the daemon. Follow it in 'chunk watch'.", id)).
 					wrap(err)
@@ -141,14 +177,17 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 			}
 			rep.report(detail)
 			live.update(detail)
+			if setup != nil && rep.settingUp() {
+				setup.update()
+			}
 			if detail.State.Finished() {
-				live.clear()
+				clearLive()
 				return finishFactory(streams, detail, jsonOut)
 			}
 		}
 		select {
 		case <-ctx.Done():
-			live.clear()
+			clearLive()
 			if err := chunkd.CancelSession(id); err != nil {
 				return sessionError(err)
 			}
@@ -181,6 +220,28 @@ type sessionReporter struct {
 	progress int
 	// checked marks the factory rounds whose review findings have been said.
 	checked map[int]bool
+
+	// setup, once collapseSetup is called, holds a factory run's setup
+	// progress — its sidecars being made and synced — instead of saying it,
+	// until the first round appears or the session ends without one.
+	setup *setupHold
+}
+
+// setupHold is the setup progress held back from a terminal's output while a
+// factory run's sandboxes are not yet ready.
+type setupHold struct {
+	start time.Time
+	held  []heldLine
+	// open is false once the first round has appeared or the session has
+	// ended without one; either way nothing more is held.
+	open bool
+}
+
+// heldLine is one line of setup progress held for later, in case it must be
+// said after all.
+type heldLine struct {
+	level iostream.Level
+	msg   string
 }
 
 func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
@@ -194,6 +255,46 @@ func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
 	}
 }
 
+// collapseSetup makes the reporter hold a factory run's pre-round setup
+// progress instead of saying it: the sidecars it makes and syncs, which only
+// matter if something goes wrong before any round. start is when following
+// began, to measure how long setup took.
+func (r *sessionReporter) collapseSetup(start time.Time) {
+	r.setup = &setupHold{start: start, open: true}
+}
+
+// settingUp reports whether a factory run's first round has yet to appear,
+// so a caller drawing a spinner in setup's place knows to keep redrawing it.
+func (r *sessionReporter) settingUp() bool {
+	return r.setup != nil && r.setup.open
+}
+
+// flushSetup says a factory run's held setup lines, as they would have been
+// said, so a failure before any round is never hidden. It is a no-op once
+// setup is no longer held.
+func (r *sessionReporter) flushSetup() {
+	if r.setup == nil || !r.setup.open {
+		return
+	}
+	r.setup.open = false
+	held := r.setup.held
+	r.setup.held = nil
+	for _, l := range held {
+		r.status(l.level, l.msg)
+	}
+}
+
+// sayProgress says a factory run's progress line, unless setup is being held
+// back and the line is not the step line announcing it (which stays visible;
+// it is not setup noise, it is the only sign setup has started at all).
+func (r *sessionReporter) sayProgress(level iostream.Level, msg string) {
+	if r.settingUp() && level != iostream.LevelStep {
+		r.setup.held = append(r.setup.held, heldLine{level, msg})
+		return
+	}
+	r.status(level, msg)
+}
+
 func (r *sessionReporter) report(d chunkd.SessionDetail) {
 	s := d.Session
 	// A factory run's progress comes first: most of it is the setup before
@@ -201,9 +302,23 @@ func (r *sessionReporter) report(d chunkd.SessionDetail) {
 	// show after the rounds.
 	if f := s.Factory; f != nil {
 		for _, l := range f.Progress.Since(r.progress) {
-			r.status(l.Level.Level(), l.Text)
+			r.sayProgress(l.Level.Level(), l.Text)
 		}
 		r.progress = f.Progress.Total
+	}
+	if r.settingUp() {
+		switch {
+		case len(s.Rounds) > 0:
+			// The sandboxes are ready: the held lines were only setup noise,
+			// so they are dropped rather than said.
+			r.setup.open = false
+			r.setup.held = nil
+			r.status(iostream.LevelDone, fmt.Sprintf("Sandboxes ready in %s", time.Since(r.setup.start).Round(time.Second)))
+		case s.State.Finished():
+			// The session ended before any round: setup itself must have
+			// failed, so what it held is never hidden.
+			r.flushSetup()
+		}
 	}
 	for i, round := range s.Rounds {
 		if r.rounds[i] != round.State {

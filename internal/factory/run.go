@@ -299,7 +299,7 @@ func runPool(ctx context.Context, opts RunOptions, cont *Continuation, wt Worktr
 			return nil, nil, err
 		}
 	}
-	status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", opts.Reviewers))
+	status(iostream.LevelStep, fmt.Sprintf("Preparing sandboxes (implementer + %d reviewers)...", opts.Reviewers))
 	pool, err := sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{
 		Size:  PoolSize(opts.Reviewers),
 		Name:  PoolName(runID),
