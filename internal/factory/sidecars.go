@@ -82,6 +82,8 @@ type Sidecars struct {
 	Prompts  []review.Prompt
 	Review   review.Options
 	Commands []config.Command
+	// OnCheckStart is called with a validation command's name as it starts.
+	OnCheckStart func(name string)
 	// OnCheck is called as each validation command finishes. Reviews report
 	// their progress through Review.ProgressFn.
 	OnCheck func(Check)
@@ -219,7 +221,7 @@ func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 		if s.BeforeValidate != nil {
 			_ = s.BeforeValidate(ctx)
 		}
-		validation = runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnCheck)
+		validation = runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnCheckStart, s.OnCheck)
 	}()
 	wg.Wait()
 	if reviewErr != nil {

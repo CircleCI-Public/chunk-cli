@@ -86,6 +86,7 @@ type RunOptions struct {
 	// them from then on.
 	Warm             *WarmPool
 	OnReviewProgress func(review.ProgressEvent)
+	OnCheckStart     func(name string)
 	OnCheck          func(Check)
 }
 
@@ -236,8 +237,9 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 			StructuredFindings: true,
 			ProgressFn:         opts.OnReviewProgress,
 		},
-		Commands: opts.Commands,
-		OnCheck:  opts.OnCheck,
+		Commands:     opts.Commands,
+		OnCheckStart: opts.OnCheckStart,
+		OnCheck:      opts.OnCheck,
 	}
 	if opts.Verbose {
 		steps.OnReviewerTree = func(t ReviewerTree) { lg.reviewerTree(status, t) }

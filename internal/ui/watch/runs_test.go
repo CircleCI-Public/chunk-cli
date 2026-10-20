@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -877,18 +878,110 @@ func TestPassedRunOpensItsLastRound(t *testing.T) {
 	assert.Assert(t, !m.roundOpen(r.s, 0) && m.roundOpen(r.s, 1))
 }
 
-// While a round's checks and reviews run, validate says how many are done.
-func TestOpenRoundCountsWhatIsStillRunning(t *testing.T) {
+// threeAndThree is a round with three gate checks and three reviews, all
+// listed from the round's start.
+func threeAndThree(state chunkd.RoundState) chunkd.Round {
+	r := chunkd.Round{Number: 1, State: state, Implement: &chunkd.RoundImplement{State: chunkd.ImplementRunning}}
+	for _, n := range []string{"test", "acceptance-test", "lint"} {
+		r.Checks = append(r.Checks, chunkd.RoundCheck{Name: n, Status: chunkd.CheckQueued})
+	}
+	for _, n := range []string{"adversarial", "correctness", "testing"} {
+		r.Reviews = append(r.Reviews, chunkd.ReviewPrompt{Name: n, State: chunkd.PromptQueued, SidecarID: "5bc90932-aaaa"})
+	}
+	return r
+}
+
+func renderRound(t *testing.T, rounds ...chunkd.Round) string {
+	t.Helper()
 	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
-	round := liveRound(1, "passed")
-	round.State = chunkd.RoundChecking
-	round.Checks[1].Status = ""
-	round.Reviews[0].State = chunkd.PromptRunning
-	r.s.Rounds = []chunkd.Round{round}
+	r.s.Rounds = rounds
 	m := sessModel(r)
 	m.selRun = "abc"
-	out := stripANSI(m.render())
-	assert.Assert(t, strings.Contains(out, "validate · 1 of 3 done"), out)
+	return stripANSI(m.render())
+}
+
+// While the implementer works, nothing has started: both groups say so, every
+// row waits, and there is no count of what is done.
+func TestRoundGroupsAreNotStartedWhileTheImplementerWorks(t *testing.T) {
+	for _, state := range []chunkd.RoundState{chunkd.RoundStarted, chunkd.RoundImplementing} {
+		out := renderRound(t, threeAndThree(state))
+		assert.Assert(t, strings.Contains(out, "checks · not started"), out)
+		assert.Assert(t, strings.Contains(out, "reviews · not started"), out)
+		assert.Assert(t, !strings.Contains(out, "0 of"), out)
+		assert.Equal(t, strings.Count(out, "waiting"), 6, out)
+	}
+}
+
+// A later round is not started while the implementer fixes the last one's
+// findings, though round 1 is done.
+func TestLaterRoundIsNotStartedWhileTheImplementerFixes(t *testing.T) {
+	first := liveRound(1, "failed")
+	second := threeAndThree(chunkd.RoundImplementing)
+	second.Number = 2
+	out := renderRound(t, first, second)
+	assert.Assert(t, strings.Contains(out, "reviews · not started"), out)
+}
+
+// Once the round is checking, each group counts its own, the total is the same
+// as before anything finished, and the rows carry no sandbox ID or review: prefix.
+func TestRoundGroupsCountSeparatelyAndNeverGrow(t *testing.T) {
+	round := threeAndThree(chunkd.RoundChecking)
+	round.Checks[0].Status = chunkd.CheckRunning
+	round.Reviews[0].State, round.Reviews[1].State, round.Reviews[2].State = chunkd.PromptRunning, chunkd.PromptRunning, chunkd.PromptRunning
+	out := renderRound(t, round)
+	assert.Assert(t, strings.Contains(out, "checks · 0 of 3 passed"), out)
+	assert.Assert(t, strings.Contains(out, "reviews · 0 of 3 done"), out)
+	for _, absent := range []string{"↪", "5bc90932", "review: "} {
+		assert.Assert(t, !strings.Contains(out, absent), "%q in:\n%s", absent, out)
+	}
+
+	round.Checks[0] = chunkd.RoundCheck{Name: "test", Status: chunkd.CheckPassed}
+	round.Checks[1].Status = chunkd.CheckRunning
+	round.Reviews[0].State = chunkd.PromptDone
+	out = renderRound(t, round)
+	assert.Assert(t, strings.Contains(out, "checks · 1 of 3 passed"), out)
+	assert.Assert(t, strings.Contains(out, "reviews · 1 of 3 done"), out)
+}
+
+// A finished round says how each group came out.
+func TestRoundGroupsSummariseOnceDone(t *testing.T) {
+	round := threeAndThree(chunkd.RoundDone)
+	round.Checks[0].Status, round.Checks[1].Status, round.Checks[2].Status = chunkd.CheckPassed, chunkd.CheckFailed, chunkd.CheckPassed
+	for i := range round.Reviews {
+		round.Reviews[i].State, round.Reviews[i].Status = chunkd.PromptDone, chunkd.CheckPassed
+	}
+	round.Reviews[2].Status = chunkd.CheckFailed
+	out := renderRound(t, round)
+	assert.Assert(t, strings.Contains(out, "checks · 2 of 3 passed, 1 failed"), out)
+	assert.Assert(t, strings.Contains(out, "reviews · 2 of 3 passed, 1 needs changes"), out)
+}
+
+// A project with no gate commands has no checks group, and one with no reviews
+// no reviews group.
+func TestRoundShowsOnlyTheGroupsThatExist(t *testing.T) {
+	round := threeAndThree(chunkd.RoundChecking)
+	round.Checks = nil
+	out := renderRound(t, round)
+	assert.Assert(t, !strings.Contains(out, "checks ·"), out)
+	assert.Assert(t, strings.Contains(out, "reviews · 0 of 3 done"), out)
+
+	round = threeAndThree(chunkd.RoundChecking)
+	round.Reviews = nil
+	out = renderRound(t, round)
+	assert.Assert(t, strings.Contains(out, "checks · 0 of 3 passed"), out)
+	assert.Assert(t, !strings.Contains(out, "reviews ·"), out)
+}
+
+// The group labels fit the right pane at 80 columns.
+func TestRoundGroupLabelsDoNotWrapAt80Columns(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Rounds = []chunkd.Round{threeAndThree(chunkd.RoundImplementing)}
+	m := sessModel(r)
+	m.selRun = "abc"
+	m.width, m.height = 80, 40
+	for _, l := range strings.Split(stripANSI(m.render()), "\n") {
+		assert.Assert(t, utf8.RuneCountInString(l) <= 80, "%q is wider than 80", l)
+	}
 }
 
 // A setup warning on a live run shows with infra folded; a plain step does not.
@@ -924,7 +1017,7 @@ func TestFooterOffersDetailsOnlyWhenThereAreSome(t *testing.T) {
 
 func TestCheckRowShowsFailureTail(t *testing.T) {
 	st := newWatchStyles(false)
-	row := checkRow(st, chunkd.RoundCheck{
+	row := Model{}.checkRow(st, chunkd.RoundCheck{
 		Name:   "test",
 		Status: chunkd.CheckFailed,
 		Output: "ok  pkg/a\n\n--- FAIL: TestX\n    x_test.go:9: want 3, got 4\nFAIL\n",
@@ -932,7 +1025,7 @@ func TestCheckRowShowsFailureTail(t *testing.T) {
 	assert.Equal(t, len(row.extra), failTailLines)
 	assert.Assert(t, strings.Contains(row.extra[len(row.extra)-1], "FAIL"))
 
-	passed := checkRow(st, chunkd.RoundCheck{Name: "lint", Status: chunkd.CheckPassed, Output: "noise"})
+	passed := Model{}.checkRow(st, chunkd.RoundCheck{Name: "lint", Status: chunkd.CheckPassed, Output: "noise"})
 	assert.Equal(t, len(passed.extra), 0)
 
 	// Raw output's colour and progress redraws are resolved, not drawn: a bare
@@ -1173,4 +1266,27 @@ func TestOpenRoundDrawsATree(t *testing.T) {
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "├─ ✓  lint"), out)
 	assert.Assert(t, strings.Contains(out, "└─ ✓  test"), out)
+}
+
+// The sandbox each review ran in is behind infra, by review.
+func TestInfraNamesEachReviewsSandbox(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	round := threeAndThree(chunkd.RoundChecking)
+	round.Reviews[0].SidecarID = "5bc90932-aaaa"
+	r.s.Rounds = []chunkd.Round{round}
+	m := sessModel(r)
+	m.selRun = "abc"
+	assert.Assert(t, !strings.Contains(stripANSI(m.render()), "5bc90932"))
+
+	m.runDetails = true
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "round 1  adversarial  5bc90932"), out)
+}
+
+// The group says when its rows will start.
+func TestNotStartedRoundExplainsWhenItBegins(t *testing.T) {
+	out := renderRound(t, threeAndThree(chunkd.RoundImplementing))
+	assert.Assert(t, strings.Contains(out, "both begin when the implementer finishes"), out)
+	out = renderRound(t, threeAndThree(chunkd.RoundChecking))
+	assert.Assert(t, !strings.Contains(out, "both begin"), out)
 }
