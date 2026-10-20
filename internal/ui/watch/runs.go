@@ -777,7 +777,7 @@ func (m Model) roundRows(st watchStyles, r chunkd.Round) []runRow {
 		rows = append(rows, m.implementRow(st, r, impl))
 	}
 	for _, c := range r.Checks {
-		rows = append(rows, checkRow(st, c))
+		rows = append(rows, m.checkRow(st, c))
 	}
 	for _, p := range r.Reviews {
 		rows = append(rows, m.reviewRow(st, p))
@@ -824,7 +824,7 @@ func (m Model) implementRow(st watchStyles, r chunkd.Round, impl *chunkd.RoundIm
 	return row
 }
 
-func checkRow(st watchStyles, c chunkd.RoundCheck) runRow {
+func (m Model) checkRow(st watchStyles, c chunkd.RoundCheck) runRow {
 	row := runRow{name: c.Name}
 	dur := ui.FormatDuration(time.Duration(c.DurationMS) * time.Millisecond)
 	switch c.Status {
@@ -837,8 +837,10 @@ func checkRow(st watchStyles, c chunkd.RoundCheck) runRow {
 		}
 	case chunkd.CheckErrored:
 		row.icon, row.detail = st.err(ui.IconFail), st.err(truncate(strings.Join(strings.Fields(c.Error), " "), 80))
+	case chunkd.CheckRunning:
+		row.icon, row.detail = m.spinner(st), st.running("running")
 	default:
-		row.icon, row.detail = st.vdim("·"), st.muted(c.Status)
+		row.icon, row.detail, row.waiting = st.vdim("·"), st.dim("waiting"), true
 	}
 	return row
 }
@@ -862,13 +864,12 @@ func tailLines(output string, n int) []string {
 }
 
 func (m Model) reviewRow(st watchStyles, p chunkd.ReviewPrompt) runRow {
-	row := runRow{name: "review: " + p.Name}
+	row := runRow{name: p.Name}
 	switch p.State {
 	case chunkd.PromptQueued:
-		row.icon = st.vdim("·")
+		row.icon, row.detail, row.waiting = st.vdim("·"), st.dim("waiting"), true
 	case chunkd.PromptRunning:
-		row.icon = m.spinner(st)
-		row.detail = st.running("↪ " + p.SidecarID[:min(8, len(p.SidecarID))])
+		row.icon, row.detail = m.spinner(st), st.running("running")
 	case chunkd.PromptDone:
 		row.icon, row.detail = reviewOutcome(st, p)
 		row.detail = st.dim(ui.FormatDuration(time.Duration(p.DurationMS)*time.Millisecond)) + row.detail

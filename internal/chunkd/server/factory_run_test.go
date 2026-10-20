@@ -436,3 +436,54 @@ func TestStartFactoryAdoptsAnUnregisteredRepository(t *testing.T) {
 	assert.Assert(t, errors.As(err, &ae), "got %v", err)
 	assert.Equal(t, ae.status, http.StatusNotFound)
 }
+
+// A round lists every validation command from its start, so the record's
+// total does not grow as commands finish: each moves from queued to running to
+// its outcome in place.
+func TestFactoryRecorderListsChecksFromTheRoundsStart(t *testing.T) {
+	entry := &sessionEntry{}
+	cmds := []config.Command{{Name: "test"}, {Name: "lint"}}
+	rec := &factoryRecorder{entry: entry, prompts: []review.Prompt{{Name: "bugs"}}, commands: cmds, rounds: map[int]int{}}
+	rec.round(1)
+
+	checks := func() []chunkd.RoundCheck { return entry.s.Rounds[0].Checks }
+	statuses := func() []string {
+		var out []string
+		for _, c := range checks() {
+			out = append(out, c.Name+":"+c.Status)
+		}
+		return out
+	}
+	assert.DeepEqual(t, statuses(), []string{"test:queued", "lint:queued"})
+
+	rec.checkStarted("test")
+	assert.DeepEqual(t, statuses(), []string{"test:running", "lint:queued"})
+
+	rec.checked(factory.Check{Name: "test", Status: factory.StatusFailed, Duration: 3 * time.Second, Output: "boom"})
+	assert.DeepEqual(t, statuses(), []string{"test:failed", "lint:queued"})
+	assert.Equal(t, checks()[0].Output, "boom")
+	assert.Equal(t, checks()[0].DurationMS, int64(3000))
+
+	rec.checkStarted("lint")
+	rec.checked(factory.Check{Name: "lint", Status: factory.StatusPassed})
+	assert.DeepEqual(t, statuses(), []string{"test:failed", "lint:passed"})
+}
+
+// A round cut short leaves no check waiting or running: the ones it never
+// finished are recorded as unable to run, with why.
+func TestSettlingASessionClosesChecksTheRoundNeverFinished(t *testing.T) {
+	entry := &sessionEntry{cancelled: true}
+	entry.s.Stages = []chunkd.Stage{{ID: chunkd.StageFactoryLoop}}
+	rec := &factoryRecorder{entry: entry, commands: []config.Command{{Name: "test"}, {Name: "lint"}}, rounds: map[int]int{}}
+	rec.round(1)
+	rec.checkStarted("test")
+	rec.checked(factory.Check{Name: "test", Status: factory.StatusPassed})
+	rec.checkStarted("lint")
+
+	(&daemon{}).settleSession(entry, nil)
+
+	checks := entry.s.Rounds[0].Checks
+	assert.Equal(t, checks[0].Status, chunkd.CheckPassed)
+	assert.Equal(t, checks[1].Status, chunkd.CheckErrored)
+	assert.Equal(t, checks[1].Error, "cancelled")
+}

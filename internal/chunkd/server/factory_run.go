@@ -7,11 +7,13 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
@@ -150,7 +152,7 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	defer close(entry.done)
 	defer entry.cancel()
 
-	rec := &factoryRecorder{entry: entry, prompts: opts.Prompts, rounds: map[int]int{}}
+	rec := &factoryRecorder{entry: entry, prompts: opts.Prompts, commands: opts.Commands, rounds: map[int]int{}}
 	root := opts.Root
 	opts.Status = func(level iostream.Level, msg string) {
 		log.Printf("chunkd: factory (%s): %s", root, msg)
@@ -161,6 +163,7 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	opts.OnEvent = rec.event
 	opts.OnActivity = rec.activity
 	opts.OnReviewProgress = rec.reviewProgress
+	opts.OnCheckStart = rec.checkStarted
 	opts.OnCheck = rec.checked
 
 	run := d.rcfg.RunFactory
@@ -196,6 +199,9 @@ func factoryResultNote(o factory.Outcome) string {
 type factoryRecorder struct {
 	entry   *sessionEntry
 	prompts []review.Prompt
+	// commands are the validation commands each round runs, which a round
+	// lists as queued from its start.
+	commands []config.Command
 
 	// rounds maps a factory round to the record's round index, and cur is the
 	// round in progress. Both are only touched from the loop's goroutine;
@@ -229,7 +235,7 @@ func (r *factoryRecorder) round(n int) int {
 	if ridx, ok := r.rounds[n]; ok {
 		return ridx
 	}
-	ridx := r.entry.beginRound(r.prompts)
+	ridx := r.entry.beginRound(r.prompts, r.commands)
 	r.rounds[n] = ridx
 	r.entry.mu.Lock()
 	r.cur = ridx
@@ -400,6 +406,22 @@ func (r *factoryRecorder) attribute(sidecarID, commandID string) string {
 	return ""
 }
 
+// checkStarted marks a validation command as running.
+func (r *factoryRecorder) checkStarted(name string) {
+	e := r.entry
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if r.cur >= len(e.s.Rounds) {
+		return
+	}
+	round := &e.s.Rounds[r.cur]
+	if i := checkIndex(round, name); i >= 0 {
+		round.Checks[i].Status = chunkd.CheckRunning
+		return
+	}
+	round.Checks = append(round.Checks, chunkd.RoundCheck{Name: name, Status: chunkd.CheckRunning})
+}
+
 // checked records a validation command as it finishes.
 func (r *factoryRecorder) checked(c factory.Check) {
 	e := r.entry
@@ -409,14 +431,24 @@ func (r *factoryRecorder) checked(c factory.Check) {
 		return
 	}
 	round := &e.s.Rounds[r.cur]
-	round.Checks = append(round.Checks, chunkd.RoundCheck{
+	rc := chunkd.RoundCheck{
 		Name:       c.Name,
 		Status:     string(c.Status),
 		SidecarID:  c.SidecarID,
 		DurationMS: c.Duration.Milliseconds(),
 		Error:      c.Error,
 		Output:     c.Output,
-	})
+	}
+	if i := checkIndex(round, c.Name); i >= 0 {
+		round.Checks[i] = rc
+		return
+	}
+	round.Checks = append(round.Checks, rc)
+}
+
+// checkIndex is where the round lists the check named name, -1 if it does not.
+func checkIndex(round *chunkd.Round, name string) int {
+	return slices.IndexFunc(round.Checks, func(c chunkd.RoundCheck) bool { return c.Name == name })
 }
 
 // finish records what the run left behind. It runs before the session is
