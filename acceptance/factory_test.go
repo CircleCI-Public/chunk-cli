@@ -46,7 +46,7 @@ func TestFactoryIsListedAndDocumented(t *testing.T) {
 
 	buildHelp := binary.RunCLI(t, []string{"factory", "build", "--help"}, env, env.HomeDir)
 	assert.Equal(t, buildHelp.ExitCode, 0, "stderr: %s", buildHelp.Stderr)
-	for _, want := range []string{"chunk factory build [prompt|-]", "--max-attempts", "--reviews", "--no-validate"} {
+	for _, want := range []string{"chunk factory build [prompt|file|-]", "--max-attempts", "--reviews", "--no-validate"} {
 		assert.Assert(t, strings.Contains(buildHelp.Stdout, want), "missing %q in stdout: %s", want, buildHelp.Stdout)
 	}
 }

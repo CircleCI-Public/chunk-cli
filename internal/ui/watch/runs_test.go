@@ -295,6 +295,26 @@ func TestLongPromptWrapsAndPaneStaysWithinTheTerminal(t *testing.T) {
 	}
 }
 
+// A run started from a file argument shows where its prompt came from, above
+// the prompt text itself, and a run without one shows no such line.
+func TestFactoryRunPaneShowsTheSpecOriginAboveThePrompt(t *testing.T) {
+	r := failedRun()
+	r.s.Factory.Prompt = "add a --verbose flag"
+	r.s.Factory.SpecOrigin = "../notes/spec.md"
+
+	m := sessModel(r)
+	pane := strings.Join(m.renderRunPane(newWatchStyles(false), r, 40), "\n")
+	assert.Assert(t, strings.Contains(pane, "from ../notes/spec.md"), "missing the spec origin:\n%s", pane)
+	assert.Assert(t, strings.Contains(pane, "add a --verbose flag"), "missing the prompt:\n%s", pane)
+	assert.Assert(t, strings.Index(pane, "from ../notes/spec.md") < strings.Index(pane, "add a --verbose flag"),
+		"the spec origin should come before the prompt:\n%s", pane)
+
+	r.s.Factory.SpecOrigin = ""
+	pane = strings.Join(m.renderRunPane(newWatchStyles(false), r, 40), "\n")
+	assert.Assert(t, !strings.Contains(pane, "from ../notes/spec.md"), "a run with no spec origin shows no origin line:\n%s", pane)
+	assert.Assert(t, strings.Contains(pane, "add a --verbose flag"), "missing the prompt:\n%s", pane)
+}
+
 func TestEndedFactoryRunSaysWhereItsWorkIs(t *testing.T) {
 	r := factoryRun("abc", chunkd.SessionDone, time.Now().Add(-time.Hour))
 	ended := time.Now()

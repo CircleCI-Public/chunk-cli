@@ -19,7 +19,7 @@ func newFactoryStartCmd() *cobra.Command {
 	var diffFile string
 
 	cmd := &cobra.Command{
-		Use:   "start [prompt|-]",
+		Use:   "start [prompt|file|-]",
 		Short: "Hand the factory a diff and a prompt to refine into a mergeable change",
 		Long: `Hand the factory a diff and a prompt: the prompt says what the change is
 for, and the diff is a first pass at it. The factory refines the diff against
@@ -46,7 +46,14 @@ The worktree starts from your files as they are, uncommitted changes included,
 on a branch named chunk/factory/<description>/<run id>, like a build's.
 Nothing runs on a sidecar until you continue. The worktree's path is printed on
 stdout, and how to continue on stderr. A - prompt, or none with stdin
-redirected, reads the prompt from stdin.`,
+redirected, reads the prompt from stdin.
+
+A single argument with no spaces that names an existing file is read as the
+prompt, wherever the file is, as for 'chunk factory build': the run still
+starts on this repo, never the file's own, and the run's record keeps the
+file's path. A missing .md, .markdown or .txt path is an error rather than
+literal text; a directory, a binary file and a file over 1 MiB are refused
+the same way.`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
@@ -84,11 +91,14 @@ redirected, reads the prompt from stdin.`,
 					return err
 				}
 			}
-			var prompt string
+			var prompt, specOrigin string
 			var err error
 			if diffFile == "-" {
-				prompt = args[0]
-			} else if prompt, err = factoryPrompt(cmd.InOrStdin(), args, false); err != nil {
+				prompt, specOrigin, err = promptFromArg("chunk factory start", args[0])
+				if err != nil {
+					return err
+				}
+			} else if prompt, specOrigin, err = factoryPrompt("chunk factory start", cmd.InOrStdin(), args, false); err != nil {
 				return err
 			}
 			// The run that refines the work needs what a build does, origin
@@ -98,7 +108,7 @@ redirected, reads the prompt from stdin.`,
 			if err != nil {
 				return err
 			}
-			rec, err := factory.Start(ctx, root, factory.Handoff{Prompt: prompt, Diff: diff})
+			rec, err := factory.Start(ctx, root, factory.Handoff{Prompt: prompt, SpecOrigin: specOrigin, Diff: diff})
 			if errors.Is(err, factory.ErrDiffAlreadyApplied) {
 				return newUserError("The diff is already in your files, so the worktree starts with it.").
 					withCode("command.invalid_args").

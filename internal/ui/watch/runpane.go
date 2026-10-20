@@ -291,6 +291,9 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 	var body []string
 	if f := s.Factory; f != nil {
 		width := max(m.width-leftPaneWidth-8, 20)
+		if f.SpecOrigin != "" {
+			body = append(body, "  "+st.vdim(truncate("from "+f.SpecOrigin, width)))
+		}
 		for _, l := range wrapWords(f.Prompt, width, maxGoalLines) {
 			body = append(body, "  "+st.muted(l))
 		}

@@ -34,6 +34,10 @@ type RunOptions struct {
 	// Prompt is what the implementer is asked to do. A continued run makes its
 	// own from Continue, and ignores this.
 	Prompt string
+	// SpecOrigin is the path Prompt was read from, when it named a file rather
+	// than being literal text. A continued run keeps the earlier run's
+	// instead, and ignores this.
+	SpecOrigin string
 	// Continue, when set, picks up the work of an earlier run instead of
 	// starting from the developer's files.
 	Continue *Continuation
@@ -170,10 +174,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if opts.OnStart != nil {
 		opts.OnStart(rep.RunID, wt)
 	}
-	rec := newRecord(rep.RunID, request, wt)
-	if cont != nil {
-		rec.Prompt, rec.ContinuesRunID = cont.From.Prompt, cont.From.RunID
-	}
+	rec := recordFor(rep.RunID, request, wt, cont, opts.SpecOrigin)
 	// Until the implementer starts, a new worktree holds nothing the developer
 	// does not already have. A continued run's worktree holds the earlier
 	// run's work, so it stays. The defers set rep, so it is a named result.
@@ -355,6 +356,20 @@ func newRecord(runID, prompt string, wt Worktree) Record {
 		RunID: runID, Prompt: prompt,
 		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
 	}
+}
+
+// recordFor is a run's record before it has ended: runID's prompt and branch
+// in wt, with specOrigin as where that prompt came from. A continued run
+// keeps the original run's prompt and spec origin instead, from cont.From,
+// rather than specOrigin (guidance's own, if guidance happened to come from a
+// file too): the chain of runs is all one change, with one spec.
+func recordFor(runID, prompt string, wt Worktree, cont *Continuation, specOrigin string) Record {
+	rec := newRecord(runID, prompt, wt)
+	rec.SpecOrigin = specOrigin
+	if cont != nil {
+		rec.Prompt, rec.ContinuesRunID, rec.SpecOrigin = cont.From.Prompt, cont.From.RunID, cont.From.SpecOrigin
+	}
+	return rec
 }
 
 // keepRecord saves the run's record, so a later run can continue it. A run

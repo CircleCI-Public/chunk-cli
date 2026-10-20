@@ -22,7 +22,10 @@ var ErrDiffAlreadyApplied = errors.New("the diff is already in your files")
 // run's worktree.
 type Handoff struct {
 	Prompt string
-	Diff   []byte
+	// SpecOrigin is the path Prompt was read from, when it named a file rather
+	// than being literal text.
+	SpecOrigin string
+	Diff       []byte
 }
 
 // Start makes a run's worktree and branch for work handed to the factory, and
@@ -42,6 +45,7 @@ func Start(ctx context.Context, root string, h Handoff) (Record, error) {
 	// How the work is described is decided here, where it is known; the run
 	// that refines it reads it from the record.
 	rec := newRecord(runID, h.Prompt, wt)
+	rec.SpecOrigin = h.SpecOrigin
 	rec.Brief, rec.NeedsWork = handoffBrief(h.Prompt), true
 	err = applyDiff(ctx, wt, h.Diff)
 	if err == nil {

@@ -23,11 +23,14 @@ type Record struct {
 	RunID string `json:"run_id"`
 	// Prompt is the original request. A continued run keeps it, so a chain of
 	// runs is all one change.
-	Prompt   string `json:"prompt"`
-	Worktree string `json:"worktree"`
-	Branch   string `json:"branch"`
-	Baseline string `json:"baseline"`
-	Head     string `json:"head"`
+	Prompt string `json:"prompt"`
+	// SpecOrigin is the path Prompt was read from, when it named a file rather
+	// than being literal text. A continued run keeps it along with Prompt.
+	SpecOrigin string `json:"spec_origin,omitempty"`
+	Worktree   string `json:"worktree"`
+	Branch     string `json:"branch"`
+	Baseline   string `json:"baseline"`
+	Head       string `json:"head"`
 	// Brief is what a run continuing this one tells its implementer about the
 	// work, when whoever made the record knows better than the default: that
 	// an earlier session started it and did not finish.

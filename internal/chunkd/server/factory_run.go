@@ -54,7 +54,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		return chunkd.Session{}, apiErr(http.StatusNotFound, "the chunk daemon is not tracking %q, and it is not the top of a git repository", req.ProjectRoot)
 	}
 	var cont *factory.Continuation
-	record := &chunkd.FactoryRun{Prompt: prompt}
+	record := &chunkd.FactoryRun{Prompt: prompt, SpecOrigin: req.SpecOrigin}
 	if req.Continue != "" {
 		from, err := factory.LoadRecord(ps.root, factory.ParseRunID(req.Continue))
 		if errors.Is(err, factory.ErrNoRecord) {
@@ -67,7 +67,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 			return chunkd.Session{}, apiErr(http.StatusBadRequest, "factory run %s is on a sidecar; its work is not local yet", factory.ParseRunID(req.Continue))
 		}
 		cont = &factory.Continuation{From: from, Guidance: prompt}
-		record = &chunkd.FactoryRun{Prompt: from.Prompt, Guidance: prompt, ContinuesRunID: from.RunID}
+		record = &chunkd.FactoryRun{Prompt: from.Prompt, Guidance: prompt, ContinuesRunID: from.RunID, SpecOrigin: from.SpecOrigin}
 	}
 	cfg, err := loadProjectConfig(ps.root)
 	if err != nil {
@@ -122,6 +122,7 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 	opts := factory.RunOptions{
 		Root:                    ps.root,
 		Prompt:                  prompt,
+		SpecOrigin:              req.SpecOrigin,
 		Continue:                cont,
 		Attempts:                attempts,
 		Reviewers:               factory.ReviewerCount(req.Reviewers, prompts),

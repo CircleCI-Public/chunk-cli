@@ -372,6 +372,27 @@ func TestStartFactoryRefusesToContinueARunOnASidecar(t *testing.T) {
 	assert.ErrorContains(t, ae, "is on a sidecar")
 }
 
+// A continued run keeps the earlier run's spec origin on its own record, so a
+// chain of runs started from a file keeps saying so in chunk watch and the
+// run's JSON.
+func TestStartFactoryKeepsTheContinuedRunsSpecOrigin(t *testing.T) {
+	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
+
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+	dir := filepath.Join(dataDir, "factory")
+	assert.NilError(t, os.MkdirAll(dir, 0o700))
+	rec := factory.Record{RunID: "run-1", Prompt: "add a flag", Branch: "chunk/factory/run-1", SpecOrigin: "../notes/spec.md"}
+	b, err := json.Marshal(rec)
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "run-1.json"), b, 0o600))
+
+	sess, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Continue: "run-1", Prompt: "you may update the test"})
+	assert.NilError(t, err)
+	assert.Equal(t, sess.Factory.ContinuesRunID, "run-1")
+	assert.Equal(t, sess.Factory.SpecOrigin, "../notes/spec.md")
+}
+
 func TestFeedKeepsTheLatestLinesAndCountsThemAll(t *testing.T) {
 	var f chunkd.Feed
 	for i := range maxFeedLines + 5 {

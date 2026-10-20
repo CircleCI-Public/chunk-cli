@@ -21,6 +21,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -176,6 +177,84 @@ func TestFactoryWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
 	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("[high] flag.go:1 unused")), stderr)
 	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("Keep working on it with: chunk factory build --continue run-1")), stderr)
+}
+
+// A lone argument naming an existing file, in another repository entirely, is
+// read on this machine as the prompt: the run still works on the project
+// where the command ran, and the file's own repo is never touched. The run's
+// record keeps the file's path as where the prompt came from.
+func TestFactoryBuildReadsAFileArgumentAsThePromptFromAnotherRepo(t *testing.T) {
+	factoryProject(t)
+	startSessionDaemon(t, fakeFactoryConfig(t, factory.ResultPassed))
+
+	otherRepo := gitrepo.SetupGitRepo(t, "acme", "notes")
+	specPath := filepath.Join(otherRepo, "spec.md")
+	spec := "# Add a verbose flag\n\nPrint extra detail while it runs.\n"
+	assert.NilError(t, os.WriteFile(specPath, []byte(spec), 0o644))
+
+	stdout, stderr, err := runFactoryBuildCmd(t, "--json", specPath)
+	assert.NilError(t, err, stderr)
+
+	var detail chunkd.SessionDetail
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &detail), stdout)
+	// The daemon trims the prompt it is sent, same as a literal argument's.
+	assert.Equal(t, detail.Factory.Prompt, strings.TrimSpace(spec))
+	assert.Equal(t, detail.Factory.SpecOrigin, specPath)
+	assert.Assert(t, strings.HasPrefix(detail.Factory.Branch, "chunk/factory/add-a-verbose-flag/"), detail.Factory.Branch)
+
+	// The file's own repo is untouched.
+	got, err := os.ReadFile(specPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), spec)
+}
+
+// A relative path inside the project works the same way as one elsewhere.
+func TestFactoryBuildReadsAFileArgumentInsideTheProjectAsThePrompt(t *testing.T) {
+	project := factoryProject(t)
+	startSessionDaemon(t, fakeFactoryConfig(t, factory.ResultPassed))
+
+	spec := "add a --verbose flag\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(project, "spec.md"), []byte(spec), 0o644))
+
+	stdout, stderr, err := runFactoryBuildCmd(t, "--json", "spec.md")
+	assert.NilError(t, err, stderr)
+
+	var detail chunkd.SessionDetail
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &detail), stdout)
+	assert.Equal(t, detail.Factory.Prompt, strings.TrimSpace(spec))
+	assert.Equal(t, detail.Factory.SpecOrigin, "spec.md")
+}
+
+// A missing path with a spec-like extension, a directory, a binary file and
+// an oversize file are each refused before the daemon is even asked to start
+// a run.
+func TestFactoryBuildRefusesUnusableFileArguments(t *testing.T) {
+	factoryProject(t)
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "spec.md")
+	assert.NilError(t, os.WriteFile(binary, []byte("bin\x00ary"), 0o644))
+	oversize := filepath.Join(dir, "big.txt")
+	assert.NilError(t, os.WriteFile(oversize, make([]byte, maxPromptFileSize+1), 0o644))
+
+	for _, tc := range []struct {
+		name string
+		arg  string
+		want string
+	}{
+		{name: "missing markdown path", arg: filepath.Join(dir, "missing.md"), want: "file not found"},
+		{name: "directory", arg: dir, want: "is a directory"},
+		{name: "binary file", arg: binary, want: "looks like a binary file"},
+		{name: "oversize file", arg: oversize, want: "too large"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := runFactoryBuildCmd(t, tc.arg)
+			var ue *userError
+			assert.Assert(t, errors.As(err, &ue), "got %v", err)
+			assert.Assert(t, strings.Contains(ue.UserMessage(), tc.want), ue.UserMessage())
+			assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk factory build < file.md"), ue.Suggestion())
+			assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+		})
+	}
 }
 
 // --json prints the run's record, and the exit code still says whether its

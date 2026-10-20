@@ -143,7 +143,7 @@ chunk
 │           --json                  # Output as JSON
 │
 ├── factory                         # Build and manage factory runs
-│   ├── build [prompt|-]            # Implement a prompt on a sidecar, then review and validate it until it passes
+│   ├── build [prompt|file|-]       # Implement a prompt on a sidecar, then review and validate it until it passes
 │   │   --max-attempts <n>          # Maximum rounds of review and validation (default: 3)
 │   │   --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
 │   │   --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
@@ -165,7 +165,7 @@ chunk
 │   │   --json                      # Output as JSON
 │   ├── pull [run id]               # Bring a --remote run's work back (default: the most recently started remote run)
 │   │   --json                      # Output as JSON
-│   ├── start [prompt|-]            # Hand the factory a diff and a prompt to refine
+│   ├── start [prompt|file|-]       # Hand the factory a diff and a prompt to refine
 │   │   --diff <file|->             # Start from a patch of work done elsewhere
 │   │   --json                      # Output as JSON
 │   ├── bootstrap                   # Set up this project for chunk factory: config, sidecar image, review prompts
@@ -325,6 +325,20 @@ chunk
   repos than the daemon's, so they are not used: the default is every project the
   daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
   host**, sent as typed. `--focus` with no path is an error in this mode.
+- **A lone prompt argument with no spaces that names an existing file is read as the
+  prompt, wherever the file is.** `chunk factory build ../notes/spec.md` (and
+  `chunk factory start`, the same way) reads that file on this machine and
+  runs on the repository where the command was triggered, never the file's
+  own repository, which is untouched. The run's record keeps the file's path
+  as where the prompt came from (`spec_origin` in its JSON, and `chunk watch`
+  shows it above the prompt). A word with no spaces and a `.md`, `.markdown`
+  or `.txt` extension that does not exist is an error, `file not found`,
+  rather than literal text, since that is a far likelier mistyped path than a
+  prompt; a directory, a binary file and a file over 1 MiB (chunk's cap on how
+  much of a file it reads as a prompt) are refused the same way, each before
+  any sidecar is created. Anything else — an argument with spaces, or a
+  single word that is not an existing file — is literal prompt text, even one
+  that names a file: `chunk factory build "fix README.md typos"`.
 - **`factory build` runs on the local daemon, in the background.** `chunk factory build "<prompt>"` (or
   `chunk factory build < prompt.md`; `chunk factory build - < prompt.md` is the explicit
   form; a prompt argument with a non-empty file on stdin is refused, so a
