@@ -221,6 +221,13 @@ type Model struct {
 	// far the shown draft is scrolled.
 	draftLog    []string
 	draftScroll int
+	// draftFocus is the draft section the section keys act on, draftPlanShut
+	// and draftChangesOpen which are folded: the plan starts open and the
+	// change closed. They are kept here, not in the lines drawn, so a resize
+	// leaves them as they were.
+	draftFocus       draftSection
+	draftPlanShut    bool
+	draftChangesOpen bool
 	// draftStarted is when Claude started the draft, and draftTook how long
 	// it took, shown so the speed is seen.
 	draftStarted time.Time

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -133,6 +134,10 @@ func (m Model) updateDraftKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m.scrollDraft(-(m.contentHeight() - 2)), nil
 			}
 			return m.scrollDraft(m.contentHeight() - 2), nil
+		case key.Matches(msg, k.ToggleSection):
+			return m.toggleDraftSection(), nil
+		case key.Matches(msg, k.FocusSection):
+			return m.focusDraftSection(), nil
 		case key.Matches(msg, k.SendDraft):
 			m.draft, m.draftNote, m.sendingDraft = draftNone, "sending the draft to the factory…", true
 			return m, sendDraftCmd(m.sender, m.draftRoot, m.draftResult.RunID)
@@ -160,6 +165,7 @@ func (m Model) updatePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.draftRoot, m.prompt = m.startRoot(), ""
 		m.draft, m.draftLatest, m.draftNote = draftWorking, "", ""
 		m.draftLog, m.draftScroll = nil, 0
+		m = m.resetDraftSections()
 		m.draftStarted, m.draftTook = time.Now(), 0
 		base := m.draftCtx
 		if base == nil {
@@ -255,6 +261,8 @@ func (m Model) withDraftDone(msg draftDoneMsg) Model {
 		m.draftCancel = nil
 	}
 	m.draftResult, m.draftDiff = msg.draft, &diffCache{}
+	m = m.resetDraftSections()
+	m.draftScroll = 0
 	if !m.draftStarted.IsZero() {
 		m.draftTook = time.Since(m.draftStarted)
 	}
@@ -516,24 +524,122 @@ func (m Model) draftAction(st watchStyles) []string {
 	return []string{
 		st.success(ui.IconOK + " Draft ready: " + lastLine(m.draftResult.Stat)),
 		st.muted("press ") + key("enter") + st.muted(" to send it to the factory (last step)"),
-		key("↑/↓") + st.muted(" scroll the change") + st.vdim("  ·  ") + key("esc") + st.muted(" keeps it for later"),
+		key("↑/↓") + st.muted(" scroll") + st.vdim("  ·  ") + key("tab") + st.muted(" switch section") + st.vdim("  ·  ") + key("esc") + st.muted(" keeps it for later"),
 	}
 }
 
-// draftBody is the draft as the pane shows it: Claude's summary wrapped to
-// the pane, then the per-file summary and the diff, coloured as git colours
-// them.
+// draftSection is one of the two parts the draft is shown in.
+type draftSection int
+
+const (
+	// sectionPlan is what Claude said it did, sectionChanges the diffstat and
+	// diff it left.
+	sectionPlan draftSection = iota
+	sectionChanges
+)
+
+// resetDraftSections puts the sections back as a new draft first shows them.
+func (m Model) resetDraftSections() Model {
+	m.draftFocus, m.draftPlanShut, m.draftChangesOpen = sectionPlan, false, false
+	return m
+}
+
+// draftSectionOpen reports whether sec shows its content.
+func (m Model) draftSectionOpen(sec draftSection) bool {
+	if sec == sectionPlan {
+		return !m.draftPlanShut
+	}
+	return m.draftChangesOpen
+}
+
+// toggleDraftSection folds or unfolds the section in focus. Folding takes
+// lines away, so the scroll is brought back within what is left.
+func (m Model) toggleDraftSection() Model {
+	if m.draftFocus == sectionPlan {
+		m.draftPlanShut = !m.draftPlanShut
+	} else {
+		m.draftChangesOpen = !m.draftChangesOpen
+	}
+	return m.scrollDraft(0)
+}
+
+// focusDraftSection moves the focus to the other section, which is where tab
+// and shift+tab both go with two. A draft that changed nothing has only its
+// plan, so there is nowhere to move to.
+func (m Model) focusDraftSection() Model {
+	if m.draftResult.Stat == "" {
+		return m
+	}
+	m.draftFocus = 1 - m.draftFocus
+	return m
+}
+
+var statCounts = regexp.MustCompile(`(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?`)
+
+// statSummary is git's --stat totals as a short line, such as "1 file, +7 −2".
+// Totals it cannot read are shown as git wrote them.
+func statSummary(stat string) string {
+	last := lastLine(stat)
+	g := statCounts.FindStringSubmatch(last)
+	if g == nil {
+		return last
+	}
+	files := g[1] + " files"
+	if g[1] == "1" {
+		files = "1 file"
+	}
+	var counts []string
+	if g[2] != "" {
+		counts = append(counts, "+"+g[2])
+	}
+	if g[3] != "" {
+		counts = append(counts, "−"+g[3])
+	}
+	if len(counts) == 0 {
+		return files
+	}
+	return files + ", " + strings.Join(counts, " ")
+}
+
+// sectionHeader is a section's heading: a marker for whether it is open, its
+// name, and, when folded, what it holds in a few words. The focused one is
+// highlighted.
+func (m Model) sectionHeader(st watchStyles, sec draftSection, name, folded string) string {
+	marker := "▸"
+	if m.draftSectionOpen(sec) {
+		marker, folded = "▾", ""
+	}
+	text := marker + " " + name
+	if folded != "" {
+		text += " · " + folded
+	}
+	if m.draftFocus == sec {
+		return st.Teal.Bold(true).Render(text)
+	}
+	return st.muted(text)
+}
+
+// draftBody is the draft as the pane shows it, in two sections: the plan,
+// Claude's summary wrapped to the pane, and the changes, the per-file summary
+// and the diff coloured as git colours them. A section that is folded shows
+// its heading only.
 func (m Model) draftBody(st watchStyles, width int) []string {
 	d := m.draftResult
-	var lines []string
-	lines = append(lines, "")
-	if s := strings.TrimSpace(d.Summary); s != "" {
-		for _, l := range strings.Split(ansi.Wordwrap(s, width-2, ""), "\n") {
-			lines = append(lines, "  "+l)
+	lines := []string{"", m.sectionHeader(st, sectionPlan, "Plan", "")}
+	if m.draftSectionOpen(sectionPlan) {
+		if s := strings.TrimSpace(d.Summary); s != "" {
+			for _, l := range strings.Split(ansi.Wordwrap(s, width-2, ""), "\n") {
+				lines = append(lines, "  "+l)
+			}
+		} else {
+			lines = append(lines, st.vdim("  Claude gave no summary"))
 		}
-		lines = append(lines, "")
 	}
 	if d.Stat == "" {
+		return lines
+	}
+	lines = append(lines, "", m.sectionHeader(st, sectionChanges, "Changes", statSummary(d.Stat)))
+	if !m.draftSectionOpen(sectionChanges) {
 		return lines
 	}
 	for _, l := range strings.Split(d.Stat, "\n") {
