@@ -36,7 +36,7 @@ func NewRootCmd(version string) *cobra.Command {
 
 	rootCmd := &cobra.Command{
 		Use:           "chunk",
-		Short:         "Generate AI review context and trigger AI coding tasks",
+		Short:         "Hand work to agents and review it before you push",
 		Version:       version,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -67,15 +67,27 @@ func NewRootCmd(version string) *cobra.Command {
 			withoutDetail()
 	})
 
-	rootCmd.SetHelpTemplate(rootCmd.HelpTemplate() + `
-Getting started:
-  chunk init                    Initialize project configuration
-  chunk auth login              Log in to CircleCI via browser (recommended)
-  chunk auth set <provider>     Store a credential manually (circleci, anthropic, github)
-  chunk task config             Set up CircleCI task configuration
-  chunk task run --definition <name> --prompt "<task>"
-                                Trigger an AI coding task
+	rootCmd.SetHelpTemplate(`{{if .HasParent}}{{with (or .Long .Short)}}{{. | trimTrailingWhitespaces}}
 
+{{end}}{{if or .Runnable .HasSubCommands}}{{.UsageString}}{{end}}{{else}}{{.Short}}
+
+Start here
+  chunk init                 Set up this project (config, sandbox, review prompts)
+  chunk factory start        Optional: hand chunk a diff you already started
+  chunk factory build        Build a change from a prompt, review it, open the PR
+  chunk watch                Follow and manage your factory runs. Keep it open.
+
+Other commands
+{{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}  {{rpad .Name .NamePadding}} {{.Short}}
+{{end}}{{end}}
+Run 'chunk commands' to list every command.
+
+Usage:
+  {{.CommandPath}} [command]
+
+Flags:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}
+{{end}}
 Environment Variables:
   CIRCLECI_TOKEN                  CircleCI API token (also: CIRCLE_TOKEN)
   ANTHROPIC_API_KEY               Anthropic API key

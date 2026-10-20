@@ -35,6 +35,15 @@ Download the latest `chunk-cli_Windows_x86_64.zip` or `chunk-cli_Windows_arm64.z
 
 ## Quick Start
 
+### Start here
+
+```bash
+chunk init                                     # set up this project: config, sandbox, review prompts
+chunk factory start "add a --verbose flag"     # optional: hand chunk a diff you already started
+chunk factory build "add a --verbose flag"     # build a change from a prompt, review it, open the PR
+chunk watch                                    # follow and manage your factory runs — keep it open
+```
+
 ### Project Setup
 
 Initialize your project for hook automation and validation:
