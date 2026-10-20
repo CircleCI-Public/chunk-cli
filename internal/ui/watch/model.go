@@ -737,7 +737,7 @@ func (m Model) renderFooter(st watchStyles) string {
 		footer += "  " + st.muted(clip(m.runLine(), m.width-2)) + "\n"
 	}
 	if m.daemonErr != nil {
-		footer += "  " + st.err("daemon unavailable: "+m.daemonErr.Error()) + "\n"
+		footer += "  " + st.err(clip("daemon unavailable: "+m.daemonErr.Error(), m.width-2)) + "\n"
 	}
 	return footer
 }

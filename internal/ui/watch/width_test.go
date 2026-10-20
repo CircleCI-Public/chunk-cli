@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ func TestDashboardNeverExceedsItsWidth(t *testing.T) {
 				m.focusedPane = focus
 				m.runDetails = details
 				m.authErr = "not authenticated to CircleCI — command output unavailable"
+				m.daemonErr = errors.New("remote chunk daemon at 10.0.0.5:7777 unreachable: dial tcp: connection refused by the remote host")
 				for i, line := range strings.Split(m.render(), "\n") {
 					if got := lipgloss.Width(line); got > width {
 						t.Errorf("details=%v width=%d focus=%d: line %d is %d columns",
