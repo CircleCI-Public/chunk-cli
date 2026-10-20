@@ -820,6 +820,22 @@ func nextStepLine(st watchStyles, s chunkd.Session) string {
 	return ""
 }
 
+// reviewSandboxLines names the sandbox each of s's reviews ran in, by round.
+func reviewSandboxLines(st watchStyles, s chunkd.Session) []string {
+	var lines []string
+	for _, r := range s.Rounds {
+		for _, p := range r.Reviews {
+			if p.SidecarID == "" {
+				continue
+			}
+			id, _, _ := strings.Cut(p.SidecarID, "-")
+			lines = append(lines, fmt.Sprintf("      %s  %s  %s",
+				st.dim(fmt.Sprintf("round %d", r.Number)), st.muted(p.Name), st.vdim(id)))
+		}
+	}
+	return lines
+}
+
 // runDetailLines are where the run put its work and what it said while setting
 // up. They are the least of what a person watching a run wants, so they stay
 // folded until asked for.
@@ -840,6 +856,12 @@ func (m Model) runDetailLines(st watchStyles, run sessionInfo) []string {
 		for _, l := range feed[max(len(feed)-5, 0):] {
 			lines = append(lines, "      "+feedText(st, l))
 		}
+	}
+	// A review's row no longer carries its sandbox ID; this is where it stays
+	// reachable, for a review whose own logs have to be chased.
+	if reviewed := reviewSandboxLines(st, run.s); len(reviewed) > 0 {
+		lines = append(lines, "    "+st.vdim("review sandboxes"))
+		lines = append(lines, reviewed...)
 	}
 	if len(lines) == 0 {
 		return nil
