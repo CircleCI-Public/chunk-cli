@@ -178,9 +178,11 @@ func TestFactoryWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	_, stderr, err := runFactoryBuildCmd(t, "--max-attempts", "1", "add a --verbose flag")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
-	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
+	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round: the run reached its cap (--max-attempts).")
 	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("[high] flag.go:1 unused")), stderr)
-	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("Keep working on it with: chunk factory build --continue run-1")), stderr)
+	// How to go further is the error's suggestion, not a second hint line.
+	assert.Equal(t, ue.Suggestion(), `Raise the cap with --max-attempts <n>, or carry on with: chunk factory build --continue run-1 ["what to do differently"]`)
+	assert.Assert(t, !strings.Contains(stderr, "Keep working on it with"), stderr)
 }
 
 // A lone argument naming an existing file, in another repository entirely, is
@@ -270,7 +272,7 @@ func TestFactoryJSONWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	stdout, stderr, err := runFactoryBuildCmd(t, "--json", "--max-attempts", "1", "add a --verbose flag")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
-	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
+	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round: the run reached its cap (--max-attempts).")
 	var detail chunkd.SessionDetail
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &detail), stdout)
 	assert.Equal(t, detail.Factory.Result, "exhausted")

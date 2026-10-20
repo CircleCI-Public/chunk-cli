@@ -354,7 +354,7 @@ the draft for later).
 chunk watch  2 runs  main@a3f9e12
 ──────────────────────────────────────────────────────────────────
  runs                  │ run  chunk-cli · chunk/factory/abc · 0123456
- ⌕ search runs      /  │   ⠋ Round 2 (max 3) · implementing  1m0s · $0.41
+ ⌕ search runs      /  │   ⠋ Round 2 of up to 3 · implementing  1m0s · $0.41
 ▶ ⠋ Add a --verbose fl │   # Add a --verbose flag to chunk validate
     running  round 2/3 │
   ✓ Fix the flaky test │   ▸ Round 1  ✗  1 of 3 checks passed  ·  1m0s

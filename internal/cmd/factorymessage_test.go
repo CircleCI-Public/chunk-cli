@@ -95,7 +95,7 @@ func TestRunStartMessage(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := runStartMessage(tc.pr, tc.remote, tc.continuing)
+			got := runStartMessage(tc.pr, tc.remote, tc.continuing, 3)
 			for _, want := range tc.want {
 				assert.Assert(t, strings.Contains(got, want), "missing %q in:\n%s", want, got)
 			}
@@ -107,6 +107,24 @@ func TestRunStartMessage(t *testing.T) {
 			// ends with, then that you can walk away.
 			assertOrdered(t, got, tc.want...)
 		})
+	}
+}
+
+// The run-start message says how many rounds the run gets and the flag that
+// changes it, before what the run ends with.
+func TestRunStartMessageNamesTheRoundCap(t *testing.T) {
+	for _, tc := range []struct {
+		attempts int
+		want     string
+	}{
+		{attempts: 1, want: "for 1 review round (change with --max-attempts)."},
+		{attempts: 3, want: "for up to 3 review rounds (change with --max-attempts)."},
+		{attempts: 10, want: "for up to 10 review rounds (change with --max-attempts)."},
+	} {
+		got := runStartMessage(prFlags{}, false, false, tc.attempts)
+		assertOrdered(t, got, "run your checks until they pass", tc.want, "opens a pull request if it can")
+		got = runStartMessage(prFlags{}, true, false, tc.attempts)
+		assertOrdered(t, got, "run your checks until they pass", tc.want, "its own sidecar")
 	}
 }
 
