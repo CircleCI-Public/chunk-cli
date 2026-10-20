@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Go, then strip files not needed at runtime.
 # Symlink binaries into /usr/local/bin so they're on the default PATH
 # even when the sandbox agent runs commands in a clean environment.
-RUN curl -fsSL https://go.dev/dl/go1.26.1.linux-amd64.tar.gz \
+RUN curl -fsSL https://go.dev/dl/go1.26.10.linux-amd64.tar.gz \
     | tar -C /usr/local -xz \
  && rm -rf /usr/local/go/test /usr/local/go/api /usr/local/go/doc /usr/local/go/misc \
  && ln -s /usr/local/go/bin/go /usr/local/bin/go \
