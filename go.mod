@@ -2,7 +2,7 @@ module github.com/CircleCI-Public/chunk-cli
 
 go 1.26.0
 
-toolchain go1.26.10
+toolchain go1.27.3
 
 require (
 	charm.land/bubbles/v2 v2.2.1
