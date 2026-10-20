@@ -511,13 +511,13 @@ func formatByteSize(n int64) string {
 
 // promptPathError reports that arg could not be read as a prompt file, for
 // the reason in msg, before anything else about the run starts. The
-// suggestion always offers the same two escape hatches: quote it as literal
-// text, or read a file on stdin instead, which works whatever about the path
-// made it unusable.
+// suggestion offers stdin, the only escape hatch there is: quoting a single
+// word reaches the command as the same argument, so it cannot be what tells
+// a path from literal text.
 func promptPathError(use, msg string) error {
 	return newUserError(msg).
 		withCode("command.invalid_args").
-		withSuggestion(fmt.Sprintf(`Quote it if you meant that as literal text, or send a file on stdin instead: %s < file.md`, use)).
+		withSuggestion(fmt.Sprintf(`Fix the path, or send the prompt on stdin: %s < file.md, or pipe the text to %s -`, use, use)).
 		withExitCode(ExitBadArgs).
 		withoutDetail()
 }
