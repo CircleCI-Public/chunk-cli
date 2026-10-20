@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -88,15 +89,20 @@ func (s PromptSource) link(p review.Prompt) string {
 	if dir == "" {
 		dir = review.DefaultDir
 	}
-	return fmt.Sprintf("https://github.com/%s/%s/blob/%s/%s", s.Owner, s.Repo, s.Commit,
-		path.Join(filepath.ToSlash(dir), p.File))
+	// A file name can hold spaces, parentheses or a "#", any of which would end
+	// the link early or point it at the wrong place.
+	segments := strings.Split(path.Join(filepath.ToSlash(dir), p.File), "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/blob/%s/%s", s.Owner, s.Repo, s.Commit, strings.Join(segments, "/"))
 }
 
 // PullRequestBody is a run's pull request description: what was asked and how
 // the review went. The diff and its stat are on the pull request already.
 func PullRequestBody(prompt string, rep Report, src PromptSource) string {
 	var b strings.Builder
-	b.WriteString(cutRunes(strings.TrimSpace(prompt), maxPRPromptRunes) + "\n")
+	b.WriteString(closeFences(cutRunes(strings.TrimSpace(prompt), maxPRPromptRunes)) + "\n")
 	fmt.Fprintf(&b, "\n## Review\n\nAll checks passed after %d round(s):\n\n", rep.Outcome.Rounds)
 	for _, c := range rep.Outcome.Checks {
 		if c.Status != StatusPassed {
@@ -132,6 +138,31 @@ func reviewLine(name string, src PromptSource) string {
 	return line
 }
 
+// closeFences closes a code fence the text leaves open, so a request that has
+// one, or was cut inside one, does not swallow the rest of the description.
+func closeFences(s string) string {
+	var open string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		for _, marker := range []string{"```", "~~~"} {
+			if !strings.HasPrefix(line, marker) {
+				continue
+			}
+			switch open {
+			case "":
+				open = marker
+			case marker:
+				open = ""
+			}
+			break
+		}
+	}
+	if open == "" {
+		return s
+	}
+	return s + "\n" + open
+}
+
 // maxSummaryRunes keeps a check's summary to one line of a list.
 const maxSummaryRunes = 140
 
@@ -147,10 +178,26 @@ func promptSummary(body string) string {
 			return summarize(para)
 		case line == "", strings.HasPrefix(line, "#") && len(para) == 0:
 			continue
+		case len(para) == 0 && !isProse(line):
+			// Not a paragraph a summary can be taken from: it would open a
+			// fence or a table, or hide the rest of the line, in the list it is
+			// put in.
+			return ""
 		}
 		para = append(para, line)
 	}
 	return summarize(para)
+}
+
+// isProse reports whether a line that starts a paragraph is plain text, rather
+// than markdown that would change how the rest of the description renders.
+func isProse(line string) bool {
+	for _, prefix := range []string{"```", "~~~", "---", "<", "|", "- ", "* ", "+ ", ">"} {
+		if strings.HasPrefix(line, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 func summarize(lines []string) string {

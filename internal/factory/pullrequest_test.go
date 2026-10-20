@@ -164,3 +164,19 @@ func TestPullRequestBodyKeepsALongPromptShort(t *testing.T) {
 	assert.Assert(t, utf8.ValidString(got))
 	assert.Assert(t, utf8.RuneCountInString(got) < 9000, "the body was %d characters", utf8.RuneCountInString(got))
 }
+
+func TestPullRequestBodyEscapesTheLinkAndKeepsTheRequestFromSwallowingTheReview(t *testing.T) {
+	rep := Report{Outcome: Outcome{Rounds: 1, Checks: []Check{{Name: "my check", Kind: KindReview, Status: StatusPassed}}}}
+	src := PromptSource{
+		Prompts: []review.Prompt{{Name: "my check", File: "my check (1)#.md", Body: "```\ncode\n```\n"}},
+		Owner:   "acme", Repo: "widgets", Commit: "abc123",
+	}
+
+	got := PullRequestBody("fix it\n```go\nfunc f() {", rep, src)
+
+	assert.Assert(t, strings.Contains(got, "/.chunk/reviews/my%20check%20%281%29%23.md"), got)
+	// The fence the request left open is closed before the review section.
+	assert.Assert(t, strings.Contains(got, "func f() {\n```\n\n## Review"), got)
+	// A prompt that opens with a fence has no summary to take, and none leaks in.
+	assert.Assert(t, strings.HasPrefix(strings.Split(got, "\n- ")[1], "my check ([prompt]"), got)
+}
