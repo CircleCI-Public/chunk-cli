@@ -14,6 +14,7 @@ import (
 	appversion "github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
+// hello world
 var version = "dev"
 
 func main() {
