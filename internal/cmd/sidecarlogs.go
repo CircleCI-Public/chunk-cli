@@ -14,10 +14,10 @@ import (
 
 // newSidecarLogsCmd prints a remote command's output.
 //
-// This is the non-TUI door onto the same data `chunk watch` shows, which matters
-// because the most common reader here has no terminal at all: an agent that just
-// ran validate and wants to know why it failed can pipe this, where it cannot
-// drive a dashboard.
+// This is the non-TUI door onto the output `chunk watch` opens a pane over, which
+// matters because the most common reader here has no terminal at all: an agent
+// that just ran validate and wants to know why it failed can pipe this, where it
+// cannot drive a dashboard.
 //
 // It prefers the chunk daemon's buffer and falls back to the API, so it works
 // whether or not a daemon is running.
@@ -28,7 +28,8 @@ func newSidecarLogsCmd() *cobra.Command {
 		Use:   "logs <command-id>",
 		Short: "Print the output of a command that ran on a sidecar",
 		Long: "Print the output of a command that ran on a sidecar.\n\n" +
-			"Command IDs appear in the chunk watch dashboard. Output is read from the\n" +
+			"Command IDs are recorded by the chunk daemon for the commands it is\n" +
+			"buffering, and by a factory run for each of its reviews. Output is read from the\n" +
 			"chunk daemon's buffer when it has it, and from the CircleCI API otherwise.\n\n" +
 			"Exits non-zero only when reading failed. A command that itself exited\n" +
 			"non-zero is reported on stderr as \"exit status N\" and does not change this\n" +
@@ -82,7 +83,7 @@ func newSidecarLogsCmd() *cobra.Command {
 				}
 				return &userError{
 					msg:        fmt.Sprintf("Could not read output for command %s.", commandID),
-					suggestion: "Check the command ID in the chunk watch dashboard.",
+					suggestion: "Check the command ID. Only commands the chunk daemon buffered, and the reviews of a factory run, have one to look up.",
 					err:        err,
 				}
 			}

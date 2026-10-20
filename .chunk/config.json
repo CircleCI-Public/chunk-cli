@@ -23,14 +23,15 @@
       "name": "lint",
       "run": "task lint",
       "role": "gate",
-      "timeout": 300
+      "timeout": 300,
+      "remote": true
     },
     {
       "name": "format",
       "run": "task fmt",
       "role": "autofix",
-      "local": true,
-      "timeout": 30
+      "timeout": 30,
+      "local": true
     }
   ],
   "vcs": {
@@ -38,8 +39,9 @@
     "repo": "chunk-cli"
   },
   "validation": {
-    "sidecarImage": "4c46e935-5727-461b-9c73-d6806ecbdf36"
+    "sidecarImage": "4115ea13-52e8-4fdf-bd60-d4d86a1d2bfe"
   },
+  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
   "environment": {
     "stack": "go",
     "setup": [
@@ -54,10 +56,13 @@
       {
         "name": "install",
         "command": "go mod download"
+      },
+      {
+        "name": "warm-caches",
+        "command": "task lint || true; go test -race -count=1 -run '^$' ./... || true"
       }
     ],
     "image": "cimg/go",
     "image_version": "1.26.2"
-  },
-  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c"
+  }
 }

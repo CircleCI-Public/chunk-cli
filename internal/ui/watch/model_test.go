@@ -2,7 +2,6 @@ package watch
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,156 +11,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 )
-
-// groupEvents tests
-
-func TestGroupEvents_empty(t *testing.T) {
-	if groups := groupEvents(nil); len(groups) != 0 {
-		t.Errorf("want 0 groups, got %d", len(groups))
-	}
-}
-
-func TestGroupEvents_singleRunning(t *testing.T) {
-	events := []eventlog.Event{
-		{Op: eventlog.OpValidate, Level: "step"},
-		{Op: eventlog.OpValidate, Level: "info"},
-	}
-	groups := groupEvents(events)
-	if len(groups) != 1 {
-		t.Fatalf("want 1 group, got %d", len(groups))
-	}
-	if len(groups[0]) != 2 {
-		t.Errorf("want 2 events in group, got %d", len(groups[0]))
-	}
-}
-
-func TestGroupEvents_terminatedByDone(t *testing.T) {
-	events := []eventlog.Event{
-		{Op: eventlog.OpSync, Level: "step"},
-		{Op: eventlog.OpSync, Level: "done"},
-		{Op: eventlog.OpSync, Level: "info"},
-	}
-	groups := groupEvents(events)
-	if len(groups) != 2 {
-		t.Fatalf("want 2 groups, got %d", len(groups))
-	}
-	if len(groups[0]) != 2 {
-		t.Errorf("first group: want 2 events, got %d", len(groups[0]))
-	}
-	if len(groups[1]) != 1 {
-		t.Errorf("second group: want 1 event, got %d", len(groups[1]))
-	}
-}
-
-func TestGroupEvents_terminatedByError(t *testing.T) {
-	events := []eventlog.Event{
-		{Op: eventlog.OpValidate, Level: "step"},
-		{Op: eventlog.OpValidate, Level: "error"},
-	}
-	groups := groupEvents(events)
-	if len(groups) != 1 || len(groups[0]) != 2 {
-		t.Fatalf("want 1 group of 2, got %d groups", len(groups))
-	}
-}
-
-func TestGroupEvents_opChange(t *testing.T) {
-	events := []eventlog.Event{
-		{Op: eventlog.OpSync, Level: "info"},
-		{Op: eventlog.OpValidate, Level: "info"},
-	}
-	groups := groupEvents(events)
-	if len(groups) != 2 {
-		t.Fatalf("want 2 groups, got %d", len(groups))
-	}
-	if groups[0][0].Op != eventlog.OpSync {
-		t.Errorf("group 0 should be sync, got %q", groups[0][0].Op)
-	}
-	if groups[1][0].Op != eventlog.OpValidate {
-		t.Errorf("group 1 should be validate, got %q", groups[1][0].Op)
-	}
-}
-
-func TestGroupEvents_doneFollowedByNewOp(t *testing.T) {
-	// done terminates the group, next event starts a fresh one even with same op.
-	events := []eventlog.Event{
-		{Op: eventlog.OpSync, Level: "step"},
-		{Op: eventlog.OpSync, Level: "done"},
-		{Op: eventlog.OpSync, Level: "step"},
-		{Op: eventlog.OpSync, Level: "info"},
-	}
-	groups := groupEvents(events)
-	if len(groups) != 2 {
-		t.Fatalf("want 2 groups, got %d", len(groups))
-	}
-	if len(groups[1]) != 2 {
-		t.Errorf("second run: want 2 events, got %d", len(groups[1]))
-	}
-}
-
-// groupByInvocation / closesRun tests
-
-func TestGroupByInvocation_singleRun(t *testing.T) {
-	events := []eventlog.Event{
-		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "test    1.0s (remote)"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "lint    0.2s (remote)"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "2/2 passed  1.5s", Final: true, Passed: 2, Total: 2},
-	}
-	groups := groupByInvocation(events)
-	if len(groups) != 1 {
-		t.Fatalf("want 1 group, got %d", len(groups))
-	}
-	if len(groups[0].events) != 4 {
-		t.Errorf("want 4 events in group, got %d", len(groups[0].events))
-	}
-}
-
-func TestGroupByInvocation_twoRuns(t *testing.T) {
-	events := []eventlog.Event{
-		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "test    1.0s (remote)"},
-		{Op: eventlog.OpValidate, Level: "error", Msg: "0/1 passed  1.0s", Final: true, Total: 1},
-		// second run
-		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "test    0.8s (remote)"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "1/1 passed  0.9s", Final: true, Passed: 1, Total: 1},
-	}
-	groups := groupByInvocation(events)
-	if len(groups) != 2 {
-		t.Fatalf("want 2 groups, got %d", len(groups))
-	}
-}
-
-func TestGroupByInvocation_inProgress(t *testing.T) {
-	events := []eventlog.Event{
-		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
-		{Op: eventlog.OpValidate, Level: "step", Msg: "$ task test"},
-	}
-	groups := groupByInvocation(events)
-	if len(groups) != 1 {
-		t.Fatalf("want 1 in-progress group, got %d", len(groups))
-	}
-}
-
-func TestClosesRun(t *testing.T) {
-	cases := []struct {
-		name string
-		e    eventlog.Event
-		want bool
-	}{
-		{"final event", eventlog.Event{Op: eventlog.OpValidate, Level: "done", Final: true, Passed: 3, Total: 3}, true},
-		{"per-command done", eventlog.Event{Op: eventlog.OpValidate, Level: "done", Msg: "test    8.0s (remote)"}, false},
-		{"sync done", eventlog.Event{Op: eventlog.OpSync, Level: "done", Msg: "Synced"}, false},
-		{"in flight", eventlog.Event{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace..."}, false},
-	}
-	for _, c := range cases {
-		if got := closesRun(c.e); got != c.want {
-			t.Errorf("closesRun(%s) = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
 
 // truncate tests
 
@@ -171,12 +21,11 @@ func TestTruncate(t *testing.T) {
 		n    int
 		want string
 	}{
-		{"hello", 10, "hello"},
-		{"hello", 5, "hello"},
-		{"hello", 4, "hel…"},
-		{"hello", 1, "h"},
+		{"short", 10, "short"},
+		{"exactly-10", 10, "exactly-10"},
+		{"this-is-too-long", 10, "this-is-t…"},
+		{"ab", 1, "a"},
 		{"", 5, ""},
-		{"héllo", 3, "hé…"},
 	}
 	for _, tt := range tests {
 		if got := truncate(tt.in, tt.n); got != tt.want {
@@ -223,183 +72,15 @@ func TestAgo(t *testing.T) {
 	}
 }
 
-// recency ordering and per-project event caps
-
-func TestSortByActivity_freshestProjectFirst(t *testing.T) {
-	now := time.Now()
-	sidecars := []sidecarInfo{
-		{id: "stale", repoName: "old-project", fileMtime: now.Add(-6 * time.Hour)},
-		{id: "older", repoName: "busy-project", lastActivity: now.Add(-30 * time.Minute)},
-		{id: "newest", repoName: "busy-project", lastActivity: now.Add(-1 * time.Minute)},
-	}
-
-	sortByActivity(sidecars, "")
-
-	want := []string{"newest", "older", "stale"}
-	for i, id := range want {
-		if sidecars[i].id != id {
-			t.Errorf("position %d: want %s, got %s", i, id, sidecars[i].id)
-		}
-	}
-}
-
-func TestSortByActivity_keepsProjectsGrouped(t *testing.T) {
-	now := time.Now()
-	sidecars := []sidecarInfo{
-		{id: "a1", repoName: "a", lastActivity: now.Add(-2 * time.Minute)},
-		{id: "b1", repoName: "b", lastActivity: now.Add(-1 * time.Minute)},
-		{id: "a2", repoName: "a", lastActivity: now.Add(-3 * time.Minute)},
-	}
-
-	sortByActivity(sidecars, "")
-
-	// Project b is freshest so it leads, then both of a's sidecars together.
-	want := []string{"b1", "a1", "a2"}
-	for i, id := range want {
-		if sidecars[i].id != id {
-			t.Errorf("position %d: want %s, got %s", i, id, sidecars[i].id)
-		}
-	}
-}
-
-func TestFilterSidecars_keepsEveryConfirmedSidecar(t *testing.T) {
-	now := time.Now()
-	// Confirmed sidecars are still running however long they have sat idle, so
-	// none of them is filtered for age. One that has never done anything has
-	// nothing to show, though, and is dropped.
-	sidecars := []sidecarInfo{
-		{id: "busy", verified: true, lastActivity: now.Add(-time.Minute)},
-		{id: "idle-for-days", verified: true, lastActivity: now.Add(-72 * time.Hour)},
-		{id: "never-used", verified: true},
-	}
-
-	got := filterSidecars(sidecars)
-
-	want := []string{"busy", "idle-for-days"}
-	assert.Equal(t, len(got), len(want))
-	for i, id := range want {
-		assert.Equal(t, got[i].id, id, "position %d", i)
-	}
-}
-
-func TestFilterSidecars_dropsStaleUnconfirmedSidecars(t *testing.T) {
-	now := time.Now()
-	sidecars := []sidecarInfo{
-		{id: "recent", lastActivity: now.Add(-23 * time.Hour)},
-		{id: "mtime-recent", fileMtime: now.Add(-10 * time.Minute)}, // no events: "No activity yet."
-		{id: "too-old", lastActivity: now.Add(-25 * time.Hour)},
-		{id: "mtime-old", fileMtime: now.Add(-25 * time.Hour)},
-		{id: "no-activity-at-all"},
-	}
-
-	got := filterSidecars(sidecars)
-
-	want := []string{"recent"}
-	assert.Equal(t, len(got), len(want))
-	for i, id := range want {
-		assert.Equal(t, got[i].id, id, "position %d", i)
-	}
-}
-
-func TestRowStatus(t *testing.T) {
-	m := New(nil, false)
-	st := newWatchStyles(false)
-	tests := []struct {
-		name string
-		sc   sidecarInfo
-		want string
-	}{
-		{"running shows the op", sidecarInfo{running: true, verified: true, lastOp: eventlog.OpValidate}, string(eventlog.OpValidate) + "..."},
-		{"running wins over unconfirmed", sidecarInfo{running: true, lastOp: eventlog.OpValidate}, string(eventlog.OpValidate) + "..."},
-		{"unconfirmed is not called idle", sidecarInfo{lastResult: levelDone}, "? unconfirmed"},
-		{"idle after a pass", sidecarInfo{verified: true, lastResult: levelDone}, "idle · last passed"},
-		{"idle after a failure", sidecarInfo{verified: true, lastResult: levelError}, "idle · last failed"},
-		{"idle with no runs", sidecarInfo{verified: true}, "idle"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := m.rowStatus(st, tc.sc)
-			// Split on the separator: the two halves are styled separately.
-			for _, part := range strings.Split(tc.want, " · ") {
-				assert.Assert(t, strings.Contains(got, part), "got %q, want %q", got, tc.want)
-			}
-			if !strings.Contains(tc.want, "last") {
-				assert.Assert(t, !strings.Contains(got, "last"), "got %q", got)
-			}
-		})
-	}
-}
-
-func TestUpdate_selectionFollowsSidecarID(t *testing.T) {
-	now := time.Now()
-	m := New(nil, false)
-	m.sidecars = []sidecarInfo{{id: "a", projectName: "p"}, {id: "b", projectName: "p"}}
-
-	// Select the second sidecar.
-	next, _ := m.Update(tea.KeyPressMsg{Code: 's'})
-	m = next.(Model)
-	if m.selectedID != "b" {
-		t.Fatalf("want selectedID b, got %q", m.selectedID)
-	}
-
-	// A poll reorders the list; the selection should follow the id, not the index.
-	next, _ = m.Update(dataMsg{
-		sidecars: []sidecarInfo{
-			{id: "c", projectName: "p", lastActivity: now},
-			{id: "b", projectName: "p", lastActivity: now.Add(-time.Minute)},
-			{id: "a", projectName: "p", lastActivity: now.Add(-2 * time.Minute)},
-		},
-	})
-	m = next.(Model)
-	if m.selectedIdx != 1 || m.selectedID != "b" {
-		t.Errorf("want selection to stay on b (idx 1), got idx %d id %q", m.selectedIdx, m.selectedID)
-	}
-}
-
-func TestUpdate_initialSelectionPicksMostRecent(t *testing.T) {
-	// On first entry, New() has no selection, so the freshest sidecar must be
-	// selected.
-	now := time.Now()
-	m := New(nil, false)
-
-	next, _ := m.Update(dataMsg{sidecars: []sidecarInfo{
-		{id: "newest", lastActivity: now.Add(-1 * time.Minute)},
-		{id: "older", lastActivity: now.Add(-30 * time.Minute)},
-	}})
-	m = next.(Model)
-
-	if m.selectedIdx != 0 || m.selectedID != "newest" {
-		t.Errorf("want initial selection at idx 0 (newest), got idx %d id %q", m.selectedIdx, m.selectedID)
-	}
-}
-
-func TestUpdate_unknownSelectionFallsBackToFreshest(t *testing.T) {
-	m := New(nil, false)
-	m.selectedID = "gone"
-
-	next, _ := m.Update(dataMsg{sidecars: []sidecarInfo{{id: "fresh"}, {id: "older"}}})
-	m = next.(Model)
-
-	if m.selectedIdx != 0 || m.selectedID != "fresh" {
-		t.Errorf("want fallback to idx 0 (fresh), got idx %d id %q", m.selectedIdx, m.selectedID)
-	}
-}
-
-// The update notice is right-aligned with padding, so a notice that does not
-// fit would wrap the footer and push the fixed-height layout off screen.
 // The daemon-unavailable line used to be appended past the last row of the
 // terminal, so it was clipped at every height and a dead daemon looked like a
 // dashboard that had simply gone quiet.
 func TestRender_daemonErrorIsVisibleAndStillFitsTheTerminal(t *testing.T) {
-	now := time.Now()
 	for _, height := range []int{12, 24, 40, 60} {
-		m := sessionModel("", []sidecarInfo{
-			{id: "id1", sessionID: "sessA", repoName: "repo", branch: "main",
-				lastActivity: now},
-		})
+		m := sessModel(factoryRun("abc", chunkd.SessionRunning, time.Now()))
 		m.width = 100
 		m.height = height
-		m.selectedIdx = 0
+		m = m.reselectRun()
 		m.daemonErr = errors.New("connect to chunk daemon: no such file")
 
 		out := m.render()
@@ -412,33 +93,26 @@ func TestRender_daemonErrorIsVisibleAndStillFitsTheTerminal(t *testing.T) {
 }
 
 func TestRender_withoutADaemonErrorTheLayoutIsUnchanged(t *testing.T) {
-	now := time.Now()
-	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "repo", branch: "main",
-			lastActivity: now},
-	})
+	m := sessModel(factoryRun("abc", chunkd.SessionRunning, time.Now()))
 	m.width = 100
 	m.height = 24
-	m.selectedIdx = 0
+	m = m.reselectRun()
 
 	assert.Equal(t, strings.Count(m.render(), "\n"), 24)
 }
 
-// sessionModel leaves the selection at -1 so labels are not masked by the ▶
-// marker. Rendering must survive that rather than indexing m.sidecars[-1].
-func TestRender_survivesAnOutOfRangeSelection(t *testing.T) {
-	now := time.Now()
-	for _, idx := range []int{-1, 0, 5} {
-		m := sessionModel("", []sidecarInfo{
-			{id: "id1", sessionID: "sessA", repoName: "repo", branch: "main",
-				lastActivity: now},
-		})
-		m.width = 100
-		m.height = 24
-		m.selectedIdx = idx
+// With nothing to show the dashboard still has to say what it is for, rather
+// than leaving two empty panes that read as a broken daemon.
+func TestRender_noRunsSaysSoAndKeepsItsLayout(t *testing.T) {
+	m := sessModel()
+	m.width, m.height = 100, 24
 
-		assert.Assert(t, m.render() != "", "selection %d rendered nothing", idx)
-	}
+	out := m.render()
+
+	assert.Equal(t, strings.Count(out, "\n"), 24)
+	assert.Assert(t, strings.Contains(out, "no runs yet"), out)
+	assert.Assert(t, strings.Contains(out, "chunk factory build"), out)
+	assert.Assert(t, strings.Contains(out, "0 runs"), out)
 }
 
 func TestRenderFooter_updateNoticeNeverWidensFooter(t *testing.T) {
@@ -482,634 +156,47 @@ func TestRenderFooter_updateNoticeShownWhenItFits(t *testing.T) {
 	}
 }
 
-// session-aware rendering tests
-
-// sessionModel builds a model whose own session is fixed, so tests do not
-// depend on whether the suite itself runs inside an agent session.
-func sessionModel(own string, sidecars []sidecarInfo) Model {
-	m := New(nil, false)
-	m.ownSession = own
-	m.sidecars = sidecars
-	m.selectedIdx = -1 // no selection, so the ▶ marker cannot mask a label
-	return m
-}
-
-func TestRenderSidecarPane_singleSessionKeepsBranchLabel(t *testing.T) {
-	m := sessionModel("sessA", []sidecarInfo{
-		{id: "id1", name: "chunk-cli-sessA", sessionID: "sessA",
-			repoName: "chunk-cli", branch: "main", lastActivity: time.Now()},
-	})
-
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-
-	// One session in the worktree: nothing to disambiguate, so the row reads
-	// exactly as it did before sessions existed.
-	assert.Assert(t, strings.Contains(pane, "main"), pane)
-	assert.Assert(t, !strings.Contains(pane, "sessions"), pane)
-	assert.Assert(t, !strings.Contains(pane, "this session"), pane)
-}
-
-func TestRenderSidecarPane_twoSessionsAreNamed(t *testing.T) {
+// The daemon reports a project's sidecars, events and buffered commands
+// whatever the dashboard does with them. This one lists runs, so the snapshot's
+// infrastructure is dropped at the door rather than kept for a pane that no
+// longer exists.
+func TestConvertSnapshot_keepsRunsAndDropsInfrastructure(t *testing.T) {
 	now := time.Now()
-	m := sessionModel("aaaaaaaa-1111-2222-3333-444444444444", []sidecarInfo{
-		{id: "id1", name: "chunk-cli-aaaaaaaa", sessionID: "aaaaaaaa-1111-2222-3333-444444444444",
-			repoName: "chunk-cli", branch: "main", lastActivity: now},
-		{id: "id2", name: "chunk-cli-bbbbbbbb", sessionID: "bbbbbbbb-1111-2222-3333-444444444444",
-			repoName: "chunk-cli", branch: "main", lastActivity: now.Add(-5 * time.Minute)},
-	})
-
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-
-	// The branch is named once for the group, and each row by its session.
-	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
-	assert.Assert(t, strings.Contains(pane, "this session"), pane)
-	assert.Assert(t, strings.Contains(pane, "bbbbbbbb"), pane)
-	// The full UUID is never printed — it is unreadable at this pane width.
-	assert.Assert(t, !strings.Contains(pane, "bbbbbbbb-1111"), pane)
-}
-
-func TestRenderSidecarPane_groupHeaderPrintedOncePerWorktree(t *testing.T) {
-	now := time.Now()
-	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", branch: "main", lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", branch: "main", lastActivity: now},
-	})
-
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-
-	assert.Equal(t, strings.Count(pane, "2 sessions"), 1, pane)
-}
-
-func TestRenderSidecarPane_detachedHeadNamesTheDirectory(t *testing.T) {
-	now := time.Now()
-	// A distinct projectName, so finding it proves the group header used the
-	// directory rather than merely matching the repo header above it.
-	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "monorepo", projectName: "wt-detached", lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "monorepo", projectName: "wt-detached", lastActivity: now},
-	})
-
-	// With no branch to name the group, the header must still say something the
-	// reader can act on rather than rendering blank.
-	lines := m.renderSidecarPane(newWatchStyles(false), 40)
-	countAt := -1
-	for i, l := range lines {
-		if strings.Contains(l, "2 sessions") {
-			countAt = i
-		}
-	}
-	assert.Assert(t, countAt > 0, strings.Join(lines, "\n"))
-	assert.Assert(t, strings.Contains(lines[countAt-1], "wt-detached"), lines[countAt-1])
-}
-
-func TestRenderSidecarPane_dropsWholeRowsRatherThanCuttingOne(t *testing.T) {
-	now := time.Now()
-	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "repo-a", branch: "main",
-			lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "repo-b", branch: "main",
-			lastActivity: now.Add(-time.Minute)},
-	})
-
-	// Room for the title, the blank under it, and the first row only. The second
-	// row would previously have been started and then clipped by renderBody,
-	// losing its status and age.
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 7), "\n")
-
-	// A complete row carries its age, so one age per status means no row was
-	// cut part-way through.
-	assert.Equal(t, strings.Count(pane, "unconfirmed"), strings.Count(pane, "ago"), pane)
-	assert.Assert(t, strings.Contains(pane, "1 more"), pane)
-}
-
-func TestRenderSidecarPane_scrolledShowsUpHintAndHidesScrolledRows(t *testing.T) {
-	now := time.Now()
-	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "repo-a", branch: "feat", lastActivity: now.Add(-2 * time.Minute)},
-		{id: "id2", sessionID: "sessB", repoName: "repo-b", branch: "main", lastActivity: now.Add(-time.Minute)},
-		{id: "id3", sessionID: "sessC", repoName: "repo-c", branch: "main", lastActivity: now},
-	})
-	m.leftScrollOffset = 1 // repo-a is scrolled off
-
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-
-	assert.Assert(t, strings.Contains(pane, "↑ 1 more"), pane)
-	assert.Assert(t, !strings.Contains(pane, "repo-a"), pane)
-	assert.Assert(t, strings.Contains(pane, "repo-b"), pane)
-	assert.Assert(t, strings.Contains(pane, "repo-c"), pane)
-}
-
-// tallSidecars returns n sidecars that each sit in their own repo and carry a
-// snapshot and a resource sample, so every row costs more than linesPerSidecar.
-func tallSidecars(n int) []sidecarInfo {
-	now := time.Now()
-	sidecars := make([]sidecarInfo, n)
-	for i := range sidecars {
-		sidecars[i] = sidecarInfo{
-			id: fmt.Sprintf("s%d", i), repoName: fmt.Sprintf("repo-%d", i), branch: "main",
-			snapshotName: "snap", lastActivity: now,
-			resources: &chunkd.Resources{SampledAt: now, CPUPercent: 5},
-		}
-	}
-	return sidecars
-}
-
-// selectionDrawn reports whether the selected row's ▶ marker made it into the
-// left pane as renderBody would lay it out.
-func selectionDrawn(m Model) bool {
-	pane := strings.Join(m.renderSidecarPane(m.styles(), m.contentHeight()), "\n")
-	return strings.Contains(pane, "▶")
-}
-
-func TestAdjustLeftScroll_keepsSelectionDrawnWhileNavigatingTallRows(t *testing.T) {
-	for _, height := range []int{18, 30, 40, 42} {
-		m := New(nil, false)
-		m.sidecars = tallSidecars(10)
-		m.height = height
-
-		for i := 0; i < len(m.sidecars); i++ {
-			assert.Assert(t, selectionDrawn(m), "height %d, down to %d", height, m.selectedIdx)
-			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-			m = next.(Model)
-		}
-		for i := 0; i < len(m.sidecars); i++ {
-			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-			m = next.(Model)
-			assert.Assert(t, selectionDrawn(m), "height %d, up to %d", height, m.selectedIdx)
-		}
-		assert.Equal(t, m.leftScrollOffset, 0, "height %d", height)
-	}
-}
-
-func TestAdjustLeftScroll_noScrollWhenSelectionIsVisible(t *testing.T) {
-	m := New(nil, false)
-	m.sidecars = tallSidecars(10)
-	m.height = 40
-	m.leftScrollOffset = 2
-	m.selectedIdx = 3
-
-	m = m.adjustLeftScroll()
-
-	assert.Equal(t, m.leftScrollOffset, 2)
-}
-
-func TestAdjustLeftScroll_scrollsBackWhenListShrinks(t *testing.T) {
-	m := New(nil, false)
-	m.sidecars = tallSidecars(10)
-	m.height = 40
-	m.selectedIdx = 9
-	m = m.adjustLeftScroll()
-	assert.Assert(t, m.leftScrollOffset > 0)
-
-	// A poll ages most sidecars out; the three left all fit.
-	m.sidecars = m.sidecars[7:]
-	m.selectedIdx = 2
-	m = m.adjustLeftScroll()
-
-	assert.Equal(t, m.leftScrollOffset, 0)
-	pane := strings.Join(m.renderSidecarPane(m.styles(), m.contentHeight()), "\n")
-	assert.Assert(t, !strings.Contains(pane, "↑"), pane)
-}
-
-func TestUpdate_resizeKeepsSelectionDrawn(t *testing.T) {
-	m := New(nil, false)
-	m.sidecars = tallSidecars(10)
-	m.height = 80
-	m.selectedIdx = 7
-	m = m.adjustLeftScroll()
-	assert.Assert(t, selectionDrawn(m))
-
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
-	m = next.(Model)
-
-	assert.Assert(t, selectionDrawn(m))
-}
-
-func TestRenderSidecarPane_noOverflowHintWhenEverythingFits(t *testing.T) {
-	now := time.Now()
-	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "repo-a", branch: "main",
-			lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "repo-b", branch: "main",
-			lastActivity: now.Add(-time.Minute)},
-	})
-
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-
-	assert.Assert(t, !strings.Contains(pane, "more"), pane)
-}
-
-func TestRenderSidecarPane_sameBranchInTwoCheckoutsNamesTheDirectory(t *testing.T) {
-	now := time.Now()
-	// Two clones of one repo, both on main. repoName is the basename of the main
-	// worktree, so both collapse under one repo header — and the basenames match
-	// too, which is exactly why the branch alone cannot name these rows.
-	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0, lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/tmp/chunk-cli", branch: "main", projectIdx: 1,
-			lastActivity: now.Add(-1 * time.Minute)},
-	})
-
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-
-	assert.Assert(t, strings.Contains(pane, "work/chunk-cli"), pane)
-	assert.Assert(t, strings.Contains(pane, "tmp/chunk-cli"), pane)
-}
-
-func TestRenderSidecarPane_distinctBranchesKeepTheirBranchLabels(t *testing.T) {
-	now := time.Now()
-	// Two directories of one repo on different branches: the branch already tells
-	// them apart, so nothing should change.
-	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0, lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", projectName: "chunk-cli-wt",
-			projectPath: "/Users/j/work/chunk-cli-wt", branch: "feature", projectIdx: 1,
-			lastActivity: now.Add(-1 * time.Minute)},
-	})
-
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-
-	assert.Assert(t, strings.Contains(pane, "main"), pane)
-	assert.Assert(t, strings.Contains(pane, "feature"), pane)
-	assert.Assert(t, !strings.Contains(pane, "work/chunk-cli"), pane)
-}
-
-func TestRenderSidecarPane_ambiguousBranchNamesTheDirectoryInTheGroupHeader(t *testing.T) {
-	now := time.Now()
-	// One of the two checkouts is itself shared by two sessions: its group header
-	// has to name the directory, since "main" would match the other checkout.
-	m := sessionModel("sessA", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0, lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0,
-			lastActivity: now.Add(-1 * time.Minute)},
-		{id: "id3", sessionID: "sessC", repoName: "chunk-cli", projectName: "chunk-cli",
-			projectPath: "/Users/j/tmp/chunk-cli", branch: "main", projectIdx: 1,
-			lastActivity: now.Add(-2 * time.Minute)},
-	})
-
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-
-	assert.Assert(t, strings.Contains(pane, "work/chunk-cli"), pane)
-	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
-	assert.Assert(t, strings.Contains(pane, "tmp/chunk-cli"), pane)
-}
-
-func TestShortestUniqueSuffixes(t *testing.T) {
-	tests := []struct {
-		name  string
-		paths map[int]string
-		want  map[int]string
-	}{
-		{
-			"colliding basenames take the parent",
-			map[int]string{0: "/Users/j/work/chunk-cli", 1: "/Users/j/tmp/chunk-cli"},
-			map[int]string{0: "work/chunk-cli", 1: "tmp/chunk-cli"},
-		},
-		{
-			"distinct basenames stay short",
-			map[int]string{0: "/Users/j/work/chunk-cli", 1: "/Users/j/work/chunk-cli-wt"},
-			map[int]string{0: "chunk-cli", 1: "chunk-cli-wt"},
-		},
-		{
-			"digs as deep as it must",
-			map[int]string{0: "/a/one/x/repo", 1: "/a/two/x/repo"},
-			map[int]string{0: "one/x/repo", 1: "two/x/repo"},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := shortestUniqueSuffixes(tc.paths)
-			for idx, want := range tc.want {
-				assert.Equal(t, got[idx], want, "index %d", idx)
-			}
-		})
-	}
-}
-
-func TestSortByActivity_pinsTheViewersOwnRowFirstInItsGroup(t *testing.T) {
-	now := time.Now()
-	// The viewer's own session is the stalest of the three, so recency alone
-	// would bury it in the middle of the group.
-	sidecars := []sidecarInfo{
-		{id: "theirs-new", sessionID: "sessB", repoName: "r", branch: "main", lastActivity: now},
-		{id: "mine", sessionID: "sessMine", repoName: "r", branch: "main", lastActivity: now.Add(-30 * time.Minute)},
-		{id: "theirs-mid", sessionID: "sessC", repoName: "r", branch: "main", lastActivity: now.Add(-5 * time.Minute)},
+	snap := chunkd.Snapshot{
+		AuthError:       "no token",
+		ReviewAuthError: "no claude",
+		Projects: []chunkd.ProjectSnapshot{{
+			Root:     "/tmp/repo",
+			Branch:   "main",
+			HeadRef:  "0123456789abcdef",
+			RepoName: "repo",
+			Sidecars: []chunkd.SidecarState{{ID: "id1", Name: "sc-1", LastActivity: now}},
+			Commands: []chunkd.CommandState{{CommandID: "c1", SidecarID: "id1", Running: true}},
+			Sessions: []chunkd.Session{{ID: "run-1", State: chunkd.SessionRunning, StartedAt: now}},
+		}},
 	}
 
-	sortByActivity(sidecars, "sessMine")
+	msg := convertSnapshot(snap)
 
-	// Own row first, and the rest still in recency order behind it.
-	want := []string{"mine", "theirs-new", "theirs-mid"}
-	for i, id := range want {
-		assert.Equal(t, sidecars[i].id, id, "position %d", i)
-	}
+	assert.DeepEqual(t, msg.projects, []ProjectEntry{{ProjectRoot: "/tmp/repo"}})
+	assert.DeepEqual(t, msg.branches, []string{"main"})
+	assert.DeepEqual(t, msg.headRefs, []string{"0123456789abcdef"})
+	assert.Equal(t, msg.authErr, "no token")
+	assert.Equal(t, msg.reviewAuthErr, "no claude")
+	assert.Equal(t, len(msg.sessions), 1)
+	assert.Equal(t, msg.sessions[0].s.ID, "run-1")
+	assert.Equal(t, msg.sessions[0].label, "repo")
 }
 
-func TestSortByActivity_pinningDoesNotJumpGroups(t *testing.T) {
-	now := time.Now()
-	// A busier branch must still lead the repo: pinning orders rows inside a
-	// group, it does not promote the viewer's group over a fresher one.
-	sidecars := []sidecarInfo{
-		{id: "busy", sessionID: "sessB", repoName: "r", branch: "feature", lastActivity: now},
-		{id: "mine", sessionID: "sessMine", repoName: "r", branch: "main", lastActivity: now.Add(-30 * time.Minute)},
-	}
-
-	sortByActivity(sidecars, "sessMine")
-
-	assert.Equal(t, sidecars[0].id, "busy")
-}
-
-func TestRowLabel(t *testing.T) {
-	m := New(nil, false)
-	m.ownSession = "mine1234-abcd"
-
-	tests := []struct {
-		name     string
-		sc       sidecarInfo
-		multi    bool
-		dirLabel string
-		want     string
-	}{
-		{"alone uses the branch", sidecarInfo{id: "x", branch: "main", sessionID: "other"}, false, "", "main"},
-		{"a branch checked out twice is named by directory", sidecarInfo{id: "x", branch: "main"}, false, "work/repo", "work/repo"},
-		{"alone with no branch falls back to the identifier", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-1"}, false, "", "11111111-aaaa-bbbb-cccc-000000000001"},
-		{"own session is called out", sidecarInfo{id: "x", branch: "main", sessionID: "mine1234-abcd"}, true, "", "● this session"},
-		{"other session is shortened", sidecarInfo{id: "x", branch: "main", sessionID: "theirs99-abcd"}, true, "", "○ theirs99"},
-		{"pre-session state is abbreviated too", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-legacy", branch: "main"}, true, "", "○ 11111111"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, m.rowLabel(tc.sc, tc.multi, tc.dirLabel), tc.want)
-		})
-	}
-}
-
-func TestSortByActivity_keepsWorktreeGroupsTogether(t *testing.T) {
-	now := time.Now()
-	// Two sessions on main, with a busier branch in the same repo between them.
-	// Without a worktree tier the busy branch splits main's rows apart and the
-	// pane cannot print one header for them.
-	sidecars := []sidecarInfo{
-		{id: "main-old", repoName: "r", branch: "main", lastActivity: now.Add(-10 * time.Minute)},
-		{id: "feature", repoName: "r", branch: "feature", lastActivity: now.Add(-2 * time.Minute)},
-		{id: "main-new", repoName: "r", branch: "main", lastActivity: now.Add(-1 * time.Minute)},
-	}
-
-	sortByActivity(sidecars, "")
-
-	want := []string{"main-new", "main-old", "feature"}
-	for i, id := range want {
-		assert.Equal(t, sidecars[i].id, id, "position %d", i)
-	}
-}
-
-func TestRenderActivityPane_namesTheSelectedSession(t *testing.T) {
-	now := time.Now()
-	m := sessionModel("mine1234-abcd", []sidecarInfo{
-		{id: "id1", name: "sc-1", sessionID: "theirs99-abcd", repoName: "chunk-cli",
-			branch: "main", lastActivity: now},
-	})
-	m.selectedIdx = 0
-	m.width = 120
-
-	pane := strings.Join(m.renderActivityPane(newWatchStyles(false), 20), "\n")
-
-	// The left pane can be scrolled away from the selection, so the activity
-	// header has to say whose events these are on its own.
-	assert.Assert(t, strings.Contains(pane, "theirs99"), pane)
-}
-
-func TestConvertSnapshot_carriesSessionID(t *testing.T) {
-	now := time.Now()
-	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
-		Root:     "/tmp/repo",
-		Branch:   "main",
-		RepoName: "repo",
-		Sidecars: []chunkd.SidecarState{
-			{ID: "id1", Name: "sc-1", SessionID: "sessA", LastActivity: now},
-			{ID: "id2", Name: "sc-2", SessionID: "sessB", LastActivity: now},
-		},
-	}}}
-
-	msg := convertSnapshot(snap, New(nil, true))
-
-	got := map[string]string{}
-	for _, sc := range msg.sidecars {
-		got[sc.id] = sc.sessionID
-	}
-	assert.Equal(t, got["id1"], "sessA")
-	assert.Equal(t, got["id2"], "sessB")
-}
-
-// A local validate run has no sidecar, so it gets no row — neither one of its
-// own nor a share of a session's.
-func TestConvertSnapshot_localRunGetsNoRow(t *testing.T) {
-	now := time.Now()
-	msg := convertSnapshot(
-		twoSessionSnapshot(now.Add(-10*time.Minute), now.Add(-11*time.Minute), now),
-		New(nil, true))
-
-	got := map[string]string{}
-	for _, sc := range msg.sidecars {
-		got[sc.id] = sc.sessionID
-	}
-	assert.DeepEqual(t, got, map[string]string{"idA": "sessA", "idB": "sessB"})
-
-	m := sessionModel("sessA", msg.sidecars)
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
-	assert.Assert(t, !strings.Contains(pane, "local"), pane)
-}
-
-func TestConvertSnapshot_projectWithOnlyLocalRunsIsEmpty(t *testing.T) {
-	now := time.Now()
-	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
-		Root: "/repo", Branch: "main", RepoName: "repo",
-		Events: []eventlog.Event{{Ts: now, Op: eventlog.OpValidate, Level: levelDone}},
-	}}}
-
-	msg := convertSnapshot(snap, New(nil, true))
-
-	assert.Equal(t, len(msg.sidecars), 0)
-	assert.Equal(t, len(msg.projects), 1)
-}
-
-// A sync finishes "done" as well, so a failed run followed by a sync must still
-// read as failed, and a sidecar that has only ever synced has no result at all.
-func TestConvertSnapshot_resultComesFromTheLastValidateRun(t *testing.T) {
-	now := time.Now()
-	ev := func(ago time.Duration, id string, op eventlog.Op, level string, final bool) eventlog.Event {
-		return eventlog.Event{Ts: now.Add(-ago), SidecarID: id, Op: op, Level: level, Final: final}
-	}
-	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
-		Root: "/repo", Branch: "main", RepoName: "repo",
-		Sidecars: []chunkd.SidecarState{
-			{ID: "failed-then-synced", Verified: true, LastActivity: now},
-			{ID: "only-synced", Verified: true, LastActivity: now},
-			{ID: "passed", Verified: true, LastActivity: now},
-		},
-		Events: []eventlog.Event{
-			ev(10*time.Minute, "failed-then-synced", eventlog.OpValidate, levelError, true),
-			ev(5*time.Minute, "failed-then-synced", eventlog.OpSync, levelDone, false),
-			ev(5*time.Minute, "only-synced", eventlog.OpSync, levelDone, false),
-			// The newest finished run wins, and a step from a run still in
-			// flight does not clear it.
-			ev(4*time.Minute, "passed", eventlog.OpValidate, levelError, true),
-			ev(3*time.Minute, "passed", eventlog.OpValidate, levelDone, true),
-			ev(2*time.Minute, "passed", eventlog.OpValidate, "step", false),
-		},
-	}}}
-
-	msg := convertSnapshot(snap, New(nil, true))
-
-	got := map[string]string{}
-	for _, sc := range msg.sidecars {
-		got[sc.id] = sc.lastResult
-	}
-	assert.DeepEqual(t, got, map[string]string{
-		"failed-then-synced": levelError,
-		"only-synced":        "",
-		"passed":             levelDone,
-	})
-}
-
-func TestConvertSnapshot_carriesVerifiedAndRunningCommands(t *testing.T) {
-	now := time.Now()
-	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
-		Root: "/repo", Branch: "main", RepoName: "repo",
-		Sidecars: []chunkd.SidecarState{
-			{ID: "busy", Verified: true, LastActivity: now},
-			{ID: "quiet", Verified: true, LastActivity: now},
-		},
-		// The event log has gone quiet, but the daemon is still streaming a
-		// command on busy, so busy is running.
-		Commands: []chunkd.CommandState{
-			{CommandID: "c1", SidecarID: "busy", Running: true},
-			{CommandID: "c2", SidecarID: "quiet", Running: false},
-		},
-	}}}
-
-	msg := convertSnapshot(snap, New(nil, true))
-
-	byID := map[string]sidecarInfo{}
-	for _, sc := range msg.sidecars {
-		byID[sc.id] = sc
-	}
-	assert.Assert(t, byID["busy"].verified && byID["busy"].running)
-	assert.Assert(t, byID["quiet"].verified && !byID["quiet"].running)
-}
-
-// twoSessionSnapshot builds a daemon snapshot for one worktree driven by two
-// sessions. localAt, when non-zero, adds a local (non-sidecar) validate run.
-func twoSessionSnapshot(aAt, bAt, localAt time.Time) chunkd.Snapshot {
-	ev := func(ts time.Time, sidecarID string) eventlog.Event {
-		return eventlog.Event{Ts: ts, SidecarID: sidecarID, Op: eventlog.OpValidate,
-			Level: levelDone, Msg: "1/1 passed"}
-	}
-	events := []eventlog.Event{ev(aAt, "idA"), ev(bAt, "idB")}
-	if !localAt.IsZero() {
-		events = append(events, ev(localAt, ""))
-	}
-	return chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
-		Root:     "/repo",
-		Branch:   "main",
-		RepoName: "repo",
-		Sidecars: []chunkd.SidecarState{
-			{ID: "idA", Name: "repo-sessA", SessionID: "sessA", RepoName: "repo", LastActivity: aAt},
-			{ID: "idB", Name: "repo-sessB", SessionID: "sessB", RepoName: "repo", LastActivity: bAt},
-		},
-		Events: events,
-	}}}
-}
-
-// The unit tests above set m.sidecars directly, so they cannot catch a merge
-// that collapses two sessions into one row. This drives the real path —
-// convertSnapshot → sortByActivity → filterSidecars — and
-// asserts both sessions survive it with their identities intact.
-func TestConvertSnapshot_twoSessionsSurviveTheMerge(t *testing.T) {
-	now := time.Now()
-	msg := convertSnapshot(twoSessionSnapshot(now, now.Add(-5*time.Minute), time.Time{}), New(nil, true))
-
-	assert.Equal(t, len(msg.sidecars), 2)
-	assert.Equal(t, sharedWorktrees(msg.sidecars)[groupOf(msg.sidecars[0])], 2)
-
-	m := sessionModel("sessA", msg.sidecars)
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
-	assert.Assert(t, strings.Contains(pane, "this session"), pane)
-	assert.Assert(t, strings.Contains(pane, "sessB"), pane)
-}
-
-// outcomeOf tests
-
-func TestOutcomeOf(t *testing.T) {
-	now := time.Now()
-	tests := []struct {
-		name      string
-		events    []eventlog.Event
-		wantIcon  string
-		wantLabel string
-		wantLevel string
-	}{
-		{
-			name:      "running while recent",
-			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace...", Ts: now.Add(-time.Minute)}},
-			wantIcon:  "●",
-			wantLabel: "running",
-			wantLevel: "",
-		},
-		{
-			name:      "abandoned once past the running timeout",
-			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace...", Ts: now.Add(-8 * time.Hour)}},
-			wantIcon:  "⊘",
-			wantLabel: "abandoned",
-			wantLevel: levelAbandoned,
-		},
-		{
-			name: "passed",
-			events: []eventlog.Event{
-				{Op: eventlog.OpValidate, Level: "info", Msg: "$ task test", Ts: now.Add(-8 * time.Hour)},
-				{Op: eventlog.OpValidate, Level: "done", Msg: "4/4 passed  32.4s", Final: true, Passed: 4, Total: 4, Ts: now.Add(-8 * time.Hour)},
-			},
-			wantIcon:  "✓",
-			wantLabel: "4/4",
-			wantLevel: levelDone,
-		},
-		{
-			name:      "setup failure closes the invocation",
-			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "error", Msg: "setup failed  3.1s: agent: failed to sign challenge", Final: true, Ts: now.Add(-8 * time.Hour)}},
-			wantIcon:  "✗",
-			wantLabel: "0/0",
-			wantLevel: levelError,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			icon, label, level := outcomeOf(invocationGroup{events: tt.events})
-			if icon != tt.wantIcon || label != tt.wantLabel || level != tt.wantLevel {
-				t.Errorf("outcomeOf() = (%q, %q, %q), want (%q, %q, %q)", icon, label, level, tt.wantIcon, tt.wantLabel, tt.wantLevel)
-			}
-		})
-	}
-}
-
-// A key the footer does not offer does nothing: Enter and Space only act on
-// the right pane, and ← only leaves it.
+// A key the footer does not offer does nothing: with no run to show, the right
+// pane has nothing to select, open or fold.
 func TestDisabledKeysDoNothing(t *testing.T) {
-	m := New(nil, false)
-	for _, code := range []rune{tea.KeyEnter, tea.KeySpace, tea.KeyLeft} {
+	m := sessModel()
+	m.width, m.height = 100, 24
+	for _, code := range []rune{tea.KeyEnter, tea.KeySpace, tea.KeyLeft, tea.KeyRight, 'd'} {
 		next, cmd := m.Update(tea.KeyPressMsg{Code: code})
 		assert.Assert(t, cmd == nil, "%q in the left pane", code)
-		assert.Equal(t, next.(Model).focusedPane, paneLeft)
-		assert.Equal(t, len(next.(Model).toggledInvocs), 0)
+		assert.Equal(t, next.(Model).focusedPane, paneLeft, "%q moved the focus", code)
+		assert.Assert(t, !next.(Model).runDetails, "%q opened the details fold", code)
 	}
-	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	m = next.(Model)
-	next, _ = m.Update(tea.KeyPressMsg{Code: 'l'})
-	assert.Equal(t, next.(Model).focusedPane, paneRight, "→ is a no-op once the right pane has focus")
 }

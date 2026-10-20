@@ -21,11 +21,15 @@ const maxRequestBytes = 64 * 1024
 //	GET  /factory[?root=<path>] list sessions (newest first), optionally one project's
 //	GET  /factory/{id}         one session with its review findings
 //	POST /factory/{id}/cancel  stop a session
+//	POST /factory/warm         make the sidecars a run continuing run_id would use
+//	POST /factory/warm/{run}/cancel  delete those sidecars
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /factory", d.handleFactoryStart)
 	mux.HandleFunc("GET /factory", d.handleSessionList)
 	mux.HandleFunc("GET /factory/{id}", d.handleSessionGet)
 	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
+	mux.HandleFunc("POST /factory/warm", d.handleFactoryWarm)
+	mux.HandleFunc("POST /factory/warm/{run}/cancel", d.handleFactoryWarmCancel)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

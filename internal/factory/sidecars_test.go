@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -355,4 +357,64 @@ func TestCheckWaitsForReviewers(t *testing.T) {
 	}
 	_, err := failed.Check(ctx, 1)
 	assert.ErrorContains(t, err, "get the reviewer sidecars ready: clone failed")
+}
+
+// The validation commands wait for what BeforeValidate waits for, such as a
+// warm-up still running on the implementer's sidecar, so they never overlap
+// it; the reviews do not.
+func TestChecksWaitForTheWarmUp(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	validated := false
+	record := func(run sidecar.Execer) sidecar.Execer {
+		return func(ctx context.Context, e *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
+			if strings.Contains(script, "echo validated") {
+				mu.Lock()
+				validated = true
+				mu.Unlock()
+			}
+			return run(ctx, e, script, env, onOutput, onSubmitted)
+		}
+	}
+	s, impl, _, _ := newSidecarsFixture(t, record)
+	s.Commands = []config.Command{{Name: "check", Run: "echo validated"}}
+	warmedUp := make(chan struct{})
+	s.BeforeValidate = func(ctx context.Context) error {
+		select {
+		case <-warmedUp:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	writeFile(t, impl.RepoPath, "main.go", "package main\n\n// v1\n")
+	_, err := s.Collect(ctx)
+	assert.NilError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Check(ctx, 1)
+		done <- err
+	}()
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	early := validated
+	mu.Unlock()
+	assert.Assert(t, !early, "a validation command ran while the warm-up was going")
+	select {
+	case <-done:
+		t.Fatal("the check finished while the warm-up was going")
+	default:
+	}
+
+	close(warmedUp)
+	select {
+	case err := <-done:
+		assert.NilError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the check did not finish once the warm-up had")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Assert(t, validated, "the validation command ran after the warm-up")
 }

@@ -89,6 +89,9 @@ type daemon struct {
 	// the daemon has no client (unauthenticated), in which case POST /sidecar
 	// returns 503.
 	prov *provisioner
+	// warm keeps the sidecars made ahead of factory runs while their work is
+	// drafted. Nil in daemons built without one, which then make none.
+	warm *warmStore
 	// claims tracks which sessions are actively validating which paths, for
 	// advisory cross-agent coordination.
 	claims *claimStore
@@ -208,6 +211,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		claims:    newClaimStore(),
 		live:      newLivenessChecker(listFor(client)),
 		sessions:  newSessionStore(ctx),
+		warm:      newWarmStore(ctx),
 		rcfg:      dopts.review,
 		gh:        ghClient,
 	}
@@ -221,6 +225,8 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	defer d.res.stopAll()
 	defer d.tasks.stopAll()
 	defer d.sessions.stopAll()
+	// Before the sessions stop: a run waiting for warm sidecars is let go.
+	defer d.warm.stopAll()
 	if prov != nil {
 		defer prov.stopAll(context.Background())
 	}
@@ -507,6 +513,19 @@ func (d *daemon) withSessions(root string, p chunkd.ProjectSnapshot, sidecarPool
 		// second and therefore share a run ID, the remaining pool belongs to the
 		// newest one.
 		name := factory.PoolName(f.RunID)
+		if _, exists := byPool[name]; !exists {
+			byPool[name] = i
+		}
+	}
+	// A run continuing another can take over the sidecars made ahead of it
+	// under the continued run's ID, so a pool no run of that name owns belongs
+	// to the newest run continuing it.
+	for i := range p.Sessions {
+		f := p.Sessions[i].Factory
+		if f == nil || f.ContinuesRunID == "" {
+			continue
+		}
+		name := factory.PoolName(f.ContinuesRunID)
 		if _, exists := byPool[name]; !exists {
 			byPool[name] = i
 		}
