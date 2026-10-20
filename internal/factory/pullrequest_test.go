@@ -8,6 +8,8 @@ import (
 	"unicode/utf8"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
 // projectWithOrigin returns a project whose origin is a bare repository on this
@@ -97,7 +99,7 @@ func TestPullRequestTitle(t *testing.T) {
 	}
 }
 
-func TestPullRequestBodySaysWhatWasAskedChangedAndChecked(t *testing.T) {
+func TestPullRequestBodySaysWhatWasAskedAndChecked(t *testing.T) {
 	rep := Report{
 		Stat: "2 files changed, 10 insertions(+)",
 		Outcome: Outcome{Result: ResultPassed, Rounds: 2, Checks: []Check{
@@ -106,40 +108,75 @@ func TestPullRequestBodySaysWhatWasAskedChangedAndChecked(t *testing.T) {
 			{Name: "test", Kind: KindValidate, Status: StatusPassed},
 		}},
 	}
+	src := PromptSource{
+		Prompts: []review.Prompt{{
+			Name: "bugs", File: "bugs.md",
+			Body: "# Review Check: Bugs\n\nTries to break the change and proves each\nproblem before reporting it. More detail.\n\n## Rules\n",
+		}},
+		Owner: "acme", Repo: "widgets", Commit: "abc123", Dir: "custom/reviews",
+	}
 
-	got := PullRequestBody("Add a flag\nand document it", "20261002-150405-ab12cd", rep)
+	got := PullRequestBody("# Add a flag\n\n- and document it", rep, src)
 
 	for _, want := range []string{
-		"> Add a flag\n> and document it\n",
-		"2 files changed, 10 insertions(+)",
+		"# Add a flag\n\n- and document it\n",
 		"All checks passed after 2 round(s)",
-		"- bugs (review)\n",
-		"- test (validation)\n",
-		"run 20261002-150405-ab12cd",
+		"- bugs: Tries to break the change and proves each problem before reporting it." +
+			" ([prompt](https://github.com/acme/widgets/blob/abc123/custom/reviews/bugs.md))\n",
+		"- test\n",
+		"Assembled with care by **chunk factory 🏭**",
 	} {
 		assert.Assert(t, strings.Contains(got, want), "%q is not in:\n%s", want, got)
 	}
-	// Only checks that passed are listed as passing.
-	assert.Assert(t, !strings.Contains(got, "style"), got)
+	for _, unwanted := range []string{"## Request", "> ", "## Changes", "2 files changed", "run ", "(validation)", "style"} {
+		assert.Assert(t, !strings.Contains(got, unwanted), "%q is in:\n%s", unwanted, got)
+	}
+}
+
+func TestPullRequestBodyListsAReviewWithNoParagraphByNameAndLink(t *testing.T) {
+	rep := Report{Outcome: Outcome{Rounds: 1, Checks: []Check{{Name: "bare", Kind: KindReview, Status: StatusPassed}}}}
+	src := PromptSource{
+		Prompts: []review.Prompt{{Name: "bare", File: "bare.md", Body: "# Just a heading\n"}},
+		Owner:   "acme", Repo: "widgets", Commit: "abc123",
+	}
+
+	got := PullRequestBody("add a flag", rep, src)
+
+	assert.Assert(t, strings.Contains(got, "- bare ([prompt](https://github.com/acme/widgets/blob/abc123/.chunk/reviews/bare.md))\n"), got)
+}
+
+func TestPullRequestBodyLeavesOutLinksItCannotMake(t *testing.T) {
+	rep := Report{Outcome: Outcome{Rounds: 1, Checks: []Check{
+		{Name: "lint", Kind: KindValidate, Status: StatusPassed},
+		{Name: "gone", Kind: KindReview, Status: StatusPassed},
+	}}}
+
+	got := PullRequestBody("add a flag", rep, PromptSource{})
+
+	assert.Assert(t, strings.Contains(got, "- lint\n"), got)
+	assert.Assert(t, strings.Contains(got, "- gone\n"), got)
+	assert.Assert(t, !strings.Contains(got, "http"), got)
 }
 
 func TestPullRequestBodyKeepsALongPromptShort(t *testing.T) {
-	got := PullRequestBody(strings.Repeat("é", 20000), "run-1", Report{})
+	got := PullRequestBody(strings.Repeat("é", 20000), Report{}, PromptSource{})
 
 	assert.Assert(t, utf8.ValidString(got))
 	assert.Assert(t, utf8.RuneCountInString(got) < 9000, "the body was %d characters", utf8.RuneCountInString(got))
 }
 
-// A run that started from uncommitted work has that work as its branch's first
-// commit, so the pull request is bigger than the run's own change, and says so.
-func TestPullRequestBodySaysWhenTheBranchCarriesTheStartingWork(t *testing.T) {
-	rep := Report{Stat: "1 file changed, 4 insertions(+)", Outcome: Outcome{Rounds: 1}}
+func TestPullRequestBodyEscapesTheLinkAndKeepsTheRequestFromSwallowingTheReview(t *testing.T) {
+	rep := Report{Outcome: Outcome{Rounds: 1, Checks: []Check{{Name: "my check", Kind: KindReview, Status: StatusPassed}}}}
+	src := PromptSource{
+		Prompts: []review.Prompt{{Name: "my check", File: "my check (1)#.md", Body: "```\ncode\n```\n"}},
+		Owner:   "acme", Repo: "widgets", Commit: "abc123",
+	}
 
-	rep.Worktree = Worktree{Baseline: "aaa", Head: "bbb"}
-	with := PullRequestBody("add a flag", "run-1", rep)
-	assert.Assert(t, strings.Contains(with, "uncommitted work the run started from"), with)
+	got := PullRequestBody("fix it\n```go\nfunc f() {", rep, src)
 
-	rep.Worktree = Worktree{Baseline: "aaa", Head: "aaa"}
-	without := PullRequestBody("add a flag", "run-1", rep)
-	assert.Assert(t, !strings.Contains(without, "uncommitted"), without)
+	assert.Assert(t, strings.Contains(got, "/.chunk/reviews/my%20check%20%281%29%23.md"), got)
+	// The fence the request left open is closed before the review section.
+	assert.Assert(t, strings.Contains(got, "func f() {\n```\n\n## Review"), got)
+	// A prompt that opens with a fence has no summary to take, and none leaks in.
+	assert.Assert(t, strings.HasPrefix(strings.Split(got, "\n- ")[1], "my check ([prompt]"), got)
 }

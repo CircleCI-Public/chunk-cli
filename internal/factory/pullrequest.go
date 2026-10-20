@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
+	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
 const (
@@ -63,37 +67,145 @@ func PullRequestTitle(prompt, runID string) string {
 	return "chunk factory run " + runID
 }
 
-// PullRequestBody is a run's pull request description: what was asked, what
-// changed, how the review went, and where it came from. A change a person is
-// asked to merge should say how it was checked.
-func PullRequestBody(prompt, runID string, rep Report) string {
+// PromptSource says where a pull request's review prompts can be read: which
+// prompts ran, and how to link to them at the commit the pull request shows.
+type PromptSource struct {
+	Prompts []review.Prompt
+	// Owner, Repo and Commit make a link to a prompt's file. Without all three
+	// the checks are listed without links.
+	Owner, Repo, Commit string
+	// Dir is the prompts' directory relative to the project root, "" for the
+	// default.
+	Dir string
+}
+
+// link is the address of a prompt's file at the pull request's head commit, or
+// "" when it cannot be worked out.
+func (s PromptSource) link(p review.Prompt) string {
+	if s.Owner == "" || s.Repo == "" || s.Commit == "" || p.File == "" {
+		return ""
+	}
+	dir := s.Dir
+	if dir == "" {
+		dir = review.DefaultDir
+	}
+	// A file name can hold spaces, parentheses or a "#", any of which would end
+	// the link early or point it at the wrong place.
+	segments := strings.Split(path.Join(filepath.ToSlash(dir), p.File), "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/blob/%s/%s", s.Owner, s.Repo, s.Commit, strings.Join(segments, "/"))
+}
+
+// PullRequestBody is a run's pull request description: what was asked and how
+// the review went. The diff and its stat are on the pull request already.
+func PullRequestBody(prompt string, rep Report, src PromptSource) string {
 	var b strings.Builder
-	b.WriteString("## Request\n\n")
-	for _, line := range strings.Split(cutRunes(strings.TrimSpace(prompt), maxPRPromptRunes), "\n") {
-		b.WriteString("> " + line + "\n")
-	}
-	if rep.Stat != "" {
-		fmt.Fprintf(&b, "\n## Changes\n\n%s\n", rep.Stat)
-		// The run's branch starts from the developer's uncommitted work, committed
-		// first, so the pull request's own diff is larger than the run's change.
-		if rep.Worktree.Baseline != "" && rep.Worktree.Baseline != rep.Worktree.Head {
-			b.WriteString("\nThat counts only what the run changed. The first commit on this branch is the " +
-				"uncommitted work the run started from, which is part of this pull request too.\n")
-		}
-	}
+	b.WriteString(closeFences(cutRunes(strings.TrimSpace(prompt), maxPRPromptRunes)) + "\n")
 	fmt.Fprintf(&b, "\n## Review\n\nAll checks passed after %d round(s):\n\n", rep.Outcome.Rounds)
 	for _, c := range rep.Outcome.Checks {
 		if c.Status != StatusPassed {
 			continue
 		}
-		kind := "review"
 		if c.Kind == KindValidate {
-			kind = "validation"
+			fmt.Fprintf(&b, "- %s\n", c.Name)
+			continue
 		}
-		fmt.Fprintf(&b, "- %s (%s)\n", c.Name, kind)
+		b.WriteString("- " + reviewLine(c.Name, src) + "\n")
 	}
-	fmt.Fprintf(&b, "\n---\nOpened by `chunk factory build`, run %s.\n", runID)
+	b.WriteString("\n---\nAssembled with care by **chunk factory 🏭**\n")
 	return b.String()
+}
+
+// reviewLine describes a review check: its name, a line on what it looks for,
+// and a link to its prompt, each when there is one.
+func reviewLine(name string, src PromptSource) string {
+	var p review.Prompt
+	for _, candidate := range src.Prompts {
+		if candidate.Name == name {
+			p = candidate
+			break
+		}
+	}
+	line := name
+	if summary := promptSummary(p.Body); summary != "" {
+		line += ": " + summary
+	}
+	if link := src.link(p); link != "" {
+		line += " ([prompt](" + link + "))"
+	}
+	return line
+}
+
+// closeFences closes a code fence the text leaves open, so a request that has
+// one, or was cut inside one, does not swallow the rest of the description.
+func closeFences(s string) string {
+	var open string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		for _, marker := range []string{"```", "~~~"} {
+			if !strings.HasPrefix(line, marker) {
+				continue
+			}
+			switch open {
+			case "":
+				open = marker
+			case marker:
+				open = ""
+			}
+			break
+		}
+	}
+	if open == "" {
+		return s
+	}
+	return s + "\n" + open
+}
+
+// maxSummaryRunes keeps a check's summary to one line of a list.
+const maxSummaryRunes = 140
+
+// promptSummary is the first paragraph of a prompt, on one line and cut to its
+// first sentence if that is shorter than a line. Headings come before it and
+// are skipped; "" means the prompt has no paragraph to take it from.
+func promptSummary(body string) string {
+	var para []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "" && len(para) > 0:
+			return summarize(para)
+		case line == "", strings.HasPrefix(line, "#") && len(para) == 0:
+			continue
+		case len(para) == 0 && !isProse(line):
+			// Not a paragraph a summary can be taken from: it would open a
+			// fence or a table, or hide the rest of the line, in the list it is
+			// put in.
+			return ""
+		}
+		para = append(para, line)
+	}
+	return summarize(para)
+}
+
+// isProse reports whether a line that starts a paragraph is plain text, rather
+// than markdown that would change how the rest of the description renders.
+func isProse(line string) bool {
+	for _, prefix := range []string{"```", "~~~", "---", "<", "|", "- ", "* ", "+ ", ">"} {
+		if strings.HasPrefix(line, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func summarize(lines []string) string {
+	text := strings.Join(lines, " ")
+	if i := strings.Index(text, ". "); i >= 0 {
+		text = text[:i+1]
+	}
+	return cutWords(text, maxSummaryRunes)
 }
 
 // cutRunes cuts s to at most n characters, marking a cut with an ellipsis. It

@@ -31,6 +31,9 @@ type pullRequestPlan struct {
 	// localBranch is the branch the developer had checked out when the run
 	// started, which the pull request targets if the remote has it too.
 	localBranch string
+	// reviewsDir is the review prompts' directory relative to the project root,
+	// "" for the default.
+	reviewsDir string
 }
 
 // errNoGitHubToken is why a project cannot open a pull request when the daemon
@@ -43,7 +46,7 @@ var errNoGitHubToken = fmt.Errorf("the chunk daemon has no GitHub token: set %s 
 // would take minutes to reach it starts: a GitHub token, and an origin on
 // GitHub to open it on. Its error says what is missing in terms that read both
 // as why a run opened no pull request and as why one that had to was refused.
-func (d *daemon) planPullRequest(ctx context.Context, root string, draft bool) (*pullRequestPlan, error) {
+func (d *daemon) planPullRequest(ctx context.Context, root string, draft bool, reviewsDir string) (*pullRequestPlan, error) {
 	if d.gh == nil {
 		return nil, errNoGitHubToken
 	}
@@ -51,7 +54,7 @@ func (d *daemon) planPullRequest(ctx context.Context, root string, draft bool) (
 	if err != nil {
 		return nil, fmt.Errorf("this project's origin remote must be on GitHub (%w)", err)
 	}
-	return &pullRequestPlan{owner: owner, repo: repo, draft: draft, localBranch: currentBranch(root)}, nil
+	return &pullRequestPlan{owner: owner, repo: repo, draft: draft, localBranch: currentBranch(root), reviewsDir: reviewsDir}, nil
 }
 
 // refusePullRequest turns a plan that could not be made into the refusal a run
@@ -82,7 +85,7 @@ func (d *daemon) factoryPullRequest(req chunkd.FactoryRequest, root string, reco
 	}
 	// Checked now, not after a run that takes minutes: the push and the pull
 	// request come last, and need things the run does not.
-	plan, err := d.planPullRequest(context.Background(), root, req.Draft)
+	plan, err := d.planPullRequest(context.Background(), root, req.Draft, req.ReviewsDir)
 	switch {
 	case err == nil:
 		record.PullRequest = &chunkd.PullRequest{State: chunkd.PRPending, Draft: req.Draft}
@@ -155,11 +158,17 @@ func (d *daemon) openPullRequest(ctx context.Context, entry *sessionEntry, opts 
 	entry.mu.Lock()
 	request := entry.s.Factory.Prompt
 	entry.mu.Unlock()
+	// The prompts are linked at the commit the pull request shows, so a link is
+	// to what ran.
+	src := factory.PromptSource{Prompts: opts.Prompts, Owner: plan.owner, Repo: plan.repo, Dir: plan.reviewsDir}
+	if tip, err := rep.Worktree.Tip(openCtx); err == nil {
+		src.Commit = tip
+	}
 	created, err := d.gh.CreatePullRequest(openCtx, plan.owner, plan.repo, github.NewPullRequest{
 		Base:  base,
 		Head:  branch,
 		Title: factory.PullRequestTitle(request, rep.RunID),
-		Body:  factory.PullRequestBody(request, rep.RunID, rep),
+		Body:  factory.PullRequestBody(request, rep, src),
 		Draft: plan.draft,
 	})
 	if err != nil {
