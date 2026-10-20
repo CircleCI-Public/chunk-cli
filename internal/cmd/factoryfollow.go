@@ -176,7 +176,7 @@ type sessionReporter struct {
 	// implement and checks are what has been said of a factory round's
 	// implementer turn and how many of its validation commands.
 	implement map[int]chunkd.RoundImplement
-	checks    map[int]int
+	checks    map[string]bool
 	// progress counts the lines of the factory run's progress already said.
 	progress int
 	// checked marks the factory rounds whose review findings have been said.
@@ -189,7 +189,7 @@ func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
 		rounds:    map[int]chunkd.RoundState{},
 		reviews:   map[string]chunkd.PromptRunState{},
 		implement: map[int]chunkd.RoundImplement{},
-		checks:    map[int]int{},
+		checks:    map[string]bool{},
 		checked:   map[int]bool{},
 	}
 }
@@ -218,10 +218,14 @@ func (r *sessionReporter) report(d chunkd.SessionDetail) {
 		if impl := round.Implement; impl != nil {
 			r.reportImplement(i, *impl)
 		}
-		for _, c := range round.Checks[min(r.checks[i], len(round.Checks)):] {
+		for _, c := range round.Checks {
+			key := fmt.Sprintf("%d/%s", i, c.Name)
+			if c.Status == chunkd.CheckQueued || c.Status == chunkd.CheckRunning || r.checks[key] {
+				continue
+			}
+			r.checks[key] = true
 			r.reportCheck(c)
 		}
-		r.checks[i] = len(round.Checks)
 		for _, p := range round.Reviews {
 			key := fmt.Sprintf("%d/%s", i, p.Name)
 			if r.reviews[key] == p.State {

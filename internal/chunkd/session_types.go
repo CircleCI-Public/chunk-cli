@@ -316,6 +316,10 @@ const (
 	CheckFailed = "failed"
 	// CheckErrored means the check could not run.
 	CheckErrored = "errored"
+	// CheckQueued and CheckRunning are a RoundCheck's states before it has an
+	// outcome: its round has not reached it yet, or it is running now.
+	CheckQueued  = "queued"
+	CheckRunning = "running"
 )
 
 // ReviewPrompt is one review's progress inside a round. It carries state only:

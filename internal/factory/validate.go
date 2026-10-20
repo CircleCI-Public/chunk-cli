@@ -65,9 +65,12 @@ func LoadChecks(dir string, optional bool, cfg *config.ProjectConfig, noValidate
 // runValidation runs each command in turn in the implementer's workspace, where
 // the code under review already is, and returns one check per command. They
 // run one after another because they share one checkout and one machine.
-func runValidation(ctx context.Context, exec sidecar.Execer, entry *sidecar.PoolEntry, cmds []config.Command, onDone func(Check)) []Check {
+func runValidation(ctx context.Context, exec sidecar.Execer, entry *sidecar.PoolEntry, cmds []config.Command, onStart func(name string), onDone func(Check)) []Check {
 	checks := make([]Check, 0, len(cmds))
 	for _, c := range cmds {
+		if onStart != nil {
+			onStart(c.Name)
+		}
 		check := runCommand(ctx, exec, entry, c)
 		if onDone != nil {
 			onDone(check)

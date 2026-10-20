@@ -482,7 +482,9 @@ func sessionTitle(info sessionInfo) string {
 // runRow is one selectable row as the run pane draws it.
 type runRow struct {
 	icon, name, detail string
-	extra              []string // lines under the row, not selectable
+	// waiting dims the row: it has not started.
+	waiting bool
+	extra   []string // lines under the row, not selectable
 }
 
 // renderRunRound draws round ri: one line when closed, or its header, the
@@ -533,7 +535,11 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 		width = max(width, utf8.RuneCountInString(rows[0].name)-2)
 	}
 	draw := func(row runRow, indent, nameWidth int, branch string) {
-		line := pad(idx, indent) + branch + row.icon + "  " + row.name + strings.Repeat(" ", max(nameWidth-utf8.RuneCountInString(row.name), 0))
+		name := row.name
+		if row.waiting {
+			name = st.dim(name)
+		}
+		line := pad(idx, indent) + branch + row.icon + "  " + name + strings.Repeat(" ", max(nameWidth-utf8.RuneCountInString(row.name), 0))
 		if row.detail != "" {
 			line += "   " + row.detail
 		}
@@ -547,16 +553,33 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 	if nImpl == 1 {
 		draw(rows[0], 4, width+2, "")
 	}
-	if len(rows) > nImpl {
-		label := "    " + st.vdim("validate")
-		if pending, total := roundPending(r); pending > 0 {
-			label += st.dim(fmt.Sprintf(" · %d of %d done", total-pending, total))
+	// Checks and reviews are two groups, each with its own count, listed from
+	// the round's start so the totals do not grow while it runs.
+	rest := rows[nImpl:]
+	groups := []struct {
+		name string
+		rows []runRow
+		sum  groupCount
+	}{
+		{"checks", rest[:len(r.Checks)], checkCount(r)},
+		{"reviews", rest[len(r.Checks):], reviewCount(r)},
+	}
+	if awaitingImplementer(r) && len(rest) > 0 {
+		lines = append(lines, "      "+st.dim("both begin when the implementer finishes"))
+	}
+	for _, g := range groups {
+		if len(g.rows) == 0 {
+			continue
+		}
+		label := "    " + st.vdim(g.name)
+		if text := g.sum.text(awaitingImplementer(r)); text != "" {
+			label += st.dim(" · " + text)
 		}
 		lines = append(lines, label)
-		for i, row := range rows[nImpl:] {
+		for i, row := range g.rows {
 			// A tree down the left, so the group reads as one thing.
 			branch := "├─ "
-			if i == len(rows)-nImpl-1 {
+			if i == len(g.rows)-1 {
 				branch = "└─ "
 			}
 			draw(row, 4, width, st.vdim(branch))
@@ -568,22 +591,71 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 	return lines, at, end, idx
 }
 
-// roundPending counts the round's checks and reviews that have not finished,
-// and all of them.
-func roundPending(r chunkd.Round) (pending, total int) {
+// awaitingImplementer reports whether a round's checks and reviews are waiting
+// for the implementer to finish its turn. It is the phase the Now line calls
+// "the implementer is making the change".
+func awaitingImplementer(r chunkd.Round) bool {
+	return r.State == chunkd.RoundStarted || r.State == chunkd.RoundImplementing
+}
+
+// groupCount tallies one group of a round: its checks or its reviews.
+type groupCount struct {
+	total, pending, passed, failed int
+	// failedWord is what a failure is called in this group. While the group
+	// still runs, a check counts as passed or not, but a review is done
+	// whatever it found, so countPassed says which to report.
+	failedWord  string
+	countPassed bool
+}
+
+// text says how the group stands: that it has not started, how many have
+// finished while some are pending, or how they came out once all have.
+func (g groupCount) text(notStarted bool) string {
+	switch {
+	case g.total == 0:
+		return ""
+	case notStarted && g.pending == g.total:
+		return "not started"
+	case g.pending > 0 && g.countPassed:
+		return fmt.Sprintf("%d of %d passed", g.passed, g.total)
+	case g.pending > 0:
+		return fmt.Sprintf("%d of %d done", g.total-g.pending, g.total)
+	case g.failed > 0:
+		return fmt.Sprintf("%d of %d passed, %d %s", g.passed, g.total, g.failed, g.failedWord)
+	}
+	return fmt.Sprintf("%d of %d passed", g.passed, g.total)
+}
+
+// checkCount tallies a round's validation commands.
+func checkCount(r chunkd.Round) groupCount {
+	g := groupCount{total: len(r.Checks), failedWord: "failed", countPassed: true}
 	for _, c := range r.Checks {
-		total++
-		if c.Status != chunkd.CheckPassed && c.Status != chunkd.CheckFailed && c.Status != chunkd.CheckErrored {
-			pending++
+		switch c.Status {
+		case chunkd.CheckPassed:
+			g.passed++
+		case chunkd.CheckFailed, chunkd.CheckErrored:
+			g.failed++
+		default:
+			g.pending++
 		}
 	}
+	return g
+}
+
+// reviewCount tallies a round's reviews.
+func reviewCount(r chunkd.Round) groupCount {
+	g := groupCount{total: len(r.Reviews), failedWord: "needs changes"}
 	for _, p := range r.Reviews {
-		total++
-		if p.State == chunkd.PromptQueued || p.State == chunkd.PromptRunning {
-			pending++
+		switch {
+		case p.State == chunkd.PromptQueued || p.State == chunkd.PromptRunning:
+			g.pending++
+		case p.State == chunkd.PromptFailed || p.Status == chunkd.CheckFailed || p.Status == chunkd.CheckErrored:
+			g.failed++
+		default:
+			g.passed++
 		}
 	}
-	return pending, total
+	return g
 }
 
 func (m Model) roundIcon(st watchStyles, r chunkd.Round) string {
@@ -748,6 +820,22 @@ func nextStepLine(st watchStyles, s chunkd.Session) string {
 	return ""
 }
 
+// reviewSandboxLines names the sandbox each of s's reviews ran in, by round.
+func reviewSandboxLines(st watchStyles, s chunkd.Session) []string {
+	var lines []string
+	for _, r := range s.Rounds {
+		for _, p := range r.Reviews {
+			if p.SidecarID == "" {
+				continue
+			}
+			id, _, _ := strings.Cut(p.SidecarID, "-")
+			lines = append(lines, fmt.Sprintf("      %s  %s  %s",
+				st.dim(fmt.Sprintf("round %d", r.Number)), st.muted(p.Name), st.vdim(id)))
+		}
+	}
+	return lines
+}
+
 // runDetailLines are where the run put its work and what it said while setting
 // up. They are the least of what a person watching a run wants, so they stay
 // folded until asked for.
@@ -768,6 +856,12 @@ func (m Model) runDetailLines(st watchStyles, run sessionInfo) []string {
 		for _, l := range feed[max(len(feed)-5, 0):] {
 			lines = append(lines, "      "+feedText(st, l))
 		}
+	}
+	// A review's row no longer carries its sandbox ID; this is where it stays
+	// reachable, for a review whose own logs have to be chased.
+	if reviewed := reviewSandboxLines(st, run.s); len(reviewed) > 0 {
+		lines = append(lines, "    "+st.vdim("review sandboxes"))
+		lines = append(lines, reviewed...)
 	}
 	if len(lines) == 0 {
 		return nil

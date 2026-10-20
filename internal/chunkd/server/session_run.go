@@ -254,10 +254,13 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 }
 
 // beginRound adds the next round with its reviews queued, and returns its index.
-func (e *sessionEntry) beginRound(prompts []review.Prompt) int {
+func (e *sessionEntry) beginRound(prompts []review.Prompt, commands []config.Command) int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	r := chunkd.Round{Number: e.nextNumberLocked(), State: chunkd.RoundStarted, StartedAt: time.Now()}
+	for _, c := range commands {
+		r.Checks = append(r.Checks, chunkd.RoundCheck{Name: c.Name, Status: chunkd.CheckQueued})
+	}
 	for _, p := range prompts {
 		r.Reviews = append(r.Reviews, chunkd.ReviewPrompt{Name: p.Name, State: chunkd.PromptQueued})
 	}
@@ -364,6 +367,13 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 		r.State, r.EndedAt = chunkd.RoundFailed, &now
 		if r.Note == "" {
 			r.Note = reason
+		}
+		// A check the round never reached did not run, so it is not left
+		// waiting on a round that is over.
+		for i := range r.Checks {
+			if c := &r.Checks[i]; c.Status == chunkd.CheckQueued || c.Status == chunkd.CheckRunning {
+				c.Status, c.Error = chunkd.CheckErrored, reason
+			}
 		}
 		for i := range r.Reviews {
 			p := &r.Reviews[i]
