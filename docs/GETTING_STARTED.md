@@ -349,7 +349,7 @@ then the draft's diff is shown in the right pane (`↑/↓` scrolls it), and
 the draft for later).
 
 ```
-chunk watch  2 runs  main@a3f9e12                        15:04:32
+chunk watch  2 runs  main@a3f9e12
 ──────────────────────────────────────────────────────────────────
  runs                  │ run  chunk-cli · chunk/factory/abc · 0123456
  ⌕ search runs      /  │   ⠋ Round 2 (max 3) · implementing  1m0s · $0.41
