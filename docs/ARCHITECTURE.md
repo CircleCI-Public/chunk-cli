@@ -443,6 +443,7 @@ POST /factory              {project_root, prompt, reviews_dir?, no_validate?, at
 GET  /factory[?root=<path>] → {sessions: [Session...]}, newest first
 GET  /factory/{id}         → SessionDetail: the session plus each round's review findings
 POST /factory/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
+DELETE /factory/{id}       → 204: forget a finished session; 409 while it is still running
 POST /factory/warm         {project_root, run_id} → 202: make the sidecars a run
                              continuing run_id would use, from its baseline, before
                              that run starts (503 no credential or not authenticated,

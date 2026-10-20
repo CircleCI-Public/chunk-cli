@@ -225,6 +225,27 @@ func (s *sessionStore) cancelSession(id string) (found, wasActive bool) {
 	return true, active
 }
 
+// deleteSession forgets a finished session. It reports whether the session
+// exists and whether it was removed: a session still going is left alone, since
+// its loop owns it until it ends.
+func (s *sessionStore) deleteSession(id string) (found, removed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e := s.sessions[id]
+	if e == nil {
+		return false, false
+	}
+	if !e.snapshot().State.Finished() {
+		return true, false
+	}
+	root := e.snapshot().ProjectRoot
+	delete(s.sessions, id)
+	if i := slices.Index(s.byProject[root], id); i >= 0 {
+		s.byProject[root] = slices.Delete(s.byProject[root], i, i+1)
+	}
+	return true, true
+}
+
 // stopAll cancels every session in flight and waits for them to settle.
 func (s *sessionStore) stopAll() {
 	if s == nil {

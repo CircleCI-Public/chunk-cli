@@ -21,6 +21,7 @@ const maxRequestBytes = 64 * 1024
 //	GET  /factory[?root=<path>] list sessions (newest first), optionally one project's
 //	GET  /factory/{id}         one session with its review findings
 //	POST /factory/{id}/cancel  stop a session
+//	DELETE /factory/{id}       forget a finished session (409 while it is running)
 //	POST /factory/warm         make the sidecars a run continuing run_id would use
 //	POST /factory/warm/{run}/cancel  delete those sidecars
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
@@ -28,6 +29,7 @@ func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("GET /factory", d.handleSessionList)
 	mux.HandleFunc("GET /factory/{id}", d.handleSessionGet)
 	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
+	mux.HandleFunc("DELETE /factory/{id}", d.handleSessionDelete)
 	mux.HandleFunc("POST /factory/warm", d.handleFactoryWarm)
 	mux.HandleFunc("POST /factory/warm/{run}/cancel", d.handleFactoryWarmCancel)
 }
@@ -102,4 +104,16 @@ func (d *daemon) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
 	// Cancelling is idempotent: a session that already ended is not an error, so
 	// a viewer that raced the session's own end gets the same answer.
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (d *daemon) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
+	found, removed := d.sessions.deleteSession(r.PathValue("id"))
+	switch {
+	case !found:
+		http.Error(w, "no such session", http.StatusNotFound)
+	case !removed:
+		http.Error(w, "the session is still running: cancel it first", http.StatusConflict)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

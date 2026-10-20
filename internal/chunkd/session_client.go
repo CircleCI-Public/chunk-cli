@@ -113,6 +113,12 @@ func CancelSession(id string) error {
 	return sessionCall(http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/cancel", nil, nil)
 }
 
+// DeleteSession forgets a finished session. A session still running is refused;
+// it has to be cancelled first.
+func DeleteSession(id string) error {
+	return sessionCall(http.MethodDelete, "/factory/"+neturl.PathEscape(id), nil, nil)
+}
+
 // WarmFactory asks the daemon to make the sidecars a factory run continuing
 // req.RunID would use, without waiting for them. The run started next for it
 // uses them; if none is started soon, the daemon deletes them.

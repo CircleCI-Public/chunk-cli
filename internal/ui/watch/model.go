@@ -172,10 +172,13 @@ type Model struct {
 	// every run worth listing before the search filters it down to them; query
 	// is what the person typed after /, and searching is true while the
 	// keyboard goes to it.
-	sessions      []sessionInfo
-	allRuns       []sessionInfo
-	query         string
-	searching     bool
+	sessions  []sessionInfo
+	allRuns   []sessionInfo
+	query     string
+	searching bool
+	// showEnded lists finished runs alongside the live ones. Off by default so
+	// history does not crowd out what is going now.
+	showEnded     bool
 	reviewAuthErr string
 
 	// selRun is the ID of the selected run, "" when there is none to select.
@@ -345,6 +348,10 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case key.Matches(msg, k.Cancel):
 		return m.requestRunCancel(run, wasConfirm)
+	case key.Matches(msg, k.Delete):
+		return m.requestRunDelete(run, wasConfirm)
+	case key.Matches(msg, k.ToggleEnded):
+		return m.toggleEnded(), nil
 	case key.Matches(msg, k.Right):
 		m.focusedPane = paneRight
 	case key.Matches(msg, k.Left):
@@ -457,7 +464,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// it is before the poll and find that row again after.
 		prevRun, prevItem := m.selRun, m.selectedRunItem()
 		m.allRuns = visibleRuns(msg.sessions, time.Now())
-		m.sessions = filterRuns(m.allRuns, m.query)
+		m.sessions = m.listedRuns()
 		m.reviewAuthErr = msg.reviewAuthErr
 		m = m.reselectRun().selectPendingRun()
 		if run := m.selectedRun(); run != nil {
@@ -686,9 +693,12 @@ func (m Model) renderEmptyPane(st watchStyles) []string {
 	}
 	lines := make([]string, 0, 5+len(logoLines))
 	lines = append(lines, title, "")
-	if len(m.allRuns) > 0 {
+	switch {
+	case len(m.allRuns) > 0 && m.query == "" && !m.showEnded:
+		lines = append(lines, st.muted("No active runs."), st.dim("Press ")+st.Teal.Bold(true).Render("e")+st.dim(" to show finished runs."), "")
+	case len(m.allRuns) > 0:
 		lines = append(lines, st.muted("No run matches the search."), "")
-	} else {
+	default:
 		hint := st.dim("Start one with: chunk factory build \"<what to change>\"")
 		if m.keys().New.Enabled() {
 			hint = st.dim("Press ") + st.Teal.Bold(true).Render("n") + st.dim(" to start one, or run: chunk factory build \"<what to change>\"")
@@ -776,6 +786,8 @@ func (m Model) runLine() string {
 		return m.draftNote
 	case run == nil:
 		return ""
+	case m.runConfirm == run.s.ID && run.s.State.Finished():
+		return "press D again to delete this run's record"
 	case m.runConfirm == run.s.ID:
 		return "press x again to cancel this run — q only detaches"
 	}
