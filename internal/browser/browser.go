@@ -1,4 +1,5 @@
-package oauth
+// Package browser opens URLs in the user's default browser.
+package browser
 
 import (
 	"fmt"
@@ -6,7 +7,8 @@ import (
 	"runtime"
 )
 
-func OpenBrowser(url string) error {
+// Open starts the platform's opener for url and returns without waiting for it.
+func Open(url string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.Command("open", url).Start()

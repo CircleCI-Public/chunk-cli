@@ -89,6 +89,25 @@ func (m Model) runItems(s chunkd.Session) []runItem {
 			items = append(items, roundItems(s, ri)...)
 		}
 	}
+	return append(items, outcomeItems(s)...)
+}
+
+// outcomeItems are the selectable rows under the rounds: the branch once the
+// run has ended, and the pull request once it is open. A pull request still
+// being pushed, or one that failed or was skipped, has no link to act on, so
+// it is drawn but cannot take the cursor.
+func outcomeItems(s chunkd.Session) []runItem {
+	f := s.Factory
+	if f == nil {
+		return nil
+	}
+	var items []runItem
+	if s.State.Finished() && f.Branch != "" {
+		items = append(items, runItem{kind: itemBranch, round: -1})
+	}
+	if f.PullRequest.Opened() {
+		items = append(items, runItem{kind: itemPR, round: -1})
+	}
 	return items
 }
 
@@ -149,6 +168,9 @@ func (m Model) toggleRound(run *sessionInfo) Model {
 		return m
 	}
 	ri := items[m.runItem].round
+	if ri < 0 {
+		return m
+	}
 	byRun := maps.Clone(m.runOpen)
 	if byRun == nil {
 		byRun = map[string]map[int]bool{}
@@ -315,11 +337,14 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 	}
 	body = append(body, m.runDetailLines(st, run)...)
 
-	tail := m.runOutcomeLines(st, s)
+	tail, tailSel := m.runOutcomeLines(st, s)
 	room := maxLines - len(head)
 	if len(tail) > 0 && room-len(tail) >= minBodyLines {
 		room -= len(tail)
 	} else {
+		if tailSel >= 0 {
+			selStart, selEnd = len(body)+tailSel, len(body)+tailSel+1
+		}
 		body = append(body, tail...)
 		tail = nil
 	}
@@ -487,13 +512,35 @@ func roundRollup(st watchStyles, r chunkd.Round) string {
 }
 
 // runOutcomeLines say where an ended run's work is and what to do next, or
-// while it runs, anything that went wrong setting it up.
-func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) []string {
+// while it runs, anything that went wrong setting it up. sel is the line the
+// cursor is on, -1 when it is not on one of them.
+func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) (lines []string, sel int) {
 	f := s.Factory
 	if f == nil {
+		return nil, -1
+	}
+	sel = -1
+	// lead is the indent of a selectable row, with the cursor in it when the
+	// row has it; it also notes where that row lands.
+	lead := func(kind runItemKind) string {
+		items := m.runItems(s)
+		if m.runItem >= len(items) || items[m.runItem].kind != kind {
+			return "  "
+		}
+		sel = len(lines)
+		if m.focusedPane == paneRight {
+			return st.success("›") + " "
+		}
+		return "  "
+	}
+	// note is what the last action on a row said, on a line under it: beside
+	// a long URL it would be clipped away.
+	note := func(kind runItemKind) []string {
+		if n := m.rowNote; n.runID == s.ID && n.kind == kind && n.text != "" {
+			return []string{"    " + st.success(n.text)}
+		}
 		return nil
 	}
-	var lines []string
 	if next := nextStepLine(st, s); next != "" {
 		lines = append(lines, "  "+next)
 	}
@@ -502,7 +549,8 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) []string {
 		// ended but before the session settles, so it earns a line while the
 		// run is still shown as running.
 		if pr := f.PullRequest; pr != nil && pr.State != chunkd.PRPending {
-			lines = append(lines, "  "+st.vdim("pr      ")+prProgress(st, pr))
+			lines = append(lines, lead(itemPR)+st.vdim("Pull request: ")+prProgress(st, pr))
+			lines = append(lines, note(itemPR)...)
 		}
 		if feed := f.Progress.Lines; len(feed) > 0 {
 			if l := feed[len(feed)-1]; l.Level == chunkd.FeedWarn || l.Level == chunkd.FeedError {
@@ -518,10 +566,12 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) []string {
 			case f.Committed:
 				what = "committed"
 			}
-			lines = append(lines, "  "+st.vdim("branch  ")+st.muted(f.Branch)+"  "+st.dim(what))
+			lines = append(lines, lead(itemBranch)+st.vdim("Branch: ")+st.muted(f.Branch)+"  "+st.dim(what))
+			lines = append(lines, note(itemBranch)...)
 		}
 		if pr := f.PullRequest; pr != nil {
-			lines = append(lines, "  "+st.vdim("pr      ")+prProgress(st, pr))
+			lines = append(lines, lead(itemPR)+st.vdim("Pull request: ")+prProgress(st, pr))
+			lines = append(lines, note(itemPR)...)
 		}
 		if !f.Committed && f.Worktree != "" && !f.WorktreeRemoved {
 			lines = append(lines, "  "+st.vdim("work    ")+st.dim("not committed, in "+f.Worktree))
@@ -531,9 +581,12 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) []string {
 		}
 	}
 	if len(lines) == 0 {
-		return nil
+		return nil, -1
 	}
-	return append([]string{""}, lines...)
+	if sel >= 0 {
+		sel++ // the blank line in front
+	}
+	return append([]string{""}, lines...), sel
 }
 
 // prProgress is where a run's pull request has got to, for the pr row: the
@@ -548,7 +601,9 @@ func prProgress(st watchStyles, pr *chunkd.PullRequest) string {
 	case chunkd.PROpening:
 		return st.running("opening on GitHub...")
 	case chunkd.PROpened:
-		line := st.muted(pr.URL)
+		// A real terminal hyperlink, so Cmd+click works where the terminal
+		// supports it and the plain URL shows where it does not.
+		line := st.Muted.Hyperlink(pr.URL).Render(pr.URL)
 		if pr.Draft {
 			line += "  " + st.dim("draft")
 		}

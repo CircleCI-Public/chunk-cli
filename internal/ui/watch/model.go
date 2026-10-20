@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/browser"
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -266,6 +267,14 @@ type Model struct {
 	// the infrastructure under a run: its worktree, sidecars and setup log.
 	runOpen    map[string]map[int]bool
 	runDetails bool
+	// openURL opens a link in the default browser; superEnter is whether the
+	// terminal can tell Cmd+Enter from Enter. rowNote is what the last open or
+	// copy of the run's branch or pull request said, on its row, and noteSeq
+	// numbers them so an old one's timer cannot clear a newer one.
+	openURL    func(string) error
+	superEnter bool
+	rowNote    rowNote
+	noteSeq    int
 	// spinning is true while a spinner tick chain is in flight, so a poll that
 	// finds something running after a quiet spell can start one without doubling
 	// up on a chain that never stopped.
@@ -295,6 +304,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		ownSession:    session.IDFromEnv(),
 		hasDarkBG:     lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
 		conn:          chunkd.CurrentConnection(),
+		openURL:       browser.Open,
 		spinning:      true, // Init starts the first chain
 	}
 }
@@ -304,6 +314,13 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 // already know.
 func (m Model) WithConnection(conn chunkd.Connection) Model {
 	m.conn = conn
+	return m
+}
+
+// WithOpener returns a copy of m that opens links with open instead of the
+// default browser.
+func (m Model) WithOpener(open func(string) error) Model {
+	m.openURL = open
 	return m
 }
 
@@ -368,8 +385,10 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return *opened, cmd
 		}
 		m = m.toggleSelectedInvoc()
+	case key.Matches(msg, k.OpenPR):
+		return m.openPullRequest(run)
 	case key.Matches(msg, k.Copy):
-		return m.copyRunFailure(run)
+		return m.copyRunItem(run)
 	case key.Matches(msg, k.Toggle):
 		if run != nil {
 			m = m.toggleRound(run)
@@ -506,6 +525,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionActionMsg:
 		return m.withSessionAction(msg), nil
+
+	case tea.KeyboardEnhancementsMsg, prOpenedMsg, rowNoteExpiredMsg:
+		return m.updateRowNote(msg)
 
 	case updateCheckMsg:
 		m.updateAvailable = msg.latest
