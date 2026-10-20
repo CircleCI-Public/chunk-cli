@@ -76,7 +76,7 @@ func runFactoryBuildRemote(cmd *cobra.Command, opts factoryRemoteOptions) (err e
 	if err := checkFactoryRemoteFlags(opts); err != nil {
 		return err
 	}
-	printRunStartMessage(streams, opts.jsonOut, runStartMessage(prFlags{}, true, false))
+	printRunStartMessage(streams, opts.jsonOut, runStartMessage(prFlags{}, true, false, opts.attempts))
 
 	root, err := sessionProjectRoot(ctx)
 	if err != nil {

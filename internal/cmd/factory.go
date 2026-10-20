@@ -155,6 +155,14 @@ implementer is sent what failed, in a round that counts toward
 --max-attempts. Without a prompt in a terminal, it asks for one first, and
 Enter skips it.
 
+A round is one implementer pass, then the reviews and the project's checks.
+The run stops when every check passes or after --max-attempts rounds (3 by
+default), and says what is left. Raise it when the change is large or the
+reviewers are strict and runs keep ending with feedback left, so a run can
+finish without --continue. Lower it, down to 1, for quick or exploratory
+changes or to cap spend: each round costs an implementer turn plus every
+reviewer, so more rounds cost more and take longer.
+
 Once every check has passed the run pushes its branch to origin and opens a
 pull request on GitHub, ready for review (--draft opens a draft). That needs a
 GitHub token ('chunk auth set github' or GITHUB_TOKEN, then restart the daemon)
@@ -310,7 +318,7 @@ which is what pushes and opens the pull request.`,
 			if err != nil {
 				return sessionError(err)
 			}
-			printRunStartMessage(streams, jsonOut, runStartMessage(pr, false, continueRun != ""))
+			printRunStartMessage(streams, jsonOut, runStartMessage(pr, false, continueRun != "", attempts))
 			streams.ErrPrintf("Factory run %s started on the chunk daemon. Ctrl-C stops it.\n", id)
 			if logArg != "" {
 				streams.ErrPrintf("Logging to %s\n", logArg)
@@ -324,7 +332,7 @@ which is what pushes and opens the pull request.`,
 		},
 	}
 
-	cmd.Flags().IntVar(&attempts, "max-attempts", 3, "maximum rounds of review and validation")
+	cmd.Flags().IntVar(&attempts, "max-attempts", 3, maxAttemptsUsage)
 	cmd.Flags().StringVar(&continueRun, "continue", "", "pick up an earlier run by its ID (the branch's final segment) or full branch")
 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
@@ -830,7 +838,7 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
 	case chunkd.SessionRunning, chunkd.SessionDone:
 	}
-	if err := reportOutcome(status, f.Result, f.Rounds); err != nil {
+	if err := reportOutcome(status, f); err != nil {
 		return err
 	}
 	return reportPullRequest(f)
@@ -903,17 +911,22 @@ func printFactoryLeftovers(f *chunkd.FactoryRun, status iostream.StatusFunc, str
 
 // printFactoryContinueHint says how to carry on a run whose committed work
 // still fails its checks. The branch names the run whose record a continued
-// run reads, the first in a chain of them.
+// run reads, the first in a chain of them. A run that ran out of rounds says
+// it in its error instead, beside how to raise the cap.
 func printFactoryContinueHint(f *chunkd.FactoryRun, status iostream.StatusFunc) {
-	if !f.Continuable() {
+	if !f.Continuable() || f.Result == chunkd.ResultExhausted {
 		return
 	}
 	status(iostream.LevelInfo, fmt.Sprintf(`Keep working on it with: %s ["what to do differently"]`, f.ContinueCommand()))
 }
 
+// maxAttemptsUsage is --max-attempts' help. Cobra adds "(default 3)".
+const maxAttemptsUsage = "maximum rounds of implement, review and check. Raise for large changes; lower to cap cost"
+
 // reportOutcome says why the loop stopped and returns an error unless every
 // check passed. How each round's checks came out was said as it was checked.
-func reportOutcome(status iostream.StatusFunc, result string, rounds int) error {
+func reportOutcome(status iostream.StatusFunc, f *chunkd.FactoryRun) error {
+	result, rounds := f.Result, f.Rounds
 	switch result {
 	case chunkd.ResultPassed:
 		status(iostream.LevelDone, fmt.Sprintf("All checks passed after %d round(s).", rounds))
@@ -924,7 +937,27 @@ func reportOutcome(status iostream.StatusFunc, result string, rounds int) error 
 		return &userError{msg: fmt.Sprintf("The implementer stopped changing the code after round %d, with checks still failing.", rounds), hideDetail: true, errMsg: "stuck"}
 	case chunkd.ResultExhausted:
 	}
-	return &userError{msg: fmt.Sprintf("Checks still failed after %d round(s).", rounds), hideDetail: true, errMsg: "attempts exhausted"}
+	return exhaustedError(f)
+}
+
+// exhaustedError says a run used every round it was allowed with checks still
+// failing, and how to go further: a higher --max-attempts next time, or
+// --continue to carry this run's work on now, when it committed any.
+func exhaustedError(f *chunkd.FactoryRun) *userError {
+	rounds := fmt.Sprintf("%d rounds", f.Rounds)
+	if f.Rounds == 1 {
+		rounds = "1 round"
+	}
+	suggestion := "Raise the cap with --max-attempts <n>."
+	if f.Continuable() {
+		suggestion = fmt.Sprintf(`Raise the cap with --max-attempts <n>, or carry on with: %s ["what to do differently"]`, f.ContinueCommand())
+	}
+	return &userError{
+		msg:        fmt.Sprintf("Checks still failed after %s: the run reached its cap (--max-attempts).", rounds),
+		suggestion: suggestion,
+		hideDetail: true,
+		errMsg:     "attempts exhausted",
+	}
 }
 
 // oneLineSummary collapses text to one line short enough for a status line.

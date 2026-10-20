@@ -131,7 +131,7 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 			continue
 		}
 		for _, want := range []string{
-			"Add a --verbose flag", "Round 2 (max 3) · implementing", "$0.41",
+			"Add a --verbose flag", "Round 2 of up to 3 · implementing", "$0.41",
 			"Round 1", "1 of 3 checks passed", "2 issues, 1 worth changing", "Round 2", "implement", "▸ details",
 		} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
@@ -147,6 +147,69 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 		}
 	}
+}
+
+// The headline says which round a run is on out of the most it will run, with
+// no "up to" when it runs only one, and nothing about a cap it does not have.
+func TestRoundLabel(t *testing.T) {
+	for _, tc := range []struct {
+		attempts, rounds int
+		want             string
+	}{
+		{attempts: 1, rounds: 1, want: "Round 1 of 1"},
+		{attempts: 3, rounds: 1, want: "Round 1 of up to 3"},
+		{attempts: 3, rounds: 2, want: "Round 2 of up to 3"},
+		{attempts: 10, rounds: 4, want: "Round 4 of up to 10"},
+		{attempts: 0, rounds: 2, want: "Round 2"},
+		// Before the first round starts, the run is on round 1.
+		{attempts: 3, rounds: 0, want: "Round 1 of up to 3"},
+	} {
+		r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+		r.s.Factory.Attempts = tc.attempts
+		r.s.Rounds = make([]chunkd.Round, tc.rounds)
+		assert.Equal(t, roundLabel(r.s), tc.want)
+	}
+}
+
+// What a round is and how to change the cap is under the headline for the
+// first round; after that it is behind ?, which the footer names.
+func TestRoundCapIsExplainedInTheFirstRoundAndOnDemand(t *testing.T) {
+	const note = "A round is one implementer pass"
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	r.s.Rounds = []chunkd.Round{{Number: 1, State: chunkd.RoundImplementing}}
+	m := sessModel(r)
+	m.selRun = "abc"
+	out := stripANSI(m.render())
+	for _, want := range []string{"Round 1 of up to 3 · implementing", note, "--max-attempts", "? about rounds"} {
+		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+	}
+	m, _ = press(m, '?')
+	assert.Assert(t, !strings.Contains(m.render(), note), "? hides it:\n%s", m.render())
+
+	r.s.Rounds = append(r.s.Rounds, chunkd.Round{Number: 2, State: chunkd.RoundImplementing})
+	m = sessModel(r)
+	m.selRun = "abc"
+	out = stripANSI(m.render())
+	assert.Assert(t, !strings.Contains(out, note), "shown past round 1:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "? about rounds"), out)
+	m, _ = press(m, '?')
+	assert.Assert(t, strings.Contains(m.render(), note), "? shows it:\n%s", m.render())
+
+	// A run that has ended has no round to explain, and no key for it.
+	ended := time.Now()
+	r.s.State, r.s.EndedAt = chunkd.SessionDone, &ended
+	m = sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, '?')
+	out = stripANSI(m.render())
+	assert.Assert(t, !strings.Contains(out, note), out)
+	assert.Assert(t, !strings.Contains(out, "about rounds"), out)
+}
+
+// With one round allowed, the note says so in the singular.
+func TestRoundCapNote(t *testing.T) {
+	assert.Assert(t, strings.Contains(roundCapNote(1), "stops after 1 round and"))
+	assert.Assert(t, strings.Contains(roundCapNote(5), "stops after 5 rounds and"))
 }
 
 // While the implementer works, its row says what it last did and how much it
