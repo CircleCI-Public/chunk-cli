@@ -206,6 +206,20 @@ func (s *sessionStore) forProject(root string) []chunkd.Session {
 	return out
 }
 
+// entries lists every session the store holds. Safe on a nil store.
+func (s *sessionStore) entries() []*sessionEntry {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*sessionEntry, 0, len(s.sessions))
+	for _, e := range s.sessions {
+		out = append(out, e)
+	}
+	return out
+}
+
 // cancelSession asks a session to stop. It reports whether the session exists and was
 // still going; cancelling an ended session is not an error worth a status code.
 func (s *sessionStore) cancelSession(id string) (found, wasActive bool) {

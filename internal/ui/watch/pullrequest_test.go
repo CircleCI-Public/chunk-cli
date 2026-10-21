@@ -293,3 +293,56 @@ func TestDraftPullRequestOpensToo(t *testing.T) {
 	deliverMsgs(m, msgs(cmd))
 	assert.DeepEqual(t, *opened, []string{prURL})
 }
+
+// Once the daemon has looked up where an ended run's pull request stands, the
+// run list's chip says so instead of that the run passed.
+func TestRunChipFollowsThePullRequest(t *testing.T) {
+	st := newWatchStyles(false)
+	opened := func(status string) sessionInfo {
+		return prRun(chunkd.SessionDone, &chunkd.PullRequest{
+			State: chunkd.PROpened, Number: 7, URL: "https://github.com/acme/widgets/pull/7", Status: status,
+		})
+	}
+	chip := func(run sessionInfo) string { return strings.TrimSpace(stripANSI(runChip(st, run.s))) }
+
+	for status, want := range map[string]string{
+		"":                           "passed", // not looked up yet
+		chunkd.PRStatusUp:            "PR up",
+		chunkd.PRStatusInReview:      "in review",
+		chunkd.PRStatusFeedback:      "feedback",
+		chunkd.PRStatusChecksFailing: "checks failing",
+		chunkd.PRStatusMerged:        "merged",
+		chunkd.PRStatusClosed:        "closed",
+	} {
+		assert.Equal(t, chip(opened(status)), want, "status %q", status)
+	}
+
+	// The run list can be searched by it.
+	assert.Assert(t, strings.Contains(runStatus(opened(chunkd.PRStatusFeedback).s), "feedback"))
+
+	// A pull request that never opened has no status to show, whatever it holds.
+	run := prRun(chunkd.SessionDone, &chunkd.PullRequest{State: chunkd.PRFailed, Status: chunkd.PRStatusMerged})
+	assert.Equal(t, chip(run), "passed")
+	// A run that did not pass is not rescued by its pull request.
+	run = opened(chunkd.PRStatusMerged)
+	run.s.Stages = []chunkd.Stage{{ID: chunkd.StageFactoryLoop, State: chunkd.StageFailed}}
+	assert.Assert(t, chip(run) != "merged", "the loop failed, so the pull request does not name the run")
+}
+
+func TestRunPaneSaysWhereThePullRequestStands(t *testing.T) {
+	st := newWatchStyles(false)
+	say := func(status string) string {
+		return stripANSI(nextStepLine(st, prRun(chunkd.SessionDone, &chunkd.PullRequest{
+			State: chunkd.PROpened, Number: 7, URL: "https://github.com/acme/widgets/pull/7", Status: status,
+		}).s))
+	}
+	assert.Equal(t, say(chunkd.PRStatusMerged), ui.IconOK+" The pull request was merged.")
+	assert.Equal(t, say(chunkd.PRStatusClosed), ui.IconWarn+" The pull request was closed without being merged.")
+	assert.Equal(t, say(chunkd.PRStatusFeedback), ui.IconWarn+" Reviewers left feedback on the pull request. It is waiting on you.")
+	assert.Equal(t, say(chunkd.PRStatusChecksFailing), ui.IconFail+" The pull request's checks on GitHub are failing.")
+	assert.Equal(t, say(chunkd.PRStatusInReview), ui.IconOK+" All checks passed. The pull request is in review.")
+
+	assert.Equal(t, prRow(st, prRun(chunkd.SessionDone, &chunkd.PullRequest{
+		State: chunkd.PROpened, Number: 7, URL: "https://github.com/acme/widgets/pull/7", Status: chunkd.PRStatusMerged,
+	})), "Pull request: https://github.com/acme/widgets/pull/7 · merged")
+}

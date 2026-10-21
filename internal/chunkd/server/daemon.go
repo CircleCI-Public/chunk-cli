@@ -85,6 +85,8 @@ type daemon struct {
 	// prm monitors open PRs for each project's current branch. Nil when no
 	// GitHub credentials are available.
 	prm *prMonitor
+	// prp follows the pull requests runs opened. Nil-safe like prm.
+	prp *prProgress
 	// prov creates and tracks sidecars owned by this daemon instance. Nil when
 	// the daemon has no client (unauthenticated), in which case POST /sidecar
 	// returns 503.
@@ -207,6 +209,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		risk:      newRiskMemory(),
 		hist:      newRiskHistory(),
 		prm:       newPRMonitor(ghClient),
+		prp:       newPRProgress(ghClient),
 		prov:      prov,
 		claims:    newClaimStore(),
 		live:      newLivenessChecker(listFor(client)),
@@ -278,6 +281,7 @@ func (d *daemon) pollLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			d.poll()
+			d.prp.refresh(ctx, d.sessions)
 			d.claims.expireAll()
 		case <-ctx.Done():
 			return

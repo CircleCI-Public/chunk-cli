@@ -440,3 +440,52 @@ func keys(m map[string]*github.UserActivity) []string {
 	}
 	return out
 }
+
+// --- FetchPRProgress ---
+
+func TestFetchPRProgress(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	srv := httptest.NewServer(gh)
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	// reviewer a asked for changes and then approved, so only b still blocks.
+	gh.SetPullRequestProgress(3, `{
+		"state": "OPEN", "isDraft": true,
+		"reviewRequests": {"totalCount": 1},
+		"reviews": {"totalCount": 4, "nodes": [
+			{"state": "CHANGES_REQUESTED", "author": {"login": "a"}},
+			{"state": "COMMENTED", "author": {"login": "b"}},
+			{"state": "APPROVED", "author": {"login": "a"}},
+			{"state": "CHANGES_REQUESTED", "author": {"login": "b"}}
+		]},
+		"reviewThreads": {"nodes": [{"isResolved": true}, {"isResolved": false}, {"isResolved": false}]},
+		"commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE"}}}]}
+	}`)
+	got, err := c.FetchPRProgress(context.Background(), "acme", "widgets", 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := github.PRProgress{
+		State: "OPEN", Draft: true, ReviewRequested: true, Reviewed: true,
+		ChangesRequested: true, OpenThreads: 2, CheckState: "FAILURE",
+	}
+	if got == nil || *got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+
+	gh.SetPullRequestProgress(4, `{
+		"state": "OPEN",
+		"reviews": {"totalCount": 2, "nodes": [
+			{"state": "CHANGES_REQUESTED", "author": {"login": "a"}},
+			{"state": "APPROVED", "author": {"login": "a"}}
+		]}
+	}`)
+	got, err = c.FetchPRProgress(context.Background(), "acme", "widgets", 4)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ChangesRequested {
+		t.Fatalf("a reviewer who went on to approve still blocks: %+v", got)
+	}
+}
