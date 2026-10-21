@@ -733,6 +733,21 @@ func TestNextReachesTheNearestCommentThenRewrittenParts(t *testing.T) {
 	}
 }
 
+func TestNextStaysPutWithNoCommentBelow(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: 0, quote: "## 1. Outcome", text: "a"}}
+	m.moveCursor(1)
+	m = drive(t, m, press("tab"))
+
+	m = drive(t, m, press("n"))
+	if m.cursor != 1 {
+		t.Fatalf("cursor after n: %d, want 1", m.cursor)
+	}
+}
+
 func TestCursorStaysOnARewrittenPartsCommentWhenATurnEnds(t *testing.T) {
 	m := New(context.Background(), nil, nil, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})

@@ -153,12 +153,10 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				next = c.block
 			}
 		}
-		if next < 0 {
-			if start := len(m.blocks); start > m.cursor && start < m.stops() {
-				next = start
-			} else if m.cursor+1 < m.stops() {
-				next = m.cursor + 1
-			}
+		// Past the last commented block, n goes on to the comments on parts
+		// Claude has since rewritten, which are the stops after the blocks.
+		if s := max(m.cursor+1, len(m.blocks)); next < 0 && s < m.stops() {
+			next = s
 		}
 		if next >= 0 {
 			m.moveCursor(next)
