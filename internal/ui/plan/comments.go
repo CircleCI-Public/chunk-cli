@@ -79,7 +79,7 @@ func quoteLines(md string) string {
 }
 
 // updatePlanKey handles a key while the plan pane has the keyboard.
-func (m Model) updatePlanKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := m.keys()
 	switch {
 	case key.Matches(msg, k.Up):
@@ -134,7 +134,7 @@ func (m *Model) nextHeading(dir int) int {
 }
 
 // updateCommentKey handles a key while a comment is being written.
-func (m Model) updateCommentKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateCommentKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := m.keys()
 	switch {
 	case key.Matches(msg, k.CancelComment):

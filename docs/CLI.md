@@ -168,6 +168,8 @@ chunk
 │   ├── start [prompt|file|-]       # Hand the factory a diff and a prompt to refine
 │   │   --diff <file|->             # Start from a patch of work done elsewhere
 │   │   --json                      # Output as JSON
+│   ├── plan [prompt]               # Plan a change with Claude, then send the plan to the factory
+│   │   --model <model>             # Model Claude plans with (default: your Claude Code default)
 │   ├── bootstrap                   # Set up this project for chunk factory: config, sidecar image, review prompts
 │   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
 │   │   --skip-sidecar              # Leave out setting up and recording the sidecar image
@@ -546,6 +548,18 @@ chunk
   new way to make a first pass does. Only the worktree's path goes to stdout,
   so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the record
   instead.
+- **`factory plan` makes a plan with Claude, then sends it to the factory.**
+  It opens a two-pane screen: a chat with Claude Code on this machine on the
+  left, and the plan Claude writes on the right, rendered as markdown. Each
+  message is a turn of one `claude -p --resume` session that reads the code
+  (Bash is off) and keeps the plan, in factory-bot's format, in a file in the
+  project's data directory rather than the working tree. `tab` moves to the
+  plan, where `c` comments on the highlighted part (a heading, paragraph, list
+  item or code block); comments go with the next message, each quoting the
+  markdown it is on. `ctrl+s` sends the plan to the local daemon as `chunk
+  factory build <plan file>` would; a plan not sent is kept, and its path
+  printed. It checks what `factory build` checks before it opens. The same
+  screen opens from `chunk watch` with `p`.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans
   three parts, prints the plan, and leaves out each part already done, so a
   rerun finishes a setup that stopped partway; with nothing left to do it fails
@@ -728,8 +742,14 @@ chunk
   `origin` remote, validation commands or review prompts, Claude Code being
   installed) is checked before Claude starts, and why there is no draft, or
   why it could not be sent, is shown in the footer. Closing the dashboard
-  stops a draft still being made. `n` is not offered against a remote daemon,
-  since a factory run works from files on this machine. A selected
+  stops a draft still being made. `p` opens the `chunk factory plan` screen
+  in the same project, to plan the change with Claude before the factory
+  builds it. `esc` (or `ctrl+c` while Claude works) goes back to the runs with
+  the plan kept, and Claude carrying on; `p` opens it again as it was. A sent
+  plan's run is selected once a poll lists it, and a plan not sent when the
+  dashboard closes is kept, and its path printed. `n` and `p` are not offered
+  against a remote daemon, since a factory run works from files on this
+  machine. A selected
   run's pane reads top to bottom: the prompt, a status line that says what the run is doing
   ("Round 2 of up to 3 · implementing", or "Round 1 of 1" with
   `--max-attempts 1`) or, once it
@@ -761,7 +781,7 @@ chunk
   request that is still being pushed, failed or was skipped has no link to act
   on, so it cannot be selected). `c` copies what has the cursor, the branch
   name or the full URL, and says `copied` under the row for a few seconds. `b`
-  and `p` copy the branch name and the pull request's URL from any row of the
+  and `u` copy the branch name and the pull request's URL from any row of the
   run, with no need to move the cursor first. On
   the pull request row `Enter` or `o` opens it in the default browser
   (`o` works from any row of the run), and so does `Cmd+Enter` in terminals

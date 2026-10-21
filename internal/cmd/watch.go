@@ -23,6 +23,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 )
 
@@ -107,10 +108,21 @@ func newWatchCmd() *cobra.Command {
 			// dashboard; it is stopped, and waited for, as the dashboard ends.
 			defer drafts.stop()
 			m := watch.New(entries, !focus).WithRelaunch().WithBottomMargin(editorRowMargin()).
-				WithDrafts(drafts.ctx, startDir, drafts.draft, sendDraft)
+				WithDrafts(drafts.ctx, startDir, drafts.draft, sendDraft).
+				WithPlans(drafts.ctx, drafts.plan)
 			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
-			_, err = p.Run()
-			return err
+			final, err := p.Run()
+			if err != nil {
+				return err
+			}
+			if fm, ok := final.(watch.Model); ok && fm.HasPlan() {
+				if saved := drafts.lastPlan(); saved != "" {
+					if _, err := os.Stat(saved); err == nil {
+						iostream.FromCmd(cmd).ErrPrintf("The plan was not sent. It is saved at %s; build it later with: chunk factory build %s\n", saved, saved)
+					}
+				}
+			}
+			return nil
 		},
 	}
 
@@ -171,6 +183,10 @@ type watchDrafts struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	mu sync.Mutex
+	// planPath is the file of the plan last opened from the dashboard.
+	planPath string
 }
 
 func newWatchDrafts(parent context.Context) *watchDrafts {
@@ -254,6 +270,40 @@ func (d *watchDrafts) draft(ctx context.Context, root, prompt string, activity f
 		}()
 	}
 	return draft, err
+}
+
+// plan opens a conversation with Claude Code, on this machine, about a plan
+// for a change in root, as `chunk factory plan` does. What a build checks
+// first is checked before the screen opens, so no one plans a change the
+// factory would refuse. Errors come back as one sentence for the dashboard.
+func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Turner, plan.Submitter, error) {
+	if err := checkFactoryProject(ctx, root); err != nil {
+		return nil, nil, err
+	}
+	if err := factory.CheckClaude(); err != nil {
+		return nil, nil, errors.New("this machine has no Claude Code to plan with; install it from https://claude.com/claude-code")
+	}
+	planPath, err := newPlanPath(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	d.mu.Lock()
+	d.planPath = planPath
+	d.mu.Unlock()
+	turn, submit := planSession(root, planPath, "")
+	// A turn's Claude is stopped as the dashboard ends, and waited for.
+	waited := func(ctx context.Context, message string, activity func(string)) (string, string, error) {
+		d.wg.Add(1)
+		defer d.wg.Done()
+		return turn(ctx, message, activity)
+	}
+	return waited, submit, nil
+}
+
+func (d *watchDrafts) lastPlan() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.planPath
 }
 
 // draftModel is the model a change started from the dashboard is made with:

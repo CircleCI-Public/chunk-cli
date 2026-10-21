@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
@@ -59,18 +60,7 @@ then press ctrl+s to send it to the factory to build, as
 				return err
 			}
 
-			session := &factory.PlanSession{Dir: root, PlanPath: planPath, Model: model}
-			turn := func(ctx context.Context, message string, activity func(string)) (string, string, error) {
-				reply, err := session.Turn(ctx, message, func(a claudecode.Activity) { activity(activityLine(a)) })
-				p, planErr := session.Plan()
-				return reply, p, errors.Join(err, planErr)
-			}
-			submit := func(text string) (string, error) {
-				if err := chunkd.EnsureRunning(); err != nil {
-					return "", fmt.Errorf("start the chunk daemon: %w", err)
-				}
-				return sendPlan(root, planPath, text)
-			}
+			turn, submit := planSession(root, planPath, model)
 
 			var first string
 			if len(args) == 1 {
@@ -80,12 +70,14 @@ then press ctrl+s to send it to the factory to build, as
 			// the screen is closed mid-turn.
 			planCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			p := tea.NewProgram(plan.New(planCtx, turn, submit, first), tea.WithContext(ctx))
+			screen := plan.New(planCtx, turn, submit, first).
+				WithTerminal(lipgloss.HasDarkBackground(os.Stdin, os.Stdout), false)
+			p := tea.NewProgram(plan.Screen{Model: screen}, tea.WithContext(ctx))
 			final, err := p.Run()
 			if err != nil {
 				return err
 			}
-			m, _ := final.(plan.Model)
+			m := final.(plan.Screen).Model
 			if m.RunID == "" {
 				if _, err := os.Stat(planPath); err == nil {
 					streams.ErrPrintf("The plan was not sent. It is saved at %s; build it later with: chunk factory build %s\n", planPath, planPath)
@@ -114,6 +106,25 @@ func newPlanPath(root string) (string, error) {
 		return "", fmt.Errorf("create the plans directory: %w", err)
 	}
 	return filepath.Join(dir, time.Now().Format("20060102-150405")+".md"), nil
+}
+
+// planSession is a conversation with Claude about the plan at planPath, in
+// root, for the planning screen: its turns, and the send of the plan it ends
+// with to the factory.
+func planSession(root, planPath, model string) (plan.Turner, plan.Submitter) {
+	session := &factory.PlanSession{Dir: root, PlanPath: planPath, Model: model}
+	turn := func(ctx context.Context, message string, activity func(string)) (string, string, error) {
+		reply, err := session.Turn(ctx, message, func(a claudecode.Activity) { activity(activityLine(a)) })
+		p, planErr := session.Plan()
+		return reply, p, errors.Join(err, planErr)
+	}
+	submit := func(text string) (string, error) {
+		if err := chunkd.EnsureRunning(); err != nil {
+			return "", fmt.Errorf("start the chunk daemon: %w", err)
+		}
+		return sendPlan(root, planPath, text)
+	}
+	return turn, submit
 }
 
 // sendPlan hands an approved plan to the factory, as 'chunk factory build

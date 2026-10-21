@@ -63,6 +63,15 @@ func (m Model) keys() keyMap {
 		Quit:          key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 
+	if m.back {
+		// Esc leaves, as it does elsewhere in the host, unless it has
+		// Claude to stop, a comment to cancel or a question to answer no to.
+		k.Quit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "back to runs"))
+		if !m.busy && !m.commenting && !m.confirming {
+			k.Quit = key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc", "back to runs"))
+		}
+	}
+
 	inChat := m.focus == paneChat && !m.commenting
 	inPlan := m.focus == panePlan && !m.commenting
 	for _, b := range []*key.Binding{&k.Send, &k.Newline} {
@@ -88,8 +97,8 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.SaveComment, k.CancelComment,
 		k.Send, k.Newline,
 		k.Comment, k.Up,
-		k.Stop, k.Focus, k.SendPlan,
-		k.SectionBack, k.Delete, k.Next, k.Quit,
+		k.Stop, k.Focus, k.SendPlan, k.Quit,
+		k.SectionBack, k.Delete, k.Next,
 	}
 }
 

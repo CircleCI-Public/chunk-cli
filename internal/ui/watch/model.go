@@ -15,6 +15,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/browser"
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
 
@@ -245,6 +246,17 @@ type Model struct {
 	draftTook    time.Duration
 	// sendingDraft is true from enter until the factory answers.
 	sendingDraft bool
+	// planner makes a plan with Claude, opened with p, in startDir's project
+	// like a draft. planScreen is the planning screen once there is one, kept
+	// when it is closed until its plan is sent; planOpen is whether it is
+	// shown, planOpening whether the planner is still opening it, and
+	// planRoot the project its plan is for.
+	planCtx     context.Context
+	planOpening bool
+	planner     Planner
+	planScreen  *plan.Model
+	planOpen    bool
+	planRoot    string
 	// runChanges is each finished run's committed change, by run ID, read
 	// once its run is selected.
 	runChanges map[string]runChange
@@ -343,6 +355,8 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focusedPane = paneLeft
 	case key.Matches(msg, k.New):
 		m.draft, m.prompt = draftPrompting, ""
+	case key.Matches(msg, k.Plan):
+		return m.openPlan()
 	case key.Matches(msg, k.Quit, k.ForceQuit):
 		return m, tea.Quit
 	case key.Matches(msg, k.Back):
@@ -408,6 +422,13 @@ func (m Model) moveSelection(run *sessionInfo, delta int) Model {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.planScreen != nil {
+		return m.updateWithPlan(msg)
+	}
+	return m.update(msg)
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
 		m.hasDarkBG = msg.IsDark()
@@ -435,6 +456,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg, draftActivityMsg, draftDoneMsg, runStartedMsg, draftTickMsg:
 		return m.updateDraftMsg(msg)
+
+	case planReadyMsg:
+		return m.withPlanReady(msg)
 
 	case errMsg:
 		m.daemonErr = msg.err
@@ -520,6 +544,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
+	if m.planOpen {
+		v := tea.NewView(m.planScreen.Content())
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		v.WindowTitle = "chunk watch"
+		return v
+	}
 	v := tea.NewView(m.render())
 	v.AltScreen = true
 	v.WindowTitle = "chunk watch"

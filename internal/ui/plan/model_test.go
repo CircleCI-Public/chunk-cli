@@ -18,8 +18,8 @@ func drive(t *testing.T, m Model, msg tea.Msg) Model {
 	t.Helper()
 	queue := []tea.Msg{msg}
 	for len(queue) > 0 {
-		next, cmd := m.Update(queue[0])
-		m = next.(Model)
+		var cmd tea.Cmd
+		m, cmd = m.Update(queue[0])
 		queue = append(queue[1:], run(cmd)...)
 	}
 	return m
@@ -64,7 +64,7 @@ func TestFirstMessageRendersPlanAndReply(t *testing.T) {
 	if got != "add a --dry-run flag" {
 		t.Fatalf("turn got %q", got)
 	}
-	view := ansi.Strip(m.View().Content)
+	view := ansi.Strip(m.Content())
 	for _, want := range []string{"Add a flag", "The flag exists.", "Wrote a first plan.", "add a --dry-run flag"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
@@ -137,7 +137,7 @@ func TestCommentGoesToClaudeWithTheBlockItQuotes(t *testing.T) {
 	if len(m.comments) != 1 || m.comments[0].quote != "* [AGENT] parse it in main.go" {
 		t.Fatalf("comments: %+v", m.comments)
 	}
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "use cobra flags") {
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "use cobra flags") {
 		t.Errorf("the comment is not shown under its block:\n%s", view)
 	}
 
@@ -204,7 +204,7 @@ func TestCommentFollowsItsBlockWhenThePlanChanges(t *testing.T) {
 // view taller than height: either breaks the screen in a real terminal.
 func assertFits(t *testing.T, m Model, width, height int) {
 	t.Helper()
-	lines := strings.Split(m.View().Content, "\n")
+	lines := strings.Split(m.Content(), "\n")
 	if len(lines) > height {
 		t.Errorf("view is %d lines, screen is %d", len(lines), height)
 	}
@@ -223,7 +223,7 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 		m := New(context.Background(), turn, nil, "")
 		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
 		assertFits(t, m, width, 24)
-		if view := ansi.Strip(m.View().Content); width >= 80 && !strings.Contains(view, "here.") {
+		if view := ansi.Strip(m.Content()); width >= 80 && !strings.Contains(view, "here.") {
 			t.Errorf("at %d wide the empty plan's hint is cut off:\n%s", width, view)
 		}
 
@@ -252,8 +252,7 @@ func TestChatStaysWhereTheDeveloperScrolled(t *testing.T) {
 
 	m.chatView.ScrollUp(5)
 	m.busy = true
-	next, _ := m.Update(m.spin.Tick())
-	m = next.(Model)
+	m, _ = m.Update(m.spin.Tick())
 	if m.chatView.AtBottom() {
 		t.Error("a spinner tick scrolled the chat back to the bottom")
 	}
@@ -271,21 +270,21 @@ func TestQuitAsksAgainWhenCommentsAreUnsent(t *testing.T) {
 	m = drive(t, m, press("enter"))
 
 	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
-	next, cmd := m.Update(ctrlC)
-	m = next.(Model)
+	var cmd tea.Cmd
+	m, cmd = m.Update(ctrlC)
 	if cmd != nil {
 		t.Fatal("ctrl+c with an unsent comment quit at once")
 	}
-	if !strings.Contains(ansi.Strip(m.View().Content), "1 unsent comment") {
-		t.Errorf("no warning about the unsent comment:\n%s", ansi.Strip(m.View().Content))
+	if !strings.Contains(ansi.Strip(m.Content()), "1 unsent comment") {
+		t.Errorf("no warning about the unsent comment:\n%s", ansi.Strip(m.Content()))
 	}
 	if _, cmd := m.Update(ctrlC); cmd == nil {
 		t.Error("a second ctrl+c did not quit")
 	}
 
 	// Any other key in between starts over.
-	next, _ = m.Update(press("j"))
-	if _, cmd := next.(Model).Update(ctrlC); cmd != nil {
+	next, _ := m.Update(press("j"))
+	if _, cmd := next.Update(ctrlC); cmd != nil {
 		t.Error("ctrl+c after another key quit without asking")
 	}
 }
@@ -293,11 +292,11 @@ func TestQuitAsksAgainWhenCommentsAreUnsent(t *testing.T) {
 func TestNewlineHintMatchesTheTerminal(t *testing.T) {
 	m := New(context.Background(), nil, nil, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 160, Height: 30})
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "ctrl+j new line") {
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "ctrl+j new line") {
 		t.Errorf("a terminal that sends shift+enter as enter should be told ctrl+j:\n%s", view)
 	}
 	m = drive(t, m, tea.KeyboardEnhancementsMsg{Flags: ansi.KittyDisambiguateEscapeCodes})
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "shift+enter new line") {
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "shift+enter new line") {
 		t.Errorf("a terminal that tells shift+enter apart should be told it:\n%s", view)
 	}
 }
@@ -309,9 +308,65 @@ func TestFooterKeepsSendingThePlanInReach(t *testing.T) {
 	m := New(context.Background(), turn, nil, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 110, Height: 30})
 	for range 2 {
-		if view := ansi.Strip(m.View().Content); !strings.Contains(view, "ctrl+s send plan to factory") {
+		if view := ansi.Strip(m.Content()); !strings.Contains(view, "ctrl+s send plan to factory") {
 			t.Errorf("the footer dropped ctrl+s:\n%s", view)
 		}
 		m = drive(t, m, press("tab"))
+	}
+}
+
+// closedBy is the ClosedMsg cmd produces, if it produces one.
+func closedBy(cmd tea.Cmd) (ClosedMsg, bool) {
+	if cmd == nil {
+		return ClosedMsg{}, false
+	}
+	msg, ok := cmd().(ClosedMsg)
+	return msg, ok
+}
+
+func TestSendingThePlanClosesTheScreenWithItsRun(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	_, cmd := m.Update(submittedMsg{runID: "run-1"})
+	if got, ok := closedBy(cmd); !ok || got.RunID != "run-1" {
+		t.Fatalf("sending the plan closed with %+v, %v", got, ok)
+	}
+}
+
+func TestBackClosesAtOnceAndKeepsWhatIsUnsent(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it").WithBack()
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 30})
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	m = drive(t, m, press("enter"))
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "esc back to runs") {
+		t.Errorf("the footer does not say esc goes back:\n%s", view)
+	}
+
+	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if got, ok := closedBy(cmd); !ok || got.RunID != "" {
+		t.Fatalf("esc closed with %+v, %v", got, ok)
+	}
+	if len(m.comments) != 1 {
+		t.Errorf("closing dropped the comment: %+v", m.comments)
+	}
+}
+
+func TestBackLeavesEscToStopClaude(t *testing.T) {
+	m := New(context.Background(), nil, nil, "").WithBack()
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 30})
+	stopped := false
+	m.busy, m.cancelTurn = true, func() { stopped = true }
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if _, ok := closedBy(cmd); ok || !stopped {
+		t.Fatalf("esc while Claude works closed %v, stopped %v", ok, stopped)
+	}
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if _, ok := closedBy(cmd); !ok {
+		t.Fatal("ctrl+c while Claude works did not go back")
 	}
 }

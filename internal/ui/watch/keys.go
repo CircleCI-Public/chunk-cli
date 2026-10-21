@@ -37,7 +37,10 @@ type keyMap struct {
 	// ToggleSection folds or unfolds the draft section in focus, and
 	// FocusSection moves the focus between them.
 	ToggleSection, FocusSection key.Binding
-	Details                     key.Binding
+	// Plan opens the planning screen, to make a plan with Claude and send
+	// it to the factory, or goes back to the one left open.
+	Plan    key.Binding
+	Details key.Binding
 	// Rounds shows or hides what a round is and how to change the cap on
 	// them, under a running run's headline.
 	Rounds key.Binding
@@ -64,14 +67,15 @@ func (m Model) keys() keyMap {
 		Open:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
 		OpenPR:        key.NewBinding(key.WithKeys("o", "super+enter")),
 		Copy:          key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy failure")),
-		CopyBranch:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b/p", "copy branch/PR")),
-		CopyPR:        key.NewBinding(key.WithKeys("p")),
+		CopyBranch:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b/u", "copy branch/PR")),
+		CopyPR:        key.NewBinding(key.WithKeys("u")),
 		Toggle:        key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
 		Search:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search runs")),
 		Keep:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "keep filter")),
 		Clear:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "clear")),
 		Details:       key.NewBinding(key.WithKeys("d", "i"), key.WithHelp("d", "details")),
 		New:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new run")),
+		Plan:          key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "plan a run")),
 		Send:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "go to step 2")),
 		Discard:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		StopDraft:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop Claude")),
@@ -92,6 +96,10 @@ func (m Model) keys() keyMap {
 	k.Keep.SetEnabled(m.searching)
 	k.Clear.SetEnabled(m.searching)
 	k.New.SetEnabled(m.drafter != nil && m.sender != nil && m.startRoot() != "")
+	k.Plan.SetEnabled(m.planner != nil && (m.planScreen != nil || m.startRoot() != ""))
+	if m.planScreen != nil {
+		k.Plan.SetHelp("p", "back to plan")
+	}
 	k.Send.SetEnabled(m.draft == draftPrompting)
 	k.Discard.SetEnabled(m.draft == draftPrompting)
 	k.StopDraft.SetEnabled(m.draft == draftWorking)
@@ -130,7 +138,7 @@ func (m Model) keys() keyMap {
 		// Typing goes to the search or the prompt, and a draft being made or
 		// shown has keys of its own, so no other key does anything: d is the
 		// draft's diff then, not a run's details.
-		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.OpenPR, &k.Copy, &k.CopyBranch, &k.CopyPR, &k.Toggle, &k.Search, &k.New, &k.Details, &k.Rounds, &k.Cancel, &k.Delete, &k.ToggleEnded, &k.Quit} {
+		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.OpenPR, &k.Copy, &k.CopyBranch, &k.CopyPR, &k.Toggle, &k.Search, &k.New, &k.Plan, &k.Details, &k.Rounds, &k.Cancel, &k.Delete, &k.ToggleEnded, &k.Quit} {
 			b.SetEnabled(false)
 		}
 	}
@@ -167,7 +175,7 @@ func (k *keyMap) enableBranchAndPR(m Model, run *sessionInfo) {
 
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.ToggleSection, k.KeepDraft, k.Keep, k.Clear, k.New, k.Up, k.Right, k.Open, k.Copy, k.CopyBranch, k.Toggle, k.Search, k.Details, k.Rounds, k.Cancel, k.Delete, k.ToggleEnded, k.Left, k.Quit}
+	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.ToggleSection, k.KeepDraft, k.Keep, k.Clear, k.New, k.Plan, k.Up, k.Right, k.Open, k.Copy, k.CopyBranch, k.Toggle, k.Search, k.Details, k.Rounds, k.Cancel, k.Delete, k.ToggleEnded, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

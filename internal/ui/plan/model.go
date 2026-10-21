@@ -2,13 +2,16 @@
 // Claude is writing, rendered as markdown. The developer can comment
 // on any part of the plan; comments go to Claude with their next message.
 // When the developer approves the plan it is handed to the factory to build.
+//
+// The screen is a component: its host passes it messages and draws what
+// Content returns, and it reports that it is done with a ClosedMsg. Screen
+// hosts it as a program of its own.
 package plan
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -71,6 +74,16 @@ type (
 	}
 )
 
+// ClosedMsg is the screen asking its host to close it: the plan was sent to
+// the factory as run RunID, or, when RunID is "", the developer left.
+type ClosedMsg struct {
+	RunID string
+}
+
+func closed(runID string) tea.Cmd {
+	return func() tea.Msg { return ClosedMsg{RunID: runID} }
+}
+
 // Model is the planning screen.
 type Model struct {
 	ctx    context.Context
@@ -122,6 +135,9 @@ type Model struct {
 	// whether it tells shift+enter from enter.
 	dark          bool
 	disambiguates bool
+	// back is whether the host keeps the screen to reopen once it is closed,
+	// so leaving it loses nothing and stops nothing.
+	back bool
 	// RunID is the factory run the plan was sent to, once it has been.
 	RunID string
 
@@ -159,15 +175,31 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 		commentInput: ci,
 		spin:         spinner.New(spinner.WithSpinner(spinner.Dot)),
 		pending:      strings.TrimSpace(first),
-		dark:         lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
+		dark:         true,
 	}
+}
+
+// WithTerminal returns a copy of m for a terminal with a dark background or
+// not, that tells shift+enter from enter or not. The screen learns of a
+// change to either from the messages its host passes on.
+func (m Model) WithTerminal(dark, disambiguates bool) Model {
+	m.dark, m.disambiguates = dark, disambiguates
+	return m
+}
+
+// WithBack returns a copy of m for a host that keeps the screen when it is
+// closed and can open it again as it was: esc, when there is nothing for it
+// to stop or cancel, and ctrl+c close it without asking or stopping Claude.
+func (m Model) WithBack() Model {
+	m.back = true
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
 	return textarea.Blink
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -232,7 +264,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.RunID = msg.runID
-		return m, tea.Quit
+		return m, closed(msg.runID)
 
 	case spinner.TickMsg:
 		if !m.busy {
@@ -247,7 +279,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.forward(msg)
 }
 
-func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := m.keys()
 	if key.Matches(msg, k.Quit) {
 		return m.quit()
@@ -319,8 +351,12 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // quit closes the screen, unless that would drop comments or a message the
-// developer has not sent, when it asks for a second ctrl+c first.
-func (m Model) quit() (tea.Model, tea.Cmd) {
+// developer has not sent, when it asks for a second ctrl+c first. A screen
+// its host keeps loses nothing by closing, so it closes at once.
+func (m Model) quit() (Model, tea.Cmd) {
+	if m.back {
+		return m, closed("")
+	}
 	if unsent := m.unsent(); unsent != "" && !m.quitting {
 		m.quitting, m.confirming = true, false
 		m.status = warn(fmt.Sprintf("Your %s will be lost. Press ctrl+c again to quit.", unsent))
@@ -329,7 +365,7 @@ func (m Model) quit() (tea.Model, tea.Cmd) {
 	if m.cancelTurn != nil {
 		m.cancelTurn()
 	}
-	return m, tea.Quit
+	return m, closed("")
 }
 
 // unsent names what the developer has written that has not gone to Claude,
@@ -352,7 +388,7 @@ func (m Model) unsent() string {
 func warn(s string) string { return ui.WarningStyle.Render(s) }
 
 // forward hands msg to the focused pane's component.
-func (m Model) forward(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	if m.focus == panePlan {
 		m.planView, cmd = m.planView.Update(msg)
@@ -371,7 +407,7 @@ func (m Model) forward(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // send starts a turn with text, and any comments waiting, as the developer's
 // message.
-func (m Model) send(text string) (tea.Model, tea.Cmd) {
+func (m Model) send(text string) (Model, tea.Cmd) {
 	m.messages = append(m.messages, message{fromUser: true, text: text, comments: m.comments})
 	prompt := composeMessage(text, m.comments)
 	m.inFlight, m.comments = m.comments, nil
@@ -614,9 +650,11 @@ var (
 	claudeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
 )
 
-func (m Model) View() tea.View {
+// Content is the screen as its host draws it: the panes and the footer,
+// filling the size it was last sent.
+func (m Model) Content() string {
 	if m.width == 0 {
-		return tea.NewView("")
+		return ""
 	}
 	border := func(focused bool, w int) lipgloss.Style {
 		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Width(w).Height(m.height - footerRows)
@@ -641,8 +679,5 @@ func (m Model) View() tea.View {
 	}
 	// A footer that wraps would push the panes off the top of the screen.
 	footer = ansi.Truncate(footer, m.width, "…")
-	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, lipgloss.JoinHorizontal(lipgloss.Top, chat, plan), footer))
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
-	return v
+	return lipgloss.JoinVertical(lipgloss.Left, lipgloss.JoinHorizontal(lipgloss.Top, chat, plan), footer)
 }

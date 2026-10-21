@@ -217,7 +217,7 @@ func TestCopyTakesWhatHasTheCursor(t *testing.T) {
 	assert.Assert(t, strings.Contains(stripANSI(m2.render()), "copied"))
 }
 
-func TestBAndPCopyTheBranchAndPullRequestFromAnyRow(t *testing.T) {
+func TestBAndUCopyTheBranchAndPullRequestFromAnyRow(t *testing.T) {
 	m, _ := openPRModel(t, openedPR(), nil)
 	for range m.runItems(m.selectedRun().s) {
 		m, _ = press(m, tea.KeyUp)
@@ -226,14 +226,14 @@ func TestBAndPCopyTheBranchAndPullRequestFromAnyRow(t *testing.T) {
 	assert.Assert(t, strings.Contains(fmt.Sprint(msgs(cmd)), "chunk/factory/abc"))
 	assert.Assert(t, strings.Contains(stripANSI(m1.render()), "copied"))
 
-	m2, cmd := press(m, 'p')
+	m2, cmd := press(m, 'u')
 	assert.Assert(t, strings.Contains(fmt.Sprint(msgs(cmd)), prURL))
 	assert.Assert(t, strings.Contains(stripANSI(m2.render()), "copied"))
 }
 
-func TestPCopiesNothingWithoutAnOpenPullRequest(t *testing.T) {
+func TestUCopiesNothingWithoutAnOpenPullRequest(t *testing.T) {
 	m, _ := openPRModel(t, nil, nil)
-	_, cmd := press(m, 'p')
+	_, cmd := press(m, 'u')
 	assert.Equal(t, len(msgs(cmd)), 0)
 }
 
