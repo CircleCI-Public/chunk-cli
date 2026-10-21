@@ -437,7 +437,7 @@ chunk
   and exits non-zero. The session's `factory.pull_request` records
   `state` (`pending`, `pushing`, `opening`, `opened`, `failed` or `skipped`), `url`,
   `number`, `base` and a `message` for the last two, which `chunk watch` draws as
-  the run pane's `pr` row and as `PR #<n>` beside an ended run in the run list.
+  the run pane's `Pull request` row and as `PR #<n>` beside an ended run in the run list.
   Once it is open, the daemon asks GitHub about it about once a minute and records
   `status`: `up` (nobody has reviewed it or been asked to), `in_review`, `feedback`
   (changes requested, or review threads still unresolved), `checks_failing`,
@@ -445,7 +445,7 @@ chunk
   verdict is the one that counts, so one who asked for changes and then approved
   no longer blocks. `chunk watch` shows it as the run's chip in place of `passed`
   (`PR up`, `in review`, `feedback`, `checks failing`, `merged`, `closed`) and on
-  the `pr` row, and the run list search finds it. It is followed while the run is
+  the `Pull request` row, and the run list search finds it. It is followed while the run is
   going and for a day after it ends, which is as long as the run list keeps it, and
   not once merged or closed. With no GitHub token the status stays unset and the run
   shows `passed`.

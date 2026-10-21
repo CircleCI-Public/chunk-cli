@@ -344,5 +344,5 @@ func TestRunPaneSaysWhereThePullRequestStands(t *testing.T) {
 
 	assert.Equal(t, prRow(st, prRun(chunkd.SessionDone, &chunkd.PullRequest{
 		State: chunkd.PROpened, Number: 7, URL: "https://github.com/acme/widgets/pull/7", Status: chunkd.PRStatusMerged,
-	})), "pr https://github.com/acme/widgets/pull/7 · merged")
+	})), "Pull request: https://github.com/acme/widgets/pull/7 · merged")
 }
