@@ -85,7 +85,9 @@ then press ctrl+s to send it to the factory to build, as
 				return nil
 			}
 			streams.ErrPrintf("Factory run %s started on the chunk daemon from %s.\n", m.RunID, planPath)
-			streams.ErrPrintln("Follow along with `chunk watch`, or leave it running.")
+			if showHints(streams, false) {
+				streams.ErrPrintln(watchStartHint)
+			}
 			return nil
 		},
 	}

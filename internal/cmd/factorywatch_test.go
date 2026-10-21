@@ -74,7 +74,7 @@ func TestSessionReporterPointsFailuresAtWatch(t *testing.T) {
 			"round 1: done",
 			"  test failed in 3s (details in chunk watch)",
 			"  lint passed in 1s",
-			"review bugs: 1 finding(s) (details in chunk watch)",
+			"review bugs: 1 finding(s)",
 			"  [high] a.go:1 x",
 			"review style: no findings worth changing",
 		}},
@@ -127,6 +127,15 @@ func TestFactoryExhaustedOnATerminalPointsAtWatchThenContinue(t *testing.T) {
 	)
 	// --continue <run id> follows, as the error's suggestion.
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk factory build --continue run-1"), ue.Suggestion())
+}
+
+// With --continue naming the run by another ID, the hint leaves its own out.
+func TestWatchHintDoesNotNameTwoIDs(t *testing.T) {
+	same := chunkd.SessionDetail{Session: chunkd.Session{ID: "run-1", Factory: &chunkd.FactoryRun{RunID: "run-1", Branch: "chunk/run-1"}}}
+	assert.Equal(t, watchHint(same, "see the findings"), "Run run-1: see the findings in chunk watch.")
+
+	continued := chunkd.SessionDetail{Session: chunkd.Session{ID: "run-2", Factory: &chunkd.FactoryRun{RunID: "run-2", Branch: "chunk/run-1"}}}
+	assert.Equal(t, watchHint(continued, "see the findings"), "see the findings in chunk watch.")
 }
 
 // None of the pointers reach --json or an output that is not a terminal.

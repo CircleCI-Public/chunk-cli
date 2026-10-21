@@ -185,6 +185,9 @@ type sessionReporter struct {
 	// hints ends a failed check's or a review with findings' line with a
 	// pointer to chunk watch, where the rest of it is. Only on a terminal.
 	hints bool
+	// pointed is whether a line has already pointed at chunk watch, which says
+	// it once for the run rather than on every failure.
+	pointed bool
 }
 
 func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
@@ -310,12 +313,14 @@ func (r *sessionReporter) reportFindings(results []chunkd.ReviewResult) {
 	}
 }
 
-// watchSuffix is what ends the line of something that needs a look, when the
-// reporter gives hints: where its details are.
+// watchSuffix is what ends the line of the first thing in a run that needs a
+// look, when the reporter gives hints: where its details are. Later lines do
+// not repeat it.
 func (r *sessionReporter) watchSuffix() string {
-	if !r.hints {
+	if !r.hints || r.pointed {
 		return ""
 	}
+	r.pointed = true
 	return " (details in chunk watch)"
 }
 

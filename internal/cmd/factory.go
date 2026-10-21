@@ -847,7 +847,7 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 		return err
 	}
 	if hints {
-		status(iostream.LevelInfo, fmt.Sprintf("Run %s: see its reviews and checks in chunk watch.", factoryRunID(detail)))
+		status(iostream.LevelInfo, watchHint(detail, "see its reviews and checks"))
 	}
 	return reportPullRequest(f)
 }
@@ -856,16 +856,25 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 // ID, before how to carry it on (--continue) is said. A run that passed is
 // pointed there after its outcome instead, by finishFactory.
 func printFactoryWatchHint(detail chunkd.SessionDetail, status iostream.StatusFunc) {
-	id := factoryRunID(detail)
 	switch {
 	case detail.State == chunkd.SessionDone && detail.Factory.Result == chunkd.ResultPassed:
 		return
 	case detail.State == chunkd.SessionDone &&
 		(detail.Factory.Result == chunkd.ResultExhausted || detail.Factory.Result == chunkd.ResultStuck):
-		status(iostream.LevelInfo, fmt.Sprintf("Run %s: see the findings in chunk watch.", id))
+		status(iostream.LevelInfo, watchHint(detail, "see the findings"))
 	default:
-		status(iostream.LevelInfo, fmt.Sprintf("Run %s: see what happened in chunk watch.", id))
+		status(iostream.LevelInfo, watchHint(detail, "see what happened"))
 	}
+}
+
+// watchHint is the line that says what chunk watch shows of the run. It names
+// the run by its ID, unless --continue would name it by another (the first
+// run of its branch), when two IDs side by side would read as one run.
+func watchHint(detail chunkd.SessionDetail, what string) string {
+	if f := detail.Factory; f != nil && f.Branch != "" && f.ContinueID() != factoryRunID(detail) {
+		return what + " in chunk watch."
+	}
+	return fmt.Sprintf("Run %s: %s in chunk watch.", factoryRunID(detail), what)
 }
 
 // factoryRunID is the ID the run is known by in chunk watch and to --continue.
