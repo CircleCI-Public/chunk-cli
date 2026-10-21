@@ -94,7 +94,9 @@ func (m Model) keys() keyMap {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
 	k.Delete.SetEnabled(inPlan && m.commentAt(m.cursor) >= 0)
-	k.Next.SetEnabled(inPlan && len(m.comments) > 0)
+	// n has nowhere to go with nothing commented below the cursor, so the
+	// footer does not offer it there.
+	k.Next.SetEnabled(inPlan && m.nextComment() != m.cursor)
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)

@@ -147,20 +147,7 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case key.Matches(msg, k.SectionNext):
 		m.moveCursor(m.nextHeading(1))
 	case key.Matches(msg, k.Next):
-		next := -1
-		for _, c := range m.comments {
-			if c.block > m.cursor && (next < 0 || c.block < next) {
-				next = c.block
-			}
-		}
-		// Past the last commented block, n goes on to the comments on parts
-		// Claude has since rewritten, which are the stops after the blocks.
-		if s := max(m.cursor+1, len(m.blocks)); next < 0 && s < m.stops() {
-			next = s
-		}
-		if next >= 0 {
-			m.moveCursor(next)
-		}
+		m.moveCursor(m.nextComment())
 	case key.Matches(msg, k.Comment):
 		m.commenting, m.status = true, ""
 		m.commentInput.Reset()
@@ -181,6 +168,26 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+// nextComment is the stop n moves to: the nearest commented block below the
+// cursor, and past the last of those the comments on parts Claude has since
+// rewritten, which are the stops after the blocks. With nothing commented
+// below it is the cursor itself, which keeps n in place.
+func (m *Model) nextComment() int {
+	next := -1
+	for _, c := range m.comments {
+		if c.block > m.cursor && (next < 0 || c.block < next) {
+			next = c.block
+		}
+	}
+	if next >= 0 {
+		return next
+	}
+	if s := max(m.cursor+1, len(m.blocks)); s < m.stops() {
+		return s
+	}
+	return m.cursor
 }
 
 // nextHeading is the next heading's block from the cursor in direction dir,

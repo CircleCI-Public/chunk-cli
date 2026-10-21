@@ -258,10 +258,52 @@ func TestCommentEditorGrowsWithWrappedText(t *testing.T) {
 		m = drive(t, m, press("down"))
 	}
 	m = drive(t, m, press("c"))
-	m.commentInput.SetValue(strings.Repeat("x", 300))
+	if h := m.commentInput.Height(); h != 1 {
+		t.Errorf("an empty comment editor is %d rows tall, want 1", h)
+	}
 
-	if h := m.commentInput.Height(); h <= 1 || h > maxCommentRows {
-		t.Errorf("comment editor height is %d, want >1 and <=%d", h, maxCommentRows)
+	// Text that wraps past one row grows the editor, and text that wraps
+	// past six stops at six and scrolls inside itself.
+	width := m.commentInput.Width()
+	m.commentInput.SetValue(strings.Repeat("x", width+1))
+	if h := m.commentInput.Height(); h != 2 {
+		t.Errorf("a comment editor on two wrapped rows is %d rows tall, want 2", h)
+	}
+	m.commentInput.SetValue(strings.Repeat("x", (maxCommentRows+3)*width))
+	if h := m.commentInput.Height(); h != maxCommentRows {
+		t.Errorf("a comment editor past %d wrapped rows is %d rows tall, want %d", maxCommentRows, h, maxCommentRows)
+	}
+}
+
+func TestCommentTakesMoreLinesThanTheEditorShows(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = drive(t, m, press("tab"))
+	for range 3 {
+		m = drive(t, m, press("down"))
+	}
+	m = drive(t, m, press("c"))
+
+	// The editor shows six rows at most; the comment itself goes on past
+	// them, as a message in the chat does.
+	var want []string
+	for i := range maxCommentRows + 3 {
+		if i > 0 {
+			m = drive(t, m, tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+		}
+		m = typeText(t, m, fmt.Sprintf("line%d", i))
+		want = append(want, fmt.Sprintf("line%d", i))
+	}
+	if h := m.commentInput.Height(); h != maxCommentRows {
+		t.Errorf("comment editor is %d rows tall, want %d", h, maxCommentRows)
+	}
+
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 1 || m.comments[0].text != strings.Join(want, "\n") {
+		t.Fatalf("comments: %+v, want one of %d lines", m.comments, len(want))
 	}
 }
 
@@ -689,6 +731,23 @@ func TestCommentOnARewrittenPartCanBeEditedAndDeleted(t *testing.T) {
 
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "y")
+
+	// The editor is drawn in the section itself, under the part the comment
+	// was on, with what has been typed into it so far.
+	lines := strings.Split(ansi.Strip(m.planView.View()), "\n")
+	onLine, editorLine := -1, -1
+	for i, l := range lines {
+		if strings.Contains(l, `on "* [AGENT] parse it in main.go"`) {
+			onLine = i
+		}
+		if strings.Contains(l, "xy") {
+			editorLine = i
+		}
+	}
+	if onLine < 0 || editorLine != onLine+1 {
+		t.Fatalf("the editor at line %d does not come right after the part at %d:\n%s", editorLine, onLine, strings.Join(lines, "\n"))
+	}
+
 	m = drive(t, m, press("enter"))
 	if len(m.comments) != 1 || m.comments[0].text != "xy" || m.comments[0].quote != "* [AGENT] parse it in main.go" || m.comments[0].block != -1 {
 		t.Fatalf("comment after editing: %+v", m.comments)
@@ -715,21 +774,36 @@ func TestNextReachesTheNearestCommentThenRewrittenParts(t *testing.T) {
 		{block: 3, quote: "* [AGENT] parse it in main.go", text: "a"},
 		{block: 1, quote: "The flag exists.", text: "b"},
 		{block: -1, quote: "something gone", text: "c"},
+		{block: -1, quote: "something else gone", text: "d"},
 	}
 	m.moveCursor(0)
 	m = drive(t, m, press("tab"))
 
-	m = drive(t, m, press("n"))
-	if m.cursor != 1 {
-		t.Fatalf("cursor after first n: %d, want 1", m.cursor)
+	// The commented blocks in turn, nearest first, then each comment on a
+	// part Claude has since rewritten.
+	want := []int{1, 3, len(m.blocks), len(m.blocks) + 1}
+	for i, at := range want {
+		m = drive(t, m, press("n"))
+		if m.cursor != at {
+			t.Fatalf("cursor after n %d: %d, want %d", i+1, m.cursor, at)
+		}
 	}
-	m = drive(t, m, press("n"))
-	if m.cursor != 3 {
-		t.Fatalf("cursor after second n: %d, want 3", m.cursor)
-	}
+}
+
+func TestNextReachesARewrittenPartsCommentFromAnywhereAbove(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: -1, quote: "something gone", text: "c"}}
+	m.moveCursor(0)
+	m = drive(t, m, press("tab"))
+
+	// With nothing commented below it, n skips the blocks between the
+	// cursor and the comments on parts Claude has rewritten.
 	m = drive(t, m, press("n"))
 	if m.cursor != len(m.blocks) {
-		t.Fatalf("cursor after third n: %d, want %d", m.cursor, len(m.blocks))
+		t.Fatalf("cursor after n: %d, want %d", m.cursor, len(m.blocks))
 	}
 }
 
@@ -738,13 +812,72 @@ func TestNextStaysPutWithNoCommentBelow(t *testing.T) {
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
-	m.comments = []comment{{block: 0, quote: "## 1. Outcome", text: "a"}}
-	m.moveCursor(1)
+	m.comments = []comment{{block: 2, quote: "## 2. Spec", text: "a"}}
 	m = drive(t, m, press("tab"))
 
+	// From above the only comment n reaches it and is offered; on it and
+	// below it there is nowhere to go, so n neither moves nor is offered.
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "n next comment") {
+		t.Errorf("the footer should offer n with a comment below:\n%s", view)
+	}
 	m = drive(t, m, press("n"))
-	if m.cursor != 1 {
-		t.Fatalf("cursor after n: %d, want 1", m.cursor)
+	if m.cursor != 2 {
+		t.Fatalf("cursor after n: %d, want 2", m.cursor)
+	}
+	for _, at := range []int{2, len(m.blocks) - 1} {
+		m.moveCursor(at)
+		m = drive(t, m, press("n"))
+		if m.cursor != at {
+			t.Errorf("cursor after n at stop %d: %d, want %d", at, m.cursor, at)
+		}
+		if view := ansi.Strip(m.Content()); strings.Contains(view, "n next comment") {
+			t.Errorf("the footer offers n with nothing commented below stop %d:\n%s", at, view)
+		}
+	}
+}
+
+func TestCursorLeavesARewrittenPartsCommentWhenItIsSent(t *testing.T) {
+	// A turn that does not answer while the test looks at the screen, so the
+	// cursor is seen as it is for the length of the turn.
+	hold := make(chan struct{})
+	defer close(hold)
+	turn := func(ctx context.Context, _ string, _ func(string)) (string, string, error) {
+		<-hold
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: -1, quote: "gone", text: "x"}}
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("G"))
+	if m.cursor != len(m.blocks) {
+		t.Fatalf("cursor is not on the comment: %d", m.cursor)
+	}
+
+	// Sending takes the comment, and the stop it was drawn at, with it.
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 0 || !m.busy {
+		t.Fatalf("comments: %+v, busy: %v", m.comments, m.busy)
+	}
+	if m.cursor >= len(m.blocks) {
+		t.Fatalf("cursor is %d, past the last of %d blocks", m.cursor, len(m.blocks))
+	}
+
+	// It is on the last block, the nearest stop to where it was, and back in
+	// the plan it is drawn there and moves from there.
+	if m.cursor != len(m.blocks)-1 {
+		t.Fatalf("cursor is %d, want the last block %d", m.cursor, len(m.blocks)-1)
+	}
+	m = drive(t, m, press("tab"))
+	if view := ansi.Strip(m.planView.View()); !strings.Contains(view, "▌") {
+		t.Errorf("the focused plan pane draws no cursor:\n%s", view)
+	}
+	m = drive(t, m, press("up"))
+	if m.cursor != len(m.blocks)-2 {
+		t.Errorf("cursor after up: %d, want %d", m.cursor, len(m.blocks)-2)
 	}
 }
 

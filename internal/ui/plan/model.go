@@ -169,6 +169,10 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 	ci.Placeholder = "Comment on this part"
 	ci.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
 	ci.DynamicHeight = true
+	// MaxContentHeight bounds the comment itself, at the chat input's own
+	// limit, so that MaxHeight bounds only the rows it is shown in: without
+	// it the editor would take no more lines than it shows.
+	ci.MaxContentHeight = ci.MaxHeight
 	ci.MaxHeight = maxCommentRows
 	ciStyles := ci.Styles()
 	ciStyles.Focused.CursorLine = lipgloss.NewStyle()
@@ -467,7 +471,10 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 	m.busy, m.cancelTurn = true, cancel
 	m.activityCh = make(chan string, 64)
 	m.syncPlaceholder()
-	m.drawPlan()
+	// Sending takes the comments on parts Claude has rewritten with it, and
+	// their stops with them, so the cursor is put back in reach of what is
+	// left rather than left past the end of the plan for the whole turn.
+	m.moveCursor(m.cursor)
 	m.renderChat()
 	m.chatView.GotoBottom()
 	return m, tea.Batch(turnCmd(ctx, m.turn, prompt, m.activityCh), waitActivity(ctx, m.activityCh), m.spin.Tick)
@@ -624,9 +631,11 @@ func (m *Model) renderPlan() {
 	m.reanchor()
 	// The cursor stays on its block when Claude left that block as it was,
 	// and otherwise on the same place in the plan as near as there is one.
+	// On a comment on a part Claude has since rewritten it has no block to
+	// follow; Update puts it back on that comment.
 	m.cursor = min(m.cursor, m.stops()-1)
 	for i, b := range m.blocks {
-		if b.source == cursorSource {
+		if cursorSource != "" && b.source == cursorSource {
 			m.cursor = i
 			break
 		}
