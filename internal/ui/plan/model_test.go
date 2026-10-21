@@ -93,8 +93,8 @@ func TestApprovingSendsThePlan(t *testing.T) {
 	}
 }
 
-// key is a key press of k, named as tea names it.
-func key(k string) tea.KeyPressMsg {
+// press is a key press of k, named as tea names it.
+func press(k string) tea.KeyPressMsg {
 	switch k {
 	case "enter":
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
@@ -110,7 +110,7 @@ func key(k string) tea.KeyPressMsg {
 func typeText(t *testing.T, m Model, s string) Model {
 	t.Helper()
 	for _, r := range s {
-		m = drive(t, m, key(string(r)))
+		m = drive(t, m, press(string(r)))
 	}
 	return m
 }
@@ -127,13 +127,13 @@ func TestCommentGoesToClaudeWithTheBlockItQuotes(t *testing.T) {
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 
 	// To the plan, down to the bullet, and comment on it.
-	m = drive(t, m, key("tab"))
+	m = drive(t, m, press("tab"))
 	for range 3 {
-		m = drive(t, m, key("down"))
+		m = drive(t, m, press("down"))
 	}
-	m = drive(t, m, key("c"))
+	m = drive(t, m, press("c"))
 	m = typeText(t, m, "use cobra flags")
-	m = drive(t, m, key("enter"))
+	m = drive(t, m, press("enter"))
 	if len(m.comments) != 1 || m.comments[0].quote != "* [AGENT] parse it in main.go" {
 		t.Fatalf("comments: %+v", m.comments)
 	}
@@ -142,8 +142,8 @@ func TestCommentGoesToClaudeWithTheBlockItQuotes(t *testing.T) {
 	}
 
 	// Enter in the chat with nothing typed sends the comment alone.
-	m = drive(t, m, key("tab"))
-	m = drive(t, m, key("enter"))
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("enter"))
 	if len(sent) != 2 {
 		t.Fatalf("turns: %d", len(sent))
 	}
@@ -167,14 +167,14 @@ func TestCommentsComeBackWhenTheTurnFails(t *testing.T) {
 	}
 	m := New(context.Background(), turn, nil, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m = drive(t, m, key("tab"))
-	m = drive(t, m, key("c"))
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
 	m = typeText(t, m, "too vague")
-	m = drive(t, m, key("enter"))
+	m = drive(t, m, press("enter"))
 
 	fail = true
-	m = drive(t, m, key("tab"))
-	m = drive(t, m, key("enter"))
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("enter"))
 	if len(m.comments) != 1 || m.comments[0].text != "too vague" {
 		t.Fatalf("comments after a failed turn: %+v", m.comments)
 	}
@@ -197,5 +197,121 @@ func TestCommentFollowsItsBlockWhenThePlanChanges(t *testing.T) {
 	m.renderPlan()
 	if got := m.comments[0].block; got != -1 {
 		t.Errorf("comment on a rewritten block is on %d, want -1", got)
+	}
+}
+
+// assertFits fails when any line of the view is wider than width, or the
+// view taller than height: either breaks the screen in a real terminal.
+func assertFits(t *testing.T, m Model, width, height int) {
+	t.Helper()
+	lines := strings.Split(m.View().Content, "\n")
+	if len(lines) > height {
+		t.Errorf("view is %d lines, screen is %d", len(lines), height)
+	}
+	for i, l := range lines {
+		if w := ansi.StringWidth(l); w > width {
+			t.Errorf("line %d is %d wide, screen is %d: %q", i, w, width, ansi.Strip(l))
+		}
+	}
+}
+
+func TestScreenFitsTheTerminal(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	for _, width := range []int{60, 80, 110} {
+		m := New(context.Background(), turn, nil, "")
+		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
+		assertFits(t, m, width, 24)
+		if view := ansi.Strip(m.View().Content); width >= 80 && !strings.Contains(view, "here.") {
+			t.Errorf("at %d wide the empty plan's hint is cut off:\n%s", width, view)
+		}
+
+		m = drive(t, m, press("x"))
+		m = drive(t, m, press("enter"))
+		m = drive(t, m, press("tab"))
+		m = drive(t, m, press("c"))
+		m = typeText(t, m, "too vague")
+		m = drive(t, m, press("enter"))
+		assertFits(t, m, width, 24)
+
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		assertFits(t, m, width, 24)
+	}
+}
+
+func TestChatStaysWhereTheDeveloperScrolled(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return strings.Repeat("A long reply.\n\n", 30), "", nil
+	}
+	m := New(context.Background(), turn, nil, "first")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if !m.chatView.AtBottom() {
+		t.Fatal("the chat should follow a new reply")
+	}
+
+	m.chatView.ScrollUp(5)
+	m.busy = true
+	next, _ := m.Update(m.spin.Tick())
+	m = next.(Model)
+	if m.chatView.AtBottom() {
+		t.Error("a spinner tick scrolled the chat back to the bottom")
+	}
+}
+
+func TestQuitAsksAgainWhenCommentsAreUnsent(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	m = drive(t, m, press("enter"))
+
+	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	next, cmd := m.Update(ctrlC)
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("ctrl+c with an unsent comment quit at once")
+	}
+	if !strings.Contains(ansi.Strip(m.View().Content), "1 unsent comment") {
+		t.Errorf("no warning about the unsent comment:\n%s", ansi.Strip(m.View().Content))
+	}
+	if _, cmd := m.Update(ctrlC); cmd == nil {
+		t.Error("a second ctrl+c did not quit")
+	}
+
+	// Any other key in between starts over.
+	next, _ = m.Update(press("j"))
+	if _, cmd := next.(Model).Update(ctrlC); cmd != nil {
+		t.Error("ctrl+c after another key quit without asking")
+	}
+}
+
+func TestNewlineHintMatchesTheTerminal(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 160, Height: 30})
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "ctrl+j new line") {
+		t.Errorf("a terminal that sends shift+enter as enter should be told ctrl+j:\n%s", view)
+	}
+	m = drive(t, m, tea.KeyboardEnhancementsMsg{Flags: ansi.KittyDisambiguateEscapeCodes})
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "shift+enter new line") {
+		t.Errorf("a terminal that tells shift+enter apart should be told it:\n%s", view)
+	}
+}
+
+func TestFooterKeepsSendingThePlanInReach(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 110, Height: 30})
+	for range 2 {
+		if view := ansi.Strip(m.View().Content); !strings.Contains(view, "ctrl+s send plan to factory") {
+			t.Errorf("the footer dropped ctrl+s:\n%s", view)
+		}
+		m = drive(t, m, press("tab"))
 	}
 }

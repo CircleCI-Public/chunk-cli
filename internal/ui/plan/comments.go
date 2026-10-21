@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -79,30 +80,28 @@ func quoteLines(md string) string {
 
 // updatePlanKey handles a key while the plan pane has the keyboard.
 func (m Model) updatePlanKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "up", "k":
+	k := m.keys()
+	switch {
+	case key.Matches(msg, k.Up):
 		m.moveCursor(m.cursor - 1)
-	case "down", "j":
+	case key.Matches(msg, k.Down):
 		m.moveCursor(m.cursor + 1)
-	case "g", "home":
+	case key.Matches(msg, k.Top):
 		m.moveCursor(0)
-	case "G", "end":
+	case key.Matches(msg, k.Bottom):
 		m.moveCursor(len(m.blocks) - 1)
-	case "[":
+	case key.Matches(msg, k.SectionBack):
 		m.moveCursor(m.nextHeading(-1))
-	case "]":
+	case key.Matches(msg, k.SectionNext):
 		m.moveCursor(m.nextHeading(1))
-	case "n":
+	case key.Matches(msg, k.Next):
 		for _, c := range m.comments {
 			if c.block > m.cursor {
 				m.moveCursor(c.block)
 				break
 			}
 		}
-	case "c", keyEnter:
-		if len(m.blocks) == 0 {
-			return m, nil
-		}
+	case key.Matches(msg, k.Comment):
 		m.commenting, m.status = true, ""
 		m.commentInput.Reset()
 		if i := m.commentAt(m.cursor); i >= 0 {
@@ -110,11 +109,11 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.commentInput.CursorEnd()
 		}
 		return m, m.commentInput.Focus()
-	case "d":
-		if i := m.commentAt(m.cursor); i >= 0 {
-			m.comments = append(m.comments[:i], m.comments[i+1:]...)
-			m.drawPlan()
-		}
+	case key.Matches(msg, k.Delete):
+		i := m.commentAt(m.cursor)
+		m.comments = append(m.comments[:i], m.comments[i+1:]...)
+		m.drawPlan()
+		m.syncPlaceholder()
 	default:
 		var cmd tea.Cmd
 		m.planView, cmd = m.planView.Update(msg)
@@ -136,12 +135,13 @@ func (m *Model) nextHeading(dir int) int {
 
 // updateCommentKey handles a key while a comment is being written.
 func (m Model) updateCommentKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	k := m.keys()
+	switch {
+	case key.Matches(msg, k.CancelComment):
 		m.commenting = false
 		m.commentInput.Blur()
 		return m, nil
-	case keyEnter:
+	case key.Matches(msg, k.SaveComment):
 		text := strings.TrimSpace(m.commentInput.Value())
 		i := m.commentAt(m.cursor)
 		switch {
@@ -183,7 +183,7 @@ func (m *Model) moveCursor(i int) {
 }
 
 var (
-	cursorBar   = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render("▌ ")
+	cursorBar   = lipgloss.NewStyle().Foreground(accentColor).Render("▌ ")
 	commentBar  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("┃ ")
 	noBar       = "  "
 	commentText = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))

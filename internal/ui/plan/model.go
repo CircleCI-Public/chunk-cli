@@ -8,8 +8,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
@@ -45,6 +47,10 @@ type message struct {
 	// comments are the plan comments a developer's message carried.
 	comments []comment
 	failed   bool
+	// rendered is a reply's markdown as rendered at renderedWidth, kept so
+	// the chat is not rendered again on every tick of the spinner.
+	rendered      string
+	renderedWidth int
 }
 
 // renderedBlock is a block of the plan and its lines as glamour renders it.
@@ -107,7 +113,15 @@ type Model struct {
 	activityCh chan string
 
 	confirming bool
-	status     string
+	// quitting is set by a ctrl+c that would drop what the developer has not
+	// sent; a second ctrl+c quits.
+	quitting bool
+	status   string
+
+	// dark is whether the terminal's background is dark, and disambiguates
+	// whether it tells shift+enter from enter.
+	dark          bool
+	disambiguates bool
 	// RunID is the factory run the plan was sent to, once it has been.
 	RunID string
 
@@ -145,6 +159,7 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 		commentInput: ci,
 		spin:         spinner.New(spinner.WithSpinner(spinner.Dot)),
 		pending:      strings.TrimSpace(first),
+		dark:         lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
 	}
 }
 
@@ -166,6 +181,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
+
+	case tea.KeyboardEnhancementsMsg:
+		m.disambiguates = msg.SupportsKeyDisambiguation()
+		return m, nil
+
+	case tea.BackgroundColorMsg:
+		if m.dark != msg.IsDark() {
+			m.dark = msg.IsDark()
+			m.restyle()
+		}
+		return m, nil
 
 	case activityMsg:
 		m.activity = string(msg)
@@ -222,34 +248,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "ctrl+c" {
-		if m.cancelTurn != nil {
-			m.cancelTurn()
-		}
-		return m, tea.Quit
+	k := m.keys()
+	if key.Matches(msg, k.Quit) {
+		return m.quit()
+	}
+	if m.quitting {
+		m.quitting, m.status = false, ""
 	}
 	if m.confirming {
-		switch msg.String() {
-		case "y", keyEnter:
-			m.confirming = false
-			m.status = "Sending the plan to the factory…"
-			return m, submitCmd(m.submit, m.plan)
-		default:
-			m.confirming, m.status = false, ""
+		m.confirming, m.status = false, ""
+		if !key.Matches(msg, k.Confirm) {
 			return m, nil
 		}
+		m.status = "Sending the plan to the factory…"
+		return m, submitCmd(m.submit, m.plan)
 	}
 	if m.commenting {
 		return m.updateCommentKey(msg)
 	}
 
-	switch msg.String() {
-	case "esc":
-		if m.busy && m.cancelTurn != nil {
+	switch {
+	case key.Matches(msg, k.Stop):
+		if m.cancelTurn != nil {
 			m.cancelTurn()
 		}
 		return m, nil
-	case "tab":
+	case key.Matches(msg, k.Focus):
 		if m.focus == paneChat {
 			m.focus = panePlan
 			m.input.Blur()
@@ -259,7 +283,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focus = paneChat
 		m.drawPlan()
 		return m, m.input.Focus()
-	case "ctrl+s":
+	case key.Matches(msg, k.SendPlan):
 		switch {
 		case m.busy:
 			m.status = warn("Wait for Claude to finish, or press esc to stop it.")
@@ -279,7 +303,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.focus == panePlan {
 		return m.updatePlanKey(msg)
 	}
-	if msg.String() == keyEnter {
+	if key.Matches(msg, k.Send) {
 		if m.busy {
 			m.status = warn("Claude is still answering; your message is kept until it finishes.")
 			return m, nil
@@ -294,8 +318,36 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m.forward(msg)
 }
 
-// keyEnter sends a message, saves a comment and confirms.
-const keyEnter = "enter"
+// quit closes the screen, unless that would drop comments or a message the
+// developer has not sent, when it asks for a second ctrl+c first.
+func (m Model) quit() (tea.Model, tea.Cmd) {
+	if unsent := m.unsent(); unsent != "" && !m.quitting {
+		m.quitting, m.confirming = true, false
+		m.status = warn(fmt.Sprintf("Your %s will be lost. Press ctrl+c again to quit.", unsent))
+		return m, nil
+	}
+	if m.cancelTurn != nil {
+		m.cancelTurn()
+	}
+	return m, tea.Quit
+}
+
+// unsent names what the developer has written that has not gone to Claude,
+// or is "" when there is nothing.
+func (m Model) unsent() string {
+	n := len(m.comments)
+	if m.commenting && strings.TrimSpace(m.commentInput.Value()) != "" && m.commentAt(m.cursor) < 0 {
+		n++
+	}
+	var parts []string
+	if n > 0 {
+		parts = append(parts, fmt.Sprintf("%d unsent %s", n, plural(n, "comment", "comments")))
+	}
+	if strings.TrimSpace(m.input.Value()) != "" {
+		parts = append(parts, "unsent message")
+	}
+	return strings.Join(parts, " and ")
+}
 
 func warn(s string) string { return ui.WarningStyle.Render(s) }
 
@@ -330,6 +382,7 @@ func (m Model) send(text string) (tea.Model, tea.Cmd) {
 	m.syncPlaceholder()
 	m.drawPlan()
 	m.renderChat()
+	m.chatView.GotoBottom()
 	return m, tea.Batch(turnCmd(ctx, m.turn, prompt, m.activityCh), waitActivity(ctx, m.activityCh), m.spin.Tick)
 }
 
@@ -407,15 +460,20 @@ func (m *Model) layout() {
 	m.renderChat()
 }
 
-// newRenderer is a glamour renderer that wraps at width.
-func newRenderer(width int) (*glamour.TermRenderer, error) {
-	return glamour.NewTermRenderer(glamour.WithStandardStyle("dark"), glamour.WithWordWrap(width))
+// newRenderer is a glamour renderer for the terminal's background that wraps
+// at width.
+func newRenderer(dark bool, width int) (*glamour.TermRenderer, error) {
+	style := "light"
+	if dark {
+		style = "dark"
+	}
+	return glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(width))
 }
 
 // renderMarkdown renders md with glamour at width, or returns it as typed
 // when it cannot be rendered.
-func renderMarkdown(md string, width int) string {
-	r, err := newRenderer(width)
+func renderMarkdown(md string, dark bool, width int) string {
+	r, err := newRenderer(dark, width)
 	if err != nil {
 		return md
 	}
@@ -453,14 +511,15 @@ func (m *Model) renderPlan() {
 	}
 	if strings.TrimSpace(m.plan) == "" {
 		m.blocks = nil
-		m.planView.SetContent(ui.HelperStyle.Render("\n  No plan yet. Tell Claude what you want to change, and the plan it writes appears here."))
+		m.planView.SetContent(ui.HelperStyle.Padding(1, 2).Width(m.planView.Width()).
+			Render("No plan yet. Tell Claude what you want to change, and the plan it writes appears here."))
 		return
 	}
 	if w == m.renderedWidth && m.blocks != nil && m.renderedFrom == m.plan {
 		m.drawPlan()
 		return
 	}
-	r, err := newRenderer(w - 1)
+	r, err := newRenderer(m.dark, w-1)
 	if err != nil {
 		m.planView.SetContent(m.plan)
 		return
@@ -495,7 +554,8 @@ func (m *Model) renderChat() {
 	}
 	wrap := lipgloss.NewStyle().Width(w)
 	var b strings.Builder
-	for _, msg := range m.messages {
+	for i := range m.messages {
+		msg := &m.messages[i]
 		switch {
 		case msg.fromUser:
 			b.WriteString(youStyle.Render("You") + "\n")
@@ -512,23 +572,45 @@ func (m *Model) renderChat() {
 			b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text))
 		default:
 			b.WriteString(claudeStyle.Render("Claude") + "\n")
-			b.WriteString(renderMarkdown(msg.text, w-2))
+			if msg.renderedWidth != w {
+				msg.rendered, msg.renderedWidth = renderMarkdown(msg.text, m.dark, w-2), w
+			}
+			b.WriteString(msg.rendered)
 		}
 		b.WriteString("\n\n")
 	}
 	if m.busy {
-		line := m.spin.View() + " Claude is thinking"
+		// The spinner's frames carry their own space after the dot.
+		line := m.spin.View() + "Claude is thinking"
 		if m.activity != "" {
 			line += ": " + m.activity
 		}
 		b.WriteString(ui.HelperStyle.Width(w).MaxHeight(2).Render(line))
 	}
+	// The chat follows what is added to it unless the developer has
+	// scrolled up to read, when it stays where they are.
+	follow := m.chatView.AtBottom()
 	m.chatView.SetContent(b.String())
-	m.chatView.GotoBottom()
+	if follow {
+		m.chatView.GotoBottom()
+	}
+}
+
+// restyle renders the plan and the chat again for a change of background.
+func (m *Model) restyle() {
+	m.renderedWidth = 0
+	for i := range m.messages {
+		m.messages[i].renderedWidth = 0
+	}
+	m.renderPlan()
+	m.renderChat()
 }
 
 var (
-	youStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	// accentColor marks what has the keyboard: the focused pane's border,
+	// the plan's cursor and the footer's keys.
+	accentColor = lipgloss.Color("6")
+	youStyle    = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
 	claudeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
 )
 
@@ -539,7 +621,7 @@ func (m Model) View() tea.View {
 	border := func(focused bool, w int) lipgloss.Style {
 		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Width(w).Height(m.height - footerRows)
 		if focused {
-			return s.BorderForeground(lipgloss.Color("6"))
+			return s.BorderForeground(accentColor)
 		}
 		return s.BorderForeground(lipgloss.Color("8"))
 	}
@@ -555,27 +637,12 @@ func (m Model) View() tea.View {
 
 	footer := m.status
 	if footer == "" {
-		footer = ui.HelperStyle.Render(m.help())
+		footer = newHelp(m.dark, m.width).View(m.keys())
 	}
+	// A footer that wraps would push the panes off the top of the screen.
+	footer = ansi.Truncate(footer, m.width, "…")
 	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, lipgloss.JoinHorizontal(lipgloss.Top, chat, plan), footer))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
-}
-
-func (m Model) help() string {
-	var parts []string
-	switch {
-	case m.commenting:
-		parts = append(parts, "enter save comment", "esc cancel")
-	case m.focus == panePlan:
-		parts = append(parts, "tab chat", "↑/↓ move", "[/] section", "c comment", "d delete comment", "n next comment")
-	default:
-		parts = append(parts, "tab plan", "enter send", "shift+enter new line")
-	}
-	if m.busy {
-		parts = append(parts, "esc stop Claude")
-	}
-	parts = append(parts, "ctrl+s send plan to factory", "ctrl+c quit")
-	return strings.Join(parts, " • ")
 }
