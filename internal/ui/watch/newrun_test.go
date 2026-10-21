@@ -405,13 +405,24 @@ func TestTheDraftIsTimed(t *testing.T) {
 	assert.Assert(t, strings.Contains(view(m), "drafted in 1m12s"), view(m))
 }
 
-// With n on offer, an empty dashboard says to press it.
-func TestAnEmptyDashboardSaysToPressN(t *testing.T) {
+// An empty dashboard names the two ways to begin, each with its key, so a new
+// user is not left to find them in the footer.
+func TestAnEmptyDashboardOffersNewRunAndPlan(t *testing.T) {
 	f := &fakeDrafts{}
 	m := sessModel().WithDrafts(t.Context(), "/src/chunk-cli", f.makeDraft, f.send)
-	assert.Assert(t, strings.Contains(view(m), "Press n to start one, or run: chunk factory build"), view(m))
+	out := view(m)
+	assert.Assert(t, strings.Contains(out, "Let's build"), out)
+	assert.Assert(t, strings.Contains(out, "[n] new run"), out)
+	assert.Assert(t, !strings.Contains(out, "[p]"), "plan is not offered without a planner: %s", out)
 
-	assert.Assert(t, !strings.Contains(view(sessModel()), "Press n"), "not when n is not on offer")
+	m = m.WithPlans(t.Context(), (&fakePlans{}).planner)
+	out = view(m)
+	assert.Assert(t, strings.Contains(out, "[n] new run   [p] plan a run"), out)
+	assert.Assert(t, strings.Contains(out, `or run: chunk factory build "<what to change>"`), out)
+
+	out = view(sessModel())
+	assert.Assert(t, !strings.Contains(out, "[n]") && !strings.Contains(out, "Let's build"), "no keys, nothing to press: %s", out)
+	assert.Assert(t, strings.Contains(out, `Start one with: chunk factory build "<what to change>"`), out)
 }
 
 // While a sent draft's run is not listed yet, a key goes back to the dashboard
