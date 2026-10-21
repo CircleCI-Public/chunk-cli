@@ -85,7 +85,8 @@ func widestRun() sessionInfo {
 }
 
 // No line of the run pane is wider than the pane, so none is cut at its edge:
-// each wraps to the pane instead.
+// each wraps to the pane instead. The title is the exception: it goes into the
+// frame's edge, which cuts it to fit.
 func TestRunPaneWrapsEveryLineToThePane(t *testing.T) {
 	stubRunChange(t, "+++ b/README.md\n@@ -1 +1 @@\n+`chunk factory` has an implementer agent change your code on a sidecar, then reviews the result with each prompt in `.chunk/reviews/`\n", nil)
 	done := finishedRun("run-1")
@@ -99,6 +100,9 @@ func TestRunPaneWrapsEveryLineToThePane(t *testing.T) {
 				m.runDetails = details
 				m = m.reselectRun()
 				for i, line := range m.renderRunPane(m.styles(), *m.selectedRun(), 60) {
+					if i == 0 {
+						continue
+					}
 					if got := lipgloss.Width(line); got > width-leftPaneWidth-5 {
 						t.Errorf("%s details=%v width=%d: line %d is %d columns: %q",
 							run.s.ID, details, width, i, got, stripANSI(line))

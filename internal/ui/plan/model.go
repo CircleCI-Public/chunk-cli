@@ -494,13 +494,13 @@ func submitCmd(submit Submitter, plan string) tea.Cmd {
 }
 
 // Layout: the chat is on the left and the plan, which needs the room, takes
-// the right 60% of the screen. Each pane has a one-cell border and a title
-// row; the plan has a row under it for comments, and the screen a footer row.
+// the right 60% of the screen. Each pane has a one-cell border with its title
+// set into the top edge; the plan has a row under it for comments, and the
+// screen a footer row.
 const (
 	borderSize     = 2
 	footerRows     = 1
 	inputRows      = 3
-	headerRows     = 1
 	planFooterRows = 1
 	planPercent    = 60
 )
@@ -511,10 +511,10 @@ func (m *Model) chatWidth() int { return m.width - m.planWidth() }
 func (m *Model) layout() {
 	inner := m.height - footerRows - borderSize
 	m.planView.SetWidth(m.planWidth() - borderSize)
-	m.planView.SetHeight(inner - headerRows - planFooterRows)
+	m.planView.SetHeight(inner - planFooterRows)
 	m.commentInput.SetWidth(m.planWidth() - borderSize - 4)
 	m.chatView.SetWidth(m.chatWidth() - borderSize)
-	m.chatView.SetHeight(inner - headerRows - inputRows - 1)
+	m.chatView.SetHeight(inner - inputRows - 1)
 	m.input.SetWidth(m.chatWidth() - borderSize)
 	m.renderPlan()
 	m.renderChat()
@@ -680,22 +680,24 @@ func (m Model) Content() string {
 	if m.width == 0 {
 		return ""
 	}
-	border := func(focused bool, w int) lipgloss.Style {
-		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Width(w).Height(m.height - footerRows)
+	pane := func(focused bool, w int, title, content string) string {
+		edge := lipgloss.Color("8")
 		if focused {
-			return s.BorderForeground(accentColor)
+			edge = accentColor
 		}
-		return s.BorderForeground(lipgloss.Color("8"))
+		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
+			Width(w).Height(m.height - footerRows)
+		return titled(s.Render(content), title, lipgloss.NewStyle().Foreground(edge).Render)
 	}
 
-	planHeader := ui.TitleStyle.Render("Plan")
+	planTitle := ui.TitleStyle.Render("Plan")
 	if m.focus == panePlan {
-		planHeader += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", m.planView.ScrollPercent()*100))
+		planTitle += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", m.planView.ScrollPercent()*100))
 	}
-	chat := border(m.focus == paneChat, m.chatWidth()).Render(
-		ui.TitleStyle.Render("Chat") + "\n" + m.chatView.View() + "\n\n" + m.input.View())
-	plan := border(m.focus == panePlan, m.planWidth()).Render(
-		planHeader + "\n" + m.planView.View() + "\n" + m.planFooter())
+	chat := pane(m.focus == paneChat, m.chatWidth(), ui.TitleStyle.Render("Chat"),
+		m.chatView.View()+"\n\n"+m.input.View())
+	plan := pane(m.focus == panePlan, m.planWidth(), planTitle,
+		m.planView.View()+"\n"+m.planFooter())
 
 	footer := m.status
 	if footer == "" {
@@ -704,4 +706,18 @@ func (m Model) Content() string {
 	// A footer that wraps would push the panes off the top of the screen.
 	footer = ansi.Truncate(footer, m.width, "…")
 	return lipgloss.JoinVertical(lipgloss.Left, lipgloss.JoinHorizontal(lipgloss.Top, chat, plan), footer)
+}
+
+// titled sets title into the top edge of box, a pane drawn with a rounded
+// border, as in "╭─ Plan ─────╮", cut to leave at least one cell of edge
+// after it. line draws the edge in the border's colour.
+func titled(box, title string, line func(...string) string) string {
+	top, rest, _ := strings.Cut(box, "\n")
+	n := lipgloss.Width(top) - 2
+	if n < 5 {
+		return box
+	}
+	title = ansi.Truncate(title, n-4, "…")
+	edge := line("╭─ ") + title + line(" "+strings.Repeat("─", max(n-3-lipgloss.Width(title), 0))+"╮")
+	return edge + "\n" + rest
 }
