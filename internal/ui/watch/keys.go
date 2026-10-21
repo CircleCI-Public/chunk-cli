@@ -34,8 +34,11 @@ type keyMap struct {
 	New, Send, Discard                key.Binding
 	StopDraft                         key.Binding
 	ScrollDraft, SendDraft, KeepDraft key.Binding
-	Details                           key.Binding
-	Cancel                            key.Binding
+	// ToggleSection folds or unfolds the draft section in focus, and
+	// FocusSection moves the focus between them.
+	ToggleSection, FocusSection key.Binding
+	Details                     key.Binding
+	Cancel                      key.Binding
 	// Back is Esc: back to the list from the right pane, and quit from the
 	// list. It goes unlisted, since q and ← already say both.
 	Back      key.Binding
@@ -49,31 +52,33 @@ func (m Model) keys() keyMap {
 	run := m.selectedRun()
 	right := m.focusedPane == paneRight
 	k := keyMap{
-		Up:          key.NewBinding(key.WithKeys("up", "k", "w"), key.WithHelp("↑/↓", "select")),
-		Down:        key.NewBinding(key.WithKeys("down", "j", "s")),
-		Left:        key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "back")),
-		Right:       key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "run")),
-		Open:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
-		OpenPR:      key.NewBinding(key.WithKeys("o", "super+enter")),
-		Copy:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy failure")),
-		CopyBranch:  key.NewBinding(key.WithKeys("b"), key.WithHelp("b/p", "copy branch/PR")),
-		CopyPR:      key.NewBinding(key.WithKeys("p")),
-		Toggle:      key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
-		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search runs")),
-		Keep:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "keep filter")),
-		Clear:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "clear")),
-		Details:     key.NewBinding(key.WithKeys("d", "i"), key.WithHelp("d", "details")),
-		New:         key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new run")),
-		Send:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "go to step 2")),
-		Discard:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-		StopDraft:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop Claude")),
-		ScrollDraft: key.NewBinding(key.WithKeys("up", "down", "k", "j", "pgup", "pgdown"), key.WithHelp("↑/↓", "scroll the change")),
-		SendDraft:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send to factory (last step)")),
-		KeepDraft:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "keep for later")),
-		Cancel:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
-		Back:        key.NewBinding(key.WithKeys("esc")),
-		Quit:        key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
-		ForceQuit:   key.NewBinding(key.WithKeys("ctrl+c")),
+		Up:            key.NewBinding(key.WithKeys("up", "k", "w"), key.WithHelp("↑/↓", "select")),
+		Down:          key.NewBinding(key.WithKeys("down", "j", "s")),
+		Left:          key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "back")),
+		Right:         key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "run")),
+		Open:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
+		OpenPR:        key.NewBinding(key.WithKeys("o", "super+enter")),
+		Copy:          key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy failure")),
+		CopyBranch:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b/p", "copy branch/PR")),
+		CopyPR:        key.NewBinding(key.WithKeys("p")),
+		Toggle:        key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
+		Search:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search runs")),
+		Keep:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "keep filter")),
+		Clear:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "clear")),
+		Details:       key.NewBinding(key.WithKeys("d", "i"), key.WithHelp("d", "details")),
+		New:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new run")),
+		Send:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "go to step 2")),
+		Discard:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+		StopDraft:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop Claude")),
+		ScrollDraft:   key.NewBinding(key.WithKeys("up", "down", "k", "j", "pgup", "pgdown"), key.WithHelp("↑/↓", "scroll the change")),
+		ToggleSection: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "expand/collapse")),
+		FocusSection:  key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "switch section")),
+		SendDraft:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send to factory (last step)")),
+		KeepDraft:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "keep for later")),
+		Cancel:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
+		Back:          key.NewBinding(key.WithKeys("esc")),
+		Quit:          key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
+		ForceQuit:     key.NewBinding(key.WithKeys("ctrl+c")),
 	}
 	k.Search.SetEnabled(!right && len(m.allRuns) > 0)
 	k.Keep.SetEnabled(m.searching)
@@ -84,6 +89,8 @@ func (m Model) keys() keyMap {
 	k.StopDraft.SetEnabled(m.draft == draftWorking)
 	changed := m.draft == draftReady && m.draftResult.Stat != ""
 	k.ScrollDraft.SetEnabled(changed)
+	k.ToggleSection.SetEnabled(changed)
+	k.FocusSection.SetEnabled(changed)
 	k.SendDraft.SetEnabled(changed)
 	k.KeepDraft.SetEnabled(m.draft == draftReady)
 	if m.draft == draftReady && !changed {
@@ -146,7 +153,7 @@ func (k *keyMap) enableBranchAndPR(m Model, run *sessionInfo) {
 
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.KeepDraft, k.Keep, k.Clear, k.New, k.Up, k.Right, k.Open, k.Copy, k.CopyBranch, k.Toggle, k.Search, k.Details, k.Cancel, k.Left, k.Quit}
+	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.ToggleSection, k.KeepDraft, k.Keep, k.Clear, k.New, k.Up, k.Right, k.Open, k.Copy, k.CopyBranch, k.Toggle, k.Search, k.Details, k.Cancel, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

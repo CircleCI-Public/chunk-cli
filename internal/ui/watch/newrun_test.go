@@ -75,6 +75,9 @@ func deliver(t *testing.T, m Model, cmd tea.Cmd) Model {
 
 func view(m Model) string { return stripANSI(m.render()) }
 
+// tab is the rune press sends for the tab key.
+const tab = tea.KeyTab
+
 var sampleDraft = Draft{
 	RunID:   "run-1",
 	Summary: "Added a --verbose flag.",
@@ -121,17 +124,21 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 
 	assert.Equal(t, m.draft, draftReady)
 	out = view(m)
-	assert.Assert(t, strings.Contains(out, "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change\n  1. write a prompt → 2. Claude drafts the change → [3. send to the factory (last step)]\n  › Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-) · the change is shown above\n  enter send to factory (last step)  ·  ↑/↓ scroll the change  ·  esc keep for later"), out)
+	assert.Assert(t, strings.Contains(out, "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change\n  1. write a prompt → 2. Claude drafts the change → [3. send to the factory (last step)]\n  › Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-) · the change is shown above\n  enter send to factory (last step)  ·  ↑/↓ scroll the change  ·  space expand/collapse  ·  esc keep for later"), out)
 
 	// The change is shown in the right pane as soon as it is ready, with what
 	// Claude said it did: there is no key to press to see it.
 	assert.Assert(t, strings.Contains(out, "draft  chunk-cli · drafted in "), "the draft says how long it took: %s", out)
 	assert.Assert(t, strings.Contains(out, "✓ Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-)"), "the pane says the draft is ready: %s", out)
 	assert.Assert(t, strings.Contains(out, "press enter to send it to the factory (last step)"), "the pane says what to press: %s", out)
-	assert.Assert(t, strings.Contains(out, "↑/↓ scroll the change  ·  esc keeps it for later"), out)
+	assert.Assert(t, strings.Contains(out, "↑/↓ scroll  ·  tab switch section  ·  esc keeps it for later"), out)
 	assert.Assert(t, strings.Count(m.render(), m.styles().Teal.Bold(true).Render("enter")) >= 2, "enter stands out in the pane as in the footer")
 	assert.Assert(t, strings.Contains(out, "Added a --verbose flag."), out)
-	assert.Assert(t, strings.Contains(out, "verbose bool"), "the diff is shown: %s", out)
+	assert.Assert(t, !strings.Contains(out, "verbose bool"), "the diff starts folded: %s", out)
+	m, _ = press(m, tab)
+	m, _ = press(m, ' ')
+	out = view(m)
+	assert.Assert(t, strings.Contains(out, "verbose bool"), "the diff is shown once the changes are open: %s", out)
 	assert.Assert(t, m.output == nil, "no other view was opened")
 
 	m, cmd = press(m, tea.KeyEnter)
@@ -367,6 +374,7 @@ func TestALongDraftScrolls(t *testing.T) {
 	m = typeText(m, "add lines")
 	m, cmd := press(m, tea.KeyEnter)
 	m = deliver(t, m, cmd)
+	m, _ = press(m, tab, ' ')
 	assert.Assert(t, strings.Contains(view(m), "↓ more"), view(m))
 	assert.Assert(t, !strings.Contains(view(m), "+line 79"), "the end is not in view yet")
 
@@ -440,4 +448,118 @@ func TestNClearsThePaneForTheNewRun(t *testing.T) {
 
 	m, _ = press(m, tea.KeyEscape)
 	assert.Assert(t, strings.Contains(view(m), "run  repo"), "esc brings the run back to the pane")
+}
+
+// readyDraft is a draft ready to read, with a diff long enough to scroll.
+func readyDraft(t *testing.T) Model {
+	t.Helper()
+	var diff strings.Builder
+	for i := range 80 {
+		fmt.Fprintf(&diff, "+line %02d\n", i)
+	}
+	d := Draft{RunID: "run-1", Summary: "Added lines.\nI didn't check the docs.", Stat: " a.go | 80 +\n 1 file changed, 7 insertions(+), 2 deletions(-)", Diff: diff.String()}
+	m, _ := press(draftModel(t, &fakeDrafts{draft: d}), 'n')
+	m = typeText(m, "add lines")
+	m, cmd := press(m, tea.KeyEnter)
+	return deliver(t, m, cmd)
+}
+
+// The draft shows its plan open and its changes folded to their stat line, and
+// space folds or unfolds the section in focus.
+func TestTheDraftIsShownAsAPlanAndChanges(t *testing.T) {
+	m := readyDraft(t)
+	out := view(m)
+	assert.Assert(t, strings.Contains(out, "▾ Plan"), out)
+	assert.Assert(t, strings.Contains(out, "I didn't check the docs."), "the plan is open: %s", out)
+	assert.Assert(t, strings.Contains(out, "▸ Changes · 1 file, +7 −2"), out)
+	assert.Assert(t, !strings.Contains(out, "+line 00"), "the diff is folded: %s", out)
+	assert.Assert(t, strings.Contains(out, "space expand/collapse"), "the footer says how: %s", out)
+
+	// Space acts on the section in focus: the plan first.
+	m, _ = press(m, ' ')
+	out = view(m)
+	assert.Assert(t, strings.Contains(out, "▸ Plan"), out)
+	assert.Assert(t, !strings.Contains(out, "I didn't check the docs."), out)
+
+	m, _ = press(m, ' ')
+	assert.Assert(t, strings.Contains(view(m), "I didn't check the docs."), "space unfolds it again")
+}
+
+// Tab and shift+tab move the focus, which the highlighted header shows.
+func TestTabMovesTheFocusBetweenSections(t *testing.T) {
+	m := readyDraft(t)
+	assert.Equal(t, m.draftFocus, sectionPlan)
+	st := m.styles()
+	assert.Assert(t, strings.Contains(m.render(), st.Teal.Bold(true).Render("▾ Plan")), "the focused header is highlighted")
+
+	m, _ = press(m, tab)
+	assert.Equal(t, m.draftFocus, sectionChanges)
+	assert.Assert(t, strings.Contains(m.render(), st.Teal.Bold(true).Render("▸ Changes · 1 file, +7 −2")))
+	m, _ = press(m, ' ')
+	assert.Assert(t, strings.Contains(view(m), "▾ Changes"), view(m))
+	assert.Assert(t, strings.Contains(view(m), "+line 00"), view(m))
+
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	assert.Equal(t, next.(Model).draftFocus, sectionPlan)
+}
+
+// Folding the changes brings the scroll back within what is left, and the
+// sections stay as they were through a resize.
+func TestFoldingKeepsTheScrollInRangeAndSurvivesAResize(t *testing.T) {
+	m := readyDraft(t)
+	m, _ = press(m, tab, ' ')
+	for range 200 {
+		m, _ = press(m, tea.KeyDown)
+	}
+	assert.Assert(t, m.draftScroll > 0)
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: m.width - 10, Height: m.height - 4})
+	m = next.(Model)
+	assert.Assert(t, m.draftChangesOpen && m.draftFocus == sectionChanges, "the sections stay as they were after a resize")
+
+	m, _ = press(m, ' ')
+	assert.Equal(t, m.draftScroll, 0, "the plan is short, so the scroll is back at the top")
+	assert.Assert(t, strings.Contains(view(m), "▸ Changes"), view(m))
+	assert.Assert(t, strings.Contains(view(m), "Added lines."), view(m))
+}
+
+// A draft that changed nothing has only its plan: there is no second section
+// to focus.
+func TestADraftWithNoChangesHasOnlyAPlan(t *testing.T) {
+	f := &fakeDrafts{draft: Draft{RunID: "run-1", Summary: "Nothing to change."}}
+	m, _ := press(draftModel(t, f), 'n')
+	m = typeText(m, "add a flag")
+	m, cmd := press(m, tea.KeyEnter)
+	m = deliver(t, m, cmd)
+	m, _ = press(m, tab)
+	assert.Equal(t, m.draftFocus, sectionPlan)
+	assert.Assert(t, !strings.Contains(view(m), "Changes"), view(m))
+}
+
+func TestStatSummary(t *testing.T) {
+	for in, want := range map[string]string{
+		" a.go | 3 ++-\n 1 file changed, 2 insertions(+), 1 deletion(-)": "1 file, +2 −1",
+		" 3 files changed, 9 insertions(+)":                              "3 files, +9",
+		" 2 files changed, 4 deletions(-)":                               "2 files, −4",
+		"something unexpected":                                           "something unexpected",
+	} {
+		assert.Equal(t, statSummary(in), want)
+	}
+}
+
+// The sections fit an 80-column terminal, folded and unfolded: no line is
+// wider than the screen, and the dashboard stays the terminal's height.
+func TestTheDraftSectionsFitEightyColumns(t *testing.T) {
+	m := readyDraft(t)
+	m.width = 80
+	for _, open := range []bool{false, true} {
+		if open {
+			m, _ = press(m, tab, ' ')
+		}
+		out := m.render()
+		assert.Equal(t, strings.Count(out, "\n"), m.height, "changes open %v:\n%s", open, out)
+		for _, l := range strings.Split(out, "\n") {
+			assert.Assert(t, ansi.StringWidth(l) <= m.width, "changes open %v, line too wide: %q", open, stripANSI(l))
+		}
+	}
 }
