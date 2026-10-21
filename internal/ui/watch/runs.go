@@ -30,11 +30,12 @@ type sessionInfo struct {
 	label string
 }
 
-// sessionActionMsg reports the outcome of a cancel request.
+// sessionActionMsg reports the outcome of a cancel or delete request.
 type sessionActionMsg struct {
-	id   string
-	note string
-	err  error
+	id      string
+	note    string
+	err     error
+	deleted bool
 }
 
 func cancelSessionCmd(id string) tea.Cmd {
@@ -157,15 +158,97 @@ func (m Model) moveRunSelection(delta int) Model {
 // second on the same run sends the request.
 func (m Model) requestRunCancel(run *sessionInfo, wasConfirm string) (tea.Model, tea.Cmd) {
 	if wasConfirm != run.s.ID {
-		m.runConfirm, m.runNote = run.s.ID, ""
+		m.runConfirm, m.confirmDelete, m.runNote = run.s.ID, false, ""
 		return m, nil
 	}
 	m.runNote = "cancelling…"
 	return m, cancelSessionCmd(run.s.ID)
 }
 
-// withSessionAction folds a cancel result into the run pane's note.
+// listedRuns is the runs the left pane lists: the live ones, plus the finished
+// ones when showEnded is set, narrowed by the search. The selected run stays
+// listed after it ends, so one being watched does not vanish at the moment its
+// result lands.
+func (m Model) listedRuns() []sessionInfo {
+	runs := m.allRuns
+	if !m.showEnded {
+		runs = nil
+		for _, r := range m.allRuns {
+			if !r.s.State.Finished() || r.s.ID == m.selRun {
+				runs = append(runs, r)
+			}
+		}
+	}
+	return filterRuns(runs, m.query)
+}
+
+// endedCount is how many finished runs the toggle would reveal.
+func (m Model) endedCount() int {
+	n := 0
+	for _, r := range m.allRuns {
+		if r.s.State.Finished() {
+			n++
+		}
+	}
+	return n
+}
+
+// toggleEnded shows or hides the finished runs, keeping the selection on a run
+// that is still listed. Hiding hides the selected run too if it has finished.
+func (m Model) toggleEnded() Model {
+	m.showEnded = !m.showEnded
+	prev := m.selRun
+	if run := m.selectedRun(); !m.showEnded && run != nil && run.s.State.Finished() {
+		// Hiding was asked for, so the selected run is not kept listed.
+		m.selRun = ""
+	}
+	m.sessions = m.listedRuns()
+	m = m.reselectRun()
+	if m.selRun != prev {
+		m.runItem, m.runConfirm, m.runNote = 0, "", ""
+	}
+	return m
+}
+
+// requestRunDelete implements the two-press delete of a finished run's record.
+// An x pressed once for the run before it ended does not count as the first D.
+func (m Model) requestRunDelete(run *sessionInfo, wasConfirm string) (tea.Model, tea.Cmd) {
+	if wasConfirm != run.s.ID || !m.confirmDelete {
+		m.runConfirm, m.confirmDelete, m.runNote = run.s.ID, true, ""
+		return m, nil
+	}
+	m.runNote = "deleting…"
+	return m, deleteSessionCmd(run.s.ID)
+}
+
+func deleteSessionCmd(id string) tea.Cmd {
+	return func() tea.Msg {
+		if err := chunkd.DeleteSession(id); err != nil {
+			return sessionActionMsg{id: id, err: err}
+		}
+		return sessionActionMsg{id: id, note: "deleted", deleted: true}
+	}
+}
+
+// withSessionAction folds a cancel or delete result into the run pane.
 func (m Model) withSessionAction(msg sessionActionMsg) Model {
+	if msg.deleted && msg.err == nil {
+		// Drop the row now rather than leave it listed until the next poll.
+		kept := m.allRuns[:0:0]
+		for _, r := range m.allRuns {
+			if r.s.ID != msg.id {
+				kept = append(kept, r)
+			}
+		}
+		m.allRuns = kept
+		m.sessions = m.listedRuns()
+		prev := m.selRun
+		m = m.reselectRun()
+		if m.selRun != prev {
+			m.runItem, m.runConfirm, m.runNote = 0, "", ""
+		}
+		return m
+	}
 	run := m.selectedRun()
 	if run == nil || run.s.ID != msg.id {
 		return m
@@ -479,7 +562,7 @@ func filterRuns(all []sessionInfo, query string) []sessionInfo {
 // that is still listed.
 func (m Model) setQuery(query string) Model {
 	m.query = query
-	m.sessions = filterRuns(m.allRuns, query)
+	m.sessions = m.listedRuns()
 	prev := m.selRun
 	m = m.reselectRun()
 	if m.selRun != prev {
@@ -526,6 +609,9 @@ func (m Model) renderRunList(st watchStyles) []string {
 	}
 	lines := []string{head, m.searchRow(st)}
 	if len(m.sessions) == 0 {
+		if m.query == "" && !m.showEnded {
+			return append(lines, "  "+st.dim("no active runs"), "  "+st.dim("e shows finished"), "")
+		}
 		return append(lines, "  "+st.dim("no runs match"), "")
 	}
 	for _, r := range m.sessions {
