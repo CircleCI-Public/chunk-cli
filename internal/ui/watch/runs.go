@@ -30,7 +30,7 @@ type sessionInfo struct {
 	label string
 }
 
-// sessionActionMsg reports the outcome of a cancel request.
+// sessionActionMsg reports the outcome of a cancel or delete request.
 type sessionActionMsg struct {
 	id      string
 	note    string
@@ -158,7 +158,7 @@ func (m Model) moveRunSelection(delta int) Model {
 // second on the same run sends the request.
 func (m Model) requestRunCancel(run *sessionInfo, wasConfirm string) (tea.Model, tea.Cmd) {
 	if wasConfirm != run.s.ID {
-		m.runConfirm, m.runNote = run.s.ID, ""
+		m.runConfirm, m.confirmDelete, m.runNote = run.s.ID, false, ""
 		return m, nil
 	}
 	m.runNote = "cancelling…"
@@ -194,11 +194,15 @@ func (m Model) endedCount() int {
 }
 
 // toggleEnded shows or hides the finished runs, keeping the selection on a run
-// that is still listed.
+// that is still listed. Hiding hides the selected run too if it has finished.
 func (m Model) toggleEnded() Model {
 	m.showEnded = !m.showEnded
-	m.sessions = m.listedRuns()
 	prev := m.selRun
+	if run := m.selectedRun(); !m.showEnded && run != nil && run.s.State.Finished() {
+		// Hiding was asked for, so the selected run is not kept listed.
+		m.selRun = ""
+	}
+	m.sessions = m.listedRuns()
 	m = m.reselectRun()
 	if m.selRun != prev {
 		m.runItem, m.runConfirm, m.runNote = 0, "", ""
@@ -207,9 +211,10 @@ func (m Model) toggleEnded() Model {
 }
 
 // requestRunDelete implements the two-press delete of a finished run's record.
+// An x pressed once for the run before it ended does not count as the first D.
 func (m Model) requestRunDelete(run *sessionInfo, wasConfirm string) (tea.Model, tea.Cmd) {
-	if wasConfirm != run.s.ID {
-		m.runConfirm, m.runNote = run.s.ID, ""
+	if wasConfirm != run.s.ID || !m.confirmDelete {
+		m.runConfirm, m.confirmDelete, m.runNote = run.s.ID, true, ""
 		return m, nil
 	}
 	m.runNote = "deleting…"
@@ -225,7 +230,7 @@ func deleteSessionCmd(id string) tea.Cmd {
 	}
 }
 
-// withSessionAction folds a cancel result into the run pane's note.
+// withSessionAction folds a cancel or delete result into the run pane.
 func (m Model) withSessionAction(msg sessionActionMsg) Model {
 	if msg.deleted && msg.err == nil {
 		// Drop the row now rather than leave it listed until the next poll.
@@ -237,8 +242,11 @@ func (m Model) withSessionAction(msg sessionActionMsg) Model {
 		}
 		m.allRuns = kept
 		m.sessions = m.listedRuns()
+		prev := m.selRun
 		m = m.reselectRun()
-		m.runItem, m.runConfirm, m.runNote = 0, "", ""
+		if m.selRun != prev {
+			m.runItem, m.runConfirm, m.runNote = 0, "", ""
+		}
 		return m
 	}
 	run := m.selectedRun()

@@ -183,12 +183,13 @@ type Model struct {
 
 	// selRun is the ID of the selected run, "" when there is none to select.
 	// runItem is the selected row inside the run's pane; runConfirm is the run
-	// an 'x' has been pressed for once, and runNote what the last action on a
-	// run said.
-	selRun     string
-	runItem    int
-	runConfirm string
-	runNote    string
+	// an 'x' or 'D' has been pressed for once, confirmDelete which of the two it
+	// was, and runNote what the last action on a run said.
+	selRun        string
+	runItem       int
+	runConfirm    string
+	confirmDelete bool
+	runNote       string
 	// runOpen is the rounds of each run (by run ID) the user opened or closed,
 	// over the default of showing only the round that matters. taskOpen is
 	// whether each run's task row (by run ID) was expanded, over the default of
@@ -786,7 +787,7 @@ func (m Model) runLine() string {
 		return m.draftNote
 	case run == nil:
 		return ""
-	case m.runConfirm == run.s.ID && run.s.State.Finished():
+	case m.runConfirm == run.s.ID && m.confirmDelete:
 		return "press D again to delete this run's record"
 	case m.runConfirm == run.s.ID:
 		return "press x again to cancel this run — q only detaches"

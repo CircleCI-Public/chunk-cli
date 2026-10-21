@@ -1363,3 +1363,25 @@ func TestDeletedRunLeavesTheList(t *testing.T) {
 	assert.DeepEqual(t, listedIDs(m), []string{"b"})
 	assert.Equal(t, m.selRun, "b")
 }
+
+func TestCancelPressDoesNotCountTowardsDelete(t *testing.T) {
+	m := sessModel()
+	m = poll(m, factoryRun("abc", chunkd.SessionRunning, time.Now()))
+	m, _ = press(m, 'x')
+	m = poll(m, endedRun("abc"))
+	assert.Assert(t, !strings.Contains(m.runLine(), "press D"), m.runLine())
+
+	m, cmd := press(m, 'D')
+	assert.Assert(t, cmd == nil)
+	assert.Equal(t, m.runLine(), "press D again to delete this run's record")
+}
+
+func TestHidingFinishedRunsHidesTheSelectedOne(t *testing.T) {
+	m := sessModel()
+	m = poll(m, factoryRun("live", chunkd.SessionRunning, time.Now()), endedRun("old"))
+	m.selRun = "old"
+
+	m, _ = press(m, 'e')
+	assert.DeepEqual(t, listedIDs(m), []string{"live"})
+	assert.Equal(t, m.selRun, "live")
+}

@@ -235,10 +235,11 @@ func (s *sessionStore) deleteSession(id string) (found, removed bool) {
 	if e == nil {
 		return false, false
 	}
-	if !e.snapshot().State.Finished() {
+	snap := e.snapshot()
+	if !snap.State.Finished() {
 		return true, false
 	}
-	root := e.snapshot().ProjectRoot
+	root := snap.ProjectRoot
 	delete(s.sessions, id)
 	if i := slices.Index(s.byProject[root], id); i >= 0 {
 		s.byProject[root] = slices.Delete(s.byProject[root], i, i+1)
