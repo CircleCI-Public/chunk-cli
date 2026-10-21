@@ -420,6 +420,11 @@ func TestAnEmptyDashboardOffersNewRunAndPlan(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "[n] new run   [p] plan a run"), out)
 	assert.Assert(t, strings.Contains(out, `or run: chunk factory build "<what to change>"`), out)
 
+	// A key that is off does not hide the one that is on.
+	out = view(sessModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).WithPlans(t.Context(), (&fakePlans{}).planner))
+	assert.Assert(t, strings.Contains(out, "[p] plan a run") && strings.Contains(out, "Let's build"), out)
+	assert.Assert(t, !strings.Contains(out, "[n]"), out)
+
 	out = view(sessModel())
 	assert.Assert(t, !strings.Contains(out, "[n]") && !strings.Contains(out, "Let's build"), "no keys, nothing to press: %s", out)
 	assert.Assert(t, strings.Contains(out, `Start one with: chunk factory build "<what to change>"`), out)
