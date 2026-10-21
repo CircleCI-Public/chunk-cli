@@ -504,3 +504,27 @@ func TestPlanIsSentOnceWhileTheFactoryAnswers(t *testing.T) {
 		t.Error("ctrl+s asked to send the plan again while it is being sent")
 	}
 }
+
+func TestBubbleFitsAShortMessageAndWrapsALongOne(t *testing.T) {
+	m := &Model{}
+	const w = 60
+	short := m.userBubble(&message{fromUser: true, text: "hi"}, w)
+	top, _, _ := strings.Cut(ansi.Strip(short), "\n")
+	if got := ansi.StringWidth(strings.TrimSpace(top)); got != len("hi")+bubbleChrome {
+		t.Errorf("bubble for %q is %d wide, want %d:\n%s", "hi", got, len("hi")+bubbleChrome, ansi.Strip(short))
+	}
+
+	long := m.userBubble(&message{fromUser: true, text: strings.Repeat("word ", 30)}, w)
+	lines := strings.Split(ansi.Strip(long), "\n")
+	if len(lines) < 4 {
+		t.Errorf("long message did not wrap:\n%s", ansi.Strip(long))
+	}
+	for i, l := range lines {
+		if got := ansi.StringWidth(l); got > w {
+			t.Errorf("line %d is %d wide, chat is %d: %q", i, got, w, l)
+		}
+		if !strings.HasPrefix(l, " ") {
+			t.Errorf("line %d leaves no room on the left: %q", i, l)
+		}
+	}
+}

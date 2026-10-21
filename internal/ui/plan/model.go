@@ -627,9 +627,11 @@ func (m *Model) userBubble(msg *message, w int) string {
 	if msg.text != "" {
 		parts = append(parts, msg.text)
 	}
-	body := lipgloss.NewStyle().Width(inner).Render(strings.Join(parts, "\n"))
+	// A short message gets a bubble that fits it; a long one wraps at inner.
+	text := strings.Join(parts, "\n")
+	fit := min(lipgloss.Width(text), inner)
 	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accentColor).
-		Padding(0, 1).Width(lipgloss.Width(body) + bubbleChrome).Render(body)
+		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
 	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
 }
 
