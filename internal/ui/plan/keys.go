@@ -13,14 +13,20 @@ import (
 type keyMap struct {
 	// Chat keys. Newline is the textarea's own; it is here for its hint.
 	Send, Newline key.Binding
-	// Plan keys.
+	// ChatPageUp carries the hint for both; the input has no use for them.
+	ChatPageUp, ChatPageDown key.Binding
+	// Plan keys. The page keys move the highlight a page or half a page at a
+	// time, as well as the view; PageUp carries the hint for all four.
 	Up, Down, Top, Bottom key.Binding
+	PageUp, PageDown      key.Binding
+	HalfUp, HalfDown      key.Binding
 	// SectionBack carries the hint for both.
 	SectionBack, SectionNext key.Binding
 	Comment, Delete, Next    key.Binding
 	// While a comment is written.
 	SaveComment, CancelComment key.Binding
-	// While sending the plan is confirmed. Any other key says no.
+	// While sending the plan is confirmed. Any other key, enter too, says
+	// no: sending starts a factory run, so it takes a y.
 	Confirm key.Binding
 
 	Focus    key.Binding
@@ -45,10 +51,16 @@ func (m Model) keys() keyMap {
 	k := keyMap{
 		Send:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send")),
 		Newline:       key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"), key.WithHelp(newline, "new line")),
+		ChatPageUp:    key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup/pgdn", "scroll chat")),
+		ChatPageDown:  key.NewBinding(key.WithKeys("pgdown")),
 		Up:            key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/↓", "move")),
 		Down:          key.NewBinding(key.WithKeys("down", "j")),
 		Top:           key.NewBinding(key.WithKeys("g", "home")),
 		Bottom:        key.NewBinding(key.WithKeys("G", "end")),
+		PageUp:        key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup/pgdn", "page")),
+		PageDown:      key.NewBinding(key.WithKeys("pgdown")),
+		HalfUp:        key.NewBinding(key.WithKeys("ctrl+u")),
+		HalfDown:      key.NewBinding(key.WithKeys("ctrl+d")),
 		SectionBack:   key.NewBinding(key.WithKeys("["), key.WithHelp("[/]", "section")),
 		SectionNext:   key.NewBinding(key.WithKeys("]")),
 		Comment:       key.NewBinding(key.WithKeys("c", "enter"), key.WithHelp("c", "comment")),
@@ -56,7 +68,7 @@ func (m Model) keys() keyMap {
 		Next:          key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next comment")),
 		SaveComment:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save comment")),
 		CancelComment: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-		Confirm:       key.NewBinding(key.WithKeys("y", "enter")),
+		Confirm:       key.NewBinding(key.WithKeys("y")),
 		Focus:         key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", focusHelp)),
 		Stop:          key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop Claude")),
 		SendPlan:      key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "send plan to factory")),
@@ -74,10 +86,10 @@ func (m Model) keys() keyMap {
 
 	inChat := m.focus == paneChat && !m.commenting
 	inPlan := m.focus == panePlan && !m.commenting
-	for _, b := range []*key.Binding{&k.Send, &k.Newline} {
+	for _, b := range []*key.Binding{&k.Send, &k.Newline, &k.ChatPageUp, &k.ChatPageDown} {
 		b.SetEnabled(inChat)
 	}
-	for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Top, &k.Bottom, &k.SectionBack, &k.SectionNext, &k.Comment} {
+	for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Top, &k.Bottom, &k.PageUp, &k.PageDown, &k.HalfUp, &k.HalfDown, &k.SectionBack, &k.SectionNext, &k.Comment} {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
 	k.Delete.SetEnabled(inPlan && m.commentAt(m.cursor) >= 0)
@@ -98,7 +110,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.Send, k.Newline,
 		k.Comment, k.Up,
 		k.Stop, k.Focus, k.SendPlan, k.Quit,
-		k.SectionBack, k.Delete, k.Next,
+		k.SectionBack, k.Delete, k.Next, k.PageUp, k.ChatPageUp,
 	}
 }
 

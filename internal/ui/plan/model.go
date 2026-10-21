@@ -165,11 +165,17 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 	ci.Prompt = "💬 "
 	ci.Placeholder = "Comment on the highlighted part (enter saves, esc cancels)"
 
+	// The plan's keys are the screen's own, which move the cursor with the
+	// view; the viewport's would scroll one without the other, and its d
+	// and u would scroll where d deletes a comment.
+	planView := viewport.New()
+	planView.KeyMap = viewport.KeyMap{}
+
 	return Model{
 		ctx:          ctx,
 		turn:         turn,
 		submit:       submit,
-		planView:     viewport.New(),
+		planView:     planView,
 		chatView:     viewport.New(),
 		input:        in,
 		commentInput: ci,
@@ -334,6 +340,14 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	if m.focus == panePlan {
 		return m.updatePlanKey(msg)
+	}
+	switch {
+	case key.Matches(msg, k.ChatPageUp):
+		m.chatView.PageUp()
+		return m, nil
+	case key.Matches(msg, k.ChatPageDown):
+		m.chatView.PageDown()
+		return m, nil
 	}
 	if key.Matches(msg, k.Send) {
 		if m.busy {

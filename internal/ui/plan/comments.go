@@ -90,6 +90,14 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.moveCursor(0)
 	case key.Matches(msg, k.Bottom):
 		m.moveCursor(len(m.blocks) - 1)
+	case key.Matches(msg, k.PageUp):
+		m.page(-m.planView.Height())
+	case key.Matches(msg, k.PageDown):
+		m.page(m.planView.Height())
+	case key.Matches(msg, k.HalfUp):
+		m.page(-m.planView.Height() / 2)
+	case key.Matches(msg, k.HalfDown):
+		m.page(m.planView.Height() / 2)
 	case key.Matches(msg, k.SectionBack):
 		m.moveCursor(m.nextHeading(-1))
 	case key.Matches(msg, k.SectionNext):
@@ -162,6 +170,33 @@ func (m Model) updateCommentKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.commentInput, cmd = m.commentInput.Update(msg)
 	return m, cmd
+}
+
+// page scrolls the plan by delta lines and puts the cursor on the first
+// block that starts in view, or on the first or last block when the plan
+// cannot scroll that way, so the highlight moves with the view.
+func (m *Model) page(delta int) {
+	if len(m.blocks) == 0 {
+		return
+	}
+	before := m.planView.YOffset()
+	m.planView.SetYOffset(before + delta)
+	top := m.planView.YOffset()
+	switch {
+	case top == before && delta > 0:
+		m.moveCursor(len(m.blocks) - 1)
+		return
+	case top == before:
+		m.moveCursor(0)
+		return
+	}
+	for i := range m.blocks {
+		if m.blockTop[i] >= top {
+			m.moveCursor(i)
+			return
+		}
+	}
+	m.moveCursor(len(m.blocks) - 1)
 }
 
 // moveCursor puts the plan's cursor on block i and scrolls to keep the whole

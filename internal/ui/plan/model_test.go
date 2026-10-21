@@ -3,6 +3,7 @@ package plan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -368,5 +369,95 @@ func TestBackLeavesEscToStopClaude(t *testing.T) {
 	_, cmd = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if _, ok := closedBy(cmd); !ok {
 		t.Fatal("ctrl+c while Claude works did not go back")
+	}
+}
+
+// longPlan is a plan too long for the pane, with no comments.
+func longPlan() string {
+	var b strings.Builder
+	b.WriteString("## 1. Outcome\n\n")
+	for i := range 60 {
+		fmt.Fprintf(&b, "Paragraph %d of the plan.\n\n", i)
+	}
+	return b.String()
+}
+
+func TestDOnABlockWithoutACommentDoesNotScroll(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", longPlan(), nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = drive(t, m, press("tab"))
+	for _, k := range []string{"d", "u", "f", "b", " "} {
+		m = drive(t, m, press(k))
+		if m.planView.YOffset() != 0 || m.cursor != 0 {
+			t.Fatalf("%q moved the plan: offset %d, cursor %d", k, m.planView.YOffset(), m.cursor)
+		}
+	}
+}
+
+func TestPagingMovesTheCursorWithTheView(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", longPlan(), nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = drive(t, m, press("tab"))
+
+	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	off := m.planView.YOffset()
+	if off == 0 || m.blockTop[m.cursor] < off || m.blockTop[m.cursor] >= off+m.planView.Height() {
+		t.Fatalf("pgdown: offset %d, cursor %d at line %d", off, m.cursor, m.blockTop[m.cursor])
+	}
+	half := drive(t, m, tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	if half.planView.YOffset() >= off || half.cursor >= m.cursor {
+		t.Errorf("ctrl+u: offset %d, cursor %d", half.planView.YOffset(), half.cursor)
+	}
+	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.planView.YOffset() != 0 || m.cursor != 0 {
+		t.Errorf("pgup back: offset %d, cursor %d", m.planView.YOffset(), m.cursor)
+	}
+	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.cursor != 0 {
+		t.Errorf("pgup at the top left the cursor on %d", m.cursor)
+	}
+}
+
+func TestPageKeysScrollTheChat(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return strings.Repeat("A long reply.\n\n", 30), "", nil
+	}
+	m := New(context.Background(), turn, nil, "first")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "pgup/pgdn scroll chat") {
+		t.Errorf("chat scrolling is not in the footer:\n%s", view)
+	}
+	bottom := m.chatView.YOffset()
+	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.chatView.YOffset() >= bottom {
+		t.Fatalf("pgup left the chat at %d", m.chatView.YOffset())
+	}
+	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if !m.chatView.AtBottom() {
+		t.Error("pgdown did not scroll back down")
+	}
+}
+
+func TestEnterDoesNotConfirmSendingThePlan(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", "# Plan", nil
+	}
+	sent := false
+	submit := func(string) (string, error) {
+		sent = true
+		return "run-1", nil
+	}
+	m := New(context.Background(), turn, submit, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = drive(t, m, press("enter"))
+	if sent || m.confirming {
+		t.Fatalf("enter answered the question: sent %v, still asking %v", sent, m.confirming)
 	}
 }
