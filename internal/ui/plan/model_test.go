@@ -636,3 +636,25 @@ func TestFirstPlanShowsASkeletonWhileClaudeWrites(t *testing.T) {
 	}
 	close(release)
 }
+
+// While a comment is written enter saves it, so the bar does not offer enter
+// as the key that sends comments to Claude.
+func TestActionBarOffersNoButtonWhileACommentIsWritten(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 110, Height: 30})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: 0, quote: "## 1. Outcome", text: "x"}}
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+
+	view := ansi.Strip(m.Content())
+	if !strings.Contains(view, "enter save comment") {
+		t.Fatalf("the bar does not say enter saves:\n%s", view)
+	}
+	for _, not := range []string{"Send 1 comment", "Approve plan"} {
+		if strings.Contains(view, not) {
+			t.Errorf("the bar offers %q while a comment is written:\n%s", not, view)
+		}
+	}
+}

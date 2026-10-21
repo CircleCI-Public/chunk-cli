@@ -150,7 +150,9 @@ func (m Model) actions() (main, side string) {
 	n := len(m.comments)
 	approve := "ctrl+s Approve plan"
 	switch {
-	case m.sending:
+	// While a comment is written enter saves it and ctrl+s does nothing, so
+	// neither button is on offer: the hints name the keys that work.
+	case m.sending, m.commenting:
 		return "", ""
 	case m.busy:
 		return outline(m.purple(), "esc Stop Claude"), m.style(m.faint()).Render(approve)
