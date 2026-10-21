@@ -405,8 +405,7 @@ func TestTheDraftIsTimed(t *testing.T) {
 	assert.Assert(t, strings.Contains(view(m), "drafted in 1m12s"), view(m))
 }
 
-// An empty dashboard offers each way to begin only when its key is on, and
-// always leaves the command to run.
+// An empty dashboard offers each way to begin only when its key is on.
 func TestAnEmptyDashboardOffersOnlyTheKeysThatAreOn(t *testing.T) {
 	f := &fakeDrafts{}
 	plans := (&fakePlans{}).planner
@@ -422,9 +421,8 @@ func TestAnEmptyDashboardOffersOnlyTheKeysThatAreOn(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			out := view(tc.m)
-			assert.Equal(t, strings.Contains(out, "[n]"), tc.n, out)
-			assert.Equal(t, strings.Contains(out, "[p]"), tc.p, out)
-			assert.Assert(t, strings.Contains(out, "chunk factory build"), "the command is always left: %s", out)
+			assert.Equal(t, strings.Contains(out, "n  new run"), tc.n, out)
+			assert.Equal(t, strings.Contains(out, "p  plan a run"), tc.p, out)
 		})
 	}
 }
@@ -577,5 +575,18 @@ func TestTheDraftSectionsFitEightyColumns(t *testing.T) {
 		for _, l := range strings.Split(out, "\n") {
 			assert.Assert(t, ansi.StringWidth(l) <= m.width, "changes open %v, line too wide: %q", open, stripANSI(l))
 		}
+	}
+}
+
+// On a short terminal the mascot gives way so the buttons, which are the only
+// place the keys are named, stay in view.
+func TestTheWelcomeKeepsItsButtonsOnAShortTerminal(t *testing.T) {
+	f := &fakeDrafts{}
+	m := sessModel().WithDrafts(t.Context(), "/src/chunk-cli", f.makeDraft, f.send).WithPlans(t.Context(), (&fakePlans{}).planner)
+	for _, height := range []int{24, 16, 12} {
+		m.width, m.height = 80, height
+		out := view(m)
+		assert.Assert(t, strings.Contains(out, "n  new run") && strings.Contains(out, "p  plan a run"), "height %d: %s", height, out)
+		assert.Equal(t, strings.Count(m.render(), "\n"), height)
 	}
 }

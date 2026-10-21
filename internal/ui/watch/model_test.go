@@ -110,8 +110,8 @@ func TestRender_noRunsSaysSoAndKeepsItsLayout(t *testing.T) {
 	out := m.render()
 
 	assert.Equal(t, strings.Count(out, "\n"), 24)
-	assert.Assert(t, strings.Contains(out, "no runs yet"), out)
-	assert.Assert(t, strings.Contains(out, "chunk factory build"), out)
+	assert.Assert(t, strings.Contains(out, "█"), "the mascot is drawn:\n"+out)
+	assert.Assert(t, !strings.Contains(out, "no runs yet"), "no run list beside the welcome:\n"+out)
 	assert.Assert(t, strings.Contains(out, "0 runs"), out)
 }
 
