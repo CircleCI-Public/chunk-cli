@@ -820,6 +820,7 @@ func factoryLogPath(root, path string, on bool, name string) (string, error) {
 func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOut bool) error {
 	status := newStatusFunc(streams)
 	f := detail.Factory
+	hints := showHints(streams, jsonOut)
 	if jsonOut {
 		if err := iostream.PrintJSON(streams.Out, detail); err != nil {
 			return err
@@ -829,6 +830,9 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 	} else {
 		printFactoryLeftovers(f, status, streams)
 		printFactoryPullRequest(f, status)
+		if hints {
+			printFactoryWatchHint(detail, status)
+		}
 		printFactoryContinueHint(f, status)
 	}
 	printFactoryTotals(detail, status)
@@ -842,7 +846,34 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 	if err := reportOutcome(status, f); err != nil {
 		return err
 	}
+	if hints {
+		status(iostream.LevelInfo, fmt.Sprintf("Run %s: see its reviews and checks in chunk watch.", factoryRunID(detail)))
+	}
 	return reportPullRequest(f)
+}
+
+// printFactoryWatchHint points a run that did not pass at chunk watch, by its
+// ID, before how to carry it on (--continue) is said. A run that passed is
+// pointed there after its outcome instead, by finishFactory.
+func printFactoryWatchHint(detail chunkd.SessionDetail, status iostream.StatusFunc) {
+	id := factoryRunID(detail)
+	switch {
+	case detail.State == chunkd.SessionDone && detail.Factory.Result == chunkd.ResultPassed:
+		return
+	case detail.State == chunkd.SessionDone &&
+		(detail.Factory.Result == chunkd.ResultExhausted || detail.Factory.Result == chunkd.ResultStuck):
+		status(iostream.LevelInfo, fmt.Sprintf("Run %s: see the findings in chunk watch.", id))
+	default:
+		status(iostream.LevelInfo, fmt.Sprintf("Run %s: see what happened in chunk watch.", id))
+	}
+}
+
+// factoryRunID is the ID the run is known by in chunk watch and to --continue.
+func factoryRunID(detail chunkd.SessionDetail) string {
+	if detail.Factory != nil && detail.Factory.RunID != "" {
+		return detail.Factory.RunID
+	}
+	return detail.ID
 }
 
 // printFactoryPullRequest says what became of the run's pull request, where

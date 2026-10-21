@@ -317,6 +317,14 @@ git commit -m "Regenerate lock file on Linux"
 
 ## Watching factory runs with chunk watch
 
+`chunk watch` is the recommended way to interact with chunk and stay on top of
+everything it is doing. Keep it open in another terminal while you work.
+`chunk factory build` prints a plain log of one run; `chunk watch` shows every
+run in this project and others, each review finding with its severity and
+location, the output of failed checks, the implementer's live activity and the
+pull request, with keys to copy, expand and cancel. That is why a build's
+output points there ("details in chunk watch") when something needs a look.
+
 `chunk watch` opens a live TUI dashboard of the `chunk factory build` runs the
 daemon is driving. It is about the runs themselves, not the infrastructure under
 them: sidecars, their sync and validate activity and their resource usage have no
@@ -576,7 +584,7 @@ Make changes
 Validate on a sidecar
     └─ chunk sidecar sync + chunk validate --remote   (or locally: chunk validate)
     └─ or hand it to the agent: "validate on the sidecar"
-    └─ chunk watch   (optional: live dashboard of chunk factory build runs)
+    └─ chunk watch   (recommended: keep it open to follow every factory run)
 
 Before committing
     └─ Hook runs chunk validate automatically
