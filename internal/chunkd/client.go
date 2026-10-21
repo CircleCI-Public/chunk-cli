@@ -572,13 +572,43 @@ func EnsureRunning() error {
 				return nil
 			}
 			// A daemon from another build is replaced rather than reused: see
-			// BuildID for why reusing it degrades silently.
+			// BuildID for why reusing it degrades silently. Unless it is running
+			// a factory run: stopping it would kill the run, which is far worse
+			// than a dashboard showing slightly stale fields. It is replaced on
+			// the first call after its runs end.
+			if hasRunningSessions(sockPath) {
+				return nil
+			}
 			if stopErr := stopDaemon(pid, sockPath); stopErr != nil {
 				return fmt.Errorf("replace stale chunk daemon: %w", stopErr)
 			}
 		}
 	}
 	return launch()
+}
+
+// hasRunningSessions reports whether the daemon on sockPath has a factory run
+// still going. A daemon that cannot say (one from a build without the session
+// API, or one that fails to answer) counts as idle, so it is replaced as before.
+func hasRunningSessions(sockPath string) bool {
+	resp, err := unixClient(sockPath).Get("http://chunkd/factory")
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var list SessionList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return false
+	}
+	for _, s := range list.Sessions {
+		if !s.State.Finished() {
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureLaunched starts the daemon when nothing is answering and otherwise
