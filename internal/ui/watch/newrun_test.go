@@ -94,7 +94,7 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 
 	m, _ = press(m, 'n')
 	out := view(m)
-	assert.Assert(t, strings.Contains(out, "Step 1 of 3: write a prompt describing the change you want\n  [1. write a prompt] → 2. Claude drafts the change → 3. send to the factory (last step)\n  › ▏type the change you want (e.g. add a --verbose flag)"), "the empty prompt says what to type:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "[1. write a prompt] → 2. Claude drafts the change → 3. send to the factory\n  › ▏type the change you want (e.g. add a --verbose flag)"), "the empty prompt says what to type:\n%s", out)
 	m = typeText(m, "add a --verbose flag")
 	out = view(m)
 	assert.Assert(t, strings.Contains(out, "› add a --verbose flag▏"), out)
@@ -116,7 +116,7 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 
 	m, cmd = press(m, tea.KeyEnter)
 	assert.Equal(t, m.draft, draftWorking)
-	assert.Assert(t, strings.Contains(view(m), "Step 2 of 3: Claude is drafting the code change on your machine, in a copy of your repo\n  1. write a prompt → [2. Claude drafts the change] → 3. send to the factory (last step)\n  › Claude is working…"), view(m))
+	assert.Assert(t, strings.Contains(view(m), "1. write a prompt → [2. Claude drafts the change] → 3. send to the factory  ·  on a copy of your repo\n  › Claude is working…"), view(m))
 	assert.Assert(t, strings.Contains(view(m), "esc stop Claude"), view(m))
 	m = deliver(t, m, cmd)
 	assert.Equal(t, f.root, "/src/chunk-cli")
@@ -124,15 +124,17 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 
 	assert.Equal(t, m.draft, draftReady)
 	out = view(m)
-	assert.Assert(t, strings.Contains(out, "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change\n  1. write a prompt → 2. Claude drafts the change → [3. send to the factory (last step)]\n  › Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-) · the change is shown above\n  enter send to factory (last step)  ·  ↑/↓ scroll the change  ·  space expand/collapse  ·  esc keep for later"), out)
+	st := m.styles()
+	assert.Assert(t, strings.Contains(out, "1. write a prompt → 2. Claude drafts the change → [3. send to the factory]  ·  finishes the change"), "the breadcrumb is pinned under the panes, with no loss of what each step means:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "[esc] Keep for later   [space] Expand/collapse   [tab] Switch section   [↑/↓] Scroll"), "the secondary keys are named once, in the bottom bar: %s", out)
 
 	// The change is shown in the right pane as soon as it is ready, with what
 	// Claude said it did: there is no key to press to see it.
 	assert.Assert(t, strings.Contains(out, "draft  chunk-cli · drafted in "), "the draft says how long it took: %s", out)
-	assert.Assert(t, strings.Contains(out, "✓ Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-)"), "the pane says the draft is ready: %s", out)
-	assert.Assert(t, strings.Contains(out, "press enter to send it to the factory (last step)"), "the pane says what to press: %s", out)
-	assert.Assert(t, strings.Contains(out, "↑/↓ scroll  ·  tab switch section  ·  esc keeps it for later"), out)
-	assert.Assert(t, strings.Count(m.render(), m.styles().Teal.Bold(true).Render("enter")) >= 2, "enter stands out in the pane as in the footer")
+	assert.Assert(t, strings.Contains(out, "Draft ready: 1 file changed, 10 insertions(+), 2 deletions(-)"), "the pane says the draft is ready, and nothing else: %s", out)
+	assert.Assert(t, !strings.Contains(out, "press enter") && !strings.Contains(out, "scroll the change"), "the pane does not repeat the bottom bar's keys: %s", out)
+	assert.Assert(t, strings.Contains(m.render(), st.Accent.Padding(0, 1).Render("⏎ Send to factory")), "the one primary action is a filled button")
+	assert.Assert(t, strings.Contains(m.render(), "⏎ ready to send"), "a draft ready to send stays flagged in the header while the diff is scrolled")
 	assert.Assert(t, strings.Contains(out, "Added a --verbose flag."), out)
 	assert.Assert(t, !strings.Contains(out, "verbose bool"), "the diff starts folded: %s", out)
 	m, _ = press(m, tab)
@@ -188,7 +190,7 @@ func TestStoppingClaudeKeepsWhatItDid(t *testing.T) {
 	next, _ := m.Update(<-done)
 	m = next.(Model)
 	assert.Equal(t, m.draft, draftReady)
-	assert.Assert(t, strings.Contains(view(m), "› Draft ready: 1 file changed"), view(m))
+	assert.Assert(t, strings.Contains(view(m), "Draft ready: 1 file changed"), view(m))
 }
 
 // A draft with no changes has nothing for the factory to refine, so it can
@@ -201,10 +203,9 @@ func TestADraftWithNoChangesCanOnlyBeClosed(t *testing.T) {
 	m = deliver(t, m, cmd)
 
 	out := view(m)
-	assert.Assert(t, strings.Contains(out, "› Claude made no changes, so there is nothing to send"), out)
-	assert.Assert(t, !strings.Contains(out, "enter send to factory"), out)
-	assert.Assert(t, strings.Contains(out, "esc close"), out)
-	assert.Assert(t, strings.Contains(out, "press esc to close it"), "the pane says what to press: %s", out)
+	assert.Assert(t, strings.Contains(out, "Claude made no changes, so there is nothing to send"), out)
+	assert.Assert(t, !strings.Contains(out, "Send to factory"), out)
+	assert.Assert(t, strings.Contains(out, "[esc] Close"), "the one key left is named once, in the bottom bar: %s", out)
 
 	m, cmd = press(m, tea.KeyEnter)
 	assert.Assert(t, cmd == nil, "Enter sends nothing")
@@ -473,7 +474,7 @@ func TestTheDraftIsShownAsAPlanAndChanges(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "I didn't check the docs."), "the plan is open: %s", out)
 	assert.Assert(t, strings.Contains(out, "▸ Changes · 1 file, +7 −2"), out)
 	assert.Assert(t, !strings.Contains(out, "+line 00"), "the diff is folded: %s", out)
-	assert.Assert(t, strings.Contains(out, "space expand/collapse"), "the footer says how: %s", out)
+	assert.Assert(t, strings.Contains(out, "[space] Expand/collapse"), "the footer says how: %s", out)
 
 	// Space acts on the section in focus: the plan first.
 	m, _ = press(m, ' ')

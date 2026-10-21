@@ -72,11 +72,11 @@ func (m Model) keys() keyMap {
 		Send:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "go to step 2")),
 		Discard:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		StopDraft:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop Claude")),
-		ScrollDraft:   key.NewBinding(key.WithKeys("up", "down", "k", "j", "pgup", "pgdown"), key.WithHelp("↑/↓", "scroll the change")),
-		ToggleSection: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "expand/collapse")),
-		FocusSection:  key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "switch section")),
-		SendDraft:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send to factory (last step)")),
-		KeepDraft:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "keep for later")),
+		ScrollDraft:   key.NewBinding(key.WithKeys("up", "down", "k", "j", "pgup", "pgdown"), key.WithHelp("↑/↓", "Scroll")),
+		ToggleSection: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "Expand/collapse")),
+		FocusSection:  key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "Switch section")),
+		SendDraft:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "Send to factory")),
+		KeepDraft:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "Keep for later")),
 		Cancel:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
 		ToggleEnded:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "show finished")),
 		Delete:        key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete run")),
@@ -98,7 +98,7 @@ func (m Model) keys() keyMap {
 	k.SendDraft.SetEnabled(changed)
 	k.KeepDraft.SetEnabled(m.draft == draftReady)
 	if m.draft == draftReady && !changed {
-		k.KeepDraft.SetHelp("esc", "close")
+		k.KeepDraft.SetHelp("esc", "Close")
 	}
 	k.Left.SetEnabled(right)
 	k.Right.SetEnabled(!right && run != nil)
