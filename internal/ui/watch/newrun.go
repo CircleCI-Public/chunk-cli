@@ -261,8 +261,6 @@ func (m Model) withDraftDone(msg draftDoneMsg) Model {
 		m.draftCancel = nil
 	}
 	m.draftResult, m.draftDiff = msg.draft, &diffCache{}
-	m = m.resetDraftSections()
-	m.draftScroll = 0
 	if !m.draftStarted.IsZero() {
 		m.draftTook = time.Since(m.draftStarted)
 	}
@@ -565,11 +563,8 @@ func (m Model) toggleDraftSection() Model {
 
 // focusDraftSection moves the focus to the other section, which is where tab
 // and shift+tab both go with two. A draft that changed nothing has only its
-// plan, so there is nowhere to move to.
+// plan, and keys leaves FocusSection off for it.
 func (m Model) focusDraftSection() Model {
-	if m.draftResult.Stat == "" {
-		return m
-	}
 	m.draftFocus = 1 - m.draftFocus
 	return m
 }

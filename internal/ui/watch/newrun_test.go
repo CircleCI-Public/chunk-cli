@@ -546,3 +546,20 @@ func TestStatSummary(t *testing.T) {
 		assert.Equal(t, statSummary(in), want)
 	}
 }
+
+// The sections fit an 80-column terminal, folded and unfolded: no line is
+// wider than the screen, and the dashboard stays the terminal's height.
+func TestTheDraftSectionsFitEightyColumns(t *testing.T) {
+	m := readyDraft(t)
+	m.width = 80
+	for _, open := range []bool{false, true} {
+		if open {
+			m, _ = press(m, tab, ' ')
+		}
+		out := m.render()
+		assert.Equal(t, strings.Count(out, "\n"), m.height, "changes open %v:\n%s", open, out)
+		for _, l := range strings.Split(out, "\n") {
+			assert.Assert(t, ansi.StringWidth(l) <= m.width, "changes open %v, line too wide: %q", open, stripANSI(l))
+		}
+	}
+}
