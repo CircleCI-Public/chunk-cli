@@ -321,10 +321,16 @@ const (
 // Continuable reports whether the run stopped with committed work that has
 // not passed its checks, which a later run can pick up: checks still failing
 // when the loop ended, or a run that errored or was cancelled part way, after
-// its implementer had started. Committed is only set once the run has ended,
-// so a run still going is never continuable.
+// its implementer had made changes. Committed is only set once the run has
+// ended, so a run still going is never continuable.
 func (f *FactoryRun) Continuable() bool {
 	unfinished := f.Result != ResultPassed && f.Result != ResultNoChange
+	// A run that stopped with no result may have committed nothing: Committed
+	// is set even when there was nothing to commit. A stat that could not be
+	// worked out may still hide work.
+	if f.Result == "" && f.Stat == "" && f.StatError == "" {
+		return false
+	}
 	return unfinished && f.Committed && f.Branch != ""
 }
 
