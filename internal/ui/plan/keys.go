@@ -86,9 +86,10 @@ func (m Model) keys() keyMap {
 
 	inChat := m.focus == paneChat && !m.commenting
 	inPlan := m.focus == panePlan && !m.commenting
-	for _, b := range []*key.Binding{&k.Send, &k.Newline, &k.ChatPageUp, &k.ChatPageDown} {
+	for _, b := range []*key.Binding{&k.Send, &k.ChatPageUp, &k.ChatPageDown} {
 		b.SetEnabled(inChat)
 	}
+	k.Newline.SetEnabled(inChat || m.commenting)
 	for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Top, &k.Bottom, &k.PageUp, &k.PageDown, &k.HalfUp, &k.HalfDown, &k.SectionBack, &k.SectionNext, &k.Comment} {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}

@@ -556,9 +556,12 @@ chunk
   message is a turn of one `claude -p --resume` session that reads the code
   (Bash is off) and keeps the plan, in factory-bot's format, in a file in the
   project's data directory rather than the working tree. `tab` moves to the
-  plan, where `c` comments on the highlighted part (a heading, paragraph, list
-  item or code block); comments go with the next message, each quoting the
-  markdown it is on. `ctrl+s` sends the plan to the local daemon as `chunk
+  plan, where `c` writes a comment right under the highlighted part (a
+  heading, paragraph, list item or code block); `enter` saves it and
+  `shift+enter`/`ctrl+j` adds a line. A comment on a part Claude has since
+  rewritten is listed after the plan, naming the part it was on, where it can
+  still be edited or deleted. Comments go with the next message, each quoting
+  the markdown it is on. `ctrl+s` sends the plan to the local daemon as `chunk
   factory build <plan file>` would; a plan not sent is kept, and its path
   printed. It checks what `factory build` checks before it opens. The same
   screen opens from `chunk watch` with `p`.

@@ -103,6 +103,8 @@ func press(k string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyTab}
 	case "down":
 		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "up":
+		return tea.KeyPressMsg{Code: tea.KeyUp}
 	}
 	r := []rune(k)[0]
 	return tea.KeyPressMsg{Code: r, Text: k}
@@ -181,6 +183,110 @@ func TestCommentsComeBackWhenTheTurnFails(t *testing.T) {
 	}
 }
 
+func TestCommentEditorOpensUnderItsBlock(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = drive(t, m, press("tab"))
+	for range 3 {
+		m = drive(t, m, press("down"))
+	}
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "abc")
+
+	lines := strings.Split(ansi.Strip(m.planView.View()), "\n")
+	bulletLine, abcLine := -1, -1
+	for i, l := range lines {
+		if strings.Contains(l, "parse it in main.go") {
+			bulletLine = i
+		}
+		if strings.Contains(l, "abc") {
+			abcLine = i
+		}
+	}
+	if bulletLine < 0 || abcLine != bulletLine+1 {
+		t.Fatalf("comment editor at line %d does not come right after the bullet at %d:\n%s", abcLine, bulletLine, strings.Join(lines, "\n"))
+	}
+	footer := ansi.Strip(m.planFooter())
+	if strings.Contains(footer, "abc") || strings.Contains(footer, "c to comment") {
+		t.Errorf("the plan footer should not hold the editor: %q", footer)
+	}
+}
+
+func TestCommentTakesNewLines(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = drive(t, m, press("tab"))
+	for range 3 {
+		m = drive(t, m, press("down"))
+	}
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "a")
+	m = drive(t, m, tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	m = typeText(t, m, "b")
+	m = drive(t, m, press("enter"))
+
+	if len(m.comments) != 1 || m.comments[0].text != "a\nb" {
+		t.Fatalf("comments: %+v", m.comments)
+	}
+	view := ansi.Strip(m.planView.View())
+	lines := strings.Split(view, "\n")
+	aLine := -1
+	for i, l := range lines {
+		if strings.Contains(l, "💬 a") {
+			aLine = i
+		}
+	}
+	if aLine < 0 || aLine+1 >= len(lines) || !strings.HasSuffix(strings.TrimRight(lines[aLine+1], " "), "b") {
+		t.Fatalf("a and b are not on separate consecutive lines:\n%s", view)
+	}
+}
+
+func TestCommentEditorGrowsWithWrappedText(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = drive(t, m, press("tab"))
+	for range 3 {
+		m = drive(t, m, press("down"))
+	}
+	m = drive(t, m, press("c"))
+	m.commentInput.SetValue(strings.Repeat("x", 300))
+
+	if h := m.commentInput.Height(); h <= 1 || h > maxCommentRows {
+		t.Errorf("comment editor height is %d, want >1 and <=%d", h, maxCommentRows)
+	}
+}
+
+func TestEscCancelsTheCommentInPlace(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = drive(t, m, press("tab"))
+	for range 3 {
+		m = drive(t, m, press("down"))
+	}
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "abc")
+	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if len(m.comments) != 0 {
+		t.Fatalf("comments: %+v", m.comments)
+	}
+	if view := ansi.Strip(m.Content()); strings.Contains(view, "abc") {
+		t.Errorf("the cancelled comment is still shown:\n%s", view)
+	}
+}
+
 func TestCommentFollowsItsBlockWhenThePlanChanges(t *testing.T) {
 	m := New(context.Background(), nil, nil, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
@@ -198,6 +304,53 @@ func TestCommentFollowsItsBlockWhenThePlanChanges(t *testing.T) {
 	m.renderPlan()
 	if got := m.comments[0].block; got != -1 {
 		t.Errorf("comment on a rewritten block is on %d, want -1", got)
+	}
+}
+
+func TestCursorDoesNotHideTheCommentBar(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = drive(t, m, press("tab"))
+	for range 3 {
+		m = drive(t, m, press("down"))
+	}
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "use cobra flags")
+	m = drive(t, m, press("enter"))
+
+	find := func(lines []string, want string) int {
+		for i, l := range lines {
+			if strings.Contains(l, want) {
+				return i
+			}
+		}
+		return -1
+	}
+	lines := strings.Split(ansi.Strip(m.planView.View()), "\n")
+	bulletLine := find(lines, "parse it in main.go")
+	commentLine := find(lines, "use cobra flags")
+	if bulletLine < 0 || commentLine < 0 {
+		t.Fatalf("could not find the bullet or its comment:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, i := range []int{bulletLine, commentLine} {
+		if !strings.HasPrefix(lines[i], "▌┃") {
+			t.Errorf("line %d does not carry both bars: %q", i, lines[i])
+		}
+	}
+
+	m = drive(t, m, press("up"))
+	lines = strings.Split(ansi.Strip(m.planView.View()), "\n")
+	for _, i := range []int{bulletLine, commentLine} {
+		if !strings.HasPrefix(lines[i], " ┃") {
+			t.Errorf("line %d should have lost the cursor bar: %q", i, lines[i])
+		}
+	}
+	headingLine := find(lines, "Spec")
+	if headingLine < 0 || !strings.HasPrefix(lines[headingLine], "▌ ") {
+		t.Errorf("the heading line should carry the cursor bar alone: %q", lines[headingLine])
 	}
 }
 
@@ -231,6 +384,13 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 		m = drive(t, m, press("x"))
 		m = drive(t, m, press("enter"))
 		m = drive(t, m, press("tab"))
+
+		m = drive(t, m, press("c"))
+		m.commentInput.SetValue(strings.Repeat("a long word ", 20) + "\nand a second line")
+		m.moveCursor(m.cursor)
+		assertFits(t, m, width, 24)
+		m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyEscape})
+
 		m = drive(t, m, press("c"))
 		m = typeText(t, m, "too vague")
 		m = drive(t, m, press("enter"))
@@ -299,6 +459,17 @@ func TestNewlineHintMatchesTheTerminal(t *testing.T) {
 	m = drive(t, m, tea.KeyboardEnhancementsMsg{Flags: ansi.KittyDisambiguateEscapeCodes})
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "shift+enter new line") {
 		t.Errorf("a terminal that tells shift+enter apart should be told it:\n%s", view)
+	}
+
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m2 := New(context.Background(), turn, nil, "plan it")
+	m2 = drive(t, m2, tea.WindowSizeMsg{Width: 160, Height: 30})
+	m2 = drive(t, m2, press("tab"))
+	m2 = drive(t, m2, press("c"))
+	if view := ansi.Strip(m2.Content()); !strings.Contains(view, "ctrl+j new line") {
+		t.Errorf("the comment editor's footer should hint ctrl+j on a terminal that can't tell shift+enter apart:\n%s", view)
 	}
 }
 
@@ -477,6 +648,157 @@ func TestTwoCommentsOnIdenticalBlocksStayOnSeparateBlocks(t *testing.T) {
 	a, b := m.comments[0].block, m.comments[1].block
 	if a == b || min(a, b) != 2 || max(a, b) != 3 {
 		t.Errorf("comments are on blocks %d and %d, want one each on 2 and 3", a, b)
+	}
+}
+
+func TestCommentOnARewrittenPartIsStillShown(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: 3, quote: "* [AGENT] parse it in main.go", text: "x"}}
+
+	m.plan = "## 1. Outcome\n\nRewritten."
+	m.renderPlan()
+	if got := m.comments[0].block; got != -1 {
+		t.Fatalf("comment on a rewritten block is on %d, want -1", got)
+	}
+
+	view := ansi.Strip(m.planView.View())
+	for _, want := range []string{"On parts Claude has since rewritten", `on "* [AGENT] parse it in main.go"`, "x"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view is missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCommentOnARewrittenPartCanBeEditedAndDeleted(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: 3, quote: "* [AGENT] parse it in main.go", text: "x"}}
+	m.plan = "## 1. Outcome\n\nRewritten."
+	m.renderPlan()
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("G"))
+	if m.cursor != len(m.blocks) {
+		t.Fatalf("cursor is %d, want %d", m.cursor, len(m.blocks))
+	}
+
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "y")
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 1 || m.comments[0].text != "xy" || m.comments[0].quote != "* [AGENT] parse it in main.go" || m.comments[0].block != -1 {
+		t.Fatalf("comment after editing: %+v", m.comments)
+	}
+
+	m = drive(t, m, press("d"))
+	if len(m.comments) != 0 {
+		t.Fatalf("comments after delete: %+v", m.comments)
+	}
+	if view := ansi.Strip(m.planView.View()); strings.Contains(view, "On parts Claude has since rewritten") {
+		t.Errorf("the rewritten-parts section should be gone:\n%s", view)
+	}
+	if m.cursor != len(m.blocks)-1 {
+		t.Errorf("cursor is %d, want %d", m.cursor, len(m.blocks)-1)
+	}
+}
+
+func TestNextReachesTheNearestCommentThenRewrittenParts(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{
+		{block: 3, quote: "* [AGENT] parse it in main.go", text: "a"},
+		{block: 1, quote: "The flag exists.", text: "b"},
+		{block: -1, quote: "something gone", text: "c"},
+	}
+	m.moveCursor(0)
+	m = drive(t, m, press("tab"))
+
+	m = drive(t, m, press("n"))
+	if m.cursor != 1 {
+		t.Fatalf("cursor after first n: %d, want 1", m.cursor)
+	}
+	m = drive(t, m, press("n"))
+	if m.cursor != 3 {
+		t.Fatalf("cursor after second n: %d, want 3", m.cursor)
+	}
+	m = drive(t, m, press("n"))
+	if m.cursor != len(m.blocks) {
+		t.Fatalf("cursor after third n: %d, want %d", m.cursor, len(m.blocks))
+	}
+}
+
+func TestCursorStaysOnARewrittenPartsCommentWhenATurnEnds(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: -1, quote: "gone", text: "x"}}
+	m = drive(t, m, press("tab"))
+	m.moveCursor(len(m.blocks))
+	if m.commentAt(m.cursor) != 0 {
+		t.Fatalf("cursor is not on the orphan: %d", m.cursor)
+	}
+	m = drive(t, m, press("c"))
+
+	newPlan := "## 0. New\n\nAdded.\n\n" + twoParts
+	m, _ = m.Update(turnDoneMsg{plan: newPlan})
+
+	ci := m.commentAt(m.cursor)
+	if ci < 0 || m.comments[ci].text != "x" {
+		t.Fatalf("cursor is not on the orphan after the turn: cursor=%d comments=%+v", m.cursor, m.comments)
+	}
+
+	m = typeText(t, m, "z")
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 1 || m.comments[0].text != "xz" {
+		t.Fatalf("comments after saving: %+v", m.comments)
+	}
+}
+
+func TestCommentUnderItsBlockHasNoExcerpt(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = drive(t, m, press("tab"))
+	for range 3 {
+		m = drive(t, m, press("down"))
+	}
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "use cobra flags")
+	m = drive(t, m, press("enter"))
+
+	if view := ansi.Strip(m.planView.View()); strings.Contains(view, `on "* [AGENT]`) {
+		t.Errorf("a comment under its own block should not have an excerpt:\n%s", view)
+	}
+}
+
+func TestSentCommentNamesItsTarget(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = drive(t, m, press("tab"))
+	for range 3 {
+		m = drive(t, m, press("down"))
+	}
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "use cobra flags")
+	m = drive(t, m, press("enter"))
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("enter"))
+
+	if view := ansi.Strip(m.chatView.View()); !strings.Contains(view, `on "* [AGENT] parse it in main.go"`) {
+		t.Errorf("chat is missing the comment's target:\n%s", view)
 	}
 }
 
