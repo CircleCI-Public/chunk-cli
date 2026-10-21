@@ -207,7 +207,8 @@ type Model struct {
 	capOpen    map[string]bool
 	runDetails bool
 	// drafter has Claude draft a prompt typed after n, in startDir's project
-	// when there is one, and sender hands the draft to the factory. draft is
+	// when there is one, and sender hands the draft to the factory; continuer
+	// starts a run that picks up a finished one's work. draft is
 	// where that has got to: prompt is what is being typed, draftRoot the
 	// project Claude is drafting in, and draftResult what it made. draftCancel
 	// stops Claude, whose activity arrives on draftActivity until draftWait
@@ -217,6 +218,7 @@ type Model struct {
 	draftCtx      context.Context
 	drafter       Drafter
 	sender        Sender
+	continuer     Continuer
 	startDir      string
 	draft         draftState
 	prompt        string
@@ -246,6 +248,8 @@ type Model struct {
 	draftTook    time.Duration
 	// sendingDraft is true from enter until the factory answers.
 	sendingDraft bool
+	// continuing is true from r until the factory answers.
+	continuing bool
 	// planner makes a plan with Claude, opened with p, in startDir's project
 	// like a draft. planScreen is the planning screen once there is one, kept
 	// when it is closed until its plan is sent; planOpen is whether it is
@@ -372,6 +376,8 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.requestRunCancel(run, wasConfirm)
 	case key.Matches(msg, k.Delete):
 		return m.requestRunDelete(run, wasConfirm)
+	case key.Matches(msg, k.Continue):
+		return m.continueRun(run)
 	case key.Matches(msg, k.ToggleEnded):
 		return m.toggleEnded(), nil
 	case key.Matches(msg, k.Right):
@@ -521,6 +527,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionActionMsg:
 		return m.withSessionAction(msg), nil
 
+	case runContinuedMsg:
+		return m.withRunContinued(msg), nil
+
 	case tea.KeyboardEnhancementsMsg, prOpenedMsg, rowNoteExpiredMsg:
 		return m.updateRowNote(msg)
 
@@ -567,12 +576,9 @@ func (m Model) render() string {
 	}
 	st := m.styles()
 	if m.output != nil {
-		return m.renderHeader(st) + m.renderSeparator(st) + m.renderOutputPane(st)
+		return m.renderHeader(st) + m.renderOutputPane(st)
 	}
-	return m.renderHeader(st) +
-		m.renderFrameEdge(st, '╭', '┬', '╮') +
-		m.renderBody(st) +
-		m.renderFooter(st)
+	return m.renderHeader(st) + m.renderBody(st) + m.renderFooter(st)
 }
 
 func (m Model) renderHeader(st watchStyles) string {
@@ -633,17 +639,24 @@ func (m Model) frameStyle(st watchStyles, rightPane bool) func(string) string {
 }
 
 // renderFrameEdge is the top or bottom of the frame around the two panes, with
-// a junction over the divider.
-func (m Model) renderFrameEdge(st watchStyles, left, junction, right rune) string {
+// a junction over the divider and each pane's title, if it has one, set into
+// the edge over it.
+func (m Model) renderFrameEdge(st watchStyles, left, junction, right rune, leftTitle, rightTitle string) string {
 	leftW := leftPaneWidth + 1 // the pane and the space before the divider
 	rightW := max(m.width-leftW-3, 0)
 	l, r := m.frameStyle(st, false), m.frameStyle(st, true)
-	return l(string(left)+strings.Repeat("─", leftW)) + st.teal(string(junction)) +
-		r(strings.Repeat("─", rightW)+string(right)) + "\n"
+	return l(string(left)) + edgeSegment(l, leftTitle, leftW) + st.teal(string(junction)) +
+		edgeSegment(r, rightTitle, rightW) + r(string(right)) + "\n"
 }
 
-func (m Model) renderSeparator(st watchStyles) string {
-	return st.vdim(strings.Repeat("─", m.width)) + "\n"
+// edgeSegment is n cells of a frame edge drawn with line, with title set into
+// it as in "─ runs ─────" and cut to leave at least one cell of edge after it.
+func edgeSegment(line func(string) string, title string, n int) string {
+	if title == "" || n < 5 {
+		return line(strings.Repeat("─", n))
+	}
+	title = clip(title, n-4)
+	return line("─ ") + title + line(" "+strings.Repeat("─", max(n-3-lipgloss.Width(title), 0)))
 }
 
 // contentHeight is how many lines the two panes get between the header and
@@ -670,24 +683,31 @@ func (m Model) contentHeight() int {
 	return h
 }
 
+// renderBody is the frame's top edge and the two panes in it. Each pane is
+// drawn with its title as its first line, which goes into the edge over it, so
+// a pane is drawn one line taller than the rows it fills.
 func (m Model) renderBody(st watchStyles) string {
 	contentHeight := m.contentHeight()
+	paneHeight := contentHeight + 1
 
-	leftLines := m.renderLeftPane(st, contentHeight)
+	leftLines := m.renderLeftPane(st, paneHeight)
 	var rightLines []string
 	if m.draft == draftPrompting {
 		rightLines = m.renderNewRunPane(st)
 	} else if m.draft == draftWorking || m.draft == draftReady {
-		rightLines = m.renderDraftPane(st, contentHeight)
+		rightLines = m.renderDraftPane(st, paneHeight)
 	} else if m.handingOff() {
-		rightLines = m.renderSentPane(st, contentHeight)
+		rightLines = m.renderSentPane(st, paneHeight)
 	} else if run := m.selectedRun(); run != nil {
-		rightLines = m.renderRunPane(st, *run, contentHeight)
+		rightLines = m.renderRunPane(st, *run, paneHeight)
 	} else {
 		rightLines = m.renderEmptyPane(st)
 	}
+	leftTitle, leftLines := paneTitle(leftLines)
+	rightTitle, rightLines := paneTitle(rightLines)
 
 	var b strings.Builder
+	b.WriteString(m.renderFrameEdge(st, '╭', '┬', '╮', leftTitle, rightTitle))
 	for i := 0; i < contentHeight; i++ {
 		l := ""
 		if i < len(leftLines) {
@@ -705,6 +725,14 @@ func (m Model) renderBody(st watchStyles) string {
 		b.WriteString(m.frameStyle(st, false)("│") + lPad + " " + st.teal("│") + " " + rPad + m.frameStyle(st, true)("│") + "\n")
 	}
 	return b.String()
+}
+
+// paneTitle splits a pane's lines into its title and the lines under it.
+func paneTitle(lines []string) (string, []string) {
+	if len(lines) == 0 {
+		return "", nil
+	}
+	return lines[0], lines[1:]
 }
 
 // renderLeftPane is the run list, windowed so the selected run stays on screen
@@ -807,10 +835,10 @@ func (m Model) renderFooter(st watchStyles) string {
 		}
 	}
 
-	footer := m.renderFrameEdge(st, '╰', '┴', '╯') + "  " + bar + "\n"
+	footer := m.renderFrameEdge(st, '╰', '┴', '╯', "", "") + "  " + bar + "\n"
 	if m.draft != draftNone {
 		// A new run's keys go last, under the step they are for.
-		footer = m.renderFrameEdge(st, '╰', '┴', '╯') + m.draftFooter(st, bar)
+		footer = m.renderFrameEdge(st, '╰', '┴', '╯', "", "") + m.draftFooter(st, bar)
 	}
 	switch {
 	case m.draft != draftNone:

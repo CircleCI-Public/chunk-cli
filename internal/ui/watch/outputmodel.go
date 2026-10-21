@@ -94,8 +94,8 @@ func (m Model) withOutputChunk(msg outputMsg) (tea.Model, tea.Cmd) {
 
 // outputHeight is the number of scrollback lines the pane can draw.
 func (m Model) outputHeight() int {
-	// header + separator + pane title + pane separator + footer
-	h := m.height - 5
+	// header + the rule with the pane's title in it + footer
+	h := m.height - 3
 	if h < 1 {
 		h = 1
 	}
@@ -144,8 +144,7 @@ func (m Model) renderOutputPane(st watchStyles) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(title + "\n")
-	b.WriteString(st.vdim(strings.Repeat("─", m.width)) + "\n")
+	b.WriteString(edgeSegment(st.vdim, title, m.width) + "\n")
 	if p.err != nil {
 		b.WriteString(" " + st.err(p.err.Error()) + "\n")
 	}

@@ -621,3 +621,22 @@ func TestRequestTimeoutOverridesClientTimeout(t *testing.T) {
 	assert.Assert(t, errors.Is(err, context.DeadlineExceeded), "got %v", err)
 	assert.Assert(t, time.Since(start) < 10*time.Second, "request timeout must replace the client timeout")
 }
+
+// TestRequestTimeoutSurvivesRetryBudget pins that a 429 retry budget extends
+// a per-request timeout rather than replacing it with the client default.
+func TestRequestTimeoutSurvivesRetryBudget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := hc.New(hc.Config{
+		BaseURL:          srv.URL,
+		Timeout:          50 * time.Millisecond,
+		RetryOn429Budget: 50 * time.Millisecond,
+	})
+
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/", hc.Timeout(5*time.Second)))
+	assert.NilError(t, err)
+}

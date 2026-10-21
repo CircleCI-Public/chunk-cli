@@ -670,7 +670,7 @@ func (m Model) draftBody(st watchStyles, width int) []string {
 
 // scrollDraft moves the shown draft by delta lines, kept within it.
 func (m Model) scrollDraft(delta int) Model {
-	room := max(m.contentHeight()-draftPaneTop, 1)
+	room := max(m.contentHeight()+1-draftPaneTop, 1) // the pane's title is in the frame
 	limit := max(len(m.draftBody(m.styles(), m.draftPaneWidth()))-room, 0)
 	m.draftScroll = min(max(m.draftScroll+delta, 0), limit)
 	return m

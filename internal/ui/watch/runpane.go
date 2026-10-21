@@ -514,7 +514,10 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 	// Every line is wrapped to the pane rather than cut at its edge, and the
 	// selected row's span is carried over to the lines it wrapped to.
 	width := m.width - leftPaneWidth - 5
-	headLines, _ := wrapPane(head[:], width)
+	// The title goes into the frame's edge, which cuts it to fit, so only
+	// the status under it is wrapped.
+	status, _ := wrapPane(head[1:], width)
+	headLines := append([]string{head[0]}, status...)
 	// The round cap's explanation is help, not the run, so it gives way
 	// when the pane is too short or narrow to keep the rounds in view too.
 	// It wraps between words only, so the flag it names is never split.
@@ -854,7 +857,11 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) (lines []string
 			lines = append(lines, "  "+st.vdim("work    ")+st.dim("not committed, in "+f.Worktree))
 		}
 		if f.Continuable() {
-			lines = append(lines, "  "+st.vdim("next    ")+st.muted(f.ContinueCommand()))
+			next := f.ContinueCommand()
+			if m.continuer != nil {
+				next = "press r to continue it, or " + next
+			}
+			lines = append(lines, "  "+st.vdim("next    ")+st.muted(next))
 		}
 	}
 	if len(lines) == 0 {

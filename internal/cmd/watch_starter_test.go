@@ -119,6 +119,32 @@ func TestSendDraftContinuesItsRun(t *testing.T) {
 	assert.Equal(t, opts.Model, "sonnet", "a draft is finished with the faster model")
 }
 
+// Continuing a run from the dashboard picks it up as `chunk factory build
+// --continue <run>` with no prompt would: the work is checked first, on the
+// default model.
+func TestContinueRunContinuesWithoutGuidance(t *testing.T) {
+	project := factoryProject(t)
+	writeFactoryRecord(t, project, "run-0")
+	cfg := fakeFactoryConfig(t, factory.ResultPassed)
+	got := make(chan factory.RunOptions, 1)
+	run := cfg.RunFactory
+	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got <- opts
+		return run(ctx, opts)
+	}
+	startSessionDaemon(t, cfg)
+
+	id, err := continueRun(project, "run-0")
+	assert.NilError(t, err)
+	assert.Assert(t, id != "")
+
+	opts := <-got
+	assert.Assert(t, opts.Continue != nil, "the run was not told to continue")
+	assert.Equal(t, opts.Continue.From.RunID, "run-0")
+	assert.Equal(t, opts.Continue.Guidance, "", "the work is checked first and the implementer is sent what failed")
+	assert.Equal(t, opts.Model, "", "a continued run uses the default model")
+}
+
 // Editors' built-in terminals get a margin at the bottom of the dashboard;
 // other terminals use every row.
 func TestEditorRowMargin(t *testing.T) {

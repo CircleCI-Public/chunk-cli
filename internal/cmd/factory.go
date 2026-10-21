@@ -942,7 +942,8 @@ func printFactoryLeftovers(f *chunkd.FactoryRun, status iostream.StatusFunc, str
 }
 
 // printFactoryContinueHint says how to carry on a run whose committed work
-// still fails its checks. The branch names the run whose record a continued
+// has not passed its checks, including one that failed or was cancelled part
+// way. The branch names the run whose record a continued
 // run reads, the first in a chain of them. A run that ran out of rounds says
 // it in its error instead, beside how to raise the cap.
 func printFactoryContinueHint(f *chunkd.FactoryRun, status iostream.StatusFunc) {
