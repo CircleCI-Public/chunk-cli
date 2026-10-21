@@ -126,6 +126,9 @@ type Model struct {
 	activityCh chan string
 
 	confirming bool
+	// sending is set from the developer's y until the factory answers, so a
+	// second send cannot start a second run.
+	sending bool
 	// quitting is set by a ctrl+c that would drop what the developer has not
 	// sent; a second ctrl+c quits.
 	quitting bool
@@ -232,6 +235,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case activityMsg:
+		// A message that was already queued when the turn ended.
+		if !m.busy {
+			return m, nil
+		}
 		m.activity = string(msg)
 		m.renderChat()
 		return m, waitActivity(m.ctx, m.activityCh)
@@ -265,6 +272,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case submittedMsg:
+		m.sending = false
 		if msg.err != nil {
 			m.status = ui.ErrorStyle.Render("Could not send the plan: " + msg.err.Error())
 			return m, nil
@@ -298,6 +306,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if !key.Matches(msg, k.Confirm) {
 			return m, nil
 		}
+		m.sending = true
 		m.status = "Sending the plan to the factory…"
 		return m, submitCmd(m.submit, m.plan)
 	}
@@ -323,6 +332,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, m.input.Focus()
 	case key.Matches(msg, k.SendPlan):
 		switch {
+		case m.sending:
 		case m.busy:
 			m.status = warn("Wait for Claude to finish, or press esc to stop it.")
 		case strings.TrimSpace(m.plan) == "":

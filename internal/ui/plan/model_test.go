@@ -461,3 +461,46 @@ func TestEnterDoesNotConfirmSendingThePlan(t *testing.T) {
 		t.Fatalf("enter answered the question: sent %v, still asking %v", sent, m.confirming)
 	}
 }
+
+func TestTwoCommentsOnIdenticalBlocksStayOnSeparateBlocks(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = "## Spec\n\n* Tests\n* Tests"
+	m.renderPlan()
+	m.comments = []comment{
+		{block: 1, quote: "* Tests", text: "first"},
+		{block: 2, quote: "* Tests", text: "second"},
+	}
+
+	m.plan = "## New\n\n## Spec\n\n* Tests\n* Tests"
+	m.renderPlan()
+	a, b := m.comments[0].block, m.comments[1].block
+	if a == b || min(a, b) != 2 || max(a, b) != 3 {
+		t.Errorf("comments are on blocks %d and %d, want one each on 2 and 3", a, b)
+	}
+}
+
+func TestActivityAfterTheTurnEndsIsDropped(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", "# Plan", nil
+	}
+	m := New(context.Background(), turn, nil, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = drive(t, m, activityMsg("reading main.go"))
+	if m.activity != "" {
+		t.Errorf("activity after the turn is %q, want none", m.activity)
+	}
+}
+
+func TestPlanIsSentOnceWhileTheFactoryAnswers(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", "# Plan", nil
+	}
+	m := New(context.Background(), turn, nil, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.sending = true
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if m.confirming {
+		t.Error("ctrl+s asked to send the plan again while it is being sent")
+	}
+}

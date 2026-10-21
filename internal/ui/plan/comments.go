@@ -25,17 +25,25 @@ type comment struct {
 }
 
 // reanchor puts each comment back on the block it quotes after the plan has
-// been split again.
+// been split again. Two comments never share a block, so of several blocks
+// with the same markdown each comment takes a different one.
 func (m *Model) reanchor() {
+	taken := map[int]bool{}
+	var lost []int
 	for i := range m.comments {
 		c := &m.comments[i]
-		if c.block >= 0 && c.block < len(m.blocks) && m.blocks[c.block].source == c.quote {
+		if c.block >= 0 && c.block < len(m.blocks) && m.blocks[c.block].source == c.quote && !taken[c.block] {
+			taken[c.block] = true
 			continue
 		}
+		lost = append(lost, i)
+	}
+	for _, i := range lost {
+		c := &m.comments[i]
 		c.block = -1
 		for j, b := range m.blocks {
-			if b.source == c.quote {
-				c.block = j
+			if b.source == c.quote && !taken[j] {
+				c.block, taken[j] = j, true
 				break
 			}
 		}
