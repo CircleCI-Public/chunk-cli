@@ -226,10 +226,9 @@ func (m *Model) moveCursor(i int) {
 }
 
 var (
-	cursorBar   = lipgloss.NewStyle().Foreground(accentColor).Render("▌ ")
-	commentBar  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("┃ ")
-	noBar       = "  "
-	commentText = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	cursorBar  = lipgloss.NewStyle().Foreground(accentColor).Render("▌ ")
+	commentBar = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("┃ ")
+	noBar      = "  "
 )
 
 // gutterWidth is the cells left of the plan for the cursor and comment bars.
@@ -259,12 +258,20 @@ func (m *Model) drawPlan() {
 			bar = commentBar
 		}
 		for _, l := range b.lines {
+			// The block the cursor is on is raised off the pane.
+			if i == m.cursor && m.focus == panePlan {
+				l = paint(l, w-1, m.raised())
+			}
 			lines = append(lines, bar+l)
 		}
 		if ci >= 0 {
-			note := commentText.Width(w - 4).Render("💬 " + m.comments[ci].text)
-			for _, l := range strings.Split(note, "\n") {
-				lines = append(lines, bar+"  "+l)
+			// The note hangs under its block as a thread, on a rail of its
+			// own with a line saying what it is.
+			rail := m.style(m.amber()).Render("┃")
+			card := m.style(m.dim()).Render("your comment · queued") + "\n" +
+				m.style(m.amber()).Width(w-6).Render(m.comments[ci].text)
+			for _, l := range strings.Split(paint(card, w-5, m.note()), "\n") {
+				lines = append(lines, bar+"  "+rail+l)
 			}
 		}
 		m.blockEnd[i] = len(lines)
@@ -286,7 +293,7 @@ func (m *Model) planFooter() string {
 	}
 	switch {
 	case n == 0 && m.focus == panePlan:
-		return ui.HelperStyle.Render("c to comment on the highlighted part")
+		return "  " + ui.HelperStyle.Render("c to comment on the highlighted part")
 	case n == 0:
 		return ""
 	}
@@ -294,7 +301,7 @@ func (m *Model) planFooter() string {
 	if orphaned > 0 {
 		s += fmt.Sprintf(" (%d on parts Claude has since rewritten)", orphaned)
 	}
-	return ansi.Truncate(commentText.Render(s), m.planView.Width(), "…")
+	return ansi.Truncate("  "+m.style(m.amber()).Render(s), m.planView.Width(), "…")
 }
 
 func plural(n int, one, many string) string {
