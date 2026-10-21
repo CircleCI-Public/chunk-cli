@@ -248,6 +248,8 @@ type Model struct {
 	draftTook    time.Duration
 	// sendingDraft is true from enter until the factory answers.
 	sendingDraft bool
+	// continuing is true from r until the factory answers.
+	continuing bool
 	// planner makes a plan with Claude, opened with p, in startDir's project
 	// like a draft. planScreen is the planning screen once there is one, kept
 	// when it is closed until its plan is sent; planOpen is whether it is

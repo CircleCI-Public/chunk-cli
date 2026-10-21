@@ -27,7 +27,7 @@ func (m Model) WithContinue(cont Continuer) Model {
 
 // canContinue reports whether run can be continued from the dashboard.
 func (m Model) canContinue(run *sessionInfo) bool {
-	return m.continuer != nil && run != nil && run.s.State.Finished() &&
+	return m.continuer != nil && !m.continuing && run != nil && run.s.State.Finished() &&
 		run.s.Factory != nil && run.s.Factory.Continuable()
 }
 
@@ -36,6 +36,7 @@ func (m Model) canContinue(run *sessionInfo) bool {
 // without a prompt.
 func (m Model) continueRun(run *sessionInfo) (tea.Model, tea.Cmd) {
 	m.runNote = "starting a run to continue this one…"
+	m.continuing = true
 	cont, root, from, runID := m.continuer, run.s.ProjectRoot, run.s.ID, run.s.Factory.ContinueID()
 	return m, func() tea.Msg {
 		id, err := cont(root, runID)
@@ -46,6 +47,7 @@ func (m Model) continueRun(run *sessionInfo) (tea.Model, tea.Cmd) {
 // withRunContinued notes how continuing a run went. The new run is selected
 // once a poll lists it, with the search cleared so it is not filtered out.
 func (m Model) withRunContinued(msg runContinuedMsg) Model {
+	m.continuing = false
 	if msg.err != nil {
 		if run := m.selectedRun(); run != nil && run.s.ID == msg.from {
 			m.runNote = "could not continue the run: " + msg.err.Error()
