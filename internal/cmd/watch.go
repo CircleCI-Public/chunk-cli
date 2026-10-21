@@ -109,6 +109,7 @@ func newWatchCmd() *cobra.Command {
 			defer drafts.stop()
 			m := watch.New(entries, !focus).WithRelaunch().WithBottomMargin(editorRowMargin()).
 				WithDrafts(drafts.ctx, startDir, drafts.draft, sendDraft).
+				WithContinue(continueRun).
 				WithPlans(drafts.ctx, drafts.plan)
 			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
 			final, err := p.Run()
@@ -323,7 +324,20 @@ const draftGuidance = "Finish the draft in the working tree into a change ready 
 // sendDraft hands a draft's run to the factory to finish, as `chunk factory
 // build --continue <run> --model sonnet "<draftGuidance>"` would.
 func sendDraft(root, runID string) (string, error) {
-	id, err := chunkd.StartFactory(chunkd.FactoryRequest{ProjectRoot: root, Continue: runID, Prompt: draftGuidance, Model: draftModel})
+	return startDashboardFactory(chunkd.FactoryRequest{ProjectRoot: root, Continue: runID, Prompt: draftGuidance, Model: draftModel})
+}
+
+// continueRun picks up a finished run's work, as `chunk factory build
+// --continue <run>` with no prompt would: the work is checked first and the
+// implementer is sent what failed.
+func continueRun(root, runID string) (string, error) {
+	return startDashboardFactory(chunkd.FactoryRequest{ProjectRoot: root, Continue: runID})
+}
+
+// startDashboardFactory starts a factory run for the dashboard, with any
+// error as one sentence for it to show.
+func startDashboardFactory(req chunkd.FactoryRequest) (string, error) {
+	id, err := chunkd.StartFactory(req)
 	var refused *chunkd.SessionRefused
 	switch {
 	case errors.As(err, &refused):

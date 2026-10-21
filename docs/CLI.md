@@ -465,9 +465,11 @@ chunk
   not once merged or closed. With no GitHub token the status stays unset and the run
   shows `passed`.
   A `--remote` run does not go through the local daemon, so it opens none, and `--open-pr` or `--draft` with `--remote` is refused. Only GitHub is supported.
-- **`factory build --continue` picks up a finished run's work.** A run whose checks
-  still fail when it ends (exhausted or stuck) prints
-  `chunk factory build --continue <run id>`. The continued run reopens the earlier
+- **`factory build --continue` picks up a finished run's work.** A run that
+  ends with committed work short of passing (exhausted or stuck, or failed or
+  cancelled part way, such as on a reviewer sidecar that could not be made)
+  prints `chunk factory build --continue <run id>`, and `r` in `chunk watch`
+  starts the same run, with no prompt, from the run's pane. The continued run reopens the earlier
   run's worktree (adding it back from its branch if it was removed, and first
   committing any edits made in it by hand), adds a commit to the same branch,
   and measures the work from the same baseline, so reviewers see the whole
@@ -794,7 +796,11 @@ chunk
   of output. The footer only lists keys that do something for what is
   selected, so `x` is gone once a run has ended. **`q` only detaches**: the run
   belongs to the daemon and carries on. The one key that stops it is `x`, and it
-  needs a second `x` on the same run to confirm.
+  needs a second `x` on the same run to confirm. `r` continues a finished run
+  that has committed work short of passing, as `chunk factory build --continue
+  <run id>` with no prompt does: the work is checked first and the implementer
+  is sent what failed. It is one press, since the new run can be cancelled
+  with `x`.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It polls the daemon every 5 seconds. Use `j`/`k` or `↑`/`↓` to select a run, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

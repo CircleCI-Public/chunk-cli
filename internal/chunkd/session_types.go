@@ -318,21 +318,29 @@ const (
 	ResultNoChange = "no_change"
 )
 
-// Continuable reports whether the run stopped with committed work whose
-// checks still fail, which a later run can pick up.
+// Continuable reports whether the run stopped with committed work that has
+// not passed its checks, which a later run can pick up: checks still failing
+// when the loop ended, or a run that errored or was cancelled part way, after
+// its implementer had started. Committed is only set once the run has ended,
+// so a run still going is never continuable.
 func (f *FactoryRun) Continuable() bool {
-	failing := f.Result == ResultExhausted || f.Result == ResultStuck
-	return failing && f.Committed && f.Branch != ""
+	unfinished := f.Result != ResultPassed && f.Result != ResultNoChange
+	return unfinished && f.Committed && f.Branch != ""
 }
 
-// ContinueCommand is the command that carries the run on. The branch ends in
-// the run's ID, which names the record a continued run reads.
-func (f *FactoryRun) ContinueCommand() string {
+// ContinueID is the run a continued run reads the record of. The branch ends
+// in the ID of the first run in a chain of them.
+func (f *FactoryRun) ContinueID() string {
 	id := f.Branch
 	if i := strings.LastIndexByte(id, '/'); i >= 0 {
 		id = id[i+1:]
 	}
-	return "chunk factory build --continue " + id
+	return id
+}
+
+// ContinueCommand is the command that carries the run on.
+func (f *FactoryRun) ContinueCommand() string {
+	return "chunk factory build --continue " + f.ContinueID()
 }
 
 // How a check came out, as ReviewResult.Status and RoundCheck.Status.

@@ -336,7 +336,7 @@ itself shown under them.
 Press `→` to move into the run, `Enter` to open a row's output, `Space` to open or
 close a round, `d` for the run's details (its worktree and setup log), `c` to copy
 a failure report (what failed, its error and the end of its output) to paste into
-an agent, and `x` twice to cancel the run. The run list shows only live runs; `e` shows or hides finished ones (a run you have selected stays listed when it ends), and `D` twice deletes a finished run's record. While the implementer works, its row shows what it last did and how many tools it has used, with what it last said under it. A failed check shows the last few lines
+an agent, and `x` twice to cancel the run. The run list shows only live runs; `e` shows or hides finished ones (a run you have selected stays listed when it ends), `D` twice deletes a finished run's record, and `r` continues a finished run whose committed work has not passed, as `chunk factory build --continue` does. While the implementer works, its row shows what it last did and how many tools it has used, with what it last said under it. A failed check shows the last few lines
 of its output under its row. `c` copies through the terminal (OSC 52), so a
 terminal that doesn't support it won't receive the copy. `q` only closes the
 dashboard; the run carries on.
