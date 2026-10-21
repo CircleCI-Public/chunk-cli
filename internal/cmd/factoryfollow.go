@@ -112,6 +112,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 		live.clear()
 		status(level, msg)
 	})
+	rep.hints = showHints(streams, jsonOut)
 	failures := 0
 	ticker := time.NewTicker(sessionPollInterval)
 	defer ticker.Stop()
@@ -181,6 +182,12 @@ type sessionReporter struct {
 	progress int
 	// checked marks the factory rounds whose review findings have been said.
 	checked map[int]bool
+	// hints ends a failed check's or a review with findings' line with a
+	// pointer to chunk watch, where the rest of it is. Only on a terminal.
+	hints bool
+	// pointed is whether a line has already pointed at chunk watch, which says
+	// it once for the run rather than on every failure.
+	pointed bool
 }
 
 func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
@@ -295,7 +302,7 @@ func (r *sessionReporter) reportFindings(results []chunkd.ReviewResult) {
 		case chunkd.CheckPassed:
 			r.status(iostream.LevelDone, fmt.Sprintf("review %s: no findings worth changing", res.Prompt))
 		case chunkd.CheckFailed:
-			r.status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)", res.Prompt, len(res.Findings)))
+			r.status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)%s", res.Prompt, len(res.Findings), r.watchSuffix()))
 		case chunkd.CheckErrored:
 			r.status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", res.Prompt, res.Error))
 			continue
@@ -304,6 +311,17 @@ func (r *sessionReporter) reportFindings(results []chunkd.ReviewResult) {
 			r.status(iostream.LevelInfo, fmt.Sprintf("  [%s] %s %s", f.Severity, f.Location(), oneLineSummary(f.Body)))
 		}
 	}
+}
+
+// watchSuffix is what ends the line of the first thing in a run that needs a
+// look, when the reporter gives hints: where its details are. Later lines do
+// not repeat it.
+func (r *sessionReporter) watchSuffix() string {
+	if !r.hints || r.pointed {
+		return ""
+	}
+	r.pointed = true
+	return " (details in chunk watch)"
 }
 
 // failedOutputLines is how much of a failed validation command's output is
@@ -316,7 +334,7 @@ func (r *sessionReporter) reportCheck(c chunkd.RoundCheck) {
 	case chunkd.CheckPassed:
 		r.status(iostream.LevelDone, fmt.Sprintf("  %s passed in %s", c.Name, msDuration(c.DurationMS)))
 	case chunkd.CheckFailed:
-		r.status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, msDuration(c.DurationMS)))
+		r.status(iostream.LevelError, fmt.Sprintf("  %s failed in %s%s", c.Name, msDuration(c.DurationMS), r.watchSuffix()))
 		if c.Output == "" {
 			return
 		}

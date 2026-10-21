@@ -820,6 +820,7 @@ func factoryLogPath(root, path string, on bool, name string) (string, error) {
 func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOut bool) error {
 	status := newStatusFunc(streams)
 	f := detail.Factory
+	hints := showHints(streams, jsonOut)
 	if jsonOut {
 		if err := iostream.PrintJSON(streams.Out, detail); err != nil {
 			return err
@@ -829,6 +830,9 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 	} else {
 		printFactoryLeftovers(f, status, streams)
 		printFactoryPullRequest(f, status)
+		if hints {
+			printFactoryWatchHint(detail, status)
+		}
 		printFactoryContinueHint(f, status)
 	}
 	printFactoryTotals(detail, status)
@@ -842,7 +846,43 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 	if err := reportOutcome(status, f); err != nil {
 		return err
 	}
+	if hints {
+		status(iostream.LevelInfo, watchHint(detail, "see its reviews and checks"))
+	}
 	return reportPullRequest(f)
+}
+
+// printFactoryWatchHint points a run that did not pass at chunk watch, by its
+// ID, before how to carry it on (--continue) is said. A run that passed is
+// pointed there after its outcome instead, by finishFactory.
+func printFactoryWatchHint(detail chunkd.SessionDetail, status iostream.StatusFunc) {
+	switch {
+	case detail.State == chunkd.SessionDone && detail.Factory.Result == chunkd.ResultPassed:
+		return
+	case detail.State == chunkd.SessionDone &&
+		(detail.Factory.Result == chunkd.ResultExhausted || detail.Factory.Result == chunkd.ResultStuck):
+		status(iostream.LevelInfo, watchHint(detail, "see the findings"))
+	default:
+		status(iostream.LevelInfo, watchHint(detail, "see what happened"))
+	}
+}
+
+// watchHint is the line that says what chunk watch shows of the run. It names
+// the run by its ID, unless --continue would name it by another (the first
+// run of its branch), when two IDs side by side would read as one run.
+func watchHint(detail chunkd.SessionDetail, what string) string {
+	if f := detail.Factory; f != nil && f.Branch != "" && f.ContinueID() != factoryRunID(detail) {
+		return what + " in chunk watch."
+	}
+	return fmt.Sprintf("Run %s: %s in chunk watch.", factoryRunID(detail), what)
+}
+
+// factoryRunID is the ID the run is known by in chunk watch and to --continue.
+func factoryRunID(detail chunkd.SessionDetail) string {
+	if detail.Factory != nil && detail.Factory.RunID != "" {
+		return detail.Factory.RunID
+	}
+	return detail.ID
 }
 
 // printFactoryPullRequest says what became of the run's pull request, where

@@ -97,6 +97,10 @@ func printInitSummary(commands []config.Command, streams iostream.Streams) {
 		}
 		streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate --remote "+c.Name), ui.Dim("run "+c.Name+" remotely"))
 	}
+	if showHints(streams, false) {
+		streams.ErrPrintln("")
+		streams.ErrPrintf("Keep %s open in another terminal to stay on top of your runs.\n", ui.Cyan("chunk watch"))
+	}
 }
 
 // detectOrgID attempts to resolve a CircleCI org ID without prompting for auth.

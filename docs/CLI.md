@@ -348,8 +348,9 @@ chunk
   change (or, with `--continue`, reviews the existing work), reviews it and
   runs the project's checks until they pass, for how many review rounds and
   the flag that changes that ("up to 3 review rounds (change with
-  --max-attempts)"), what the run ends with, and that
-  you do not have to stay — follow along with `chunk watch`, or leave it
+  --max-attempts)"), and what the run ends with. A second line recommends
+  `chunk watch` as the best way to follow it and every other run, and what it
+  shows (findings, check output, the pull request); you can also leave it
   running. What it says the run ends with matches the flags: a pull request by
   default (hedged, since a project with no GitHub token or origin still runs
   and opens none), the pull request with `--open-pr`, a draft pull request
@@ -359,8 +360,21 @@ chunk
   `--no-open-pr` (the work stays on the local branch), and with `--remote`,
   that it keeps running on its own sidecar, `chunk factory pull` brings the
   work back, and it opens no pull request yet.
-  This line is left out with `--json`, and when stderr is not a terminal (a
-  log file, a pipe, CI), so neither changes anything already being parsed.
+  These lines are left out with `--json`, in CI (`CI` set), and when stdout or
+  stderr is not a terminal (a log file, a pipe), so none of those changes
+  anything already being parsed.
+- **`chunk watch` is the recommended way to interact with chunk.** The plain
+  output of `factory build` is a log of a run; `chunk watch` shows every run
+  in every project, each review finding with its severity and location, the
+  output of each failed check, the implementer's live activity and the pull
+  request, with keys to copy, expand and cancel. So on a terminal chunk points
+  there when it helps: at the start of a run (above), at the end of a failed
+  check's or a review with findings' line ("details in chunk watch"), at the
+  end of every run with its run ID (before `--continue <run id>`, when the
+  run can be carried on), after `chunk init`, and in bare `chunk` help. Each
+  pointer follows the same rule as the start message: never with `--json`, in
+  CI, or when stdout or stderr is not a terminal. Chunk never opens `watch` for
+  you.
 - **A factory run works in rounds, and `--max-attempts` caps them.** A round
   is one implementer pass, then the reviews and the project's checks. The run
   stops when every check passes or after `--max-attempts` rounds (default: 3).
