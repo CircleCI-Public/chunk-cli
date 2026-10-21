@@ -157,7 +157,7 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 	in := textarea.New()
 	in.Placeholder = chatPlaceholder
 	in.ShowLineNumbers = false
-	in.Prompt = "┃ "
+	in.Prompt = ""
 	// Enter sends; a new line is shift+enter or ctrl+j.
 	in.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
 	in.SetHeight(3)
@@ -532,9 +532,15 @@ func submitCmd(submit Submitter, plan string) tea.Cmd {
 // set into the top edge; the plan has a row under it for comments, and the
 // screen a footer row.
 const (
-	borderSize     = 2
-	footerRows     = 1
-	inputRows      = 3
+	borderSize   = 2
+	bubbleChrome = borderSize + 2
+	// chatGutter is the cells of room left and right of the messages.
+	chatGutter = 1
+	footerRows = 1
+	inputRows  = 3
+	// inputBoxRows is the input and its border, which has the input's title
+	// set into the top edge.
+	inputBoxRows   = inputRows + borderSize
 	planFooterRows = 1
 	planPercent    = 60
 )
@@ -548,8 +554,8 @@ func (m *Model) layout() {
 	m.planView.SetHeight(inner - planFooterRows)
 	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 5)
 	m.chatView.SetWidth(m.chatWidth() - borderSize)
-	m.chatView.SetHeight(inner - inputRows - 1)
-	m.input.SetWidth(m.chatWidth() - borderSize)
+	m.chatView.SetHeight(inner - inputBoxRows)
+	m.input.SetWidth(m.chatWidth() - 2*borderSize)
 	m.renderPlan()
 	m.renderChat()
 }
@@ -643,27 +649,40 @@ func (m *Model) renderPlan() {
 	m.moveCursor(m.cursor)
 }
 
+// userBubble is the developer's message as a bubble against the right edge
+// of the chat, with the plan comments it carried above their text.
+func (m *Model) userBubble(msg *message, w int) string {
+	// The bubble leaves room on its left, so that it reads as a side of the
+	// conversation, and has a border and a cell of padding each side.
+	inner := max(w*85/100-bubbleChrome, 1)
+	var parts []string
+	for _, c := range msg.comments {
+		parts = append(parts, ui.HelperStyle.Render(excerpt(c.quote, inner)))
+		parts = append(parts, commentBody(c.text, inner)...)
+	}
+	if msg.text != "" {
+		parts = append(parts, msg.text)
+	}
+	// A short message gets a bubble that fits it; a long one wraps at inner.
+	text := strings.Join(parts, "\n")
+	fit := min(lipgloss.Width(text), inner)
+	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accentColor).
+		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
+	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
+}
+
 func (m *Model) renderChat() {
-	w := m.chatView.Width()
+	// A cell of room each side keeps the messages off the pane's border.
+	w := m.chatView.Width() - 2*chatGutter
 	if w <= 0 {
 		return
 	}
-	wrap := lipgloss.NewStyle().Width(w)
 	var b strings.Builder
 	for i := range m.messages {
 		msg := &m.messages[i]
 		switch {
 		case msg.fromUser:
-			b.WriteString(youStyle.Render("You") + "\n")
-			for _, c := range msg.comments {
-				b.WriteString(ui.HelperStyle.Render(excerpt(c.quote, w)) + "\n")
-				for _, l := range commentBody(c.text, w) {
-					b.WriteString(l + "\n")
-				}
-			}
-			if msg.text != "" {
-				b.WriteString(wrap.Render(msg.text))
-			}
+			b.WriteString(m.userBubble(msg, w))
 		case msg.failed:
 			b.WriteString(claudeStyle.Render("Claude") + "\n")
 			b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text))
@@ -687,7 +706,7 @@ func (m *Model) renderChat() {
 	// The chat follows what is added to it unless the developer has
 	// scrolled up to read, when it stays where they are.
 	follow := m.chatView.AtBottom()
-	m.chatView.SetContent(b.String())
+	m.chatView.SetContent(lipgloss.NewStyle().PaddingLeft(chatGutter).Render(b.String()))
 	if follow {
 		m.chatView.GotoBottom()
 	}
@@ -707,7 +726,6 @@ var (
 	// accentColor marks what has the keyboard: the focused pane's border,
 	// the plan's cursor and the footer's keys.
 	accentColor = lipgloss.Color("6")
-	youStyle    = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
 	claudeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
 )
 
@@ -732,7 +750,7 @@ func (m Model) Content() string {
 		planTitle += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", m.planView.ScrollPercent()*100))
 	}
 	chat := pane(m.focus == paneChat, m.chatWidth(), ui.TitleStyle.Render("Chat"),
-		m.chatView.View()+"\n\n"+m.input.View())
+		m.chatView.View()+"\n"+m.inputBox())
 	plan := pane(m.focus == panePlan, m.planWidth(), planTitle,
 		m.planView.View()+"\n"+m.planFooter())
 
@@ -743,6 +761,18 @@ func (m Model) Content() string {
 	// A footer that wraps would push the panes off the top of the screen.
 	footer = ansi.Truncate(footer, m.width, "…")
 	return lipgloss.JoinVertical(lipgloss.Left, lipgloss.JoinHorizontal(lipgloss.Top, chat, plan), footer)
+}
+
+// inputBox is the message being written, in a box of its own under the chat
+// that takes the accent colour when it has the keyboard.
+func (m Model) inputBox() string {
+	edge := lipgloss.Color("8")
+	if m.focus == paneChat && !m.commenting {
+		edge = accentColor
+	}
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
+		Width(m.chatWidth() - borderSize).Render(m.input.View())
+	return titled(box, ui.TitleStyle.Render("Message"), lipgloss.NewStyle().Foreground(edge).Render)
 }
 
 // titled sets title into the top edge of box, a pane drawn with a rounded

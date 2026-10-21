@@ -779,11 +779,7 @@ func (m Model) renderEmptyPane(st watchStyles) []string {
 	case len(m.allRuns) > 0:
 		lines = append(lines, st.muted("No run matches the search."), "")
 	default:
-		hint := st.dim("Start one with: chunk factory build \"<what to change>\"")
-		if m.keys().New.Enabled() {
-			hint = st.dim("Press ") + st.Teal.Bold(true).Render("n") + st.dim(" to start one, or run: chunk factory build \"<what to change>\"")
-		}
-		lines = append(lines, st.muted("No runs yet."), hint, "")
+		lines = append(lines, m.renderStartHints(st)...)
 	}
 
 	// right pane width: total - 1 leading space - leftPaneWidth - 1 space - 1 divider - 1 space
@@ -800,6 +796,33 @@ func (m Model) renderEmptyPane(st watchStyles) []string {
 		lines = append(lines, padStr+st.vdim(l))
 	}
 	return lines
+}
+
+// renderStartHints is what the empty pane offers when there is nothing to
+// watch and nothing has ever run: the two ways to begin, each with the key that
+// starts it, so a new user sees what to do on arriving. A key that is not on
+// offer is left out, and with neither the command line is all that is left.
+func (m Model) renderStartHints(st watchStyles) []string {
+	k := m.keys()
+	var actions []string
+	for _, b := range []key.Binding{k.New, k.Plan} {
+		if !b.Enabled() {
+			continue
+		}
+		h := b.Help()
+		actions = append(actions, st.Teal.Bold(true).Render("["+h.Key+"]")+" "+st.muted(h.Desc))
+	}
+	cmd := st.dim("chunk factory build \"<what to change>\"")
+	if len(actions) == 0 {
+		return []string{st.muted("No runs yet."), st.dim("Start one with: ") + cmd, ""}
+	}
+	return []string{
+		st.muted("No runs yet."),
+		st.emphasis("Let's build"),
+		strings.Join(actions, "   "),
+		st.dim("or run: ") + cmd,
+		"",
+	}
 }
 
 func (m Model) renderFooter(st watchStyles) string {
