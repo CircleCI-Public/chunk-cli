@@ -1,6 +1,7 @@
 package chunkd
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -401,4 +402,58 @@ func TestFetchSnapshotRelaunching_neverRelaunchesARemoteDaemon(t *testing.T) {
 	_, err := FetchSnapshotRelaunching(nil)
 	assert.Assert(t, err != nil)
 	assert.Equal(t, launches, 0)
+}
+
+// serveSessionDaemon is fakeDaemon for a daemon with a session API: /ping
+// answers build and GET /factory lists sessions.
+func serveSessionDaemon(t *testing.T, build string, sessions ...Session) (sockPath string, launches *int) {
+	t.Helper()
+	dir := socketDir(t)
+	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	assert.NilError(t, WritePID(filepath.Join(dir, "daemon.pid"), os.Getpid()))
+	sockPath = filepath.Join(dir, "daemon.sock")
+	ln, err := net.Listen("unix", sockPath)
+	assert.NilError(t, err)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, build) })
+	mux.HandleFunc("GET /factory", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(SessionList{Sessions: sessions})
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return sockPath, stubLaunch(t)
+}
+
+// A newer binary must not replace a daemon that is in the middle of a factory
+// run: the run dies with it and its caller reports "no such session".
+func TestEnsureRunning_keepsAStaleDaemonWithARunGoing(t *testing.T) {
+	_, launches := serveSessionDaemon(t, "some-other-build",
+		Session{ID: "done", State: SessionDone},
+		Session{ID: "live", State: SessionRunning})
+
+	assert.NilError(t, EnsureRunning())
+	assert.Equal(t, *launches, 0, "a daemon with a running session was replaced")
+	assert.Check(t, IsDaemonRunning(), "the daemon was stopped")
+}
+
+func TestHasRunningSessions(t *testing.T) {
+	t.Run("only finished sessions", func(t *testing.T) {
+		sock, _ := serveSessionDaemon(t, "b",
+			Session{ID: "a", State: SessionDone},
+			Session{ID: "b", State: SessionCancelled})
+		assert.Check(t, !hasRunningSessions(sock))
+	})
+	t.Run("a running session", func(t *testing.T) {
+		sock, _ := serveSessionDaemon(t, "b", Session{ID: "a", State: SessionRunning})
+		assert.Check(t, hasRunningSessions(sock))
+	})
+	t.Run("a daemon without the session API", func(t *testing.T) {
+		dir := socketDir(t)
+		serveFakeDaemon(t, dir, "b")
+		assert.Check(t, !hasRunningSessions(filepath.Join(dir, "daemon.sock")))
+	})
+	t.Run("nothing listening", func(t *testing.T) {
+		assert.Check(t, !hasRunningSessions(filepath.Join(socketDir(t), "daemon.sock")))
+	})
 }
