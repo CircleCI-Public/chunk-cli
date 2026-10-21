@@ -144,7 +144,7 @@ chunk
 │
 ├── factory                         # Build and manage factory runs
 │   ├── build [prompt|file|-]       # Implement a prompt on a sidecar, then review and validate it until it passes
-│   │   --max-attempts <n>          # Maximum rounds of review and validation (default: 3)
+│   │   --max-attempts <n>          # Maximum rounds of implement, review and check (default: 3)
 │   │   --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
 │   │   --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
 │   │   --reviews <dir>             # Directory of review prompts (default: .chunk/reviews)
@@ -344,7 +344,9 @@ chunk
   "started on the chunk daemon" (or, with `--remote`, before the sidecar is
   provisioned), it prints a plain-language line: that chunk implements the
   change (or, with `--continue`, reviews the existing work), reviews it and
-  runs the project's checks until they pass, what the run ends with, and that
+  runs the project's checks until they pass, for how many review rounds and
+  the flag that changes that ("up to 3 review rounds (change with
+  --max-attempts)"), what the run ends with, and that
   you do not have to stay — follow along with `chunk watch`, or leave it
   running. What it says the run ends with matches the flags: a pull request by
   default (hedged, since a project with no GitHub token or origin still runs
@@ -357,6 +359,17 @@ chunk
   work back, and it opens no pull request yet.
   This line is left out with `--json`, and when stderr is not a terminal (a
   log file, a pipe, CI), so neither changes anything already being parsed.
+- **A factory run works in rounds, and `--max-attempts` caps them.** A round
+  is one implementer pass, then the reviews and the project's checks. The run
+  stops when every check passes or after `--max-attempts` rounds (default: 3).
+  A run that reaches the cap with checks still failing says so, names
+  `--max-attempts` to raise it and, when it committed work, the
+  `chunk factory build --continue <run id>` command that carries it on. Raise
+  the cap when the change is large or the reviewers are strict and runs keep
+  ending with feedback left, so a run can finish without `--continue`. Lower
+  it, down to 1, for quick or exploratory changes or to cap spend: each round
+  costs an implementer turn plus every reviewer, so more rounds cost more and
+  take longer.
 - **`factory build` runs on the local daemon, in the background.** `chunk factory build "<prompt>"` (or
   `chunk factory build < prompt.md`; `chunk factory build - < prompt.md` is the explicit
   form; a prompt argument with a non-empty file on stdin is refused, so a
@@ -717,8 +730,10 @@ chunk
   why it could not be sent, is shown in the footer. Closing the dashboard
   stops a draft still being made. `n` is not offered against a remote daemon,
   since a factory run works from files on this machine. A selected
-  run's pane reads top to bottom: the prompt, a status line that says what the run is doing (or, once it
-  ended, how it ended, what blocked it and what it cost), then each round, then
+  run's pane reads top to bottom: the prompt, a status line that says what the run is doing
+  ("Round 2 of up to 3 · implementing", or "Round 1 of 1" with
+  `--max-attempts 1`) or, once it
+  ended, how it ended, what blocked it and what it cost, then each round, then
   where the work is (branch, whether it was committed), the committed change
   itself under that (read from the run's branch on this machine and coloured, as
   much as fits, then `git diff <baseline> <branch>` for the rest) and, for a run that
@@ -727,7 +742,9 @@ chunk
   One round starts open: the latest, or on a run that ended failing, the one
   that failed. The others are a line each (how they came out, findings,
   duration), and `Space` or `Enter` on a round opens or closes it, so any number
-  can be open. An open round shows the implementer's turn (duration, cost, diff
+  can be open. During a run's first round, a few lines under the status say
+  what a round is, what the cap means and how to change it with
+  `--max-attempts`; after that, `?` shows or hides them. An open round shows the implementer's turn (duration, cost, diff
   stat), then its validation commands
   and reviews under `validate`. Where the run put its work and what it said while
   setting up (worktree, setup log, setup progress) are folded under

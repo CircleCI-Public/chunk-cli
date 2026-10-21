@@ -50,6 +50,27 @@ func TestFactoryBuildRemoteFlagIsVisibleAndChunkBinaryStaysHidden(t *testing.T) 
 	assert.Assert(t, chunkBinary.Hidden, "--chunk-binary should stay hidden")
 }
 
+// --max-attempts' help says what a round is, its default and why to change it.
+func TestFactoryBuildMaxAttemptsHelp(t *testing.T) {
+	usage := newFactoryBuildCmd().Flags().FlagUsages()
+	assert.Assert(t, cmp.Contains(usage,
+		"maximum rounds of implement, review and check. Raise for large changes; lower to cap cost (default 3)"))
+}
+
+// Running out of rounds says the cap was reached, the flag that raises it and,
+// when the run committed work, the command that carries it on.
+func TestExhaustedErrorNamesTheCapAndHowToGoFurther(t *testing.T) {
+	committed := &chunkd.FactoryRun{Result: chunkd.ResultExhausted, Rounds: 3, Committed: true, Branch: "chunk/factory/add-flag/run-7"}
+	ue := exhaustedError(committed)
+	assert.Equal(t, ue.UserMessage(), "Checks still failed after 3 rounds: the run reached its cap (--max-attempts).")
+	assert.Equal(t, ue.Suggestion(), `Raise the cap with --max-attempts <n>, or carry on with: chunk factory build --continue run-7 ["what to do differently"]`)
+
+	// Without committed work there is nothing for --continue to pick up.
+	ue = exhaustedError(&chunkd.FactoryRun{Result: chunkd.ResultExhausted, Rounds: 1})
+	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round: the run reached its cap (--max-attempts).")
+	assert.Equal(t, ue.Suggestion(), "Raise the cap with --max-attempts <n>.")
+}
+
 // checkFactoryContinue refuses a run whose work is still on a per-run
 // sidecar: there is nothing local yet to continue.
 func TestCheckFactoryContinueRefusesARunOnASidecar(t *testing.T) {

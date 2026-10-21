@@ -98,7 +98,7 @@ func TestFactoryWhoseChecksFailOpensNoPullRequest(t *testing.T) {
 
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
-	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
+	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round: the run reached its cap (--max-attempts).")
 	assert.Assert(t, strings.Contains(stderr, "No pull request opened: checks still failed after 1 round(s)"), stderr)
 	assert.Equal(t, len(gh.PullRequests()), 0)
 }

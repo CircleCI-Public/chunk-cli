@@ -264,11 +264,7 @@ func runPhase(s chunkd.Session) string {
 func runHeadline(st watchStyles, s chunkd.Session) string {
 	switch s.State {
 	case chunkd.SessionRunning:
-		round := fmt.Sprintf("Round %d", max(len(s.Rounds), 1))
-		if f := s.Factory; f != nil && f.Attempts > 0 {
-			round += fmt.Sprintf(" (max %d)", f.Attempts)
-		}
-		return st.running(round + " · " + runPhase(s))
+		return st.running(roundLabel(s) + " · " + runPhase(s))
 	case chunkd.SessionCancelled:
 		return st.warning("cancelled")
 	case chunkd.SessionFailed:
@@ -289,6 +285,62 @@ func runHeadline(st watchStyles, s chunkd.Session) string {
 		note += " · blocked by " + b
 	}
 	return st.err(note)
+}
+
+// roundLabel is which round a running run is on, out of the most it will
+// run: "Round 2 of up to 3", or "Round 1 of 1" when it runs only one. A run
+// that does not say its cap is just "Round 2".
+func roundLabel(s chunkd.Session) string {
+	n := max(len(s.Rounds), 1)
+	f := s.Factory
+	switch {
+	case f == nil || f.Attempts < 1:
+		return fmt.Sprintf("Round %d", n)
+	case f.Attempts == 1:
+		return fmt.Sprintf("Round %d of 1", n)
+	}
+	return fmt.Sprintf("Round %d of up to %d", n, f.Attempts)
+}
+
+// roundCapNote says what a round is, what the cap on them means and how to
+// change it, for a reader who sees "of up to 3" and does not know.
+func roundCapNote(attempts int) string {
+	rounds := fmt.Sprintf("%d rounds", attempts)
+	if attempts == 1 {
+		rounds = "1 round"
+	}
+	return "A round is one implementer pass, then reviews and your checks. Chunk stops after " + rounds +
+		" and tells you what is left. Change it with --max-attempts <n>: raise it for large changes, lower it to cap cost."
+}
+
+// hasRoundCap reports whether s is a running run that says how many rounds
+// it will run, so there is a cap to explain.
+func hasRoundCap(s chunkd.Session) bool {
+	return s.State == chunkd.SessionRunning && s.Factory != nil && s.Factory.Attempts > 0
+}
+
+// capNoteShown reports whether the round cap is explained under s's
+// headline: during its first round, when it is new, and after that when the
+// user asks, by run ID, as taskOpen does for the task.
+func (m Model) capNoteShown(s chunkd.Session) bool {
+	if !hasRoundCap(s) {
+		return false
+	}
+	if open, ok := m.capOpen[s.ID]; ok {
+		return open
+	}
+	return len(s.Rounds) <= 1
+}
+
+// toggleCapNote shows or hides the round cap's explanation for s.
+func (m Model) toggleCapNote(s chunkd.Session) Model {
+	open := maps.Clone(m.capOpen)
+	if open == nil {
+		open = map[string]bool{}
+	}
+	open[s.ID] = !m.capNoteShown(s)
+	m.capOpen = open
+	return m
 }
 
 // runCost is what the run's implementer turns cost.
@@ -463,6 +515,21 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 	// selected row's span is carried over to the lines it wrapped to.
 	width := m.width - leftPaneWidth - 5
 	headLines, _ := wrapPane(head[:], width)
+	// The round cap's explanation is help, not the run, so it gives way
+	// when the pane is too short or narrow to keep the rounds in view too.
+	// It wraps between words only, so the flag it names is never split.
+	if m.capNoteShown(s) {
+		note := wrapLine(roundCapNote(s.Factory.Attempts), width-4)
+		fits := true
+		for _, l := range note {
+			fits = fits && utf8.RuneCountInString(l) <= width-4
+		}
+		if fits && maxLines-len(headLines)-len(note) >= minBodyLines {
+			for _, l := range note {
+				headLines = append(headLines, "    "+st.dim(l))
+			}
+		}
+	}
 	body, at := wrapPane(body, width)
 	if selStart >= 0 {
 		selStart, selEnd = at[selStart], at[selEnd]
