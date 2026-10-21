@@ -954,7 +954,11 @@ func (m Model) copyRunRow(run *sessionInfo, kind runItemKind) (tea.Model, tea.Cm
 	}
 	text := run.s.Factory.Branch
 	if kind == itemPR {
-		text = run.s.Factory.PullRequest.URL
+		// Only an open pull request has a link worth copying.
+		text = ""
+		if pr := run.s.Factory.PullRequest; pr.Opened() {
+			text = pr.URL
+		}
 	}
 	if text == "" {
 		return m, nil
