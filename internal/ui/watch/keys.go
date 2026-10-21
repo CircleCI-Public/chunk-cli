@@ -13,9 +13,16 @@ type keyMap struct {
 	Up, Down    key.Binding
 	Left, Right key.Binding
 	Open        key.Binding
-	Copy        key.Binding
-	Toggle      key.Binding
-	Search      key.Binding
+	// OpenPR opens the run's pull request from anywhere in the run pane. It is
+	// not listed in the footer: on the pull request row Open's hint names it.
+	OpenPR key.Binding
+	Copy   key.Binding
+	// CopyBranch and CopyPR copy the run's branch name and pull request URL
+	// from anywhere, so neither needs the cursor on its row. CopyPR goes
+	// unlisted: CopyBranch's hint names both.
+	CopyBranch, CopyPR key.Binding
+	Toggle             key.Binding
+	Search             key.Binding
 	// Keep and Clear end a search: Enter keeps its filter, Esc drops it.
 	Keep, Clear key.Binding
 	// The new run's step keys are drawn bold in the accent colour, so a new
@@ -47,7 +54,10 @@ func (m Model) keys() keyMap {
 		Left:        key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "back")),
 		Right:       key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "run")),
 		Open:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
+		OpenPR:      key.NewBinding(key.WithKeys("o", "super+enter")),
 		Copy:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy failure")),
+		CopyBranch:  key.NewBinding(key.WithKeys("b"), key.WithHelp("b/p", "copy branch/PR")),
+		CopyPR:      key.NewBinding(key.WithKeys("p")),
 		Toggle:      key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
 		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search runs")),
 		Keep:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "keep filter")),
@@ -81,8 +91,7 @@ func (m Model) keys() keyMap {
 	}
 	k.Left.SetEnabled(right)
 	k.Right.SetEnabled(!right && run != nil)
-	k.Open.SetEnabled(right && run != nil)
-	k.Copy.SetEnabled(right && run != nil)
+	k.enableBranchAndPR(m, run)
 	k.Toggle.SetEnabled(right && run != nil)
 	k.Up.SetEnabled(len(m.sessions) > 0)
 	k.Down.SetEnabled(len(m.sessions) > 0)
@@ -100,16 +109,44 @@ func (m Model) keys() keyMap {
 		// Typing goes to the search or the prompt, and a draft being made or
 		// shown has keys of its own, so no other key does anything: d is the
 		// draft's diff then, not a run's details.
-		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.Copy, &k.Toggle, &k.Search, &k.New, &k.Details, &k.Cancel, &k.Quit} {
+		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.OpenPR, &k.Copy, &k.CopyBranch, &k.CopyPR, &k.Toggle, &k.Search, &k.New, &k.Details, &k.Cancel, &k.Quit} {
 			b.SetEnabled(false)
 		}
 	}
 	return k
 }
 
+// enableBranchAndPR turns on the keys for the run's branch and pull request,
+// and words Open and Copy for the row that has the cursor.
+func (k *keyMap) enableBranchAndPR(m Model, run *sessionInfo) {
+	right := m.focusedPane == paneRight
+	item := m.selectedRunItem()
+	onPR := right && item != nil && item.kind == itemPR
+	onBranch := right && item != nil && item.kind == itemBranch
+	factory := run != nil && run.s.Factory != nil
+	hasPR := factory && run.s.Factory.PullRequest.Opened()
+	// Enter on the branch has nothing to do, so it is not offered there.
+	k.Open.SetEnabled(right && run != nil && !onBranch)
+	k.OpenPR.SetEnabled(right && hasPR)
+	k.Copy.SetEnabled(right && run != nil)
+	k.CopyBranch.SetEnabled(factory && run.s.Factory.Branch != "")
+	k.CopyPR.SetEnabled(hasPR)
+	switch {
+	case onPR:
+		hint := "Enter/o"
+		if m.superEnter {
+			hint = "Enter/⌘Enter/o"
+		}
+		k.Open.SetHelp(hint, "open")
+		k.Copy.SetHelp("c", "copy URL")
+	case onBranch:
+		k.Copy.SetHelp("c", "copy branch")
+	}
+}
+
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.KeepDraft, k.Keep, k.Clear, k.New, k.Up, k.Right, k.Open, k.Copy, k.Toggle, k.Search, k.Details, k.Cancel, k.Left, k.Quit}
+	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.KeepDraft, k.Keep, k.Clear, k.New, k.Up, k.Right, k.Open, k.Copy, k.CopyBranch, k.Toggle, k.Search, k.Details, k.Cancel, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

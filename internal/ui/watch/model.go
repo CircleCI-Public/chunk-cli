@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/browser"
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
@@ -232,6 +233,14 @@ type Model struct {
 	// bottomMargin is how many of the terminal's last rows are left blank, for
 	// a terminal that reports more rows than it shows.
 	bottomMargin int
+	// openURL opens a link in the default browser; superEnter is whether the
+	// terminal can tell Cmd+Enter from Enter. rowNote is what the last open or
+	// copy of the run's branch or pull request said, on its row, and noteSeq
+	// numbers them so an old one's timer cannot clear a newer one.
+	openURL    func(string) error
+	superEnter bool
+	rowNote    rowNote
+	noteSeq    int
 	// spinning is true while a spinner tick chain is in flight, so a poll that
 	// finds something running after a quiet spell can start one without doubling
 	// up on a chain that never stopped.
@@ -252,6 +261,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		watchAll:  watchAll,
 		hasDarkBG: lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
 		conn:      chunkd.CurrentConnection(),
+		openURL:   browser.Open,
 		spinning:  true, // Init starts the first chain
 	}
 }
@@ -269,6 +279,13 @@ func (m Model) WithConnection(conn chunkd.Connection) Model {
 // show, and the rows they hide are the footer's.
 func (m Model) WithBottomMargin(rows int) Model {
 	m.bottomMargin = max(rows, 0)
+	return m
+}
+
+// WithOpener returns a copy of m that opens links with open instead of the
+// default browser.
+func (m Model) WithOpener(open func(string) error) Model {
+	m.openURL = open
 	return m
 }
 
@@ -333,8 +350,14 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if run != nil {
 			return m.openRunItem(run, m.runItems(run.s))
 		}
+	case key.Matches(msg, k.OpenPR):
+		return m.openPullRequest(run)
 	case key.Matches(msg, k.Copy):
-		return m.copyRunFailure(run)
+		return m.copyRunItem(run)
+	case key.Matches(msg, k.CopyBranch):
+		return m.copyRunRow(run, itemBranch)
+	case key.Matches(msg, k.CopyPR):
+		return m.copyRunRow(run, itemPR)
 	case key.Matches(msg, k.Toggle):
 		if run != nil {
 			m = m.toggleRunRow(run)
@@ -447,6 +470,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionActionMsg:
 		return m.withSessionAction(msg), nil
+
+	case tea.KeyboardEnhancementsMsg, prOpenedMsg, rowNoteExpiredMsg:
+		return m.updateRowNote(msg)
 
 	case updateCheckMsg:
 		m.updateAvailable = msg.latest

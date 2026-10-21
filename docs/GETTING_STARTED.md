@@ -341,6 +341,8 @@ of its output under its row. `c` copies through the terminal (OSC 52), so a
 terminal that doesn't support it won't receive the copy. `q` only closes the
 dashboard; the run carries on.
 
+Once a run has ended, its `Branch:` row takes the cursor, and so does its `Pull request:` row once the pull request is open. `c` copies what has the cursor (the branch name or the pull request's URL), and `b` and `p` copy them from any row of the run. On the pull request row `Enter` or `o` opens it in your browser (`o` works from any row), as does `Cmd+Enter` in terminals that can send it (kitty, Ghostty, WezTerm, iTerm2 with the kitty protocol enabled; the footer shows it only then). With no browser to open it in, such as over SSH, the URL is copied instead.
+
 Press `n` to start a run from the dashboard, in three steps the footer walks you
 through: type the change you want and press `Enter`; Claude Code drafts it on
 your machine, in a copy of the project, while the factory's sidecars start;
