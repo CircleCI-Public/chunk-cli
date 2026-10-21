@@ -341,7 +341,7 @@ of its output under its row. `c` copies through the terminal (OSC 52), so a
 terminal that doesn't support it won't receive the copy. `q` only closes the
 dashboard; the run carries on.
 
-Once a run has ended, its `Branch:` row takes the cursor, and so does its `Pull request:` row once the pull request is open. `c` copies what has the cursor (the branch name or the pull request's URL), and `b` and `p` copy them from any row of the run. On the pull request row `Enter` or `o` opens it in your browser (`o` works from any row), as does `Cmd+Enter` in terminals that can send it (kitty, Ghostty, WezTerm, iTerm2 with the kitty protocol enabled; the footer shows it only then). With no browser to open it in, such as over SSH, the URL is copied instead.
+Once a run has ended, its `Branch:` row takes the cursor, and so does its `Pull request:` row once the pull request is open. `c` copies what has the cursor (the branch name or the pull request's URL), and `b` and `u` copy them from any row of the run. On the pull request row `Enter` or `o` opens it in your browser (`o` works from any row), as does `Cmd+Enter` in terminals that can send it (kitty, Ghostty, WezTerm, iTerm2 with the kitty protocol enabled; the footer shows it only then). With no browser to open it in, such as over SSH, the URL is copied instead.
 
 Press `n` to start a run from the dashboard, in three steps the footer walks you
 through: type the change you want and press `Enter`; Claude Code drafts it on
@@ -349,6 +349,13 @@ your machine, in a copy of the project, while the factory's sidecars start;
 then the draft's diff is shown in the right pane (`↑/↓` scrolls it), and
 `Enter` sends the draft and your prompt to the factory to finish (`Esc` keeps
 the draft for later).
+
+For a bigger change, press `p` to plan it with Claude first. The chat is on
+the left and the plan Claude writes is on the right; `tab` moves to the plan,
+where `c` leaves a comment on the highlighted part for Claude to address with
+your next message. `ctrl+s` sends the finished plan to the factory to build.
+`esc` goes back to your runs with the plan kept, and `p` opens it again.
+`chunk factory plan` opens the same screen on its own.
 
 ```
 chunk watch  2 runs  main@a3f9e12

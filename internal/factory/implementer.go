@@ -35,6 +35,18 @@ func implementerSystemPrompt(instructions string) string {
 	return baseImplementerSystemPrompt + "\n\nRun-specific instructions:\n" + strings.TrimSpace(instructions)
 }
 
+// The claude flags every local and sidecar run of Claude Code passes.
+const (
+	flagDisallowedTools    = "--disallowedTools"
+	flagAppendSystemPrompt = "--append-system-prompt"
+)
+
+// streamArgs starts a claude command line, after prefix, that answers in
+// stream-json for a Stream to read.
+func streamArgs(prefix ...string) []string {
+	return append(prefix, "-p", "--output-format", "stream-json", "--verbose")
+}
+
 // disallowedGit are the git commands that would move the implementer's work
 // out of the working tree the loop collects it from.
 var disallowedGit = []string{
@@ -131,12 +143,11 @@ func turnError(ctx context.Context, who string, timeout time.Duration, code int,
 
 // script builds the shell script for one turn.
 func (im *Implementer) script(prompt string) string {
-	args := []string{
-		"claude", "-p", "--output-format", "stream-json", "--verbose",
+	args := append(streamArgs("claude"),
 		"--dangerously-skip-permissions",
-		"--disallowedTools", strings.Join(disallowedGit, ","),
-		"--append-system-prompt", implementerSystemPrompt(im.Instructions),
-	}
+		flagDisallowedTools, strings.Join(disallowedGit, ","),
+		flagAppendSystemPrompt, implementerSystemPrompt(im.Instructions),
+	)
 	if im.started {
 		args = append(args, "--resume", im.sessionID)
 	} else {
