@@ -286,7 +286,7 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 			ctxTimeout = r.timeout
 		}
 		if c.retryOn429Budget > 0 {
-			ctxTimeout = c.retryOn429Budget + c.timeout // extend deadline to cover retry waits
+			ctxTimeout += c.retryOn429Budget // extend deadline to cover retry waits
 		}
 		var timeoutCancel context.CancelFunc
 		ctx, timeoutCancel = context.WithTimeout(ctx, ctxTimeout)
