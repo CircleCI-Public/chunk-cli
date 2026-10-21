@@ -56,6 +56,10 @@ type watchStyles struct {
 	VDim     lipgloss.Style
 	// Chip is the base of a coloured label; the caller sets its background.
 	Chip lipgloss.Style
+	// Accent is filled with the brand colour, for the one primary action a
+	// screen offers (e.g. sending a draft to the factory), so it reads as a
+	// button next to the dimmed, bracketed hints for everything else.
+	Accent lipgloss.Style
 }
 
 func (s watchStyles) dim(text string) string      { return s.Dim.Render(text) }
@@ -89,6 +93,7 @@ func newWatchStyles(hasDark bool) watchStyles {
 		Muted:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("252"), lipgloss.Color("250"))),
 		VDim:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242"))),
 		Chip:     lipgloss.NewStyle().Bold(true).Foreground(chunkNavy),
+		Accent:   lipgloss.NewStyle().Bold(true).Foreground(ld(lipgloss.Color("255"), chunkNavy)).Background(ld(chunkNavy, chunkYellow)),
 	}
 }
 
@@ -549,7 +554,7 @@ func (m Model) renderHeader(st watchStyles) string {
 	}
 
 	title := st.teal("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
-	right := m.runTag(st) + m.connectionTag(st)
+	right := m.draftReadyTag(st) + m.runTag(st) + m.connectionTag(st)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -557,6 +562,15 @@ func (m Model) renderHeader(st watchStyles) string {
 	// Clipped like every other line: one that wraps costs a row the fixed-height
 	// layout never budgeted for.
 	return clip(title+strings.Repeat(" ", gap)+right, m.width) + "\n"
+}
+
+// draftReadyTag flags a draft ready to send in the header too, so the next
+// action stays visible while the diff below it is scrolled out of view.
+func (m Model) draftReadyTag(st watchStyles) string {
+	if m.draft != draftReady || m.draftResult.Stat == "" {
+		return ""
+	}
+	return st.Accent.Padding(0, 1).Render("⏎ ready to send") + "  "
 }
 
 // connectionTag says which daemon the dashboard is showing and whether it is

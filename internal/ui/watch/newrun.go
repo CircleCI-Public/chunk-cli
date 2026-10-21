@@ -317,23 +317,12 @@ func (m Model) selectPendingRun() Model {
 var draftSteps = []string{
 	"write a prompt",
 	"Claude drafts the change",
-	"send to the factory (last step)",
+	"send to the factory",
 }
 
-// draftLines is how many lines the footer gives a new run: which step it is
-// on, the map of every step, and the prompt or what Claude is doing.
-const draftLines = 3
-
-// stepTitle says which step a new run is on and what that step does.
-func stepTitle(n int) string {
-	switch n {
-	case 1:
-		return "Step 1 of 3: write a prompt describing the change you want"
-	case 2:
-		return "Step 2 of 3: Claude is drafting the code change on your machine, in a copy of your repo"
-	}
-	return "Step 3 of 3 (last step): send Claude's draft and your prompt to the factory, which finishes the change"
-}
+// draftLines is how many lines the footer gives a new run: the map of every
+// step, and the prompt or what Claude is doing.
+const draftLines = 2
 
 // stepsMap is every step in order, with step n in brackets, so a new user can
 // see what comes before and after and that sending to the factory is the end.
@@ -348,10 +337,26 @@ func stepsMap(n int) string {
 	return strings.Join(parts, " → ")
 }
 
-// draftFooter is the footer's lines for a new run: which step it is on, the
-// map of every step in the accent colour, what the step needs or shows, and
-// last the keys for that step (bar). They are as many lines as the footer's bar
-// and draftLines.
+// stepHint is the one fact about step n that its name alone does not say:
+// drafting does not touch the user's working tree, and sending to the
+// factory is what finishes the change. Appended to the breadcrumb so the
+// banner stays one line without losing either.
+func stepHint(n int) string {
+	switch n {
+	case 2:
+		return "on a copy of your repo"
+	case 3:
+		return "finishes the change"
+	}
+	return ""
+}
+
+// draftFooter is the footer's lines for a new run, pinned under the panes so
+// they never scroll out of view: the map of every step with its stepHint, in
+// the accent colour, what the step needs or shows, and last the keys for that
+// step (bar) — each as a button when it is the one key to press next, dimmed
+// otherwise, so no key is named twice. They are as many lines as the footer's
+// bar and draftLines.
 func (m Model) draftFooter(st watchStyles, bar string) string {
 	step, last := 1, ""
 	switch m.draft {
@@ -371,19 +376,45 @@ func (m Model) draftFooter(st watchStyles, bar string) string {
 		last = st.muted(clip("› "+line, m.width-2))
 	case draftReady:
 		step = 3
-		line := "Claude made no changes, so there is nothing to send"
-		switch {
-		case m.draftNote != "":
-			line = m.draftNote
-		case m.draftResult.Stat != "":
-			line = "Draft ready: " + lastLine(m.draftResult.Stat) + " · the change is shown above"
+		bar = clip(m.draftActionBar(st), m.width-2)
+		if m.draftNote != "" {
+			last = st.muted(clip("› "+m.draftNote, m.width-2))
 		}
-		last = st.muted(clip("› "+line, m.width-2))
 	}
-	return "  " + st.muted(clip(stepTitle(step), m.width-2)) + "\n" +
-		"  " + st.teal(clip(stepsMap(step), m.width-2)) + "\n" +
+	banner := stepsMap(step)
+	if hint := stepHint(step); hint != "" {
+		banner += "  ·  " + hint
+	}
+	return "  " + st.teal(clip(banner, m.width-2)) + "\n" +
 		"  " + last + "\n" +
 		"  " + bar + "\n"
+}
+
+// draftActionBar is the ready step's keys, named once, as buttons: the
+// primary action (sending the draft to the factory) is filled in the accent
+// colour, and the rest — keeping it for later, folding, switching and
+// scrolling its sections — are dimmed and bracketed, so the one key to press
+// next stands out from the others.
+func (m Model) draftActionBar(st watchStyles) string {
+	k := m.keys()
+	if !k.SendDraft.Enabled() {
+		return actionHint(st, false, k.KeepDraft)
+	}
+	return actionHint(st, true, k.SendDraft) + "   " +
+		actionHint(st, false, k.KeepDraft) + "   " +
+		actionHint(st, false, k.ToggleSection) + "   " +
+		actionHint(st, false, k.FocusSection) + "   " +
+		actionHint(st, false, k.ScrollDraft)
+}
+
+// actionHint names one key once: a filled button for the primary action, or a
+// dimmed, bracketed key for a secondary one.
+func actionHint(st watchStyles, primary bool, b key.Binding) string {
+	h := b.Help()
+	if primary {
+		return st.Accent.Padding(0, 1).Render("⏎ " + h.Desc)
+	}
+	return st.vdim("[" + h.Key + "] " + h.Desc)
 }
 
 // promptField is the prompt as it is typed, on a faint background across the
@@ -504,26 +535,18 @@ func (m Model) renderDraftPane(st watchStyles, maxLines int) []string {
 }
 
 // draftPaneTop is how many lines the draft pane keeps above the draft, in
-// view however far it is scrolled: its heading, then draftAction's lines.
-const draftPaneTop = 4
+// view however far it is scrolled: its heading, then draftAction's status
+// line. What to press next is said once, in the action bar pinned under the
+// panes, not repeated here.
+const draftPaneTop = 2
 
-// draftAction says, in the pane beside the draft, what the draft is and what
-// to press next, as the footer does, so neither is only in the footer. It is
-// draftPaneTop-1 lines, short enough for a narrow pane.
+// draftAction says, in the pane beside the draft, what the draft is: ready to
+// send, or empty. It is draftPaneTop-1 lines, short enough for a narrow pane.
 func (m Model) draftAction(st watchStyles) []string {
-	key := st.Teal.Bold(true).Render
 	if m.draftResult.Stat == "" {
-		return []string{
-			st.warning("Claude made no changes, so there is nothing to send"),
-			st.muted("press ") + key("esc") + st.muted(" to close it"),
-			"",
-		}
+		return []string{st.warning("Claude made no changes, so there is nothing to send")}
 	}
-	return []string{
-		st.success(ui.IconOK + " Draft ready: " + lastLine(m.draftResult.Stat)),
-		st.muted("press ") + key("enter") + st.muted(" to send it to the factory (last step)"),
-		key("↑/↓") + st.muted(" scroll") + st.vdim("  ·  ") + key("tab") + st.muted(" switch section") + st.vdim("  ·  ") + key("esc") + st.muted(" keeps it for later"),
-	}
+	return []string{st.success(ui.IconOK + " Draft ready: " + lastLine(m.draftResult.Stat))}
 }
 
 // draftSection is one of the two parts the draft is shown in.
