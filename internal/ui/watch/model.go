@@ -207,7 +207,8 @@ type Model struct {
 	capOpen    map[string]bool
 	runDetails bool
 	// drafter has Claude draft a prompt typed after n, in startDir's project
-	// when there is one, and sender hands the draft to the factory. draft is
+	// when there is one, and sender hands the draft to the factory; continuer
+	// starts a run that picks up a finished one's work. draft is
 	// where that has got to: prompt is what is being typed, draftRoot the
 	// project Claude is drafting in, and draftResult what it made. draftCancel
 	// stops Claude, whose activity arrives on draftActivity until draftWait
@@ -217,6 +218,7 @@ type Model struct {
 	draftCtx      context.Context
 	drafter       Drafter
 	sender        Sender
+	continuer     Continuer
 	startDir      string
 	draft         draftState
 	prompt        string
@@ -246,6 +248,8 @@ type Model struct {
 	draftTook    time.Duration
 	// sendingDraft is true from enter until the factory answers.
 	sendingDraft bool
+	// continuing is true from r until the factory answers.
+	continuing bool
 	// planner makes a plan with Claude, opened with p, in startDir's project
 	// like a draft. planScreen is the planning screen once there is one, kept
 	// when it is closed until its plan is sent; planOpen is whether it is
@@ -372,6 +376,8 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.requestRunCancel(run, wasConfirm)
 	case key.Matches(msg, k.Delete):
 		return m.requestRunDelete(run, wasConfirm)
+	case key.Matches(msg, k.Continue):
+		return m.continueRun(run)
 	case key.Matches(msg, k.ToggleEnded):
 		return m.toggleEnded(), nil
 	case key.Matches(msg, k.Right):
@@ -520,6 +526,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionActionMsg:
 		return m.withSessionAction(msg), nil
+
+	case runContinuedMsg:
+		return m.withRunContinued(msg), nil
 
 	case tea.KeyboardEnhancementsMsg, prOpenedMsg, rowNoteExpiredMsg:
 		return m.updateRowNote(msg)

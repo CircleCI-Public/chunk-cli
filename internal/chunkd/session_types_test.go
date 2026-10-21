@@ -6,20 +6,25 @@ import (
 	"gotest.tools/v3/assert"
 )
 
-// Only a run that stopped failing with committed work on a branch has
-// something for --continue to pick up.
-func TestContinuableNeedsFailingCommittedWorkOnABranch(t *testing.T) {
+// Only a run that stopped short of passing with committed work on a branch
+// has something for --continue to pick up.
+func TestContinuableNeedsUnfinishedCommittedWorkOnABranch(t *testing.T) {
 	cases := map[string]struct {
 		run  FactoryRun
 		want bool
 	}{
-		"exhausted":     {FactoryRun{Result: ResultExhausted, Committed: true, Branch: "chunk/factory/abc"}, true},
-		"stuck":         {FactoryRun{Result: ResultStuck, Committed: true, Branch: "chunk/factory/abc"}, true},
-		"passed":        {FactoryRun{Result: ResultPassed, Committed: true, Branch: "chunk/factory/abc"}, false},
-		"no change":     {FactoryRun{Result: ResultNoChange, Committed: true, Branch: "chunk/factory/abc"}, false},
-		"not committed": {FactoryRun{Result: ResultExhausted, Branch: "chunk/factory/abc"}, false},
-		"no branch":     {FactoryRun{Result: ResultExhausted, Committed: true}, false},
-		"still running": {FactoryRun{Committed: true, Branch: "chunk/factory/abc"}, false},
+		"exhausted": {FactoryRun{Result: ResultExhausted, Committed: true, Branch: "chunk/factory/abc"}, true},
+		"stuck":     {FactoryRun{Result: ResultStuck, Committed: true, Branch: "chunk/factory/abc"}, true},
+		// A run that errored or was cancelled part way ends with no result.
+		"errored or cancelled": {FactoryRun{Committed: true, Branch: "chunk/factory/abc", Stat: "1 file changed, 2 insertions(+)"}, true},
+		// It may have stopped before the implementer changed anything.
+		"errored with nothing committed": {FactoryRun{Committed: true, Branch: "chunk/factory/abc"}, false},
+		"errored, stat unknown":          {FactoryRun{Committed: true, Branch: "chunk/factory/abc", StatError: "boom"}, true},
+		"passed":                         {FactoryRun{Result: ResultPassed, Committed: true, Branch: "chunk/factory/abc"}, false},
+		"no change":                      {FactoryRun{Result: ResultNoChange, Committed: true, Branch: "chunk/factory/abc"}, false},
+		"not committed":                  {FactoryRun{Result: ResultExhausted, Branch: "chunk/factory/abc"}, false},
+		"no branch":                      {FactoryRun{Result: ResultExhausted, Committed: true}, false},
+		"still running":                  {FactoryRun{Branch: "chunk/factory/abc"}, false},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

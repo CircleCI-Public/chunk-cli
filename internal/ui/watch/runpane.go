@@ -857,7 +857,11 @@ func (m Model) runOutcomeLines(st watchStyles, s chunkd.Session) (lines []string
 			lines = append(lines, "  "+st.vdim("work    ")+st.dim("not committed, in "+f.Worktree))
 		}
 		if f.Continuable() {
-			lines = append(lines, "  "+st.vdim("next    ")+st.muted(f.ContinueCommand()))
+			next := f.ContinueCommand()
+			if m.continuer != nil {
+				next = "press r to continue it, or " + next
+			}
+			lines = append(lines, "  "+st.vdim("next    ")+st.muted(next))
 		}
 	}
 	if len(lines) == 0 {
