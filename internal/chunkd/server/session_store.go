@@ -130,15 +130,16 @@ func newSessionStore(parent context.Context) *sessionStore {
 	}
 }
 
-// add creates a running entry for s. If the project already has a session that
-// has not ended it creates nothing and says why. One at a time per project.
+// add creates a running entry for s. A project can have any number of sessions
+// going at once, each in its own worktree. The exception is a session that
+// continues a run: the continuation takes over that run's worktree, so it is
+// refused while the run is still going or another session is continuing it.
+// It then creates nothing and says why.
 func (s *sessionStore) add(sess chunkd.Session) (*sessionEntry, context.Context, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, id := range s.byProject[sess.ProjectRoot] {
-		if other := s.sessions[id]; other != nil && !other.snapshot().State.Finished() {
-			return nil, nil, fmt.Sprintf("a session is already active for this project (session %s)", id)
-		}
+	if busy := s.continuingLocked(sess); busy != "" {
+		return nil, nil, busy
 	}
 	sess.ID = uuid.NewString()
 	sess.State = chunkd.SessionRunning
@@ -154,6 +155,32 @@ func (s *sessionStore) add(sess chunkd.Session) (*sessionEntry, context.Context,
 	s.byProject[sess.ProjectRoot] = append(s.byProject[sess.ProjectRoot], sess.ID)
 	s.evictLocked(sess.ProjectRoot)
 	return entry, ctx, ""
+}
+
+// continuingLocked says why sess cannot start because a live session of its
+// project is using the worktree of the run sess continues, or "" when none is.
+func (s *sessionStore) continuingLocked(sess chunkd.Session) string {
+	if sess.Factory == nil || sess.Factory.ContinuesRunID == "" {
+		return ""
+	}
+	from := sess.Factory.ContinuesRunID
+	for _, id := range s.byProject[sess.ProjectRoot] {
+		other := s.sessions[id]
+		if other == nil {
+			continue
+		}
+		snap := other.snapshot()
+		if snap.State.Finished() || snap.Factory == nil {
+			continue
+		}
+		switch from {
+		case snap.Factory.RunID:
+			return fmt.Sprintf("factory run %s is still running (session %s)", from, id)
+		case snap.Factory.ContinuesRunID:
+			return fmt.Sprintf("factory run %s is already being continued (session %s)", from, id)
+		}
+	}
+	return ""
 }
 
 // evictLocked drops the oldest finished sessions until the project is within

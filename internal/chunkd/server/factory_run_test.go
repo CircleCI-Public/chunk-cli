@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -303,13 +304,26 @@ func TestRunningSessionIsNotDeleted(t *testing.T) {
 	assert.Assert(t, s.get(e.snapshot().ID) != nil)
 }
 
-// One session at a time per project.
-func TestFactorySessionsTakeTurns(t *testing.T) {
-	s := newSessionStore(context.Background())
-	_, _, busy := s.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
-	assert.Equal(t, busy, "")
-	_, _, busy = s.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
-	assert.Assert(t, busy != "", "two factory runs ran at once")
+// Two factory runs in one project go at once, each in its own worktree.
+func TestFactorySessionsRunSideBySide(t *testing.T) {
+	release := make(chan struct{})
+	var started sync.WaitGroup
+	started.Add(2)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		started.Done()
+		<-release
+		return factory.Report{Outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 1}}, nil
+	})
+
+	first, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	second, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "fix the typo"})
+	assert.NilError(t, err, "a second run in the project was refused")
+	started.Wait()
+
+	close(release)
+	waitForSessionEnd(t, d, first.ID)
+	waitForSessionEnd(t, d, second.ID)
 }
 
 // TestFactorySessionKeepsItsLog guards --log and --verbose on the daemon: the

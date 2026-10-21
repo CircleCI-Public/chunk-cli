@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -20,22 +21,40 @@ func finish(e *sessionEntry, state chunkd.SessionState) {
 	close(e.done)
 }
 
-func TestSessionStoreAllowsOneActiveSessionPerProject(t *testing.T) {
+func TestSessionStoreAllowsSessionsSideBySide(t *testing.T) {
 	store := newSessionStore(t.Context())
 
-	first, _, busy := store.add(chunkd.Session{ProjectRoot: "/p"})
+	first, _, busy := store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
 	assert.Equal(t, busy, "")
 	assert.Equal(t, len(first.snapshot().Stages), len(newStages()))
 
-	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p"})
-	assert.Assert(t, busy != "", "a second session on the same project must be refused")
+	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
+	assert.Equal(t, busy, "", "a second run in the same project has its own worktree")
+	assert.Equal(t, len(store.forProject("/p")), 2)
+}
 
-	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/other"})
-	assert.Equal(t, busy, "", "another project is independent")
+func TestSessionStoreRefusesToContinueARunInUse(t *testing.T) {
+	store := newSessionStore(t.Context())
 
-	finish(first, chunkd.SessionDone)
-	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p"})
-	assert.Equal(t, busy, "", "an ended session no longer blocks the project")
+	running, _, busy := store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{RunID: "run-1"}})
+	assert.Equal(t, busy, "")
+
+	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}})
+	assert.Assert(t, strings.Contains(busy, "still running"), busy)
+
+	finish(running, chunkd.SessionDone)
+	continuing, _, busy := store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}})
+	assert.Equal(t, busy, "", "an ended run can be continued")
+
+	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}})
+	assert.Assert(t, strings.Contains(busy, "already being continued"), busy)
+
+	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-2"}})
+	assert.Equal(t, busy, "", "continuing another run is independent")
+
+	finish(continuing, chunkd.SessionDone)
+	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}})
+	assert.Equal(t, busy, "", "an ended continuation no longer holds the run")
 }
 
 func TestSessionStoreKeepsTheNewestFinishedSessionsNewestFirst(t *testing.T) {

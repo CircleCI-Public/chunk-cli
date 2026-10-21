@@ -13,7 +13,7 @@ import (
 // SessionRefused is the daemon's refusal of a session request: it was reachable
 // and understood the request, and said no. The message is the daemon's own and
 // is meant to be shown as is; Status tells a caller which kind of no it was
-// (409 a session is already active, 503 the daemon lacks a credential, ...).
+// (409 the run it continues is in use, 503 the daemon lacks a credential, ...).
 type SessionRefused struct {
 	Status  int
 	Message string
