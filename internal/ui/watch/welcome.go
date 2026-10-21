@@ -23,9 +23,13 @@ func (m Model) welcoming() bool {
 func (m Model) renderWelcome(st watchStyles) string {
 	inner := max(m.width-2, 0)
 	height := m.contentHeight()
-	rows := m.welcomeRows(st, true)
-	if len(rows) > height {
-		rows = m.welcomeRows(st, false)
+	// The mascot gives way, to its smaller size and then to nothing, before
+	// the buttons do: they are the only place the keys are named.
+	var rows []string
+	for _, size := range []logoSize{logoBig, logoSmall, logoNone} {
+		if rows = m.welcomeRows(st, size); len(rows) <= height {
+			break
+		}
 	}
 	top := max((height-len(rows))/2, 0)
 
@@ -44,11 +48,23 @@ func (m Model) renderWelcome(st watchStyles) string {
 	return b.String()
 }
 
-func (m Model) welcomeRows(st watchStyles, big bool) []string {
+// logoSize is how large the welcome draws the mascot.
+type logoSize int
+
+const (
+	logoBig logoSize = iota
+	logoSmall
+	logoNone
+)
+
+func (m Model) welcomeRows(st watchStyles, size logoSize) []string {
 	rows := make([]string, 0, len(logoLines)+8)
-	logo := logoLines
-	if big {
-		logo = scaleLogo(logo)
+	var logo []string
+	switch size {
+	case logoBig:
+		logo = scaleLogo(logoLines)
+	case logoSmall:
+		logo = logoLines
 	}
 	// Every row is padded to the widest so the rows are centred as one block;
 	// centred one by one the ragged right edge would shear the mascot.
@@ -59,7 +75,9 @@ func (m Model) welcomeRows(st watchStyles, big bool) []string {
 	for _, l := range logo {
 		rows = append(rows, st.vdim(padLine(l, width)))
 	}
-	rows = append(rows, "")
+	if len(logo) > 0 {
+		rows = append(rows, "")
+	}
 
 	k := m.keys()
 	var buttons []string

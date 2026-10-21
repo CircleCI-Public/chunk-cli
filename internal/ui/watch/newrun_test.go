@@ -577,3 +577,16 @@ func TestTheDraftSectionsFitEightyColumns(t *testing.T) {
 		}
 	}
 }
+
+// On a short terminal the mascot gives way so the buttons, which are the only
+// place the keys are named, stay in view.
+func TestTheWelcomeKeepsItsButtonsOnAShortTerminal(t *testing.T) {
+	f := &fakeDrafts{}
+	m := sessModel().WithDrafts(t.Context(), "/src/chunk-cli", f.makeDraft, f.send).WithPlans(t.Context(), (&fakePlans{}).planner)
+	for _, height := range []int{24, 16, 12} {
+		m.width, m.height = 80, height
+		out := view(m)
+		assert.Assert(t, strings.Contains(out, "n  new run") && strings.Contains(out, "p  plan a run"), "height %d: %s", height, out)
+		assert.Equal(t, strings.Count(m.render(), "\n"), height)
+	}
+}
