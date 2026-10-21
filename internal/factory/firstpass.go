@@ -52,12 +52,11 @@ func FirstPass(ctx context.Context, rec Record, model string, onActivity func(cl
 	start := time.Now()
 	s := claudecode.NewStream(onActivity)
 	var stderr bytes.Buffer
-	args := []string{
-		"-p", "--output-format", "stream-json", "--verbose",
+	args := append(streamArgs(),
 		"--permission-mode", "acceptEdits",
-		"--disallowedTools", strings.Join(disallowedGit, ","),
-		"--append-system-prompt", firstPassSystemPrompt,
-	}
+		flagDisallowedTools, strings.Join(disallowedGit, ","),
+		flagAppendSystemPrompt, firstPassSystemPrompt,
+	)
 	if model != "" {
 		args = append(args, "--model", model)
 	}
