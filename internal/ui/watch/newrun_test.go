@@ -405,29 +405,28 @@ func TestTheDraftIsTimed(t *testing.T) {
 	assert.Assert(t, strings.Contains(view(m), "drafted in 1m12s"), view(m))
 }
 
-// An empty dashboard names the two ways to begin, each with its key, so a new
-// user is not left to find them in the footer.
-func TestAnEmptyDashboardOffersNewRunAndPlan(t *testing.T) {
+// An empty dashboard offers each way to begin only when its key is on, and
+// always leaves the command to run.
+func TestAnEmptyDashboardOffersOnlyTheKeysThatAreOn(t *testing.T) {
 	f := &fakeDrafts{}
-	m := sessModel().WithDrafts(t.Context(), "/src/chunk-cli", f.makeDraft, f.send)
-	out := view(m)
-	assert.Assert(t, strings.Contains(out, "Let's build"), out)
-	assert.Assert(t, strings.Contains(out, "[n] new run"), out)
-	assert.Assert(t, !strings.Contains(out, "[p]"), "plan is not offered without a planner: %s", out)
-
-	m = m.WithPlans(t.Context(), (&fakePlans{}).planner)
-	out = view(m)
-	assert.Assert(t, strings.Contains(out, "[n] new run   [p] plan a run"), out)
-	assert.Assert(t, strings.Contains(out, `or run: chunk factory build "<what to change>"`), out)
-
-	// A key that is off does not hide the one that is on.
-	out = view(sessModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).WithPlans(t.Context(), (&fakePlans{}).planner))
-	assert.Assert(t, strings.Contains(out, "[p] plan a run") && strings.Contains(out, "Let's build"), out)
-	assert.Assert(t, !strings.Contains(out, "[n]"), out)
-
-	out = view(sessModel())
-	assert.Assert(t, !strings.Contains(out, "[n]") && !strings.Contains(out, "Let's build"), "no keys, nothing to press: %s", out)
-	assert.Assert(t, strings.Contains(out, `Start one with: chunk factory build "<what to change>"`), out)
+	plans := (&fakePlans{}).planner
+	cases := map[string]struct {
+		m    Model
+		n, p bool
+	}{
+		"neither": {sessModel(), false, false},
+		"new run": {sessModel().WithDrafts(t.Context(), "/src/chunk-cli", f.makeDraft, f.send), true, false},
+		"plan":    {sessModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).WithPlans(t.Context(), plans), false, true},
+		"both":    {sessModel().WithDrafts(t.Context(), "/src/chunk-cli", f.makeDraft, f.send).WithPlans(t.Context(), plans), true, true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			out := view(tc.m)
+			assert.Equal(t, strings.Contains(out, "[n]"), tc.n, out)
+			assert.Equal(t, strings.Contains(out, "[p]"), tc.p, out)
+			assert.Assert(t, strings.Contains(out, "chunk factory build"), "the command is always left: %s", out)
+		})
+	}
 }
 
 // While a sent draft's run is not listed yet, a key goes back to the dashboard
