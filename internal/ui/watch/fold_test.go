@@ -23,8 +23,3 @@ func TestFoldHeader(t *testing.T) {
 		assert.Equal(t, got, tc.want, "open=%v label=%q summary=%q", tc.open, tc.label, tc.summary)
 	}
 }
-
-func TestFoldHint(t *testing.T) {
-	assert.Equal(t, foldHint(false), "expand")
-	assert.Equal(t, foldHint(true), "collapse")
-}

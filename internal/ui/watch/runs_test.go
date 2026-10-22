@@ -295,7 +295,7 @@ func foldingRun() sessionInfo {
 	r := failedRun()
 	var log []string
 	for i := 1; i <= 20; i++ {
-		log = append(log, fmt.Sprintf("log line %d", i))
+		log = append(log, fmt.Sprintf("line-%02d", i))
 	}
 	r.s.Rounds[1].Checks[0].Output = strings.Join(log, "\n")
 	r.s.Rounds[1].Implement.Summary = "Added the flag and its test."
@@ -325,19 +325,19 @@ func TestSpaceFoldsACheckOpenUnderItsRow(t *testing.T) {
 
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "▸ ✗  lint"), out)
-	assert.Assert(t, strings.Contains(out, "log line 20") && !strings.Contains(out, "log line 17"), "shut, the row shows its last few lines:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "line-20") && !strings.Contains(out, "line-17"), "shut, the row shows its last few lines:\n%s", out)
 
 	m, _ = press(m, ' ')
 	assert.Assert(t, m.roundOpen(m.selectedRun().s, 1), "the round stays open")
 	out = stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "▾ ✗  lint"), out)
 	assert.Assert(t, strings.Contains(out, "… 5 earlier lines"), out)
-	assert.Assert(t, strings.Contains(out, "log line 6") && strings.Contains(out, "log line 20"), out)
-	assert.Assert(t, !strings.Contains(out, "log line 5\n") && !strings.Contains(out, "log line 5 "), "the start of the log is cut:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "line-06") && strings.Contains(out, "line-20"), out)
+	assert.Assert(t, !strings.Contains(out, "line-05"), "the start of the log is cut:\n%s", out)
 
 	m, _ = press(m, ' ')
 	out = stripANSI(m.render())
-	assert.Assert(t, !strings.Contains(out, "log line 6"), out)
+	assert.Assert(t, !strings.Contains(out, "line-06"), out)
 }
 
 // The implementer's row folds open to what it said it did.
