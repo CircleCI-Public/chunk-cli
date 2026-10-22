@@ -24,6 +24,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
 // Turner sends the developer's message to the planning agent and returns its
@@ -723,7 +724,7 @@ func (m *Model) userBubble(msg *message, w int) string {
 	// A short message gets a bubble that fits it; a long one wraps at inner.
 	text := strings.Join(parts, "\n")
 	fit := min(lipgloss.Width(text), inner)
-	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accentColor).
+	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.teal()).
 		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
 	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
 }
@@ -798,12 +799,7 @@ func (m *Model) restyle() {
 	m.renderChat()
 }
 
-var (
-	// accentColor marks what has the keyboard: the focused pane's border,
-	// the plan's cursor and the footer's keys.
-	accentColor = lipgloss.Color("6")
-	claudeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
-)
+var claudeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
 
 // Content is the screen as its host draws it: the panes and the footer,
 // filling the size it was last sent.
@@ -812,14 +808,13 @@ func (m Model) Content() string {
 		return ""
 	}
 	pane := func(focused bool, w int, title, content string) string {
-		edge := lipgloss.Color("8")
+		edge := m.quiet()
 		if focused {
-			edge = accentColor
+			edge = m.teal()
 		}
 		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-			Background(m.surface()).Padding(padY, padX, 0, padX).
+			Padding(padY, padX, 0, padX).
 			Width(w).Height(m.height - m.topRows() - footerRows)
-		content = paint(content, w-borderSize-2*padX, m.surface())
 		return titled(s.Render(content), title, lipgloss.NewStyle().Foreground(edge).Render)
 	}
 	// The pane without the keyboard has a dim title as well as a dim border.
@@ -855,11 +850,11 @@ func (m Model) Content() string {
 // inputBox is the message being written, in a box of its own under the chat
 // that takes the accent colour when it has the keyboard.
 func (m Model) inputBox() string {
-	edge := lipgloss.Color("8")
+	edge := m.quiet()
 	if m.focus == paneChat && !m.commenting {
-		edge = accentColor
+		edge = m.teal()
 	}
-	ground := m.hue("#ffffff", "#0d1015")
+	ground := theme.New(m.dark).Field.GetBackground()
 	w := m.chatWidth() - borderSize - 2*padX
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
 		Background(ground).Width(w).Render(paint(m.input.View(), w-borderSize, ground))

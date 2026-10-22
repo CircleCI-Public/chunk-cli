@@ -288,19 +288,16 @@ const gutterWidth = 2
 // it scrolls inside itself.
 const maxCommentRows = 6
 
-var (
-	// cursorMark and commentMark are the gutter's two columns: the cursor's
-	// mark on the left, the comment's on the right.
-	cursorMark  = lipgloss.NewStyle().Foreground(accentColor).Render("▌")
-	commentMark = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("┃")
-)
+// commentMark is the gutter's right column, the comment's mark. The cursor's
+// mark on the left is in the accent, so it follows the terminal's background.
+var commentMark = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("┃")
 
 // gutter is the two cells left of a line: the cursor's mark, then the
 // comment's.
-func gutter(cursor, commented bool) string {
+func (m *Model) gutter(cursor, commented bool) string {
 	g := " "
 	if cursor {
-		g = cursorMark
+		g = m.style(m.teal()).Render("▌")
 	}
 	if commented {
 		return g + commentMark
@@ -354,7 +351,7 @@ func (m *Model) drawPlan() {
 		m.blockTop[i] = len(lines)
 		ci := m.commentAt(i)
 		editing := m.commenting && i == m.cursor
-		g := gutter(i == m.cursor && m.focus == panePlan, ci >= 0 || editing)
+		g := m.gutter(i == m.cursor && m.focus == panePlan, ci >= 0 || editing)
 		for _, l := range b.lines {
 			// The block the cursor is on is raised off the pane.
 			if i == m.cursor && m.focus == panePlan {
@@ -374,7 +371,7 @@ func (m *Model) drawPlan() {
 		for k, ci := range orphans {
 			s := len(m.blocks) + k
 			editing := m.commenting && m.cursor == s
-			g := gutter(s == m.cursor && m.focus == panePlan, true)
+			g := m.gutter(s == m.cursor && m.focus == panePlan, true)
 			m.blockTop[s] = len(lines)
 			lines = append(lines, g+"  "+ui.HelperStyle.Render(excerpt(m.comments[ci].quote, w-2)))
 			for _, l := range m.commentLines(ci, editing, w-4) {

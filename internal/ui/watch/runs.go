@@ -13,6 +13,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
 // maxRuns caps the ended runs the left pane lists. Live runs are always
@@ -689,7 +690,7 @@ const outcomeFailed = "failed"
 // runChip is the run's state as a coloured block: the one thing in the run
 // list the eye should find first.
 func runChip(st watchStyles, s chunkd.Session) string {
-	text, bg := "running", chunkYellow
+	text, bg := "running", theme.Yellow
 	if s.State != chunkd.SessionRunning {
 		text = truncate(runLabel(s), 14)
 		switch text {
@@ -700,7 +701,7 @@ func runChip(st watchStyles, s chunkd.Session) string {
 		case prLabelMerged:
 			bg = lipgloss.Color("5")
 		default:
-			bg = chunkGreen
+			bg = theme.Green
 		}
 	}
 	return st.Chip.Background(bg).Render(" " + text + " ")

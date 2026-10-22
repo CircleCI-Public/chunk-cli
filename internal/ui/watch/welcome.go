@@ -48,6 +48,7 @@ func (m Model) renderWelcome(st watchStyles) string {
 		line = padLine(clip(strings.Repeat(" ", pad)+line, inner), inner)
 		b.WriteString(edge("│") + line + edge("│") + "\n")
 	}
+	b.WriteString(edge("╰"+strings.Repeat("─", inner)+"╯") + "\n")
 	return b.String()
 }
 
