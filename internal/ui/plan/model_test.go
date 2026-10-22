@@ -192,6 +192,57 @@ func TestCommentsComeBackWhenTheTurnFails(t *testing.T) {
 	}
 }
 
+func TestSSendsCommentsFromThePlan(t *testing.T) {
+	var sent []string
+	turn := func(_ context.Context, msg string, _ func(string)) (string, string, error) {
+		sent = append(sent, msg)
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+
+	// A message started in the chat, then a comment in the plan.
+	m = typeText(t, m, "draft")
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	m = drive(t, m, press("enter"))
+	if bar := ansi.Strip(m.actionBar()); !strings.Contains(bar, "s Send 1 comment to Claude") {
+		t.Errorf("the action bar does not offer s:\n%s", bar)
+	}
+
+	m = drive(t, m, press("s"))
+	if len(sent) != 2 || !strings.Contains(sent[1], "My comment: too vague") {
+		t.Fatalf("turns: %q", sent)
+	}
+	if strings.Contains(sent[1], "draft") {
+		t.Errorf("the chat's draft, out of sight, was sent: %q", sent[1])
+	}
+	if m.focus != panePlan || len(m.comments) != 0 || m.input.Value() != "draft" {
+		t.Errorf("focus %v, comments %+v, draft %q", m.focus, m.comments, m.input.Value())
+	}
+}
+
+func TestSInThePlanWaitsForClaude(t *testing.T) {
+	var turns int
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		turns++
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	m = drive(t, m, press("enter"))
+
+	m.busy = true
+	m = drive(t, m, press("s"))
+	if turns != 1 || len(m.comments) != 1 || !strings.Contains(ansi.Strip(m.status), "still answering") {
+		t.Errorf("turns %d, comments %+v, status %q", turns, m.comments, m.status)
+	}
+}
+
 func TestCommentEditorOpensUnderItsBlock(t *testing.T) {
 	turn := func(context.Context, string, func(string)) (string, string, error) {
 		return "ok", twoParts, nil

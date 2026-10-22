@@ -137,6 +137,7 @@ func (m Model) actionBar() string {
 	// What the buttons say is left out of the hints.
 	k.Stop.SetEnabled(false)
 	k.SendPlan.SetEnabled(false)
+	k.SendComments.SetEnabled(false)
 	room := max(inner-lipgloss.Width(right)-2, 0)
 	hints := ansi.Truncate(theme.Help(theme.New(m.dark), room).View(k), room, "…")
 	gap := max(inner-lipgloss.Width(hints)-lipgloss.Width(right), 1)
@@ -165,7 +166,7 @@ func (m Model) actions() (main, side string) {
 	case n > 0:
 		send := fmt.Sprintf("enter Send %d %s to Claude", n, plural(n, "comment", "comments"))
 		if m.focus == panePlan {
-			send = "tab, enter " + strings.TrimPrefix(send, "enter ")
+			send = "s " + strings.TrimPrefix(send, "enter ")
 		}
 		return button(m.teal(), send), m.style(m.faint()).Render(approve + " · resolve comments first")
 	}
