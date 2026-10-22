@@ -135,25 +135,7 @@ func (m Model) keys() keyMap {
 	if m.showEnded {
 		k.ToggleEnded.SetHelp("e", "hide finished")
 	}
-	// The footer says what Space will do at the cursor: expand or collapse the
-	// fold that has it, or, on a row inside an open round, collapse the round.
-	// Branch and PR have nothing to fold, so Toggle is disabled there.
-	if it := m.selectedRunItem(); run != nil && it != nil {
-		switch it.kind { //nolint:exhaustive // itemImplement, itemCheck and itemReview fall to the default
-		case itemTask:
-			k.Toggle.SetEnabled(right && len(taskLines(run.s.Factory.Prompt, m.taskWidth(), false)) > maxGoalLines)
-			k.Toggle.SetHelp("Space", foldHint(m.taskExpanded(run.s.ID)))
-			k.Copy.SetHelp("c", "copy task")
-		case itemRound:
-			k.Toggle.SetHelp("Space", foldHint(m.roundOpen(run.s, it.round)))
-		case itemDetails:
-			k.Toggle.SetHelp("Space", foldHint(m.detailsShown(run.s.ID)))
-		case itemBranch, itemPR:
-			k.Toggle.SetEnabled(false)
-		default: // a row inside an open round
-			k.Toggle.SetHelp("Space", "collapse round")
-		}
-	}
+	k.setToggleHint(m, run, right)
 	if m.searching || m.draft != draftNone {
 		// Typing goes to the search or the prompt, and a draft being made or
 		// shown has keys of its own, so no other key does anything.
@@ -189,6 +171,31 @@ func (k *keyMap) enableBranchAndPR(m Model, run *sessionInfo) {
 		k.Copy.SetHelp("c", "copy URL")
 	case onBranch:
 		k.Copy.SetHelp("c", "copy branch")
+	}
+}
+
+// setToggleHint says in the footer what Space will do at the cursor: expand
+// or collapse the fold that has it. A row with nothing to fold — the branch,
+// the PR, a check that passed, a review still running — gets no hint.
+func (k *keyMap) setToggleHint(m Model, run *sessionInfo, right bool) {
+	it := m.selectedRunItem()
+	if run == nil || it == nil {
+		return
+	}
+	switch it.kind {
+	case itemTask:
+		k.Toggle.SetEnabled(right && len(taskLines(run.s.Factory.Prompt, m.taskWidth(), false)) > maxGoalLines)
+		k.Toggle.SetHelp("Space", foldHint(m.taskExpanded(run.s.ID)))
+		k.Copy.SetHelp("c", "copy task")
+	case itemRound:
+		k.Toggle.SetHelp("Space", foldHint(m.roundOpen(run.s, it.round)))
+	case itemDetails:
+		k.Toggle.SetHelp("Space", foldHint(m.detailsShown(run.s.ID)))
+	case itemImplement, itemCheck, itemReview:
+		k.Toggle.SetEnabled(right && rowFoldable(run.s, *it))
+		k.Toggle.SetHelp("Space", foldHint(m.rowOpen(run.s.ID, *it)))
+	case itemBranch, itemPR:
+		k.Toggle.SetEnabled(false)
 	}
 }
 

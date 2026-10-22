@@ -781,7 +781,8 @@ chunk
   One round starts open: the latest, or on a run that ended failing, the one
   that failed. The others are a line each (how they came out, findings,
   duration). `Space` expands or collapses whatever has the cursor — the task, a
-  round, or details — and the footer names what it will do there; a collapsed
+  round, details, or a row inside a round — and the footer names what it will
+  do there, or names nothing on a row with nothing to fold; a collapsed
   block's header sums up what it holds, and `Enter` does the same on a row
   with nothing else to open. During a run's first round, a few lines under the status say
   what a round is, what the cap means and how to change it with
@@ -796,9 +797,13 @@ chunk
   worth changing ("3 issues, 1 worth changing"). A line under the rounds says what
   is happening and whether there is anything to do ("Now: the implementer is making the
   change. Nothing to do yet.", or, once the run ended, whether the checks passed). `→` moves into
-  the pane, `↑/↓` picks a row and `Enter` opens it: a review's live log, a
-  failed check's output, or the implementer's summary (on a round, it opens or
-  closes the round). Once the run has ended, its `Branch:` row takes the cursor,
+  the pane and `↑/↓` picks a row. A row inside a round that has something behind
+  it carries a `▸`, and `Space` folds that open under the row, up to 15 lines:
+  the implementer's summary and diff stat, a failed check's kept output (its
+  end), or a finished review's findings, fetched the first time it is opened.
+  `Enter` opens the same in a full-screen view to read all of it, and is the
+  way to follow a review that is still running (on a round, it opens or closes
+  the round). Once the run has ended, its `Branch:` row takes the cursor,
   and so does its `Pull request:` row once the pull request is open (a pull
   request that is still being pushed, failed or was skipped has no link to act
   on, so it cannot be selected). `c` copies what has the cursor, the branch

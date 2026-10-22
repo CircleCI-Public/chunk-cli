@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
@@ -219,21 +220,26 @@ func (m Model) toggleTask(runID string) Model {
 	return m
 }
 
-// toggleRunRow flips the expand state of the selected row: the task, when
-// that is what is selected, or its round otherwise.
-func (m Model) toggleRunRow(run *sessionInfo) Model {
+// toggleRunRow flips the expand state of the selected row: the task, a
+// round, details, or a row inside a round, which folds open under itself.
+func (m Model) toggleRunRow(run *sessionInfo) (Model, tea.Cmd) {
 	items := m.runItems(run.s)
 	if m.runItem >= len(items) {
-		return m
+		return m, nil
 	}
-	switch items[m.runItem].kind { //nolint:exhaustive // every other row's default is to toggle its round
+	it := items[m.runItem]
+	switch it.kind {
 	case itemTask:
-		return m.toggleTask(run.s.ID)
+		return m.toggleTask(run.s.ID), nil
+	case itemRound:
+		return m.toggleRound(run), nil
 	case itemDetails:
-		return m.toggleDetails(run.s.ID)
-	default:
-		return m.toggleRound(run)
+		return m.toggleDetails(run.s.ID), nil
+	case itemImplement, itemCheck, itemReview:
+		return m.toggleRow(run, it)
+	case itemBranch, itemPR:
 	}
+	return m, nil
 }
 
 // ---- status ------------------------------------------------------------------
@@ -659,6 +665,13 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 	idx := 1
 
 	rows := m.roundRows(st, r)
+	items := roundItems(s, ri)
+	// The fold marker gets a column only in a round where a row folds, so a
+	// round of passed checks lines up as it always has.
+	folds := false
+	for _, it := range items {
+		folds = folds || rowFoldable(s, it)
+	}
 	nImpl := 0
 	if r.Implement != nil {
 		nImpl = 1
@@ -675,12 +688,27 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 		if row.waiting {
 			name = st.dim(name)
 		}
-		line := pad(idx, indent) + branch + row.icon + "  " + name + strings.Repeat(" ", max(nameWidth-utf8.RuneCountInString(row.name), 0))
+		// A row with something behind it carries a fold marker, and open, its
+		// fold in place of the few lines it shows under itself when shut.
+		it := items[idx-1]
+		marker, open := "", false
+		if folds {
+			marker = "  "
+		}
+		if rowFoldable(s, it) {
+			open = m.rowOpen(s.ID, it)
+			marker = st.vdim(foldHeader(open, "", ""))
+		}
+		line := pad(idx, indent) + branch + marker + row.icon + "  " + name + strings.Repeat(" ", max(nameWidth-utf8.RuneCountInString(row.name), 0))
 		if row.detail != "" {
 			line += "   " + row.detail
 		}
 		lines = append(lines, line)
-		lines = append(lines, row.extra...)
+		if open {
+			lines = append(lines, m.rowFoldLines(st, s, it)...)
+		} else {
+			lines = append(lines, row.extra...)
+		}
 		if first+idx == sel {
 			end = len(lines)
 		}

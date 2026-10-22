@@ -254,9 +254,9 @@ func TestRunningImplementerRowShowsItsProgress(t *testing.T) {
 	assert.Assert(t, !strings.Contains(out, "quiet"), out)
 }
 
-// A finished round opens and closes on Space, from its header or from a row
-// inside it, and the selection stays on the header.
-func TestRoundsOpenAndCloseAndKeepTheSelectionOnTheHeader(t *testing.T) {
+// A finished round opens and closes on Space or Enter from its header, and
+// Space on a row inside it leaves the round open.
+func TestRoundsOpenAndCloseFromTheirHeader(t *testing.T) {
 	r := failedRun()
 	m := sessModel(r)
 	m.selRun = "abc"
@@ -271,21 +271,110 @@ func TestRoundsOpenAndCloseAndKeepTheSelectionOnTheHeader(t *testing.T) {
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "▾ Round 1") && strings.Contains(out, "unit tests"), out)
 
-	// From a row inside round 2: space closes the round and selects its header.
-	m, _ = press(m, tea.KeyDown, tea.KeyDown, tea.KeyDown, tea.KeyDown) // header 1 → implement, lint(round 1), test, header 2... walk to a row of round 2
-	items := m.runItems(m.selectedRun().s)
-	for items[m.runItem].round != 1 || items[m.runItem].kind != itemCheck {
+	// A row inside round 2 has nothing to fold, so Space leaves the round be.
+	for it := m.selectedRunItem(); it.round != 1 || it.kind != itemCheck; it = m.selectedRunItem() {
 		m, _ = press(m, tea.KeyDown)
 	}
 	m, _ = press(m, ' ')
-	items = m.runItems(m.selectedRun().s)
-	assert.Assert(t, !m.roundOpen(m.selectedRun().s, 1))
-	assert.Equal(t, items[m.runItem].kind, itemRound)
-	assert.Equal(t, items[m.runItem].round, 1)
+	assert.Assert(t, m.roundOpen(m.selectedRun().s, 1))
+	assert.Equal(t, m.selectedRunItem().kind, itemCheck)
 
-	// Enter on a header toggles too.
+	// From its header, Space closes it and Enter opens it again.
+	for *m.selectedRunItem() != (runItem{kind: itemRound, round: 1}) {
+		m, _ = press(m, tea.KeyUp)
+	}
+	m, _ = press(m, ' ')
+	assert.Assert(t, !m.roundOpen(m.selectedRun().s, 1))
 	m, _ = press(m, tea.KeyEnter)
 	assert.Assert(t, m.roundOpen(m.selectedRun().s, 1))
+}
+
+// foldingRun is failedRun with something behind round 2's rows: a long log
+// kept for its failing lint check and the implementer's account of its turn.
+func foldingRun() sessionInfo {
+	r := failedRun()
+	var log []string
+	for i := 1; i <= 20; i++ {
+		log = append(log, fmt.Sprintf("log line %d", i))
+	}
+	r.s.Rounds[1].Checks[0].Output = strings.Join(log, "\n")
+	r.s.Rounds[1].Implement.Summary = "Added the flag and its test."
+	return r
+}
+
+// selectRow moves the cursor in the run pane down to row it.
+func selectRow(t *testing.T, m Model, it runItem) Model {
+	t.Helper()
+	for range m.runItems(m.selectedRun().s) {
+		if *m.selectedRunItem() == it {
+			return m
+		}
+		m, _ = press(m, tea.KeyDown)
+	}
+	t.Fatalf("no row %+v", it)
+	return m
+}
+
+// Space on a check with output kept folds its output open under its row,
+// the end of it, with a note of what was cut; Space again folds it shut.
+func TestSpaceFoldsACheckOpenUnderItsRow(t *testing.T) {
+	m := sessModel(foldingRun())
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+	m = selectRow(t, m, runItem{kind: itemCheck, round: 1})
+
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "▸ ✗  lint"), out)
+	assert.Assert(t, strings.Contains(out, "log line 20") && !strings.Contains(out, "log line 17"), "shut, the row shows its last few lines:\n%s", out)
+
+	m, _ = press(m, ' ')
+	assert.Assert(t, m.roundOpen(m.selectedRun().s, 1), "the round stays open")
+	out = stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "▾ ✗  lint"), out)
+	assert.Assert(t, strings.Contains(out, "… 5 earlier lines"), out)
+	assert.Assert(t, strings.Contains(out, "log line 6") && strings.Contains(out, "log line 20"), out)
+	assert.Assert(t, !strings.Contains(out, "log line 5\n") && !strings.Contains(out, "log line 5 "), "the start of the log is cut:\n%s", out)
+
+	m, _ = press(m, ' ')
+	out = stripANSI(m.render())
+	assert.Assert(t, !strings.Contains(out, "log line 6"), out)
+}
+
+// The implementer's row folds open to what it said it did.
+func TestSpaceFoldsTheImplementerOpenToItsSummary(t *testing.T) {
+	m := sessModel(foldingRun())
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+	m = selectRow(t, m, runItem{kind: itemImplement, round: 1})
+	assert.Assert(t, !strings.Contains(stripANSI(m.render()), "Added the flag"))
+	m, _ = press(m, ' ')
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "Added the flag and its test."), stripANSI(m.render()))
+}
+
+// A finished review's findings are not in the snapshot: opening its fold
+// fetches them once, and shows them under the row.
+func TestSpaceFoldsAFinishedReviewOpenToItsFindings(t *testing.T) {
+	r := failedRun()
+	r.s.Rounds[1].Reviews = []chunkd.ReviewPrompt{{Name: "style", State: chunkd.PromptDone, Status: chunkd.CheckPassed}}
+	m := sessModel(r)
+	m.selRun = "abc"
+	fetches := 0
+	m.detailFn = func(string) (chunkd.SessionDetail, error) {
+		fetches++
+		return chunkd.SessionDetail{Details: []chunkd.RoundDetail{{Number: 2, Results: []chunkd.ReviewResult{{Prompt: "style"}}}}}, nil
+	}
+	m, _ = press(m, tea.KeyRight)
+	m = selectRow(t, m, runItem{kind: itemReview, round: 1})
+
+	m, cmd := press(m, ' ')
+	assert.Assert(t, cmd != nil, "opening the fold fetches the findings")
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "loading…"))
+	next, _ := m.Update(cmd())
+	m = next.(Model)
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "No findings."), stripANSI(m.render()))
+
+	m, _ = press(m, ' ', ' ')
+	assert.Equal(t, fetches, 1, "the findings are kept once fetched")
 }
 
 func failedRun() sessionInfo {
@@ -829,8 +918,7 @@ func TestFooterOffersOnlyTheKeysThatWork(t *testing.T) {
 }
 
 // The footer says what Space will do at the cursor: expand a collapsed fold,
-// collapse an open one, collapse the round from a row inside it, and nothing
-// on the branch, which has nothing to fold.
+// collapse an open one, and nothing on a row with nothing to fold.
 func TestFooterNamesWhatSpaceWillDoAtTheCursor(t *testing.T) {
 	m := sessModel(failedRun())
 	m.selRun = "abc"
@@ -848,17 +936,26 @@ func TestFooterNamesWhatSpaceWillDoAtTheCursor(t *testing.T) {
 	}
 	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space collapse"), m.renderFooter(m.styles()))
 
-	// A check row inside the open round collapses the round, not itself.
+	// A check with nothing kept has nothing to fold.
 	for m.selectedRunItem().kind != itemCheck {
 		m, _ = press(m, tea.KeyDown)
 	}
-	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space collapse round"), m.renderFooter(m.styles()))
+	assert.Assert(t, !strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space"), m.renderFooter(m.styles()))
 
 	// The branch has nothing to fold.
 	for *m.selectedRunItem() != (runItem{kind: itemBranch, round: -1}) {
 		m, _ = press(m, tea.KeyDown)
 	}
 	assert.Assert(t, !strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space"), m.renderFooter(m.styles()))
+
+	// A check with output kept folds itself.
+	m = sessModel(foldingRun())
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+	m = selectRow(t, m, runItem{kind: itemCheck, round: 1})
+	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space expand"), m.renderFooter(m.styles()))
+	m, _ = press(m, ' ')
+	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space collapse"), m.renderFooter(m.styles()))
 }
 
 // An implementer's summary is prose: it is wrapped to the pane rather than

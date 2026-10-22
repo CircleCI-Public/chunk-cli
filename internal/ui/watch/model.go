@@ -203,10 +203,15 @@ type Model struct {
 	// cap, over the default of during its first round. detailsOpen is whether
 	// each run's details fold (by run ID) — its worktree, setup log, progress
 	// feed and review sandboxes — is open, over the default of folded.
+	// rowsOpen is which rows inside each run's rounds (by run ID) are folded
+	// open to show what is behind them, and reviewFolds the findings fetched
+	// for the finished reviews among them.
 	runOpen     map[string]map[int]bool
 	taskOpen    map[string]bool
 	capOpen     map[string]bool
 	detailsOpen map[string]bool
+	rowsOpen    map[string]map[runItem]bool
+	reviewFolds map[reviewKey]reviewFold
 	// drafter has Claude draft a prompt typed after n, in startDir's project
 	// when there is one, and sender hands the draft to the factory; continuer
 	// starts a run that picks up a finished one's work. draft is
@@ -403,8 +408,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.copyRunRow(run, itemPR)
 	case key.Matches(msg, k.Toggle):
 		if run != nil {
-			m = m.toggleRunRow(run)
-			break
+			return m.toggleRunRow(run)
 		}
 	case key.Matches(msg, k.Rounds):
 		if run != nil {
@@ -474,6 +478,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reviewDetailMsg:
 		return m.withReviewDetail(msg)
+
+	case reviewFoldMsg:
+		return m.withReviewFold(msg), nil
 
 	case outputTickMsg:
 		// Only the current pane's tick chain may continue. Without the sequence

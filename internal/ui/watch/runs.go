@@ -299,7 +299,7 @@ func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cm
 	}
 	it := items[m.runItem]
 	if it.kind == itemTask || it.kind == itemRound || it.kind == itemDetails {
-		return m.toggleRunRow(run), nil
+		return m.toggleRunRow(run)
 	}
 	if it.kind == itemPR {
 		return m.openPullRequest(run)
