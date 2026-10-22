@@ -432,6 +432,38 @@ func TestStartFactoryKeepsTheContinuedRunsSpecOrigin(t *testing.T) {
 	assert.Equal(t, sess.Factory.SpecOrigin, "../notes/spec.md")
 }
 
+// Continuing a later run of a chain is refused while another run of it is
+// going: both would work in the chain's one worktree.
+func TestStartFactoryRefusesToContinueAChainInUse(t *testing.T) {
+	release := make(chan struct{})
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		<-release
+		return factory.Report{Outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 1}}, nil
+	})
+	t.Cleanup(func() { close(release) })
+
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+	dir := filepath.Join(dataDir, "factory")
+	assert.NilError(t, os.MkdirAll(dir, 0o700))
+	const branch = "chunk/factory/add-a-flag/run-1"
+	for _, rec := range []factory.Record{
+		{RunID: "run-1", Prompt: "add a flag", Branch: branch},
+		{RunID: "run-2", Prompt: "add a flag", Branch: branch, ContinuesRunID: "run-1"},
+	} {
+		b, err := json.Marshal(rec)
+		assert.NilError(t, err)
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, rec.RunID+".json"), b, 0o600))
+	}
+
+	_, err = d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Continue: "run-1"})
+	assert.NilError(t, err)
+	_, err = d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Continue: "run-2"})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae), "two runs of a chain went at once: %v", err)
+	assert.Equal(t, ae.status, http.StatusConflict)
+}
+
 func TestFeedKeepsTheLatestLinesAndCountsThemAll(t *testing.T) {
 	var f chunkd.Feed
 	for i := range maxFeedLines + 5 {

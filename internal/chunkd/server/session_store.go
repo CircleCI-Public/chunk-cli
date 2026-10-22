@@ -26,6 +26,10 @@ type sessionEntry struct {
 	// it is reported as cancelled rather than as whatever error the stop made.
 	cancelled bool
 	done      chan struct{}
+	// branch is the existing branch a session that continues a run works on,
+	// known before its run starts and records it. Set by addOn, then not
+	// changed.
+	branch string
 	// loopNote is why the loop ended, and loopFailed that it ran to its end
 	// without its work passing. Both are internal: the record shows their
 	// consequences.
@@ -130,15 +134,21 @@ func newSessionStore(parent context.Context) *sessionStore {
 	}
 }
 
-// add creates a running entry for s. A project can have any number of sessions
-// going at once, each in its own worktree. The exception is a session that
-// continues a run: the continuation takes over that run's worktree, so it is
-// refused while the run is still going or another session is continuing it.
-// It then creates nothing and says why.
+// add creates a running entry for s, on a worktree of its own. A project can
+// have any number of sessions going at once.
 func (s *sessionStore) add(sess chunkd.Session) (*sessionEntry, context.Context, string) {
+	return s.addOn(sess, "")
+}
+
+// addOn creates a running entry for s, as add does, for a session that works
+// on the existing branch, and the worktree on it, rather than on its own: a
+// run that continues another. Every run of a chain of continuations works on
+// the branch of the first, so one is refused while any live session of the
+// project is on that branch. It then creates nothing and says why.
+func (s *sessionStore) addOn(sess chunkd.Session, branch string) (*sessionEntry, context.Context, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if busy := s.continuingLocked(sess); busy != "" {
+	if busy := s.onBranchLocked(sess.ProjectRoot, branch); busy != "" {
 		return nil, nil, busy
 	}
 	sess.ID = uuid.NewString()
@@ -148,6 +158,7 @@ func (s *sessionStore) add(sess chunkd.Session) (*sessionEntry, context.Context,
 	ctx, cancel := context.WithCancel(s.parent)
 	entry := &sessionEntry{
 		s:      sess,
+		branch: branch,
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}
@@ -157,14 +168,13 @@ func (s *sessionStore) add(sess chunkd.Session) (*sessionEntry, context.Context,
 	return entry, ctx, ""
 }
 
-// continuingLocked says why sess cannot start because a live session of its
-// project is using the worktree of the run sess continues, or "" when none is.
-func (s *sessionStore) continuingLocked(sess chunkd.Session) string {
-	if sess.Factory == nil || sess.Factory.ContinuesRunID == "" {
+// onBranchLocked says why a session cannot start on branch because a live
+// session of the project at root is working on it, or "" when none is.
+func (s *sessionStore) onBranchLocked(root, branch string) string {
+	if branch == "" {
 		return ""
 	}
-	from := sess.Factory.ContinuesRunID
-	for _, id := range s.byProject[sess.ProjectRoot] {
+	for _, id := range s.byProject[root] {
 		other := s.sessions[id]
 		if other == nil {
 			continue
@@ -173,12 +183,15 @@ func (s *sessionStore) continuingLocked(sess chunkd.Session) string {
 		if snap.State.Finished() || snap.Factory == nil {
 			continue
 		}
-		switch from {
-		case snap.Factory.RunID:
-			return fmt.Sprintf("factory run %s is still running (session %s)", from, id)
-		case snap.Factory.ContinuesRunID:
-			return fmt.Sprintf("factory run %s is already being continued (session %s)", from, id)
+		// A continuation is on its branch from the start; a new run only once
+		// its worktree is made, before which nothing can name it to continue.
+		if other.branch != branch && snap.Factory.Branch != branch {
+			continue
 		}
+		if snap.Factory.RunID != "" {
+			return fmt.Sprintf("factory run %s is still working on %s (session %s)", snap.Factory.RunID, branch, id)
+		}
+		return fmt.Sprintf("a factory run continuing %s is already starting on %s (session %s)", snap.Factory.ContinuesRunID, branch, id)
 	}
 	return ""
 }

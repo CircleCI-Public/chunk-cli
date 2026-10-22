@@ -35,26 +35,49 @@ func TestSessionStoreAllowsSessionsSideBySide(t *testing.T) {
 
 func TestSessionStoreRefusesToContinueARunInUse(t *testing.T) {
 	store := newSessionStore(t.Context())
+	const branch = "chunk/factory/add-a-flag/run-1"
 
-	running, _, busy := store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{RunID: "run-1"}})
+	running, _, busy := store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{RunID: "run-1", Branch: branch}})
 	assert.Equal(t, busy, "")
 
-	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}})
-	assert.Assert(t, strings.Contains(busy, "still running"), busy)
+	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
+	assert.Assert(t, strings.Contains(busy, "still working on"), busy)
 
 	finish(running, chunkd.SessionDone)
-	continuing, _, busy := store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}})
+	continuing, _, busy := store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
 	assert.Equal(t, busy, "", "an ended run can be continued")
 
-	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}})
-	assert.Assert(t, strings.Contains(busy, "already being continued"), busy)
+	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
+	assert.Assert(t, strings.Contains(busy, "already starting on"), busy)
 
-	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-2"}})
-	assert.Equal(t, busy, "", "continuing another run is independent")
+	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-9"}}, "chunk/factory/fix-the-typo/run-9")
+	assert.Equal(t, busy, "", "continuing a run on another branch is independent")
 
 	finish(continuing, chunkd.SessionDone)
-	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}})
-	assert.Equal(t, busy, "", "an ended continuation no longer holds the run")
+	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
+	assert.Equal(t, busy, "", "an ended continuation no longer holds the branch")
+}
+
+// Every run of a chain of continuations works in the first run's worktree, so
+// continuing a later run of the chain is refused while another is going, though
+// the two continue different runs.
+func TestSessionStoreRefusesToContinueAChainInUse(t *testing.T) {
+	store := newSessionStore(t.Context())
+	const branch = "chunk/factory/add-a-flag/run-1"
+
+	// run-2 continued run-1 and ended; run-3 continues run-1 again.
+	second, _, busy := store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
+	assert.Equal(t, busy, "")
+	finish(second, chunkd.SessionDone)
+	third, _, busy := store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
+	assert.Equal(t, busy, "")
+
+	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-2"}}, branch)
+	assert.Assert(t, busy != "", "two runs went in one worktree")
+
+	finish(third, chunkd.SessionDone)
+	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-2"}}, branch)
+	assert.Equal(t, busy, "")
 }
 
 func TestSessionStoreKeepsTheNewestFinishedSessionsNewestFirst(t *testing.T) {
