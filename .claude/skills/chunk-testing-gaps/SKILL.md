@@ -1,0 +1,236 @@
+---
+name: chunk-testing-gaps
+description: >-
+  Use when asked to "find testing gaps", "chunk testing-gaps", "mutation test",
+  "mutate this code", "test mutation coverage", or "find surviving mutants".
+  Runs a 4-stage mutation testing process: discovery, validation on parallel
+  sidecars, production cross-reference, and risk assessment.
+version: 2.1.0
+---
+
+# Chunk Mutate Skill
+
+Perform mutation testing on the current codebase to find gaps in test coverage.
+
+## Goal
+
+Perform mutation testing on this codebase. A **mutation** is a small, deliberate change to production code that mimics a realistic bug a human might introduce. A **mutant** is the resulting modified codebase. If the test suite catches the bug (tests fail), the mutant is **killed**. If tests still pass, the mutant **survives** — exposing a gap in test coverage.
+
+The objective is to find as many surviving mutants as possible, prioritised by risk.
+
+## Prerequisites
+
+This prompt expects to be run in the context of a local clone of a VCS project. If that is not the case, stop and explain why you cannot proceed.
+
+Before any testing, ensure local dependencies are running (`docker compose up -d` or equivalent). On compose failure, check whether containers from another project are occupying ports and kill them.
+
+Stage 2 runs mutants on `chunk` sidecars, which needs `validation.sidecarImage` set in `.chunk/config.json`. Check it with `cat .chunk/config.json`. If it is missing, stop and tell the user to run the one-time setup in the `chunk-sidecar` skill (Step 3) first — booting a fresh unconfigured sidecar per mutant is slow enough to make the whole run impractical.
+
+## Step 0 — Scope the run
+
+Before discovery, ask the user what they want to target:
+
+```
+AskUserQuestion:
+  header: "Mutation scope"
+  question: "What should we run mutation testing on?"
+  options:
+    - "Entire codebase"  ← Recommended for a first run
+      description: "Discover and test mutations across all production code.
+                    Can take 20–60 minutes for large repos."
+      → proceed to Stage 1 with no path filter
+    - "Specific package or directory"
+      description: "Focus on one area (e.g. pkg/auth, internal/api).
+                    Faster and easier to act on the results."
+      → ask user for the path, then scope Stage 1 discovery to that subtree
+    - "Files changed in this branch"
+      description: "Only mutate code touched in the current branch — good for
+                    pre-merge coverage checks."
+      → run: git diff --name-only origin/main...HEAD
+        filter Stage 1 candidates to those files only
+```
+
+## Never create VCS artifacts for a mutant
+
+A mutant is a deliberately broken copy of the code. It must never reach the remote.
+
+- **Do not** push branches, open pull requests (draft or otherwise), or create git worktrees for mutants.
+- **Do not** try to get CI to run a mutant. CI is not the execution environment for this skill; sidecars are.
+- Mutations are carried as patches in a variants file and applied on a throwaway sidecar. Nothing is committed and your working tree is left as you found it.
+
+Earlier versions of this skill pushed a branch per mutant and opened a draft PR to force a CI run. That flooded repositories with stale draft PRs. If you find yourself reaching for `git push` or `gh pr create` in Stage 2, you have taken a wrong turn — re-read Stage 2.
+
+## What to Mutate
+
+### Priority targets (highest to lowest)
+
+1. **Security and auth**: authentication checks, permission gates, encryption, token validation, input sanitisation
+2. **Control flow**: condition inversions (`==` ↔ `!=`, `<` ↔ `<=`), removed or inverted `if` branches, swapped `switch`/`case` fall-throughs, early returns removed or added
+3. **Validation**: removed or weakened input validation, boundary checks changed, nil/null guard removal
+4. **State and values**: variables zeroed or hardcoded, default values changed, constants altered
+5. **Error handling**: errors swallowed (replaced with nil/null), retry logic removed, fallback paths deleted
+
+### What NOT to mutate
+
+- Test code, test helpers, fakes, mocks, fixtures, or end-to-end test harnesses
+- Logging, tracing, or metrics-only code blocks (spans, metric emissions, structured log calls) unless they also affect control flow
+- Generated code or vendored dependencies
+
+### Bias toward survivors
+
+Focus mutations where test coverage is likely weakest. Look for these patterns:
+
+- **Tests that test the mock**: the test and mock are tightly coupled — the mock returns a hardcoded value that happens to match a production default, so mutating that default is invisible to the test
+- **Model coupling**: tests import production models/types and assert directly on their fields, meaning the test exercises serialisation rather than behaviour
+- **Happy-path-only tests**: a function has multiple branches but only the success path is tested
+- **Missing edge cases**: boundary values, empty collections, nil/null inputs, zero-length strings
+
+## Method
+
+### Stage 1 — Discovery
+
+Investigate the codebase and identify candidate mutations. Use subagents to parallelise discovery across packages, modules, or directories — one subagent per logical area.
+
+Each mutation must be assigned a unique sequential number (e.g. `MUT-001`, `MUT-002`, ...).
+
+**Target density**: aim for roughly 1 mutation per 50 lines of production code (e.g. ~1000 mutations for a 50k LOC codebase). This is a guideline, not a hard rule — dense areas may yield more, sparse areas fewer.
+
+**Time cap**: if no new viable mutation has been identified for 3 minutes, stop discovery and proceed with what you have.
+
+For each candidate, record:
+- Mutation number
+- File path and line number(s)
+- Description of the change
+- Rationale (why this might survive)
+
+### Stage 2 — Validation
+
+Validation is two passes: a cheap local triage that discards the obvious kills, then a sidecar run for whatever is left. Triage first — it is what keeps the sidecar count, and therefore the cost, proportionate to the number of interesting mutants rather than to the number of candidates.
+
+#### 2a — Local triage
+
+For each candidate mutation, working in your normal checkout one at a time:
+
+1. Apply the mutation with an in-place edit.
+2. Run static analysis: linter, type checks, compilation — use the project's standard tooling (`./do`, `Taskfile`, or whatever is configured). If the project has no local tooling, check CI config for what tools are used and attempt to run them locally. **Do not install missing tools without prompting.**
+3. Run targeted local tests: tests in the mutated package/module that reference the mutated function or type. For Go, use the race detector and a 1-minute timeout (`-race -timeout 1m`). If tests take longer than 1 minute, treat the mutation as viable and move on.
+4. **Revert the edit** before moving to the next candidate. Never leave a mutation in the working tree.
+5. **If static analysis or tests fail** → mark the mutant **killed locally** and drop it.
+6. **If the mutant survives** → capture the change as a patch for pass 2b, then revert.
+
+A patch is the output of `git diff` for that single mutation, captured before the revert.
+
+#### 2b — Sidecar run
+
+Before writing the variants file, report the survivor count from 2a and ask for approval:
+
+```
+AskUserQuestion:
+  header: "Approve sidecar run"
+  question: "Local triage found <N> surviving mutants. The sidecar run will boot up
+             to --parallel sidecars and may take several minutes. How would you
+             like to proceed?"
+  options:
+    - "Run with --parallel 5"  ← Recommended
+      description: "Boots 5 sidecars at a time. Balances speed and org resource usage."
+      → proceed with: chunk validate variants .chunk/variants.json --parallel 5
+    - "Run faster with --parallel 10"
+      description: "Boots 10 sidecars at a time. Use when the org has sufficient
+                    sidecar quota and you want results quickly."
+      → proceed with: chunk validate variants .chunk/variants.json --parallel 10
+    - "Run conservatively with --parallel 2"
+      description: "Low resource footprint. Good when the org has a tight quota."
+      → proceed with: chunk validate variants .chunk/variants.json --parallel 2
+    - "Cancel — review the survivors first"
+      → print the local survivor list and stop; let user decide whether to continue
+```
+
+Collect every local survivor into a single variants file at `.chunk/variants.json` (gitignored) — a JSON array of objects with `id`, `description`, and `patch`:
+
+```json
+[
+  {
+    "id": "MUT-001",
+    "description": "Inverted auth check in verifyToken",
+    "patch": "diff --git a/pkg/auth/verify.go b/pkg/auth/verify.go\n@@ ... @@\n-\tif !ok {\n+\tif ok {\n"
+  }
+]
+```
+
+The `patch` value must be the literal `git diff` text with newlines escaped, and must apply cleanly against the current `HEAD`.
+
+Then run the whole set in one command:
+
+```
+chunk validate variants .chunk/variants.json --parallel 5
+```
+
+This boots one throwaway sidecar per variant (5 at a time), applies that variant's patch there, runs the project's `remote: true` validate commands, and deletes the sidecar. Nothing is pushed and no PR is created.
+
+It prints a JSON array, one entry per variant:
+
+- `killed: true` → the test suite ran and failed. Mark as **killed**. `command` names the validate command that caught it.
+- `killed: false` with no `error` → the tests passed on broken code. Mark as **survivor** — this is a real coverage gap.
+- `error` non-empty → the mutant was never assessed. Mark as **inconclusive**. Causes include: the patch did not apply, the sidecar failed to boot, the sync failed, the validate command was not present on the snapshot, or the command timed out. Either fix the cause and re-run just that variant, or report it as not assessed.
+
+`killed` and `error` are mutually exclusive, and an inconclusive variant is neither a kill nor a survivor. **Never record an inconclusive variant as either.** Counting one as killed is the worst outcome available here: it converts a broken run into a clean bill of health.
+
+Raise `--parallel` for a larger temporary pool and faster run at higher concurrent cost; lower it if the org hits sidecar limits. Use `--name <command>` to run a single validate command instead of every remote one. `--timeout <seconds>` bounds each command for variants whose mutation makes the suite hang; a command's own `timeout` in `.chunk/config.json` takes precedence.
+
+Prefer a command that runs the whole suite. Template variables like `{{CHANGED_PACKAGES}}` expand against your *local* working tree before the command is sent, and the mutation exists only on the sidecar — so a changed-packages command can skip the very package it is meant to be testing and report a false survivor.
+
+#### Sanity-check the run before believing it
+
+A high kill rate is the result an environmental failure produces, because a snapshot missing the project's tooling fails the same way for every variant. Before reporting results:
+
+- **If every variant was killed, treat the run as suspect until proven otherwise.** The command warns when this happens. Open the `stdout`/`stderr` of two or three results and confirm the failures are test assertions failing, not a missing binary, a dependency that was never installed, or a shell error.
+- **If every variant was killed by the same command with the same exit code**, that is the signature of a broken environment rather than a well-tested codebase.
+- **Check the inconclusive count.** Variants that were not assessed are gaps in the report, not passes.
+
+If the environment is at fault, fix it — usually by rebuilding the snapshot via the `chunk-sidecar` skill — and re-run. Do not report a coverage verdict from a run you could not sanity-check.
+
+**Cleanup**: the command deletes its own sidecars, including on Ctrl-C, and sweeps orphans from a previous crashed run before it starts. The sweep only takes sidecars old enough that no live run could still own them, so a second `validate variants` in another worktree or repo is safe to run alongside the first. You do not need to clean up sidecars by hand. Do delete `.chunk/variants.json` when the run is done.
+
+#### Stage 2 Summary
+
+Once the variants run has completed, produce a summary table:
+
+| # | Mutation | File | Line | Status |
+|---|----------|------|------|--------|
+| MUT-001 | Inverted auth check | `pkg/auth/verify.go` | 42 | Survivor |
+| MUT-002 | Removed nil guard | `pkg/api/handler.go` | 118 | Killed (sidecar) |
+| MUT-003 | Weakened length check | `pkg/api/parse.go` | 55 | Killed (local) |
+| MUT-004 | Removed retry | `pkg/api/client.go` | 73 | Not assessed (timed out) |
+
+Report any inconclusive variants separately, with the reason they did not run, so the user can see what was left unassessed rather than reading their absence as a pass.
+
+### Stage 3 — Production Cross-Reference
+
+Attempt to determine whether the surviving mutants' code paths are exercised in production. Use any available observability tooling — Honeycomb, Datadog, or other connected MCP servers or CLIs.
+
+Concrete approaches:
+- **Honeycomb**: query for traces spanning the service and function/handler containing the mutation over the last 7 days. Check span counts and error rates.
+- **Datadog**: look for metrics on the relevant endpoint, service, or function. Check request volume and latency percentiles.
+- **Other**: Kibana, Prometheus, New Relic, CloudWatch — whatever is available. Check logs, request counts, or dashboards referencing the mutated code path.
+
+If no observability access is available, note this and skip to Stage 4.
+
+Update the summary table with a **Production Traffic** column indicating: **High** (clear evidence of regular traffic), **Low** (occasional or indirect traffic), **None found** (no evidence), or **Unknown** (no observability access).
+
+### Stage 4 — Risk Assessment
+
+For each survivor, assess overall risk based on:
+
+- **Severity of the mutation**: what could go wrong if this bug shipped? (auth bypass > cosmetic issue)
+- **Production traffic**: is this code path actually hit?
+- **Blast radius**: how many users/systems would be affected?
+- **Detectability**: would monitoring/alerting catch this before users notice?
+
+Assign a risk level: **Critical**, **High**, **Medium**, or **Low**.
+
+Present the final summary table sorted by risk (highest first):
+
+| # | Mutation | File | Line | Production Traffic | Risk | Rationale |
+|---|----------|------|------|--------------------|------|-----------|
+| MUT-001 | Inverted auth check | `pkg/auth/verify.go` | 42 | High | Critical | Auth bypass on a hot path, no test coverage |
+| MUT-017 | Hardcoded timeout to 0 | `pkg/worker/poll.go` | 89 | Low | Medium | Would cause tight loop but only in batch worker |
