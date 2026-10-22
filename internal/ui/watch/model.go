@@ -774,9 +774,6 @@ func runListWindow(lines []string, maxLines, selected int) []string {
 	return append(out, lines[firstLine:lastLine]...)
 }
 
-// renderEmptyPane is the right-hand pane when there is no run to show. The
-// dashboard is about factory runs, so with none to draw it says so rather than
-// leaving the pane blank.
 // renderPendingPane is the right pane between a run being sent to the factory
 // and a poll listing it: the start hints would read as if nothing had happened.
 func (m Model) renderPendingPane(st watchStyles) []string {
@@ -792,6 +789,9 @@ func (m Model) renderPendingPane(st watchStyles) []string {
 	}
 }
 
+// renderEmptyPane is the right-hand pane when there is no run to show. The
+// dashboard is about factory runs, so with none to draw it says so rather than
+// leaving the pane blank.
 func (m Model) renderEmptyPane(st watchStyles) []string {
 	title := st.vdim("run")
 	if m.focusedPane == paneRight {

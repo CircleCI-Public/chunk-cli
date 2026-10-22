@@ -125,6 +125,7 @@ func TestRender_noWelcomeWhileASentRunIsPending(t *testing.T) {
 	out := m.render()
 
 	assert.Assert(t, !strings.Contains(out, "█"), "no mascot while a run is pending:\n"+out)
+	assert.Assert(t, strings.Contains(out, "Sent to the factory"), out)
 	assert.Equal(t, strings.Count(out, "\n"), 24)
 }
 
