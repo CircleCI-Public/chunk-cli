@@ -780,14 +780,17 @@ chunk
   it up. The title, status and outcome stay in place while the rounds scroll.
   One round starts open: the latest, or on a run that ended failing, the one
   that failed. The others are a line each (how they came out, findings,
-  duration), and `Space` or `Enter` on a round opens or closes it, so any number
-  can be open. During a run's first round, a few lines under the status say
+  duration). `Space` expands or collapses whatever has the cursor — the task, a
+  round, or details — and the footer names what it will do there; a collapsed
+  block's header sums up what it holds, and `Enter` does the same on a row
+  with nothing else to open. During a run's first round, a few lines under the status say
   what a round is, what the cap means and how to change it with
   `--max-attempts`; after that, `?` shows or hides them. An open round shows the implementer's turn (duration, cost, diff
   stat), then its validation commands
   and reviews under `validate`. Where the run put its work and what it said while
-  setting up (worktree, setup log, setup progress) are folded under
-  `details`, which `d` opens. A factory review is a check: it passes unless it
+  setting up (worktree, setup log, setup progress) are behind a `details` row
+  under the rounds, which `Space` or `Enter` opens; whether it is open is kept
+  per run, like the task and the rounds. A factory review is a check: it passes unless it
   found something worth changing (high or medium severity), so its row shows ✓ with any lesser
   issues noted ("2 issues, none worth changing"), or ✗ with how many of its issues are
   worth changing ("3 issues, 1 worth changing"). A line under the rounds says what

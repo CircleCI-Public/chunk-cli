@@ -39,8 +39,7 @@ type keyMap struct {
 	ToggleSection, FocusSection key.Binding
 	// Plan opens the planning screen, to make a plan with Claude and send
 	// it to the factory, or goes back to the one left open.
-	Plan    key.Binding
-	Details key.Binding
+	Plan key.Binding
 	// Rounds shows or hides what a round is and how to change the cap on
 	// them, under a running run's headline.
 	Rounds key.Binding
@@ -76,7 +75,6 @@ func (m Model) keys() keyMap {
 		Search:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search runs")),
 		Keep:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "keep filter")),
 		Clear:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "clear")),
-		Details:       key.NewBinding(key.WithKeys("d", "i"), key.WithHelp("d", "details")),
 		New:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new run")),
 		Plan:          key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "plan a run")),
 		Send:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "go to step 2")),
@@ -110,6 +108,13 @@ func (m Model) keys() keyMap {
 	changed := m.draft == draftReady && m.draftResult.Stat != ""
 	k.ScrollDraft.SetEnabled(changed)
 	k.ToggleSection.SetEnabled(changed)
+	if changed {
+		open := "Expand"
+		if m.draftSectionOpen(m.draftFocus) {
+			open = "Collapse"
+		}
+		k.ToggleSection.SetHelp("space", open)
+	}
 	k.FocusSection.SetEnabled(changed)
 	k.SendDraft.SetEnabled(changed)
 	k.KeepDraft.SetEnabled(m.draft == draftReady)
@@ -122,9 +127,6 @@ func (m Model) keys() keyMap {
 	k.Toggle.SetEnabled(right && run != nil)
 	k.Up.SetEnabled(len(m.sessions) > 0)
 	k.Down.SetEnabled(len(m.sessions) > 0)
-	// A run with nothing to detail yet (it failed before its worktree was
-	// made, say) draws no details row, so the key would do nothing.
-	k.Details.SetEnabled(run != nil && m.runDetailLines(m.styles(), *run) != nil)
 	k.Cancel.SetEnabled(run != nil && !run.s.State.Finished())
 	k.Rounds.SetEnabled(run != nil && hasRoundCap(run.s))
 	k.Delete.SetEnabled(run != nil && run.s.State.Finished())
@@ -133,17 +135,29 @@ func (m Model) keys() keyMap {
 	if m.showEnded {
 		k.ToggleEnded.SetHelp("e", "hide finished")
 	}
-	if run != nil {
-		k.Toggle.SetHelp("Space", "expand/collapse")
-		if it := m.selectedRunItem(); it != nil && it.kind == itemTask {
+	// The footer says what Space will do at the cursor: expand or collapse the
+	// fold that has it, or, on a row inside an open round, collapse the round.
+	// Branch and PR have nothing to fold, so Toggle is disabled there.
+	if it := m.selectedRunItem(); run != nil && it != nil {
+		switch it.kind { //nolint:exhaustive // itemImplement, itemCheck and itemReview fall to the default
+		case itemTask:
+			k.Toggle.SetEnabled(right && len(taskLines(run.s.Factory.Prompt, m.taskWidth(), false)) > maxGoalLines)
+			k.Toggle.SetHelp("Space", foldHint(m.taskExpanded(run.s.ID)))
 			k.Copy.SetHelp("c", "copy task")
+		case itemRound:
+			k.Toggle.SetHelp("Space", foldHint(m.roundOpen(run.s, it.round)))
+		case itemDetails:
+			k.Toggle.SetHelp("Space", foldHint(m.detailsShown(run.s.ID)))
+		case itemBranch, itemPR:
+			k.Toggle.SetEnabled(false)
+		default: // a row inside an open round
+			k.Toggle.SetHelp("Space", "collapse round")
 		}
 	}
 	if m.searching || m.draft != draftNone {
 		// Typing goes to the search or the prompt, and a draft being made or
-		// shown has keys of its own, so no other key does anything: d is the
-		// draft's diff then, not a run's details.
-		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.OpenPR, &k.Copy, &k.CopyBranch, &k.CopyPR, &k.Toggle, &k.Search, &k.New, &k.Plan, &k.Details, &k.Rounds, &k.Cancel, &k.Continue, &k.Delete, &k.ToggleEnded, &k.Quit} {
+		// shown has keys of its own, so no other key does anything.
+		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.OpenPR, &k.Copy, &k.CopyBranch, &k.CopyPR, &k.Toggle, &k.Search, &k.New, &k.Plan, &k.Rounds, &k.Cancel, &k.Continue, &k.Delete, &k.ToggleEnded, &k.Quit} {
 			b.SetEnabled(false)
 		}
 	}
@@ -180,7 +194,7 @@ func (k *keyMap) enableBranchAndPR(m Model, run *sessionInfo) {
 
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.ToggleSection, k.KeepDraft, k.Keep, k.Clear, k.New, k.Plan, k.Continue, k.Up, k.Right, k.Open, k.Copy, k.CopyBranch, k.Toggle, k.Search, k.Details, k.Rounds, k.Cancel, k.Delete, k.ToggleEnded, k.Left, k.Quit}
+	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.ToggleSection, k.KeepDraft, k.Keep, k.Clear, k.New, k.Plan, k.Continue, k.Up, k.Right, k.Open, k.Copy, k.CopyBranch, k.Toggle, k.Search, k.Rounds, k.Cancel, k.Delete, k.ToggleEnded, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

@@ -197,6 +197,19 @@ func TestDisabledKeysDoNothing(t *testing.T) {
 		next, cmd := m.Update(tea.KeyPressMsg{Code: code})
 		assert.Assert(t, cmd == nil, "%q in the left pane", code)
 		assert.Equal(t, next.(Model).focusedPane, paneLeft, "%q moved the focus", code)
-		assert.Assert(t, !next.(Model).runDetails, "%q opened the details fold", code)
+		assert.Equal(t, len(next.(Model).detailsOpen), 0, "%q opened the details fold", code)
 	}
+}
+
+// d is not a key the dashboard answers to any more: details opens only from
+// its own row, with Space or Enter, like every other fold.
+func TestDKeyDoesNothingToARunsDetails(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+
+	m, cmd := press(m, 'd')
+	assert.Assert(t, cmd == nil)
+	assert.Equal(t, len(m.detailsOpen), 0, "d opened the details fold")
 }

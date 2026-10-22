@@ -55,6 +55,22 @@ func press(m Model, codes ...rune) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+// openRunDetails moves the cursor to the selected run's details row and
+// opens it, as a person would with Space.
+func openRunDetails(t *testing.T, m Model) Model {
+	t.Helper()
+	m, _ = press(m, tea.KeyRight)
+	for i := 0; i < len(m.runItems(m.selectedRun().s)); i++ {
+		if it := m.selectedRunItem(); it != nil && it.kind == itemDetails {
+			m, _ = press(m, ' ')
+			return m
+		}
+		m, _ = press(m, tea.KeyDown)
+	}
+	t.Fatalf("no details row found")
+	return m
+}
+
 func TestCollectSessionsPutsLiveOnesFirstThenNewest(t *testing.T) {
 	now := time.Now()
 	ended := now
@@ -134,7 +150,10 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 		}
 		for _, want := range []string{
 			"Add a --verbose flag", "Round 2 of up to 3 · implementing", "$0.41",
-			"Round 1", "1 of 3 checks passed", "2 issues, 1 worth changing", "Round 2", "implement", "▸ details",
+			"Round 1", "1 of 3 checks passed", "2 issues, 1 worth changing", "Round 2", "implement",
+			// The collapsed details row names what it holds, so a person decides
+			// whether to open it without having to.
+			"▸ details · worktree, progress",
 		} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 		}
@@ -143,7 +162,7 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 			assert.Assert(t, !strings.Contains(out, absent), "unexpected %q:\n%s", absent, out)
 		}
 
-		m, _ = press(m, 'd')
+		m = openRunDetails(t, m)
 		out = m.render()
 		for _, want := range []string{"▾ details", "/tmp/wt/abc", "syncing the implementer"} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
@@ -245,7 +264,7 @@ func TestRoundsOpenAndCloseAndKeepTheSelectionOnTheHeader(t *testing.T) {
 	run := m.selectedRun()
 	// The ended run opens its failing round, 2, and no other.
 	assert.Assert(t, !m.roundOpen(run.s, 0) && m.roundOpen(run.s, 1) && !m.roundOpen(run.s, 2))
-	assert.Equal(t, len(m.runItems(run.s)), 1+3+3+1, "the task, three headers, round 2's implementer and two checks, and the branch")
+	assert.Equal(t, len(m.runItems(run.s)), 1+3+3+1+1, "the task, three headers, round 2's implementer and two checks, details, and the branch")
 
 	m, _ = press(m, ' ')
 	assert.Assert(t, m.roundOpen(m.selectedRun().s, 0), "space on the first header opens it")
@@ -327,7 +346,7 @@ func TestLongPromptWrapsAndPaneStaysWithinTheTerminal(t *testing.T) {
 		m.width = width
 		out := m.render()
 		assert.Assert(t, strings.Count(out, "refactor the helper") > 1, "the prompt is wrapped over lines:\n%s", out)
-		assert.Assert(t, strings.Contains(stripANSI(out), "Space to read all"),
+		assert.Assert(t, strings.Contains(stripANSI(out), "more lines"),
 			"a one-paragraph prompt past three wrapped lines is collapsed:\n%s", out)
 		for i, line := range strings.Split(out, "\n") {
 			assert.Assert(t, lipgloss.Width(line) <= width, "width %d line %d is %d columns", width, i, lipgloss.Width(line))
@@ -366,7 +385,7 @@ func TestTaskRowShowsShortPromptInFullWithNoMarker(t *testing.T) {
 	m.selRun = "abc"
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "Fix the login bug") && strings.Contains(out, "It happens on retry"), out)
-	assert.Assert(t, !strings.Contains(out, "Space to read all"), out)
+	assert.Assert(t, !strings.Contains(out, "more lines"), out)
 }
 
 // A prompt past maxGoalLines source lines is collapsed to the first of them,
@@ -379,7 +398,7 @@ func TestTaskRowCollapsesLongPromptWithALineCountMarker(t *testing.T) {
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "Line one") && strings.Contains(out, "Line two") && strings.Contains(out, "Line three"), out)
 	assert.Assert(t, !strings.Contains(out, "Line four") && !strings.Contains(out, "Line five"), out)
-	assert.Assert(t, strings.Contains(out, "… (Space to read all, 5 lines)"), out)
+	assert.Assert(t, strings.Contains(out, "▸ 2 more lines"), out)
 }
 
 // Space on the task row reads it in full, and a second Space folds it back.
@@ -394,12 +413,13 @@ func TestSpaceExpandsAndCollapsesTheTaskRow(t *testing.T) {
 	m, _ = press(m, ' ')
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "Line four") && strings.Contains(out, "Line five"), out)
-	assert.Assert(t, !strings.Contains(out, "Space to read all"), out)
+	assert.Assert(t, !strings.Contains(out, "more lines"), out)
+	assert.Assert(t, strings.Contains(out, "▾ show less"), "an expanded long task can be folded back:\n%s", out)
 
 	m, _ = press(m, ' ')
 	out = stripANSI(m.render())
 	assert.Assert(t, !strings.Contains(out, "Line four"), out)
-	assert.Assert(t, strings.Contains(out, "… (Space to read all, 5 lines)"), out)
+	assert.Assert(t, strings.Contains(out, "▸ 2 more lines"), out)
 }
 
 // Expanded, the task keeps the prompt's line breaks, blank lines and list
@@ -467,6 +487,24 @@ func TestCopyOnTheTaskRowCopiesTheFullPrompt(t *testing.T) {
 	assert.Equal(t, m.runNote, "copied task to clipboard")
 }
 
+// A short task has nothing to expand, so the footer carries no Space hint for
+// it, and the key does nothing.
+func TestShortTaskRowOffersNoToggleHint(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	r.s.Factory.Prompt = "Fix the login bug\n\nIt happens on retry"
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight) // select the task row
+	assert.Equal(t, *m.selectedRunItem(), runItem{kind: itemTask})
+
+	footer := stripANSI(m.renderFooter(m.styles()))
+	assert.Assert(t, !strings.Contains(footer, "Space"), "a short task has nothing to fold:\n%s", footer)
+
+	m, cmd := press(m, ' ')
+	assert.Assert(t, cmd == nil)
+	assert.Assert(t, !m.taskExpanded("abc"), "space does nothing on a short task")
+}
+
 // A run with no prompt (an older run, from before the task row existed) has
 // no task row to select.
 func TestRunWithNoPromptHasNoTaskRow(t *testing.T) {
@@ -478,7 +516,7 @@ func TestRunWithNoPromptHasNoTaskRow(t *testing.T) {
 	for _, it := range m.runItems(r.s) {
 		assert.Assert(t, it.kind != itemTask, "no task row when the prompt is empty")
 	}
-	assert.Assert(t, !strings.Contains(stripANSI(m.render()), "Space to read all"))
+	assert.Assert(t, !strings.Contains(stripANSI(m.render()), "more lines"))
 }
 
 func TestEndedFactoryRunSaysWhereItsWorkIs(t *testing.T) {
@@ -496,7 +534,7 @@ func TestEndedFactoryRunSaysWhereItsWorkIs(t *testing.T) {
 	for _, want := range []string{"still failing", "checks still failed after 3 round(s)", "chunk/factory/abc", "committed · 2 files changed, 10 insertions(+)", "chunk factory build --continue abc"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 	}
-	m, _ = press(m, 'd')
+	m = openRunDetails(t, m)
 	assert.Assert(t, strings.Contains(m.render(), "/tmp/run.log"), "the log is under details:\n%s", m.render())
 }
 
@@ -790,6 +828,39 @@ func TestFooterOffersOnlyTheKeysThatWork(t *testing.T) {
 	}
 }
 
+// The footer says what Space will do at the cursor: expand a collapsed fold,
+// collapse an open one, collapse the round from a row inside it, and nothing
+// on the branch, which has nothing to fold.
+func TestFooterNamesWhatSpaceWillDoAtTheCursor(t *testing.T) {
+	m := sessModel(failedRun())
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+
+	// Round 1 is closed by default.
+	for *m.selectedRunItem() != (runItem{kind: itemRound, round: 0}) {
+		m, _ = press(m, tea.KeyDown)
+	}
+	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space expand"), m.renderFooter(m.styles()))
+
+	// Round 2 is the one that failed, open by default.
+	for *m.selectedRunItem() != (runItem{kind: itemRound, round: 1}) {
+		m, _ = press(m, tea.KeyDown)
+	}
+	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space collapse"), m.renderFooter(m.styles()))
+
+	// A check row inside the open round collapses the round, not itself.
+	for m.selectedRunItem().kind != itemCheck {
+		m, _ = press(m, tea.KeyDown)
+	}
+	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space collapse round"), m.renderFooter(m.styles()))
+
+	// The branch has nothing to fold.
+	for *m.selectedRunItem() != (runItem{kind: itemBranch, round: -1}) {
+		m, _ = press(m, tea.KeyDown)
+	}
+	assert.Assert(t, !strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space"), m.renderFooter(m.styles()))
+}
+
 // An implementer's summary is prose: it is wrapped to the pane rather than
 // clipped, holds the dashboard's height, and scrolls.
 func TestTextPaneWrapsAndScrollsWithinTheScreen(t *testing.T) {
@@ -1070,15 +1141,104 @@ func TestLiveRunShowsItsLatestSetupWarning(t *testing.T) {
 	}
 }
 
-// The details key is offered only when the run has something to show under it.
-func TestFooterOffersDetailsOnlyWhenThereAreSome(t *testing.T) {
+// The collapsed details row names what it holds, in order, each item only
+// when present, and a single review sandbox is named in the singular.
+func TestDetailsSummaryNamesWhatItHolds(t *testing.T) {
 	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
-	m := sessModel(r).reselectRun()
-	assert.Assert(t, strings.Contains(m.renderFooter(m.styles()), "details"))
+	r.s.Factory.Log = "/tmp/run.log"
+	r.s.Factory.Progress = chunkd.Feed{Lines: []chunkd.FeedLine{{Level: chunkd.FeedStep, Text: "syncing"}}}
+	r.s.Rounds = []chunkd.Round{{Reviews: []chunkd.ReviewPrompt{
+		{Name: "adversarial", SidecarID: "5bc90932-aaaa"},
+		{Name: "correctness", SidecarID: "7ad11023-bbbb"},
+		{Name: "testing"}, // no sandbox: not counted
+	}}}
+	assert.Equal(t, detailsSummary(r.s), "worktree, log, progress, 2 review sandboxes")
+
+	assert.Equal(t, detailsSummary(chunkd.Session{Factory: &chunkd.FactoryRun{Worktree: "/tmp/wt"}}), "worktree")
+	oneSandbox := chunkd.Session{
+		Factory: &chunkd.FactoryRun{},
+		Rounds:  []chunkd.Round{{Reviews: []chunkd.ReviewPrompt{{SidecarID: "abc"}}}},
+	}
+	assert.Equal(t, detailsSummary(oneSandbox), "1 review sandbox")
+
+	// A worktree the run has removed is not named.
+	removed := chunkd.Session{Factory: &chunkd.FactoryRun{Worktree: "/tmp/wt", WorktreeRemoved: true}}
+	assert.Equal(t, detailsSummary(removed), "")
+}
+
+// The details row is offered only when the run has something to show under it.
+func TestDetailsRowAppearsOnlyWhenThereIsSomethingToShow(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	hasDetailsRow := func(s chunkd.Session) bool {
+		for _, it := range (Model{}).runItems(s) {
+			if it.kind == itemDetails {
+				return true
+			}
+		}
+		return false
+	}
+	assert.Assert(t, hasDetailsRow(r.s))
 
 	r.s.Factory.Worktree = ""
-	m = sessModel(r).reselectRun()
-	assert.Assert(t, !strings.Contains(m.renderFooter(m.styles()), "details"))
+	assert.Assert(t, !hasDetailsRow(r.s))
+}
+
+// The details fold's open state is kept per run, like the task's, so
+// switching to another run and back leaves it as it was.
+func TestDetailsOpenStateSurvivesSwitchingRuns(t *testing.T) {
+	a := factoryRun("a", chunkd.SessionRunning, time.Now())
+	b := factoryRun("b", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	m := sessModel(a, b)
+	m.selRun = "a"
+	m = openRunDetails(t, m)
+	assert.Assert(t, m.detailsShown("a"))
+
+	m, _ = press(m, tea.KeyEscape, tea.KeyDown) // back to the list, down to run b
+	assert.Equal(t, m.selRun, "b")
+	assert.Assert(t, !m.detailsShown("b"), "run b's details are its own state")
+	m, _ = press(m, tea.KeyUp) // back up to run a
+	assert.Equal(t, m.selRun, "a")
+	assert.Assert(t, m.detailsShown("a"), "run a's details are still open after switching away and back")
+}
+
+// Enter on the details row toggles it too, the same way it does on a round's
+// header: there is nothing to open behind either, so the key folds instead.
+func TestEnterOnTheDetailsRowTogglesTooLikeARoundHeader(t *testing.T) {
+	r := factoryRun("abc", chunkd.SessionRunning, time.Now())
+	m := sessModel(r)
+	m.selRun = "abc"
+	m, _ = press(m, tea.KeyRight)
+	for it := m.selectedRunItem(); it == nil || it.kind != itemDetails; it = m.selectedRunItem() {
+		m, _ = press(m, tea.KeyDown)
+	}
+
+	m, _ = press(m, tea.KeyEnter)
+	assert.Assert(t, m.detailsShown("abc"), "Enter opens the details row")
+	m, _ = press(m, tea.KeyEnter)
+	assert.Assert(t, !m.detailsShown("abc"), "Enter closes it again")
+}
+
+// Down moves through a run's rows in order: the task, each round, details,
+// then the branch and pull request.
+func TestRunItemOrderIsTaskRoundsDetailsBranchPR(t *testing.T) {
+	r := endedRun("abc")
+	r.s.Rounds = []chunkd.Round{liveRound(1, "passed")}
+	r.s.Factory.Branch = "chunk/factory/abc"
+	r.s.Factory.PullRequest = &chunkd.PullRequest{State: chunkd.PROpened, URL: "https://example.com/pr/1"}
+	items := (Model{}).runItems(r.s)
+
+	indexOf := func(kind runItemKind) int {
+		for i, it := range items {
+			if it.kind == kind {
+				return i
+			}
+		}
+		return -1
+	}
+	taskAt, roundAt, detailsAt := indexOf(itemTask), indexOf(itemRound), indexOf(itemDetails)
+	branchAt, prAt := indexOf(itemBranch), indexOf(itemPR)
+	assert.Assert(t, taskAt >= 0 && roundAt > taskAt && detailsAt > roundAt && branchAt > detailsAt && prAt > branchAt,
+		"task=%d round=%d details=%d branch=%d pr=%d", taskAt, roundAt, detailsAt, branchAt, prAt)
 }
 
 func TestCheckRowShowsFailureTail(t *testing.T) {
@@ -1344,7 +1504,7 @@ func TestInfraNamesEachReviewsSandbox(t *testing.T) {
 	m.selRun = "abc"
 	assert.Assert(t, !strings.Contains(stripANSI(m.render()), "5bc90932"))
 
-	m.runDetails = true
+	m = openRunDetails(t, m)
 	out := stripANSI(m.render())
 	assert.Assert(t, strings.Contains(out, "round 1  adversarial  5bc90932"), out)
 }

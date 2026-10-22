@@ -27,7 +27,7 @@ func TestDashboardNeverExceedsItsWidth(t *testing.T) {
 				m = m.reselectRun()
 				m.width = width
 				m.focusedPane = focus
-				m.runDetails = details
+				m.detailsOpen = map[string]bool{run.s.ID: details}
 				m.authErr = "not authenticated to CircleCI — command output unavailable"
 				for i, line := range strings.Split(m.render(), "\n") {
 					if got := lipgloss.Width(line); got > width {
@@ -48,7 +48,7 @@ func TestTaskLinesWrapAtEightyColumnsWithoutBreakingWords(t *testing.T) {
 	longWord := strings.Repeat("x", width+20)
 	prompt := "Please " + strings.Repeat("refactor the helper so it stops throwing on empty input. ", 8) + longWord
 
-	lines := taskLines(prompt, width, true)
+	lines := wrappedTaskLines(prompt, width)
 
 	var gotWords []string
 	for _, l := range lines {
@@ -97,7 +97,7 @@ func TestRunPaneWrapsEveryLineToThePane(t *testing.T) {
 			for _, width := range []int{40, 50, 60, 70, 80, 120} {
 				m := pollAndRead(t, sessModel(), run)
 				m.width = width
-				m.runDetails = details
+				m.detailsOpen = map[string]bool{run.s.ID: details}
 				m = m.reselectRun()
 				for i, line := range m.renderRunPane(m.styles(), *m.selectedRun(), 60) {
 					if i == 0 {

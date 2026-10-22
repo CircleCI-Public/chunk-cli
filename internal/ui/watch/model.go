@@ -200,12 +200,13 @@ type Model struct {
 	// over the default of showing only the round that matters. taskOpen is
 	// whether each run's task row (by run ID) was expanded, over the default of
 	// collapsed. capOpen is whether each run (by run ID) explains its round
-	// cap, over the default of during its first round. runDetails shows the
-	// detail under a run: its worktree and setup log.
-	runOpen    map[string]map[int]bool
-	taskOpen   map[string]bool
-	capOpen    map[string]bool
-	runDetails bool
+	// cap, over the default of during its first round. detailsOpen is whether
+	// each run's details fold (by run ID) — its worktree, setup log, progress
+	// feed and review sandboxes — is open, over the default of folded.
+	runOpen     map[string]map[int]bool
+	taskOpen    map[string]bool
+	capOpen     map[string]bool
+	detailsOpen map[string]bool
 	// drafter has Claude draft a prompt typed after n, in startDir's project
 	// when there is one, and sender hands the draft to the factory; continuer
 	// starts a run that picks up a finished one's work. draft is
@@ -405,8 +406,6 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m = m.toggleRunRow(run)
 			break
 		}
-	case key.Matches(msg, k.Details):
-		m.runDetails = !m.runDetails
 	case key.Matches(msg, k.Rounds):
 		if run != nil {
 			m = m.toggleCapNote(run.s)
