@@ -523,7 +523,6 @@ func TestNoRunsSaysWhereRunsComeFrom(t *testing.T) {
 	m := sessModel()
 	out := stripANSI(strings.Join(m.renderLeftPane(m.styles(), 30), "\n"))
 	assert.Assert(t, strings.Contains(out, "no runs yet"), out)
-	assert.Assert(t, strings.Contains(stripANSI(m.render()), "chunk factory build"), "the empty pane says where runs come from")
 
 	m, _ = press(m, tea.KeyDown)
 	assert.Equal(t, m.selRun, "")

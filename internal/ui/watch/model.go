@@ -578,6 +578,9 @@ func (m Model) render() string {
 	if m.output != nil {
 		return m.renderHeader(st) + m.renderOutputPane(st)
 	}
+	if m.welcoming() {
+		return m.renderHeader(st) + m.renderWelcome(st) + m.renderFooter(st)
+	}
 	return m.renderHeader(st) + m.renderBody(st) + m.renderFooter(st)
 }
 
@@ -836,7 +839,12 @@ func (m Model) renderFooter(st watchStyles) string {
 		// stand out from the actions they name.
 		help.Styles.ShortKey = st.Teal.Bold(true)
 	}
-	bar := help.View(m.keys())
+	var bar string
+	if m.welcoming() {
+		bar = help.View(quitOnly{m.keys().Quit})
+	} else {
+		bar = help.View(m.keys())
+	}
 	// help adds a hint that overflows when there is no room left for its
 	// ellipsis, so the clip below is still needed.
 	bar = clip(bar, m.width-2)
@@ -858,7 +866,11 @@ func (m Model) renderFooter(st watchStyles) string {
 		}
 	}
 
-	footer := m.renderFrameEdge(st, '╰', '┴', '╯', "", "") + "  " + bar + "\n"
+	edge := m.renderFrameEdge(st, '╰', '┴', '╯', "", "")
+	if m.welcoming() {
+		edge = st.vdim("╰"+strings.Repeat("─", max(m.width-2, 0))+"╯") + "\n"
+	}
+	footer := edge + "  " + bar + "\n"
 	if m.draft != draftNone {
 		// A new run's keys go last, under the step they are for.
 		footer = m.renderFrameEdge(st, '╰', '┴', '╯', "", "") + m.draftFooter(st, bar)

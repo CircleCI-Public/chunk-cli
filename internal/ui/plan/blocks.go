@@ -119,5 +119,8 @@ func splitBlocks(md string) []block {
 // joinsPrevious is whether b follows prev with no blank line, as the items of
 // one list do.
 func joinsPrevious(prev, b block) bool {
+	if prev.kind == kindHeading && !strings.HasPrefix(prev.source, "# ") {
+		return true
+	}
 	return prev.kind == kindListItem && b.kind == kindListItem
 }

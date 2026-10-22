@@ -119,7 +119,9 @@ type Model struct {
 	width  int
 	height int
 
-	busy       bool
+	busy bool
+	// log is what Claude has done this turn, oldest first.
+	log        []string
 	cancelTurn context.CancelFunc
 	activity   string
 	activityCh chan string
@@ -140,6 +142,10 @@ type Model struct {
 	// back is whether the host keeps the screen to reopen once it is closed,
 	// so leaving it loses nothing and stops nothing.
 	back bool
+	// branch is the git branch the plan is for, shown in the header.
+	branch string
+	// units and questions are how many of each the plan has.
+	units, questions int
 	// RunID is the factory run the plan was sent to, once it has been.
 	RunID string
 
@@ -176,7 +182,6 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 	ci.MaxHeight = maxCommentRows
 	ciStyles := ci.Styles()
 	ciStyles.Focused.CursorLine = lipgloss.NewStyle()
-	ciStyles.Focused.Text = commentText
 	ci.SetStyles(ciStyles)
 
 	// The plan's keys are the screen's own, which move the cursor with the
@@ -204,6 +209,13 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 // change to either from the messages its host passes on.
 func (m Model) WithTerminal(dark, disambiguates bool) Model {
 	m.dark, m.disambiguates = dark, disambiguates
+	return m
+}
+
+// WithBranch returns a copy of m that names the branch the plan is for in its
+// header.
+func (m Model) WithBranch(branch string) Model {
+	m.branch = branch
 	return m
 }
 
@@ -251,11 +263,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.activity = string(msg)
+		m.log = append(m.log, m.activity)
+		if len(m.log) > 5 {
+			m.log = m.log[len(m.log)-5:]
+		}
 		m.renderChat()
 		return m, waitActivity(m.ctx, m.activityCh)
 
 	case turnDoneMsg:
-		m.busy, m.activity = false, ""
+		m.busy, m.activity, m.log = false, "", nil
 		if m.cancelTurn != nil {
 			m.cancelTurn()
 			m.cancelTurn = nil
@@ -285,8 +301,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.inFlight = nil
 		if msg.plan != "" {
 			m.plan = msg.plan
-			m.renderPlan()
 		}
+		// Also when the plan is as it was: the skeleton, if any, goes.
+		m.renderPlan()
 		if held >= 0 {
 			if s := m.stopOf(hc); s >= 0 {
 				m.moveCursor(s)
@@ -466,11 +483,12 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 	m.messages = append(m.messages, message{fromUser: true, text: text, comments: m.comments})
 	prompt := composeMessage(text, m.comments)
 	m.inFlight, m.comments = m.comments, nil
-	m.status = ""
+	m.status, m.log = "", nil
 	ctx, cancel := context.WithCancel(m.ctx)
 	m.busy, m.cancelTurn = true, cancel
 	m.activityCh = make(chan string, 64)
 	m.syncPlaceholder()
+	m.renderPlan()
 	// Sending takes the comments on parts Claude has rewritten with it, and
 	// their stops with them, so the cursor is put back in reach of what is
 	// left rather than left past the end of the plan for the whole turn.
@@ -530,32 +548,58 @@ func submitCmd(submit Submitter, plan string) tea.Cmd {
 // Layout: the chat is on the left and the plan, which needs the room, takes
 // the right 60% of the screen. Each pane has a one-cell border with its title
 // set into the top edge; the plan has a row under it for comments, and the
-// screen a footer row.
+// screen a header row above the panes and a footer row below them.
 const (
 	borderSize   = 2
 	bubbleChrome = borderSize + 2
 	// chatGutter is the cells of room left and right of the messages.
 	chatGutter = 1
-	footerRows = 1
+	headerRows = 1
+	tabRows    = 1
+	footerRows = 3
 	inputRows  = 3
 	// inputBoxRows is the input and its border, which has the input's title
 	// set into the top edge.
-	inputBoxRows   = inputRows + borderSize
+	inputBoxRows = inputRows + borderSize
+	// padX and padY are the room between a pane's border and its content.
+	padX           = 1
+	padY           = 1
 	planFooterRows = 1
 	planPercent    = 60
 )
 
-func (m *Model) planWidth() int { return m.width * planPercent / 100 }
-func (m *Model) chatWidth() int { return m.width - m.planWidth() }
+func (m *Model) planWidth() int {
+	if m.narrow() {
+		return m.width
+	}
+	return m.width * planPercent / 100
+}
+
+func (m *Model) chatWidth() int {
+	if m.narrow() {
+		return m.width
+	}
+	return m.width - m.planWidth()
+}
+
+// topRows is what sits above the panes.
+func (m *Model) topRows() int {
+	if m.narrow() {
+		return headerRows + tabRows
+	}
+	return headerRows
+}
 
 func (m *Model) layout() {
-	inner := m.height - footerRows - borderSize
-	m.planView.SetWidth(m.planWidth() - borderSize)
-	m.planView.SetHeight(inner - planFooterRows)
-	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 5)
-	m.chatView.SetWidth(m.chatWidth() - borderSize)
-	m.chatView.SetHeight(inner - inputBoxRows)
-	m.input.SetWidth(m.chatWidth() - 2*borderSize)
+	inner := m.height - m.topRows() - footerRows - borderSize
+	m.planView.SetWidth(m.planWidth() - borderSize - 2*padX)
+	m.planView.SetHeight(inner - planFooterRows - padY)
+	// The editor is the text of a comment's card, which sits past the gutter
+	// on a rail, indented, with a cell either side.
+	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 6)
+	m.chatView.SetWidth(m.chatWidth() - borderSize - 2*padX)
+	m.chatView.SetHeight(inner - inputBoxRows - padY)
+	m.input.SetWidth(m.chatWidth() - 2*borderSize - 2*padX)
 	m.renderPlan()
 	m.renderChat()
 }
@@ -611,6 +655,11 @@ func (m *Model) renderPlan() {
 	}
 	if strings.TrimSpace(m.plan) == "" {
 		m.blocks = nil
+		m.units, m.questions = 0, 0
+		if m.busy {
+			m.planView.SetContent(lipgloss.NewStyle().Padding(1, 2).Render(m.skeleton(m.planView.Width() - 4)))
+			return
+		}
 		m.planView.SetContent(ui.HelperStyle.Padding(1, 2).Width(m.planView.Width()).
 			Render("No plan yet. Tell Claude what you want to change, and the plan it writes appears here."))
 		return
@@ -630,9 +679,18 @@ func (m *Model) renderPlan() {
 	}
 	blocks := splitBlocks(m.plan)
 	m.blocks = make([]renderedBlock, len(blocks))
+	var st planStats
 	for i, b := range blocks {
-		m.blocks[i] = renderedBlock{block: b, lines: renderLines(r, b.source)}
+		lines, ok := m.styled(b, &st, w)
+		if !ok {
+			lines, ok = m.blockLines(b, w-1)
+		}
+		if !ok {
+			lines = renderLines(r, b.source)
+		}
+		m.blocks[i] = renderedBlock{block: b, lines: lines}
 	}
+	m.units, m.questions = st.units, st.questions
 	m.renderedFrom, m.renderedWidth = m.plan, w
 	m.reanchor()
 	// The cursor stays on its block when Claude left that block as it was,
@@ -657,8 +715,7 @@ func (m *Model) userBubble(msg *message, w int) string {
 	inner := max(w*85/100-bubbleChrome, 1)
 	var parts []string
 	for _, c := range msg.comments {
-		parts = append(parts, ui.HelperStyle.Render(excerpt(c.quote, inner)))
-		parts = append(parts, commentBody(c.text, inner)...)
+		parts = append(parts, m.style(m.faint()).Render("┃ "+excerpt(c.quote, inner-2)), m.style(m.amber()).Render("┃ "+c.text))
 	}
 	if msg.text != "" {
 		parts = append(parts, msg.text)
@@ -695,13 +752,13 @@ func (m *Model) renderChat() {
 		}
 		b.WriteString("\n\n")
 	}
+	if len(m.comments) > 0 && !m.busy {
+		// The comments wait in a bubble like the message they will go in.
+		b.WriteString(m.userBubble(&message{fromUser: true, comments: m.comments}, w) + "\n")
+		b.WriteString(m.style(m.faint()).Render("queued · sends with your next message") + "\n\n")
+	}
 	if m.busy {
-		// The spinner's frames carry their own space after the dot.
-		line := m.spin.View() + "Claude is thinking"
-		if m.activity != "" {
-			line += ": " + m.activity
-		}
-		b.WriteString(ui.HelperStyle.Width(w).MaxHeight(2).Render(line))
+		b.WriteString(m.activityLog(w))
 	}
 	// The chat follows what is added to it unless the developer has
 	// scrolled up to read, when it stays where they are.
@@ -710,6 +767,25 @@ func (m *Model) renderChat() {
 	if follow {
 		m.chatView.GotoBottom()
 	}
+}
+
+// activityLog is what Claude has been doing this turn: each thing it has
+// finished with a tick, and the one in hand with the spinner.
+func (m Model) activityLog(w int) string {
+	if len(m.log) == 0 {
+		// The spinner's frames carry their own space after the dot.
+		return m.style(m.purple()).Render(m.spin.View() + "Claude is thinking…")
+	}
+	var lines []string
+	for i, a := range m.log {
+		a = ansi.Truncate(a, w-2, "…")
+		if i == len(m.log)-1 {
+			lines = append(lines, m.style(m.purple()).Render(m.spin.View()+a))
+			continue
+		}
+		lines = append(lines, m.style(m.green()).Render("✓ ")+m.style(m.dim()).Render(a))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // restyle renders the plan and the chat again for a change of background.
@@ -741,26 +817,39 @@ func (m Model) Content() string {
 			edge = accentColor
 		}
 		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-			Width(w).Height(m.height - footerRows)
+			Background(m.surface()).Padding(padY, padX, 0, padX).
+			Width(w).Height(m.height - m.topRows() - footerRows)
+		content = paint(content, w-borderSize-2*padX, m.surface())
 		return titled(s.Render(content), title, lipgloss.NewStyle().Foreground(edge).Render)
 	}
+	// The pane without the keyboard has a dim title as well as a dim border.
+	title := func(focused bool, name string) string {
+		if focused {
+			return ui.TitleStyle.Render(name)
+		}
+		return ui.HelperStyle.Faint(true).Render(name)
+	}
 
-	planTitle := ui.TitleStyle.Render("Plan")
+	planTitle := title(m.focus == panePlan, "Plan")
 	if m.focus == panePlan {
 		planTitle += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", m.planView.ScrollPercent()*100))
 	}
-	chat := pane(m.focus == paneChat, m.chatWidth(), ui.TitleStyle.Render("Chat"),
+	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, "Chat"),
 		m.chatView.View()+"\n"+m.inputBox())
 	plan := pane(m.focus == panePlan, m.planWidth(), planTitle,
 		m.planView.View()+"\n"+m.planFooter())
 
-	footer := m.status
-	if footer == "" {
-		footer = newHelp(m.dark, m.width).View(m.keys())
+	panes := lipgloss.JoinHorizontal(lipgloss.Top, chat, plan)
+	top := m.header()
+	if m.narrow() {
+		// One pane at a time, the other a tab away.
+		panes = chat
+		if m.focus == panePlan {
+			panes = plan
+		}
+		top += "\n" + m.tabs()
 	}
-	// A footer that wraps would push the panes off the top of the screen.
-	footer = ansi.Truncate(footer, m.width, "…")
-	return lipgloss.JoinVertical(lipgloss.Left, lipgloss.JoinHorizontal(lipgloss.Top, chat, plan), footer)
+	return lipgloss.JoinVertical(lipgloss.Left, top, panes, m.actionBar())
 }
 
 // inputBox is the message being written, in a box of its own under the chat
@@ -770,8 +859,10 @@ func (m Model) inputBox() string {
 	if m.focus == paneChat && !m.commenting {
 		edge = accentColor
 	}
+	ground := m.hue("#ffffff", "#0d1015")
+	w := m.chatWidth() - borderSize - 2*padX
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-		Width(m.chatWidth() - borderSize).Render(m.input.View())
+		Background(ground).Width(w).Render(paint(m.input.View(), w-borderSize, ground))
 	return titled(box, ui.TitleStyle.Render("Message"), lipgloss.NewStyle().Foreground(edge).Render)
 }
 

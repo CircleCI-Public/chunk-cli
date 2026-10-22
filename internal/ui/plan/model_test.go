@@ -206,7 +206,8 @@ func TestCommentEditorOpensUnderItsBlock(t *testing.T) {
 			abcLine = i
 		}
 	}
-	if bulletLine < 0 || abcLine != bulletLine+1 {
+	// The editor's card has its header line between the bullet and the text.
+	if bulletLine < 0 || abcLine != bulletLine+2 || !strings.Contains(lines[bulletLine+1], "your comment") {
 		t.Fatalf("comment editor at line %d does not come right after the bullet at %d:\n%s", abcLine, bulletLine, strings.Join(lines, "\n"))
 	}
 	footer := ansi.Strip(m.planFooter())
@@ -238,7 +239,7 @@ func TestCommentTakesNewLines(t *testing.T) {
 	lines := strings.Split(view, "\n")
 	aLine := -1
 	for i, l := range lines {
-		if strings.Contains(l, "💬 a") {
+		if strings.HasSuffix(strings.TrimRight(l, " "), "┃a") {
 			aLine = i
 		}
 	}
@@ -390,7 +391,7 @@ func TestCursorDoesNotHideTheCommentBar(t *testing.T) {
 			t.Errorf("line %d should have lost the cursor bar: %q", i, lines[i])
 		}
 	}
-	headingLine := find(lines, "Spec")
+	headingLine := find(lines, "SPEC")
 	if headingLine < 0 || !strings.HasPrefix(lines[headingLine], "▌ ") {
 		t.Errorf("the heading line should carry the cursor bar alone: %q", lines[headingLine])
 	}
@@ -419,7 +420,7 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 		m := New(context.Background(), turn, nil, "")
 		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
 		assertFits(t, m, width, 24)
-		if view := ansi.Strip(m.Content()); width >= 80 && !strings.Contains(view, "here.") {
+		if view := ansi.Strip(m.Content()); width >= narrowBelow && !strings.Contains(view, "here.") {
 			t.Errorf("at %d wide the empty plan's hint is cut off:\n%s", width, view)
 		}
 
@@ -515,15 +516,15 @@ func TestNewlineHintMatchesTheTerminal(t *testing.T) {
 	}
 }
 
-func TestFooterKeepsSendingThePlanInReach(t *testing.T) {
+func TestActionBarKeepsApprovingThePlanInReach(t *testing.T) {
 	turn := func(context.Context, string, func(string)) (string, string, error) {
 		return "ok", twoParts, nil
 	}
 	m := New(context.Background(), turn, nil, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 110, Height: 30})
 	for range 2 {
-		if view := ansi.Strip(m.Content()); !strings.Contains(view, "ctrl+s send plan to factory") {
-			t.Errorf("the footer dropped ctrl+s:\n%s", view)
+		if view := ansi.Strip(m.Content()); !strings.Contains(view, "ctrl+s Approve plan") {
+			t.Errorf("the action bar dropped ctrl+s:\n%s", view)
 		}
 		m = drive(t, m, press("tab"))
 	}
@@ -744,7 +745,7 @@ func TestCommentOnARewrittenPartCanBeEditedAndDeleted(t *testing.T) {
 			editorLine = i
 		}
 	}
-	if onLine < 0 || editorLine != onLine+1 {
+	if onLine < 0 || editorLine != onLine+2 || !strings.Contains(lines[onLine+1], "your comment") {
 		t.Fatalf("the editor at line %d does not come right after the part at %d:\n%s", editorLine, onLine, strings.Join(lines, "\n"))
 	}
 
@@ -995,6 +996,136 @@ func TestBubbleFitsAShortMessageAndWrapsALongOne(t *testing.T) {
 		}
 		if !strings.HasPrefix(l, " ") {
 			t.Errorf("line %d leaves no room on the left: %q", i, l)
+		}
+	}
+}
+
+func TestHeaderShowsPlanState(t *testing.T) {
+	turn := func(_ context.Context, _ string, _ func(string)) (string, string, error) {
+		return "Wrote a plan.", "# Add a flag\n\n## 1. Outcome\n\nThe flag exists.", nil
+	}
+	m := New(context.Background(), turn, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "No plan yet") {
+		t.Errorf("header does not say there is no plan:\n%s", view)
+	}
+
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m, _ = m.send("add a flag")
+	m = drive(t, m, turnDoneMsg{reply: "Wrote a plan.", plan: "# Add a flag\n\n## 1. Outcome\n\nThe flag exists."})
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Plan ready") {
+		t.Errorf("header does not say the plan is ready:\n%s", view)
+	}
+
+	m.comments = []comment{{block: 0, quote: "# Add a flag", text: "name it --dry"}}
+	m.renderPlan()
+	view := ansi.Strip(m.Content())
+	for _, want := range []string{"1 comment waiting for Claude", "your comment · queued", "name it --dry"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view is missing %q:\n%s", want, view)
+		}
+	}
+	for _, size := range [][2]int{{120, 40}, {80, 24}, {60, 20}} {
+		m = drive(t, m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		assertFits(t, m, size[0], size[1])
+	}
+}
+
+const planWithUnits = `# Retry on 429
+
+## 1. Outcome
+
+Create retries.
+
+## 3. Open Questions
+
+- Which timeout caps the wait?
+
+## 5. Units
+
+### Unit 1: Add RetryPolicy
+
+Code.
+
+### Unit 2: Wire it in
+
+More code.`
+
+func TestPlanShowsUnitsAsSteps(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", planWithUnits, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it").WithBranch("hanabel/retry-429")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := ansi.Strip(m.Content())
+	for _, want := range []string{"hanabel/retry-429", "OUTCOME ─", "OPEN QUESTIONS", "○ 1  Add RetryPolicy", "○ 2  Wire it in", "2 units", "1 open question", "ctrl+s Approve plan"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view is missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestNarrowScreenTakesTurnsWithTabs(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "Wrote it.", planWithUnits, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 70, Height: 30})
+	view := ansi.Strip(m.Content())
+	if !strings.Contains(view, "Chat") || !strings.Contains(view, "Plan · 2 units") {
+		t.Errorf("no tab strip:\n%s", view)
+	}
+	if strings.Contains(view, "Retry on 429") {
+		t.Errorf("the plan shows beside the chat on a narrow screen:\n%s", view)
+	}
+	assertFits(t, m, 70, 30)
+
+	m = drive(t, m, press("tab"))
+	view = ansi.Strip(m.Content())
+	if !strings.Contains(view, "Retry on 429") || strings.Contains(view, "Wrote it.") {
+		t.Errorf("tab did not bring the plan up in place of the chat:\n%s", view)
+	}
+	assertFits(t, m, 70, 30)
+}
+
+func TestFirstPlanShowsASkeletonWhileClaudeWrites(t *testing.T) {
+	release := make(chan struct{})
+	turn := func(_ context.Context, _ string, activity func(string)) (string, string, error) {
+		activity("Read create.go")
+		<-release
+		return "ok", planWithUnits, nil
+	}
+	m := New(context.Background(), turn, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m, _ = m.send("plan it")
+	m = drive(t, m, activityMsg("Read create.go"))
+	view := ansi.Strip(m.Content())
+	for _, want := range []string{"Claude is drafting", "Read create.go", "███", "esc Stop Claude"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view is missing %q:\n%s", want, view)
+		}
+	}
+	close(release)
+}
+
+// While a comment is written enter saves it, so the bar does not offer enter
+// as the key that sends comments to Claude.
+func TestActionBarOffersNoButtonWhileACommentIsWritten(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 110, Height: 30})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: 0, quote: "## 1. Outcome", text: "x"}}
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+
+	view := ansi.Strip(m.Content())
+	if !strings.Contains(view, "enter save comment") {
+		t.Fatalf("the bar does not say enter saves:\n%s", view)
+	}
+	for _, not := range []string{"Send 1 comment", "Approve plan"} {
+		if strings.Contains(view, not) {
+			t.Errorf("the bar offers %q while a comment is written:\n%s", not, view)
 		}
 	}
 }

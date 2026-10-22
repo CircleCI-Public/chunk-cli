@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
@@ -70,8 +71,11 @@ then press ctrl+s to send it to the factory to build, as
 			// the screen is closed mid-turn.
 			planCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
+			// The branch is only for the header; a repo without one has none.
+			branch, _ := gitutil.CurrentBranchIn(root)
 			screen := plan.New(planCtx, turn, submit, first).
-				WithTerminal(lipgloss.HasDarkBackground(os.Stdin, os.Stdout), false)
+				WithTerminal(lipgloss.HasDarkBackground(os.Stdin, os.Stdout), false).
+				WithBranch(branch)
 			p := tea.NewProgram(plan.Screen{Model: screen}, tea.WithContext(ctx))
 			final, err := p.Run()
 			if err != nil {

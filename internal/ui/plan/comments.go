@@ -293,7 +293,6 @@ var (
 	// mark on the left, the comment's on the right.
 	cursorMark  = lipgloss.NewStyle().Foreground(accentColor).Render("▌")
 	commentMark = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("┃")
-	commentText = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 )
 
 // gutter is the two cells left of a line: the cursor's mark, then the
@@ -315,33 +314,26 @@ func excerpt(quote string, width int) string {
 	return ansi.Truncate(`on "`+first+`"`, width, "…")
 }
 
-// commentBody is a comment's text as drawn: 💬 before the first line, the
-// rest indented under it, wrapped to width.
-func commentBody(text string, width int) []string {
-	split := strings.Split(commentText.Width(width-3).Render(text), "\n")
-	out := make([]string, len(split))
-	for j, l := range split {
-		lead := "💬 "
-		if j > 0 {
-			lead = "   "
-		}
-		out[j] = lead + l
-	}
-	return out
-}
-
-// editorLines is the comment editor's own view with the same 💬/three-space
-// lead as a saved comment's body, so the two line up.
-func editorLines(view string) []string {
-	lines := strings.Split(view, "\n")
+// commentCard is a comment as it hangs under its block: a thread on a rail
+// of its own, with a line saying what it is above body, on the note's ground,
+// width w cells across.
+func (m *Model) commentCard(head, body string, w int) []string {
+	rail := m.style(m.amber()).Render("┃")
+	card := m.style(m.dim()).Render(head) + "\n" + body
+	lines := strings.Split(paint(card, w-1, m.note()), "\n")
 	for j, l := range lines {
-		lead := "💬 "
-		if j > 0 {
-			lead = "   "
-		}
-		lines[j] = lead + l
+		lines[j] = rail + l
 	}
 	return lines
+}
+
+// commentLines is the card for comment ci, or for the editor when it is the
+// comment being written, width w cells across.
+func (m *Model) commentLines(ci int, editing bool, w int) []string {
+	if editing {
+		return m.commentCard("your comment", m.commentInput.View(), w)
+	}
+	return m.commentCard("your comment · queued", m.style(m.amber()).Width(w-2).Render(m.comments[ci].text), w)
 }
 
 // drawPlan lays out the rendered blocks with the cursor and comments marked,
@@ -364,15 +356,14 @@ func (m *Model) drawPlan() {
 		editing := m.commenting && i == m.cursor
 		g := gutter(i == m.cursor && m.focus == panePlan, ci >= 0 || editing)
 		for _, l := range b.lines {
+			// The block the cursor is on is raised off the pane.
+			if i == m.cursor && m.focus == panePlan {
+				l = paint(l, w-1, m.raised())
+			}
 			lines = append(lines, g+l)
 		}
-		switch {
-		case editing:
-			for _, l := range editorLines(m.commentInput.View()) {
-				lines = append(lines, g+"  "+l)
-			}
-		case ci >= 0:
-			for _, l := range commentBody(m.comments[ci].text, w-2) {
+		if ci >= 0 || editing {
+			for _, l := range m.commentLines(ci, editing, w-4) {
 				lines = append(lines, g+"  "+l)
 			}
 		}
@@ -386,15 +377,8 @@ func (m *Model) drawPlan() {
 			g := gutter(s == m.cursor && m.focus == panePlan, true)
 			m.blockTop[s] = len(lines)
 			lines = append(lines, g+"  "+ui.HelperStyle.Render(excerpt(m.comments[ci].quote, w-2)))
-			switch {
-			case editing:
-				for _, l := range editorLines(m.commentInput.View()) {
-					lines = append(lines, g+"  "+l)
-				}
-			default:
-				for _, l := range commentBody(m.comments[ci].text, w-2) {
-					lines = append(lines, g+"  "+l)
-				}
+			for _, l := range m.commentLines(ci, editing, w-4) {
+				lines = append(lines, g+"  "+l)
 			}
 			m.blockEnd[s] = len(lines)
 		}
@@ -414,7 +398,7 @@ func (m *Model) planFooter() string {
 	}
 	switch {
 	case n == 0 && m.focus == panePlan && !m.commenting:
-		return ui.HelperStyle.Render("c to comment on the highlighted part")
+		return "  " + ui.HelperStyle.Render("c to comment on the highlighted part")
 	case n == 0:
 		return ""
 	}
@@ -422,7 +406,7 @@ func (m *Model) planFooter() string {
 	if orphaned > 0 {
 		s += fmt.Sprintf(" (%d on parts Claude has since rewritten)", orphaned)
 	}
-	return ansi.Truncate(commentText.Render(s), m.planView.Width(), "…")
+	return ansi.Truncate("  "+m.style(m.amber()).Render(s), m.planView.Width(), "…")
 }
 
 func plural(n int, one, many string) string {

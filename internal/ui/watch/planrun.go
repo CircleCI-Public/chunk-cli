@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
@@ -61,8 +62,10 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.draftNote = ""
+	branch, _ := gitutil.CurrentBranchIn(msg.root)
 	screen := plan.New(m.planCtx, msg.turn, msg.submit, "").
 		WithTerminal(m.hasDarkBG, m.superEnter).
+		WithBranch(branch).
 		WithBack()
 	screen, cmd := screen.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 	m.planScreen, m.planOpen, m.planRoot = &screen, true, msg.root
