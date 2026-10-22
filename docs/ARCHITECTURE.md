@@ -437,7 +437,7 @@ POST /factory              {project_root, prompt, reviews_dir?, no_validate?, at
                             model?, implementer_instructions?, implement_timeout_seconds?,
                             review_timeout_seconds?, keep_sidecars?, org_id?, image?, log?, verbose?,
                             open_pr?, draft?}
-                           → 202 {id}   (409 a session is active, 404 unknown project,
+                           → 202 {id}   (409 the run it continues is in use, 404 unknown project,
                                          400 bad request or nothing to check, 503 no credential
                                          or, with pull_request=required, no GitHub token)
 GET  /factory[?root=<path>] → {sessions: [Session...]}, newest first
@@ -521,7 +521,10 @@ went.
   kept. A round counts *distinct* findings (`DedupeFindings`) and, of those, the
   ones **worth changing**: severity high or medium. In-process `chunk review`
   does not ask for findings, so its prompts and output are unchanged.
-- **One active session per project.**
+- **Sessions in a project run side by side.** Each has its own worktree,
+  branch, sidecars and record. The one thing they cannot share is a chain of
+  continuations' worktree, which every run of the chain works in: a continuation
+  is refused (409) while any live session of the project is on that branch.
 - **Prompts come from the project** (`.chunk/reviews`): `reviews_dir` must be
   relative and may not leave the project.
 - **Detach is not cancel.** A viewer disconnecting changes nothing; the session
