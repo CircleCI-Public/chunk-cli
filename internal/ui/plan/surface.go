@@ -8,14 +8,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// The grounds the screen is built from. The panes sit on one, and what is
-// set apart from a pane (the block the cursor is on, a comment, a code
-// block) sits on another, so the screen reads as surfaces and not as text in
-// boxes.
-func (m Model) surface() color.Color { return m.hue("#f6f8fa", "#11151c") }
-func (m Model) raised() color.Color  { return m.hue("#ddf4ff", "#16222a") }
-func (m Model) note() color.Color    { return m.hue("#fff8c5", "#221e14") }
-func (m Model) sunk() color.Color    { return m.hue("#eaeef2", "#0b0e13") }
+// The grounds the screen is built from. The panes sit on the terminal's own
+// background, as chunk watch's do, and what is set apart from a pane (the
+// block the cursor is on, a comment, a code block) sits on a ground of its
+// own, so the screen reads as surfaces and not as text in boxes.
+func (m Model) raised() color.Color { return m.hue("#ddf4ff", "#16222a") }
+func (m Model) note() color.Color   { return m.hue("#fff8c5", "#221e14") }
+func (m Model) sunk() color.Color   { return m.hue("#eaeef2", "#0b0e13") }
 
 // bgSeq is the escape sequence that sets c as the background.
 func bgSeq(c color.Color) string {

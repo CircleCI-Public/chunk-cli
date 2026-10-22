@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
 // The screen's palette: what each colour means is the same everywhere it is
@@ -18,9 +19,12 @@ func (m Model) hue(light, dark string) color.Color {
 	return lipgloss.LightDark(m.dark)(lipgloss.Color(light), lipgloss.Color(dark))
 }
 
-// teal is what has the keyboard; amber is the developer's comments; purple is
-// Claude at work; green is a plan that is ready.
-func (m Model) teal() color.Color   { return m.hue("#0e7c86", "#4fd1c5") }
+// teal is what has the keyboard, in chunk's brand accent so the screen looks
+// like chunk watch's (the name is watch's too); quiet is the border of what
+// doesn't have it. amber is the developer's comments; purple is Claude at
+// work; green is a plan that is ready.
+func (m Model) teal() color.Color   { return theme.New(m.dark).Teal.GetForeground() }
+func (m Model) quiet() color.Color  { return theme.New(m.dark).VDim.GetForeground() }
 func (m Model) amber() color.Color  { return m.hue("#9a6700", "#f0c16a") }
 func (m Model) purple() color.Color { return m.hue("#8250df", "#c792ea") }
 func (m Model) green() color.Color  { return m.hue("#1a7f37", "#7ee08a") }
@@ -119,7 +123,7 @@ func (m Model) tabs() string {
 // with the state: send comments first, and only then approve.
 func (m Model) actionBar() string {
 	inner := m.width - borderSize - 2
-	edge := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.hue("#d0d7de", "#262c39")).Background(m.surface()).Padding(0, 1)
+	edge := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.quiet()).Padding(0, 1)
 	if m.status != "" {
 		return edge.Width(m.width).Render(ansi.Truncate(m.status, inner, "…"))
 	}
@@ -134,9 +138,9 @@ func (m Model) actionBar() string {
 	k.Stop.SetEnabled(false)
 	k.SendPlan.SetEnabled(false)
 	room := max(inner-lipgloss.Width(right)-2, 0)
-	hints := ansi.Truncate(newHelp(m.dark, room).View(k), room, "…")
+	hints := ansi.Truncate(theme.Help(theme.New(m.dark), room).View(k), room, "…")
 	gap := max(inner-lipgloss.Width(hints)-lipgloss.Width(right), 1)
-	return edge.Width(m.width).Render(paint(hints+strings.Repeat(" ", gap)+right, inner, m.surface()))
+	return edge.Width(m.width).Render(hints + strings.Repeat(" ", gap) + right)
 }
 
 // actions is the bar's main button and the one beside it.

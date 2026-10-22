@@ -115,6 +115,20 @@ func TestRender_noRunsSaysSoAndKeepsItsLayout(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "0 runs"), out)
 }
 
+// A run just sent to the factory is not listed until a poll finds it; the
+// welcome must not flash up in that gap.
+func TestRender_noWelcomeWhileASentRunIsPending(t *testing.T) {
+	m := sessModel()
+	m.width, m.height = 100, 24
+	m.pendingRun = "run-1"
+
+	out := m.render()
+
+	assert.Assert(t, !strings.Contains(out, "█"), "no mascot while a run is pending:\n"+out)
+	assert.Assert(t, strings.Contains(out, "Sent to the factory"), out)
+	assert.Equal(t, strings.Count(out, "\n"), 24)
+}
+
 func TestRenderFooter_updateNoticeNeverWidensFooter(t *testing.T) {
 	for _, width := range []int{40, 80, 100, 120, 200} {
 		for _, focus := range []pane{paneLeft, paneRight} {
@@ -198,5 +212,64 @@ func TestDisabledKeysDoNothing(t *testing.T) {
 		assert.Assert(t, cmd == nil, "%q in the left pane", code)
 		assert.Equal(t, next.(Model).focusedPane, paneLeft, "%q moved the focus", code)
 		assert.Equal(t, len(next.(Model).detailsOpen), 0, "%q opened the details fold", code)
+	}
+}
+
+// The dashboard's two panes are drawn as separate boxes side by side, not one
+// shared frame with a divider.
+func TestPanesAreSeparateBoxes(t *testing.T) {
+	m := sessModel(factoryRun("abc", chunkd.SessionRunning, time.Now()))
+	m.width, m.height = 100, 30
+	m = m.reselectRun()
+
+	lines := strings.Split(m.render(), "\n")
+	top := stripANSI(lines[1])
+	if !strings.HasPrefix(top, "╭─ runs") {
+		t.Errorf("top line does not start with the left box's edge: %q", top)
+	}
+	if !strings.Contains(top, "╮╭─ run") {
+		t.Errorf("top line does not join two boxes: %q", top)
+	}
+	var bottom string
+	for _, l := range lines {
+		if s := stripANSI(l); strings.Contains(s, "╯╰") {
+			bottom = s
+			break
+		}
+	}
+	if bottom == "" {
+		t.Errorf("no box line joins two boxes with ╯╰ in:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, l := range []string{top, bottom} {
+		if strings.ContainsAny(l, "┬┴") {
+			t.Errorf("line still has a shared-frame junction: %q", l)
+		}
+	}
+}
+
+// The focused pane's box is drawn in the brand accent, and the other pane's
+// in the quiet grey.
+func TestFocusedBoxIsTheAccent(t *testing.T) {
+	m := sessModel(factoryRun("abc", chunkd.SessionRunning, time.Now()))
+	m.width, m.height = 100, 30
+	m = m.reselectRun()
+	st := newWatchStyles(true)
+
+	m.focusedPane = paneLeft
+	top := strings.Split(m.render(), "\n")[1]
+	if !strings.HasPrefix(top, st.Teal.Render("╭")) {
+		t.Errorf("left-focused top line does not start with the accent ╭: %q", top)
+	}
+	if !strings.Contains(top, st.VDim.Render("╭")) {
+		t.Errorf("left-focused top line does not contain the vdim ╭ for the right box: %q", top)
+	}
+
+	m.focusedPane = paneRight
+	top = strings.Split(m.render(), "\n")[1]
+	if !strings.HasPrefix(top, st.VDim.Render("╭")) {
+		t.Errorf("right-focused top line does not start with the vdim ╭: %q", top)
+	}
+	if !strings.Contains(top, st.Teal.Render("╭")) {
+		t.Errorf("right-focused top line does not contain the accent ╭ for the right box: %q", top)
 	}
 }

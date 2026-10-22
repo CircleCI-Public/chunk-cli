@@ -11,7 +11,6 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -421,7 +420,7 @@ func actionHint(st watchStyles, primary bool, b key.Binding) string {
 // footer's width, so where to type is easy to find without drawing a box
 // that would take rows of its own.
 func (m Model) promptField(st watchStyles) string {
-	field := lipgloss.NewStyle().Background(lipgloss.LightDark(m.hasDarkBG)(lipgloss.Color("254"), lipgloss.Color("236")))
+	field := st.Field
 	width := max(m.width-4, 4)
 	room := width - 2 - 1 // the "› " in front and the cursor
 	var text string

@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -12,28 +13,65 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-// comment is the developer's note on one block of the plan, sent to Claude
-// with their next message.
+// comment is the developer's note on a run of blocks of the plan, sent to
+// Claude with their next message.
 type comment struct {
-	// block is the index of the block the comment is on, or -1 once Claude
-	// has rewritten that block and it is gone. Such a comment is still sent.
+	// block is the index of the first block the comment is on, or -1 once
+	// Claude has rewritten those blocks and they are gone. Such a comment is
+	// still sent.
 	block int
-	// quote is the block's markdown, which is how Claude finds what the
+	// span is how many blocks the comment is on, from block.
+	span int
+	// quote is the blocks' markdown, which is how Claude finds what the
 	// comment is about.
 	quote string
 	text  string
 }
 
-// reanchor puts each comment back on the block it quotes after the plan has
-// been split again. Two comments never share a block, so of several blocks
-// with the same markdown each comment takes a different one.
+// last is the index of the last block c is on.
+func (c comment) last() int { return c.block + max(c.span, 1) - 1 }
+
+// quoteOf is the markdown of blocks lo to hi as it is in the plan, or, when
+// it cannot be found there as it is, their markdown a blank line apart.
+func (m *Model) quoteOf(lo, hi int) string {
+	first, last := m.blocks[lo], m.blocks[hi]
+	if first.at >= 0 && last.at >= first.at && last.at+len(last.source) <= len(m.renderedFrom) {
+		return m.renderedFrom[first.at : last.at+len(last.source)]
+	}
+	sources := make([]string, 0, hi-lo+1)
+	for _, b := range m.blocks[lo : hi+1] {
+		sources = append(sources, b.source)
+	}
+	return strings.Join(sources, "\n\n")
+}
+
+// reanchor puts each comment back on the blocks it quotes after the plan has
+// been split again. Two comments never share a block, so of several runs of
+// blocks with the same markdown each comment takes a different one.
 func (m *Model) reanchor() {
 	taken := map[int]bool{}
+	free := func(lo, n int) bool {
+		for i := lo; i < lo+n; i++ {
+			if taken[i] {
+				return false
+			}
+		}
+		return true
+	}
+	take := func(lo, n int) {
+		for i := lo; i < lo+n; i++ {
+			taken[i] = true
+		}
+	}
+	fits := func(c *comment, lo int) bool {
+		n := max(c.span, 1)
+		return lo >= 0 && lo+n <= len(m.blocks) && free(lo, n) && m.quoteOf(lo, lo+n-1) == c.quote
+	}
 	var lost []int
 	for i := range m.comments {
 		c := &m.comments[i]
-		if c.block >= 0 && c.block < len(m.blocks) && m.blocks[c.block].source == c.quote && !taken[c.block] {
-			taken[c.block] = true
+		if fits(c, c.block) {
+			take(c.block, max(c.span, 1))
 			continue
 		}
 		lost = append(lost, i)
@@ -41,9 +79,10 @@ func (m *Model) reanchor() {
 	for _, i := range lost {
 		c := &m.comments[i]
 		c.block = -1
-		for j, b := range m.blocks {
-			if b.source == c.quote && !taken[j] {
-				c.block, taken[j] = j, true
+		for j := range m.blocks {
+			if fits(c, j) {
+				c.block = j
+				take(j, max(c.span, 1))
 				break
 			}
 		}
@@ -76,11 +115,58 @@ func (m *Model) commentAt(i int) int {
 		return -1
 	}
 	for j, c := range m.comments {
-		if c.block == i {
+		if c.block >= 0 && c.block <= i && i <= c.last() {
 			return j
 		}
 	}
 	return -1
+}
+
+// selecting is whether a run of blocks is selected to comment on.
+func (m *Model) selecting() bool { return m.anchor >= 0 && m.anchor != m.cursor }
+
+// selection is the first and last stop the next comment is on: the blocks
+// from the anchor to the cursor, or the cursor alone.
+func (m *Model) selection() (lo, hi int) {
+	if m.anchor < 0 {
+		return m.cursor, m.cursor
+	}
+	return min(m.anchor, m.cursor), max(m.anchor, m.cursor)
+}
+
+// selected is whether stop i is in the selection.
+func (m *Model) selected(i int) bool {
+	lo, hi := m.selection()
+	return lo <= i && i <= hi
+}
+
+// extend moves the cursor by delta and keeps the selection's other end where
+// it was, so the selection grows or shrinks with it. A selection is of
+// blocks: it does not reach comments on parts Claude has since rewritten.
+func (m *Model) extend(delta int) {
+	if m.cursor >= len(m.blocks) {
+		m.anchor = -1
+		m.moveCursor(m.cursor + delta)
+		return
+	}
+	if m.anchor < 0 {
+		m.anchor = m.cursor
+	}
+	m.moveCursor(min(m.cursor+delta, len(m.blocks)-1))
+}
+
+// widen grows lo to hi to take in the whole of every comment it touches, and
+// returns them, in order, as the indexes in m.comments of the comments a new
+// one on lo to hi replaces.
+func (m *Model) widen(lo, hi int) (int, int, []int) {
+	var in []int
+	for j, c := range m.comments {
+		if c.block >= 0 && c.block <= hi && c.last() >= lo {
+			in = append(in, j)
+			lo, hi = min(lo, c.block), max(hi, c.last())
+		}
+	}
+	return lo, hi, in
 }
 
 // stopOf is the cursor stop comment c is drawn at, or -1.
@@ -125,7 +211,17 @@ func quoteLines(md string) string {
 // updatePlanKey handles a key while the plan pane has the keyboard.
 func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := m.keys()
+	// Only the keys that grow or shrink the selection keep it.
+	if !key.Matches(msg, k.ExtendUp, k.ExtendDown, k.Comment) {
+		m.anchor = -1
+	}
 	switch {
+	case key.Matches(msg, k.ExtendUp):
+		m.extend(-1)
+	case key.Matches(msg, k.ExtendDown):
+		m.extend(1)
+	case key.Matches(msg, k.ClearSelection):
+		m.drawPlan()
 	case key.Matches(msg, k.Up):
 		m.moveCursor(m.cursor - 1)
 	case key.Matches(msg, k.Down):
@@ -151,8 +247,20 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case key.Matches(msg, k.Comment):
 		m.commenting, m.status = true, ""
 		m.commentInput.Reset()
-		if i := m.commentAt(m.cursor); i >= 0 {
-			m.commentInput.SetValue(m.comments[i].text)
+		var texts []string
+		if m.cursor < len(m.blocks) {
+			// The editor opens on the selection and every comment it
+			// touches, with their text, and goes under the last block.
+			lo, hi, in := m.widen(m.selection())
+			for _, j := range in {
+				texts = append(texts, m.comments[j].text)
+			}
+			m.anchor, m.cursor = lo, hi
+		} else if i := m.commentAt(m.cursor); i >= 0 {
+			texts = []string{m.comments[i].text}
+		}
+		if len(texts) > 0 {
+			m.commentInput.SetValue(strings.Join(texts, "\n\n"))
 			m.commentInput.MoveToEnd()
 		}
 		m.moveCursor(m.cursor)
@@ -206,23 +314,23 @@ func (m Model) updateCommentKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := m.keys()
 	switch {
 	case key.Matches(msg, k.CancelComment):
-		m.commenting = false
+		m.commenting, m.anchor = false, -1
 		m.commentInput.Blur()
 		m.drawPlan()
 		return m, nil
 	case key.Matches(msg, k.SaveComment):
 		text := strings.TrimSpace(m.commentInput.Value())
-		i := m.commentAt(m.cursor)
-		switch {
-		case text == "" && i >= 0:
-			m.comments = append(m.comments[:i], m.comments[i+1:]...)
-		case text == "":
-		case i >= 0:
-			m.comments[i].text = text
-		case m.cursor < len(m.blocks):
-			m.comments = append(m.comments, comment{block: m.cursor, quote: m.blocks[m.cursor].source, text: text})
+		if m.cursor < len(m.blocks) {
+			m.saveOnBlocks(text)
+		} else if i := m.commentAt(m.cursor); i >= 0 {
+			// A comment on a part Claude has since rewritten.
+			if text == "" {
+				m.comments = append(m.comments[:i], m.comments[i+1:]...)
+			} else {
+				m.comments[i].text = text
+			}
 		}
-		m.commenting = false
+		m.commenting, m.anchor = false, -1
 		m.commentInput.Blur()
 		m.moveCursor(m.cursor)
 		m.syncPlaceholder()
@@ -232,6 +340,31 @@ func (m Model) updateCommentKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	m.commentInput, cmd = m.commentInput.Update(msg)
 	m.moveCursor(m.cursor)
 	return m, cmd
+}
+
+// saveOnBlocks saves text as the comment on the selection, in place of the
+// comments it took in when the editor opened; empty text deletes them. A
+// comment keeps its place among the others, so it is sent where it was.
+func (m *Model) saveOnBlocks(text string) {
+	lo, hi, in := m.widen(m.selection())
+	c := comment{block: lo, span: hi - lo + 1, quote: m.quoteOf(lo, hi), text: text}
+	at := len(m.comments)
+	if len(in) > 0 {
+		at = in[0]
+	}
+	var kept []comment
+	for j, old := range m.comments {
+		if j == at && text != "" {
+			kept = append(kept, c)
+		}
+		if !slices.Contains(in, j) {
+			kept = append(kept, old)
+		}
+	}
+	if at == len(m.comments) && text != "" {
+		kept = append(kept, c)
+	}
+	m.comments = kept
 }
 
 // page scrolls the plan by delta lines and puts the cursor on the first stop
@@ -288,19 +421,16 @@ const gutterWidth = 2
 // it scrolls inside itself.
 const maxCommentRows = 6
 
-var (
-	// cursorMark and commentMark are the gutter's two columns: the cursor's
-	// mark on the left, the comment's on the right.
-	cursorMark  = lipgloss.NewStyle().Foreground(accentColor).Render("▌")
-	commentMark = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("┃")
-)
+// commentMark is the gutter's right column, the comment's mark. The cursor's
+// mark on the left is in the accent, so it follows the terminal's background.
+var commentMark = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("┃")
 
 // gutter is the two cells left of a line: the cursor's mark, then the
 // comment's.
-func gutter(cursor, commented bool) string {
+func (m *Model) gutter(cursor, commented bool) string {
 	g := " "
 	if cursor {
-		g = cursorMark
+		g = m.style(m.teal()).Render("▌")
 	}
 	if commented {
 		return g + commentMark
@@ -348,21 +478,35 @@ func (m *Model) drawPlan() {
 	m.blockTop = make([]int, m.stops())
 	m.blockEnd = make([]int, m.stops())
 	for i, b := range m.blocks {
+		ci := m.commentAt(i)
+		// While a comment is written its blocks are the selection, and the
+		// editor is drawn in place of the comments it takes in.
+		editing := m.commenting && m.selected(i)
+		if editing {
+			ci = -1
+		}
+		marked := m.selected(i) && m.focus == panePlan
+		g := m.gutter(marked, ci >= 0 || editing)
 		if i > 0 && !joinsPrevious(m.blocks[i-1].block, b.block) {
-			lines = append(lines, "")
+			// The blank line between two blocks of one comment or one
+			// selection carries their bars, so they read as one.
+			sep := ""
+			if (ci >= 0 && ci == m.commentAt(i-1)) || (m.selected(i-1) && m.selected(i) && (editing || marked)) {
+				sep = g
+			}
+			lines = append(lines, sep)
 		}
 		m.blockTop[i] = len(lines)
-		ci := m.commentAt(i)
-		editing := m.commenting && i == m.cursor
-		g := gutter(i == m.cursor && m.focus == panePlan, ci >= 0 || editing)
 		for _, l := range b.lines {
-			// The block the cursor is on is raised off the pane.
-			if i == m.cursor && m.focus == panePlan {
+			// The blocks under the cursor are raised off the pane.
+			if marked {
 				l = paint(l, w-1, m.raised())
 			}
 			lines = append(lines, g+l)
 		}
-		if ci >= 0 || editing {
+		// A comment hangs under the last of its blocks, and the editor under
+		// the cursor's.
+		if (ci >= 0 && i == m.comments[ci].last()) || (editing && i == m.cursor) {
 			for _, l := range m.commentLines(ci, editing, w-4) {
 				lines = append(lines, g+"  "+l)
 			}
@@ -374,7 +518,7 @@ func (m *Model) drawPlan() {
 		for k, ci := range orphans {
 			s := len(m.blocks) + k
 			editing := m.commenting && m.cursor == s
-			g := gutter(s == m.cursor && m.focus == panePlan, true)
+			g := m.gutter(s == m.cursor && m.focus == panePlan, true)
 			m.blockTop[s] = len(lines)
 			lines = append(lines, g+"  "+ui.HelperStyle.Render(excerpt(m.comments[ci].quote, w-2)))
 			for _, l := range m.commentLines(ci, editing, w-4) {
@@ -397,6 +541,9 @@ func (m *Model) planFooter() string {
 		}
 	}
 	switch {
+	case m.selecting() && !m.commenting:
+		lo, hi := m.selection()
+		return "  " + ui.HelperStyle.Render(fmt.Sprintf("%d parts selected · c to comment on them", hi-lo+1))
 	case n == 0 && m.focus == panePlan && !m.commenting:
 		return "  " + ui.HelperStyle.Render("c to comment on the highlighted part")
 	case n == 0:

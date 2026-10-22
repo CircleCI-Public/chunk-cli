@@ -579,13 +579,16 @@ chunk
   the working tree, commits, pushes or writes to a pull request is denied.
   `tab` moves to the plan, where `c` writes a comment right under the
   highlighted part (a heading, paragraph, list item or code block); `enter`
-  saves it and `shift+enter`/`ctrl+j` adds a line. A comment on a part Claude
-  has since rewritten is listed after the plan, naming the part it was on,
-  where it can still be edited or deleted. Comments go with the next message,
-  each quoting the markdown it is on. `ctrl+s` sends the plan to the local
-  daemon as `chunk factory build <plan file>` would; a plan not sent is kept,
-  and its path printed. It checks what `factory build` checks before it opens.
-  The same screen opens from `chunk watch` with `p`.
+  saves it and `shift+enter`/`ctrl+j` adds a line. `shift+↑/↓` (or `K`/`J`)
+  selects a run of parts for one comment, which hangs under the last of them; a
+  selection that touches a comment takes in all of it, and its text, and `esc`
+  clears a selection. A comment on a part Claude has since rewritten is listed
+  after the plan, naming the part it was on, where it can still be edited or
+  deleted. Comments go with the next message, each quoting the markdown it is
+  on. `ctrl+s` sends the plan to the local daemon as `chunk factory build <plan
+  file>` would; a plan not sent is kept, and its path printed. It checks what
+  `factory build` checks before it opens. The same screen opens from `chunk
+  watch` with `p`.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans
   three parts, prints the plan, and leaves out each part already done, so a
   rerun finishes a setup that stopped partway; with nothing left to do it fails
