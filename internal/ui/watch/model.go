@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
 
@@ -44,24 +45,11 @@ var logoLines = []string{
 	"    █████████████████",
 }
 
-// watchStyles holds lipgloss styles computed for the current terminal background.
-type watchStyles struct {
-	Dim      lipgloss.Style
-	Emphasis lipgloss.Style
-	Success  lipgloss.Style
-	Warning  lipgloss.Style
-	Running  lipgloss.Style
-	Teal     lipgloss.Style
-	Error    lipgloss.Style
-	Muted    lipgloss.Style
-	VDim     lipgloss.Style
-	// Chip is the base of a coloured label; the caller sets its background.
-	Chip lipgloss.Style
-	// Accent is filled with the brand colour, for the one primary action a
-	// screen offers (e.g. sending a draft to the factory), so it reads as a
-	// button next to the dimmed, bracketed hints for everything else.
-	Accent lipgloss.Style
-}
+// watchStyles is the shared TUI palette with the dashboard's shorthand for
+// rendering in each style.
+type watchStyles struct{ theme.Styles }
+
+func newWatchStyles(hasDark bool) watchStyles { return watchStyles{theme.New(hasDark)} }
 
 func (s watchStyles) dim(text string) string      { return s.Dim.Render(text) }
 func (s watchStyles) emphasis(text string) string { return s.Emphasis.Render(text) }
@@ -72,31 +60,6 @@ func (s watchStyles) teal(text string) string     { return s.Teal.Render(text) }
 func (s watchStyles) err(text string) string      { return s.Error.Render(text) }
 func (s watchStyles) muted(text string) string    { return s.Muted.Render(text) }
 func (s watchStyles) vdim(text string) string     { return s.VDim.Render(text) }
-
-// Chunk brand colours. The accent is navy on a light terminal, where yellow
-// would vanish, and yellow on a dark one.
-var (
-	chunkYellow = lipgloss.Color("#FFF700")
-	chunkNavy   = lipgloss.Color("#2E3C52")
-	chunkGreen  = lipgloss.Color("#00DB73")
-)
-
-func newWatchStyles(hasDark bool) watchStyles {
-	ld := lipgloss.LightDark(hasDark)
-	return watchStyles{
-		Dim:      lipgloss.NewStyle().Foreground(ld(lipgloss.Color("248"), lipgloss.Color("246"))),
-		Emphasis: lipgloss.NewStyle().Bold(true),
-		Success:  lipgloss.NewStyle().Foreground(chunkGreen),
-		Warning:  lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
-		Running:  lipgloss.NewStyle().Foreground(lipgloss.Color("4")),
-		Teal:     lipgloss.NewStyle().Foreground(ld(chunkNavy, chunkYellow)),
-		Error:    lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
-		Muted:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("252"), lipgloss.Color("250"))),
-		VDim:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242"))),
-		Chip:     lipgloss.NewStyle().Bold(true).Foreground(chunkNavy),
-		Accent:   lipgloss.NewStyle().Bold(true).Foreground(ld(lipgloss.Color("255"), chunkNavy)).Background(ld(chunkNavy, chunkYellow)),
-	}
-}
 
 // ProjectEntry holds everything the watch model needs for one project.
 type ProjectEntry struct {
@@ -631,41 +594,10 @@ func (m Model) connectionTag(st watchStyles) string {
 	return st.success(ui.IconOK) + " " + st.muted(label)
 }
 
-// frameStyle colours a part of the frame around the two panes: the focused
-// pane's edges are drawn in the accent colour and the other pane's stay quiet.
-// The divider is the focused pane's edge whichever pane that is.
-func (m Model) frameStyle(st watchStyles, rightPane bool) func(string) string {
-	if (m.focusedPane == paneRight) == rightPane {
-		return st.teal
-	}
-	return st.vdim
-}
-
-// renderFrameEdge is the top or bottom of the frame around the two panes, with
-// a junction over the divider and each pane's title, if it has one, set into
-// the edge over it.
-func (m Model) renderFrameEdge(st watchStyles, left, junction, right rune, leftTitle, rightTitle string) string {
-	leftW := leftPaneWidth + 1 // the pane and the space before the divider
-	rightW := max(m.width-leftW-3, 0)
-	l, r := m.frameStyle(st, false), m.frameStyle(st, true)
-	return l(string(left)) + edgeSegment(l, leftTitle, leftW) + st.teal(string(junction)) +
-		edgeSegment(r, rightTitle, rightW) + r(string(right)) + "\n"
-}
-
-// edgeSegment is n cells of a frame edge drawn with line, with title set into
-// it as in "─ runs ─────" and cut to leave at least one cell of edge after it.
-func edgeSegment(line func(string) string, title string, n int) string {
-	if title == "" || n < 5 {
-		return line(strings.Repeat("─", n))
-	}
-	title = clip(title, n-4)
-	return line("─ ") + title + line(" "+strings.Repeat("─", max(n-3-lipgloss.Width(title), 0)))
-}
-
 // contentHeight is how many lines the two panes get between the header and
 // the footer.
 func (m Model) contentHeight() int {
-	h := m.height - 4 // header + separator + footer + padding
+	h := m.height - 4 // header + the boxes' top and bottom edges (2) + the help bar
 	// The footer grows by a line when the daemon is unreachable. Without handing
 	// that line back the message lands past the last row and is clipped at every
 	// terminal size, which is how a daemon that had died came to look like a
@@ -686,9 +618,9 @@ func (m Model) contentHeight() int {
 	return h
 }
 
-// renderBody is the frame's top edge and the two panes in it. Each pane is
-// drawn with its title as its first line, which goes into the edge over it, so
-// a pane is drawn one line taller than the rows it fills.
+// renderBody is the two panes, each its own rounded box with its title set
+// into the box's top edge, so a pane is drawn one line taller than the rows
+// it fills.
 func (m Model) renderBody(st watchStyles) string {
 	contentHeight := m.contentHeight()
 	paneHeight := contentHeight + 1
@@ -709,8 +641,9 @@ func (m Model) renderBody(st watchStyles) string {
 	leftTitle, leftLines := paneTitle(leftLines)
 	rightTitle, rightLines := paneTitle(rightLines)
 
-	var b strings.Builder
-	b.WriteString(m.renderFrameEdge(st, '╭', '┬', '╮', leftTitle, rightTitle))
+	rw := m.width - leftPaneWidth - 5
+	left := make([]string, contentHeight)
+	right := make([]string, contentHeight)
 	for i := 0; i < contentHeight; i++ {
 		l := ""
 		if i < len(leftLines) {
@@ -720,14 +653,17 @@ func (m Model) renderBody(st watchStyles) string {
 		if i < len(rightLines) {
 			r = rightLines[i]
 		}
-		lPad := padLine(l, leftPaneWidth)
+		left[i] = padLine(l, leftPaneWidth)
 		// Clip rather than let a long line wrap: the two panes are drawn as one
 		// fixed-height block, so a line that wraps shifts everything below it and
 		// the layout no longer matches the height it was built for.
-		rPad := padLine(clip(r, m.width-leftPaneWidth-5), m.width-leftPaneWidth-5)
-		b.WriteString(m.frameStyle(st, false)("│") + lPad + " " + st.teal("│") + " " + rPad + m.frameStyle(st, true)("│") + "\n")
+		right[i] = " " + padLine(clip(r, rw), rw)
 	}
-	return b.String()
+	h := contentHeight + 2
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		st.Pane(m.focusedPane == paneLeft, leftPaneWidth+2, h, leftTitle, strings.Join(left, "\n")),
+		st.Pane(m.focusedPane == paneRight, m.width-leftPaneWidth-2, h, rightTitle, strings.Join(right, "\n")),
+	) + "\n"
 }
 
 // paneTitle splits a pane's lines into its title and the lines under it.
@@ -785,7 +721,7 @@ func (m Model) renderEmptyPane(st watchStyles) []string {
 		lines = append(lines, m.renderStartHints(st)...)
 	}
 
-	// right pane width: total - 1 leading space - leftPaneWidth - 1 space - 1 divider - 1 space
+	// right pane content width: the right box's border, then one leading space.
 	rightWidth := m.width - leftPaneWidth - 4
 	logoMaxWidth := 0
 	for _, l := range logoLines {
@@ -833,7 +769,7 @@ func (m Model) renderFooter(st watchStyles) string {
 	// fixed-height reasoning as the notice below: a wrapped footer costs a line
 	// the layout did not budget for, which is worse than a hint the reader can
 	// find by pressing the key.
-	help := newHelp(st, m.width-2)
+	help := theme.Help(st.Styles, m.width-2)
 	if m.draft != draftNone {
 		// A new run's keys are the ones a new user is told to press, so they
 		// stand out from the actions they name.
@@ -866,14 +802,10 @@ func (m Model) renderFooter(st watchStyles) string {
 		}
 	}
 
-	edge := m.renderFrameEdge(st, '╰', '┴', '╯', "", "")
-	if m.welcoming() {
-		edge = st.vdim("╰"+strings.Repeat("─", max(m.width-2, 0))+"╯") + "\n"
-	}
-	footer := edge + "  " + bar + "\n"
+	footer := "  " + bar + "\n"
 	if m.draft != draftNone {
 		// A new run's keys go last, under the step they are for.
-		footer = m.renderFrameEdge(st, '╰', '┴', '╯', "", "") + m.draftFooter(st, bar)
+		footer = m.draftFooter(st, bar)
 	}
 	switch {
 	case m.draft != draftNone:

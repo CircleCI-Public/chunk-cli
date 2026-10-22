@@ -9,7 +9,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
 // drive feeds msg to m, then runs each command it returns and feeds back
@@ -441,6 +444,26 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 
 		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 		assertFits(t, m, width, 24)
+	}
+}
+
+// The pane with the keyboard is drawn in chunk's brand accent, as in chunk
+// watch, and follows the terminal's background: yellow on a dark one, navy
+// on a light one.
+func TestFocusedPaneUsesTheBrandAccent(t *testing.T) {
+	for _, dark := range []bool{true, false} {
+		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
+		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		st := theme.New(dark)
+		top := strings.Split(m.Content(), "\n")[1]
+		focused := lipgloss.NewStyle().Foreground(st.Teal.GetForeground()).Render("╭─ ")
+		quiet := lipgloss.NewStyle().Foreground(st.VDim.GetForeground()).Render("╭─ ")
+		if !strings.HasPrefix(top, focused) {
+			t.Errorf("dark=%v: the focused chat pane's edge is not the accent: %q", dark, top)
+		}
+		if !strings.Contains(top, quiet) {
+			t.Errorf("dark=%v: the plan pane without the keyboard is not quiet: %q", dark, top)
+		}
 	}
 }
 

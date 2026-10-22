@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
 // clip cuts a line to at most width display columns, measuring with lipgloss so
@@ -144,7 +145,7 @@ func (m Model) renderOutputPane(st watchStyles) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(edgeSegment(st.vdim, title, m.width) + "\n")
+	b.WriteString(theme.EdgeSegment(st.vdim, title, m.width) + "\n")
 	if p.err != nil {
 		b.WriteString(" " + st.err(p.err.Error()) + "\n")
 	}
@@ -161,6 +162,6 @@ func (m Model) renderOutputPane(st watchStyles) string {
 	}
 	// Clipped as well as fitted: help adds a hint that overflows when there is
 	// no room left for its ellipsis.
-	b.WriteString(clip(newHelp(st, m.width).View(k), m.width) + "\n")
+	b.WriteString(clip(theme.Help(st.Styles, m.width).View(k), m.width) + "\n")
 	return b.String()
 }

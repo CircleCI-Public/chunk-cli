@@ -200,3 +200,62 @@ func TestDisabledKeysDoNothing(t *testing.T) {
 		assert.Assert(t, !next.(Model).runDetails, "%q opened the details fold", code)
 	}
 }
+
+// The dashboard's two panes are drawn as separate boxes side by side, not one
+// shared frame with a divider.
+func TestPanesAreSeparateBoxes(t *testing.T) {
+	m := sessModel(factoryRun("abc", chunkd.SessionRunning, time.Now()))
+	m.width, m.height = 100, 30
+	m = m.reselectRun()
+
+	lines := strings.Split(m.render(), "\n")
+	top := stripANSI(lines[1])
+	if !strings.HasPrefix(top, "╭─ runs") {
+		t.Errorf("top line does not start with the left box's edge: %q", top)
+	}
+	if !strings.Contains(top, "╮╭─ run") {
+		t.Errorf("top line does not join two boxes: %q", top)
+	}
+	var bottom string
+	for _, l := range lines {
+		if s := stripANSI(l); strings.Contains(s, "╯╰") {
+			bottom = s
+			break
+		}
+	}
+	if bottom == "" {
+		t.Errorf("no box line joins two boxes with ╯╰ in:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, l := range []string{top, bottom} {
+		if strings.ContainsAny(l, "┬┴") {
+			t.Errorf("line still has a shared-frame junction: %q", l)
+		}
+	}
+}
+
+// The focused pane's box is drawn in the brand accent, and the other pane's
+// in the quiet grey.
+func TestFocusedBoxIsTheAccent(t *testing.T) {
+	m := sessModel(factoryRun("abc", chunkd.SessionRunning, time.Now()))
+	m.width, m.height = 100, 30
+	m = m.reselectRun()
+	st := newWatchStyles(true)
+
+	m.focusedPane = paneLeft
+	top := strings.Split(m.render(), "\n")[1]
+	if !strings.HasPrefix(top, st.Teal.Render("╭")) {
+		t.Errorf("left-focused top line does not start with the accent ╭: %q", top)
+	}
+	if !strings.Contains(top, st.VDim.Render("╭")) {
+		t.Errorf("left-focused top line does not contain the vdim ╭ for the right box: %q", top)
+	}
+
+	m.focusedPane = paneRight
+	top = strings.Split(m.render(), "\n")[1]
+	if !strings.HasPrefix(top, st.VDim.Render("╭")) {
+		t.Errorf("right-focused top line does not start with the vdim ╭: %q", top)
+	}
+	if !strings.Contains(top, st.Teal.Render("╭")) {
+		t.Errorf("right-focused top line does not contain the accent ╭ for the right box: %q", top)
+	}
+}

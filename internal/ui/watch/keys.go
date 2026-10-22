@@ -1,7 +1,6 @@
 package watch
 
 import (
-	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 )
 
@@ -213,15 +212,3 @@ func (k outputKeyMap) ShortHelp() []key.Binding {
 }
 
 func (k outputKeyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }
-
-// newHelp is a help view styled like the rest of the dashboard, fitting width.
-func newHelp(st watchStyles, width int) help.Model {
-	h := help.New()
-	h.ShortSeparator = "  ·  "
-	h.Styles.ShortKey = st.Teal
-	h.Styles.ShortDesc = st.Dim
-	h.Styles.ShortSeparator = st.VDim
-	h.Styles.Ellipsis = st.VDim
-	h.SetWidth(max(width, 1))
-	return h
-}

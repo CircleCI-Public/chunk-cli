@@ -1,9 +1,7 @@
 package plan
 
 import (
-	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
-	"charm.land/lipgloss/v2"
 )
 
 // keyMap is every key the planning screen answers to. The handlers match
@@ -119,17 +117,3 @@ func (k keyMap) ShortHelp() []key.Binding {
 
 // FullHelp satisfies help.KeyMap; the screen only shows the short form.
 func (k keyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }
-
-// newHelp is a footer styled like chunk watch's, fitting width.
-func newHelp(dark bool, width int) help.Model {
-	ld := lipgloss.LightDark(dark)
-	h := help.New()
-	h.ShortSeparator = "  ·  "
-	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(accentColor)
-	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(ld(lipgloss.Color("248"), lipgloss.Color("246")))
-	vdim := lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242")))
-	h.Styles.ShortSeparator = vdim
-	h.Styles.Ellipsis = vdim
-	h.SetWidth(max(width, 1))
-	return h
-}
