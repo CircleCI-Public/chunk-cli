@@ -111,12 +111,16 @@ func (d *daemon) startFactory(req chunkd.FactoryRequest) (chunkd.Session, error)
 		return chunkd.Session{}, err
 	}
 
-	entry, ctx, busy := d.sessions.add(chunkd.Session{
+	var branch string
+	if cont != nil {
+		branch = cont.From.Branch
+	}
+	entry, ctx, busy := d.sessions.addOn(chunkd.Session{
 		ProjectRoot: ps.root,
 		Branch:      currentBranch(ps.root),
 		HeadSHA:     headRef(ps.root),
 		Factory:     record,
-	})
+	}, branch)
 	if busy != "" {
 		return chunkd.Session{}, apiErr(http.StatusConflict, "%s", busy)
 	}

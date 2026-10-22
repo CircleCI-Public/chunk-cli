@@ -401,7 +401,9 @@ chunk
   otherwise. It is refused when `CHUNK_DAEMON_REMOTE_ADDR` is set, since a run
   works from this machine's files. The project needs a git remote named
   `origin` (the sidecars clone from it); `factory build` fails up front without one.
-  A project has one active run at a time. Runs are kept in memory: a daemon
+  A project can have several runs going at once, each in its own worktree and
+  on its own sidecars. A run that continues another works in the worktree of the
+  first run of its chain, so it is refused while any run of that chain is going. Runs are kept in memory: a daemon
   restart loses the record, but not the work committed on the run's branch. `--reviews` must name a directory inside the project. Every reviewer is
   given the original factory prompt as the requested-change specification, so
   the files in that directory can be reusable review lenses rather than copies

@@ -240,14 +240,14 @@ func TestFailuresSayWhy(t *testing.T) {
 	m, _ = press(m, tea.KeyDown)
 	assert.Assert(t, !strings.Contains(view(m), "could not make a draft"), "the note goes with the next key")
 
-	f = &fakeDrafts{draft: sampleDraft, sendErr: errors.New("a factory run is already active for this project")}
+	f = &fakeDrafts{draft: sampleDraft, sendErr: errors.New("factory run run-1 is still working on chunk/factory/add-a-flag/run-1")}
 	m, _ = press(draftModel(t, f), 'n')
 	m = typeText(m, "add a flag")
 	m, cmd = press(m, tea.KeyEnter)
 	m = deliver(t, m, cmd)
 	m, cmd = press(m, tea.KeyEnter)
 	m = deliver(t, m, cmd)
-	assert.Assert(t, strings.Contains(view(m), "could not send the draft to the factory: a factory run is already active"), view(m))
+	assert.Assert(t, strings.Contains(view(m), "could not send the draft to the factory: factory run run-1 is still working"), view(m))
 	assert.Equal(t, m.pendingRun, "")
 }
 

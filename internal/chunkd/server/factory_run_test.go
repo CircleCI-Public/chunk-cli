@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -303,13 +304,26 @@ func TestRunningSessionIsNotDeleted(t *testing.T) {
 	assert.Assert(t, s.get(e.snapshot().ID) != nil)
 }
 
-// One session at a time per project.
-func TestFactorySessionsTakeTurns(t *testing.T) {
-	s := newSessionStore(context.Background())
-	_, _, busy := s.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
-	assert.Equal(t, busy, "")
-	_, _, busy = s.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
-	assert.Assert(t, busy != "", "two factory runs ran at once")
+// Two factory runs in one project go at once, each in its own worktree.
+func TestFactorySessionsRunSideBySide(t *testing.T) {
+	release := make(chan struct{})
+	var started sync.WaitGroup
+	started.Add(2)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		started.Done()
+		<-release
+		return factory.Report{Outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 1}}, nil
+	})
+
+	first, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	second, err := d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "fix the typo"})
+	assert.NilError(t, err, "a second run in the project was refused")
+	started.Wait()
+
+	close(release)
+	waitForSessionEnd(t, d, first.ID)
+	waitForSessionEnd(t, d, second.ID)
 }
 
 // TestFactorySessionKeepsItsLog guards --log and --verbose on the daemon: the
@@ -416,6 +430,38 @@ func TestStartFactoryKeepsTheContinuedRunsSpecOrigin(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, sess.Factory.ContinuesRunID, "run-1")
 	assert.Equal(t, sess.Factory.SpecOrigin, "../notes/spec.md")
+}
+
+// Continuing a later run of a chain is refused while another run of it is
+// going: both would work in the chain's one worktree.
+func TestStartFactoryRefusesToContinueAChainInUse(t *testing.T) {
+	release := make(chan struct{})
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		<-release
+		return factory.Report{Outcome: factory.Outcome{Result: factory.ResultPassed, Rounds: 1}}, nil
+	})
+	t.Cleanup(func() { close(release) })
+
+	dataDir, err := config.RepoDataDir(root)
+	assert.NilError(t, err)
+	dir := filepath.Join(dataDir, "factory")
+	assert.NilError(t, os.MkdirAll(dir, 0o700))
+	const branch = "chunk/factory/add-a-flag/run-1"
+	for _, rec := range []factory.Record{
+		{RunID: "run-1", Prompt: "add a flag", Branch: branch},
+		{RunID: "run-2", Prompt: "add a flag", Branch: branch, ContinuesRunID: "run-1"},
+	} {
+		b, err := json.Marshal(rec)
+		assert.NilError(t, err)
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, rec.RunID+".json"), b, 0o600))
+	}
+
+	_, err = d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Continue: "run-1"})
+	assert.NilError(t, err)
+	_, err = d.startFactory(chunkd.FactoryRequest{ProjectRoot: root, Continue: "run-2"})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae), "two runs of a chain went at once: %v", err)
+	assert.Equal(t, ae.status, http.StatusConflict)
 }
 
 func TestFeedKeepsTheLatestLinesAndCountsThemAll(t *testing.T) {
