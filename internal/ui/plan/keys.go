@@ -86,14 +86,17 @@ func (m Model) keys() keyMap {
 
 	inChat := m.focus == paneChat && !m.commenting
 	inPlan := m.focus == panePlan && !m.commenting
-	for _, b := range []*key.Binding{&k.Send, &k.Newline, &k.ChatPageUp, &k.ChatPageDown} {
+	for _, b := range []*key.Binding{&k.Send, &k.ChatPageUp, &k.ChatPageDown} {
 		b.SetEnabled(inChat)
 	}
+	k.Newline.SetEnabled(inChat || m.commenting)
 	for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Top, &k.Bottom, &k.PageUp, &k.PageDown, &k.HalfUp, &k.HalfDown, &k.SectionBack, &k.SectionNext, &k.Comment} {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
 	k.Delete.SetEnabled(inPlan && m.commentAt(m.cursor) >= 0)
-	k.Next.SetEnabled(inPlan && len(m.comments) > 0)
+	// n has nowhere to go with nothing commented below the cursor, so the
+	// footer does not offer it there.
+	k.Next.SetEnabled(inPlan && m.nextComment() != m.cursor)
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)

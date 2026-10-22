@@ -17,7 +17,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
@@ -109,7 +108,7 @@ type Model struct {
 	comments     []comment
 	inFlight     []comment
 	commenting   bool
-	commentInput textinput.Model
+	commentInput textarea.Model
 
 	planView viewport.Model
 	chatView viewport.Model
@@ -170,9 +169,20 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 	in.SetHeight(3)
 	in.Focus()
 
-	ci := textinput.New()
-	ci.Prompt = "💬 "
-	ci.Placeholder = "Comment on the highlighted part (enter saves, esc cancels)"
+	ci := textarea.New()
+	ci.ShowLineNumbers = false
+	ci.Prompt = ""
+	ci.Placeholder = "Comment on this part"
+	ci.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
+	ci.DynamicHeight = true
+	// MaxContentHeight bounds the comment itself, at the chat input's own
+	// limit, so that MaxHeight bounds only the rows it is shown in: without
+	// it the editor would take no more lines than it shows.
+	ci.MaxContentHeight = ci.MaxHeight
+	ci.MaxHeight = maxCommentRows
+	ciStyles := ci.Styles()
+	ciStyles.Focused.CursorLine = lipgloss.NewStyle()
+	ci.SetStyles(ciStyles)
 
 	// The plan's keys are the screen's own, which move the cursor with the
 	// view; the viewport's would scroll one without the other, and its d
@@ -274,6 +284,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		default:
 			m.messages = append(m.messages, message{text: msg.reply})
 		}
+		// The cursor stays on a comment on a rewritten part, wherever it now
+		// sits, rather than drifting to whatever ends up at its old stop.
+		held := -1
+		var hc comment
+		if m.cursor >= len(m.blocks) {
+			if held = m.commentAt(m.cursor); held >= 0 {
+				hc = m.comments[held]
+			}
+		}
 		// Comments Claude did not get to answer are the developer's to send
 		// again, ahead of any written since.
 		if msg.err != nil {
@@ -285,6 +304,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		// Also when the plan is as it was: the skeleton, if any, goes.
 		m.renderPlan()
+		if held >= 0 {
+			if s := m.stopOf(hc); s >= 0 {
+				m.moveCursor(s)
+			}
+		}
 		m.syncPlaceholder()
 		m.renderChat()
 		return m, nil
@@ -431,6 +455,12 @@ func warn(s string) string { return ui.WarningStyle.Render(s) }
 
 // forward hands msg to the focused pane's component.
 func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
+	if m.commenting {
+		var cmd tea.Cmd
+		m.commentInput, cmd = m.commentInput.Update(msg)
+		m.moveCursor(m.cursor)
+		return m, cmd
+	}
 	var cmd tea.Cmd
 	if m.focus == panePlan {
 		m.planView, cmd = m.planView.Update(msg)
@@ -459,6 +489,10 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 	m.activityCh = make(chan string, 64)
 	m.syncPlaceholder()
 	m.renderPlan()
+	// Sending takes the comments on parts Claude has rewritten with it, and
+	// their stops with them, so the cursor is put back in reach of what is
+	// left rather than left past the end of the plan for the whole turn.
+	m.moveCursor(m.cursor)
 	m.renderChat()
 	m.chatView.GotoBottom()
 	return m, tea.Batch(turnCmd(ctx, m.turn, prompt, m.activityCh), waitActivity(ctx, m.activityCh), m.spin.Tick)
@@ -560,7 +594,9 @@ func (m *Model) layout() {
 	inner := m.height - m.topRows() - footerRows - borderSize
 	m.planView.SetWidth(m.planWidth() - borderSize - 2*padX)
 	m.planView.SetHeight(inner - planFooterRows - padY)
-	m.commentInput.SetWidth(m.planWidth() - borderSize - 2*padX - 4)
+	// The editor is the text of a comment's card, which sits past the gutter
+	// on a rail, indented, with a cell either side.
+	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 6)
 	m.chatView.SetWidth(m.chatWidth() - borderSize - 2*padX)
 	m.chatView.SetHeight(inner - inputBoxRows - padY)
 	m.input.SetWidth(m.chatWidth() - 2*borderSize - 2*padX)
@@ -659,9 +695,11 @@ func (m *Model) renderPlan() {
 	m.reanchor()
 	// The cursor stays on its block when Claude left that block as it was,
 	// and otherwise on the same place in the plan as near as there is one.
-	m.cursor = min(m.cursor, len(m.blocks)-1)
+	// On a comment on a part Claude has since rewritten it has no block to
+	// follow; Update puts it back on that comment.
+	m.cursor = min(m.cursor, m.stops()-1)
 	for i, b := range m.blocks {
-		if b.source == cursorSource {
+		if cursorSource != "" && b.source == cursorSource {
 			m.cursor = i
 			break
 		}
@@ -677,8 +715,7 @@ func (m *Model) userBubble(msg *message, w int) string {
 	inner := max(w*85/100-bubbleChrome, 1)
 	var parts []string
 	for _, c := range msg.comments {
-		quote := ansi.Truncate(strings.SplitN(c.quote, "\n", 2)[0], inner, "…")
-		parts = append(parts, m.style(m.faint()).Render("┃ on "+quote), m.style(m.amber()).Render("┃ "+c.text))
+		parts = append(parts, m.style(m.faint()).Render("┃ "+excerpt(c.quote, inner-2)), m.style(m.amber()).Render("┃ "+c.text))
 	}
 	if msg.text != "" {
 		parts = append(parts, msg.text)
