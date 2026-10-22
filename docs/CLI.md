@@ -570,17 +570,22 @@ chunk
   It opens a two-pane screen: a chat with Claude Code on this machine on the
   left, and the plan Claude writes on the right, rendered as markdown. Each
   message is a turn of one `claude -p --resume` session that reads the code
-  (Bash is off) and keeps the plan, in factory-bot's format, in a file in the
-  project's data directory rather than the working tree. `tab` moves to the
-  plan, where `c` writes a comment right under the highlighted part (a
-  heading, paragraph, list item or code block); `enter` saves it and
-  `shift+enter`/`ctrl+j` adds a line. A comment on a part Claude has since
-  rewritten is listed after the plan, naming the part it was on, where it can
-  still be edited or deleted. Comments go with the next message, each quoting
-  the markdown it is on. `ctrl+s` sends the plan to the local daemon as `chunk
-  factory build <plan file>` would; a plan not sent is kept, and its path
-  printed. It checks what `factory build` checks before it opens. The same
-  screen opens from `chunk watch` with `p`.
+  and keeps the plan, in factory-bot's format, in a file in the project's data
+  directory rather than the working tree. The plan file is the only thing it
+  writes; its shell is an allowlist of read-only git and `gh` commands (`git
+  fetch`, `log`, `diff`, `show`, `status`, `branch`, `rev-parse`, `ls-files`,
+  `ls-tree`, `ls-remote`, and `gh pr view|diff|list|checks`), so it can look at
+  a collaborator's branch or pull request while planning. Anything that changes
+  the working tree, commits, pushes or writes to a pull request is denied.
+  `tab` moves to the plan, where `c` writes a comment right under the
+  highlighted part (a heading, paragraph, list item or code block); `enter`
+  saves it and `shift+enter`/`ctrl+j` adds a line. A comment on a part Claude
+  has since rewritten is listed after the plan, naming the part it was on,
+  where it can still be edited or deleted. Comments go with the next message,
+  each quoting the markdown it is on. `ctrl+s` sends the plan to the local
+  daemon as `chunk factory build <plan file>` would; a plan not sent is kept,
+  and its path printed. It checks what `factory build` checks before it opens.
+  The same screen opens from `chunk watch` with `p`.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans
   three parts, prints the plan, and leaves out each part already done, so a
   rerun finishes a setup that stopped partway; with nothing left to do it fails

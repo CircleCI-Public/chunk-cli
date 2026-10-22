@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,6 +26,8 @@ const planTimeout = 15 * time.Minute
 const planSystemPrompt = `You are planning a change with a developer, in their repository. You do not make the change: the plan you write is handed to an implementer agent that does.
 
 Keep the plan in the file %s, and only that file: create it on your first turn, and edit it as the conversation goes. Never edit any other file. Read the code as much as you need to make the plan specific.
+
+You may run read-only git and gh commands to look at other branches and pull requests, for example git fetch, git show origin/<branch>:<path>, git diff main...origin/<branch> and gh pr diff <number>. Never change the working tree: do not check out, switch, reset, stash, commit or push, and do not comment on pull requests.
 
 The plan has these sections, as markdown headings:
 
@@ -44,6 +47,23 @@ Walk one concrete case end to end through the finished change, showing every new
 Discrete units of work, each naming the files it changes with load-bearing code snippets, its tests alongside, and the commands that verify it.
 
 Each reply goes to the developer in a chat beside the plan. Keep it short: say what you changed in the plan and ask about anything you need answered. Do not repeat the plan in the reply.`
+
+// planTools are the shell commands a planning turn may run. They read history
+// and pull requests, or fetch refs; none of them changes the working tree.
+var planTools = []string{
+	"Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git status:*)",
+	"Bash(git branch:*)", "Bash(git rev-parse:*)", "Bash(git ls-remote:*)",
+	"Bash(git ls-files:*)", "Bash(git ls-tree:*)", "Bash(git fetch:*)",
+	"Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr list:*)", "Bash(gh pr checks:*)",
+}
+
+// planDisallowed is a backstop: planning never changes the working tree,
+// commits, pushes or writes to a pull request.
+var planDisallowed = append(slices.Clone(disallowedGit),
+	"Bash(git push:*)", "Bash(git merge:*)", "Bash(git pull:*)", "Bash(git clean:*)", "Bash(git restore:*)",
+	"Bash(gh pr comment:*)", "Bash(gh pr merge:*)", "Bash(gh pr review:*)", "Bash(gh pr close:*)",
+	"Bash(gh pr edit:*)", "Bash(gh pr create:*)", "Bash(gh api:*)",
+)
 
 // PlanSession is a conversation with Claude Code, on the developer's machine,
 // about a plan kept in a file. Its turns resume one claude session.
@@ -68,8 +88,10 @@ func (s *PlanSession) Turn(ctx context.Context, message string, onActivity func(
 	var stderr bytes.Buffer
 	args := append(streamArgs(),
 		"--permission-mode", "acceptEdits",
-		// Claude only reads the code; the plan file is all it writes.
-		flagDisallowedTools, "Bash",
+		// Claude reads the code and other branches; the plan file is all
+		// it writes.
+		flagAllowedTools, strings.Join(planTools, ","),
+		flagDisallowedTools, strings.Join(planDisallowed, ","),
 		// The plan is kept outside the repository, where claude would
 		// otherwise ask before writing.
 		"--add-dir", filepath.Dir(s.PlanPath),

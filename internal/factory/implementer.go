@@ -37,6 +37,7 @@ func implementerSystemPrompt(instructions string) string {
 
 // The claude flags every local and sidecar run of Claude Code passes.
 const (
+	flagAllowedTools       = "--allowedTools"
 	flagDisallowedTools    = "--disallowedTools"
 	flagAppendSystemPrompt = "--append-system-prompt"
 )
