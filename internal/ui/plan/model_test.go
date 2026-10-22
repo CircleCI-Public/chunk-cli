@@ -108,6 +108,12 @@ func press(k string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyDown}
 	case "up":
 		return tea.KeyPressMsg{Code: tea.KeyUp}
+	case "shift+down":
+		return tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}
+	case "shift+up":
+		return tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift}
+	case "esc":
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
 	}
 	r := []rune(k)[0]
 	return tea.KeyPressMsg{Code: r, Text: k}
@@ -1166,5 +1172,194 @@ func TestActionBarOffersNoButtonWhileACommentIsWritten(t *testing.T) {
 		if strings.Contains(view, not) {
 			t.Errorf("the bar offers %q while a comment is written:\n%s", not, view)
 		}
+	}
+}
+
+func TestShiftSelectsSeveralBlocksForOneComment(t *testing.T) {
+	var sent []string
+	turn := func(_ context.Context, msg string, _ func(string)) (string, string, error) {
+		sent = append(sent, msg)
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+
+	// From the second heading, up over the paragraph above it.
+	m = drive(t, m, press("tab"))
+	for range 2 {
+		m = drive(t, m, press("down"))
+	}
+	m = drive(t, m, press("shift+up"))
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "2 parts selected") {
+		t.Errorf("the footer does not say what is selected:\n%s", view)
+	}
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "merge these")
+	m = drive(t, m, press("enter"))
+
+	want := "The flag exists.\n\n## 2. Spec"
+	if len(m.comments) != 1 || m.comments[0].block != 1 || m.comments[0].span != 2 || m.comments[0].quote != want {
+		t.Fatalf("comments: %+v", m.comments)
+	}
+	if m.selecting() {
+		t.Error("the selection outlived its comment")
+	}
+	// The cursor on either block is on the comment.
+	m = drive(t, m, press("up"))
+	if m.commentAt(m.cursor) != 0 {
+		t.Errorf("block %d is not on the comment", m.cursor)
+	}
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("enter"))
+	if !strings.Contains(sent[1], "> The flag exists.\n>\n> ## 2. Spec") {
+		t.Errorf("Claude was not sent both parts:\n%s", sent[1])
+	}
+}
+
+func TestCommentOnSeveralBlocksHangsUnderTheLast(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: 1, span: 3, quote: m.quoteOf(1, 3), text: "use cobra flags"}}
+	m.drawPlan()
+
+	lines := strings.Split(ansi.Strip(m.planView.View()), "\n")
+	var from, card int
+	for i, l := range lines {
+		switch {
+		case strings.Contains(l, "The flag exists."):
+			from = i
+		case strings.Contains(l, "use cobra flags"):
+			card = i
+		}
+	}
+	if card <= from {
+		t.Fatalf("the comment is not under its blocks:\n%s", strings.Join(lines, "\n"))
+	}
+	for i := from; i <= card; i++ {
+		if !strings.HasPrefix(lines[i], " ┃") {
+			t.Errorf("line %d does not carry the comment bar: %q", i, lines[i])
+		}
+	}
+	if strings.Count(strings.Join(lines, "\n"), "use cobra flags") != 1 {
+		t.Error("the comment is shown more than once")
+	}
+}
+
+func TestSelectionTakesInTheCommentsItTouches(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{
+		{block: 3, quote: "* [AGENT] parse it in main.go", text: "first"},
+		{block: 1, quote: "The flag exists.", text: "second"},
+	}
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("shift+down"))
+	m = drive(t, m, press("c"))
+	// The selection was 1 to 2; it grows to take in the whole comment on 1,
+	// and the editor holds that comment's text to add to.
+	if got := m.commentInput.Value(); got != "second" {
+		t.Errorf("editor holds %q", got)
+	}
+	m = typeText(t, m, " too")
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 2 {
+		t.Fatalf("comments: %+v", m.comments)
+	}
+	if c := m.comments[1]; c.block != 1 || c.span != 2 || c.text != "second too" {
+		t.Errorf("the comment taken in is %+v", c)
+	}
+
+	// A selection over both comments makes them one, in the order they
+	// were written.
+	m = drive(t, m, press("shift+down"))
+	m = drive(t, m, press("c"))
+	if got := m.commentInput.Value(); got != "first\n\nsecond too" {
+		t.Errorf("editor holds %q", got)
+	}
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 1 || m.comments[0].block != 1 || m.comments[0].span != 3 {
+		t.Errorf("comments: %+v", m.comments)
+	}
+}
+
+func TestEmptyCommentOnASelectionDeletesWhatItTookIn(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: 1, quote: "The flag exists.", text: "x"}}
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("shift+down"))
+	m = drive(t, m, press("c"))
+	m.commentInput.Reset()
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 0 {
+		t.Errorf("comments: %+v", m.comments)
+	}
+}
+
+func TestEscClearsTheSelectionBeforeItLeaves(t *testing.T) {
+	m := New(context.Background(), nil, nil, "").WithBack()
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("shift+down"))
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "esc clear selection") {
+		t.Errorf("the footer does not offer esc:\n%s", view)
+	}
+	var cmd tea.Cmd
+	m, cmd = m.Update(press("esc"))
+	if cmd != nil {
+		if _, ok := cmd().(ClosedMsg); ok {
+			t.Fatal("esc left the screen with a selection to clear")
+		}
+	}
+	if m.selecting() {
+		t.Error("esc left the selection")
+	}
+}
+
+func TestMovingWithoutShiftDropsTheSelection(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("shift+down"))
+	m = drive(t, m, press("shift+down"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "x")
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 1 || m.comments[0].block != 3 || m.comments[0].span != 1 {
+		t.Errorf("comments: %+v", m.comments)
+	}
+}
+
+func TestCommentOnSeveralBlocksFollowsThemWhenThePlanChanges(t *testing.T) {
+	m := New(context.Background(), nil, nil, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.plan = twoParts
+	m.renderPlan()
+	m.comments = []comment{{block: 1, span: 2, quote: m.quoteOf(1, 2), text: "x"}}
+
+	m.plan = "## 0. New section\n\n" + twoParts
+	m.renderPlan()
+	if c := m.comments[0]; c.block != 2 || c.span != 2 {
+		t.Errorf("comment is on %d+%d, want 2+2", c.block, c.span)
+	}
+
+	// Rewriting either block leaves the comment on a rewritten part.
+	m.plan = strings.Replace(twoParts, "## 2. Spec", "## 2. Design", 1)
+	m.renderPlan()
+	if got := m.comments[0].block; got != -1 {
+		t.Errorf("comment on a rewritten block is on %d, want -1", got)
 	}
 }

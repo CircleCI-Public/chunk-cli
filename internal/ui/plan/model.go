@@ -60,6 +60,9 @@ type message struct {
 type renderedBlock struct {
 	block
 	lines []string
+	// at is where source starts in the plan it was split from, or -1 when
+	// it cannot be found there as it is.
+	at int
 }
 
 type (
@@ -100,6 +103,9 @@ type Model struct {
 	renderedWidth int
 	// cursor is the block the plan pane has highlighted.
 	cursor int
+	// anchor is the block a selection was started from with shift, which
+	// runs from there to the cursor, or -1 when there is none.
+	anchor int
 	// blockTop and blockEnd are each block's first line in the plan pane and
 	// the line after its last.
 	blockTop, blockEnd []int
@@ -202,6 +208,7 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 		spin:         spinner.New(spinner.WithSpinner(spinner.Dot)),
 		pending:      strings.TrimSpace(first),
 		dark:         true,
+		anchor:       -1,
 	}
 }
 
@@ -364,6 +371,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case key.Matches(msg, k.Focus):
+		m.anchor = -1
 		if m.focus == paneChat {
 			m.focus = panePlan
 			m.input.Blur()
@@ -439,8 +447,10 @@ func (m Model) quit() (Model, tea.Cmd) {
 // or is "" when there is nothing.
 func (m Model) unsent() string {
 	n := len(m.comments)
-	if m.commenting && strings.TrimSpace(m.commentInput.Value()) != "" && m.commentAt(m.cursor) < 0 {
-		n++
+	if m.commenting && strings.TrimSpace(m.commentInput.Value()) != "" && m.cursor < len(m.blocks) {
+		// The comment being written replaces those it takes in.
+		_, _, in := m.widen(m.selection())
+		n += 1 - len(in)
 	}
 	var parts []string
 	if n > 0 {
@@ -681,7 +691,12 @@ func (m *Model) renderPlan() {
 	blocks := splitBlocks(m.plan)
 	m.blocks = make([]renderedBlock, len(blocks))
 	var st planStats
+	from := 0
 	for i, b := range blocks {
+		at := -1
+		if j := strings.Index(m.plan[from:], b.source); j >= 0 {
+			at, from = from+j, from+j+len(b.source)
+		}
 		lines, ok := m.styled(b, &st, w)
 		if !ok {
 			lines, ok = m.blockLines(b, w-1)
@@ -689,11 +704,13 @@ func (m *Model) renderPlan() {
 		if !ok {
 			lines = renderLines(r, b.source)
 		}
-		m.blocks[i] = renderedBlock{block: b, lines: lines}
+		m.blocks[i] = renderedBlock{block: b, lines: lines, at: at}
 	}
 	m.units, m.questions = st.units, st.questions
 	m.renderedFrom, m.renderedWidth = m.plan, w
 	m.reanchor()
+	// A selection is of blocks as they were split, so it goes with them.
+	m.anchor = -1
 	// The cursor stays on its block when Claude left that block as it was,
 	// and otherwise on the same place in the plan as near as there is one.
 	// On a comment on a part Claude has since rewritten it has no block to
