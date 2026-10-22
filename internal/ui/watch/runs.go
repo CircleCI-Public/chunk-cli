@@ -272,6 +272,9 @@ const (
 	itemCheck
 	itemReview
 	itemRound
+	// itemDetails is the fold under the rounds holding where the run put its
+	// work and what it said setting up.
+	itemDetails
 	// itemBranch and itemPR are the run's branch and pull request, under its
 	// rounds.
 	itemBranch
@@ -295,8 +298,8 @@ func (m Model) openRunItem(run *sessionInfo, items []runItem) (tea.Model, tea.Cm
 		return m, nil
 	}
 	it := items[m.runItem]
-	if it.kind == itemTask || it.kind == itemRound {
-		return m.toggleRunRow(run), nil
+	if it.kind == itemTask || it.kind == itemRound || it.kind == itemDetails {
+		return m.toggleRunRow(run)
 	}
 	if it.kind == itemPR {
 		return m.openPullRequest(run)
@@ -402,7 +405,7 @@ func (m Model) copyRunFailure(run *sessionInfo) (tea.Model, tea.Cmd) {
 // itemFailureReport describes why a run row failed, in text to paste to an
 // agent, or "" when the row did not fail.
 func itemFailureReport(s chunkd.Session, it runItem) string {
-	if it.kind == itemTask || it.kind == itemRound || it.kind == itemBranch || it.kind == itemPR {
+	if it.kind == itemTask || it.kind == itemRound || it.kind == itemDetails || it.kind == itemBranch || it.kind == itemPR {
 		return ""
 	}
 	r := s.Rounds[it.round]
@@ -1073,7 +1076,7 @@ func (m Model) copyRunItem(run *sessionInfo) (tea.Model, tea.Cmd) {
 		text = run.s.Factory.PullRequest.URL
 	case itemBranch:
 		text = run.s.Factory.Branch
-	case itemTask, itemImplement, itemCheck, itemReview, itemRound:
+	case itemTask, itemImplement, itemCheck, itemReview, itemRound, itemDetails:
 		return m.copyRunFailure(run)
 	}
 	next, cmd := m.noteRow(run.s.ID, it.kind, "copied")

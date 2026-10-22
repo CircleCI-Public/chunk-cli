@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
@@ -100,6 +101,9 @@ func (m Model) runItems(s chunkd.Session) []runItem {
 		if m.roundOpen(s, ri) {
 			items = append(items, roundItems(s, ri)...)
 		}
+	}
+	if hasDetails(s) {
+		items = append(items, runItem{kind: itemDetails, round: -1})
 	}
 	return append(items, outcomeItems(s)...)
 }
@@ -216,17 +220,26 @@ func (m Model) toggleTask(runID string) Model {
 	return m
 }
 
-// toggleRunRow flips the expand state of the selected row: the task, when
-// that is what is selected, or its round otherwise.
-func (m Model) toggleRunRow(run *sessionInfo) Model {
+// toggleRunRow flips the expand state of the selected row: the task, a
+// round, details, or a row inside a round, which folds open under itself.
+func (m Model) toggleRunRow(run *sessionInfo) (Model, tea.Cmd) {
 	items := m.runItems(run.s)
 	if m.runItem >= len(items) {
-		return m
+		return m, nil
 	}
-	if items[m.runItem].kind == itemTask {
-		return m.toggleTask(run.s.ID)
+	it := items[m.runItem]
+	switch it.kind {
+	case itemTask:
+		return m.toggleTask(run.s.ID), nil
+	case itemRound:
+		return m.toggleRound(run), nil
+	case itemDetails:
+		return m.toggleDetails(run.s.ID), nil
+	case itemImplement, itemCheck, itemReview:
+		return m.toggleRow(run, it)
+	case itemBranch, itemPR:
 	}
-	return m.toggleRound(run)
+	return m, nil
 }
 
 // ---- status ------------------------------------------------------------------
@@ -396,16 +409,31 @@ func wrapLine(s string, width int) []string {
 // on wrapped lines rather than the prompt's own, since a one-paragraph prompt
 // is a single source line and would otherwise fill the pane uncollapsed.
 func taskLines(prompt string, width int, expanded bool) []string {
+	lines := wrappedTaskLines(prompt, width)
+	if len(lines) <= maxGoalLines {
+		return lines
+	}
+	if expanded {
+		return append(lines, foldHeader(true, "show less", ""))
+	}
+	return append(lines[:maxGoalLines:maxGoalLines],
+		foldHeader(false, fmt.Sprintf("%d more lines", len(lines)-maxGoalLines), ""))
+}
+
+// wrappedTaskLines is the prompt's lines word-wrapped to width, with no fold
+// trailer, so a caller can tell whether taskLines would add one.
+func wrappedTaskLines(prompt string, width int) []string {
 	src := strings.Split(prompt, "\n")
 	lines := make([]string, 0, len(src))
 	for _, l := range src {
 		lines = append(lines, wrapLine(l, width)...)
 	}
-	if expanded || len(lines) <= maxGoalLines {
-		return lines
-	}
-	return append(lines[:maxGoalLines:maxGoalLines],
-		fmt.Sprintf("… (Space to read all, %d lines)", len(lines)))
+	return lines
+}
+
+// taskWidth is the room the task row's prompt wraps to.
+func (m Model) taskWidth() int {
+	return max(m.width-leftPaneWidth-8, 20)
 }
 
 // renderTaskRows draws the task row at the top of the run pane: the prompt,
@@ -420,12 +448,20 @@ func (m Model) renderTaskRows(st watchStyles, s chunkd.Session, first, sel int, 
 	if !hasTask(s) {
 		return nil, at, end, 0
 	}
-	width := max(m.width-leftPaneWidth-8, 20)
+	width := m.taskWidth()
 	var rows []string
 	if o := s.Factory.SpecOrigin; o != "" {
 		rows = append(rows, st.vdim(truncate("from "+o, width)))
 	}
-	for _, l := range taskLines(s.Factory.Prompt, width, m.taskExpanded(s.ID)) {
+	taskRows := taskLines(s.Factory.Prompt, width, m.taskExpanded(s.ID))
+	// A fold's trailer — "N more lines" or "show less" — is drawn vdim, not
+	// muted like the prompt, so it reads as the fold it is.
+	trailer := len(wrappedTaskLines(s.Factory.Prompt, width)) > maxGoalLines
+	for i, l := range taskRows {
+		if trailer && i == len(taskRows)-1 {
+			rows = append(rows, st.vdim(l))
+			continue
+		}
 		rows = append(rows, st.muted(l))
 	}
 	marker := "  "
@@ -509,7 +545,12 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 		body = append(body, rows...)
 		item += n
 	}
-	body = append(body, m.runDetailLines(st, run)...)
+	if rows, at, end, n := m.renderDetailRows(st, run, item, m.runItem, focused); n > 0 {
+		if at >= 0 {
+			selStart, selEnd = len(body)+at, len(body)+end
+		}
+		body = append(body, rows...)
+	}
 
 	// Every line is wrapped to the pane rather than cut at its edge, and the
 	// selected row's span is carried over to the lines it wrapped to.
@@ -610,12 +651,13 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 		return p + "  "
 	}
 
+	label := "Round " + fmt.Sprint(r.Number)
 	if !open {
-		line := pad(0, 2) + st.vdim("▸") + " Round " + fmt.Sprint(r.Number) + "  " + m.roundIcon(st, r) + "  " + roundRollup(st, r)
+		line := pad(0, 2) + st.vdim(foldHeader(false, label, "")) + "  " + m.roundIcon(st, r) + "  " + roundRollup(st, r)
 		return []string{line}, at, end, 1
 	}
 
-	head := pad(0, 2) + st.vdim("▾") + " Round " + fmt.Sprint(r.Number) + "  " + roundStateText(st, r)
+	head := pad(0, 2) + st.vdim(foldHeader(true, label, "")) + "  " + roundStateText(st, r)
 	if len(r.Reviews) > 0 && (r.Findings > 0 || r.State == chunkd.RoundDone) {
 		head += st.dim(fmt.Sprintf("  ·  %d issue%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
 	}
@@ -623,6 +665,13 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 	idx := 1
 
 	rows := m.roundRows(st, r)
+	items := roundItems(s, ri)
+	// The fold marker gets a column only in a round where a row folds, so a
+	// round of passed checks lines up as it always has.
+	folds := false
+	for _, it := range items {
+		folds = folds || rowFoldable(s, it)
+	}
 	nImpl := 0
 	if r.Implement != nil {
 		nImpl = 1
@@ -639,12 +688,27 @@ func (m Model) renderRunRound(st watchStyles, s chunkd.Session, ri, first, sel i
 		if row.waiting {
 			name = st.dim(name)
 		}
-		line := pad(idx, indent) + branch + row.icon + "  " + name + strings.Repeat(" ", max(nameWidth-utf8.RuneCountInString(row.name), 0))
+		// A row with something behind it carries a fold marker, and open, its
+		// fold in place of the few lines it shows under itself when shut.
+		it := items[idx-1]
+		marker, open := "", false
+		if folds {
+			marker = "  "
+		}
+		if rowFoldable(s, it) {
+			open = m.rowOpen(s.ID, it)
+			marker = st.vdim(foldHeader(open, "", ""))
+		}
+		line := pad(idx, indent) + branch + marker + row.icon + "  " + name + strings.Repeat(" ", max(nameWidth-utf8.RuneCountInString(row.name), 0))
 		if row.detail != "" {
 			line += "   " + row.detail
 		}
 		lines = append(lines, line)
-		lines = append(lines, row.extra...)
+		if open {
+			lines = append(lines, m.rowFoldLines(st, s, it)...)
+		} else {
+			lines = append(lines, row.extra...)
+		}
 		if first+idx == sel {
 			end = len(lines)
 		}
@@ -983,10 +1047,56 @@ func reviewSandboxLines(st watchStyles, s chunkd.Session) []string {
 	return lines
 }
 
-// runDetailLines are where the run put its work and what it said while setting
-// up. They are the least of what a person watching a run wants, so they stay
-// folded until asked for.
-func (m Model) runDetailLines(st watchStyles, run sessionInfo) []string {
+// countReviewSandboxes is how many of s's reviews ran in a sandbox worth
+// naming under details.
+func countReviewSandboxes(s chunkd.Session) int {
+	n := 0
+	for _, r := range s.Rounds {
+		for _, p := range r.Reviews {
+			if p.SidecarID != "" {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// detailsSummary is what the details fold holds, in a few words, for its
+// collapsed header.
+func detailsSummary(s chunkd.Session) string {
+	f := s.Factory
+	if f == nil {
+		return ""
+	}
+	var parts []string
+	if f.Worktree != "" && !f.WorktreeRemoved {
+		parts = append(parts, "worktree")
+	}
+	if f.Log != "" {
+		parts = append(parts, "log")
+	}
+	if len(f.Progress.Lines) > 0 {
+		parts = append(parts, "progress")
+	}
+	if n := countReviewSandboxes(s); n > 0 {
+		word := "review sandbox"
+		if n != 1 {
+			word = "review sandboxes"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", n, word))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// hasDetails reports whether s has anything worth a details fold under its
+// rounds: its worktree, setup log, progress feed, or a review's sandbox.
+func hasDetails(s chunkd.Session) bool {
+	return detailsSummary(s) != ""
+}
+
+// detailLines are where the run put its work and what it said while setting
+// up: the details fold's content, drawn only while it is open.
+func (m Model) detailLines(st watchStyles, run sessionInfo) []string {
 	f := run.s.Factory
 	if f == nil {
 		return nil
@@ -1010,11 +1120,49 @@ func (m Model) runDetailLines(st watchStyles, run sessionInfo) []string {
 		lines = append(lines, "    "+st.vdim("review sandboxes"))
 		lines = append(lines, reviewed...)
 	}
-	if len(lines) == 0 {
-		return nil
+	return lines
+}
+
+// detailsShown reports whether run's details fold is read in full.
+func (m Model) detailsShown(runID string) bool {
+	return m.detailsOpen[runID]
+}
+
+// toggleDetails flips whether runID's details fold is open. Kept per run, as
+// taskOpen is, so switching to another run and back leaves it as it was.
+func (m Model) toggleDetails(runID string) Model {
+	open := maps.Clone(m.detailsOpen)
+	if open == nil {
+		open = map[string]bool{}
 	}
-	if !m.runDetails {
-		return []string{"", "  " + st.vdim("▸ details")}
+	open[runID] = !m.detailsShown(runID)
+	m.detailsOpen = open
+	return m
+}
+
+// renderDetailRows draws the details fold under the rounds: closed, a line
+// naming what it holds; open, the run's worktree, log, setup feed and each
+// review's sandbox. first is the run-wide index of the details row and sel
+// the run-wide selected index; at and end mark the selected row's lines
+// within the returned slice the same way renderRunRound does, so an open
+// details block longer than the pane scrolls into view the same way an open
+// round does.
+func (m Model) renderDetailRows(st watchStyles, run sessionInfo, first, sel int, focused bool) (lines []string, at, end, n int) {
+	at, end = -1, -1
+	if !hasDetails(run.s) {
+		return nil, at, end, 0
 	}
-	return append([]string{"", "  " + st.vdim("▾ details")}, lines...)
+	open := m.detailsShown(run.s.ID)
+	marker, selected := "  ", first == sel
+	if selected && focused {
+		marker = st.success("› ")
+	}
+	lines = append(lines, "", marker+st.vdim(foldHeader(open, "details", detailsSummary(run.s))))
+	if open {
+		lines = append(lines, m.detailLines(st, run)...)
+	}
+	if selected {
+		at, end = 1, len(lines)
+	}
+	return lines, at, end, 1
 }

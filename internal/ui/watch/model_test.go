@@ -197,6 +197,6 @@ func TestDisabledKeysDoNothing(t *testing.T) {
 		next, cmd := m.Update(tea.KeyPressMsg{Code: code})
 		assert.Assert(t, cmd == nil, "%q in the left pane", code)
 		assert.Equal(t, next.(Model).focusedPane, paneLeft, "%q moved the focus", code)
-		assert.Assert(t, !next.(Model).runDetails, "%q opened the details fold", code)
+		assert.Equal(t, len(next.(Model).detailsOpen), 0, "%q opened the details fold", code)
 	}
 }

@@ -623,14 +623,7 @@ func statSummary(stat string) string {
 // name, and, when folded, what it holds in a few words. The focused one is
 // highlighted.
 func (m Model) sectionHeader(st watchStyles, sec draftSection, name, folded string) string {
-	marker := "▸"
-	if m.draftSectionOpen(sec) {
-		marker, folded = "▾", ""
-	}
-	text := marker + " " + name
-	if folded != "" {
-		text += " · " + folded
-	}
+	text := foldHeader(m.draftSectionOpen(sec), name, folded)
 	if m.draftFocus == sec {
 		return st.Teal.Bold(true).Render(text)
 	}
