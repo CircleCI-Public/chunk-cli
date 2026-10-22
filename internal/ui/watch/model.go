@@ -426,6 +426,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runChangeMsg:
 		return m.withRunChange(msg), nil
 
+	case tea.MouseMsg:
+		return withSelectedChange(m.updateMouse(msg), nil)
+
 	case tea.PasteMsg, draftActivityMsg, draftDoneMsg, runStartedMsg, draftTickMsg:
 		return m.updateDraftMsg(msg)
 
@@ -465,33 +468,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchOutput(m.output.commandID, m.output.offset), outputTick(msg.seq))
 
 	case dataMsg:
-		m.daemonErr = nil
-		m.projects = msg.projects
-		m.branches = msg.branches
-		m.headRefs = msg.headRefs
-		m.authErr = msg.authErr
-		// A new round, or the run ending, can change which round is open by
-		// default and so add or drop rows above the selection: note which row
-		// it is before the poll and find that row again after.
-		prevRun, prevItem := m.selRun, m.selectedRunItem()
-		m.allRuns = visibleRuns(msg.sessions, time.Now())
-		m.sessions = m.listedRuns()
-		m.reviewAuthErr = msg.reviewAuthErr
-		m = m.reselectRun().selectPendingRun()
-		if run := m.selectedRun(); run != nil {
-			if run.s.ID == prevRun && prevItem != nil {
-				m.runItem = m.findRunItem(run.s, *prevItem)
-			} else {
-				m.runItem = min(m.runItem, max(len(m.runItems(run.s))-1, 0))
-			}
-		}
-		m.hasSpinner = anySessionLive(m.allRuns)
-		next := tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
-		if m.hasSpinner && !m.spinning {
-			m.spinning = true
-			next = tea.Batch(next, doSpin())
-		}
-		return withSelectedChange(m, next)
+		return m.withData(msg)
 
 	case sessionActionMsg:
 		return m.withSessionAction(msg), nil
@@ -521,6 +498,37 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// withData folds a poll's result into the dashboard.
+func (m Model) withData(msg dataMsg) (tea.Model, tea.Cmd) {
+	m.daemonErr = nil
+	m.projects = msg.projects
+	m.branches = msg.branches
+	m.headRefs = msg.headRefs
+	m.authErr = msg.authErr
+	// A new round, or the run ending, can change which round is open by
+	// default and so add or drop rows above the selection: note which row
+	// it is before the poll and find that row again after.
+	prevRun, prevItem := m.selRun, m.selectedRunItem()
+	m.allRuns = visibleRuns(msg.sessions, time.Now())
+	m.sessions = m.listedRuns()
+	m.reviewAuthErr = msg.reviewAuthErr
+	m = m.reselectRun().selectPendingRun()
+	if run := m.selectedRun(); run != nil {
+		if run.s.ID == prevRun && prevItem != nil {
+			m.runItem = m.findRunItem(run.s, *prevItem)
+		} else {
+			m.runItem = min(m.runItem, max(len(m.runItems(run.s))-1, 0))
+		}
+	}
+	m.hasSpinner = anySessionLive(m.allRuns)
+	next := tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+	if m.hasSpinner && !m.spinning {
+		m.spinning = true
+		next = tea.Batch(next, doSpin())
+	}
+	return withSelectedChange(m, next)
+}
+
 func (m Model) View() tea.View {
 	if m.planOpen {
 		v := tea.NewView(m.planScreen.Content())
@@ -531,6 +539,7 @@ func (m Model) View() tea.View {
 	}
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "chunk watch"
 	return v
 }
@@ -702,12 +711,22 @@ func runListWindow(lines []string, maxLines, selected int) []string {
 		return lines[:min(maxLines, len(lines))]
 	}
 	room := maxLines - 2
-	visibleRuns := max(room/2, 1)
-	firstRun := min(max(selected-visibleRuns+1, 0), selected)
+	firstRun := firstWindowedRun(maxLines, selected)
 	firstLine := 2 + firstRun*2
 	lastLine := min(firstLine+room, len(lines)-1) // leave out the trailing blank
 	out := append([]string(nil), lines[:2]...)
 	return append(out, lines[firstLine:lastLine]...)
+}
+
+// firstWindowedRun is the first run runListWindow shows when the list is
+// taller than maxLines: the one that leaves the selected run on the last row.
+// The mouse uses it too, to say which run is under a click.
+func firstWindowedRun(maxLines, selected int) int {
+	if maxLines <= 2 || selected < 0 {
+		return 0
+	}
+	visibleRuns := max((maxLines-2)/2, 1)
+	return min(max(selected-visibleRuns+1, 0), selected)
 }
 
 // renderPendingPane is the right pane between a run being sent to the factory

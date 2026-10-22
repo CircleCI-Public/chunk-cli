@@ -510,6 +510,26 @@ func wrapPane(lines []string, width int) (out []string, at []int) {
 // outcome stays under the rounds; the rounds between are windowed so the
 // selected row stays on screen.
 func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []string {
+	lines, _ := m.layoutRunPane(st, run, maxLines)
+	return lines
+}
+
+// runPaneGeom says where the run pane put its rows, for the mouse. Lines are
+// counted from the top of the pane, title included.
+type runPaneGeom struct {
+	// top is the pane line of the first body line shown, first its index in
+	// the whole body, and shown how many body lines there are.
+	top, first, shown int
+	// tailTop is the pane line of the outcome when it is drawn apart from the
+	// scrolling body, and -1 when it is part of it.
+	tailTop int
+	// selStart and selEnd are the selected row's lines in the whole body, or
+	// -1; tailSel is its line within the outcome when it is there instead.
+	selStart, selEnd, tailSel int
+}
+
+// layoutRunPane is renderRunPane and where it put the selected row.
+func (m Model) layoutRunPane(st watchStyles, run sessionInfo, maxLines int) ([]string, runPaneGeom) {
 	s := run.s
 	title := st.vdim("run")
 	if m.focusedPane == paneRight {
@@ -584,12 +604,15 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 	if outcomeSel >= 0 {
 		tailSel = tailAt[outcomeSel]
 	}
+	geom := runPaneGeom{tailTop: -1, selStart: selStart, selEnd: selEnd, tailSel: -1}
 	room := maxLines - len(headLines)
 	if len(tail) > 0 && room-len(tail) >= minBodyLines {
 		room -= len(tail)
+		geom.tailSel = tailSel
 	} else {
 		if tailSel >= 0 {
 			selStart, selEnd = len(body)+tailSel, len(body)+tailSel+1
+			geom.selStart, geom.selEnd = selStart, selEnd
 		}
 		body = append(body, tail...)
 		tail = nil
@@ -600,12 +623,17 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 			first = min(selStart, selEnd-room)
 		}
 		body = body[first:min(first+room, len(body))]
+		geom.first = first
+	}
+	geom.top, geom.shown = len(headLines), len(body)
+	if len(tail) > 0 {
+		geom.tailTop = len(headLines) + len(body)
 	}
 	out := make([]string, 0, len(headLines)+len(body)+len(tail))
 	out = append(append(append(out, headLines...), body...), tail...)
 	// A finished run's change fills the room left under its outcome, so it
 	// is read where the run is shown, without a key to press.
-	return append(out, m.runChangeLines(st, run, maxLines-len(out))...)
+	return append(out, m.runChangeLines(st, run, maxLines-len(out))...), geom
 }
 
 // sessionTitle is the run's project, branch and starting commit.
