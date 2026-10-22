@@ -65,6 +65,8 @@ func (m Model) welcomeRows(st watchStyles, size logoSize) []string {
 		logo = scaleLogo(logoLines)
 	case logoSmall:
 		logo = logoLines
+	case logoNone:
+		// No room for the mascot: the buttons alone.
 	}
 	// Every row is padded to the widest so the rows are centred as one block;
 	// centred one by one the ragged right edge would shear the mascot.
