@@ -572,7 +572,10 @@ chunk
   project's data directory rather than the working tree. `tab` moves to the
   plan, where `c` writes a comment right under the highlighted part (a
   heading, paragraph, list item or code block); `enter` saves it and
-  `shift+enter`/`ctrl+j` adds a line. A comment on a part Claude has since
+  `shift+enter`/`ctrl+j` adds a line. `shift+↑/↓` (or `K`/`J`) selects a run
+  of parts for one comment, which hangs under the last of them; a selection
+  that touches a comment takes in all of it, and its text, and `esc` clears a
+  selection. A comment on a part Claude has since
   rewritten is listed after the plan, naming the part it was on, where it can
   still be edited or deleted. Comments go with the next message, each quoting
   the markdown it is on. `ctrl+s` sends the plan to the local daemon as `chunk

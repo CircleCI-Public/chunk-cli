@@ -361,7 +361,8 @@ the draft for later).
 For a bigger change, press `p` to plan it with Claude first. The chat is on
 the left and the plan Claude writes is on the right; `tab` moves to the plan,
 where `c` writes a comment right under the highlighted part for Claude to
-address with your next message. `ctrl+s` sends the finished plan to the
+address with your next message; `shift+↑/↓` selects several parts to
+comment on together. `ctrl+s` sends the finished plan to the
 factory to build.
 `esc` goes back to your runs with the plan kept, and `p` opens it again.
 `chunk factory plan` opens the same screen on its own.
