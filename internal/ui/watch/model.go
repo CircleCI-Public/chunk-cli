@@ -709,6 +709,8 @@ func (m Model) renderBody(st watchStyles) string {
 		rightLines = m.renderSentPane(st, paneHeight)
 	} else if run := m.selectedRun(); run != nil {
 		rightLines = m.renderRunPane(st, *run, paneHeight)
+	} else if m.pendingRun != "" {
+		rightLines = m.renderPendingPane(st)
 	} else {
 		rightLines = m.renderEmptyPane(st)
 	}
@@ -770,6 +772,21 @@ func runListWindow(lines []string, maxLines, selected int) []string {
 	lastLine := min(firstLine+room, len(lines)-1) // leave out the trailing blank
 	out := append([]string(nil), lines[:2]...)
 	return append(out, lines[firstLine:lastLine]...)
+}
+
+// renderPendingPane is the right pane between a run being sent to the factory
+// and a poll listing it: the start hints would read as if nothing had happened.
+func (m Model) renderPendingPane(st watchStyles) []string {
+	title := st.vdim("run")
+	if m.focusedPane == paneRight {
+		title = st.emphasis("run")
+	}
+	return []string{
+		title,
+		"",
+		st.success(ui.IconOK + " Sent to the factory"),
+		st.muted("  Its run appears in the list in a moment."),
+	}
 }
 
 // renderEmptyPane is the right-hand pane when there is no run to show. The

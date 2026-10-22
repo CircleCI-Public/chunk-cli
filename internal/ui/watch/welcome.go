@@ -9,12 +9,15 @@ import (
 
 // welcoming is whether the dashboard has nothing to show and nothing has ever
 // run: it then drops the run list for a single framed welcome, since a list
-// with nothing in it only takes room from the two ways to begin.
+// with nothing in it only takes room from the two ways to begin. A run just
+// sent to the factory but not yet listed is something to show, so the welcome
+// does not flash up in the gap before a poll lists it.
 func (m Model) welcoming() bool {
 	return m.output == nil &&
 		len(m.allRuns) == 0 &&
 		m.draft == draftNone &&
 		!m.handingOff() &&
+		m.pendingRun == "" &&
 		m.selectedRun() == nil
 }
 
