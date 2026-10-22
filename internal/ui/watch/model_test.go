@@ -115,6 +115,19 @@ func TestRender_noRunsSaysSoAndKeepsItsLayout(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "0 runs"), out)
 }
 
+// A run just sent to the factory is not listed until a poll finds it; the
+// welcome must not flash up in that gap.
+func TestRender_noWelcomeWhileASentRunIsPending(t *testing.T) {
+	m := sessModel()
+	m.width, m.height = 100, 24
+	m.pendingRun = "run-1"
+
+	out := m.render()
+
+	assert.Assert(t, !strings.Contains(out, "█"), "no mascot while a run is pending:\n"+out)
+	assert.Equal(t, strings.Count(out, "\n"), 24)
+}
+
 func TestRenderFooter_updateNoticeNeverWidensFooter(t *testing.T) {
 	for _, width := range []int{40, 80, 100, 120, 200} {
 		for _, focus := range []pane{paneLeft, paneRight} {
