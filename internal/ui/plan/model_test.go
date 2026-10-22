@@ -467,6 +467,22 @@ func TestFocusedPaneUsesTheBrandAccent(t *testing.T) {
 	}
 }
 
+// The panes and the action bar sit on the terminal's own background, as
+// chunk watch's do: only what is set apart (the message box, the block the
+// cursor is on, comments, code) has a ground of its own.
+func TestPanesSitOnTheTerminalsBackground(t *testing.T) {
+	for _, dark := range []bool{true, false} {
+		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
+		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		lines := strings.Split(m.Content(), "\n")
+		for _, i := range []int{2, len(lines) - 2} {
+			if strings.Contains(lines[i], "\x1b[48;") {
+				t.Errorf("dark=%v: line %d paints a background: %q", dark, i, lines[i])
+			}
+		}
+	}
+}
+
 func TestChatStaysWhereTheDeveloperScrolled(t *testing.T) {
 	turn := func(context.Context, string, func(string)) (string, string, error) {
 		return strings.Repeat("A long reply.\n\n", 30), "", nil

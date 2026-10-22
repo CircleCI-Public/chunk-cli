@@ -36,6 +36,9 @@ type Styles struct {
 	// screen offers (e.g. sending a draft to the factory), so it reads as a
 	// button next to the dimmed, bracketed hints for everything else.
 	Accent lipgloss.Style
+	// Field is the faint ground of a text input, so where to type is easy to
+	// find on the terminal's own background.
+	Field lipgloss.Style
 }
 
 // New returns the styles for a terminal with a dark background, or a light
@@ -54,6 +57,7 @@ func New(dark bool) Styles {
 		VDim:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242"))),
 		Chip:     lipgloss.NewStyle().Bold(true).Foreground(Navy),
 		Accent:   lipgloss.NewStyle().Bold(true).Foreground(ld(lipgloss.Color("255"), Navy)).Background(ld(Navy, Yellow)),
+		Field:    lipgloss.NewStyle().Background(ld(lipgloss.Color("254"), lipgloss.Color("236"))),
 	}
 }
 

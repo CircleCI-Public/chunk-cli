@@ -24,6 +24,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
 // Turner sends the developer's message to the planning agent and returns its
@@ -812,9 +813,8 @@ func (m Model) Content() string {
 			edge = m.teal()
 		}
 		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-			Background(m.surface()).Padding(padY, padX, 0, padX).
+			Padding(padY, padX, 0, padX).
 			Width(w).Height(m.height - m.topRows() - footerRows)
-		content = paint(content, w-borderSize-2*padX, m.surface())
 		return titled(s.Render(content), title, lipgloss.NewStyle().Foreground(edge).Render)
 	}
 	// The pane without the keyboard has a dim title as well as a dim border.
@@ -854,7 +854,7 @@ func (m Model) inputBox() string {
 	if m.focus == paneChat && !m.commenting {
 		edge = m.teal()
 	}
-	ground := m.hue("#ffffff", "#0d1015")
+	ground := theme.New(m.dark).Field.GetBackground()
 	w := m.chatWidth() - borderSize - 2*padX
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
 		Background(ground).Width(w).Render(paint(m.input.View(), w-borderSize, ground))

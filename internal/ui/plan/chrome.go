@@ -123,7 +123,7 @@ func (m Model) tabs() string {
 // with the state: send comments first, and only then approve.
 func (m Model) actionBar() string {
 	inner := m.width - borderSize - 2
-	edge := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.hue("#d0d7de", "#262c39")).Background(m.surface()).Padding(0, 1)
+	edge := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.quiet()).Padding(0, 1)
 	if m.status != "" {
 		return edge.Width(m.width).Render(ansi.Truncate(m.status, inner, "…"))
 	}
@@ -140,7 +140,7 @@ func (m Model) actionBar() string {
 	room := max(inner-lipgloss.Width(right)-2, 0)
 	hints := ansi.Truncate(theme.Help(theme.New(m.dark), room).View(k), room, "…")
 	gap := max(inner-lipgloss.Width(hints)-lipgloss.Width(right), 1)
-	return edge.Width(m.width).Render(paint(hints+strings.Repeat(" ", gap)+right, inner, m.surface()))
+	return edge.Width(m.width).Render(hints + strings.Repeat(" ", gap) + right)
 }
 
 // actions is the bar's main button and the one beside it.
