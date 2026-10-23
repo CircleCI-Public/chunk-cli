@@ -92,6 +92,45 @@ func TestPlans(t *testing.T) {
 		assertStatus(t, err, http.StatusBadRequest)
 		assertStatus(t, client.SetPlanText(ctx, "no-such-plan", "x"), http.StatusBadRequest)
 	})
+
+	t.Run("moves a plan along an edge of its state machine", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+
+		moved, err := client.MovePlan(ctx, p.ID, "Agent Ready")
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(moved.ID, p.ID))
+		assert.Check(t, cmp.Equal(moved.State, "Agent Ready"))
+
+		reqs := fake.Recorder.AllRequests()
+		last := reqs[len(reqs)-1]
+		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/plans/"+p.ID+"/move"))
+		var body map[string]any
+		assert.NilError(t, json.Unmarshal(last.Body, &body))
+		assert.Check(t, cmp.DeepEqual(body, map[string]any{"state": "Agent Ready"}))
+
+		got, err := client.GetPlan(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(got.State, "Agent Ready"))
+	})
+
+	t.Run("a move off the state machine is a 400", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+
+		_, err = client.MovePlan(ctx, p.ID, "Building - Agent")
+		assertStatus(t, err, http.StatusBadRequest)
+		_, err = client.MovePlan(ctx, uuid.NewString(), "Agent Ready")
+		assertStatus(t, err, http.StatusNotFound)
+	})
 }
 
 func TestPlanComments(t *testing.T) {
@@ -130,6 +169,44 @@ func TestPlanComments(t *testing.T) {
 		all, err = client.ListComments(ctx, p.ID, false)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(commentIDs(all), []string{quoted.ID, whole.ID}))
+	})
+
+	t.Run("replaces a comment's body and deletes comments", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		edited, err := client.CreateComment(ctx, p.ID, "## 1. Outcome", "too vague")
+		assert.NilError(t, err)
+		kept, err := client.CreateComment(ctx, p.ID, "", "looks good")
+		assert.NilError(t, err)
+
+		assert.NilError(t, client.SetCommentBody(ctx, edited.ID, "say who it is for"))
+		reqs := fake.Recorder.AllRequests()
+		last := reqs[len(reqs)-1]
+		assert.Check(t, cmp.Equal(last.Method, http.MethodPut))
+		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/comments/"+edited.ID+"/body"))
+		var body map[string]any
+		assert.NilError(t, json.Unmarshal(last.Body, &body))
+		assert.Check(t, cmp.DeepEqual(body, map[string]any{"body": "say who it is for"}))
+
+		all, err := client.ListComments(ctx, p.ID, false)
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(all, 2))
+		assert.Check(t, cmp.Equal(all[0].Body, "say who it is for"))
+		assert.Check(t, cmp.Equal(all[0].QuotedText, "## 1. Outcome"))
+
+		_, err = client.ResolveComment(ctx, edited.ID)
+		assert.NilError(t, err)
+		assert.NilError(t, client.DeleteComment(ctx, edited.ID))
+		all, err = client.ListComments(ctx, p.ID, false)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(commentIDs(all), []string{kept.ID}))
+
+		assertStatus(t, client.DeleteComment(ctx, edited.ID), http.StatusNotFound)
+		assertStatus(t, client.SetCommentBody(ctx, edited.ID, "x"), http.StatusNotFound)
 	})
 
 	t.Run("resolving again keeps the first resolved time", func(t *testing.T) {
@@ -204,6 +281,8 @@ func TestPlanComments(t *testing.T) {
 		assertStatus(t, err, http.StatusBadRequest)
 		_, err = client.ResolveComment(ctx, "no-such-comment")
 		assertStatus(t, err, http.StatusBadRequest)
+		assertStatus(t, client.SetCommentBody(ctx, "no-such-comment", "x"), http.StatusBadRequest)
+		assertStatus(t, client.DeleteComment(ctx, "no-such-comment"), http.StatusBadRequest)
 	})
 }
 

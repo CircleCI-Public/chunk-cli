@@ -2,6 +2,7 @@ package fakes
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -28,9 +29,53 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.GET("/api/v3/factory/plans/:id", f.handleGetPlan)
 	r.GET("/api/v3/factory/plans/:id/text", f.handleGetPlanText)
 	r.PUT("/api/v3/factory/plans/:id/text", f.handlePutPlanText)
+	r.POST("/api/v3/factory/plans/:id/move", f.handleMovePlan)
 	r.POST("/api/v3/factory/comments", f.handleCreateComment)
 	r.GET("/api/v3/factory/comments", f.handleListComments)
+	r.PUT("/api/v3/factory/comments/:id/body", f.handlePutCommentBody)
 	r.POST("/api/v3/factory/comments/:id/resolve", f.handleResolveComment)
+	r.DELETE("/api/v3/factory/comments/:id", f.handleDeleteComment)
+}
+
+// factoryMoves are the edges of conductor's plan state machine
+// (conductor.moves in circleci/factory).
+var factoryMoves = map[string][]string{
+	"Unprioritized":       {"Agent Ready"},
+	"Agent Ready":         {"Planning - Agent"},
+	"Planning - Agent":    {"Planning - Human"},
+	"Planning - Human":    {"Building - Agent", "Planning - Agent"},
+	"Building - Agent":    {"Building - Human", "Integrating - Agent"},
+	"Building - Human":    {"Building - Agent"},
+	"Integrating - Agent": {"Integrating - Human"},
+	"Integrating - Human": {"Integrating - Agent", "Done"},
+}
+
+// FactoryPlan is a plan as the fake holds it, for a test to inspect.
+type FactoryPlan struct {
+	ID, Title, State, Text string
+	Comments               int
+}
+
+// FactoryPlan returns plan id as the fake holds it, and false when there is
+// no such plan.
+func (f *FakeCircleCI) FactoryPlan(id string) (FactoryPlan, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	p := f.factoryPlans[id]
+	if p == nil {
+		return FactoryPlan{}, false
+	}
+	return FactoryPlan{ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments)}, true
+}
+
+// SetFactoryPlanState puts plan id in state, as factory's daemon moving it
+// would.
+func (f *FakeCircleCI) SetFactoryPlanState(id, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.state = state
+	}
 }
 
 // factoryError writes a V3 error, as conductor does.
@@ -166,6 +211,33 @@ func (f *FakeCircleCI) handlePutPlanText(c *gin.Context) {
 	}
 }
 
+// handleMovePlan moves a plan along one of factoryMoves, answering 400 for
+// any other move, as conductor does.
+func (f *FakeCircleCI) handleMovePlan(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	var body struct {
+		State string `json:"state"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.State == "" {
+		factoryError(c, http.StatusBadRequest, "a move needs a state")
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.plan(c)
+	if p == nil {
+		return
+	}
+	if !slices.Contains(factoryMoves[p.state], body.State) {
+		factoryError(c, http.StatusBadRequest, "cannot move a plan from "+p.state+" to "+body.State)
+		return
+	}
+	p.state = body.State
+	c.JSON(http.StatusOK, gin.H{"data": planEntity(p)})
+}
+
 func (f *FakeCircleCI) handleCreateComment(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
@@ -276,29 +348,74 @@ func (f *FakeCircleCI) handleListComments(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func (f *FakeCircleCI) handleResolveComment(c *gin.Context) {
+// comment finds the comment c's :id names, answering 400 for the handler
+// when :id is not a UUID and 404 when there is no such comment. f.mu must be
+// held.
+func (f *FakeCircleCI) comment(c *gin.Context) (*factoryPlan, int) {
+	id, ok := pathID(c)
+	if !ok {
+		return nil, -1
+	}
+	for _, p := range f.factoryPlans {
+		for i := range p.comments {
+			if p.comments[i].id == id {
+				return p, i
+			}
+		}
+	}
+	factoryError(c, http.StatusNotFound, "comment not found")
+	return nil, -1
+}
+
+func (f *FakeCircleCI) handlePutCommentBody(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
 	}
-	id, ok := pathID(c)
-	if !ok {
+	var body struct {
+		Body string `json:"body"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Body == "" {
+		factoryError(c, http.StatusBadRequest, "a comment needs a body")
 		return
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, p := range f.factoryPlans {
-		for i := range p.comments {
-			cm := &p.comments[i]
-			if cm.id != id {
-				continue
-			}
-			if cm.resolvedAt == nil {
-				now := time.Now().UTC()
-				cm.resolvedAt = &now
-			}
-			c.JSON(http.StatusOK, gin.H{"data": commentEntity(p.id, *cm)})
-			return
-		}
+	p, i := f.comment(c)
+	if p == nil {
+		return
 	}
-	factoryError(c, http.StatusNotFound, "comment not found")
+	p.comments[i].body = body.Body
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": p.comments[i].id, "attributes": gin.H{"body": body.Body}}})
+}
+
+func (f *FakeCircleCI) handleResolveComment(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, i := f.comment(c)
+	if p == nil {
+		return
+	}
+	cm := &p.comments[i]
+	if cm.resolvedAt == nil {
+		now := time.Now().UTC()
+		cm.resolvedAt = &now
+	}
+	c.JSON(http.StatusOK, gin.H{"data": commentEntity(p.id, *cm)})
+}
+
+func (f *FakeCircleCI) handleDeleteComment(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, i := f.comment(c)
+	if p == nil {
+		return
+	}
+	p.comments = slices.Delete(p.comments, i, i+1)
+	c.Status(http.StatusNoContent)
 }

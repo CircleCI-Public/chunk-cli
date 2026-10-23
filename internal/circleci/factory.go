@@ -45,6 +45,14 @@ type planTextAttrs struct {
 	Text string `json:"text"`
 }
 
+type moveBody struct {
+	State string `json:"state"`
+}
+
+type commentBodyAttrs struct {
+	Body string `json:"body"`
+}
+
 type commentAttrs struct {
 	QuotedText string     `json:"quoted_text"`
 	Body       string     `json:"body"`
@@ -122,6 +130,22 @@ func (c *Client) SetPlanText(ctx context.Context, id, text string) error {
 	return nil
 }
 
+// MovePlan moves factory plan id to state and returns it. A move that is not
+// an edge of factory's plan state machine is refused with a 400.
+func (c *Client) MovePlan(ctx context.Context, id, state string) (*Plan, error) {
+	var attrs planAttrs
+	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/plans/%s/move",
+		hc.RouteParams(url.PathEscape(id)),
+		hc.Body(moveBody{State: state}),
+		hc.JSONDecoder(&env),
+	))
+	if err != nil {
+		return nil, mapErr("move plan", err)
+	}
+	return &Plan{ID: env.Data.ID, Title: attrs.Title, State: attrs.State, Branch: attrs.Branch}, nil
+}
+
 // CreateComment adds a comment to factory plan planID. quotedText is the part
 // of the plan's text the comment is about, or "" for the plan as a whole.
 func (c *Client) CreateComment(ctx context.Context, planID, quotedText, body string) (*PlanComment, error) {
@@ -193,6 +217,29 @@ func (c *Client) ResolveComment(ctx context.Context, id string) (*PlanComment, e
 		return nil, mapErr("resolve comment", err)
 	}
 	return planComment(env.Data.ID, refs.FactoryPlan.ID, attrs), nil
+}
+
+// SetCommentBody replaces comment id's body.
+func (c *Client) SetCommentBody(ctx context.Context, id, body string) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPut, "/api/v3/factory/comments/%s/body",
+		hc.RouteParams(url.PathEscape(id)),
+		hc.Body(commentBodyAttrs{Body: body}),
+	))
+	if err != nil {
+		return mapErr("set comment body", err)
+	}
+	return nil
+}
+
+// DeleteComment deletes comment id, open or resolved.
+func (c *Client) DeleteComment(ctx context.Context, id string) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodDelete, "/api/v3/factory/comments/%s",
+		hc.RouteParams(url.PathEscape(id)),
+	))
+	if err != nil {
+		return mapErr("delete comment", err)
+	}
+	return nil
 }
 
 func planComment(id, planID string, a commentAttrs) *PlanComment {
