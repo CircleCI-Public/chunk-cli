@@ -73,7 +73,7 @@ func (m Model) skeleton(w int) string {
 	rows := []string{
 		bar(34), "",
 		m.style(m.faint()).Render("OUTCOME"), bar(60), bar(44), "",
-		m.style(m.faint()).Render("SPEC/DECISIONS/SCOPE"), bar(52), bar(38), "",
+		m.style(m.faint()).Render("DESIGN"), bar(52), bar(38), "",
 		m.style(m.faint()).Render("UNITS"),
 		m.style(m.faint()).Render("○ ") + bar(30), m.style(m.faint()).Render("○ ") + bar(42), m.style(m.faint()).Render("○ ") + bar(26),
 	}

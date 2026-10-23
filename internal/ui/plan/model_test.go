@@ -1145,7 +1145,7 @@ func TestFirstPlanShowsASkeletonWhileClaudeWrites(t *testing.T) {
 	m, _ = m.send("plan it")
 	m = drive(t, m, activityMsg("Read create.go"))
 	view := ansi.Strip(m.Content())
-	for _, want := range []string{"Claude is drafting", "Read create.go", "███", "esc Stop Claude"} {
+	for _, want := range []string{"Claude is drafting", "Read create.go", "███", "esc Stop Claude", "DESIGN"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}

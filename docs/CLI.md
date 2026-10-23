@@ -570,7 +570,7 @@ chunk
   It opens a two-pane screen: a chat with Claude Code on this machine on the
   left, and the plan Claude writes on the right, rendered as markdown. Each
   message is a turn of one `claude -p --resume` session that reads the code
-  (Bash is off) and keeps the plan, in factory-bot's format, in a file in the
+  (Bash is off) and keeps the plan, in factory's format, in a file in the
   project's data directory rather than the working tree. `tab` moves to the
   plan, where `c` writes a comment right under the highlighted part (a
   heading, paragraph, list item or code block); `enter` saves it and
