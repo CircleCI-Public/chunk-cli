@@ -23,7 +23,7 @@ type fakePlans struct {
 	plan    string
 	release chan struct{}
 	runID   string
-	sent    string
+	sent    bool
 }
 
 // fakePlanStore is a plan.Store whose text never changes; these tests do not
@@ -31,7 +31,7 @@ type fakePlans struct {
 type fakePlanStore struct{ text string }
 
 func (f *fakePlanStore) Create(context.Context, string) error  { return nil }
-func (f *fakePlanStore) State(context.Context) (string, error) { return "", nil }
+func (f *fakePlanStore) State(context.Context) (string, error) { return plan.ReadyState, nil }
 func (f *fakePlanStore) Move(context.Context, string) error    { return nil }
 func (f *fakePlanStore) Text(context.Context) (string, error)  { return f.text, nil }
 
@@ -71,8 +71,8 @@ func (f *fakePlans) planner(_ context.Context, root string) (plan.Agent, plan.Su
 	if f.err != nil {
 		return nil, nil, nil, f.err
 	}
-	submit := func(p string) (string, error) {
-		f.sent = p
+	submit := func() (string, error) {
+		f.sent = true
 		return f.runID, nil
 	}
 	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, submit, &fakePlanStore{text: f.plan}, nil
@@ -175,7 +175,7 @@ func TestSendingThePlanSelectsItsRun(t *testing.T) {
 	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'y', Text: "y"})
 	next, closeCmd := m.Update(cmd()) // the send
 	m = deliver(t, next.(Model), closeCmd)
-	assert.Equal(t, f.sent, "# The plan")
+	assert.Assert(t, f.sent, "the plan was not sent")
 
 	assert.Assert(t, !m.planOpen && !m.HasPlan(), "a sent plan is done with")
 	assert.Equal(t, m.pendingRun, "aaa")

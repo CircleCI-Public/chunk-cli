@@ -307,8 +307,8 @@ func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Agent, plan.S
 		return nil, nil, nil, err
 	}
 	agent, send, store := planSession(d.ctx, root, "", api)
-	submit := func(text string) (string, error) {
-		id, err := send(text)
+	submit := func() (string, error) {
+		id, err := send()
 		if err == nil {
 			d.wg.Add(1)
 			go func() {

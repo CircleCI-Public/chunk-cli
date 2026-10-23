@@ -10,6 +10,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
 // apiStoreTestClient builds a circleci.Client against a fake factory server,
@@ -114,6 +115,26 @@ func TestAPIStoreMoveFollowsTheEdge(t *testing.T) {
 	state, err := store.State(ctx)
 	assert.NilError(t, err)
 	assert.Equal(t, state, "Planning - Agent")
+}
+
+// TestAPIStoreReadyWaitsForTheReview checks that the plan sent to the
+// factory is factory's text, and only once its review has passed: a plan
+// still in Planning - Agent may have a review running, or findings unfixed.
+func TestAPIStoreReadyWaitsForTheReview(t *testing.T) {
+	client, cci := apiStoreTestClient(t)
+	store := &apiStore{api: client}
+	ctx := context.Background()
+	assert.NilError(t, store.Create(ctx, "a plan"))
+	assert.NilError(t, client.SetPlanText(ctx, store.id(), "# A plan\n"))
+
+	cci.SetFactoryPlanState(store.id(), "Planning - Agent")
+	_, err := store.ready(ctx)
+	assert.ErrorIs(t, err, errPlanNotReady)
+
+	cci.SetFactoryPlanState(store.id(), plan.ReadyState)
+	text, err := store.ready(ctx)
+	assert.NilError(t, err)
+	assert.Equal(t, text, "# A plan\n")
 }
 
 // TestAPIStoreWritesFailBeforeCreate checks that a write before Create has

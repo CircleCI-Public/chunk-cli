@@ -28,8 +28,14 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
-// Submitter hands an approved plan to the factory and returns the run's ID.
-type Submitter func(plan string) (string, error)
+// Submitter hands the approved plan, as factory has it, to the factory and
+// returns the run's ID. It reads the plan itself rather than taking the
+// screen's copy, which may be behind factory's by a poll.
+type Submitter func() (string, error)
+
+// ReadyState is the state a plan waits in for the developer once its review
+// has passed; it can be sent to the factory only from there.
+const ReadyState = "Planning - Human"
 
 // pane is which side of the screen the keyboard goes to.
 type pane int
@@ -498,7 +504,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		m.sending = true
 		m.status = "Sending the plan to the factory…"
-		return m, submitCmd(m.submit, m.plan)
+		return m, submitCmd(m.submit)
 	}
 	if m.commenting {
 		return m.updateCommentKey(msg)
@@ -524,6 +530,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.status = warn("Wait for chunk to finish.")
 		case strings.TrimSpace(m.plan) == "":
 			m.status = warn("There is no plan to send yet.")
+		case m.state != ReadyState:
+			m.status = warn("The plan is not ready yet: wait for its review to pass.")
 		case queued > 0:
 			m.confirming = true
 			m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d queued %s will not be saved. Send the plan to the factory anyway? (y/n)",
@@ -738,9 +746,9 @@ func (m *Model) syncPlaceholder() {
 	}
 }
 
-func submitCmd(submit Submitter, plan string) tea.Cmd {
+func submitCmd(submit Submitter) tea.Cmd {
 	return func() tea.Msg {
-		id, err := submit(plan)
+		id, err := submit()
 		return submittedMsg{runID: id, err: err}
 	}
 }

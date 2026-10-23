@@ -36,7 +36,7 @@ type comment struct {
 // agentStates is the state sending comments moves a plan to from each Human
 // state where the daemon's flow takes a human's comments.
 var agentStates = map[string]string{
-	"Planning - Human":    "Planning - Agent",
+	ReadyState:            "Planning - Agent",
 	"Integrating - Human": "Integrating - Agent",
 }
 

@@ -67,6 +67,8 @@ func (m Model) header() string {
 			text = fmt.Sprintf("● %d %s", n, plural(n, "comment", "comments"))
 		}
 		state = m.pill(m.amber(), "#fff8c5", "#2a2210", text)
+	case m.state != ReadyState:
+		state = m.style(m.dim()).Render("In review")
 	default:
 		state = m.pill(m.green(), "#dafbe1", "#162226", ui.IconOK+" Plan ready")
 	}
@@ -177,6 +179,8 @@ func (m Model) actions() (main, side string) {
 		return button(m.teal(), save), m.style(m.faint()).Render(approve + " · resolve comments first")
 	case open > 0:
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
+	case m.state != ReadyState:
+		return "", m.style(m.faint()).Render(approve + " · wait for the review")
 	}
 	return button(m.green(), approve), ""
 }

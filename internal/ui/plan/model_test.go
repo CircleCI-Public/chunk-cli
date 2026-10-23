@@ -129,9 +129,9 @@ func TestApprovingSendsThePlan(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan"
 	agent := turnReturning("ok")
-	var sent string
-	submit := func(p string) (string, error) {
-		sent = p
+	sent := false
+	submit := func() (string, error) {
+		sent = true
 		return "run-1", nil
 	}
 	m := New(context.Background(), agent, submit, store, "do it")
@@ -141,8 +141,38 @@ func TestApprovingSendsThePlan(t *testing.T) {
 		t.Fatal("ctrl+s should ask to confirm")
 	}
 	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if sent != "# Plan" || m.RunID != "run-1" {
-		t.Fatalf("sent %q, run %q", sent, m.RunID)
+	if !sent || m.RunID != "run-1" {
+		t.Fatalf("sent %v, run %q", sent, m.RunID)
+	}
+}
+
+// A plan still with the agent, its review among what it waits on, is not
+// sent: the factory would build what the review has not passed.
+func TestAPlanNotReadyIsNotSent(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan"
+	store.StateV = "Planning - Agent"
+	sent := false
+	submit := func() (string, error) {
+		sent = true
+		return "run-1", nil
+	}
+	m := New(context.Background(), turnReturning("ok"), submit, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := ansi.Strip(m.Content())
+	if !strings.Contains(view, "In review") || strings.Contains(view, "Plan ready") {
+		t.Errorf("header does not say the plan is in review:\n%s", view)
+	}
+	if !strings.Contains(view, "wait for the review") {
+		t.Errorf("the action bar offers to approve a plan in review:\n%s", view)
+	}
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if m.confirming {
+		t.Fatal("ctrl+s asked to send a plan in review")
+	}
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if sent {
+		t.Fatal("a plan in review was sent")
 	}
 }
 
@@ -723,7 +753,7 @@ func TestEnterDoesNotConfirmSendingThePlan(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan"
 	sent := false
-	submit := func(string) (string, error) {
+	submit := func() (string, error) {
 		sent = true
 		return "run-1", nil
 	}

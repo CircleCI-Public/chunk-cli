@@ -144,7 +144,11 @@ func factoryPlanClient() (*circleci.Client, error) {
 func planSession(ctx context.Context, root, model string, api *circleci.Client) (*planAgent, plan.Submitter, *apiStore) {
 	store := &apiStore{api: api}
 	agent := newPlanAgent(ctx, factory.AgentConfig{Dir: root, Model: model, SessionID: uuid.NewString()}, store)
-	submit := func(text string) (string, error) {
+	submit := func() (string, error) {
+		text, err := store.ready(ctx)
+		if err != nil {
+			return "", err
+		}
 		if err := chunkd.EnsureRunning(); err != nil {
 			return "", fmt.Errorf("start the chunk daemon: %w", err)
 		}
@@ -240,6 +244,31 @@ func (s *apiStore) holder(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	return p.Claim.SessionID, nil
+}
+
+// errPlanNotReady is returned by ready for a plan whose review has not
+// passed: factory has not moved it to plan.ReadyState.
+var errPlanNotReady = errors.New("the plan is not ready yet: wait for its review to pass")
+
+// ready is the plan's text in factory, to send to the factory to build, once
+// its review has passed; the text is read after the state, so it is no older
+// than the review.
+func (s *apiStore) ready(ctx context.Context) (string, error) {
+	state, err := s.State(ctx)
+	if err != nil {
+		return "", err
+	}
+	if state != plan.ReadyState {
+		return "", errPlanNotReady
+	}
+	text, err := s.Text(ctx)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", errors.New("the plan in factory is empty")
+	}
+	return text, nil
 }
 
 func (s *apiStore) Move(ctx context.Context, state string) error {

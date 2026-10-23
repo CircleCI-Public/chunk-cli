@@ -598,8 +598,10 @@ chunk
   the plan. While comments are saved they cannot be changed. A saved comment is edited at once with `c`, resolved with `r` and
   deleted with `d` (after a `y`); resolved ones are listed last. A comment on
   a part since rewritten is listed after the plan, naming the part it was on.
-  `ctrl+s` sends the plan's text to the local daemon as `chunk factory build`
-  would, with `factory plan <ID>` as where it came from; a plan not sent stays in factory, and its ID is printed. It checks
+  `ctrl+s` sends the plan's text, as factory has it, to the local daemon as
+  `chunk factory build` would, once factory's review of the plan has passed
+  and moved it to Planning - Human; until then the header reads In review. It
+  goes with `factory plan <ID>` as where it came from; a plan not sent stays in factory, and its ID is printed. It checks
   what `factory build` checks before it opens. The same screen opens from
   `chunk watch` with `p`.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans

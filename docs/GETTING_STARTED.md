@@ -367,7 +367,7 @@ The chat is on the left and the plan is on the right; `tab` moves to the plan,
 where `c` writes a comment right under the highlighted part, saved to factory
 for chunk to address when you next press `enter`; `shift+↑/↓` selects several
 parts to comment on together. `ctrl+s` sends the finished plan to the
-factory to build.
+factory to build, once factory's review of it has passed.
 `esc` goes back to your runs with the plan kept, and `p` opens it again.
 `chunk factory plan` opens the same screen on its own.
 
