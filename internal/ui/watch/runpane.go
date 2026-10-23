@@ -88,6 +88,12 @@ func hasTask(s chunkd.Session) bool {
 	return s.Factory != nil && s.Factory.Prompt != ""
 }
 
+// hasPlan is whether the run was started from a plan file, as the plan screen
+// or `factory build <plan file>` does, so its prompt is a plan to read back.
+func hasPlan(s chunkd.Session) bool {
+	return hasTask(s) && s.Factory.SpecOrigin != ""
+}
+
 // runItems lists a run's selectable rows in the order the pane draws them:
 // the task, when there is one, then each round's header, then, when it is
 // open, its rows.

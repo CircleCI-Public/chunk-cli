@@ -1704,3 +1704,29 @@ func TestHidingFinishedRunsHidesTheSelectedOne(t *testing.T) {
 	assert.DeepEqual(t, listedIDs(m), []string{"live"})
 	assert.Equal(t, m.selRun, "live")
 }
+
+// v reads back the plan a run was started from, from either pane, and is
+// offered only for a run that has one.
+func TestViewPlanOpensThePlanARunStartedFrom(t *testing.T) {
+	r := failedRun()
+	r.s.Factory.Prompt = "## 1. Outcome\n\nA plan that reads other branches."
+	r.s.Factory.SpecOrigin = "/data/plans/20261022-104239.md"
+	m := sessModel(r)
+	m.selRun = "abc"
+	assert.Assert(t, m.keys().ViewPlan.Enabled())
+
+	m, _ = press(m, 'v')
+	assert.Assert(t, m.output != nil)
+	assert.Equal(t, m.output.name, "plan")
+	out := stripANSI(m.render())
+	assert.Assert(t, strings.Contains(out, "OUTCOME ─") && strings.Contains(out, "A plan that reads other branches."), "drawn as the planning screen draws it: %s", out)
+
+	// A run from a plain prompt has no plan file to read back.
+	plain := failedRun()
+	plain.s.Factory.Prompt = "fix the typo"
+	m = sessModel(plain)
+	m.selRun = "abc"
+	assert.Assert(t, !m.keys().ViewPlan.Enabled())
+	m, _ = press(m, 'v')
+	assert.Assert(t, m.output == nil)
+}

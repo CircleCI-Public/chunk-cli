@@ -13,6 +13,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	planui "github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
@@ -535,6 +536,15 @@ func (m Model) openText(name, text string) Model {
 	m.output = &outputPane{name: name, text: text}
 	m.output.wrap(m.width - 1)
 	m.outputSeq++
+	return m
+}
+
+// openPlanText opens the output pane over a run's plan, drawn as the planning
+// screen draws it.
+func (m Model) openPlanText(plan string) Model {
+	m = m.openText("plan", plan)
+	m.output.styled = func(width int) []string { return planui.Render(plan, m.hasDarkBG, width) }
+	m.output.wrap(m.width - 1)
 	return m
 }
 
