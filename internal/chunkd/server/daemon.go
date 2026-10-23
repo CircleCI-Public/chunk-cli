@@ -126,6 +126,19 @@ func (d *daemon) waitPolled(ctx context.Context) bool {
 	}
 }
 
+// firstPollDone reports whether the first poll has finished, without waiting.
+func (d *daemon) firstPollDone() bool {
+	if d.polled == nil {
+		return true
+	}
+	select {
+	case <-d.polled:
+		return true
+	default:
+		return false
+	}
+}
+
 // RunDaemon is the chunk daemon entry point, called by the hidden _daemon subcommand.
 //
 // client and authMessage support the output-buffering feature; runner is called
@@ -424,6 +437,12 @@ func (d *daemon) conflictReport(root string) chunkd.ConflictReport {
 	// explanation that way — the no-daemon report the command synthesises
 	// already did — so a consumer reading conflict.unavailable to find out why
 	// there is no answer never has to special-case which of the two it got.
+	// Until the first poll finishes, an untracked root may only be undiscovered.
+	if !d.firstPollDone() {
+		return chunkd.ConflictReport{Root: root, Conflict: &chunkd.ConflictState{
+			Unavailable: "the chunk daemon is still starting",
+		}}
+	}
 	return chunkd.ConflictReport{Root: root, Conflict: &chunkd.ConflictState{
 		Unavailable: "the chunk daemon is not tracking this project",
 	}}
