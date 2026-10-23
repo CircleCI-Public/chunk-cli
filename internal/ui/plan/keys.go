@@ -21,9 +21,9 @@ type keyMap struct {
 	PageUp, PageDown                     key.Binding
 	HalfUp, HalfDown                     key.Binding
 	// SectionBack carries the hint for both.
-	SectionBack, SectionNext key.Binding
-	Comment, Delete, Next    key.Binding
-	// SendComments sends the comments waiting to Claude from the plan,
+	SectionBack, SectionNext       key.Binding
+	Comment, Delete, Resolve, Next key.Binding
+	// SendComments saves the queued comments to factory from the plan,
 	// without a trip to the chat; enter does it there.
 	SendComments key.Binding
 	// While a comment is written.
@@ -71,8 +71,9 @@ func (m Model) keys() keyMap {
 		SectionNext:    key.NewBinding(key.WithKeys("]")),
 		Comment:        key.NewBinding(key.WithKeys("c", "enter"), key.WithHelp("c", "comment")),
 		Delete:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete comment")),
+		Resolve:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resolve comment")),
 		Next:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next comment")),
-		SendComments:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "send comments")),
+		SendComments:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save comments")),
 		SaveComment:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save comment")),
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
@@ -105,11 +106,17 @@ func (m Model) keys() keyMap {
 	if m.selecting() {
 		k.Comment.SetHelp("c", "comment on selection")
 	}
+	k.Comment.SetEnabled(k.Comment.Enabled() && !m.onResolved(m.cursor))
 	k.Delete.SetEnabled(inPlan && !m.selecting() && m.commentAt(m.cursor) >= 0)
+	hasID := func() bool {
+		i := m.commentAt(m.cursor)
+		return i >= 0 && m.comments[i].id != ""
+	}
+	k.Resolve.SetEnabled(inPlan && !m.selecting() && hasID())
 	// n has nowhere to go with nothing commented below the cursor, so the
 	// footer does not offer it there.
 	k.Next.SetEnabled(inPlan && m.nextComment() != m.cursor)
-	k.SendComments.SetEnabled(inPlan && len(m.comments) > 0)
+	k.SendComments.SetEnabled(inPlan && !m.savingComments && (len(queuedComments(m.comments)) > 0 || m.pendingMove != ""))
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)
@@ -124,9 +131,9 @@ func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{
 		k.SaveComment, k.CancelComment,
 		k.Send, k.Newline,
-		k.Comment, k.SendComments, k.ClearSelection, k.Up,
+		k.Comment, k.Next, k.SendComments, k.ClearSelection, k.Up,
 		k.Stop, k.Focus, k.SendPlan, k.Quit,
-		k.SectionBack, k.Delete, k.Next, k.ExtendUp, k.PageUp, k.ChatPageUp,
+		k.SectionBack, k.Delete, k.Resolve, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }
 

@@ -13,7 +13,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
@@ -60,8 +62,12 @@ then press ctrl+s to send it to the factory to build, as
 			if err != nil {
 				return err
 			}
+			api, err := factoryPlanClient()
+			if err != nil {
+				return err
+			}
 
-			turn, submit := planSession(root, planPath, model)
+			turn, submit, store := planSession(root, planPath, model, api)
 
 			var first string
 			if len(args) == 1 {
@@ -73,7 +79,7 @@ then press ctrl+s to send it to the factory to build, as
 			defer cancel()
 			// The branch is only for the header; a repo without one has none.
 			branch, _ := gitutil.CurrentBranchIn(root)
-			screen := plan.New(planCtx, turn, submit, first).
+			screen := plan.New(planCtx, turn, submit, store, first).
 				WithTerminal(lipgloss.HasDarkBackground(os.Stdin, os.Stdout), false).
 				WithBranch(branch)
 			p := tea.NewProgram(plan.Screen{Model: screen}, tea.WithContext(ctx))
@@ -83,8 +89,8 @@ then press ctrl+s to send it to the factory to build, as
 			}
 			m := final.(plan.Screen).Model
 			if m.RunID == "" {
-				if _, err := os.Stat(planPath); err == nil {
-					streams.ErrPrintf("The plan was not sent. It is saved at %s; build it later with: chunk factory build %s\n", planPath, planPath)
+				if id := storePlanID(store); id != "" {
+					streams.ErrPrintf("The plan was not sent. It is plan %s in factory; open 'chunk factory plan' again to keep working on it.\n", id)
 				}
 				return nil
 			}
@@ -114,15 +120,39 @@ func newPlanPath(root string) (string, error) {
 	return filepath.Join(dir, time.Now().Format("20060102-150405")+".md"), nil
 }
 
+// factoryPlanClient resolves the CircleCI client the planning screen's store
+// talks to, from the developer's saved token. It never prompts: the
+// planning screen is not the place to start an interactive login, so a
+// missing token comes back as a plain error naming how to fix it.
+func factoryPlanClient() (*circleci.Client, error) {
+	rc, err := config.ResolveCircleCI(false)
+	if err != nil {
+		return nil, fmt.Errorf("load the CircleCI config: %w", err)
+	}
+	client, err := authprompt.ResolveCircleCIClient(rc, nil)
+	if errors.Is(err, authprompt.ErrNeedsAuth) {
+		return nil, newUserError("CircleCI authentication is required to plan with the factory.").
+			withCode("auth.circleci_token_required").
+			withSuggestion(suggestionCircleCIAuth).
+			withExitCode(ExitAuthError).
+			withoutDetail()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("connect to CircleCI: %w", err)
+	}
+	return client, nil
+}
+
 // planSession is a conversation with Claude about the plan at planPath, in
-// root, for the planning screen: its turns, and the send of the plan it ends
-// with to the factory.
-func planSession(root, planPath, model string) (plan.Turner, plan.Submitter) {
+// root, for the planning screen: its turns, the store its plan and comments
+// are kept in through api, and the send of the plan it ends with to the
+// factory.
+func planSession(root, planPath, model string, api *circleci.Client) (plan.Turner, plan.Submitter, plan.Store) {
 	session := &factory.PlanSession{Dir: root, PlanPath: planPath, Model: model}
-	turn := func(ctx context.Context, message string, activity func(string)) (string, string, error) {
-		reply, err := session.Turn(ctx, message, func(a claudecode.Activity) { activity(activityLine(a)) })
-		p, planErr := session.Plan()
-		return reply, p, errors.Join(err, planErr)
+	claimed := false
+	turn := func(ctx context.Context, message string, activity func(string)) (string, error) {
+		message, claimed = withPlanClaim(claimed, session.PlanID, message)
+		return session.Turn(ctx, message, func(a claudecode.Activity) { activity(activityLine(a)) })
 	}
 	submit := func(text string) (string, error) {
 		if err := chunkd.EnsureRunning(); err != nil {
@@ -130,7 +160,129 @@ func planSession(root, planPath, model string) (plan.Turner, plan.Submitter) {
 		}
 		return sendPlan(root, planPath, text)
 	}
-	return turn, submit
+	return turn, submit, &apiStore{api: api, session: session}
+}
+
+// withPlanClaim prepends the plan-claim instruction to message when it is
+// the first message sent since planID was created, so the agent can claim
+// the plan; a later message, or one sent before the plan exists, passes
+// through unchanged. claimed is carried by the caller across calls.
+func withPlanClaim(claimed bool, planID, message string) (string, bool) {
+	if claimed || planID == "" {
+		return message, claimed
+	}
+	return fmt.Sprintf("Plan %s in factory is for this conversation; claim it with plan_claim.\n\n%s",
+		planID, message), true
+}
+
+// storePlanID is the plan's ID in factory, once an apiStore has created one,
+// or "" for any other Store (including one that never got that far).
+func storePlanID(s plan.Store) string {
+	as, ok := s.(*apiStore)
+	if !ok {
+		return ""
+	}
+	return as.session.PlanID
+}
+
+// apiStore is a plan.Store backed by factory's V3 plan and comment API,
+// addressed by the plan's ID on session, which Create sets. The plan's text
+// is read from the local file Claude writes it to during this per-turn
+// session rather than from factory, which the TUI never writes to: nothing
+// updates it there until the long-lived agent session this plan does not
+// build exists to call plan_set, so reading it from there would show
+// nothing. That local read goes away with PlanPath once that session lands.
+type apiStore struct {
+	api     *circleci.Client
+	session *factory.PlanSession
+}
+
+func (s *apiStore) Create(ctx context.Context, title string) error {
+	p, err := s.api.CreatePlan(ctx, title, "")
+	if err != nil {
+		return fmt.Errorf("create the plan in factory: %w", err)
+	}
+	s.session.PlanID = p.ID
+	return nil
+}
+
+// errPlanNotCreated is returned by a write before Create has set an ID to
+// address it with; every write happens after a send, which creates the plan
+// first, so this only guards against a caller skipping that order.
+var errPlanNotCreated = errors.New("the plan has not been created in factory yet")
+
+func (s *apiStore) State(ctx context.Context) (string, error) {
+	if s.session.PlanID == "" {
+		return "", nil
+	}
+	p, err := s.api.GetPlan(ctx, s.session.PlanID)
+	if err != nil {
+		return "", fmt.Errorf("get the plan's state: %w", err)
+	}
+	return p.State, nil
+}
+
+func (s *apiStore) Move(ctx context.Context, state string) error {
+	if s.session.PlanID == "" {
+		return errPlanNotCreated
+	}
+	if _, err := s.api.MovePlan(ctx, s.session.PlanID, state); err != nil {
+		return fmt.Errorf("move the plan to %s: %w", state, err)
+	}
+	return nil
+}
+
+func (s *apiStore) Text(context.Context) (string, error) { return s.session.Plan() }
+
+func (s *apiStore) Comments(ctx context.Context) ([]plan.Comment, error) {
+	if s.session.PlanID == "" {
+		return nil, nil
+	}
+	cs, err := s.api.ListComments(ctx, s.session.PlanID, false)
+	if err != nil {
+		return nil, fmt.Errorf("list the plan's comments: %w", err)
+	}
+	out := make([]plan.Comment, len(cs))
+	for i, c := range cs {
+		out[i] = planComment(c)
+	}
+	return out, nil
+}
+
+func (s *apiStore) AddComment(ctx context.Context, quote, body string) (plan.Comment, error) {
+	if s.session.PlanID == "" {
+		return plan.Comment{}, errPlanNotCreated
+	}
+	c, err := s.api.CreateComment(ctx, s.session.PlanID, quote, body)
+	if err != nil {
+		return plan.Comment{}, fmt.Errorf("save the comment: %w", err)
+	}
+	return planComment(*c), nil
+}
+
+func planComment(c circleci.PlanComment) plan.Comment {
+	return plan.Comment{ID: c.ID, Quote: c.QuotedText, Body: c.Body, Resolved: c.ResolvedAt != nil}
+}
+
+func (s *apiStore) EditComment(ctx context.Context, id, body string) error {
+	if err := s.api.SetCommentBody(ctx, id, body); err != nil {
+		return fmt.Errorf("save the comment: %w", err)
+	}
+	return nil
+}
+
+func (s *apiStore) ResolveComment(ctx context.Context, id string) error {
+	if _, err := s.api.ResolveComment(ctx, id); err != nil {
+		return fmt.Errorf("resolve the comment: %w", err)
+	}
+	return nil
+}
+
+func (s *apiStore) DeleteComment(ctx context.Context, id string) error {
+	if err := s.api.DeleteComment(ctx, id); err != nil {
+		return fmt.Errorf("delete the comment: %w", err)
+	}
+	return nil
 }
 
 // sendPlan hands an approved plan to the factory, as 'chunk factory build

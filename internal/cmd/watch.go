@@ -277,28 +277,32 @@ func (d *watchDrafts) draft(ctx context.Context, root, prompt string, activity f
 // for a change in root, as `chunk factory plan` does. What a build checks
 // first is checked before the screen opens, so no one plans a change the
 // factory would refuse. Errors come back as one sentence for the dashboard.
-func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Turner, plan.Submitter, error) {
+func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Turner, plan.Submitter, plan.Store, error) {
 	if err := checkFactoryProject(ctx, root); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := factory.CheckClaude(); err != nil {
-		return nil, nil, errors.New("this machine has no Claude Code to plan with; install it from https://claude.com/claude-code")
+		return nil, nil, nil, errors.New("this machine has no Claude Code to plan with; install it from https://claude.com/claude-code")
 	}
 	planPath, err := newPlanPath(root)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	d.mu.Lock()
 	d.planPath = planPath
 	d.mu.Unlock()
-	turn, submit := planSession(root, planPath, "")
+	api, err := factoryPlanClient()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	turn, submit, store := planSession(root, planPath, "", api)
 	// A turn's Claude is stopped as the dashboard ends, and waited for.
-	waited := func(ctx context.Context, message string, activity func(string)) (string, string, error) {
+	waited := func(ctx context.Context, message string, activity func(string)) (string, error) {
 		d.wg.Add(1)
 		defer d.wg.Done()
 		return turn(ctx, message, activity)
 	}
-	return waited, submit, nil
+	return waited, submit, store, nil
 }
 
 func (d *watchDrafts) lastPlan() string {

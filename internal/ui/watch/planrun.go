@@ -11,15 +11,17 @@ import (
 )
 
 // Planner opens a conversation with Claude about a plan for a change in the
-// project at root: the planning screen's turns, and the send of the plan to
-// the factory. Its error says, as a sentence, why there can be none.
-type Planner func(ctx context.Context, root string) (plan.Turner, plan.Submitter, error)
+// project at root: the planning screen's turns, the store its plan and
+// comments are kept in, and the send of the plan to the factory. Its error
+// says, as a sentence, why there can be none.
+type Planner func(ctx context.Context, root string) (plan.Turner, plan.Submitter, plan.Store, error)
 
 // planReadyMsg is the end of opening a planning conversation.
 type planReadyMsg struct {
 	root   string
 	turn   plan.Turner
 	submit plan.Submitter
+	store  plan.Store
 	err    error
 }
 
@@ -48,8 +50,8 @@ func (m Model) openPlan() (tea.Model, tea.Cmd) {
 	root, planner, ctx := m.startRoot(), m.planner, m.planCtx
 	m.planOpening, m.draftNote = true, "opening the plan…"
 	return m, func() tea.Msg {
-		turn, submit, err := planner(ctx, root)
-		return planReadyMsg{root: root, turn: turn, submit: submit, err: err}
+		turn, submit, store, err := planner(ctx, root)
+		return planReadyMsg{root: root, turn: turn, submit: submit, store: store, err: err}
 	}
 }
 
@@ -63,7 +65,7 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.draftNote = ""
 	branch, _ := gitutil.CurrentBranchIn(msg.root)
-	screen := plan.New(m.planCtx, msg.turn, msg.submit, "").
+	screen := plan.New(m.planCtx, msg.turn, msg.submit, msg.store, "").
 		WithTerminal(m.hasDarkBG, m.superEnter).
 		WithBranch(branch).
 		WithBack()

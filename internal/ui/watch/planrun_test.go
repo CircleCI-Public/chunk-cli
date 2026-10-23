@@ -13,8 +13,8 @@ import (
 )
 
 // fakePlans stands in for Claude and the factory on the planning screen:
-// turns answer with reply and plan once release is closed, when there is
-// one, and sends answer with runID.
+// turns answer with reply once release is closed, when there is one, and
+// sends answer with runID. The store's text is plan throughout.
 type fakePlans struct {
 	root    string
 	err     error
@@ -25,26 +25,43 @@ type fakePlans struct {
 	sent    string
 }
 
-func (f *fakePlans) planner(_ context.Context, root string) (plan.Turner, plan.Submitter, error) {
+// fakePlanStore is a plan.Store whose text never changes; these tests do not
+// exercise polling or comments.
+type fakePlanStore struct{ text string }
+
+func (f *fakePlanStore) Create(context.Context, string) error  { return nil }
+func (f *fakePlanStore) State(context.Context) (string, error) { return "", nil }
+func (f *fakePlanStore) Move(context.Context, string) error    { return nil }
+func (f *fakePlanStore) Text(context.Context) (string, error)  { return f.text, nil }
+
+func (f *fakePlanStore) Comments(context.Context) ([]plan.Comment, error) { return nil, nil }
+func (f *fakePlanStore) AddComment(context.Context, string, string) (plan.Comment, error) {
+	return plan.Comment{}, nil
+}
+func (f *fakePlanStore) EditComment(context.Context, string, string) error { return nil }
+func (f *fakePlanStore) ResolveComment(context.Context, string) error      { return nil }
+func (f *fakePlanStore) DeleteComment(context.Context, string) error       { return nil }
+
+func (f *fakePlans) planner(_ context.Context, root string) (plan.Turner, plan.Submitter, plan.Store, error) {
 	f.root = root
 	if f.err != nil {
-		return nil, nil, f.err
+		return nil, nil, nil, f.err
 	}
-	turn := func(ctx context.Context, _ string, _ func(string)) (string, string, error) {
+	turn := func(ctx context.Context, _ string, _ func(string)) (string, error) {
 		if f.release != nil {
 			select {
 			case <-f.release:
 			case <-ctx.Done():
-				return "", "", ctx.Err()
+				return "", ctx.Err()
 			}
 		}
-		return f.reply, f.plan, nil
+		return f.reply, nil
 	}
 	submit := func(p string) (string, error) {
 		f.sent = p
 		return f.runID, nil
 	}
-	return turn, submit, nil
+	return turn, submit, &fakePlanStore{text: f.plan}, nil
 }
 
 func planModel(t *testing.T, f *fakePlans) Model {
@@ -118,6 +135,9 @@ func TestThePlanIsKeptBehindTheDashboard(t *testing.T) {
 	// Claude answers while the dashboard is shown.
 	close(f.release)
 	m = deliver(t, m, turn)
+	// The plan pane picks up the store's text on its next poll; this drives
+	// one deterministically rather than waiting on the real timer.
+	m = deliver(t, m, m.planScreen.Poll())
 
 	m, _ = press(m, 'p')
 	assert.Assert(t, m.planOpen)
@@ -131,6 +151,9 @@ func TestSendingThePlanSelectsItsRun(t *testing.T) {
 	m = typeInto(m, "add a flag")
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = deliver(t, m, cmd)
+	// The plan pane picks up the store's text on its next poll; this drives
+	// one deterministically rather than waiting on the real timer.
+	m = deliver(t, m, m.planScreen.Poll())
 
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'y', Text: "y"})

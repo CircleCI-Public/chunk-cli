@@ -56,6 +56,9 @@ type PlanSession struct {
 	Model string
 	// SessionID is claude's session, "" until the first turn reports it.
 	SessionID string
+	// PlanID is the plan in factory's API, "" until the first send creates
+	// it.
+	PlanID string
 }
 
 // Turn sends the developer's message to Claude and returns its reply. The plan
