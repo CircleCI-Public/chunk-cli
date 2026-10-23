@@ -21,9 +21,9 @@ type keyMap struct {
 	PageUp, PageDown                     key.Binding
 	HalfUp, HalfDown                     key.Binding
 	// SectionBack carries the hint for both.
-	SectionBack, SectionNext key.Binding
-	Comment, Delete, Next    key.Binding
-	// SendComments sends the comments waiting to Claude from the plan,
+	SectionBack, SectionNext       key.Binding
+	Comment, Delete, Resolve, Next key.Binding
+	// SendComments saves the queued comments to factory from the plan,
 	// without a trip to the chat; enter does it there.
 	SendComments key.Binding
 	// While a comment is written.
@@ -33,7 +33,6 @@ type keyMap struct {
 	Confirm key.Binding
 
 	Focus    key.Binding
-	Stop     key.Binding
 	SendPlan key.Binding
 	Quit     key.Binding
 }
@@ -71,22 +70,23 @@ func (m Model) keys() keyMap {
 		SectionNext:    key.NewBinding(key.WithKeys("]")),
 		Comment:        key.NewBinding(key.WithKeys("c", "enter"), key.WithHelp("c", "comment")),
 		Delete:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete comment")),
+		Resolve:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resolve comment")),
 		Next:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next comment")),
-		SendComments:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "send comments")),
+		SendComments:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save comments")),
 		SaveComment:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save comment")),
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
 		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", focusHelp)),
-		Stop:           key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop chunk")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "send plan to factory")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 
 	if m.back {
-		// Esc leaves, as it does elsewhere in the host, unless it has
-		// Claude to stop, a comment to cancel or a question to answer no to.
+		// Esc leaves, as it does elsewhere in the host, unless it has a
+		// comment to cancel or a question to answer no to. Leaving stops
+		// nothing: the host keeps the screen, and chunk works on.
 		k.Quit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "back to runs"))
-		if !m.busy && !m.commenting && !m.confirming && !m.selecting() {
+		if !m.commenting && !m.confirming && !m.selecting() {
 			k.Quit = key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc", "back to runs"))
 		}
 	}
@@ -100,20 +100,27 @@ func (m Model) keys() keyMap {
 	for _, b := range []*key.Binding{&k.ExtendUp, &k.ExtendDown, &k.Up, &k.Down, &k.Top, &k.Bottom, &k.PageUp, &k.PageDown, &k.HalfUp, &k.HalfDown, &k.SectionBack, &k.SectionNext, &k.Comment} {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
-	// Esc clears a selection before it stops Claude or leaves.
+	// Esc clears a selection before it leaves.
 	k.ClearSelection.SetEnabled(inPlan && m.selecting())
 	if m.selecting() {
 		k.Comment.SetHelp("c", "comment on selection")
 	}
-	k.Delete.SetEnabled(inPlan && !m.selecting() && m.commentAt(m.cursor) >= 0)
+	// While the queued comments are saved they stay as they are: the save
+	// drops them as it saves them, so one changed meanwhile would be lost.
+	k.Comment.SetEnabled(k.Comment.Enabled() && !m.onResolved(m.cursor) && !m.savingComments)
+	k.Delete.SetEnabled(inPlan && !m.selecting() && !m.savingComments && m.commentAt(m.cursor) >= 0)
+	hasID := func() bool {
+		i := m.commentAt(m.cursor)
+		return i >= 0 && m.comments[i].id != ""
+	}
+	k.Resolve.SetEnabled(inPlan && !m.selecting() && !m.savingComments && hasID())
 	// n has nowhere to go with nothing commented below the cursor, so the
 	// footer does not offer it there.
 	k.Next.SetEnabled(inPlan && m.nextComment() != m.cursor)
-	k.SendComments.SetEnabled(inPlan && len(m.comments) > 0)
+	k.SendComments.SetEnabled(inPlan && !m.savingComments && (len(queuedComments(m.comments)) > 0 || m.pendingMove != ""))
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)
-	k.Stop.SetEnabled(m.busy && !m.commenting && !m.selecting())
 	k.Confirm.SetEnabled(m.confirming)
 	return k
 }
@@ -124,9 +131,9 @@ func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{
 		k.SaveComment, k.CancelComment,
 		k.Send, k.Newline,
-		k.Comment, k.SendComments, k.ClearSelection, k.Up,
-		k.Stop, k.Focus, k.SendPlan, k.Quit,
-		k.SectionBack, k.Delete, k.Next, k.ExtendUp, k.PageUp, k.ChatPageUp,
+		k.Comment, k.Next, k.SendComments, k.ClearSelection, k.Up,
+		k.Focus, k.SendPlan, k.Quit,
+		k.SectionBack, k.Delete, k.Resolve, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }
 

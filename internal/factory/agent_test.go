@@ -619,7 +619,25 @@ func TestAgentClaimsWhenTheDaemonFails(t *testing.T) {
 	a := startTestAgent(context.Background(), t, AgentConfig{SessionID: "s1"}, "hello")
 
 	_, err := a.Claims(context.Background())
-	assert.ErrorContains(t, err, "factory daemon isn't running")
+	assert.ErrorIs(t, err, ErrNoFactoryDaemon)
+	assert.ErrorIs(t, CheckFactoryDaemon(context.Background()), ErrNoFactoryDaemon)
+}
+
+func TestAgentClaimsPassOtherDaemonFailuresOn(t *testing.T) {
+	agentFakeEnv(t)
+	t.Setenv("FAKE_CLAIMS_ERR", "claims store is corrupt")
+	fakeClaude(t, agentFakeScript)
+	fakeFactory(t)
+	a := startTestAgent(context.Background(), t, AgentConfig{SessionID: "s1"}, "hello")
+
+	_, err := a.Claims(context.Background())
+	assert.ErrorContains(t, err, "claims store is corrupt")
+	assert.Assert(t, !errors.Is(err, ErrNoFactoryDaemon))
+}
+
+func TestCheckFactoryDaemonWithoutFactory(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	assert.ErrorIs(t, CheckFactoryDaemon(context.Background()), ErrNoFactory)
 }
 
 // A Send stuck writing to a claude that stopped reading its stdin must not hold

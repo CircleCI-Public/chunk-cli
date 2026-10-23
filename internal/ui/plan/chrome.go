@@ -60,13 +60,15 @@ func (m Model) header() string {
 		state = m.pill(m.purple(), "#fbefff", "#22162b", text)
 	case strings.TrimSpace(m.plan) == "":
 		state = m.style(m.dim()).Render("No plan yet")
-	case len(m.comments) > 0:
-		n := len(m.comments)
-		text := fmt.Sprintf("● %d %s waiting for chunk", n, plural(n, "comment", "comments"))
+	case len(queuedComments(m.comments)) > 0:
+		n := len(queuedComments(m.comments))
+		text := fmt.Sprintf("● %d %s queued", n, plural(n, "comment", "comments"))
 		if m.narrow() {
 			text = fmt.Sprintf("● %d %s", n, plural(n, "comment", "comments"))
 		}
 		state = m.pill(m.amber(), "#fff8c5", "#2a2210", text)
+	case m.state != ReadyState:
+		state = m.style(m.dim()).Render("In review")
 	default:
 		state = m.pill(m.green(), "#dafbe1", "#162226", ui.IconOK+" Plan ready")
 	}
@@ -135,7 +137,6 @@ func (m Model) actionBar() string {
 	}
 	k := m.keys()
 	// What the buttons say is left out of the hints.
-	k.Stop.SetEnabled(false)
 	k.SendPlan.SetEnabled(false)
 	k.SendComments.SetEnabled(false)
 	room := max(inner-lipgloss.Width(right)-2, 0)
@@ -152,7 +153,14 @@ func (m Model) actions() (main, side string) {
 	outline := func(c color.Color, text string) string {
 		return lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(c).Render(text)
 	}
-	n := len(m.comments)
+	queued, open := 0, 0
+	for _, c := range m.comments {
+		if c.id == "" {
+			queued++
+		} else {
+			open++
+		}
+	}
 	approve := "ctrl+s Approve plan"
 	switch {
 	// While a comment is written enter saves it and ctrl+s does nothing, so
@@ -160,15 +168,19 @@ func (m Model) actions() (main, side string) {
 	case m.sending, m.commenting:
 		return "", ""
 	case m.busy:
-		return outline(m.purple(), "esc Stop chunk"), m.style(m.faint()).Render(approve)
+		return outline(m.purple(), "chunk is working"), m.style(m.faint()).Render(approve)
 	case strings.TrimSpace(m.plan) == "":
 		return "", ""
-	case n > 0:
-		send := fmt.Sprintf("enter Send %d %s to chunk", n, plural(n, "comment", "comments"))
+	case queued > 0:
+		save := fmt.Sprintf("enter Save %d %s", queued, plural(queued, "comment", "comments"))
 		if m.focus == panePlan {
-			send = "s " + strings.TrimPrefix(send, "enter ")
+			save = "s " + strings.TrimPrefix(save, "enter ")
 		}
-		return button(m.teal(), send), m.style(m.faint()).Render(approve + " · resolve comments first")
+		return button(m.teal(), save), m.style(m.faint()).Render(approve + " · resolve comments first")
+	case open > 0:
+		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
+	case m.state != ReadyState:
+		return "", m.style(m.faint()).Render(approve + " · wait for the review")
 	}
 	return button(m.green(), approve), ""
 }

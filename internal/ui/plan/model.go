@@ -1,7 +1,8 @@
 // Package plan is the planning screen: a chat with Claude beside the plan
-// Claude is writing, rendered as markdown. The developer can comment
-// on any part of the plan; comments go to Claude with their next message.
-// When the developer approves the plan it is handed to the factory to build.
+// factory is writing, rendered as markdown. The developer can comment
+// on any part of the plan; comments are queued locally and saved to factory
+// when the developer sends. When the developer approves the plan it is
+// handed to the factory to build.
 //
 // The screen is a component: its host passes it messages and draws what
 // Content returns, and it reports that it is done with a ClosedMsg. Screen
@@ -10,9 +11,9 @@ package plan
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -27,13 +28,14 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
-// Turner sends the developer's message to the planning agent and returns its
-// reply and the plan as it stands after the turn, reporting what the agent
-// does to activity as it goes.
-type Turner func(ctx context.Context, message string, activity func(string)) (reply, plan string, err error)
+// Submitter hands the approved plan, as factory has it, to the factory and
+// returns the run's ID. It reads the plan itself rather than taking the
+// screen's copy, which may be behind factory's by a poll.
+type Submitter func() (string, error)
 
-// Submitter hands an approved plan to the factory and returns the run's ID.
-type Submitter func(plan string) (string, error)
+// ReadyState is the state a plan waits in for the developer once its review
+// has passed; it can be sent to the factory only from there.
+const ReadyState = "Planning - Human"
 
 // pane is which side of the screen the keyboard goes to.
 type pane int
@@ -47,9 +49,12 @@ const (
 type message struct {
 	fromUser bool
 	text     string
-	// comments are the plan comments a developer's message carried.
-	comments []comment
 	failed   bool
+	// toBusy is a message of the developer's that reached the agent while it
+	// was working, so it reads the message once it is done with that.
+	toBusy bool
+	// byTask is a reply to a factory task rather than to the developer.
+	byTask bool
 	// rendered is a reply's markdown as rendered at renderedWidth, kept so
 	// the chat is not rendered again on every tick of the spinner.
 	rendered      string
@@ -66,16 +71,55 @@ type renderedBlock struct {
 }
 
 type (
-	activityMsg string
-	turnDoneMsg struct {
-		reply, plan string
-		err         error
-	}
 	submittedMsg struct {
 		runID string
 		err   error
 	}
+	pollMsg      struct{}
+	refreshedMsg struct {
+		state, text string
+		comments    []Comment
+		err         error
+	}
+	commentSavedMsg struct{ err error }
+	// createdMsg is the end of creating the plan in factory, for the
+	// developer's first message, text.
+	createdMsg struct {
+		text string
+		err  error
+	}
+	queueSavedMsg struct {
+		saved int
+		err   error
+		// move is the agent state saveQueued attempted to move the plan to,
+		// or "" when no move was needed this round. moveOK is only
+		// meaningful when move is set.
+		move   string
+		moveOK bool
+	}
 )
+
+// pollEvery is how often the plan pane polls the store for the plan's text,
+// state and comments while the screen is open.
+const pollEvery = 5 * time.Second
+
+func pollCmd() tea.Cmd { return tea.Tick(pollEvery, func(time.Time) tea.Msg { return pollMsg{} }) }
+
+// refreshCmd reads the plan's state, text and comments from the store.
+func refreshCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg {
+		state, err := s.State(ctx)
+		if err != nil {
+			return refreshedMsg{err: err}
+		}
+		text, err := s.Text(ctx)
+		if err != nil {
+			return refreshedMsg{err: err}
+		}
+		cs, err := s.Comments(ctx)
+		return refreshedMsg{state: state, text: text, comments: cs, err: err}
+	}
+}
 
 // ClosedMsg is the screen asking its host to close it: the plan was sent to
 // the factory as run RunID, or, when RunID is "", the developer left.
@@ -90,11 +134,16 @@ func closed(runID string) tea.Cmd {
 // Model is the planning screen.
 type Model struct {
 	ctx    context.Context
-	turn   Turner
+	agent  Agent
 	submit Submitter
+	store  Store
 
 	plan     string
+	state    string
 	messages []message
+	// created is whether the plan has been made in factory with store.Create,
+	// and creating whether that is under way.
+	created, creating bool
 
 	// blocks is renderedFrom, the plan as last rendered, split for
 	// commenting and rendered at renderedWidth.
@@ -110,12 +159,34 @@ type Model struct {
 	// the line after its last.
 	blockTop, blockEnd []int
 
-	// comments are waiting to go with the next message; inFlight went with
-	// the one Claude is answering, and come back if the turn fails.
+	// comments holds the queued comments (id "") beside the open comments
+	// factory has (id set); resolved holds the resolved ones.
 	comments     []comment
-	inFlight     []comment
+	resolved     []comment
 	commenting   bool
 	commentInput textarea.Model
+	// editingID is the saved comment the editor is changing at once, or ""
+	// while it is working on a queued comment.
+	editingID string
+	// savingEdit is set from opening the editor on a saved comment's enter
+	// until the API answers.
+	savingEdit bool
+	// savingComments is set from the developer's send until the queued
+	// comments have been saved (and the plan moved), so a second send cannot
+	// start a second save.
+	savingComments bool
+	// pendingText is the message waiting to go to the agent once the queued
+	// comments this send carried have been saved.
+	pendingText string
+	// pendingDelete is the saved comment a confirming y would delete.
+	pendingDelete string
+	// pendingMove is the agent state a move failed to reach, after every
+	// queued comment of that send was saved, or "" when no move is owed. A
+	// send with nothing queued retries it rather than skipping straight to
+	// the turn, which is otherwise the only route to a move: the plan's
+	// Human states are also its normal resting state for ordinary chat, so
+	// a send cannot move it just because that is where it sits.
+	pendingMove string
 
 	planView viewport.Model
 	chatView viewport.Model
@@ -126,12 +197,15 @@ type Model struct {
 	width  int
 	height int
 
+	// busy is whether the agent is working: from a send, or from the first
+	// thing it does on a factory task, until its reply.
 	busy bool
-	// log is what Claude has done this turn, oldest first.
-	log        []string
-	cancelTurn context.CancelFunc
-	activity   string
-	activityCh chan string
+	// byTask is whether what the agent is working on is a factory task's,
+	// rather than the developer's message.
+	byTask bool
+	// log is what the agent has done this turn, oldest first.
+	log      []string
+	activity string
 
 	confirming bool
 	// sending is set from the developer's y until the factory answers, so a
@@ -141,6 +215,9 @@ type Model struct {
 	// sent; a second ctrl+c quits.
 	quitting bool
 	status   string
+	// refreshErr is a quiet note that the last poll failed, cleared by the
+	// next successful one.
+	refreshErr string
 
 	// dark is whether the terminal's background is dark, and disambiguates
 	// whether it tells shift+enter from enter.
@@ -161,12 +238,15 @@ type Model struct {
 
 const (
 	chatPlaceholder     = "Describe the change, or give feedback on the plan…"
-	commentsPlaceholder = "Press enter to send your comments, or add a message…"
+	commentsPlaceholder = "Press enter to save your comments, or add a message…"
+	// reviewPlaceholder is for a plan waiting on the developer's review, which
+	// the agent may not change until comments move it back to the agent.
+	reviewPlaceholder = "Ask chunk about the plan; comment on it to change it…"
 )
 
 // New returns the planning screen. A non-empty first message is sent as soon
 // as the screen opens.
-func New(ctx context.Context, turn Turner, submit Submitter, first string) Model {
+func New(ctx context.Context, agent Agent, submit Submitter, store Store, first string) Model {
 	in := textarea.New()
 	in.Placeholder = chatPlaceholder
 	in.ShowLineNumbers = false
@@ -199,8 +279,9 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 
 	return Model{
 		ctx:          ctx,
-		turn:         turn,
+		agent:        agent,
 		submit:       submit,
+		store:        store,
 		planView:     planView,
 		chatView:     viewport.New(),
 		input:        in,
@@ -236,8 +317,17 @@ func (m Model) WithBack() Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Batch(textarea.Blink, pollCmd(), waitEvent(m.ctx, m.agent))
 }
+
+// Poll reads the plan's state, text and comments from the store, as the
+// screen's own timer does every few seconds. A host can use it to refresh
+// the screen deterministically, without waiting for that timer.
+func (m Model) Poll() tea.Cmd { return refreshCmd(m.ctx, m.store) }
+
+// Next waits for the agent's next event, as the screen itself does from Init
+// on. A host can use it to deliver one deterministically.
+func (m Model) Next() tea.Cmd { return waitEvent(m.ctx, m.agent) }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -265,61 +355,75 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case activityMsg:
-		// A message that was already queued when the turn ended.
-		if !m.busy {
+	case eventMsg:
+		if msg.agent != m.agent {
 			return m, nil
 		}
-		m.activity = string(msg)
-		m.log = append(m.log, m.activity)
-		if len(m.log) > 5 {
-			m.log = m.log[len(m.log)-5:]
-		}
-		m.renderChat()
-		return m, waitActivity(m.ctx, m.activityCh)
+		return m.applyEvent(msg.Event)
 
-	case turnDoneMsg:
-		m.busy, m.activity, m.log = false, "", nil
-		if m.cancelTurn != nil {
-			m.cancelTurn()
-			m.cancelTurn = nil
+	case sentMsg:
+		if msg.agent == m.agent && msg.err != nil {
+			m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+			m.messages = append(m.messages, message{text: "Could not reach chunk: " + msg.err.Error(), failed: true})
+			m.renderPlan()
+			m.renderChat()
 		}
-		switch {
-		case errors.Is(msg.err, context.Canceled):
-			m.messages = append(m.messages, message{text: "Stopped.", failed: true})
-		case msg.err != nil:
-			m.messages = append(m.messages, message{text: msg.err.Error(), failed: true})
-		default:
-			m.messages = append(m.messages, message{text: msg.reply})
-		}
-		// The cursor stays on a comment on a rewritten part, wherever it now
-		// sits, rather than drifting to whatever ends up at its old stop.
-		held := -1
-		var hc comment
-		if m.cursor >= len(m.blocks) {
-			if held = m.commentAt(m.cursor); held >= 0 {
-				hc = m.comments[held]
-			}
-		}
-		// Comments Claude did not get to answer are the developer's to send
-		// again, ahead of any written since.
-		if msg.err != nil {
-			m.comments = append(m.inFlight, m.comments...)
-		}
-		m.inFlight = nil
-		if msg.plan != "" {
-			m.plan = msg.plan
-		}
-		// Also when the plan is as it was: the skeleton, if any, goes.
-		m.renderPlan()
-		if held >= 0 {
-			if s := m.stopOf(hc); s >= 0 {
-				m.moveCursor(s)
-			}
-		}
-		m.syncPlaceholder()
-		m.renderChat()
 		return m, nil
+
+	case pollMsg:
+		return m, tea.Batch(refreshCmd(m.ctx, m.store), pollCmd())
+
+	case refreshedMsg:
+		return m.applyRefresh(msg), nil
+
+	case createdMsg:
+		m.creating = false
+		if msg.err != nil {
+			m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+			m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
+			m.renderPlan()
+			m.renderChat()
+			return m, nil
+		}
+		m.created = true
+		return m, sendCmd(m.ctx, m.agent, msg.text)
+
+	case commentSavedMsg:
+		m.savingEdit = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render(msg.err.Error())
+			return m, nil
+		}
+		m.commenting, m.anchor, m.editingID = false, -1, ""
+		m.commentInput.Blur()
+		return m, refreshCmd(m.ctx, m.store)
+
+	case queueSavedMsg:
+		m.savingComments = false
+		// Whatever got saved before the failure, if any, stays saved; only
+		// the rest is still queued.
+		m.comments = dropQueued(m.comments, msg.saved)
+		m.renderPlan()
+		m.syncPlaceholder()
+		switch {
+		case msg.move == "":
+			m.pendingMove = ""
+		case msg.moveOK:
+			m.pendingMove = ""
+		default:
+			m.pendingMove = msg.move
+		}
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render(msg.err.Error())
+			return m, refreshCmd(m.ctx, m.store)
+		}
+		text := m.pendingText
+		m.pendingText = ""
+		if text != "" {
+			next, cmd := m.send(text)
+			return next, tea.Batch(cmd, refreshCmd(next.ctx, next.store))
+		}
+		return m, refreshCmd(m.ctx, m.store)
 
 	case submittedMsg:
 		m.sending = false
@@ -343,6 +447,43 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m.forward(msg)
 }
 
+// applyRefresh is a successful or failed poll of the plan's state, text and
+// comments.
+func (m Model) applyRefresh(msg refreshedMsg) Model {
+	if msg.err != nil {
+		m.refreshErr = "could not refresh the plan: " + msg.err.Error()
+		return m
+	}
+	m.refreshErr = ""
+
+	// The cursor stays on a comment on a rewritten part, wherever it now
+	// sits, rather than drifting to whatever ends up at its old stop.
+	held := false
+	var heldID, heldQuote, heldText string
+	if m.cursor >= len(m.blocks) && !m.onResolved(m.cursor) {
+		if i := m.commentAt(m.cursor); i >= 0 {
+			held = true
+			heldID, heldQuote, heldText = m.comments[i].id, m.comments[i].quote, m.comments[i].text
+		}
+	}
+
+	m.state, m.plan = msg.state, msg.text
+	m.applyComments(msg.comments)
+	m.renderPlan()
+	if held {
+		for k, j := range m.orphans() {
+			c := m.comments[j]
+			if (heldID != "" && c.id == heldID) || (heldID == "" && c.quote == heldQuote && c.text == heldText) {
+				m.moveCursor(len(m.blocks) + k)
+				break
+			}
+		}
+	}
+	m.syncPlaceholder()
+	m.renderChat()
+	return m
+}
+
 func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := m.keys()
 	if key.Matches(msg, k.Quit) {
@@ -354,22 +495,22 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.confirming {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
+			m.pendingDelete = ""
 			return m, nil
+		}
+		if id := m.pendingDelete; id != "" {
+			m.pendingDelete = ""
+			return m, deleteCmd(m.ctx, m.store, id)
 		}
 		m.sending = true
 		m.status = "Sending the plan to the factory…"
-		return m, submitCmd(m.submit, m.plan)
+		return m, submitCmd(m.submit)
 	}
 	if m.commenting {
 		return m.updateCommentKey(msg)
 	}
 
 	switch {
-	case key.Matches(msg, k.Stop):
-		if m.cancelTurn != nil {
-			m.cancelTurn()
-		}
-		return m, nil
 	case key.Matches(msg, k.Focus):
 		m.anchor = -1
 		if m.focus == paneChat {
@@ -382,16 +523,19 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.drawPlan()
 		return m, m.input.Focus()
 	case key.Matches(msg, k.SendPlan):
+		queued := len(queuedComments(m.comments))
 		switch {
 		case m.sending:
 		case m.busy:
-			m.status = warn("Wait for chunk to finish, or press esc to stop it.")
+			m.status = warn("Wait for chunk to finish.")
 		case strings.TrimSpace(m.plan) == "":
 			m.status = warn("There is no plan to send yet.")
-		case len(m.comments) > 0:
+		case m.state != ReadyState:
+			m.status = warn("The plan is not ready yet: wait for its review to pass.")
+		case queued > 0:
 			m.confirming = true
-			m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d %s will not be sent to chunk. Send the plan to the factory anyway? (y/n)",
-				len(m.comments), plural(len(m.comments), "comment", "comments")))
+			m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d queued %s will not be saved. Send the plan to the factory anyway? (y/n)",
+				queued, plural(queued, "comment", "comments")))
 		default:
 			m.confirming = true
 			m.status = ui.TitleStyle.Render("Send this plan to the factory to build? (y/n)")
@@ -411,18 +555,35 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if key.Matches(msg, k.Send) {
-		if m.busy {
-			m.status = warn("chunk is still answering; your message is kept until it finishes.")
-			return m, nil
-		}
-		text := strings.TrimSpace(m.input.Value())
-		if text == "" && len(m.comments) == 0 {
-			return m, nil
-		}
-		m.input.Reset()
-		return m.send(text)
+		return m.deliver(strings.TrimSpace(m.input.Value()))
 	}
 	return m.forward(msg)
+}
+
+// deliver is a send from the developer: it saves the queued comments to
+// factory, moving the plan to its Agent state from a Human one, then sends
+// text to the agent, if there is any.
+func (m Model) deliver(text string) (Model, tea.Cmd) {
+	if m.savingComments {
+		return m, nil
+	}
+	queued := queuedComments(m.comments)
+	if text == "" && len(queued) == 0 && m.pendingMove == "" {
+		return m, nil
+	}
+	// A move that failed after every comment of a prior send was saved
+	// leaves none queued; retry it here rather than sending straight
+	// through, or the plan is stuck in its Human state forever. The state
+	// alone cannot stand in for this: a Human state is also the plan's
+	// ordinary resting state during review, with nothing ever queued or
+	// moved.
+	if len(queued) == 0 && m.pendingMove == "" {
+		return m.send(text)
+	}
+	m.savingComments = true
+	m.pendingText = text
+	m.status = ""
+	return m, saveQueued(m.ctx, m.store, queued, m.state)
 }
 
 // quit closes the screen, unless that would drop comments or a message the
@@ -437,20 +598,24 @@ func (m Model) quit() (Model, tea.Cmd) {
 		m.status = warn(fmt.Sprintf("Your %s will be lost. Press ctrl+c again to quit.", unsent))
 		return m, nil
 	}
-	if m.cancelTurn != nil {
-		m.cancelTurn()
-	}
 	return m, closed("")
 }
 
 // unsent names what the developer has written that has not gone to Claude,
-// or is "" when there is nothing.
+// or is "" when there is nothing. Saved comments do not count: they are
+// already in factory.
 func (m Model) unsent() string {
-	n := len(m.comments)
-	if m.commenting && strings.TrimSpace(m.commentInput.Value()) != "" && m.cursor < len(m.blocks) {
-		// The comment being written replaces those it takes in.
+	n := len(queuedComments(m.comments))
+	if m.commenting && m.editingID == "" && strings.TrimSpace(m.commentInput.Value()) != "" && m.cursor < len(m.blocks) {
+		// The comment being written replaces the queued ones it takes in.
 		_, _, in := m.widen(m.selection())
-		n += 1 - len(in)
+		queuedIn := 0
+		for _, j := range in {
+			if m.comments[j].id == "" {
+				queuedIn++
+			}
+		}
+		n += 1 - queuedIn
 	}
 	var parts []string
 	if n > 0 {
@@ -467,6 +632,9 @@ func warn(s string) string { return ui.WarningStyle.Render(s) }
 // forward hands msg to the focused pane's component.
 func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 	if m.commenting {
+		if m.savingEdit {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.commentInput, cmd = m.commentInput.Update(msg)
 		m.moveCursor(m.cursor)
@@ -488,70 +656,99 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// send starts a turn with text, and any comments waiting, as the developer's
-// message.
+// send creates the plan in factory on the first message, then sends text to
+// the agent as the developer's message. The agent may be working already, on
+// an earlier message or a factory task; it reads text once it is done. While
+// the plan is being created a message waits in the input.
 func (m Model) send(text string) (Model, tea.Cmd) {
-	m.messages = append(m.messages, message{fromUser: true, text: text, comments: m.comments})
-	prompt := composeMessage(text, m.comments)
-	m.inFlight, m.comments = m.comments, nil
-	m.status, m.log = "", nil
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.busy, m.cancelTurn = true, cancel
-	m.activityCh = make(chan string, 64)
+	if m.creating {
+		return m, nil
+	}
+	m.input.Reset()
+	m.messages = append(m.messages, message{fromUser: true, text: text, toBusy: m.busy})
+	m.status = ""
+	var tick tea.Cmd
+	if !m.busy {
+		m.busy, m.byTask, m.log = true, false, nil
+		tick = m.spin.Tick
+	}
 	m.syncPlaceholder()
 	m.renderPlan()
-	// Sending takes the comments on parts Claude has rewritten with it, and
-	// their stops with them, so the cursor is put back in reach of what is
-	// left rather than left past the end of the plan for the whole turn.
-	m.moveCursor(m.cursor)
 	m.renderChat()
 	m.chatView.GotoBottom()
-	return m, tea.Batch(turnCmd(ctx, m.turn, prompt, m.activityCh), waitActivity(ctx, m.activityCh), m.spin.Tick)
-}
-
-// syncPlaceholder tells the developer that enter sends their comments when
-// there are some to send.
-func (m *Model) syncPlaceholder() {
-	if len(m.comments) > 0 {
-		m.input.Placeholder = commentsPlaceholder
-		return
+	if !m.created {
+		m.creating = true
+		return m, tea.Batch(createCmd(m.ctx, m.store, text), tick)
 	}
-	m.input.Placeholder = chatPlaceholder
+	return m, tea.Batch(sendCmd(m.ctx, m.agent, text), tick)
 }
 
-func turnCmd(ctx context.Context, turn Turner, text string, activity chan string) tea.Cmd {
-	return func() tea.Msg {
-		// Closing the channel ends the wait for activity with the turn.
-		defer close(activity)
-		reply, plan, err := turn(ctx, text, func(s string) {
-			// Activity is only shown, so it is dropped rather than hold up
-			// Claude when the screen falls behind.
-			select {
-			case activity <- s:
-			default:
-			}
-		})
-		return turnDoneMsg{reply: reply, plan: plan, err: err}
-	}
+// createCmd creates the plan in factory, titled for text, the developer's
+// first message.
+func createCmd(ctx context.Context, s Store, text string) tea.Cmd {
+	return func() tea.Msg { return createdMsg{text: text, err: s.Create(ctx, titleOf(text))} }
 }
 
-func waitActivity(ctx context.Context, activity chan string) tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case s, ok := <-activity:
-			if !ok {
-				return nil
-			}
-			return activityMsg(s)
-		case <-ctx.Done():
-			return nil
+// applyEvent shows one thing the agent reported, then waits for the next.
+func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
+	next := waitEvent(m.ctx, m.agent)
+	switch {
+	case ev.Activity != "":
+		var tick tea.Cmd
+		if !m.busy {
+			// Nothing was sent, so a factory task started this turn.
+			m.busy, m.byTask, m.log = true, true, nil
+			tick = m.spin.Tick
 		}
+		m.activity = ev.Activity
+		m.log = append(m.log, m.activity)
+		if len(m.log) > 5 {
+			m.log = m.log[len(m.log)-5:]
+		}
+		m.renderPlan()
+		m.renderChat()
+		return m, tea.Batch(next, tick)
+	case ev.Reply != nil:
+		m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+		m.messages = append(m.messages, message{text: ev.Reply.Text, byTask: ev.Reply.ByTask})
+	case ev.Problem != nil:
+		m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+		m.messages = append(m.messages, message{text: ev.Problem.Error(), failed: true})
+	}
+	m.renderPlan()
+	m.renderChat()
+	return m, tea.Batch(next, refreshCmd(m.ctx, m.store))
+}
+
+// titleOf is the plan's title from the developer's message: its first line,
+// cut to 80 runes.
+func titleOf(text string) string {
+	line, _, _ := strings.Cut(text, "\n")
+	line = strings.TrimSpace(line)
+	r := []rune(line)
+	if len(r) > 80 {
+		r = r[:80]
+	}
+	return string(r)
+}
+
+// syncPlaceholder tells the developer that enter saves their comments when
+// there are some queued, and that only comments change a plan waiting on
+// their review.
+func (m *Model) syncPlaceholder() {
+	switch {
+	case len(queuedComments(m.comments)) > 0:
+		m.input.Placeholder = commentsPlaceholder
+	case agentStates[m.state] != "":
+		m.input.Placeholder = reviewPlaceholder
+	default:
+		m.input.Placeholder = chatPlaceholder
 	}
 }
 
-func submitCmd(submit Submitter, plan string) tea.Cmd {
+func submitCmd(submit Submitter) tea.Cmd {
 	return func() tea.Msg {
-		id, err := submit(plan)
+		id, err := submit()
 		return submittedMsg{runID: id, err: err}
 	}
 }
@@ -676,6 +873,10 @@ func (m *Model) renderPlan() {
 		return
 	}
 	if w == m.renderedWidth && m.blocks != nil && m.renderedFrom == m.plan {
+		// The blocks themselves need no work, but the comments can have
+		// changed (one saved, one resolved, …) since this plan text was last
+		// rendered, so they are re-anchored even on this fast path.
+		m.reanchor()
 		m.drawPlan()
 		return
 	}
@@ -714,7 +915,7 @@ func (m *Model) renderPlan() {
 	// The cursor stays on its block when Claude left that block as it was,
 	// and otherwise on the same place in the plan as near as there is one.
 	// On a comment on a part Claude has since rewritten it has no block to
-	// follow; Update puts it back on that comment.
+	// follow; applyRefresh puts it back on that comment.
 	m.cursor = min(m.cursor, m.stops()-1)
 	for i, b := range m.blocks {
 		if cursorSource != "" && b.source == cursorSource {
@@ -725,20 +926,26 @@ func (m *Model) renderPlan() {
 	m.moveCursor(m.cursor)
 }
 
-// userBubble is the developer's message as a bubble against the right edge
-// of the chat, with the plan comments it carried above their text.
-func (m *Model) userBubble(msg *message, w int) string {
+// userBubble is text as a bubble against the right edge of the chat, so it
+// reads as the developer's side of the conversation.
+func (m *Model) userBubble(text string, w int) string {
 	// The bubble leaves room on its left, so that it reads as a side of the
 	// conversation, and has a border and a cell of padding each side.
 	inner := max(w*85/100-bubbleChrome, 1)
-	var parts []string
-	for _, c := range msg.comments {
+	fit := min(lipgloss.Width(text), inner)
+	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.teal()).
+		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
+	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
+}
+
+// queuedBubble is the queued comments waiting to be saved, shown like the
+// message they will go with when the developer sends.
+func (m *Model) queuedBubble(cs []comment, w int) string {
+	inner := max(w*85/100-bubbleChrome, 1)
+	parts := make([]string, 0, 2*len(cs))
+	for _, c := range cs {
 		parts = append(parts, m.style(m.faint()).Render("┃ "+excerpt(c.quote, inner-2)), m.style(m.amber()).Render("┃ "+c.text))
 	}
-	if msg.text != "" {
-		parts = append(parts, msg.text)
-	}
-	// A short message gets a bubble that fits it; a long one wraps at inner.
 	text := strings.Join(parts, "\n")
 	fit := min(lipgloss.Width(text), inner)
 	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.teal()).
@@ -757,12 +964,20 @@ func (m *Model) renderChat() {
 		msg := &m.messages[i]
 		switch {
 		case msg.fromUser:
-			b.WriteString(m.userBubble(msg, w))
+			b.WriteString(m.userBubble(msg.text, w))
+			if msg.toBusy {
+				b.WriteString("\n" + lipgloss.PlaceHorizontal(w, lipgloss.Right,
+					m.style(m.faint()).Render("sent while chunk was working; it reads this next")))
+			}
 		case msg.failed:
 			b.WriteString(chunkStyle.Render("chunk") + "\n")
 			b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text))
 		default:
-			b.WriteString(chunkStyle.Render("chunk") + "\n")
+			b.WriteString(chunkStyle.Render("chunk"))
+			if msg.byTask {
+				b.WriteString(m.style(m.faint()).Render(" · factory task"))
+			}
+			b.WriteString("\n")
 			if msg.renderedWidth != w {
 				msg.rendered, msg.renderedWidth = renderMarkdown(msg.text, m.dark, w-2), w
 			}
@@ -770,10 +985,13 @@ func (m *Model) renderChat() {
 		}
 		b.WriteString("\n\n")
 	}
-	if len(m.comments) > 0 && !m.busy {
+	if q := queuedComments(m.comments); len(q) > 0 && !m.savingComments {
 		// The comments wait in a bubble like the message they will go in.
-		b.WriteString(m.userBubble(&message{fromUser: true, comments: m.comments}, w) + "\n")
-		b.WriteString(m.style(m.faint()).Render("queued · sends with your next message") + "\n\n")
+		b.WriteString(m.queuedBubble(q, w) + "\n")
+		b.WriteString(m.style(m.faint()).Render("queued · press enter to save") + "\n\n")
+	}
+	if m.savingComments {
+		b.WriteString(m.style(m.purple()).Render(m.spin.View()+"Saving your comments…") + "\n\n")
 	}
 	if m.busy {
 		b.WriteString(m.activityLog(w))
@@ -787,7 +1005,7 @@ func (m *Model) renderChat() {
 	}
 }
 
-// activityLog is what Claude has been doing this turn: each thing it has
+// activityLog is what the agent has been doing this turn: each thing it has
 // finished with a tick, and the one in hand with the spinner.
 func (m Model) activityLog(w int) string {
 	if len(m.log) == 0 {
@@ -795,6 +1013,9 @@ func (m Model) activityLog(w int) string {
 		return m.style(m.purple()).Render(m.spin.View() + "chunk is thinking…")
 	}
 	var lines []string
+	if m.byTask {
+		lines = append(lines, m.style(m.faint()).Render("working on a factory task"))
+	}
 	for i, a := range m.log {
 		a = ansi.Truncate(a, w-2, "…")
 		if i == len(m.log)-1 {
@@ -842,7 +1063,11 @@ func (m Model) Content() string {
 		return ui.HelperStyle.Faint(true).Render(name)
 	}
 
-	planTitle := title(m.focus == panePlan, "Plan")
+	planName := "Plan"
+	if m.state != "" {
+		planName = "Plan · " + m.state
+	}
+	planTitle := title(m.focus == panePlan, planName)
 	if m.focus == panePlan {
 		planTitle += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", m.planView.ScrollPercent()*100))
 	}

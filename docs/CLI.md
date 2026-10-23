@@ -569,24 +569,44 @@ chunk
   new way to make a first pass does. Only the worktree's path goes to stdout,
   so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the record
   instead.
-- **`factory plan` makes a plan with Claude, then sends it to the factory.**
-  It opens a two-pane screen: a chat with Claude Code on this machine on the
-  left, and the plan Claude writes on the right, rendered as markdown. Each
-  message is a turn of one `claude -p --resume` session that reads the code
-  (Bash is off) and keeps the plan, in factory-bot's format, in a file in the
-  project's data directory rather than the working tree. `tab` moves to the
-  plan, where `c` writes a comment right under the highlighted part (a
-  heading, paragraph, list item or code block); `enter` saves it and
-  `shift+enter`/`ctrl+j` adds a line. `shift+↑/↓` (or `K`/`J`) selects a run
-  of parts for one comment, which hangs under the last of them; a selection
-  that touches a comment takes in all of it, and its text, and `esc` clears a
-  selection. A comment on a part Claude has since
-  rewritten is listed after the plan, naming the part it was on, where it can
-  still be edited or deleted. Comments go with the next message, each quoting
-  the markdown it is on. `ctrl+s` sends the plan to the local daemon as `chunk
-  factory build <plan file>` would; a plan not sent is kept, and its path
-  printed. It checks what `factory build` checks before it opens. The same
-  screen opens from `chunk watch` with `p`.
+- **`factory plan` makes a plan with a factory planning session, then sends
+  it to the factory.** It opens a two-pane screen: a chat on the left and the
+  plan on the right, rendered as markdown. The first message creates the plan
+  in factory's V3 API and starts one long-lived `claude -p` session with
+  factory's f plugin, which claims the plan and plans it through the factory
+  daemon's tasks, writing it with `plan_set`. The screen polls the plan's
+  text, state and comments every 5s; the plan's state is in the pane's
+  title. Messages go to the session at once, even while it works, and a
+  reply to a factory task rather than to a message is marked as one. It
+  needs factory, the f plugin, and the factory daemon running with
+  `FACTORY_PLAN_STORE=circleci` as the CircleCI user chunk is signed in as;
+  it checks the daemon before it opens, and says in the chat if the session
+  could not claim the plan, as factory's API reports the claim. A session
+  that ends is resumed by the next message, and told to claim the plan again,
+  as is one factory says no longer holds it. Closing the screen, or sending
+  the plan from `chunk watch`, stops the session (SIGINT), which frees its
+  claim.
+
+  `tab` moves to the plan, where `c` writes a comment right under the
+  highlighted part (a heading, paragraph, list item or code block); `enter`
+  queues it and `shift+enter`/`ctrl+j` adds a line. `shift+↑/↓` (or `K`/`J`)
+  selects a run of parts for one comment, which hangs under the last of them;
+  a selection that touches a comment takes in all of it, and its text, and
+  `esc` clears a selection. Sending (`enter` in the chat, or `s` in the plan,
+  which leaves a half-written message in the chat) saves the queued comments
+  to factory and,
+  from a Human state, moves the plan to its Agent state, so the daemon has
+  the session address them; they never go in a chat message. While the plan
+  waits in a Human state, a message gets an answer but only comments change
+  the plan. While comments are saved they cannot be changed. A saved comment is edited at once with `c`, resolved with `r` and
+  deleted with `d` (after a `y`); resolved ones are listed last. A comment on
+  a part since rewritten is listed after the plan, naming the part it was on.
+  `ctrl+s` sends the plan's text, as factory has it, to the local daemon as
+  `chunk factory build` would, once factory's review of the plan has passed
+  and moved it to Planning - Human; until then the header reads In review. It
+  goes with `factory plan <ID>` as where it came from; a plan not sent stays in factory, and its ID is printed. It checks
+  what `factory build` checks before it opens. The same screen opens from
+  `chunk watch` with `p`.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans
   three parts, prints the plan, and leaves out each part already done, so a
   rerun finishes a setup that stopped partway; with nothing left to do it fails
@@ -771,10 +791,11 @@ chunk
   why it could not be sent, is shown in the footer. Closing the dashboard
   stops a draft still being made. `p` opens the `chunk factory plan` screen
   in the same project, to plan the change with Claude before the factory
-  builds it. `esc` (or `ctrl+c` while Claude works) goes back to the runs with
-  the plan kept, and Claude carrying on; `p` opens it again as it was. A sent
-  plan's run is selected once a poll lists it, and a plan not sent when the
-  dashboard closes is kept, and its path printed. `n` and `p` are not offered
+  builds it. `esc` or `ctrl+c` goes back to the runs with the plan kept, and
+  its session carrying on; `p` opens it again as it was. A sent plan's run is
+  selected once a poll lists it, and a plan not sent when the dashboard closes
+  stays in factory, and its ID is printed. Closing the dashboard stops the
+  planning session. `n` and `p` are not offered
   against a remote daemon, since a factory run works from files on this
   machine. A selected
   run's pane reads top to bottom: the prompt, a status line that says what the run is doing
