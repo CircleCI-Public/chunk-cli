@@ -373,6 +373,10 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if run != nil {
 			return m.toggleRunRow(run)
 		}
+	case key.Matches(msg, k.ViewPlan):
+		if run != nil {
+			return m.openPlanText(run.s.Factory.Prompt), nil
+		}
 	case key.Matches(msg, k.Rounds):
 		if run != nil {
 			m = m.toggleCapNote(run.s)
