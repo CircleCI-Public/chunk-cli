@@ -645,9 +645,9 @@ func (m Model) renderRunList(st watchStyles) []string {
 func (m Model) searchRow(st watchStyles) string {
 	switch {
 	case m.searching:
-		return st.teal("⌕ ") + truncate(m.query, leftPaneWidth-4) + st.teal("▏")
+		return st.brand("⌕ ") + truncate(m.query, leftPaneWidth-4) + st.brand("▏")
 	case m.query != "":
-		return st.teal("⌕ ") + st.muted(truncate(m.query, leftPaneWidth-14)) + "  " + st.vdim("esc clear")
+		return st.brand("⌕ ") + st.muted(truncate(m.query, leftPaneWidth-14)) + "  " + st.vdim("esc clear")
 	}
 	return st.vdim("⌕ search runs") + "  " + st.vdim("/")
 }

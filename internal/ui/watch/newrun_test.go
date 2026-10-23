@@ -101,8 +101,8 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 	assert.Assert(t, !strings.Contains(out, "type the change you want"), "the placeholder goes once something is typed:\n%s", out)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	assert.Equal(t, strings.TrimSpace(lines[len(lines)-1]), "enter go to step 2  ·  esc cancel", "the keys are the bottom line:\n%s", out)
-	assert.Assert(t, strings.Contains(m.render(), m.styles().teal(stepsMap(1))), "the map of steps is in the accent colour")
-	assert.Assert(t, strings.Contains(m.render(), m.styles().Teal.Bold(true).Render("enter")), "the step's keys are bold in the accent colour")
+	assert.Assert(t, strings.Contains(m.render(), m.styles().brand(stepsMap(1))), "the map of steps is in the accent colour")
+	assert.Assert(t, strings.Contains(m.render(), m.styles().Brand.Bold(true).Render("enter")), "the step's keys are bold in the accent colour")
 	// The prompt is a field across the footer, so where to type stands out.
 	for _, l := range lines {
 		if strings.Contains(l, "› ▏") {
@@ -505,11 +505,11 @@ func TestTabMovesTheFocusBetweenSections(t *testing.T) {
 	m := readyDraft(t)
 	assert.Equal(t, m.draftFocus, sectionPlan)
 	st := m.styles()
-	assert.Assert(t, strings.Contains(m.render(), st.Teal.Bold(true).Render("▾ Plan")), "the focused header is highlighted")
+	assert.Assert(t, strings.Contains(m.render(), st.Brand.Bold(true).Render("▾ Plan")), "the focused header is highlighted")
 
 	m, _ = press(m, tab)
 	assert.Equal(t, m.draftFocus, sectionChanges)
-	assert.Assert(t, strings.Contains(m.render(), st.Teal.Bold(true).Render("▸ Changes · 1 file, +7 −2")))
+	assert.Assert(t, strings.Contains(m.render(), st.Brand.Bold(true).Render("▸ Changes · 1 file, +7 −2")))
 	m, _ = press(m, ' ')
 	assert.Assert(t, strings.Contains(view(m), "▾ Changes"), view(m))
 	assert.Assert(t, strings.Contains(view(m), "+line 00"), view(m))

@@ -384,7 +384,7 @@ func (m Model) draftFooter(st watchStyles, bar string) string {
 	if hint := stepHint(step); hint != "" {
 		banner += "  ·  " + hint
 	}
-	return "  " + st.teal(clip(banner, m.width-2)) + "\n" +
+	return "  " + st.brand(clip(banner, m.width-2)) + "\n" +
 		"  " + last + "\n" +
 		"  " + bar + "\n"
 }
@@ -452,7 +452,7 @@ func (m Model) handingOff() bool {
 func (m Model) renderSentPane(st watchStyles, maxLines int) []string {
 	head := st.vdim("draft  ") + st.muted(filepath.Base(m.draftRoot))
 	if m.draftTook > 0 {
-		head += st.vdim(" · ") + st.teal("drafted in "+m.draftTook.Round(time.Second).String())
+		head += st.vdim(" · ") + st.brand("drafted in "+m.draftTook.Round(time.Second).String())
 	}
 	status := []string{
 		st.running("→ Sending the draft and your prompt to the factory…"),
@@ -512,7 +512,7 @@ func (m Model) renderDraftPane(st watchStyles, maxLines int) []string {
 			log = log[len(log)-max(room, 0):]
 		}
 		lines := make([]string, 0, 2+len(log))
-		lines = append(lines, st.vdim("draft  ")+st.muted("Claude is drafting in "+project+"… ")+st.teal(clock(time.Since(m.draftStarted))), "")
+		lines = append(lines, st.vdim("draft  ")+st.muted("Claude is drafting in "+project+"… ")+st.brand(clock(time.Since(m.draftStarted))), "")
 		for _, a := range log {
 			lines = append(lines, st.muted("  "+a))
 		}
@@ -520,7 +520,7 @@ func (m Model) renderDraftPane(st watchStyles, maxLines int) []string {
 	}
 	head := st.vdim("draft  ") + st.muted(project)
 	if m.draftTook > 0 {
-		head += st.vdim(" · ") + st.teal("drafted in "+m.draftTook.Round(time.Second).String())
+		head += st.vdim(" · ") + st.brand("drafted in "+m.draftTook.Round(time.Second).String())
 	}
 	body := m.draftBody(st, width)
 	room := max(maxLines-draftPaneTop, 1)
@@ -624,7 +624,7 @@ func statSummary(stat string) string {
 func (m Model) sectionHeader(st watchStyles, sec draftSection, name, folded string) string {
 	text := foldHeader(m.draftSectionOpen(sec), name, folded)
 	if m.draftFocus == sec {
-		return st.Teal.Bold(true).Render(text)
+		return st.Brand.Bold(true).Render(text)
 	}
 	return st.muted(text)
 }
@@ -672,7 +672,7 @@ func (m Model) scrollDraft(delta int) Model {
 // for the new run, saying what happens next, rather than the last run still
 // on show behind the prompt.
 func (m Model) renderNewRunPane(st watchStyles) []string {
-	key := st.Teal.Bold(true).Render
+	key := st.Brand.Bold(true).Render
 	return []string{
 		st.vdim("new run  ") + st.muted(filepath.Base(m.startRoot())),
 		"",

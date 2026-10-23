@@ -94,7 +94,7 @@ func (m Model) inline(s string) string {
 	return inlineRe.ReplaceAllStringFunc(s, func(t string) string {
 		switch {
 		case t == "[USER]":
-			return m.style(m.teal()).Bold(true).Render(t)
+			return m.style(m.brand()).Bold(true).Render(t)
 		case t == "[AGENT]":
 			return m.style(m.purple()).Bold(true).Render(t)
 		case strings.HasPrefix(t, "`"):
@@ -103,7 +103,7 @@ func (m Model) inline(s string) string {
 			return lipgloss.NewStyle().Bold(true).Render(strings.Trim(t, "*"))
 		}
 		if l := linkRe.FindStringSubmatch(t); l != nil {
-			return lipgloss.NewStyle().Underline(true).Foreground(m.teal()).Render(l[1])
+			return lipgloss.NewStyle().Underline(true).Foreground(m.brand()).Render(l[1])
 		}
 		return t
 	})
