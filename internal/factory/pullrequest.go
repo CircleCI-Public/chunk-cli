@@ -52,17 +52,12 @@ func RemoteHasBranch(ctx context.Context, dir, remote, name string) (bool, error
 	return false, fmt.Errorf("look for %s on %s: %w: %s", name, remote, err, strings.TrimSpace(string(out)))
 }
 
-// PullRequestTitle is the title a run's pull request gets: the prompt's first
-// line, cut between words to what a listing shows. A prompt with no words in
-// it falls back to naming the run.
+// PullRequestTitle is the title a run's pull request gets: the run's subject (a
+// plan's Outcome, or the prompt's first line), cut between words to what a
+// listing shows. A prompt with no words in it falls back to naming the run.
 func PullRequestTitle(prompt, runID string) string {
-	for _, line := range strings.Split(prompt, "\n") {
-		// A prompt written as a markdown document leads with a heading mark.
-		line = strings.Join(strings.Fields(strings.TrimLeft(strings.TrimSpace(line), "# ")), " ")
-		if line == "" {
-			continue
-		}
-		return cutWords(line, maxPRTitleRunes)
+	if s := subject(prompt); s != "" {
+		return cutWords(s, maxPRTitleRunes)
 	}
 	return "chunk factory run " + runID
 }

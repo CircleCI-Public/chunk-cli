@@ -73,9 +73,9 @@ func (c *Continuation) request() string {
 // commitMessage is the continued run's commit message: the original request's
 // subject, the guidance if there was any, and which run it continued.
 func (c *Continuation) commitMessage(runID string, o Outcome) string {
-	subject, _, _ := strings.Cut(strings.TrimSpace(c.From.Prompt), "\n")
+	subj, _ := commitParts(c.From.Prompt)
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", subject)
+	fmt.Fprintf(&b, "%s\n\n", subj)
 	if g := strings.TrimSpace(c.Guidance); g != "" {
 		fmt.Fprintf(&b, "%s\n\n", g)
 	}
