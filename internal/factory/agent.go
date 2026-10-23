@@ -1,0 +1,446 @@
+package factory
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+)
+
+// ErrNoFactory is returned when factory is not installed, so there is nothing
+// for a planning session's Agent to hand a plan to.
+var ErrNoFactory = errors.New("factory is not installed")
+
+// ErrNoFactoryPlugin is returned when claude's f plugin, which gives it the
+// factory MCP tools and factory.md's instructions, is not loaded.
+var ErrNoFactoryPlugin = errors.New("factory's f plugin is not loaded")
+
+// ErrFactoryMCP is returned when factory's MCP server is not connected, so
+// claude has no factory tools to plan with.
+var ErrFactoryMCP = errors.New("factory's MCP server is not connected")
+
+// factoryBinary is the factory command an Agent checks is installed.
+const factoryBinary = "factory"
+
+// Package variables so tests can shorten them.
+var (
+	agentInitTimeout  = 60 * time.Second
+	stopInterruptWait = 10 * time.Second
+	stopTerminateWait = 5 * time.Second
+)
+
+const (
+	// factoryMCP is the name claude's init event reports the factory MCP
+	// server under.
+	factoryMCP = "plugin:f:factory"
+	// agentTools is what an Agent allows claude to use without asking: the
+	// read-only tools, the one Bash command it needs to keep a plan's tasks
+	// flowing, and every factory MCP tool.
+	agentTools = "Read,Grep,Glob,Bash(factory daemon wait),mcp__plugin_f_factory"
+)
+
+// AgentConfig starts a long-lived factory planning session.
+type AgentConfig struct {
+	// Dir is the repository claude plans in.
+	Dir string
+	// Model is the model to plan with, or "" for the developer's default.
+	Model string
+	// PluginDir loads the f plugin from this directory instead of the
+	// installed one, or "" for the installed one.
+	PluginDir string
+	// SessionID is the session to start or, with Resume, to reopen.
+	SessionID string
+	// Resume reopens SessionID with --resume rather than starting it with
+	// --session-id.
+	Resume bool
+}
+
+// AgentTurn is one reply claude gave, outside of what it said while working.
+type AgentTurn struct {
+	Reply   string
+	CostUSD float64
+	// ByTask is true when nothing was sent since the last reply and a
+	// background task ended since then: claude started this turn on its own,
+	// on a factory task's notification, rather than on a developer's message.
+	ByTask bool
+}
+
+// AgentEvent is one thing an Agent reports. Exactly one field is set.
+type AgentEvent struct {
+	// Activity is a tool call claude made, or a piece of text it wrote.
+	Activity *claudecode.Activity
+	// TurnEnded is claude's reply ending a turn.
+	TurnEnded *AgentTurn
+	// Problem is something wrong with the session: claude exited without
+	// being stopped.
+	Problem error
+}
+
+// Agent is a long-lived `claude -p --input-format stream-json` session with
+// factory's f plugin: to factory, a session like any other, claiming plans
+// and running `factory daemon wait` as factory.md tells it to. Agent sends it
+// the developer's messages and reports what it does.
+//
+// Events must be drained until it closes. Events queue rather than block
+// claude, so a slow consumer never stalls the session, a Send or a Stop.
+type Agent struct {
+	sessionID string
+
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	events chan AgentEvent
+	wake   chan struct{} // wakes forward when queue grows or closed is set
+	exited chan struct{} // closed after cmd.Wait returns and the reader is flushed
+	stderr bytes.Buffer
+
+	mu sync.Mutex
+	// All fields below are guarded by mu.
+	queue                      []AgentEvent // reported, not yet on events
+	closed, stopping           bool
+	sentSinceResult, taskEnded bool
+	initCh                     chan claudecode.Init // first init only
+
+	stopOnce sync.Once
+	stopErr  error
+}
+
+// agentArgs is the claude command line StartAgent runs, after the program
+// name.
+func agentArgs(cfg AgentConfig) []string {
+	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"}
+	if cfg.Resume {
+		args = append(args, "--resume", cfg.SessionID)
+	} else {
+		args = append(args, "--session-id", cfg.SessionID)
+	}
+	args = append(args, "--permission-mode", "acceptEdits", "--allowedTools", agentTools)
+	if cfg.PluginDir != "" {
+		args = append(args, "--plugin-dir", cfg.PluginDir)
+	}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	return args
+}
+
+// StartAgent starts a long-lived factory planning session in cfg.Dir with
+// message as its first turn, and waits for claude's init event, checking
+// factory's f plugin is loaded and its MCP server connected before returning.
+// claude reports init only once it has a message to answer, so a session
+// can't start without one.
+func StartAgent(ctx context.Context, cfg AgentConfig, message string) (*Agent, error) {
+	if strings.TrimSpace(message) == "" {
+		return nil, errors.New("a session needs a first message")
+	}
+	if _, err := exec.LookPath(claudeBinary); err != nil {
+		return nil, ErrNoClaude
+	}
+	if _, err := exec.LookPath(factoryBinary); err != nil {
+		return nil, ErrNoFactory
+	}
+
+	a := &Agent{
+		sessionID: cfg.SessionID,
+		events:    make(chan AgentEvent),
+		wake:      make(chan struct{}, 1),
+		exited:    make(chan struct{}),
+		initCh:    make(chan claudecode.Init, 1),
+	}
+	// Not CommandContext: cancelling ctx runs Stop, which signals claude
+	// itself, so exec must not send a signal of its own as well.
+	cmd := exec.Command(claudeBinary, agentArgs(cfg)...)
+	cmd.Dir = cfg.Dir
+	cmd.Env = append(os.Environ(), config.EnvChunkHooksDisabled+"=1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("open claude's stdin: %w", err)
+	}
+	a.stdin = stdin
+	events := claudecode.NewEvents(a.on)
+	cmd.Stdout = eventsWriter{events}
+	cmd.Stderr = &limitWriter{buf: &a.stderr}
+	agentProcAttr(cmd)
+	// A background command claude started can outlive it holding stdout
+	// open; don't let that keep Wait from returning.
+	cmd.WaitDelay = 5 * time.Second
+	a.cmd = cmd
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start claude: %w", err)
+	}
+	go a.forward()
+
+	go func() {
+		runErr := cmd.Wait()
+		events.Flush()
+		a.mu.Lock()
+		if !a.stopping {
+			a.report(AgentEvent{Problem: fmt.Errorf("claude exited (code %d): %s", exitCodeOf(runErr), tailString(&a.stderr))})
+		}
+		a.closed = true
+		a.signal()
+		a.mu.Unlock()
+		close(a.exited)
+	}()
+
+	context.AfterFunc(ctx, func() { _ = a.Stop() })
+
+	// fail stops the session StartAgent will not return, and drains its
+	// events so forward can finish.
+	fail := func(err error) (*Agent, error) {
+		go func() {
+			for range a.events {
+			}
+		}()
+		_ = a.Stop()
+		return nil, err
+	}
+
+	if err := a.Send(message); err != nil {
+		if waitForExit(a.exited, time.Second) {
+			return fail(fmt.Errorf("claude exited before it started: %s", tailString(&a.stderr)))
+		}
+		return fail(err)
+	}
+
+	select {
+	case init := <-a.initCh:
+		if err := checkFactoryInit(init); err != nil {
+			return fail(err)
+		}
+	case <-ctx.Done():
+		return fail(ctx.Err())
+	case <-a.exited:
+		return fail(fmt.Errorf("claude exited before it started: %s", tailString(&a.stderr)))
+	case <-time.After(agentInitTimeout):
+		return fail(fmt.Errorf("claude did not report its init within %s", agentInitTimeout))
+	}
+
+	return a, nil
+}
+
+// checkFactoryInit reports ErrNoFactoryPlugin or ErrFactoryMCP when init does
+// not show a working factory setup. A connected MCP server does not mean the
+// daemon is running: factory's MCP server connects either way, and its tools
+// say when the daemon isn't.
+func checkFactoryInit(init claudecode.Init) error {
+	hasPlugin := false
+	for _, p := range init.Plugins {
+		if p == "f" {
+			hasPlugin = true
+			break
+		}
+	}
+	if !hasPlugin {
+		return fmt.Errorf("%w: install factory's f plugin, or set PluginDir", ErrNoFactoryPlugin)
+	}
+	if init.MCPServers[factoryMCP] != "connected" {
+		return fmt.Errorf("%w: factory must be on PATH", ErrFactoryMCP)
+	}
+	return nil
+}
+
+// Send writes message to claude as a new user turn.
+func (a *Agent) Send(message string) error {
+	b, err := json.Marshal(stdinMessage{Type: "user", Message: stdinUserMessage{Role: "user", Content: message}})
+	if err != nil {
+		return fmt.Errorf("encode message for claude: %w", err)
+	}
+	b = append(b, '\n')
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, err := a.stdin.Write(b); err != nil {
+		return fmt.Errorf("send to claude: %w", err)
+	}
+	a.sentSinceResult = true
+	return nil
+}
+
+// stdinMessage is one line of stream-json input: a user message. It is
+// marshaled, never built by joining strings, so nothing in message can break
+// out of it.
+type stdinMessage struct {
+	Type    string           `json:"type"`
+	Message stdinUserMessage `json:"message"`
+}
+
+type stdinUserMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// Events is every Activity, TurnEnded and Problem an Agent reports, in order.
+// It is closed once, after the session ends.
+func (a *Agent) Events() <-chan AgentEvent { return a.events }
+
+// Claims is the plans the factory daemon holds a claim on for this session,
+// by address, as `factory daemon claim list` reports them.
+func (a *Agent) Claims(ctx context.Context) ([]string, error) {
+	out, err := exec.CommandContext(ctx, factoryBinary, "daemon", "claim", "list").Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return nil, fmt.Errorf("list factory claims: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, fmt.Errorf("list factory claims: %w", err)
+	}
+	var all []struct {
+		Plan    string `json:"plan"`
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(out, &all); err != nil {
+		return nil, fmt.Errorf("read factory claims: %w", err)
+	}
+	var plans []string
+	for _, c := range all {
+		if c.Session == a.sessionID {
+			plans = append(plans, c.Plan)
+		}
+	}
+	return plans, nil
+}
+
+// Stop ends the session: SIGINT, then stdin closed, then SIGTERM, then SIGKILL
+// for claude and everything it started, if claude has not exited. It is safe
+// to call more than once and from multiple goroutines; every call returns the
+// same result.
+func (a *Agent) Stop() error {
+	a.stopOnce.Do(func() {
+		a.mu.Lock()
+		a.stopping = true
+		a.mu.Unlock()
+		a.stopErr = a.stop()
+	})
+	return a.stopErr
+}
+
+func (a *Agent) stop() error {
+	if a.cmd.Process == nil {
+		return nil
+	}
+	_ = interrupt(a.cmd.Process)
+	_ = a.stdin.Close()
+	if waitForExit(a.exited, stopInterruptWait) {
+		return nil
+	}
+	_ = terminate(a.cmd.Process)
+	if waitForExit(a.exited, stopTerminateWait) {
+		return nil
+	}
+	// Kill the whole process group: a SIGKILLed claude can't stop its
+	// background factory daemon wait, which would then hold the session's
+	// wait and make the next one fail with a 409.
+	_ = killGroup(a.cmd.Process)
+	<-a.exited
+	return errors.New("claude did not stop after SIGINT and SIGTERM; killed it")
+}
+
+func waitForExit(exited <-chan struct{}, d time.Duration) bool {
+	select {
+	case <-exited:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// report queues ev for Events unless the session has ended. It never blocks,
+// so holding mu across it is safe. The caller must hold mu.
+func (a *Agent) report(ev AgentEvent) {
+	if a.closed {
+		return
+	}
+	a.queue = append(a.queue, ev)
+	a.signal()
+}
+
+// signal wakes forward. The caller must hold mu.
+func (a *Agent) signal() {
+	select {
+	case a.wake <- struct{}{}:
+	default:
+	}
+}
+
+// forward moves queued events onto the events channel in order, without
+// holding mu while the consumer is slow, and closes the channel once the
+// session has ended and the queue is empty.
+func (a *Agent) forward() {
+	for {
+		a.mu.Lock()
+		for len(a.queue) == 0 && !a.closed {
+			a.mu.Unlock()
+			<-a.wake
+			a.mu.Lock()
+		}
+		if len(a.queue) == 0 {
+			a.mu.Unlock()
+			close(a.events)
+			return
+		}
+		ev := a.queue[0]
+		a.queue = a.queue[1:]
+		a.mu.Unlock()
+		a.events <- ev
+	}
+}
+
+// on turns claude's events into AgentEvents. It is called serially on the
+// goroutine that reads claude's stdout; Send also touches this state, so it
+// runs under mu.
+func (a *Agent) on(e claudecode.Event) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch e.Kind {
+	case claudecode.KindInit:
+		select {
+		case a.initCh <- e.Init:
+		default:
+		}
+	case claudecode.KindActivity:
+		act := e.Activity
+		a.report(AgentEvent{Activity: &act})
+	case claudecode.KindTaskEnded:
+		a.taskEnded = true
+	case claudecode.KindTurnEnded:
+		byTask := !a.sentSinceResult && a.taskEnded
+		a.sentSinceResult, a.taskEnded = false, false
+		a.report(AgentEvent{TurnEnded: &AgentTurn{Reply: e.Result.Result, CostUSD: e.Result.CostUSD, ByTask: byTask}})
+	}
+}
+
+// eventsWriter feeds claude's stdout to an Events parser as it arrives.
+type eventsWriter struct{ events *claudecode.Events }
+
+func (w eventsWriter) Write(p []byte) (int, error) {
+	w.events.Write(p)
+	return len(p), nil
+}
+
+// exitCodeOf is cmd.Wait's error as an exit code, or -1 when err does not
+// carry one (claude was killed by a signal, or never ran).
+func exitCodeOf(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
+}
+
+// tailString is the end of buf, trimmed, for an error message.
+func tailString(buf *bytes.Buffer) string {
+	return strings.TrimSpace(buf.String())
+}
