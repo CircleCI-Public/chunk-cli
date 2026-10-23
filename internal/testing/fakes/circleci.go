@@ -142,6 +142,12 @@ type FakeCircleCI struct {
 	GetCommandStatusCode      int // override for GET /sidecar/commands/:id
 	CreateOrgStatusCode       int // override for POST /api/v2/organization
 
+	// Factory plans and their comments; see factory.go.
+	factoryPlans      map[string]*factoryPlan
+	factoryCounter    int
+	FactoryStatusCode int // override for every /api/v3/factory route
+	FactoryPageSize   int // comments per list page; 0 means 50
+
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.
 	ExtraHeaders http.Header
@@ -205,6 +211,8 @@ func NewFakeCircleCI() *FakeCircleCI {
 
 	// Org endpoint
 	r.POST("/api/v2/organization", f.handleCreateOrg)
+
+	f.registerFactory(r)
 
 	return f
 }
