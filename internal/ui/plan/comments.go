@@ -267,7 +267,7 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, m.commentInput.Focus()
 	case key.Matches(msg, k.SendComments):
 		if m.busy {
-			m.status = warn("Claude is still answering; your comments are kept until it finishes.")
+			m.status = warn("chunk is still answering; your comments are kept until it finishes.")
 			return m, nil
 		}
 		// What is typed in the chat stays there: it is out of sight from
