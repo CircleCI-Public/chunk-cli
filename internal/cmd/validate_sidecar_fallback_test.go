@@ -181,3 +181,22 @@ func TestCannotCreateSidecarNamesOrgSource(t *testing.T) {
 			"only authorization failures are this function's business")
 	})
 }
+
+func TestSidecarSizeRejected(t *testing.T) {
+	rejected := &circleci.StatusError{StatusCode: 400, ServerMessage: "image is not available at this size"}
+
+	t.Run("a size the image is not built at", func(t *testing.T) {
+		err := sidecarSizeRejected("could not create", "2xlarge", "cimg-go:1.27-claude", rejected)
+		var ue *userError
+		assert.Assert(t, errors.As(err, &ue))
+		assert.Equal(t, ue.msg, "could not create")
+		assert.Check(t, strings.Contains(ue.detail, "2xlarge") && strings.Contains(ue.detail, "not available at this size"), ue.detail)
+	})
+	t.Run("no size asked for is left to the usual message", func(t *testing.T) {
+		assert.Assert(t, sidecarSizeRejected("m", "", "img", rejected) == nil)
+	})
+	t.Run("other failures are left alone", func(t *testing.T) {
+		assert.Assert(t, sidecarSizeRejected("m", "2xlarge", "img", &circleci.StatusError{StatusCode: 500}) == nil)
+		assert.Assert(t, sidecarSizeRejected("m", "2xlarge", "img", io.EOF) == nil)
+	})
+}

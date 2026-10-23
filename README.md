@@ -137,6 +137,8 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 
 **Note:** `snapshot create` consumes the source sidecar — it is deleted once the snapshot is captured and cannot be reused. To resume work, launch a new sidecar from the snapshot with `chunk sidecar create --image <snapshot-id>`. Use `chunk sidecar snapshot list` to look up snapshot IDs for your org.
 
+**Larger sidecars.** `--size small|medium|large|xlarge|2xlarge` picks the sidecar's size (default `large`). It works with a system image such as `cimg-go:1.27-claude`, once the image has been built at that size. A snapshot keeps the size of the sidecar it was taken from, so make the sidecar at the size you want, set it up, then snapshot it: `chunk sidecar create --image cimg-go:1.27-claude --size 2xlarge`, then `chunk sidecar snapshot create --name <name>`. `--size` is refused for a snapshot, and with it chunk does not fall back to the project's recorded or auto-picked snapshot.
+
 ## Factory
 
 `chunk factory` has an implementer agent change your code on a sidecar, then reviews the result with each prompt in `.chunk/reviews/` and runs your validation commands, feeding failures back until every check passes or attempts run out. When they all pass, it pushes the run's branch and opens a pull request on GitHub, ready for review (`--no-open-pr` leaves the branch alone). It works in a git worktree of its own, so your checkout is never touched, and you can follow a run in `chunk watch`.

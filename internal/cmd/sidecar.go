@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 
 	petname "github.com/dustinkirkland/golang-petname"
 	"github.com/spf13/cobra"
@@ -222,13 +223,21 @@ func newSidecarListCmd() *cobra.Command {
 }
 
 func newSidecarCreateCmd() *cobra.Command {
-	var orgID, name, image string
+	var orgID, name, image, size string
 
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a sidecar",
-		Long:  "Create a sidecar.",
+		Long: "Create a sidecar.\n\n" +
+			"--size makes it larger or smaller than the default (large) and needs a system image, such as\n" +
+			"cimg-go:1.27-claude. A snapshot keeps the size of the sidecar it was taken from, so a size\n" +
+			"cannot be chosen with one: create the sidecar at the size, then snapshot it.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if size != "" && !sidecar.ValidSize(size) {
+				return newUserError(fmt.Sprintf("Unknown size %q.", size)).
+					withSuggestion("Use one of: " + strings.Join(sidecar.Sizes, ", ") + ".").
+					withoutDetail()
+			}
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -252,9 +261,13 @@ func newSidecarCreateCmd() *cobra.Command {
 			// chose is a mistake worth explaining, while a rejected one chunk
 			// chose is not something the caller can act on.
 			var imageSource string
-			if image != "" {
+			// A recorded or auto-picked image is an org snapshot, which has no
+			// size to choose, so with --size only --image names the image and
+			// otherwise the API makes its default one at that size.
+			switch {
+			case image != "":
 				imageSource = "--image"
-			} else {
+			case size == "":
 				cfg, _ := config.LoadProjectConfig(cwd)
 				if cfg.HasSidecarImage() {
 					image = cfg.Validation.SidecarImage
@@ -264,12 +277,15 @@ func newSidecarCreateCmd() *cobra.Command {
 			// Still unset: fall back to whichever of the org's snapshots fits
 			// this repo, so an unconfigured project gets a prepared environment
 			// instead of a bare image.
-			if image == "" {
+			if image == "" && size == "" {
 				image = autoSelectSnapshotImage(cmd.Context(), client, resolvedOrgID, cwd, newStatusFunc(io), io)
 			}
-			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, image)
+			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, image, size)
 			if err != nil {
 				if err := notAuthorized("create sidecars", rc.CircleCITokenSource, err); err != nil {
+					return err
+				}
+				if err := sidecarSizeRejected(msgCouldNotCreateSidecar, size, image, err); err != nil {
 					return err
 				}
 				if err := sidecarCreateRejected(msgCouldNotCreateSidecar, resolvedOrgID, orgSource(orgID, cwd), image, imageSource, err); err != nil {
@@ -293,7 +309,8 @@ func newSidecarCreateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (auto-generated if not provided)")
-	cmd.Flags().StringVar(&image, "image", "", "Snapshot ID (from 'chunk sidecar snapshot create')")
+	cmd.Flags().StringVar(&image, "image", "", "Snapshot ID (from 'chunk sidecar snapshot create'), or a system image name")
+	cmd.Flags().StringVar(&size, "size", "", "Size: "+strings.Join(sidecar.Sizes, ", ")+" (default large; system images only)")
 
 	return cmd
 }
@@ -1307,7 +1324,7 @@ func sidecarSetupResolveSidecar(
 		return "", "", err
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating sidecar %q...", name))
-	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, "")
+	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, "", "")
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", tokenSource, err); authErr != nil {
 			return "", "", authErr

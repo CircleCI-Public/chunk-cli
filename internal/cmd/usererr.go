@@ -130,6 +130,37 @@ func sidecarCreateRejected(msg, orgID, orgSource, image, imageSource string, err
 		wrap(err)
 }
 
+// sidecarSizeRejected phrases a sidecar creation the API refused while a size
+// was asked for, or returns nil when none was or the failure is another kind.
+//
+// A 400 with a size is almost always about the size, not the org: the image
+// has not been built at that size, or it is a snapshot, which has none to
+// choose. The generic rejection would send the developer to check their org.
+func sidecarSizeRejected(msg, size, image string, err error) error {
+	var se *circleci.StatusError
+	if size == "" || !errors.As(err, &se) || se.StatusCode != http.StatusBadRequest {
+		return nil
+	}
+	suggestion := "--size needs a system image (such as cimg-go:1.27-claude) that has been built at that size. " +
+		"A snapshot keeps the size of the sidecar it was taken from: create the sidecar at the size you want, then snapshot it."
+	if image == "" {
+		suggestion = "The default image may not be built at " + size + " yet. Pass a system image with --image."
+	}
+	detail := "Size " + size
+	if image != "" {
+		detail += ", image " + image
+	}
+	if se.ServerMessage != "" {
+		detail += ": " + se.ServerMessage
+	}
+	return newUserError(msg).
+		withCode("sidecar.size_rejected").
+		withDetail(detail + ".").
+		withSuggestion(suggestion).
+		withExitCode(ExitAPIError).
+		wrap(err)
+}
+
 // outdatedSidecarAPI maps an unsupported output format to guidance that points
 // the right way. The API is behind this binary, not ahead of it, so telling
 // someone to upgrade chunk would send them in exactly the wrong direction —

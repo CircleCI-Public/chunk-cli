@@ -5,14 +5,23 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-func Create(ctx context.Context, client *circleci.Client, orgID, name, image string) (*circleci.Sidecar, error) {
-	return client.CreateSidecar(ctx, orgID, name, image)
+// Sizes are the sizes the sidecar API creates a sidecar at, smallest first. A
+// sidecar made without one is "large".
+var Sizes = []string{"small", "medium", "large", "xlarge", "2xlarge"}
+
+// ValidSize reports whether size is one of Sizes.
+func ValidSize(size string) bool { return slices.Contains(Sizes, size) }
+
+// Create makes a sidecar. size is one of Sizes, or "" for the API's default.
+func Create(ctx context.Context, client *circleci.Client, orgID, name, image, size string) (*circleci.Sidecar, error) {
+	return client.CreateSidecar(ctx, orgID, name, image, size)
 }
 
 func AddSSHKey(ctx context.Context, client *circleci.Client, sidecarID, publicKey, publicKeyFile string) (*circleci.AddSSHKeyResponse, error) {

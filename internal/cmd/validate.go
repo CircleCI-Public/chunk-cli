@@ -1714,7 +1714,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		image = autoSelectSnapshotImage(ctx, client, resolvedOrgID, workDir, newStatusFunc(streams), streams)
 	}
 	sandboxName := sidecarAutoName(ctx, workDir)
-	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
+	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image, "")
 	if err != nil {
 		if authErr := cannotCreateSidecar(resolvedOrgID, orgSource(orgID, workDir), err); authErr != nil {
 			return false, image, authErr

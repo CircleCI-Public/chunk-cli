@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,6 +26,8 @@ const planTimeout = 15 * time.Minute
 const planSystemPrompt = `You are planning a change with a developer, in their repository. You do not make the change: the plan you write is handed to an implementer agent that does.
 
 Keep the plan in the file %s, and only that file: create it on your first turn, and edit it as the conversation goes. Never edit any other file. Read the code as much as you need to make the plan specific.
+
+You may run read-only git and gh commands to look at other branches and pull requests, for example git fetch origin, git show origin/<branch>:<path>, git diff main...origin/<branch> and gh pr diff <number>. Never change the working tree: do not check out, switch, reset, stash, commit or push, and do not comment on pull requests.
 
 The plan has these sections, as markdown headings:
 
@@ -44,6 +47,39 @@ Walk one concrete case end to end through the finished change, showing every new
 Discrete units of work, each naming the files it changes with load-bearing code snippets, its tests alongside, and the commands that verify it.
 
 Each reply goes to the developer in a chat beside the plan. Keep it short: say what you changed in the plan and ask about anything you need answered. Do not repeat the plan in the reply.`
+
+// planTools are the shell commands a planning turn may run. They read history
+// and pull requests; none of them changes the working tree, and none runs a
+// program of the developer's. A rule ending in :* allows any arguments, so it
+// is only given to a command whose every flag is read-only (planDisallowed
+// closes the few that are not). A rule without it is that command exactly:
+// fetch updates only the remote-tracking branches, which is all planning needs
+// to read a collaborator's branch, and the forms of branch are the listing ones.
+var planTools = []string{
+	"Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git status:*)",
+	"Bash(git rev-parse:*)", "Bash(git ls-files:*)", "Bash(git ls-tree:*)",
+	"Bash(git fetch origin)",
+	"Bash(git branch)", "Bash(git branch -a)", "Bash(git branch -r)", "Bash(git branch -vv)", "Bash(git branch --show-current)",
+	"Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr list:*)", "Bash(gh pr checks:*)",
+}
+
+// planDisallowed is what planning never does, over and above planTools being
+// all it may run: a deny rule wins over an allow rule wherever it comes from.
+// The first group are the flags that make an otherwise read-only git command
+// write a file or run a program. A * in the middle of a rule matches wherever
+// the flag is in the command, which a :* suffix does not.
+var planDisallowed = append(slices.Clone(disallowedGit),
+	"Bash(git * --output*)", "Bash(git * --upload-pack*)", "Bash(git * --receive-pack*)", "Bash(git * --exec*)",
+	"Bash(git push:*)", "Bash(git merge:*)", "Bash(git pull:*)", "Bash(git clean:*)", "Bash(git restore:*)",
+	"Bash(gh pr comment:*)", "Bash(gh pr merge:*)", "Bash(gh pr review:*)", "Bash(gh pr close:*)",
+	"Bash(gh pr edit:*)", "Bash(gh pr create:*)", "Bash(gh api:*)",
+)
+
+// planEditRule is the one file planning may write. // makes the path absolute
+// in a permission rule.
+func planEditRule(planPath string) string {
+	return "Edit(//" + strings.TrimPrefix(filepath.ToSlash(planPath), "/") + ")"
+}
 
 // PlanSession is a conversation with Claude Code, on the developer's machine,
 // about a plan kept in a file. Its turns resume one claude session.
@@ -67,11 +103,17 @@ func (s *PlanSession) Turn(ctx context.Context, message string, onActivity func(
 	st := claudecode.NewStream(onActivity)
 	var stderr bytes.Buffer
 	args := append(streamArgs(),
-		"--permission-mode", "acceptEdits",
-		// Claude only reads the code; the plan file is all it writes.
-		flagDisallowedTools, "Bash",
+		// Claude reads the code and other branches; the plan file is all
+		// it writes. Edits are allowed to that file alone rather than by
+		// acceptEdits, which would also let it touch, move and remove files.
+		flagAllowedTools, strings.Join(append(slices.Clone(planTools), planEditRule(s.PlanPath)), ","),
+		flagDisallowedTools, strings.Join(planDisallowed, ","),
+		// Only these rules apply: the project's and the developer's own allow
+		// rules, which `chunk init` adds Bash(chunk:*) to, are not the
+		// planner's to use. Their hooks do not run either.
+		flagSettingSources, "",
 		// The plan is kept outside the repository, where claude would
-		// otherwise ask before writing.
+		// otherwise ask before reading it.
 		"--add-dir", filepath.Dir(s.PlanPath),
 		flagAppendSystemPrompt, fmt.Sprintf(planSystemPrompt, s.PlanPath),
 	)
@@ -83,7 +125,8 @@ func (s *PlanSession) Turn(ctx context.Context, message string, onActivity func(
 	}
 	cmd := exec.CommandContext(ctx, claudeBinary, args...)
 	cmd.Dir = s.Dir
-	cmd.Env = append(os.Environ(), config.EnvChunkHooksDisabled+"=1")
+	// git must not wait for a password the planning turn cannot give.
+	cmd.Env = append(os.Environ(), config.EnvChunkHooksDisabled+"=1", "GIT_TERMINAL_PROMPT=0")
 	cmd.Stdin = strings.NewReader(message)
 	cmd.Stdout = streamWriter{st}
 	cmd.Stderr = &limitWriter{buf: &stderr}

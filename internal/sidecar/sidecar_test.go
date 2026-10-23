@@ -85,7 +85,7 @@ func TestCreate(t *testing.T) {
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()
 
-	sb, err := sidecar.Create(ctx, cl, "org-1", "my-sidecar", "ubuntu:22.04")
+	sb, err := sidecar.Create(ctx, cl, "org-1", "my-sidecar", "ubuntu:22.04", "")
 	assert.NilError(t, err)
 	assert.Equal(t, sb.ID, "sidecar-new-1")
 	assert.Equal(t, sb.Name, "my-sidecar")
@@ -190,4 +190,13 @@ func TestAddSSHKey(t *testing.T) {
 		_, err := sidecar.AddSSHKey(ctx, cl, "sb-1", "", "/nonexistent/key.pub")
 		assert.ErrorContains(t, err, "read public key file")
 	})
+}
+
+func TestValidSize(t *testing.T) {
+	for _, size := range []string{"small", "medium", "large", "xlarge", "2xlarge"} {
+		assert.Check(t, sidecar.ValidSize(size), size)
+	}
+	for _, size := range []string{"", "huge", "2xl", "Large"} {
+		assert.Check(t, !sidecar.ValidSize(size), size)
+	}
 }
