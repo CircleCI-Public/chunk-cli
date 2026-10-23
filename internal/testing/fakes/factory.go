@@ -14,7 +14,16 @@ import (
 // were made, as conductor keeps them.
 type factoryPlan struct {
 	id, title, state, branch, text string
+	createdAt, updatedAt           time.Time
+	claim                          *factoryClaim
 	comments                       []factoryComment
+	// seq orders plans by creation, as created_at and id order conductor's.
+	seq int
+}
+
+type factoryClaim struct {
+	sessionID, worktree string
+	renewedAt           time.Time
 }
 
 type factoryComment struct {
@@ -26,6 +35,7 @@ type factoryComment struct {
 // registerFactory serves the factory plan and comment routes of the V3 API.
 func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.POST("/api/v3/factory/plans", f.handleCreatePlan)
+	r.GET("/api/v3/factory/plans", f.handleListPlans)
 	r.GET("/api/v3/factory/plans/:id", f.handleGetPlan)
 	r.GET("/api/v3/factory/plans/:id/text", f.handleGetPlanText)
 	r.PUT("/api/v3/factory/plans/:id/text", f.handlePutPlanText)
@@ -49,6 +59,10 @@ var factoryMoves = map[string][]string{
 	"Integrating - Agent": {"Integrating - Human"},
 	"Integrating - Human": {"Integrating - Agent", "Done"},
 }
+
+// factoryEnds are the states a plan ends in, which the plan list leaves out
+// (conductor.Ends in circleci/factory).
+var factoryEnds = []string{"Done", "Canceled", "Won't Do", "Duplicate"}
 
 // FactoryPlan is a plan as the fake holds it, for a test to inspect.
 type FactoryPlan struct {
@@ -75,6 +89,17 @@ func (f *FakeCircleCI) SetFactoryPlanState(id, state string) {
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.state = state
+		p.updatedAt = time.Now().UTC()
+	}
+}
+
+// ClaimFactoryPlan has a factory session in worktree claim plan id, as
+// factory's daemon would.
+func (f *FakeCircleCI) ClaimFactoryPlan(id, sessionID, worktree string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.claim = &factoryClaim{sessionID: sessionID, worktree: worktree, renewedAt: time.Now().UTC()}
 	}
 }
 
@@ -100,7 +125,30 @@ func (f *FakeCircleCI) factoryStart(c *gin.Context) bool {
 }
 
 func planEntity(p *factoryPlan) gin.H {
-	return gin.H{"id": p.id, "attributes": gin.H{"title": p.title, "state": p.state, "branch": p.branch}}
+	attrs := planListAttrs(p)
+	attrs["branch"] = p.branch
+	if p.claim != nil {
+		attrs["claim"] = gin.H{
+			"session_id": p.claim.sessionID, "worktree": p.claim.worktree, "renewed_at": p.claim.renewedAt,
+		}
+	}
+	return gin.H{"id": p.id, "attributes": attrs}
+}
+
+// planListAttrs are a plan's attributes as the plan list serves them, which
+// leaves out its branch and claim.
+func planListAttrs(p *factoryPlan) gin.H {
+	open := 0
+	for _, cm := range p.comments {
+		if cm.resolvedAt == nil {
+			open++
+		}
+	}
+	return gin.H{
+		"title": p.title, "state": p.state,
+		"created_at": p.createdAt.Format(time.RFC3339Nano), "updated_at": p.updatedAt.Format(time.RFC3339Nano),
+		"open_comment_count": open,
+	}
 }
 
 func commentEntity(planID string, cm factoryComment) gin.H {
@@ -131,10 +179,12 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 		return
 	}
 	id := uuid.NewString()
+	now := time.Now().UTC()
 	f.mu.Lock()
 	p := &factoryPlan{
 		id: id, title: body.Data.Attributes.Title, state: "Unprioritized",
 		branch: "factory/" + id, text: body.Data.Attributes.Text,
+		createdAt: now, updatedAt: now, seq: len(f.factoryPlans),
 	}
 	if f.factoryPlans == nil {
 		f.factoryPlans = map[string]*factoryPlan{}
@@ -143,6 +193,73 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 	ent := planEntity(p)
 	f.mu.Unlock()
 	c.JSON(http.StatusCreated, gin.H{"data": ent})
+}
+
+// handleListPlans pages through the caller's open plans, oldest first,
+// FactoryPageSize at a time, as conductor does. The fake has one user, so
+// filter[user_id]=me lists every plan and any other user's UUID none.
+func (f *FakeCircleCI) handleListPlans(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	user := c.Query("filter[user_id]")
+	if user == "" {
+		factoryError(c, http.StatusBadRequest, "filter[user_id] is required")
+		return
+	}
+	if user != "me" && uuid.Validate(user) != nil {
+		factoryError(c, http.StatusBadRequest, "filter[user_id] is not a uuid or me")
+		return
+	}
+	after, ok := pageCursor(c)
+	if !ok {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	var open []*factoryPlan
+	if user == "me" {
+		for _, p := range f.factoryPlans {
+			if !slices.Contains(factoryEnds, p.state) {
+				open = append(open, p)
+			}
+		}
+	}
+	slices.SortFunc(open, func(a, b *factoryPlan) int { return a.seq - b.seq })
+	end := min(after+f.pageSize(), len(open))
+	items := []gin.H{}
+	for _, p := range open[min(after, len(open)):end] {
+		items = append(items, gin.H{"id": p.id, "attributes": planListAttrs(p)})
+	}
+	resp := gin.H{"data": items}
+	if end < len(open) {
+		resp["page"] = gin.H{"next": strconv.Itoa(end)}
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// pageCursor returns how many items c's page[cursor] says were already
+// listed, answering 400 for the handler when it is not one of the fake's.
+func pageCursor(c *gin.Context) (int, bool) {
+	v := c.Query("page[cursor]")
+	if v == "" {
+		return 0, true
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		factoryError(c, http.StatusBadRequest, "bad cursor")
+		return 0, false
+	}
+	return n, true
+}
+
+// pageSize is FactoryPageSize, or conductor's 20 when it is 0. f.mu must be
+// held.
+func (f *FakeCircleCI) pageSize() int {
+	if f.FactoryPageSize == 0 {
+		return 20
+	}
+	return f.FactoryPageSize
 }
 
 // pathID returns c's :id, answering 400 for the handler when it is not a
@@ -207,6 +324,7 @@ func (f *FakeCircleCI) handlePutPlanText(c *gin.Context) {
 	defer f.mu.Unlock()
 	if p := f.plan(c); p != nil {
 		p.text = body.Text
+		p.updatedAt = time.Now().UTC()
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": p.id, "attributes": gin.H{"text": p.text}}})
 	}
 }
@@ -235,6 +353,7 @@ func (f *FakeCircleCI) handleMovePlan(c *gin.Context) {
 		return
 	}
 	p.state = body.State
+	p.updatedAt = time.Now().UTC()
 	c.JSON(http.StatusOK, gin.H{"data": planEntity(p)})
 }
 
@@ -310,14 +429,9 @@ func (f *FakeCircleCI) handleListComments(c *gin.Context) {
 		}
 		resolved = &b
 	}
-	after := 0
-	if v := c.Query("page[cursor]"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			factoryError(c, http.StatusBadRequest, "bad cursor")
-			return
-		}
-		after = n
+	after, ok := pageCursor(c)
+	if !ok {
+		return
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -326,10 +440,7 @@ func (f *FakeCircleCI) handleListComments(c *gin.Context) {
 		factoryError(c, http.StatusNotFound, "plan not found")
 		return
 	}
-	size := f.FactoryPageSize
-	if size == 0 {
-		size = 20
-	}
+	size := f.pageSize()
 	var matching []factoryComment
 	for _, cm := range p.comments {
 		if resolved == nil || (cm.resolvedAt != nil) == *resolved {

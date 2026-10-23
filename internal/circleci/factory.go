@@ -12,10 +12,24 @@ import (
 // Plan is a factory plan, as /api/v3/factory/plans serves it. Its text is read
 // and replaced on its own, with PlanText and SetPlanText.
 type Plan struct {
-	ID     string
-	Title  string
-	State  string
-	Branch string
+	ID    string
+	Title string
+	State string
+	// Branch is "" in ListPlans, whose rows leave it out.
+	Branch       string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	OpenComments int
+	// Claim is the factory session holding the plan, or nil when none does.
+	// ListPlans leaves it nil, since its rows leave it out.
+	Claim *PlanClaim
+}
+
+// PlanClaim is a factory session's claim on a plan.
+type PlanClaim struct {
+	SessionID string
+	Worktree  string
+	RenewedAt time.Time
 }
 
 // PlanComment is a comment on a factory plan. QuotedText is the part of the
@@ -31,9 +45,30 @@ type PlanComment struct {
 }
 
 type planAttrs struct {
-	Title  string `json:"title"`
-	State  string `json:"state"`
-	Branch string `json:"branch"`
+	Title        string      `json:"title"`
+	State        string      `json:"state"`
+	Branch       string      `json:"branch"`
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
+	OpenComments int         `json:"open_comment_count"`
+	Claim        *claimAttrs `json:"claim"`
+}
+
+type claimAttrs struct {
+	SessionID string    `json:"session_id"`
+	Worktree  string    `json:"worktree"`
+	RenewedAt time.Time `json:"renewed_at"`
+}
+
+func (a planAttrs) plan(id string) *Plan {
+	p := &Plan{
+		ID: id, Title: a.Title, State: a.State, Branch: a.Branch,
+		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt, OpenComments: a.OpenComments,
+	}
+	if a.Claim != nil {
+		p.Claim = &PlanClaim{SessionID: a.Claim.SessionID, Worktree: a.Claim.Worktree, RenewedAt: a.Claim.RenewedAt}
+	}
+	return p
 }
 
 type createPlanAttrs struct {
@@ -87,7 +122,41 @@ func (c *Client) CreatePlan(ctx context.Context, title, text string) (*Plan, err
 	if err != nil {
 		return nil, mapErr("create plan", err)
 	}
-	return &Plan{ID: env.Data.ID, Title: attrs.Title, State: attrs.State, Branch: attrs.Branch}, nil
+	return attrs.plan(env.Data.ID), nil
+}
+
+// ListPlans returns the caller's open plans, oldest first, reading every
+// page. A plan is open until it is Done, Canceled, Won't Do or Duplicate.
+func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
+	var out []Plan
+	var cursor string
+	for {
+		var page struct {
+			Data []struct {
+				ID         string    `json:"id"`
+				Attributes planAttrs `json:"attributes"`
+			} `json:"data"`
+			Page v3Page `json:"page"`
+		}
+		opts := []func(*hc.Request){
+			hc.QueryParam("filter[user_id]", "me"),
+			hc.JSONDecoder(&page),
+		}
+		if cursor != "" {
+			opts = append(opts, hc.QueryParam("page[cursor]", cursor))
+		}
+		_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/plans", opts...))
+		if err != nil {
+			return nil, mapErr("list plans", err)
+		}
+		for _, item := range page.Data {
+			out = append(out, *item.Attributes.plan(item.ID))
+		}
+		if page.Page.Next == nil || *page.Page.Next == "" {
+			return out, nil
+		}
+		cursor = *page.Page.Next
+	}
 }
 
 // GetPlan returns factory plan id.
@@ -101,7 +170,7 @@ func (c *Client) GetPlan(ctx context.Context, id string) (*Plan, error) {
 	if err != nil {
 		return nil, mapErr("get plan", err)
 	}
-	return &Plan{ID: env.Data.ID, Title: attrs.Title, State: attrs.State, Branch: attrs.Branch}, nil
+	return attrs.plan(env.Data.ID), nil
 }
 
 // PlanText returns factory plan id's text.
@@ -143,7 +212,7 @@ func (c *Client) MovePlan(ctx context.Context, id, state string) (*Plan, error) 
 	if err != nil {
 		return nil, mapErr("move plan", err)
 	}
-	return &Plan{ID: env.Data.ID, Title: attrs.Title, State: attrs.State, Branch: attrs.Branch}, nil
+	return attrs.plan(env.Data.ID), nil
 }
 
 // CreateComment adds a comment to factory plan planID. quotedText is the part

@@ -145,7 +145,7 @@ type FakeCircleCI struct {
 	// Factory plans and their comments; see factory.go.
 	factoryPlans      map[string]*factoryPlan
 	FactoryStatusCode int // override for every /api/v3/factory route
-	FactoryPageSize   int // comments per list page; 0 means 20
+	FactoryPageSize   int // plans or comments per list page; 0 means 20
 
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.
