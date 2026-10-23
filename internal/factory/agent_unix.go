@@ -16,5 +16,6 @@ func interrupt(p *os.Process) error { return p.Signal(syscall.SIGINT) }
 func terminate(p *os.Process) error { return p.Signal(syscall.SIGTERM) }
 
 // killGroup SIGKILLs claude's whole process group, which agentProcAttr made
-// claude the leader of, so the commands it started die with it.
+// claude the leader of, so the commands it started die with it, even after
+// claude itself has exited.
 func killGroup(p *os.Process) error { return syscall.Kill(-p.Pid, syscall.SIGKILL) }

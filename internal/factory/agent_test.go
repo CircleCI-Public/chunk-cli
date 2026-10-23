@@ -17,12 +17,15 @@ import (
 
 // fakeFactory puts a factory on PATH, so StartAgent's check that factory is
 // installed passes without a real factory daemon. `factory daemon claim list`
-// prints $FAKE_CLAIMS, or fails with $FAKE_CLAIMS_ERR when that is set.
+// prints $FAKE_CLAIMS, or fails with $FAKE_CLAIMS_ERR when that is set. It
+// also fails unless told not to retry while the daemon isn't running, as a
+// real factory would for a minute.
 func fakeFactory(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	script := `#!/bin/sh
 if [ "$1 $2 $3" = "daemon claim list" ]; then
+  if [ "$FACTORY_DAEMON_NOT_RUNNING_RETRY" != "0s" ]; then echo "would retry for a minute" >&2; exit 1; fi
   if [ -n "$FAKE_CLAIMS_ERR" ]; then echo "$FAKE_CLAIMS_ERR" >&2; exit 1; fi
   printf '%s' "$FAKE_CLAIMS"
 fi
@@ -212,7 +215,11 @@ func TestAgentArgs(t *testing.T) {
 	assert.Assert(t, strings.Contains(gotArgs, "--plugin-dir /plugins"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, "--model sonnet"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, "--input-format stream-json"), gotArgs)
-	assert.Assert(t, !strings.Contains(gotArgs, "--disallowedTools"), gotArgs)
+	// Planning only: no edits to the working tree, whatever the developer's
+	// own settings allow.
+	assert.Assert(t, strings.Contains(gotArgs, "--permission-mode default"), gotArgs)
+	assert.Assert(t, strings.Contains(gotArgs, "--disallowedTools Edit,Write,NotebookEdit"), gotArgs)
+	assert.Assert(t, !strings.Contains(gotArgs, "acceptEdits"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, "hooks=1"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, dir), gotArgs)
 }
@@ -483,6 +490,61 @@ done
 		}
 		return poll.Continue("claude's child %d is still running", pid)
 	}, poll.WithTimeout(5*time.Second))
+}
+
+// A command claude started can outlive a claude that exits cleanly on SIGINT,
+// as a background factory daemon wait would, holding the session's wait. Stop
+// kills what is left in claude's process group.
+func TestAgentStopKillsWhatOutlivesClaude(t *testing.T) {
+	_, sigsFile, _ := agentFakeEnv(t)
+	child := filepath.Join(t.TempDir(), "child")
+	t.Setenv("CHILD", child)
+	fakeClaude(t, `
+read -r line
+echo '{"type":"system","subtype":"init","session_id":"s1","plugins":[{"name":"f"}],"mcp_servers":[{"name":"plugin:f:factory","status":"connected"}]}'
+trap 'echo INT >> "$SIGS"; exit 130' INT
+sleep 3600 >/dev/null 2>&1 &
+echo "$!" > "$CHILD"
+wait
+`)
+	fakeFactory(t)
+	a, err := StartAgent(context.Background(), AgentConfig{SessionID: "s1"}, "hello")
+	assert.NilError(t, err)
+	var pid int
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		b, err := os.ReadFile(child)
+		if err != nil || len(b) == 0 {
+			return poll.Continue("the fake has not started its child")
+		}
+		pid, err = strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			return poll.Error(err)
+		}
+		return poll.Success()
+	}, poll.WithTimeout(5*time.Second))
+
+	assert.NilError(t, a.Stop())
+	assert.Equal(t, strings.TrimSpace(readFile(t, filepath.Dir(sigsFile), filepath.Base(sigsFile))), "INT")
+	collect(t, a, nil, 5*time.Second)
+
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		if processGone(pid) {
+			return poll.Success()
+		}
+		return poll.Continue("claude's child %d outlived it", pid)
+	}, poll.WithTimeout(5*time.Second))
+}
+
+// A long session's stderr keeps what claude wrote last, which is why it
+// exited, not what it wrote first.
+func TestTailWriterKeepsTheEnd(t *testing.T) {
+	var w tailWriter
+	_, _ = w.Write([]byte(strings.Repeat("early warning\n", outputTail)))
+	_, _ = w.Write([]byte("fatal: out of memory\n"))
+
+	got := w.tail()
+	assert.Assert(t, len(got) <= outputTail, "kept %d bytes", len(got))
+	assert.Assert(t, strings.HasSuffix(got, "fatal: out of memory"), got)
 }
 
 // A consumer that falls behind must not stall claude's reader: Send and Stop

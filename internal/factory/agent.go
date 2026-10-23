@@ -1,7 +1,6 @@
 package factory
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,8 +44,16 @@ const (
 	factoryMCP = "plugin:f:factory"
 	// agentTools is what an Agent allows claude to use without asking: the
 	// read-only tools, the one Bash command it needs to keep a plan's tasks
-	// flowing, and every factory MCP tool.
+	// flowing, and every factory MCP tool. It is enough to plan, not to build:
+	// the daemon hands a claimed plan's building tasks (build-unit,
+	// write-commits, rebase) to the same session, and those need builder
+	// subagents, git and edits. Until chunk builds with factory, the planning
+	// screen must free the plan's claim once it leaves Planning.
 	agentTools = "Read,Grep,Glob,Bash(factory daemon wait),mcp__plugin_f_factory"
+	// agentDeniedTools is what an Agent never lets claude use, whatever the
+	// developer's own settings allow: planning edits plans through the plan
+	// tools, never the working tree.
+	agentDeniedTools = "Edit,Write,NotebookEdit"
 )
 
 // AgentConfig starts a long-lived factory planning session.
@@ -101,7 +108,7 @@ type Agent struct {
 	events chan AgentEvent
 	wake   chan struct{} // wakes forward when queue grows or closed is set
 	exited chan struct{} // closed after cmd.Wait returns and the reader is flushed
-	stderr bytes.Buffer
+	stderr tailWriter    // written by exec until cmd.Wait returns, read after
 
 	mu sync.Mutex
 	// All fields below are guarded by mu.
@@ -123,7 +130,10 @@ func agentArgs(cfg AgentConfig) []string {
 	} else {
 		args = append(args, "--session-id", cfg.SessionID)
 	}
-	args = append(args, "--permission-mode", "acceptEdits", "--allowedTools", agentTools)
+	// default, not the developer's own mode: in -p, a tool agentTools does not
+	// allow is denied rather than asked about.
+	args = append(args, "--permission-mode", "default",
+		"--allowedTools", agentTools, flagDisallowedTools, agentDeniedTools)
 	if cfg.PluginDir != "" {
 		args = append(args, "--plugin-dir", cfg.PluginDir)
 	}
@@ -168,7 +178,7 @@ func StartAgent(ctx context.Context, cfg AgentConfig, message string) (*Agent, e
 	a.stdin = stdin
 	events := claudecode.NewEvents(a.on)
 	cmd.Stdout = eventsWriter{events}
-	cmd.Stderr = &limitWriter{buf: &a.stderr}
+	cmd.Stderr = &a.stderr
 	agentProcAttr(cmd)
 	// A background command claude started can outlive it holding stdout
 	// open; don't let that keep Wait from returning.
@@ -185,7 +195,7 @@ func StartAgent(ctx context.Context, cfg AgentConfig, message string) (*Agent, e
 		events.Flush()
 		a.mu.Lock()
 		if !a.stopping {
-			a.report(AgentEvent{Problem: fmt.Errorf("claude exited (code %d): %s", exitCodeOf(runErr), tailString(&a.stderr))})
+			a.report(AgentEvent{Problem: fmt.Errorf("claude exited (code %d): %s", exitCodeOf(runErr), a.stderr.tail())})
 		}
 		a.closed = true
 		a.signal()
@@ -208,7 +218,7 @@ func StartAgent(ctx context.Context, cfg AgentConfig, message string) (*Agent, e
 
 	if err := a.Send(message); err != nil {
 		if waitForExit(a.exited, time.Second) {
-			return fail(fmt.Errorf("claude exited before it started: %s", tailString(&a.stderr)))
+			return fail(fmt.Errorf("claude exited before it started: %s", a.stderr.tail()))
 		}
 		return fail(err)
 	}
@@ -221,7 +231,7 @@ func StartAgent(ctx context.Context, cfg AgentConfig, message string) (*Agent, e
 	case <-ctx.Done():
 		return fail(ctx.Err())
 	case <-a.exited:
-		return fail(fmt.Errorf("claude exited before it started: %s", tailString(&a.stderr)))
+		return fail(fmt.Errorf("claude exited before it started: %s", a.stderr.tail()))
 	case <-time.After(agentInitTimeout):
 		return fail(fmt.Errorf("claude did not report its init within %s", agentInitTimeout))
 	}
@@ -286,7 +296,11 @@ func (a *Agent) Events() <-chan AgentEvent { return a.events }
 // Claims is the plans the factory daemon holds a claim on for this session,
 // by address, as `factory daemon claim list` reports them.
 func (a *Agent) Claims(ctx context.Context) ([]string, error) {
-	out, err := exec.CommandContext(ctx, factoryBinary, "daemon", "claim", "list").Output()
+	cmd := exec.CommandContext(ctx, factoryBinary, "daemon", "claim", "list")
+	// factory retries for a minute by default while the daemon isn't running;
+	// fail at once instead, so the screen can say so.
+	cmd.Env = append(os.Environ(), "FACTORY_DAEMON_NOT_RUNNING_RETRY=0s")
+	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -310,10 +324,10 @@ func (a *Agent) Claims(ctx context.Context) ([]string, error) {
 	return plans, nil
 }
 
-// Stop ends the session: SIGINT, then stdin closed, then SIGTERM, then SIGKILL
-// for claude and everything it started, if claude has not exited. It is safe
-// to call more than once and from multiple goroutines; every call returns the
-// same result.
+// Stop ends the session: SIGINT, then stdin closed, then SIGTERM if claude has
+// not exited, then SIGKILL for whatever is left in claude's process group,
+// claude included if it still has not exited. It is safe to call more than
+// once and from multiple goroutines; every call returns the same result.
 func (a *Agent) Stop() error {
 	a.stopOnce.Do(func() {
 		a.mu.Lock()
@@ -330,17 +344,20 @@ func (a *Agent) stop() error {
 	}
 	_ = interrupt(a.cmd.Process)
 	_ = a.stdin.Close()
-	if waitForExit(a.exited, stopInterruptWait) {
-		return nil
+	exited := waitForExit(a.exited, stopInterruptWait)
+	if !exited {
+		_ = terminate(a.cmd.Process)
+		exited = waitForExit(a.exited, stopTerminateWait)
 	}
-	_ = terminate(a.cmd.Process)
-	if waitForExit(a.exited, stopTerminateWait) {
-		return nil
-	}
-	// Kill the whole process group: a SIGKILLed claude can't stop its
-	// background factory daemon wait, which would then hold the session's
-	// wait and make the next one fail with a 409.
+	// Kill the whole process group, even once claude has exited: a background
+	// factory daemon wait that outlives claude, SIGKILLed or not, would hold
+	// the session's wait and make the next one fail with a 409. The group
+	// outlives claude only while something in it is still running, so its ID
+	// is not reused before then.
 	_ = killGroup(a.cmd.Process)
+	if exited {
+		return nil
+	}
 	<-a.exited
 	return errors.New("claude did not stop after SIGINT and SIGTERM; killed it")
 }
@@ -440,7 +457,18 @@ func exitCodeOf(err error) int {
 	return -1
 }
 
-// tailString is the end of buf, trimmed, for an error message.
-func tailString(buf *bytes.Buffer) string {
-	return strings.TrimSpace(buf.String())
+// tailWriter keeps the last outputTail bytes written to it. A session can run
+// for hours, so what claude wrote to stderr as it exited is what matters, not
+// what it wrote first.
+type tailWriter struct{ buf []byte }
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	if over := len(w.buf) - outputTail; over > 0 {
+		w.buf = append(w.buf[:0], w.buf[over:]...)
+	}
+	return len(p), nil
 }
+
+// tail is what w kept, trimmed, for an error message.
+func (w *tailWriter) tail() string { return strings.TrimSpace(string(w.buf)) }
