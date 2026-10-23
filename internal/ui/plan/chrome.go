@@ -53,7 +53,7 @@ func (m Model) header() string {
 	case m.sending:
 		state = m.pill(m.teal(), "#ddf4ff", "#10222a", m.spin.View()+"Sending to the factory")
 	case m.busy:
-		text := "✦ Claude is drafting"
+		text := "✦ chunk is drafting"
 		if m.narrow() {
 			text = "✦ Drafting"
 		}
@@ -62,7 +62,7 @@ func (m Model) header() string {
 		state = m.style(m.dim()).Render("No plan yet")
 	case len(m.comments) > 0:
 		n := len(m.comments)
-		text := fmt.Sprintf("● %d %s waiting for Claude", n, plural(n, "comment", "comments"))
+		text := fmt.Sprintf("● %d %s waiting for chunk", n, plural(n, "comment", "comments"))
 		if m.narrow() {
 			text = fmt.Sprintf("● %d %s", n, plural(n, "comment", "comments"))
 		}
@@ -159,11 +159,11 @@ func (m Model) actions() (main, side string) {
 	case m.sending, m.commenting:
 		return "", ""
 	case m.busy:
-		return outline(m.purple(), "esc Stop Claude"), m.style(m.faint()).Render(approve)
+		return outline(m.purple(), "esc Stop chunk"), m.style(m.faint()).Render(approve)
 	case strings.TrimSpace(m.plan) == "":
 		return "", ""
 	case n > 0:
-		send := fmt.Sprintf("enter Send %d %s to Claude", n, plural(n, "comment", "comments"))
+		send := fmt.Sprintf("enter Send %d %s to chunk", n, plural(n, "comment", "comments"))
 		if m.focus == panePlan {
 			send = "tab, enter " + strings.TrimPrefix(send, "enter ")
 		}
