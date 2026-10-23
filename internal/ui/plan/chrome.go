@@ -19,11 +19,13 @@ func (m Model) hue(light, dark string) color.Color {
 	return lipgloss.LightDark(m.dark)(lipgloss.Color(light), lipgloss.Color(dark))
 }
 
-// teal is what has the keyboard, in chunk's brand accent so the screen looks
-// like chunk watch's (the name is watch's too); quiet is the border of what
-// doesn't have it. amber is the developer's comments; purple is Claude at
-// work; green is a plan that is ready.
-func (m Model) teal() color.Color   { return theme.New(m.dark).Teal.GetForeground() }
+// brand is chunk's accent for what has the keyboard, and marks only the
+// focused pane's own edge; quiet is the border of the pane without the
+// keyboard. dim is one step down from brand, for the active input inside the
+// focused pane; faint is a further step down, for the developer's past
+// messages. amber is the developer's comments; purple is Claude at work;
+// green is a plan that is ready.
+func (m Model) brand() color.Color  { return theme.New(m.dark).Brand.GetForeground() }
 func (m Model) quiet() color.Color  { return theme.New(m.dark).VDim.GetForeground() }
 func (m Model) amber() color.Color  { return m.hue("#9a6700", "#f0c16a") }
 func (m Model) purple() color.Color { return m.hue("#8250df", "#c792ea") }
@@ -51,7 +53,7 @@ func (m Model) header() string {
 	var state string
 	switch {
 	case m.sending:
-		state = m.pill(m.teal(), "#ddf4ff", "#10222a", m.spin.View()+"Sending to the factory")
+		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Sending to the factory")
 	case m.busy:
 		text := "✦ chunk is drafting"
 		if m.narrow() {
@@ -103,7 +105,7 @@ func (m Model) tabs() string {
 	tab := func(on bool, text string) string {
 		s := lipgloss.NewStyle().Padding(0, 2)
 		if on {
-			return s.Bold(true).Foreground(m.teal()).Background(m.hue("#ddf4ff", "#16222a")).Render(text)
+			return s.Bold(true).Foreground(m.brand()).Background(m.hue("#ddf4ff", "#16222a")).Render(text)
 		}
 		return s.Foreground(m.dim()).Render(text)
 	}
@@ -167,7 +169,7 @@ func (m Model) actions() (main, side string) {
 		if m.focus == panePlan {
 			send = "tab, enter " + strings.TrimPrefix(send, "enter ")
 		}
-		return button(m.teal(), send), m.style(m.faint()).Render(approve + " · resolve comments first")
+		return button(m.brand(), send), m.style(m.faint()).Render(approve + " · resolve comments first")
 	}
 	return button(m.green(), approve), ""
 }

@@ -430,7 +430,7 @@ var commentMark = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("�
 func (m *Model) gutter(cursor, commented bool) string {
 	g := " "
 	if cursor {
-		g = m.style(m.teal()).Render("▌")
+		g = m.style(m.brand()).Render("▌")
 	}
 	if commented {
 		return g + commentMark

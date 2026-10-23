@@ -172,7 +172,7 @@ func diffLines(st watchStyles, diff string, compact bool, width int) []string {
 			add(plain, l)
 		case strings.HasPrefix(l, "@@"):
 			inHunk = true
-			add(st.teal, l)
+			add(st.brand, l)
 		case compact && (strings.HasPrefix(l, "diff --git") || strings.HasPrefix(l, "index ") || strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "new file mode") || strings.HasPrefix(l, "deleted file mode")):
 		case compact && strings.HasPrefix(l, "+++ "):
 			add(st.emphasis, strings.TrimPrefix(strings.TrimPrefix(l, "+++ "), "b/"))

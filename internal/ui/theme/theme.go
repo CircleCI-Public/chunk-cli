@@ -26,10 +26,12 @@ type Styles struct {
 	Success  lipgloss.Style
 	Warning  lipgloss.Style
 	Running  lipgloss.Style
-	Teal     lipgloss.Style
-	Error    lipgloss.Style
-	Muted    lipgloss.Style
-	VDim     lipgloss.Style
+	// Brand is chunk's brand colour as text: navy on a light terminal, yellow
+	// on a dark one. It marks what has the keyboard.
+	Brand lipgloss.Style
+	Error lipgloss.Style
+	Muted lipgloss.Style
+	VDim  lipgloss.Style
 	// Chip is the base of a coloured label; the caller sets its background.
 	Chip lipgloss.Style
 	// Accent is filled with the brand colour, for the one primary action a
@@ -51,7 +53,7 @@ func New(dark bool) Styles {
 		Success:  lipgloss.NewStyle().Foreground(Green),
 		Warning:  lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
 		Running:  lipgloss.NewStyle().Foreground(lipgloss.Color("4")),
-		Teal:     lipgloss.NewStyle().Foreground(ld(Navy, Yellow)),
+		Brand:    lipgloss.NewStyle().Foreground(ld(Navy, Yellow)),
 		Error:    lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
 		Muted:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("252"), lipgloss.Color("250"))),
 		VDim:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242"))),
@@ -65,7 +67,7 @@ func New(dark bool) Styles {
 func Help(st Styles, width int) help.Model {
 	h := help.New()
 	h.ShortSeparator = "  ·  "
-	h.Styles.ShortKey = st.Teal
+	h.Styles.ShortKey = st.Brand
 	h.Styles.ShortDesc = st.Dim
 	h.Styles.ShortSeparator = st.VDim
 	h.Styles.Ellipsis = st.VDim
@@ -101,7 +103,7 @@ func EdgeSegment(line func(string) string, title string, n int) string {
 func (s Styles) Pane(focused bool, w, h int, title, body string) string {
 	edge := s.VDim
 	if focused {
-		edge = s.Teal
+		edge = s.Brand
 	}
 	// Render is variadic; EdgeSegment draws with a func(string) string.
 	line := func(t string) string { return edge.Render(t) }
