@@ -2,6 +2,7 @@ package circleci
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"time"
@@ -110,6 +111,26 @@ type v3Page struct {
 	Next *string `json:"next"`
 }
 
+// maxPages caps how many pages a list reads, so a server that never ends its
+// list cannot hold a caller forever.
+const maxPages = 1000
+
+// nextCursor is the cursor of the page after one that was read with cursor, or
+// "" when that was the last. It is an error when the server points back at the
+// cursor it was just asked for, or when pages reads have not reached the end.
+func nextCursor(cursor string, p v3Page, pages int) (string, error) {
+	if p.Next == nil || *p.Next == "" {
+		return "", nil
+	}
+	if *p.Next == cursor {
+		return "", fmt.Errorf("list does not advance: page cursor %q came back as the next one", cursor)
+	}
+	if pages >= maxPages {
+		return "", fmt.Errorf("list is longer than %d pages", maxPages)
+	}
+	return *p.Next, nil
+}
+
 // CreatePlan creates a factory plan from a title and its first text. The plan
 // starts Unprioritized, on a branch the API names for the title.
 func (c *Client) CreatePlan(ctx context.Context, title, text string) (*Plan, error) {
@@ -130,7 +151,7 @@ func (c *Client) CreatePlan(ctx context.Context, title, text string) (*Plan, err
 func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
 	var out []Plan
 	var cursor string
-	for {
+	for pages := 1; ; pages++ {
 		var page struct {
 			Data []struct {
 				ID         string    `json:"id"`
@@ -152,10 +173,14 @@ func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
 		for _, item := range page.Data {
 			out = append(out, *item.Attributes.plan(item.ID))
 		}
-		if page.Page.Next == nil || *page.Page.Next == "" {
+		next, err := nextCursor(cursor, page.Page, pages)
+		if err != nil {
+			return nil, err
+		}
+		if next == "" {
 			return out, nil
 		}
-		cursor = *page.Page.Next
+		cursor = next
 	}
 }
 
@@ -239,7 +264,7 @@ func (c *Client) CreateComment(ctx context.Context, planID, quotedText, body str
 func (c *Client) ListComments(ctx context.Context, planID string, open bool) ([]PlanComment, error) {
 	var out []PlanComment
 	var cursor string
-	for {
+	for pages := 1; ; pages++ {
 		var page struct {
 			Data []struct {
 				ID         string          `json:"id"`
@@ -265,10 +290,14 @@ func (c *Client) ListComments(ctx context.Context, planID string, open bool) ([]
 		for _, item := range page.Data {
 			out = append(out, *planComment(item.ID, item.References.FactoryPlan.ID, item.Attributes))
 		}
-		if page.Page.Next == nil || *page.Page.Next == "" {
+		next, err := nextCursor(cursor, page.Page, pages)
+		if err != nil {
+			return nil, err
+		}
+		if next == "" {
 			return out, nil
 		}
-		cursor = *page.Page.Next
+		cursor = next
 	}
 }
 

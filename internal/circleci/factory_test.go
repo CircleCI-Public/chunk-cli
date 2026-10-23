@@ -388,3 +388,34 @@ func assertStatus(t *testing.T, err error, code int) {
 	assert.Assert(t, errors.As(err, &se), "got %v", err)
 	assert.Check(t, cmp.Equal(se.StatusCode, code))
 }
+
+// A server that keeps naming a next page must not hold the client forever.
+func TestListsStopWhenTheServerNeverEndsThem(t *testing.T) {
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[],"page":{"next":"same"}}`))
+	}))
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+
+	_, err := client.ListPlans(ctx)
+	assert.ErrorContains(t, err, "does not advance")
+
+	_, err = client.ListComments(ctx, "plan-1", false)
+	assert.ErrorContains(t, err, "does not advance")
+}
+
+func TestNextCursor(t *testing.T) {
+	next := func(s string) v3Page { return v3Page{Next: &s} }
+
+	got, err := nextCursor("", next("b"), 1)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "b")
+
+	got, err = nextCursor("b", v3Page{}, 2)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "")
+
+	_, err = nextCursor("b", next("c"), maxPages)
+	assert.ErrorContains(t, err, "pages")
+}
