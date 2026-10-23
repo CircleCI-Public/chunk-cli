@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -70,12 +71,26 @@ func TestPlans(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 		client := newTestClient(t, srv.URL)
+		id := uuid.NewString()
+
+		_, err := client.GetPlan(ctx, id)
+		assertStatus(t, err, http.StatusNotFound)
+		_, err = client.PlanText(ctx, id)
+		assertStatus(t, err, http.StatusNotFound)
+		assertStatus(t, client.SetPlanText(ctx, id, "x"), http.StatusNotFound)
+	})
+
+	t.Run("a plan id that is not a UUID is a 400", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		client := newTestClient(t, srv.URL)
 
 		_, err := client.GetPlan(ctx, "no-such-plan")
-		assertStatus(t, err, http.StatusNotFound)
+		assertStatus(t, err, http.StatusBadRequest)
 		_, err = client.PlanText(ctx, "no-such-plan")
-		assertStatus(t, err, http.StatusNotFound)
-		assertStatus(t, client.SetPlanText(ctx, "no-such-plan", "x"), http.StatusNotFound)
+		assertStatus(t, err, http.StatusBadRequest)
+		assertStatus(t, client.SetPlanText(ctx, "no-such-plan", "x"), http.StatusBadRequest)
 	})
 }
 
@@ -169,12 +184,26 @@ func TestPlanComments(t *testing.T) {
 		defer srv.Close()
 		client := newTestClient(t, srv.URL)
 
+		_, err := client.CreateComment(ctx, uuid.NewString(), "", "a comment")
+		assertStatus(t, err, http.StatusNotFound)
+		_, err = client.ListComments(ctx, uuid.NewString(), false)
+		assertStatus(t, err, http.StatusNotFound)
+		_, err = client.ResolveComment(ctx, uuid.NewString())
+		assertStatus(t, err, http.StatusNotFound)
+	})
+
+	t.Run("ids that are not UUIDs are a 400", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		client := newTestClient(t, srv.URL)
+
 		_, err := client.CreateComment(ctx, "no-such-plan", "", "a comment")
-		assertStatus(t, err, http.StatusNotFound)
+		assertStatus(t, err, http.StatusBadRequest)
 		_, err = client.ListComments(ctx, "no-such-plan", false)
-		assertStatus(t, err, http.StatusNotFound)
+		assertStatus(t, err, http.StatusBadRequest)
 		_, err = client.ResolveComment(ctx, "no-such-comment")
-		assertStatus(t, err, http.StatusNotFound)
+		assertStatus(t, err, http.StatusBadRequest)
 	})
 }
 
@@ -188,7 +217,7 @@ func TestFactoryNotAuthorized(t *testing.T) {
 
 		_, err := client.CreatePlan(ctx, "a plan", "")
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
-		_, err = client.ListComments(ctx, "plan-1", true)
+		_, err = client.ListComments(ctx, uuid.NewString(), true)
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		srv.Close()
 	}

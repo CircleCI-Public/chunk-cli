@@ -1,12 +1,12 @@
 package fakes
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // factoryPlan is a plan the fake holds, with its comments in the order they
@@ -85,9 +85,8 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 		factoryError(c, http.StatusBadRequest, "a plan needs a title")
 		return
 	}
+	id := uuid.NewString()
 	f.mu.Lock()
-	f.factoryCounter++
-	id := fmt.Sprintf("plan-%d", f.factoryCounter)
 	p := &factoryPlan{
 		id: id, title: body.Data.Attributes.Title, state: "Unprioritized",
 		branch: "factory/" + id, text: body.Data.Attributes.Text,
@@ -101,10 +100,25 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"data": ent})
 }
 
-// plan returns the plan c's :id names, answering 404 for the handler when
-// there is none. f.mu must be held.
+// pathID returns c's :id, answering 400 for the handler when it is not a
+// UUID, as conductor does.
+func pathID(c *gin.Context) (string, bool) {
+	id := c.Param("id")
+	if uuid.Validate(id) != nil {
+		factoryError(c, http.StatusBadRequest, "id is not a uuid")
+		return "", false
+	}
+	return id, true
+}
+
+// plan returns the plan c's :id names, answering 400 for the handler when
+// :id is not a UUID and 404 when there is no such plan. f.mu must be held.
 func (f *FakeCircleCI) plan(c *gin.Context) *factoryPlan {
-	p := f.factoryPlans[c.Param("id")]
+	id, ok := pathID(c)
+	if !ok {
+		return nil
+	}
+	p := f.factoryPlans[id]
 	if p == nil {
 		factoryError(c, http.StatusNotFound, "plan not found")
 	}
@@ -178,6 +192,10 @@ func (f *FakeCircleCI) handleCreateComment(c *gin.Context) {
 		return
 	}
 	planID := body.Data.References.FactoryPlan.ID
+	if uuid.Validate(planID) != nil {
+		factoryError(c, http.StatusBadRequest, "factory_plan id is not a uuid")
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	p := f.factoryPlans[planID]
@@ -185,9 +203,8 @@ func (f *FakeCircleCI) handleCreateComment(c *gin.Context) {
 		factoryError(c, http.StatusNotFound, "plan not found")
 		return
 	}
-	f.factoryCounter++
 	cm := factoryComment{
-		id:         fmt.Sprintf("comment-%d", f.factoryCounter),
+		id:         uuid.NewString(),
 		quotedText: body.Data.Attributes.QuotedText, body: body.Data.Attributes.Body,
 		createdAt: time.Now().UTC(),
 	}
@@ -196,7 +213,9 @@ func (f *FakeCircleCI) handleCreateComment(c *gin.Context) {
 }
 
 // handleListComments pages through a plan's comments FactoryPageSize at a
-// time (default 50). Its cursor is the count of comments already listed.
+// time (default 20, as conductor's). Its cursor is the count of comments
+// already listed; conductor's is opaque too, so clients cannot tell. Like
+// conductor, it leaves out the page block on the last page.
 func (f *FakeCircleCI) handleListComments(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
@@ -204,6 +223,10 @@ func (f *FakeCircleCI) handleListComments(c *gin.Context) {
 	planID := c.Query("filter[factory_plan_id]")
 	if planID == "" {
 		factoryError(c, http.StatusBadRequest, "filter[factory_plan_id] is required")
+		return
+	}
+	if uuid.Validate(planID) != nil {
+		factoryError(c, http.StatusBadRequest, "filter[factory_plan_id] is not a uuid")
 		return
 	}
 	var resolved *bool
@@ -233,7 +256,7 @@ func (f *FakeCircleCI) handleListComments(c *gin.Context) {
 	}
 	size := f.FactoryPageSize
 	if size == 0 {
-		size = 50
+		size = 20
 	}
 	var matching []factoryComment
 	for _, cm := range p.comments {
@@ -246,19 +269,21 @@ func (f *FakeCircleCI) handleListComments(c *gin.Context) {
 	for _, cm := range matching[min(after, len(matching)):end] {
 		items = append(items, commentEntity(planID, cm))
 	}
-	var next *string
+	resp := gin.H{"data": items}
 	if end < len(matching) {
-		s := strconv.Itoa(end)
-		next = &s
+		resp["page"] = gin.H{"next": strconv.Itoa(end)}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": items, "page": gin.H{"next": next, "prev": nil}})
+	c.JSON(http.StatusOK, resp)
 }
 
 func (f *FakeCircleCI) handleResolveComment(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
 	}
-	id := c.Param("id")
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, p := range f.factoryPlans {
