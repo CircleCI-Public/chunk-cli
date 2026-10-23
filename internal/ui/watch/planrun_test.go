@@ -135,7 +135,7 @@ func TestThePlanIsKeptBehindTheDashboard(t *testing.T) {
 	m = typeInto(m, "add a flag")
 	m, turn := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	assert.Assert(t, turn != nil, "enter sends the message to chunk")
-	m = deliver(t, m, turn)
+	m = deliverThen(t, m, turn, 1) // the plan is created, then the message sent
 
 	// Esc goes back while chunk works, which carries on.
 	m, back := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -165,7 +165,7 @@ func TestSendingThePlanSelectsItsRun(t *testing.T) {
 	m := openPlanScreen(t, planModel(t, f))
 	m = typeInto(m, "add a flag")
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = deliver(t, m, cmd)
+	m = deliverThen(t, m, cmd, 1)          // the plan is created, then the message sent
 	m = deliver(t, m, m.planScreen.Next()) // chunk's reply
 	// The plan pane picks up the store's text on its next poll; this drives
 	// one deterministically rather than waiting on the real timer.
@@ -188,4 +188,27 @@ func TestWindowSizeReachesTheKeptPlan(t *testing.T) {
 	m = next.(Model)
 	lines := strings.Split(screen(m), "\n")
 	assert.Equal(t, len(lines), 50, "the screen fills the new height")
+}
+
+// deliverThen is deliver, also delivering what the commands each message
+// brings back return, n deep, as the program would: the planning screen's
+// first message creates the plan in factory before it is sent.
+func deliverThen(t *testing.T, m Model, cmd tea.Cmd, n int) Model {
+	t.Helper()
+	assert.Assert(t, cmd != nil, "a command was returned")
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c != nil {
+				m = deliverThen(t, m, c, n)
+			}
+		}
+		return m
+	}
+	next, follow := m.Update(msg)
+	m = next.(Model)
+	if n > 0 && follow != nil {
+		m = deliverThen(t, m, follow, n-1)
+	}
+	return m
 }

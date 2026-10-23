@@ -60,7 +60,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, submittedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg:
+	case eventMsg, sentMsg, submittedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -2074,5 +2074,92 @@ func TestSecondSendWhileSavingCommentsDoesNothing(t *testing.T) {
 	}
 	if len(queuedComments(next.comments)) != 1 {
 		t.Errorf("the queued comment was dropped by the second enter: %+v", next.comments)
+	}
+}
+
+func TestFailedCreateShowsInTheChatAndIsTriedAgain(t *testing.T) {
+	store := newFakeStore()
+	store.CreateErr = errors.New("factory said no")
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, nil, store, "add a --dry-run flag")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if got := agent.Sent(); len(got) != 0 {
+		t.Fatalf("sent before the plan existed: %q", got)
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Could not create the plan: factory said no") {
+		t.Errorf("the failure is not in the chat:\n%s", view)
+	}
+	if m.busy {
+		t.Error("still busy after the create failed")
+	}
+
+	store.mu.Lock()
+	store.CreateErr = nil
+	store.mu.Unlock()
+	m = typeText(t, m, "add a flag")
+	drive(t, m, press("enter"))
+	if got := agent.Sent(); len(got) != 1 || got[0] != "add a flag" {
+		t.Errorf("agent got %q", got)
+	}
+}
+
+// The plan is created off the screen's loop; a message sent meanwhile waits
+// in the input rather than racing the create.
+func TestMessageWhileThePlanIsCreatedWaitsInTheInput(t *testing.T) {
+	store := newFakeStore()
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = typeText(t, m, "first")
+	m, create := m.Update(press("enter"))
+	if !m.creating {
+		t.Fatal("the plan is not being created")
+	}
+
+	m = typeText(t, m, "second")
+	m, _ = m.Update(press("enter"))
+	if m.input.Value() != "second" {
+		t.Errorf("input is %q, want the waiting message", m.input.Value())
+	}
+
+	for _, msg := range run(create) {
+		m = drive(t, m, msg)
+	}
+	if got := agent.Sent(); len(got) != 1 || got[0] != "first" {
+		t.Errorf("agent got %q", got)
+	}
+	if !m.created || m.creating {
+		t.Errorf("created %v, creating %v", m.created, m.creating)
+	}
+}
+
+// Saving drops the queued comments it saved, so they cannot change until it
+// is done; one deleted or rewritten meanwhile would be lost.
+func TestQueuedCommentsStayAsTheyAreWhileSaved(t *testing.T) {
+	m, store := planModel(t)
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	m = drive(t, m, press("enter"))
+
+	m, save := m.Update(press("s"))
+	if !m.savingComments {
+		t.Fatal("the comments are not being saved")
+	}
+	m, _ = m.Update(press("c"))
+	if m.commenting {
+		t.Error("the editor opened while the comments were saved")
+	}
+	m, _ = m.Update(press("d"))
+	if n := len(queuedComments(m.comments)); n != 1 {
+		t.Errorf("%d queued while saving, want 1", n)
+	}
+
+	for _, msg := range run(save) {
+		m = drive(t, m, msg)
+	}
+	if len(store.Added) != 1 || len(queuedComments(m.comments)) != 0 {
+		t.Errorf("saved %+v, still queued %+v", store.Added, queuedComments(m.comments))
 	}
 }

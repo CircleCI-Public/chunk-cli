@@ -105,13 +105,15 @@ func (m Model) keys() keyMap {
 	if m.selecting() {
 		k.Comment.SetHelp("c", "comment on selection")
 	}
-	k.Comment.SetEnabled(k.Comment.Enabled() && !m.onResolved(m.cursor))
-	k.Delete.SetEnabled(inPlan && !m.selecting() && m.commentAt(m.cursor) >= 0)
+	// While the queued comments are saved they stay as they are: the save
+	// drops them as it saves them, so one changed meanwhile would be lost.
+	k.Comment.SetEnabled(k.Comment.Enabled() && !m.onResolved(m.cursor) && !m.savingComments)
+	k.Delete.SetEnabled(inPlan && !m.selecting() && !m.savingComments && m.commentAt(m.cursor) >= 0)
 	hasID := func() bool {
 		i := m.commentAt(m.cursor)
 		return i >= 0 && m.comments[i].id != ""
 	}
-	k.Resolve.SetEnabled(inPlan && !m.selecting() && hasID())
+	k.Resolve.SetEnabled(inPlan && !m.selecting() && !m.savingComments && hasID())
 	// n has nowhere to go with nothing commented below the cursor, so the
 	// footer does not offer it there.
 	k.Next.SetEnabled(inPlan && m.nextComment() != m.cursor)

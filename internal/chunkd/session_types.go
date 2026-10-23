@@ -182,7 +182,8 @@ type FactoryRun struct {
 	// ContinuesRunID is the run whose work this one picked up, if it did.
 	ContinuesRunID string `json:"continues_run_id,omitempty"`
 	// SpecOrigin is the path of the file Prompt was read from, when it was a
-	// file rather than literal text given on the command line or stdin.
+	// file rather than literal text given on the command line or stdin, or
+	// "factory plan ID" for a plan sent from the planning screen.
 	SpecOrigin string `json:"spec_origin,omitempty"`
 	// Attempts is the most rounds the run checks.
 	Attempts int    `json:"attempts,omitempty"`
@@ -500,7 +501,8 @@ type FactoryRequest struct {
 	// is set, when it is optional guidance added to the earlier run's request.
 	Prompt string `json:"prompt"`
 	// SpecOrigin is the path Prompt was read from, when the prompt argument
-	// named a file rather than being literal text.
+	// named a file rather than being literal text, or "factory plan ID" for a
+	// plan sent from the planning screen.
 	SpecOrigin string `json:"spec_origin,omitempty"`
 	// Continue is the ID of an earlier run to pick up the work of, or empty to
 	// start from the project's files.

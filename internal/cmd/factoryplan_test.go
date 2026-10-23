@@ -158,3 +158,31 @@ func TestWithPlanClaimWaitsForAnID(t *testing.T) {
 	assert.Equal(t, claimed, false)
 	assert.Equal(t, msg, "hello")
 }
+
+// TestAPIStoreHolderReadsTheClaimFromFactory checks that holder is the
+// session factory says holds the plan's claim, and "" before the plan exists
+// or while nothing claims it.
+func TestAPIStoreHolderReadsTheClaimFromFactory(t *testing.T) {
+	client, cci := apiStoreTestClient(t)
+	store := &apiStore{api: client}
+	ctx := context.Background()
+
+	h, err := store.holder(ctx)
+	assert.NilError(t, err)
+	assert.Equal(t, h, "")
+
+	assert.NilError(t, store.Create(ctx, "a plan"))
+	h, err = store.holder(ctx)
+	assert.NilError(t, err)
+	assert.Equal(t, h, "")
+
+	cci.ClaimFactoryPlan(store.id(), "s-1", "/src")
+	h, err = store.holder(ctx)
+	assert.NilError(t, err)
+	assert.Equal(t, h, "s-1")
+}
+
+func TestPlanOriginNamesTheFactoryPlan(t *testing.T) {
+	assert.Equal(t, planOrigin("1234"), "factory plan 1234")
+	assert.Equal(t, planOrigin(""), "")
+}

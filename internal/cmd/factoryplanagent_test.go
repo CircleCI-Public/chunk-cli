@@ -21,9 +21,9 @@ import (
 type fakeSession struct {
 	first  string
 	events chan factory.AgentEvent
-	claims []string
-	// claimsErr fails Claims.
-	claimsErr error
+	// block, when set, holds Send until it is closed, as a claude that
+	// stopped reading its stdin would.
+	block chan struct{}
 
 	mu      sync.Mutex
 	sent    []string
@@ -35,6 +35,9 @@ func newFakeSession(first string) *fakeSession {
 }
 
 func (s *fakeSession) Send(message string) error {
+	if s.block != nil {
+		<-s.block
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sent = append(s.sent, message)
@@ -43,11 +46,17 @@ func (s *fakeSession) Send(message string) error {
 
 func (s *fakeSession) Events() <-chan factory.AgentEvent { return s.events }
 
-func (s *fakeSession) Claims(context.Context) ([]string, error) { return s.claims, s.claimsErr }
-
 func (s *fakeSession) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.block != nil {
+		// Stopping claude ends a write to it.
+		select {
+		case <-s.block:
+		default:
+			close(s.block)
+		}
+	}
 	if !s.stopped {
 		s.stopped = true
 		close(s.events)
@@ -67,14 +76,24 @@ func (s *fakeSession) end() {
 
 // testPlanAgent is a planAgent for a plan created as planID, whose sessions
 // are fakes; starts records each session started and the config it was
-// started with.
+// started with. holderID is the session factory says holds the plan's claim,
+// and holderErr fails reading it.
 type testPlanAgent struct {
 	*planAgent
-	mu       sync.Mutex
-	sessions []*fakeSession
-	configs  []factory.AgentConfig
-	claims   []string
-	startErr error
+	mu        sync.Mutex
+	sessions  []*fakeSession
+	configs   []factory.AgentConfig
+	startErr  error
+	holderID  string
+	holderErr error
+	// started, when set, is called as each session starts.
+	started func()
+}
+
+func (tp *testPlanAgent) setHolder(id string, err error) {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	tp.holderID, tp.holderErr = id, err
 }
 
 func newTestPlanAgent(t *testing.T, planID string) *testPlanAgent {
@@ -88,10 +107,17 @@ func newTestPlanAgent(t *testing.T, planID string) *testPlanAgent {
 			return nil, tp.startErr
 		}
 		s := newFakeSession(message)
-		s.claims = tp.claims
 		tp.sessions = append(tp.sessions, s)
 		tp.configs = append(tp.configs, cfg)
+		if tp.started != nil {
+			tp.started()
+		}
 		return s, nil
+	}
+	tp.holder = func(context.Context) (string, error) {
+		tp.mu.Lock()
+		defer tp.mu.Unlock()
+		return tp.holderID, tp.holderErr
 	}
 	return tp
 }
@@ -116,7 +142,7 @@ func next(t *testing.T, a *planAgent) plan.Event {
 
 func TestPlanAgentStartsOnTheFirstMessageWithTheClaim(t *testing.T) {
 	tp := newTestPlanAgent(t, "plan-1")
-	tp.claims = []string{"plan-1"}
+	tp.setHolder("s-1", nil)
 	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
 	assert.NilError(t, tp.Send(t.Context(), "keep it small"))
 
@@ -129,7 +155,7 @@ func TestPlanAgentStartsOnTheFirstMessageWithTheClaim(t *testing.T) {
 
 func TestPlanAgentPassesEventsOn(t *testing.T) {
 	tp := newTestPlanAgent(t, "plan-1")
-	tp.claims = []string{"plan-1"}
+	tp.setHolder("s-1", nil)
 	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
 	s := tp.session(0)
 
@@ -146,8 +172,7 @@ func TestPlanAgentPassesEventsOn(t *testing.T) {
 }
 
 func TestPlanAgentSaysWhenTheDaemonHoldsNoClaim(t *testing.T) {
-	tp := newTestPlanAgent(t, "plan-1")
-	tp.claims = []string{"FNDSF-12"} // a daemon on another store
+	tp := newTestPlanAgent(t, "plan-1") // a daemon on another store claims nothing here
 	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
 	s := tp.session(0)
 	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "I could not claim it."}}
@@ -162,21 +187,67 @@ func TestPlanAgentSaysWhenTheDaemonHoldsNoClaim(t *testing.T) {
 	assert.Equal(t, next(t, tp.planAgent).Reply.Text, "ok")
 }
 
-func TestPlanAgentSaysWhenTheDaemonIsNotRunning(t *testing.T) {
+func TestPlanAgentSaysWhenAnotherSessionHoldsTheClaim(t *testing.T) {
 	tp := newTestPlanAgent(t, "plan-1")
+	tp.setHolder("s-other", nil)
 	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
-	s := tp.session(0)
-	s.claimsErr = factory.ErrNoFactoryDaemon
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "ok"}}
+	tp.session(0).events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "ok"}}
 
 	next(t, tp.planAgent)
 	ev := next(t, tp.planAgent)
-	assert.Assert(t, ev.Problem != nil && strings.Contains(ev.Problem.Error(), "factory daemon is not running"), "%v", ev.Problem)
+	assert.Assert(t, ev.Problem != nil && strings.Contains(ev.Problem.Error(), "claimed by another factory session"), "%v", ev.Problem)
+}
+
+func TestPlanAgentSaysWhenItCannotReadTheClaim(t *testing.T) {
+	tp := newTestPlanAgent(t, "plan-1")
+	tp.setHolder("", errors.New("503 from factory"))
+	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
+	tp.session(0).events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "ok"}}
+
+	next(t, tp.planAgent)
+	ev := next(t, tp.planAgent)
+	assert.Assert(t, ev.Problem != nil && strings.Contains(ev.Problem.Error(), "503 from factory"), "%v", ev.Problem)
+}
+
+// A session that holds the plan's claim is not told to claim it again; one
+// that has lost it, as an agent that released the plan has, is.
+func TestPlanAgentClaimsAgainOnceTheClaimIsLost(t *testing.T) {
+	tp := newTestPlanAgent(t, "plan-1")
+	tp.setHolder("s-1", nil)
+	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
+	s := tp.session(0)
+	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Claimed it."}}
+	next(t, tp.planAgent)
+
+	assert.NilError(t, tp.Send(t.Context(), "keep it small"))
+	tp.setHolder("", nil)
+	assert.NilError(t, tp.Send(t.Context(), "and fast"))
+	assert.DeepEqual(t, s.sent, []string{"keep it small", fmt.Sprintf(planClaim, "plan-1", "and fast")})
+
+	// The claim it was just told to make is checked once it replies.
+	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Claimed it again."}}
+	assert.Equal(t, next(t, tp.planAgent).Reply.Text, "Claimed it again.")
+	ev := next(t, tp.planAgent)
+	assert.Assert(t, ev.Problem != nil, "the claim is still missing")
+}
+
+// A blip reading the claim does not have the agent claim a plan it holds.
+func TestPlanAgentKeepsTheClaimWhenItCannotReadIt(t *testing.T) {
+	tp := newTestPlanAgent(t, "plan-1")
+	tp.setHolder("s-1", nil)
+	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
+	s := tp.session(0)
+	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Claimed it."}}
+	next(t, tp.planAgent)
+
+	tp.setHolder("", errors.New("503 from factory"))
+	assert.NilError(t, tp.Send(t.Context(), "keep it small"))
+	assert.DeepEqual(t, s.sent, []string{"keep it small"})
 }
 
 func TestPlanAgentResumesASessionThatEnded(t *testing.T) {
 	tp := newTestPlanAgent(t, "plan-1")
-	tp.claims = []string{"plan-1"}
+	tp.setHolder("s-1", nil)
 	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
 	tp.session(0).end()
 	// The ended session's events close; wait for forward to see it.
@@ -190,7 +261,9 @@ func TestPlanAgentResumesASessionThatEnded(t *testing.T) {
 	assert.Equal(t, len(tp.sessions), 2)
 	assert.Equal(t, tp.configs[1].Resume, true)
 	assert.Equal(t, tp.configs[1].SessionID, "s-1")
-	assert.Equal(t, tp.session(1).first, "are you there?", "the plan was claimed already")
+	// The ended session's claim was freed with it, so the resumed one claims
+	// the plan again.
+	assert.Equal(t, tp.session(1).first, fmt.Sprintf(planClaim, "plan-1", "are you there?"))
 }
 
 func TestPlanAgentStartFailureIsASentence(t *testing.T) {
@@ -224,4 +297,67 @@ func waitFor(cond func() bool) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return false
+}
+
+// A Send stuck writing to a claude that stopped reading must not hold up
+// Stop, which ends the write.
+func TestPlanAgentStopWhileSendIsBlocked(t *testing.T) {
+	tp := newTestPlanAgent(t, "plan-1")
+	tp.setHolder("s-1", nil)
+	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
+	s := tp.session(0)
+	s.mu.Lock()
+	s.block = make(chan struct{})
+	s.mu.Unlock()
+
+	sent := make(chan error, 1)
+	go func() { sent <- tp.Send(t.Context(), "more") }()
+	select {
+	case err := <-sent:
+		t.Fatalf("Send returned before the session stopped: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- tp.Stop() }()
+	select {
+	case err := <-stopped:
+		assert.NilError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop waited on the blocked Send")
+	}
+	<-sent
+}
+
+// A Stop that comes while the session is starting stops it once it has.
+func TestPlanAgentStopWhileStartingStopsTheSession(t *testing.T) {
+	tp := newTestPlanAgent(t, "plan-1")
+	tp.started = func() {
+		go func() { _ = tp.Stop() }()
+		assert.Assert(t, waitFor(func() bool {
+			tp.planAgent.mu.Lock()
+			defer tp.planAgent.mu.Unlock()
+			return tp.stopped
+		}))
+	}
+	err := tp.Send(t.Context(), "add a flag")
+	assert.Assert(t, errors.Is(err, errPlanAgentStopped), "%v", err)
+	assert.Assert(t, tp.sessions[0].stopped)
+}
+
+// Once stopped, the agent's events are drained, not held for a screen that
+// no longer reads them.
+func TestPlanAgentDrainsEventsOnceStopped(t *testing.T) {
+	tp := newTestPlanAgent(t, "plan-1")
+	tp.setHolder("s-1", nil)
+	assert.NilError(t, tp.Send(t.Context(), "add a flag"))
+	s := tp.session(0)
+	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "unread"}}
+	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "unread too"}}
+	assert.NilError(t, tp.Stop())
+	assert.Assert(t, waitFor(func() bool {
+		tp.planAgent.mu.Lock()
+		defer tp.planAgent.mu.Unlock()
+		return tp.hasEnded()
+	}), "forward is still waiting to hand on an event")
 }

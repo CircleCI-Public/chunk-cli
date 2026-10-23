@@ -76,7 +76,13 @@ type (
 		err         error
 	}
 	commentSavedMsg struct{ err error }
-	queueSavedMsg   struct {
+	// createdMsg is the end of creating the plan in factory, for the
+	// developer's first message, text.
+	createdMsg struct {
+		text string
+		err  error
+	}
+	queueSavedMsg struct {
 		saved int
 		err   error
 		// move is the agent state saveQueued attempted to move the plan to,
@@ -129,8 +135,9 @@ type Model struct {
 	plan     string
 	state    string
 	messages []message
-	// created is whether the plan has been made in factory with store.Create.
-	created bool
+	// created is whether the plan has been made in factory with store.Create,
+	// and creating whether that is under way.
+	created, creating bool
 
 	// blocks is renderedFrom, the plan as last rendered, split for
 	// commenting and rendered at renderedWidth.
@@ -362,6 +369,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case refreshedMsg:
 		return m.applyRefresh(msg), nil
+
+	case createdMsg:
+		m.creating = false
+		if msg.err != nil {
+			m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+			m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
+			m.renderPlan()
+			m.renderChat()
+			return m, nil
+		}
+		m.created = true
+		return m, sendCmd(m.ctx, m.agent, msg.text)
 
 	case commentSavedMsg:
 		m.savingEdit = false
@@ -631,14 +650,11 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 
 // send creates the plan in factory on the first message, then sends text to
 // the agent as the developer's message. The agent may be working already, on
-// an earlier message or a factory task; it reads text once it is done.
+// an earlier message or a factory task; it reads text once it is done. While
+// the plan is being created a message waits in the input.
 func (m Model) send(text string) (Model, tea.Cmd) {
-	if !m.created {
-		if err := m.store.Create(m.ctx, titleOf(text)); err != nil {
-			m.status = ui.ErrorStyle.Render("Could not create the plan: " + err.Error())
-			return m, nil
-		}
-		m.created = true
+	if m.creating {
+		return m, nil
 	}
 	m.input.Reset()
 	m.messages = append(m.messages, message{fromUser: true, text: text, toBusy: m.busy})
@@ -652,7 +668,17 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 	m.renderPlan()
 	m.renderChat()
 	m.chatView.GotoBottom()
+	if !m.created {
+		m.creating = true
+		return m, tea.Batch(createCmd(m.ctx, m.store, text), tick)
+	}
 	return m, tea.Batch(sendCmd(m.ctx, m.agent, text), tick)
+}
+
+// createCmd creates the plan in factory, titled for text, the developer's
+// first message.
+func createCmd(ctx context.Context, s Store, text string) tea.Cmd {
+	return func() tea.Msg { return createdMsg{text: text, err: s.Create(ctx, titleOf(text))} }
 }
 
 // applyEvent shows one thing the agent reported, then waits for the next.

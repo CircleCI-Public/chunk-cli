@@ -148,7 +148,7 @@ func planSession(ctx context.Context, root, model string, api *circleci.Client) 
 		if err := chunkd.EnsureRunning(); err != nil {
 			return "", fmt.Errorf("start the chunk daemon: %w", err)
 		}
-		return sendPlan(root, text)
+		return sendPlan(root, store.id(), text)
 	}
 	return agent, submit, store
 }
@@ -223,6 +223,23 @@ func (s *apiStore) State(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("get the plan's state: %w", err)
 	}
 	return p.State, nil
+}
+
+// holder is the factory session holding the plan's claim, or "" when none
+// does or the plan has not been created.
+func (s *apiStore) holder(ctx context.Context) (string, error) {
+	id := s.id()
+	if id == "" {
+		return "", nil
+	}
+	p, err := s.api.GetPlan(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("get the plan's claim: %w", err)
+	}
+	if p.Claim == nil {
+		return "", nil
+	}
+	return p.Claim.SessionID, nil
 }
 
 func (s *apiStore) Move(ctx context.Context, state string) error {
@@ -301,12 +318,21 @@ func (s *apiStore) DeleteComment(ctx context.Context, id string) error {
 	return nil
 }
 
-// sendPlan hands an approved plan to the factory, as 'chunk factory build'
-// would.
-func sendPlan(root, text string) (string, error) {
+// planOrigin is a run's SpecOrigin for factory plan planID, or "" for none.
+func planOrigin(planID string) string {
+	if planID == "" {
+		return ""
+	}
+	return "factory plan " + planID
+}
+
+// sendPlan hands an approved plan, planID in factory, to the factory, as
+// 'chunk factory build' would. The run names the plan as where it came from.
+func sendPlan(root, planID, text string) (string, error) {
 	id, err := chunkd.StartFactory(chunkd.FactoryRequest{
 		ProjectRoot: root,
 		Prompt:      strings.TrimSpace(text),
+		SpecOrigin:  planOrigin(planID),
 		PullRequest: chunkd.PullRequestAuto,
 	})
 	var refused *chunkd.SessionRefused

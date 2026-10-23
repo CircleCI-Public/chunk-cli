@@ -578,8 +578,11 @@ chunk
   needs factory, the f plugin, and the factory daemon running with
   `FACTORY_PLAN_STORE=circleci` as the CircleCI user chunk is signed in as;
   it checks the daemon before it opens, and says in the chat if the session
-  could not claim the plan. Closing the screen stops the session (SIGINT),
-  which frees its claim.
+  could not claim the plan, as factory's API reports the claim. A session
+  that ends is resumed by the next message, and told to claim the plan again,
+  as is one factory says no longer holds it. Closing the screen, or sending
+  the plan from `chunk watch`, stops the session (SIGINT), which frees its
+  claim.
 
   `tab` moves to the plan, where `c` writes a comment right under the
   highlighted part (a heading, paragraph, list item or code block); `enter`
@@ -592,11 +595,11 @@ chunk
   from a Human state, moves the plan to its Agent state, so the daemon has
   the session address them; they never go in a chat message. While the plan
   waits in a Human state, a message gets an answer but only comments change
-  the plan. A saved comment is edited at once with `c`, resolved with `r` and
+  the plan. While comments are saved they cannot be changed. A saved comment is edited at once with `c`, resolved with `r` and
   deleted with `d` (after a `y`); resolved ones are listed last. A comment on
   a part since rewritten is listed after the plan, naming the part it was on.
   `ctrl+s` sends the plan's text to the local daemon as `chunk factory build`
-  would; a plan not sent stays in factory, and its ID is printed. It checks
+  would, with `factory plan <ID>` as where it came from; a plan not sent stays in factory, and its ID is printed. It checks
   what `factory build` checks before it opens. The same screen opens from
   `chunk watch` with `p`.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans

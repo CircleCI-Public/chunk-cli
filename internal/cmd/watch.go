@@ -288,8 +288,10 @@ func (d *watchDrafts) draft(ctx context.Context, root, prompt string, activity f
 // checked before the screen opens, so no one plans a change the factory would
 // refuse. Errors come back as one sentence for the dashboard.
 //
+// A session is done with once its plan is sent, so it is stopped then, in
+// the background, freeing its claim; the dashboard waits for it as it ends.
 // The dashboard asks for a session only once the last one's plan was sent,
-// so that session is done with and is stopped here.
+// so that session is stopped here too, should the send not have.
 func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Agent, plan.Submitter, plan.Store, error) {
 	if err := checkFactoryProject(ctx, root); err != nil {
 		return nil, nil, nil, err
@@ -304,7 +306,18 @@ func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Agent, plan.S
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	agent, submit, store := planSession(d.ctx, root, "", api)
+	agent, send, store := planSession(d.ctx, root, "", api)
+	submit := func(text string) (string, error) {
+		id, err := send(text)
+		if err == nil {
+			d.wg.Add(1)
+			go func() {
+				defer d.wg.Done()
+				_ = agent.Stop()
+			}()
+		}
+		return id, err
+	}
 	d.mu.Lock()
 	last := d.planAgent
 	d.planAgent, d.planStore = agent, store
