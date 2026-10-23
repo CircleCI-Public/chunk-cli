@@ -361,11 +361,12 @@ then the draft's diff is shown in the right pane (`↑/↓` scrolls it), and
 `Enter` sends the draft and your prompt to the factory to finish (`Esc` keeps
 the draft for later).
 
-For a bigger change, press `p` to plan it with Claude first. The chat is on
-the left and the plan Claude writes is on the right; `tab` moves to the plan,
-where `c` writes a comment right under the highlighted part for Claude to
-address with your next message; `shift+↑/↓` selects several parts to
-comment on together. `ctrl+s` sends the finished plan to the
+For a bigger change, press `p` to plan it with a factory planning session
+first (it needs the factory daemon running with `FACTORY_PLAN_STORE=circleci`).
+The chat is on the left and the plan is on the right; `tab` moves to the plan,
+where `c` writes a comment right under the highlighted part, saved to factory
+for chunk to address when you next press `enter`; `shift+↑/↓` selects several
+parts to comment on together. `ctrl+s` sends the finished plan to the
 factory to build.
 `esc` goes back to your runs with the plan kept, and `p` opens it again.
 `chunk factory plan` opens the same screen on its own.

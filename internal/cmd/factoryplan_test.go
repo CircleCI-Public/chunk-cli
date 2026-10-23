@@ -2,15 +2,13 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
@@ -26,41 +24,39 @@ func apiStoreTestClient(t *testing.T) (*circleci.Client, *fakes.FakeCircleCI) {
 	return client, cci
 }
 
-// TestAPIStoreTextReadsThePlanFile checks that Text delegates to the
-// session's own plan file, the way chunk factory plan has always kept it:
-// nothing in factory's real API is ever told what Claude has written here,
-// so reading it back from there would show nothing.
-func TestAPIStoreTextReadsThePlanFile(t *testing.T) {
-	dir := t.TempDir()
-	planPath := filepath.Join(dir, "plan.md")
+// TestAPIStoreTextReadsThePlanFromFactory checks that Text reads the plan's
+// text from factory, where the agent writes it with plan_set, and is empty
+// before the plan exists.
+func TestAPIStoreTextReadsThePlanFromFactory(t *testing.T) {
 	client, _ := apiStoreTestClient(t)
-	store := &apiStore{api: client, session: &factory.PlanSession{PlanPath: planPath}}
+	store := &apiStore{api: client}
+	ctx := context.Background()
 
-	text, err := store.Text(context.Background())
+	text, err := store.Text(ctx)
 	assert.NilError(t, err)
 	assert.Equal(t, text, "")
 
-	assert.NilError(t, os.WriteFile(planPath, []byte("# A plan\n"), 0o600))
-	text, err = store.Text(context.Background())
+	assert.NilError(t, store.Create(ctx, "a plan"))
+	assert.NilError(t, client.SetPlanText(ctx, store.id(), "# A plan\n"))
+	text, err = store.Text(ctx)
 	assert.NilError(t, err)
 	assert.Equal(t, text, "# A plan\n")
 }
 
-// TestAPIStoreCreateSetsPlanID checks that Create posts the title with an
-// empty text, as the API requires, and keeps the returned ID on the
-// session so every later call addresses that plan.
+// TestAPIStoreCreateSetsPlanID checks that Create posts the title with the
+// plan skeleton as its text, so the plan tools have sections to write into,
+// and keeps the returned ID so every later call addresses that plan.
 func TestAPIStoreCreateSetsPlanID(t *testing.T) {
 	client, cci := apiStoreTestClient(t)
-	session := &factory.PlanSession{}
-	store := &apiStore{api: client, session: session}
+	store := &apiStore{api: client}
 
 	assert.NilError(t, store.Create(context.Background(), "add a --dry-run flag"))
-	assert.Assert(t, session.PlanID != "")
+	assert.Assert(t, store.id() != "")
 
-	plan, ok := cci.FactoryPlan(session.PlanID)
+	plan, ok := cci.FactoryPlan(store.id())
 	assert.Assert(t, ok)
 	assert.Equal(t, plan.Title, "add a --dry-run flag")
-	assert.Equal(t, plan.Text, "")
+	assert.Equal(t, plan.Text, planSkeleton("add a --dry-run flag"))
 	assert.Equal(t, plan.State, "Unprioritized")
 }
 
@@ -70,8 +66,7 @@ func TestAPIStoreCreateSetsPlanID(t *testing.T) {
 // behavior the old localPlanStore stopgap never had, always failing instead.
 func TestAPIStoreCommentsRoundTrip(t *testing.T) {
 	client, cci := apiStoreTestClient(t)
-	session := &factory.PlanSession{}
-	store := &apiStore{api: client, session: session}
+	store := &apiStore{api: client}
 	ctx := context.Background()
 	assert.NilError(t, store.Create(ctx, "a plan"))
 
@@ -101,7 +96,7 @@ func TestAPIStoreCommentsRoundTrip(t *testing.T) {
 	cs, err = store.Comments(ctx)
 	assert.NilError(t, err)
 	assert.Equal(t, len(cs), 0)
-	plan, _ := cci.FactoryPlan(session.PlanID)
+	plan, _ := cci.FactoryPlan(store.id())
 	assert.Equal(t, plan.Comments, 0)
 }
 
@@ -110,11 +105,10 @@ func TestAPIStoreCommentsRoundTrip(t *testing.T) {
 // move sending comments takes.
 func TestAPIStoreMoveFollowsTheEdge(t *testing.T) {
 	client, cci := apiStoreTestClient(t)
-	session := &factory.PlanSession{}
-	store := &apiStore{api: client, session: session}
+	store := &apiStore{api: client}
 	ctx := context.Background()
 	assert.NilError(t, store.Create(ctx, "a plan"))
-	cci.SetFactoryPlanState(session.PlanID, "Planning - Human")
+	cci.SetFactoryPlanState(store.id(), "Planning - Human")
 
 	assert.NilError(t, store.Move(ctx, "Planning - Agent"))
 	state, err := store.State(ctx)
@@ -127,7 +121,7 @@ func TestAPIStoreMoveFollowsTheEdge(t *testing.T) {
 // old localPlanStore stopgap's no-op Create and Move.
 func TestAPIStoreWritesFailBeforeCreate(t *testing.T) {
 	client, _ := apiStoreTestClient(t)
-	store := &apiStore{api: client, session: &factory.PlanSession{}}
+	store := &apiStore{api: client}
 	ctx := context.Background()
 
 	_, err := store.AddComment(ctx, "quote", "body")
@@ -149,7 +143,7 @@ func TestAPIStoreWritesFailBeforeCreate(t *testing.T) {
 func TestWithPlanClaimOnlyPrependsOnce(t *testing.T) {
 	msg, claimed := withPlanClaim(false, "plan-1", "hello")
 	assert.Equal(t, claimed, true)
-	assert.Equal(t, msg, "Plan plan-1 in factory is for this conversation; claim it with plan_claim.\n\nhello")
+	assert.Equal(t, msg, fmt.Sprintf(planClaim, "plan-1", "hello"))
 
 	msg, claimed = withPlanClaim(claimed, "plan-1", "a later message")
 	assert.Equal(t, claimed, true)
@@ -163,17 +157,4 @@ func TestWithPlanClaimWaitsForAnID(t *testing.T) {
 	msg, claimed := withPlanClaim(false, "", "hello")
 	assert.Equal(t, claimed, false)
 	assert.Equal(t, msg, "hello")
-}
-
-// TestStorePlanIDReadsTheCreatedPlan checks the "not sent" message's lookup
-// of the plan's ID: empty for a Store that never created one, and the
-// created ID once it has.
-func TestStorePlanIDReadsTheCreatedPlan(t *testing.T) {
-	client, _ := apiStoreTestClient(t)
-	session := &factory.PlanSession{}
-	store := &apiStore{api: client, session: session}
-	assert.Equal(t, storePlanID(store), "")
-
-	assert.NilError(t, store.Create(context.Background(), "a plan"))
-	assert.Equal(t, storePlanID(store), session.PlanID)
 }

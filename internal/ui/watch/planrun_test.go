@@ -12,9 +12,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
-// fakePlans stands in for Claude and the factory on the planning screen:
-// turns answer with reply once release is closed, when there is one, and
-// sends answer with runID. The store's text is plan throughout.
+// fakePlans stands in for the planning agent and the factory on the planning
+// screen: the agent answers each message with reply once release is closed,
+// when there is one, and sends answer with runID. The store's text is plan
+// throughout.
 type fakePlans struct {
 	root    string
 	err     error
@@ -42,26 +43,39 @@ func (f *fakePlanStore) EditComment(context.Context, string, string) error { ret
 func (f *fakePlanStore) ResolveComment(context.Context, string) error      { return nil }
 func (f *fakePlanStore) DeleteComment(context.Context, string) error       { return nil }
 
-func (f *fakePlans) planner(_ context.Context, root string) (plan.Turner, plan.Submitter, plan.Store, error) {
+// fakePlanAgent is a plan.Agent that answers every message with its
+// fakePlans' reply.
+type fakePlanAgent struct {
+	f      *fakePlans
+	events chan plan.Event
+}
+
+func (a *fakePlanAgent) Send(ctx context.Context, _ string) error {
+	go func() {
+		if a.f.release != nil {
+			select {
+			case <-a.f.release:
+			case <-ctx.Done():
+				return
+			}
+		}
+		a.events <- plan.Event{Reply: &plan.Reply{Text: a.f.reply}}
+	}()
+	return nil
+}
+
+func (a *fakePlanAgent) Events() <-chan plan.Event { return a.events }
+
+func (f *fakePlans) planner(_ context.Context, root string) (plan.Agent, plan.Submitter, plan.Store, error) {
 	f.root = root
 	if f.err != nil {
 		return nil, nil, nil, f.err
-	}
-	turn := func(ctx context.Context, _ string, _ func(string)) (string, error) {
-		if f.release != nil {
-			select {
-			case <-f.release:
-			case <-ctx.Done():
-				return "", ctx.Err()
-			}
-		}
-		return f.reply, nil
 	}
 	submit := func(p string) (string, error) {
 		f.sent = p
 		return f.runID, nil
 	}
-	return turn, submit, &fakePlanStore{text: f.plan}, nil
+	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, submit, &fakePlanStore{text: f.plan}, nil
 }
 
 func planModel(t *testing.T, f *fakePlans) Model {
@@ -113,17 +127,18 @@ func TestPlannerErrorIsNotedOnTheDashboard(t *testing.T) {
 	assert.Assert(t, strings.Contains(view(m), "could not start a plan: this project has no git remote named origin"), view(m))
 }
 
-// Esc goes back to the runs with the plan kept: Claude carries on while the
+// Esc goes back to the runs with the plan kept: chunk carries on while the
 // dashboard is shown, and p opens the screen again as it was.
 func TestThePlanIsKeptBehindTheDashboard(t *testing.T) {
 	f := &fakePlans{reply: "Wrote a plan.", plan: "## 1. Outcome\n\nThe flag exists.", release: make(chan struct{})}
 	m := openPlanScreen(t, planModel(t, f))
 	m = typeInto(m, "add a flag")
 	m, turn := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	assert.Assert(t, turn != nil, "enter sends the message to Claude")
+	assert.Assert(t, turn != nil, "enter sends the message to chunk")
+	m = deliver(t, m, turn)
 
-	// While Claude works, esc is for stopping it; ctrl+c goes back.
-	m, back := pressKey(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	// Esc goes back while chunk works, which carries on.
+	m, back := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = deliver(t, m, back)
 	assert.Assert(t, !m.planOpen && m.HasPlan())
 	assert.Assert(t, strings.Contains(view(m), "p back to plan"), view(m))
@@ -132,9 +147,9 @@ func TestThePlanIsKeptBehindTheDashboard(t *testing.T) {
 	m, _ = press(m, 'j')
 	assert.Equal(t, m.selRun, "bbb")
 
-	// Claude answers while the dashboard is shown.
+	// chunk answers while the dashboard is shown.
 	close(f.release)
-	m = deliver(t, m, turn)
+	m = deliver(t, m, m.planScreen.Next())
 	// The plan pane picks up the store's text on its next poll; this drives
 	// one deterministically rather than waiting on the real timer.
 	m = deliver(t, m, m.planScreen.Poll())
@@ -151,6 +166,7 @@ func TestSendingThePlanSelectsItsRun(t *testing.T) {
 	m = typeInto(m, "add a flag")
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = deliver(t, m, cmd)
+	m = deliver(t, m, m.planScreen.Next()) // chunk's reply
 	// The plan pane picks up the store's text on its next poll; this drives
 	// one deterministically rather than waiting on the real timer.
 	m = deliver(t, m, m.planScreen.Poll())

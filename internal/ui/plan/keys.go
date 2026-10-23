@@ -33,7 +33,6 @@ type keyMap struct {
 	Confirm key.Binding
 
 	Focus    key.Binding
-	Stop     key.Binding
 	SendPlan key.Binding
 	Quit     key.Binding
 }
@@ -78,16 +77,16 @@ func (m Model) keys() keyMap {
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
 		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", focusHelp)),
-		Stop:           key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop chunk")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "send plan to factory")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 
 	if m.back {
-		// Esc leaves, as it does elsewhere in the host, unless it has
-		// Claude to stop, a comment to cancel or a question to answer no to.
+		// Esc leaves, as it does elsewhere in the host, unless it has a
+		// comment to cancel or a question to answer no to. Leaving stops
+		// nothing: the host keeps the screen, and chunk works on.
 		k.Quit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "back to runs"))
-		if !m.busy && !m.commenting && !m.confirming && !m.selecting() {
+		if !m.commenting && !m.confirming && !m.selecting() {
 			k.Quit = key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc", "back to runs"))
 		}
 	}
@@ -101,7 +100,7 @@ func (m Model) keys() keyMap {
 	for _, b := range []*key.Binding{&k.ExtendUp, &k.ExtendDown, &k.Up, &k.Down, &k.Top, &k.Bottom, &k.PageUp, &k.PageDown, &k.HalfUp, &k.HalfDown, &k.SectionBack, &k.SectionNext, &k.Comment} {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
-	// Esc clears a selection before it stops Claude or leaves.
+	// Esc clears a selection before it leaves.
 	k.ClearSelection.SetEnabled(inPlan && m.selecting())
 	if m.selecting() {
 		k.Comment.SetHelp("c", "comment on selection")
@@ -120,7 +119,6 @@ func (m Model) keys() keyMap {
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)
-	k.Stop.SetEnabled(m.busy && !m.commenting && !m.selecting())
 	k.Confirm.SetEnabled(m.confirming)
 	return k
 }
@@ -132,7 +130,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.SaveComment, k.CancelComment,
 		k.Send, k.Newline,
 		k.Comment, k.Next, k.SendComments, k.ClearSelection, k.Up,
-		k.Stop, k.Focus, k.SendPlan, k.Quit,
+		k.Focus, k.SendPlan, k.Quit,
 		k.SectionBack, k.Delete, k.Resolve, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }

@@ -135,7 +135,6 @@ func (m Model) actionBar() string {
 	}
 	k := m.keys()
 	// What the buttons say is left out of the hints.
-	k.Stop.SetEnabled(false)
 	k.SendPlan.SetEnabled(false)
 	k.SendComments.SetEnabled(false)
 	room := max(inner-lipgloss.Width(right)-2, 0)
@@ -167,7 +166,7 @@ func (m Model) actions() (main, side string) {
 	case m.sending, m.commenting:
 		return "", ""
 	case m.busy:
-		return outline(m.purple(), "esc Stop chunk"), m.style(m.faint()).Render(approve)
+		return outline(m.purple(), "chunk is working"), m.style(m.faint()).Render(approve)
 	case strings.TrimSpace(m.plan) == "":
 		return "", ""
 	case queued > 0:

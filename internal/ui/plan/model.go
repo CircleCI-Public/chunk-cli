@@ -11,7 +11,6 @@ package plan
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -29,10 +28,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
-// Turner sends the developer's message to the planning agent and returns its
-// reply, reporting what the agent does to activity as it goes.
-type Turner func(ctx context.Context, message string, activity func(string)) (reply string, err error)
-
 // Submitter hands an approved plan to the factory and returns the run's ID.
 type Submitter func(plan string) (string, error)
 
@@ -49,6 +44,11 @@ type message struct {
 	fromUser bool
 	text     string
 	failed   bool
+	// toBusy is a message of the developer's that reached the agent while it
+	// was working, so it reads the message once it is done with that.
+	toBusy bool
+	// byTask is a reply to a factory task rather than to the developer.
+	byTask bool
 	// rendered is a reply's markdown as rendered at renderedWidth, kept so
 	// the chat is not rendered again on every tick of the spinner.
 	rendered      string
@@ -65,11 +65,6 @@ type renderedBlock struct {
 }
 
 type (
-	activityMsg string
-	turnDoneMsg struct {
-		reply string
-		err   error
-	}
 	submittedMsg struct {
 		runID string
 		err   error
@@ -127,7 +122,7 @@ func closed(runID string) tea.Cmd {
 // Model is the planning screen.
 type Model struct {
 	ctx    context.Context
-	turn   Turner
+	agent  Agent
 	submit Submitter
 	store  Store
 
@@ -189,12 +184,15 @@ type Model struct {
 	width  int
 	height int
 
+	// busy is whether the agent is working: from a send, or from the first
+	// thing it does on a factory task, until its reply.
 	busy bool
-	// log is what Claude has done this turn, oldest first.
-	log        []string
-	cancelTurn context.CancelFunc
-	activity   string
-	activityCh chan string
+	// byTask is whether what the agent is working on is a factory task's,
+	// rather than the developer's message.
+	byTask bool
+	// log is what the agent has done this turn, oldest first.
+	log      []string
+	activity string
 
 	confirming bool
 	// sending is set from the developer's y until the factory answers, so a
@@ -228,11 +226,14 @@ type Model struct {
 const (
 	chatPlaceholder     = "Describe the change, or give feedback on the plan…"
 	commentsPlaceholder = "Press enter to save your comments, or add a message…"
+	// reviewPlaceholder is for a plan waiting on the developer's review, which
+	// the agent may not change until comments move it back to the agent.
+	reviewPlaceholder = "Ask chunk about the plan; comment on it to change it…"
 )
 
 // New returns the planning screen. A non-empty first message is sent as soon
 // as the screen opens.
-func New(ctx context.Context, turn Turner, submit Submitter, store Store, first string) Model {
+func New(ctx context.Context, agent Agent, submit Submitter, store Store, first string) Model {
 	in := textarea.New()
 	in.Placeholder = chatPlaceholder
 	in.ShowLineNumbers = false
@@ -265,7 +266,7 @@ func New(ctx context.Context, turn Turner, submit Submitter, store Store, first 
 
 	return Model{
 		ctx:          ctx,
-		turn:         turn,
+		agent:        agent,
 		submit:       submit,
 		store:        store,
 		planView:     planView,
@@ -303,13 +304,17 @@ func (m Model) WithBack() Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, pollCmd())
+	return tea.Batch(textarea.Blink, pollCmd(), waitEvent(m.ctx, m.agent))
 }
 
 // Poll reads the plan's state, text and comments from the store, as the
 // screen's own timer does every few seconds. A host can use it to refresh
 // the screen deterministically, without waiting for that timer.
 func (m Model) Poll() tea.Cmd { return refreshCmd(m.ctx, m.store) }
+
+// Next waits for the agent's next event, as the screen itself does from Init
+// on. A host can use it to deliver one deterministically.
+func (m Model) Next() tea.Cmd { return waitEvent(m.ctx, m.agent) }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -337,36 +342,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case activityMsg:
-		// A message that was already queued when the turn ended.
-		if !m.busy {
+	case eventMsg:
+		if msg.agent != m.agent {
 			return m, nil
 		}
-		m.activity = string(msg)
-		m.log = append(m.log, m.activity)
-		if len(m.log) > 5 {
-			m.log = m.log[len(m.log)-5:]
-		}
-		m.renderChat()
-		return m, waitActivity(m.ctx, m.activityCh)
+		return m.applyEvent(msg.Event)
 
-	case turnDoneMsg:
-		m.busy, m.activity, m.log = false, "", nil
-		if m.cancelTurn != nil {
-			m.cancelTurn()
-			m.cancelTurn = nil
+	case sentMsg:
+		if msg.agent == m.agent && msg.err != nil {
+			m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+			m.messages = append(m.messages, message{text: "Could not reach chunk: " + msg.err.Error(), failed: true})
+			m.renderPlan()
+			m.renderChat()
 		}
-		switch {
-		case errors.Is(msg.err, context.Canceled):
-			m.messages = append(m.messages, message{text: "Stopped.", failed: true})
-		case msg.err != nil:
-			m.messages = append(m.messages, message{text: msg.err.Error(), failed: true})
-		default:
-			m.messages = append(m.messages, message{text: msg.reply})
-		}
-		m.renderPlan()
-		m.renderChat()
-		return m, refreshCmd(m.ctx, m.store)
+		return m, nil
 
 	case pollMsg:
 		return m, tea.Batch(refreshCmd(m.ctx, m.store), pollCmd())
@@ -497,11 +486,6 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(msg, k.Stop):
-		if m.cancelTurn != nil {
-			m.cancelTurn()
-		}
-		return m, nil
 	case key.Matches(msg, k.Focus):
 		m.anchor = -1
 		if m.focus == paneChat {
@@ -518,7 +502,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		switch {
 		case m.sending:
 		case m.busy:
-			m.status = warn("Wait for chunk to finish, or press esc to stop it.")
+			m.status = warn("Wait for chunk to finish.")
 		case strings.TrimSpace(m.plan) == "":
 			m.status = warn("There is no plan to send yet.")
 		case queued > 0:
@@ -544,10 +528,6 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if key.Matches(msg, k.Send) {
-		if m.busy {
-			m.status = warn("chunk is still answering; your message is kept until it finishes.")
-			return m, nil
-		}
 		return m.deliver(strings.TrimSpace(m.input.Value()))
 	}
 	return m.forward(msg)
@@ -590,9 +570,6 @@ func (m Model) quit() (Model, tea.Cmd) {
 		m.quitting, m.confirming = true, false
 		m.status = warn(fmt.Sprintf("Your %s will be lost. Press ctrl+c again to quit.", unsent))
 		return m, nil
-	}
-	if m.cancelTurn != nil {
-		m.cancelTurn()
 	}
 	return m, closed("")
 }
@@ -652,8 +629,9 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// send creates the plan in factory on the first message, then starts a turn
-// with text as the developer's message.
+// send creates the plan in factory on the first message, then sends text to
+// the agent as the developer's message. The agent may be working already, on
+// an earlier message or a factory task; it reads text once it is done.
 func (m Model) send(text string) (Model, tea.Cmd) {
 	if !m.created {
 		if err := m.store.Create(m.ctx, titleOf(text)); err != nil {
@@ -663,16 +641,49 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 		m.created = true
 	}
 	m.input.Reset()
-	m.messages = append(m.messages, message{fromUser: true, text: text})
-	m.status, m.log = "", nil
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.busy, m.cancelTurn = true, cancel
-	m.activityCh = make(chan string, 64)
+	m.messages = append(m.messages, message{fromUser: true, text: text, toBusy: m.busy})
+	m.status = ""
+	var tick tea.Cmd
+	if !m.busy {
+		m.busy, m.byTask, m.log = true, false, nil
+		tick = m.spin.Tick
+	}
 	m.syncPlaceholder()
 	m.renderPlan()
 	m.renderChat()
 	m.chatView.GotoBottom()
-	return m, tea.Batch(turnCmd(ctx, m.turn, text, m.activityCh), waitActivity(ctx, m.activityCh), m.spin.Tick)
+	return m, tea.Batch(sendCmd(m.ctx, m.agent, text), tick)
+}
+
+// applyEvent shows one thing the agent reported, then waits for the next.
+func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
+	next := waitEvent(m.ctx, m.agent)
+	switch {
+	case ev.Activity != "":
+		var tick tea.Cmd
+		if !m.busy {
+			// Nothing was sent, so a factory task started this turn.
+			m.busy, m.byTask, m.log = true, true, nil
+			tick = m.spin.Tick
+		}
+		m.activity = ev.Activity
+		m.log = append(m.log, m.activity)
+		if len(m.log) > 5 {
+			m.log = m.log[len(m.log)-5:]
+		}
+		m.renderPlan()
+		m.renderChat()
+		return m, tea.Batch(next, tick)
+	case ev.Reply != nil:
+		m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+		m.messages = append(m.messages, message{text: ev.Reply.Text, byTask: ev.Reply.ByTask})
+	case ev.Problem != nil:
+		m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+		m.messages = append(m.messages, message{text: ev.Problem.Error(), failed: true})
+	}
+	m.renderPlan()
+	m.renderChat()
+	return m, tea.Batch(next, refreshCmd(m.ctx, m.store))
 }
 
 // titleOf is the plan's title from the developer's message: its first line,
@@ -688,42 +699,16 @@ func titleOf(text string) string {
 }
 
 // syncPlaceholder tells the developer that enter saves their comments when
-// there are some queued.
+// there are some queued, and that only comments change a plan waiting on
+// their review.
 func (m *Model) syncPlaceholder() {
-	if len(queuedComments(m.comments)) > 0 {
+	switch {
+	case len(queuedComments(m.comments)) > 0:
 		m.input.Placeholder = commentsPlaceholder
-		return
-	}
-	m.input.Placeholder = chatPlaceholder
-}
-
-func turnCmd(ctx context.Context, turn Turner, text string, activity chan string) tea.Cmd {
-	return func() tea.Msg {
-		// Closing the channel ends the wait for activity with the turn.
-		defer close(activity)
-		reply, err := turn(ctx, text, func(s string) {
-			// Activity is only shown, so it is dropped rather than hold up
-			// Claude when the screen falls behind.
-			select {
-			case activity <- s:
-			default:
-			}
-		})
-		return turnDoneMsg{reply: reply, err: err}
-	}
-}
-
-func waitActivity(ctx context.Context, activity chan string) tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case s, ok := <-activity:
-			if !ok {
-				return nil
-			}
-			return activityMsg(s)
-		case <-ctx.Done():
-			return nil
-		}
+	case agentStates[m.state] != "":
+		m.input.Placeholder = reviewPlaceholder
+	default:
+		m.input.Placeholder = chatPlaceholder
 	}
 }
 
@@ -946,11 +931,19 @@ func (m *Model) renderChat() {
 		switch {
 		case msg.fromUser:
 			b.WriteString(m.userBubble(msg.text, w))
+			if msg.toBusy {
+				b.WriteString("\n" + lipgloss.PlaceHorizontal(w, lipgloss.Right,
+					m.style(m.faint()).Render("sent while chunk was working; it reads this next")))
+			}
 		case msg.failed:
 			b.WriteString(chunkStyle.Render("chunk") + "\n")
 			b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text))
 		default:
-			b.WriteString(chunkStyle.Render("chunk") + "\n")
+			b.WriteString(chunkStyle.Render("chunk"))
+			if msg.byTask {
+				b.WriteString(m.style(m.faint()).Render(" · factory task"))
+			}
+			b.WriteString("\n")
 			if msg.renderedWidth != w {
 				msg.rendered, msg.renderedWidth = renderMarkdown(msg.text, m.dark, w-2), w
 			}
@@ -958,7 +951,7 @@ func (m *Model) renderChat() {
 		}
 		b.WriteString("\n\n")
 	}
-	if q := queuedComments(m.comments); len(q) > 0 && !m.busy && !m.savingComments {
+	if q := queuedComments(m.comments); len(q) > 0 && !m.savingComments {
 		// The comments wait in a bubble like the message they will go in.
 		b.WriteString(m.queuedBubble(q, w) + "\n")
 		b.WriteString(m.style(m.faint()).Render("queued · press enter to save") + "\n\n")
@@ -978,7 +971,7 @@ func (m *Model) renderChat() {
 	}
 }
 
-// activityLog is what Claude has been doing this turn: each thing it has
+// activityLog is what the agent has been doing this turn: each thing it has
 // finished with a tick, and the one in hand with the spinner.
 func (m Model) activityLog(w int) string {
 	if len(m.log) == 0 {
@@ -986,6 +979,9 @@ func (m Model) activityLog(w int) string {
 		return m.style(m.purple()).Render(m.spin.View() + "chunk is thinking…")
 	}
 	var lines []string
+	if m.byTask {
+		lines = append(lines, m.style(m.faint()).Render("working on a factory task"))
+	}
 	for i, a := range m.log {
 		a = ansi.Truncate(a, w-2, "…")
 		if i == len(m.log)-1 {

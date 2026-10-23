@@ -103,7 +103,11 @@ func newWatchCmd() *cobra.Command {
 			if top := gitutil.TopLevelCtx(cmd.Context(), cwd); top != "" {
 				startDir = config.CanonicalProjectRoot(top)
 			}
-			drafts := newWatchDrafts(cmd.Context())
+			// Closing the window stops the planning session and the drafts
+			// as quitting does, rather than leaving them running.
+			ctx, stopHangup := untilHangup(cmd.Context())
+			defer stopHangup()
+			drafts := newWatchDrafts(ctx)
 			// Claude runs as a process of its own, which would outlive the
 			// dashboard; it is stopped, and waited for, as the dashboard ends.
 			defer drafts.stop()
@@ -111,16 +115,14 @@ func newWatchCmd() *cobra.Command {
 				WithDrafts(drafts.ctx, startDir, drafts.draft, sendDraft).
 				WithContinue(continueRun).
 				WithPlans(drafts.ctx, drafts.plan)
-			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
+			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
 			if err != nil {
 				return err
 			}
 			if fm, ok := final.(watch.Model); ok && fm.HasPlan() {
-				if saved := drafts.lastPlan(); saved != "" {
-					if _, err := os.Stat(saved); err == nil {
-						iostream.FromCmd(cmd).ErrPrintf("The plan was not sent. It is saved at %s; build it later with: chunk factory build %s\n", saved, saved)
-					}
+				if id := drafts.lastPlan(); id != "" {
+					iostream.FromCmd(cmd).ErrPrintf("The plan was not sent. It is plan %s in factory.\n", id)
 				}
 			}
 			return nil
@@ -186,8 +188,10 @@ type watchDrafts struct {
 	wg     sync.WaitGroup
 
 	mu sync.Mutex
-	// planPath is the file of the plan last opened from the dashboard.
-	planPath string
+	// planAgent and planStore are the planning session last opened from
+	// the dashboard, and where its plan is kept.
+	planAgent *planAgent
+	planStore *apiStore
 }
 
 func newWatchDrafts(parent context.Context) *watchDrafts {
@@ -197,6 +201,12 @@ func newWatchDrafts(parent context.Context) *watchDrafts {
 
 func (d *watchDrafts) stop() {
 	d.cancel()
+	d.mu.Lock()
+	agent := d.planAgent
+	d.mu.Unlock()
+	if agent != nil {
+		_ = agent.Stop()
+	}
 	d.wg.Wait()
 }
 
@@ -273,42 +283,59 @@ func (d *watchDrafts) draft(ctx context.Context, root, prompt string, activity f
 	return draft, err
 }
 
-// plan opens a conversation with Claude Code, on this machine, about a plan
-// for a change in root, as `chunk factory plan` does. What a build checks
-// first is checked before the screen opens, so no one plans a change the
-// factory would refuse. Errors come back as one sentence for the dashboard.
-func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Turner, plan.Submitter, plan.Store, error) {
+// plan opens a factory planning session on this machine about a plan for a
+// change in root, as `chunk factory plan` does. What a build checks first is
+// checked before the screen opens, so no one plans a change the factory would
+// refuse. Errors come back as one sentence for the dashboard.
+//
+// The dashboard asks for a session only once the last one's plan was sent,
+// so that session is done with and is stopped here.
+func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Agent, plan.Submitter, plan.Store, error) {
 	if err := checkFactoryProject(ctx, root); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := factory.CheckClaude(); err != nil {
 		return nil, nil, nil, errors.New("this machine has no Claude Code to plan with; install it from https://claude.com/claude-code")
 	}
-	planPath, err := newPlanPath(root)
-	if err != nil {
-		return nil, nil, nil, err
+	if err := factory.CheckFactoryDaemon(ctx); err != nil {
+		return nil, nil, nil, watchFactoryProblem(err)
 	}
-	d.mu.Lock()
-	d.planPath = planPath
-	d.mu.Unlock()
 	api, err := factoryPlanClient()
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	turn, submit, store := planSession(root, planPath, "", api)
-	// A turn's Claude is stopped as the dashboard ends, and waited for.
-	waited := func(ctx context.Context, message string, activity func(string)) (string, error) {
-		d.wg.Add(1)
-		defer d.wg.Done()
-		return turn(ctx, message, activity)
+	agent, submit, store := planSession(d.ctx, root, "", api)
+	d.mu.Lock()
+	last := d.planAgent
+	d.planAgent, d.planStore = agent, store
+	d.mu.Unlock()
+	if last != nil {
+		_ = last.Stop()
 	}
-	return waited, submit, store, nil
+	return agent, submit, store, nil
 }
 
+// watchFactoryProblem is CheckFactoryDaemon's error as one sentence for the
+// dashboard.
+func watchFactoryProblem(err error) error {
+	switch {
+	case errors.Is(err, factory.ErrNoFactory):
+		return errors.New("factory is not installed; install it and put it on PATH to plan")
+	case errors.Is(err, factory.ErrNoFactoryDaemon):
+		return errors.New("the factory daemon is not running; run `factory daemon` with FACTORY_PLAN_STORE=circleci to plan")
+	}
+	return err
+}
+
+// lastPlan is the ID in factory of the plan last opened from the dashboard,
+// or "" when there is none.
 func (d *watchDrafts) lastPlan() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.planPath
+	if d.planStore == nil {
+		return ""
+	}
+	return d.planStore.id()
 }
 
 // draftModel is the model a change started from the dashboard is made with:
