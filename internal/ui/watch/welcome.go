@@ -92,10 +92,10 @@ func (m Model) welcomeRows(st watchStyles, size logoSize) []string {
 			continue
 		}
 		h := b.Help()
-		label := st.Teal.Bold(true).Render(h.Key) + "  " + st.muted(h.Desc)
+		label := st.Brand.Bold(true).Render(h.Key) + "  " + st.muted(h.Desc)
 		buttons = append(buttons, lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
-			BorderForeground(st.Teal.GetForeground()).
+			BorderForeground(st.Brand.GetForeground()).
 			Padding(0, 1).
 			Render(label))
 	}

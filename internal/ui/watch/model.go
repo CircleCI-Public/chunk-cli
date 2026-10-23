@@ -56,7 +56,7 @@ func (s watchStyles) emphasis(text string) string { return s.Emphasis.Render(tex
 func (s watchStyles) success(text string) string  { return s.Success.Render(text) }
 func (s watchStyles) warning(text string) string  { return s.Warning.Render(text) }
 func (s watchStyles) running(text string) string  { return s.Running.Render(text) }
-func (s watchStyles) teal(text string) string     { return s.Teal.Render(text) }
+func (s watchStyles) brand(text string) string    { return s.Brand.Render(text) }
 func (s watchStyles) err(text string) string      { return s.Error.Render(text) }
 func (s watchStyles) muted(text string) string    { return s.Muted.Render(text) }
 func (s watchStyles) vdim(text string) string     { return s.VDim.Render(text) }
@@ -568,7 +568,7 @@ func (m Model) renderHeader(st watchStyles) string {
 		}
 	}
 
-	title := st.teal("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
+	title := st.brand("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
 	right := m.draftReadyTag(st) + m.runTag(st) + m.connectionTag(st)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
@@ -737,7 +737,7 @@ func (m Model) renderEmptyPane(st watchStyles) []string {
 	lines = append(lines, title, "")
 	switch {
 	case len(m.allRuns) > 0 && m.query == "" && !m.showEnded:
-		lines = append(lines, st.muted("No active runs."), st.dim("Press ")+st.Teal.Bold(true).Render("e")+st.dim(" to show finished runs."), "")
+		lines = append(lines, st.muted("No active runs."), st.dim("Press ")+st.Brand.Bold(true).Render("e")+st.dim(" to show finished runs."), "")
 	case len(m.allRuns) > 0:
 		lines = append(lines, st.muted("No run matches the search."), "")
 	default:
@@ -772,7 +772,7 @@ func (m Model) renderStartHints(st watchStyles) []string {
 			continue
 		}
 		h := b.Help()
-		actions = append(actions, st.Teal.Bold(true).Render("["+h.Key+"]")+" "+st.muted(h.Desc))
+		actions = append(actions, st.Brand.Bold(true).Render("["+h.Key+"]")+" "+st.muted(h.Desc))
 	}
 	cmd := st.dim("chunk factory build \"<what to change>\"")
 	if len(actions) == 0 {
@@ -796,7 +796,7 @@ func (m Model) renderFooter(st watchStyles) string {
 	if m.draft != draftNone {
 		// A new run's keys are the ones a new user is told to press, so they
 		// stand out from the actions they name.
-		help.Styles.ShortKey = st.Teal.Bold(true)
+		help.Styles.ShortKey = st.Brand.Bold(true)
 	}
 	var bar string
 	if m.welcoming() {

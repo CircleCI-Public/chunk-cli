@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,14 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
+
+// fgSeq is the escape sequence that sets c as the foreground, as bgSeq does
+// for the background.
+func fgSeq(c color.Color) string {
+	s := lipgloss.NewStyle().Foreground(c).Render("x")
+	before, _, _ := strings.Cut(s, "x")
+	return before
+}
 
 // drive feeds msg to m, then runs each command it returns and feeds back
 // what they produce, until the screen settles. Ticks and blinks are skipped:
@@ -462,7 +471,7 @@ func TestFocusedPaneUsesTheBrandAccent(t *testing.T) {
 		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		st := theme.New(dark)
 		top := strings.Split(m.Content(), "\n")[1]
-		focused := lipgloss.NewStyle().Foreground(st.Teal.GetForeground()).Render("╭─ ")
+		focused := lipgloss.NewStyle().Foreground(st.Brand.GetForeground()).Render("╭─ ")
 		quiet := lipgloss.NewStyle().Foreground(st.VDim.GetForeground()).Render("╭─ ")
 		if !strings.HasPrefix(top, focused) {
 			t.Errorf("dark=%v: the focused chat pane's edge is not the accent: %q", dark, top)
@@ -473,9 +482,115 @@ func TestFocusedPaneUsesTheBrandAccent(t *testing.T) {
 	}
 }
 
+// The message box takes one step less contrast than the pane's own accent
+// border: dim while the chat has the keyboard, quiet once the plan pane
+// does, and never the pane's own accent colour either way.
+func TestMessageBoxIsBelowThePaneAccent(t *testing.T) {
+	// check asserts the message box's title row starts right after a chat
+	// pane gutter drawn in gutterColor, with its own edge in edgeColor, and
+	// never in the brand accent.
+	check := func(t *testing.T, m Model, gutterColor, edgeColor color.Color, label string) {
+		t.Helper()
+		var line string
+		for _, l := range strings.Split(m.Content(), "\n") {
+			if strings.Contains(l, "Message") {
+				line = l
+				break
+			}
+		}
+		if line == "" {
+			t.Fatalf("%s: no line with the message box's title: %q", label, m.Content())
+		}
+		gutter := lipgloss.NewStyle().Foreground(gutterColor).Render("│") + " "
+		rest, ok := strings.CutPrefix(line, gutter)
+		if !ok {
+			t.Fatalf("%s: the message box does not start right after the pane's gutter: %q", label, line)
+		}
+		wantEdge := lipgloss.NewStyle().Foreground(edgeColor).Render("╭─ ")
+		if !strings.HasPrefix(rest, wantEdge) {
+			t.Errorf("%s: the message box's edge is not as expected: %q", label, line)
+		}
+		// Only the box's own top edge, not the pane's right border further
+		// along the same (horizontally joined) line, which may be the accent.
+		box := rest
+		if end := strings.Index(rest, "╮"); end >= 0 {
+			box = rest[:end+len("╮")]
+		}
+		if strings.Contains(box, fgSeq(m.brand())) {
+			t.Errorf("%s: the message box took the pane's own accent colour: %q", label, line)
+		}
+	}
+
+	for _, dark := range []bool{true, false} {
+		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
+		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		// The chat has the keyboard: its own gutter is the accent, and the
+		// message box one step down, dim.
+		check(t, m, m.brand(), m.dim(), fmt.Sprintf("dark=%v chat focused", dark))
+
+		// Tab moves the keyboard to the plan pane: the chat's gutter goes
+		// quiet, and the message box follows it to quiet too.
+		m = drive(t, m, press("tab"))
+		check(t, m, m.quiet(), m.quiet(), fmt.Sprintf("dark=%v plan focused", dark))
+	}
+}
+
+// Dropping the message box's ground and clearing the chat textarea's cursor
+// line leaves it, like the panes, on the terminal's own background.
+func TestMessageBoxSitsOnTheTerminalsBackground(t *testing.T) {
+	for _, dark := range []bool{true, false} {
+		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
+		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		lines := strings.Split(m.Content(), "\n")
+		start := -1
+		for i, l := range lines {
+			if strings.Contains(l, "Message") {
+				start = i
+				break
+			}
+		}
+		if start < 0 {
+			t.Fatalf("dark=%v: no line with the message box's title: %q", dark, m.Content())
+		}
+		for i := start; i < start+inputBoxRows && i < len(lines); i++ {
+			if strings.Contains(lines[i], "\x1b[48;") {
+				t.Errorf("dark=%v: line %d of the message box paints a background: %q", dark, i, lines[i])
+			}
+		}
+	}
+}
+
+// The developer's message bubbles are content, not focus: they get a faint
+// border, never the pane's accent.
+func TestUserBubbleIsQuiet(t *testing.T) {
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", "", nil
+	}
+	for _, dark := range []bool{true, false} {
+		m := New(context.Background(), turn, nil, "").WithTerminal(dark, false)
+		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = typeText(t, m, "hello there")
+		m = drive(t, m, press("enter"))
+
+		var top string
+		for _, l := range strings.Split(m.Content(), "\n") {
+			if strings.Contains(l, fgSeq(m.faint())+"╭") {
+				top = l
+				break
+			}
+		}
+		if top == "" {
+			t.Fatalf("dark=%v: no bubble border drawn with faint: %q", dark, m.Content())
+		}
+		if strings.Contains(top, fgSeq(m.brand())+"╭") {
+			t.Errorf("dark=%v: the user bubble took the pane's accent colour: %q", dark, top)
+		}
+	}
+}
+
 // The panes and the action bar sit on the terminal's own background, as
-// chunk watch's do: only what is set apart (the message box, the block the
-// cursor is on, comments, code) has a ground of its own.
+// chunk watch's do: only what is set apart (the block the cursor is on,
+// comments, code) has a ground of its own.
 func TestPanesSitOnTheTerminalsBackground(t *testing.T) {
 	for _, dark := range []bool{true, false} {
 		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
