@@ -261,13 +261,13 @@ func newSidecarCreateCmd() *cobra.Command {
 			// chose is a mistake worth explaining, while a rejected one chunk
 			// chose is not something the caller can act on.
 			var imageSource string
-			if image != "" {
+			// A recorded or auto-picked image is an org snapshot, which has no
+			// size to choose, so with --size only --image names the image and
+			// otherwise the API makes its default one at that size.
+			switch {
+			case image != "":
 				imageSource = "--image"
-			} else if size != "" {
-				// A recorded or auto-picked snapshot is an org snapshot, which
-				// has no size to choose. The API makes the size of its default
-				// image instead.
-			} else {
+			case size == "":
 				cfg, _ := config.LoadProjectConfig(cwd)
 				if cfg.HasSidecarImage() {
 					image = cfg.Validation.SidecarImage
