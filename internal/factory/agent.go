@@ -101,10 +101,13 @@ type AgentEvent struct {
 // Events must be drained until it closes. Events queue rather than block
 // claude, so a slow consumer never stalls the session, a Send or a Stop.
 type Agent struct {
-	sessionID string
+	sessionID string // as claude's init reported it; set before StartAgent returns
 
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	// sendMu serializes writes to stdin. It is not mu, so a write blocked on
+	// a full pipe can't hold up Stop or the reader of claude's stdout.
+	sendMu sync.Mutex
 	events chan AgentEvent
 	wake   chan struct{} // wakes forward when queue grows or closed is set
 	exited chan struct{} // closed after cmd.Wait returns and the reader is flushed
@@ -148,6 +151,9 @@ func agentArgs(cfg AgentConfig) []string {
 // factory's f plugin is loaded and its MCP server connected before returning.
 // claude reports init only once it has a message to answer, so a session
 // can't start without one.
+//
+// ctx is the session's lifetime, not just its start: cancelling it at any
+// point, even long after StartAgent returns, stops the session.
 func StartAgent(ctx context.Context, cfg AgentConfig, message string) (*Agent, error) {
 	if strings.TrimSpace(message) == "" {
 		return nil, errors.New("a session needs a first message")
@@ -228,6 +234,11 @@ func StartAgent(ctx context.Context, cfg AgentConfig, message string) (*Agent, e
 		if err := checkFactoryInit(init); err != nil {
 			return fail(err)
 		}
+		// The session claude reports is the one factory's hooks claim plans
+		// for, so Claims matches on it rather than on what was asked for.
+		if init.SessionID != "" {
+			a.sessionID = init.SessionID
+		}
 	case <-ctx.Done():
 		return fail(ctx.Err())
 	case <-a.exited:
@@ -267,12 +278,16 @@ func (a *Agent) Send(message string) error {
 		return fmt.Errorf("encode message for claude: %w", err)
 	}
 	b = append(b, '\n')
+	// Marked sent before writing, so a reply that arrives as the write
+	// finishes is not taken for a turn a task started.
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.sentSinceResult = true
+	a.mu.Unlock()
+	a.sendMu.Lock()
+	defer a.sendMu.Unlock()
 	if _, err := a.stdin.Write(b); err != nil {
 		return fmt.Errorf("send to claude: %w", err)
 	}
-	a.sentSinceResult = true
 	return nil
 }
 

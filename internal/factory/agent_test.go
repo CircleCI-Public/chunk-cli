@@ -597,6 +597,20 @@ func TestAgentClaims(t *testing.T) {
 	assert.DeepEqual(t, got, []string{"FNDSF-40"})
 }
 
+// Claims matches on the session claude reports, not the one asked for, in case
+// a resumed session comes back under another ID.
+func TestAgentClaimsUseTheReportedSession(t *testing.T) {
+	agentFakeEnv(t)
+	t.Setenv("FAKE_CLAIMS", `[{"plan":"FNDSF-40","session":"s1","dir":"/w"},{"plan":"FNDSF-41","session":"asked","dir":"/w2"}]`)
+	fakeClaude(t, agentFakeScript)
+	fakeFactory(t)
+	a := startTestAgent(context.Background(), t, AgentConfig{SessionID: "asked", Resume: true}, "hello")
+
+	got, err := a.Claims(context.Background())
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, []string{"FNDSF-40"})
+}
+
 func TestAgentClaimsWhenTheDaemonFails(t *testing.T) {
 	agentFakeEnv(t)
 	t.Setenv("FAKE_CLAIMS_ERR", "factory daemon isn't running")
@@ -606,4 +620,40 @@ func TestAgentClaimsWhenTheDaemonFails(t *testing.T) {
 
 	_, err := a.Claims(context.Background())
 	assert.ErrorContains(t, err, "factory daemon isn't running")
+}
+
+// A Send stuck writing to a claude that stopped reading its stdin must not hold
+// up Stop.
+func TestAgentStopWhileSendIsBlocked(t *testing.T) {
+	fakeClaude(t, `
+trap 'exit 130' INT
+read -r line
+echo '{"type":"system","subtype":"init","session_id":"s1","plugins":[{"name":"f"}],"mcp_servers":[{"name":"plugin:f:factory","status":"connected"}]}'
+while :; do sleep 0.1; done
+`)
+	fakeFactory(t)
+	a, err := StartAgent(context.Background(), AgentConfig{SessionID: "s1"}, "hello")
+	assert.NilError(t, err)
+	go func() {
+		for range a.Events() {
+		}
+	}()
+
+	sent := make(chan error, 1)
+	go func() { sent <- a.Send(strings.Repeat("x", 1<<20)) }() // far more than a pipe holds
+	select {
+	case err := <-sent:
+		t.Fatalf("Send returned before claude stopped: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- a.Stop() }()
+	select {
+	case err := <-stopped:
+		assert.NilError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Stop waited on a blocked Send")
+	}
+	assert.ErrorContains(t, <-sent, "send to claude")
 }
