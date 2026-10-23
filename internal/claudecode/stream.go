@@ -1,7 +1,6 @@
 package claudecode
 
 import (
-	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -20,6 +19,10 @@ type Activity struct {
 // structuredOutputTool is the tool Claude Code answers through when a schema
 // is given. It is how the answer arrives, not something claude did.
 const structuredOutputTool = "StructuredOutput"
+
+// contentTypeText is an assistant or tool_result content block carrying text,
+// as opposed to a tool_use or tool_result block.
+const contentTypeText = "text"
 
 // maxLineBytes caps one buffered stream-json line. A tool result echoing a
 // large file can be long; a line past this is dropped rather than buffered.
@@ -59,8 +62,7 @@ type StreamResult struct {
 // which can be mid-line, and reports what claude does.
 type Stream struct {
 	onActivity func(Activity)
-	buf        []byte
-	overflow   bool
+	lines      lineSplitter
 	sessionID  string
 	result     StreamResult
 	sawResult  bool
@@ -73,43 +75,16 @@ func NewStream(onActivity func(Activity)) *Stream {
 }
 
 // Write takes the next run of stdout.
-func (s *Stream) Write(data []byte) {
-	for len(data) > 0 {
-		i := bytes.IndexByte(data, '\n')
-		if i < 0 {
-			s.appendPartial(data)
-			return
-		}
-		s.appendPartial(data[:i])
-		if !s.overflow {
-			s.line(s.buf)
-		}
-		s.buf, s.overflow = s.buf[:0], false
-		data = data[i+1:]
-	}
-}
+func (s *Stream) Write(data []byte) { s.lines.write(data, s.line) }
 
 // Flush handles a last line that had no trailing newline.
-func (s *Stream) Flush() {
-	if len(s.buf) > 0 && !s.overflow {
-		s.line(s.buf)
-	}
-	s.buf, s.overflow = nil, false
-}
+func (s *Stream) Flush() { s.lines.flush(s.line) }
 
 // SessionID is the session the run reported, or "" before it has.
 func (s *Stream) SessionID() string { return s.sessionID }
 
 // Result is the run's result event, and whether one arrived.
 func (s *Stream) Result() (StreamResult, bool) { return s.result, s.sawResult }
-
-func (s *Stream) appendPartial(data []byte) {
-	if s.overflow || len(s.buf)+len(data) > maxLineBytes {
-		s.overflow = true
-		return
-	}
-	s.buf = append(s.buf, data...)
-}
 
 func (s *Stream) line(b []byte) {
 	var e streamEvent
@@ -129,7 +104,7 @@ func (s *Stream) line(b []byte) {
 		}
 		for _, c := range e.Message.Content {
 			switch {
-			case c.Type == "text":
+			case c.Type == contentTypeText:
 				if t := strings.TrimSpace(c.Text); t != "" {
 					s.onActivity(Activity{Detail: t})
 				}
