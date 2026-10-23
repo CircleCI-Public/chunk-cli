@@ -93,7 +93,8 @@ chunk
 │   ├── create                      # Create a sidecar
 │   │   --org-id <id>               # Organization ID (see Org ID resolution)
 │   │   --name <name>               # Sidecar name (auto-generated if omitted)
-│   │   --image <image>             # E2B template ID or container image
+│   │   --image <image>             # Snapshot ID, or a system image name such as cimg-go:1.27-claude
+│   │   --size <size>               # small, medium, large (default), xlarge or 2xlarge; system images only
 │   ├── use <id>                    # Set the active sidecar for this project
 │   ├── current                     # Show the active sidecar
 │   │   --json                      # Output as JSON

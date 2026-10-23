@@ -245,7 +245,7 @@ func assemblePool(
 	var cloneSnapshotID, cloneSeedID string
 	if newCount > 0 {
 		seedIdx := len(aliveExisting)
-		seed, err := Create(ctx, client, orgID, fmt.Sprintf("%s-%d", name, seedIdx), image)
+		seed, err := Create(ctx, client, orgID, fmt.Sprintf("%s-%d", name, seedIdx), image, "")
 		if err != nil {
 			return nil, fmt.Errorf("create sidecar %d: %w", seedIdx, err)
 		}
@@ -345,7 +345,7 @@ func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.Sta
 	cleanupCtx := context.WithoutCancel(ctx)
 	_ = p.client.DeleteSidecar(cleanupCtx, dead.ID)
 
-	sc, err := Create(ctx, p.client, p.orgID, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
+	sc, err := Create(ctx, p.client, p.orgID, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image, "")
 	if err != nil {
 		err = fmt.Errorf("replace: create sidecar: %w", err)
 		p.retire(dead, err)
@@ -434,7 +434,7 @@ func (p *Pool) startCloneCreation(
 	for i := range count {
 		go func(i int) {
 			index := baseIndex + i
-			sc, err := Create(createCtx, p.client, p.orgID, fmt.Sprintf("%s-%d", p.name, index), snapshotID)
+			sc, err := Create(createCtx, p.client, p.orgID, fmt.Sprintf("%s-%d", p.name, index), snapshotID, "")
 			if err != nil {
 				results <- cloneResult{err: fmt.Errorf("create sidecar %d from snapshot: %w", index, err)}
 				return
@@ -783,7 +783,7 @@ func (p *Pool) replaceStaleEntry(ctx context.Context, stale *PoolEntry, status i
 	status(iostream.LevelInfo, fmt.Sprintf("sidecar %s became stale during sync, creating replacement...", stale.ID))
 	_ = p.client.DeleteSidecar(context.Background(), stale.ID)
 
-	sc, err := Create(ctx, p.client, p.orgID, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
+	sc, err := Create(ctx, p.client, p.orgID, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image, "")
 	if err != nil {
 		return stale, fmt.Errorf("replace stale sidecar: create: %w", err)
 	}

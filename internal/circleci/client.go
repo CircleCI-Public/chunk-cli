@@ -98,6 +98,7 @@ type v3Collection struct {
 type sidecarAttrs struct {
 	Name  string `json:"name"`
 	Image string `json:"image,omitempty"`
+	Size  string `json:"size,omitempty"`
 }
 
 type orgUserRefs struct {
@@ -151,13 +152,17 @@ func (c *Client) ListSidecars(ctx context.Context, orgID string, all bool) ([]Si
 // must still surface as an error rather than hang the caller.
 const createSidecarTimeout = 5 * time.Minute
 
-func (c *Client) CreateSidecar(ctx context.Context, orgID, name, image string) (*Sidecar, error) {
+// CreateSidecar creates a sidecar. size is one of the API's sizes (see
+// sidecar.Sizes), or "" for the default. Only a system image has sizes: the API
+// refuses a size for a snapshot, which keeps the size of the sidecar it was
+// taken from.
+func (c *Client) CreateSidecar(ctx context.Context, orgID, name, image, size string) (*Sidecar, error) {
 	var attrs sidecarAttrs
 	var refs orgUserRefs
 	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs, References: &refs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/sidecar/instances",
 		hc.Body(v3Envelope{Data: v3DataEntity{
-			Attributes: sidecarAttrs{Name: name, Image: image},
+			Attributes: sidecarAttrs{Name: name, Image: image, Size: size},
 			References: orgRefs{Org: v3Ref{ID: orgID}},
 		}}),
 		hc.JSONDecoder(&env),

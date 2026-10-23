@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ type Sidecar struct {
 	OrgID     string    `json:"org_id"`
 	Provider  string    `json:"provider,omitempty"`
 	Image     string    `json:"image,omitempty"`
+	Size      string    `json:"size,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
@@ -320,6 +322,7 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 			Attributes struct {
 				Name  string `json:"name"`
 				Image string `json:"image,omitempty"`
+				Size  string `json:"size,omitempty"`
 			} `json:"attributes"`
 			References struct {
 				Org struct {
@@ -333,11 +336,18 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 		return
 	}
 
+	// Like the API, which refuses a size it does not know.
+	if size := body.Data.Attributes.Size; size != "" && !slices.Contains([]string{"small", "medium", "large", "xlarge", "2xlarge"}, size) {
+		c.JSON(http.StatusBadRequest, gin.H{"title": "unknown size", "message": "unknown size"})
+		return
+	}
+
 	sidecar := Sidecar{
 		ID:    fmt.Sprintf("sidecar-new-%d", counter),
 		Name:  body.Data.Attributes.Name,
 		OrgID: body.Data.References.Org.ID,
 		Image: body.Data.Attributes.Image,
+		Size:  body.Data.Attributes.Size,
 	}
 
 	f.mu.Lock()

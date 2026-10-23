@@ -229,7 +229,7 @@ func setupSidecarImage(ctx context.Context, run sidecarImageRun, status iostream
 		image = factory.BootstrapImage
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating a sidecar from %s...", image))
-	sc, err := sidecar.Create(ctx, run.Client, run.OrgID, randomSidecarName(), image)
+	sc, err := sidecar.Create(ctx, run.Client, run.OrgID, randomSidecarName(), image, "")
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", run.TokenSource, err); authErr != nil {
 			return "", authErr

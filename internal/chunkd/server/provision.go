@@ -32,7 +32,7 @@ func (p *provisioner) create(ctx context.Context, orgID, name, image string) (st
 	}
 	p.mu.Unlock()
 
-	sc, err := p.client.CreateSidecar(ctx, orgID, name, image)
+	sc, err := p.client.CreateSidecar(ctx, orgID, name, image, "")
 	if err != nil {
 		return "", fmt.Errorf("provision sidecar: %w", err)
 	}
