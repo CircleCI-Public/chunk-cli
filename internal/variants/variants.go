@@ -151,7 +151,7 @@ func runVariant(ctx context.Context, client *circleci.Client, v Variant, opts Op
 	// not the run that owns it. A run of a hundred variants can take hours, and a
 	// name carrying the run's start time would make a sidecar booted seconds ago
 	// look old enough for another run's sweep to delete.
-	sc, err := sidecar.Create(ctx, client, opts.OrgID, sidecarName(time.Now(), v.ID), opts.Image)
+	sc, err := sidecar.Create(ctx, client, opts.OrgID, sidecarName(time.Now(), v.ID), opts.Image, "")
 	if err != nil {
 		// A failure here can still have created a sidecar: the request may have
 		// landed and only the response been lost, to cancellation or a dropped

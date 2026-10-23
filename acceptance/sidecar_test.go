@@ -181,6 +181,72 @@ func TestSidecarsCreateWithImage(t *testing.T) {
 	assert.Equal(t, attrs["image"], "ubuntu:22.04")
 }
 
+func TestSidecarsCreateWithSize(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "create",
+		"--org-id", "org-aaa",
+		"--name", "big-sidecar",
+		"--image", "cimg-go:1.27-claude",
+		"--size", "2xlarge",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	createReqs := filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")
+	assert.Equal(t, len(createReqs), 1)
+
+	var body map[string]any
+	assert.NilError(t, json.Unmarshal(createReqs[0].Body, &body))
+	attrs := body["data"].(map[string]any)["attributes"].(map[string]any)
+	assert.Equal(t, attrs["size"], "2xlarge")
+	assert.Equal(t, attrs["image"], "cimg-go:1.27-claude")
+}
+
+// Without --size the request carries none, so the API keeps its default.
+func TestSidecarsCreateWithoutSizeSendsNone(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{"sidecar", "create", "--org-id", "org-aaa", "--name", "plain"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	createReqs := filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")
+	var body map[string]any
+	assert.NilError(t, json.Unmarshal(createReqs[0].Body, &body))
+	attrs := body["data"].(map[string]any)["attributes"].(map[string]any)
+	_, sent := attrs["size"]
+	assert.Assert(t, !sent, "size was sent: %v", attrs)
+}
+
+func TestSidecarsCreateRejectsAnUnknownSize(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "create", "--org-id", "org-aaa", "--size", "huge",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0)
+	assert.Assert(t, strings.Contains(result.Stderr, "2xlarge"), "should list the sizes: %s", result.Stderr)
+	assert.Equal(t, len(filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0,
+		"nothing should be sent for a size chunk knows is wrong")
+}
+
 func TestSidecarsExecHappyPath(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.ExecResponse = &fakes.ExecResponse{
