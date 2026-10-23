@@ -207,7 +207,7 @@ func TestSSendsCommentsFromThePlan(t *testing.T) {
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "too vague")
 	m = drive(t, m, press("enter"))
-	if bar := ansi.Strip(m.actionBar()); !strings.Contains(bar, "s Send 1 comment to Claude") {
+	if bar := ansi.Strip(m.actionBar()); !strings.Contains(bar, "s Send 1 comment to chunk") {
 		t.Errorf("the action bar does not offer s:\n%s", bar)
 	}
 
