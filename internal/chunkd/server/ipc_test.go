@@ -580,3 +580,30 @@ func TestSnapshotGivesUpWithItsCaller(t *testing.T) {
 	newServer(d).Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/snapshot", nil).WithContext(ctx))
 	assert.Equal(t, rec.Code, http.StatusServiceUnavailable)
 }
+
+// A root asked about during the first poll may be one the poll has not reached
+// yet, so the daemon says it is starting rather than that it does not track it.
+func TestConflictsDuringTheFirstPollSayTheDaemonIsStarting(t *testing.T) {
+	d := newTestDaemon()
+	d.polled = make(chan struct{})
+	h := newServer(d).Handler
+
+	conflicts := func() chunkd.ConflictReport {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/conflicts?root="+t.TempDir(), nil))
+		assert.Equal(t, rec.Code, http.StatusOK)
+		var report chunkd.ConflictReport
+		assert.NilError(t, json.NewDecoder(rec.Body).Decode(&report))
+		return report
+	}
+
+	report := conflicts()
+	assert.Check(t, !report.Known)
+	assert.Assert(t, report.Conflict != nil)
+	assert.Check(t, cmp.Contains(report.Conflict.Unavailable, "still starting"))
+
+	close(d.polled)
+	report = conflicts()
+	assert.Assert(t, report.Conflict != nil)
+	assert.Check(t, cmp.Contains(report.Conflict.Unavailable, "not tracking"))
+}
