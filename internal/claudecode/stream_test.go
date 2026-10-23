@@ -74,5 +74,5 @@ func TestStreamDropsOversizedLines(t *testing.T) {
 
 	_, ok := s.Result()
 	assert.Assert(t, ok)
-	assert.Assert(t, len(s.buf) < maxLineBytes)
+	assert.Assert(t, len(s.lines.buf) < maxLineBytes)
 }

@@ -753,7 +753,7 @@ func TestCommentOnARewrittenPartIsStillShown(t *testing.T) {
 	}
 
 	view := ansi.Strip(m.planView.View())
-	for _, want := range []string{"On parts Claude has since rewritten", `on "* [AGENT] parse it in main.go"`, "x"} {
+	for _, want := range []string{"On parts chunk has since rewritten", `on "* [AGENT] parse it in main.go"`, "x"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
@@ -803,7 +803,7 @@ func TestCommentOnARewrittenPartCanBeEditedAndDeleted(t *testing.T) {
 	if len(m.comments) != 0 {
 		t.Fatalf("comments after delete: %+v", m.comments)
 	}
-	if view := ansi.Strip(m.planView.View()); strings.Contains(view, "On parts Claude has since rewritten") {
+	if view := ansi.Strip(m.planView.View()); strings.Contains(view, "On parts chunk has since rewritten") {
 		t.Errorf("the rewritten-parts section should be gone:\n%s", view)
 	}
 	if m.cursor != len(m.blocks)-1 {
@@ -1065,7 +1065,7 @@ func TestHeaderShowsPlanState(t *testing.T) {
 	m.comments = []comment{{block: 0, quote: "# Add a flag", text: "name it --dry"}}
 	m.renderPlan()
 	view := ansi.Strip(m.Content())
-	for _, want := range []string{"1 comment waiting for Claude", "your comment · queued", "name it --dry"} {
+	for _, want := range []string{"1 comment waiting for chunk", "your comment · queued", "name it --dry"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
@@ -1145,7 +1145,7 @@ func TestFirstPlanShowsASkeletonWhileClaudeWrites(t *testing.T) {
 	m, _ = m.send("plan it")
 	m = drive(t, m, activityMsg("Read create.go"))
 	view := ansi.Strip(m.Content())
-	for _, want := range []string{"Claude is drafting", "Read create.go", "███", "esc Stop Claude"} {
+	for _, want := range []string{"chunk is drafting", "Read create.go", "███", "esc Stop chunk"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}

@@ -385,12 +385,12 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		switch {
 		case m.sending:
 		case m.busy:
-			m.status = warn("Wait for Claude to finish, or press esc to stop it.")
+			m.status = warn("Wait for chunk to finish, or press esc to stop it.")
 		case strings.TrimSpace(m.plan) == "":
 			m.status = warn("There is no plan to send yet.")
 		case len(m.comments) > 0:
 			m.confirming = true
-			m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d %s will not be sent to Claude. Send the plan to the factory anyway? (y/n)",
+			m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d %s will not be sent to chunk. Send the plan to the factory anyway? (y/n)",
 				len(m.comments), plural(len(m.comments), "comment", "comments")))
 		default:
 			m.confirming = true
@@ -412,7 +412,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	if key.Matches(msg, k.Send) {
 		if m.busy {
-			m.status = warn("Claude is still answering; your message is kept until it finishes.")
+			m.status = warn("chunk is still answering; your message is kept until it finishes.")
 			return m, nil
 		}
 		text := strings.TrimSpace(m.input.Value())
@@ -672,7 +672,7 @@ func (m *Model) renderPlan() {
 			return
 		}
 		m.planView.SetContent(ui.HelperStyle.Padding(1, 2).Width(m.planView.Width()).
-			Render("No plan yet. Tell Claude what you want to change, and the plan it writes appears here."))
+			Render("No plan yet. Tell chunk what you want to change, and the plan it writes appears here."))
 		return
 	}
 	if w == m.renderedWidth && m.blocks != nil && m.renderedFrom == m.plan {
@@ -759,10 +759,10 @@ func (m *Model) renderChat() {
 		case msg.fromUser:
 			b.WriteString(m.userBubble(msg, w))
 		case msg.failed:
-			b.WriteString(claudeStyle.Render("Claude") + "\n")
+			b.WriteString(chunkStyle.Render("chunk") + "\n")
 			b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text))
 		default:
-			b.WriteString(claudeStyle.Render("Claude") + "\n")
+			b.WriteString(chunkStyle.Render("chunk") + "\n")
 			if msg.renderedWidth != w {
 				msg.rendered, msg.renderedWidth = renderMarkdown(msg.text, m.dark, w-2), w
 			}
@@ -792,7 +792,7 @@ func (m *Model) renderChat() {
 func (m Model) activityLog(w int) string {
 	if len(m.log) == 0 {
 		// The spinner's frames carry their own space after the dot.
-		return m.style(m.purple()).Render(m.spin.View() + "Claude is thinking…")
+		return m.style(m.purple()).Render(m.spin.View() + "chunk is thinking…")
 	}
 	var lines []string
 	for i, a := range m.log {
@@ -816,7 +816,7 @@ func (m *Model) restyle() {
 	m.renderChat()
 }
 
-var claudeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
+var chunkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
 
 // Content is the screen as its host draws it: the panes and the footer,
 // filling the size it was last sent.

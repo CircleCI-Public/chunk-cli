@@ -36,6 +36,7 @@ func newFactoryCmd() *cobra.Command {
 	cmd.AddCommand(newFactoryPullCmd())
 	cmd.AddCommand(newFactoryStartCmd())
 	cmd.AddCommand(newFactoryPlanCmd())
+	cmd.AddCommand(newFactoryAgentCmd())
 	cmd.AddCommand(newFactoryBootstrapCmd())
 	cmd.AddCommand(newFactoryEvalCmd())
 	return cmd

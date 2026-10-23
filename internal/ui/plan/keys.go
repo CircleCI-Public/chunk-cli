@@ -73,7 +73,7 @@ func (m Model) keys() keyMap {
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
 		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", focusHelp)),
-		Stop:           key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop Claude")),
+		Stop:           key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop chunk")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "send plan to factory")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}

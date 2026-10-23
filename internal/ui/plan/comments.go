@@ -514,7 +514,7 @@ func (m *Model) drawPlan() {
 		m.blockEnd[i] = len(lines)
 	}
 	if orphans := m.orphans(); len(orphans) > 0 {
-		lines = append(lines, "", "  "+ui.HelperStyle.Render("On parts Claude has since rewritten"))
+		lines = append(lines, "", "  "+ui.HelperStyle.Render("On parts chunk has since rewritten"))
 		for k, ci := range orphans {
 			s := len(m.blocks) + k
 			editing := m.commenting && m.cursor == s
@@ -551,7 +551,7 @@ func (m *Model) planFooter() string {
 	}
 	s := fmt.Sprintf("%d %s to send with your next message", n, plural(n, "comment", "comments"))
 	if orphaned > 0 {
-		s += fmt.Sprintf(" (%d on parts Claude has since rewritten)", orphaned)
+		s += fmt.Sprintf(" (%d on parts chunk has since rewritten)", orphaned)
 	}
 	return ansi.Truncate("  "+m.style(m.amber()).Render(s), m.planView.Width(), "…")
 }
