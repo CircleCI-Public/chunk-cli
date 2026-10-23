@@ -106,6 +106,37 @@ type daemon struct {
 	// gh is the GitHub client, nil when the daemon has no token. Factory runs
 	// asked to open a pull request need it.
 	gh *github.Client
+	// polled is closed once the first poll has finished, so /snapshot can wait
+	// for data while /ping answers straight away. Nil in daemons built without
+	// one, which have nothing to wait for.
+	polled chan struct{}
+}
+
+// waitPolled blocks until the first poll has finished or ctx is done, and
+// reports whether the poll finished.
+func (d *daemon) waitPolled(ctx context.Context) bool {
+	if d.polled == nil {
+		return true
+	}
+	select {
+	case <-d.polled:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// firstPollDone reports whether the first poll has finished, without waiting.
+func (d *daemon) firstPollDone() bool {
+	if d.polled == nil {
+		return true
+	}
+	select {
+	case <-d.polled:
+		return true
+	default:
+		return false
+	}
 }
 
 // RunDaemon is the chunk daemon entry point, called by the hidden _daemon subcommand.
@@ -217,6 +248,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		warm:      newWarmStore(ctx),
 		rcfg:      dopts.review,
 		gh:        ghClient,
+		polled:    make(chan struct{}),
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.
@@ -234,10 +266,21 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		defer prov.stopAll(context.Background())
 	}
 
-	// Poll once before accepting connections so the first request has data.
-	d.poll()
+	// The first poll runs while the server is already serving. It makes an API
+	// call per org and walks every project, so it can take longer than a client
+	// launching the daemon waits for /ping (FACT-650); /snapshot waits for it
+	// instead, so the first dashboard still has data. Registered after the
+	// stopAll defers so it runs before them: the poll uses the samplers they stop.
+	go func() {
+		defer close(d.polled)
+		d.poll()
+	}()
+	defer func() { <-d.polled }()
 
-	go d.pollLoop(ctx)
+	go func() {
+		<-d.polled
+		d.pollLoop(ctx)
+	}()
 	go d.checkConflictsLoop(ctx)
 
 	srv := newServer(d)
@@ -394,6 +437,12 @@ func (d *daemon) conflictReport(root string) chunkd.ConflictReport {
 	// explanation that way — the no-daemon report the command synthesises
 	// already did — so a consumer reading conflict.unavailable to find out why
 	// there is no answer never has to special-case which of the two it got.
+	// Until the first poll finishes, an untracked root may only be undiscovered.
+	if !d.firstPollDone() {
+		return chunkd.ConflictReport{Root: root, Conflict: &chunkd.ConflictState{
+			Unavailable: "the chunk daemon is still starting",
+		}}
+	}
 	return chunkd.ConflictReport{Root: root, Conflict: &chunkd.ConflictState{
 		Unavailable: "the chunk daemon is not tracking this project",
 	}}
