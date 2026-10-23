@@ -422,8 +422,9 @@ chunk
   nothing for five minutes; without a terminal the same is printed every two
   minutes.
   Factory branches are named `chunk/factory/<description>/<run id>`. The
-  description is a short slug made from the prompt's first line, while the
-  final segment remains the stable run ID. When the run ends it prints that
+  description is a short slug made from the prompt's first line (for a plan
+  from `factory plan`, its `# name` line), while the final segment remains the
+  stable run ID. When the run ends it prints that
   branch, how to keep it, how long the run took and what the implementer cost,
   and exits non-zero unless every check passed. `--log` has the run keep a
   plain-text log in `~/.local/share/chunk/repo-<id>/factory/<start time>.log`, and
@@ -443,7 +444,9 @@ chunk
   (with the developer's own git credentials, never prompting) and opens a pull
   request on GitHub, ready for review; `--draft` opens a draft instead, and
   `--no-open-pr` leaves the branch alone. The title is the prompt's first line,
-  cut between words to 72 characters, and the description holds the request, the
+  or for a plan from `factory plan` the text of its `## 1. Outcome`, cut
+  between words to 72 characters; the commit's subject comes from the same
+  place. The description holds the request, the
   diff stat and the checks that passed, with a note when the branch also carries
   the uncommitted work the run started from. It targets the branch the run was
   started from if `origin` has it, and the repository's default branch otherwise

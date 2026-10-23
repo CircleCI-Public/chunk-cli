@@ -83,9 +83,13 @@ func branchName(prompt, runID string) string {
 
 // branchSlug makes the request recognizable in branch listings while the run
 // ID remains the stable identifier used for records, logs, and continuation.
+// A plan's "# name" line is already a slug, so a plan is named for that.
 func branchSlug(prompt string) string {
-	subject, _, _ := strings.Cut(strings.TrimSpace(prompt), "\n")
-	words := strings.FieldsFunc(strings.ToLower(subject), func(r rune) bool {
+	source := subject(prompt)
+	if title, ok := planTitle(prompt); ok {
+		source = title
+	}
+	words := strings.FieldsFunc(strings.ToLower(source), func(r rune) bool {
 		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 	})
 	if len(words) == 0 {
@@ -160,14 +164,14 @@ func (w Worktree) Stat(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// CommitMessage is the work's commit message: the prompt's first line as the
-// subject, the rest of the prompt below it, and how the run ended.
+// CommitMessage is the work's commit message: the run's subject (a plan's
+// Outcome, or the prompt's first line), the rest of the prompt below it, and
+// how the run ended.
 func CommitMessage(prompt, runID string, o Outcome) string {
-	subject, rest, _ := strings.Cut(strings.TrimSpace(prompt), "\n")
-	subject = strings.TrimSuffix(subject, "\r")
+	subj, rest := commitParts(prompt)
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", subject)
-	if rest = strings.Trim(rest, "\r\n"); rest != "" {
+	fmt.Fprintf(&b, "%s\n\n", subj)
+	if rest != "" {
 		fmt.Fprintf(&b, "%s\n\n", rest)
 	}
 	fmt.Fprintf(&b, "Written by chunk factory run %s", runID)
