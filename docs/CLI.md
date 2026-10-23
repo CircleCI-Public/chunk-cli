@@ -573,10 +573,12 @@ chunk
   and keeps the plan, in factory-bot's format, in a file in the project's data
   directory rather than the working tree. The plan file is the only thing it
   writes; its shell is an allowlist of read-only git and `gh` commands (`git
-  fetch`, `log`, `diff`, `show`, `status`, `branch`, `rev-parse`, `ls-files`,
-  `ls-tree`, `ls-remote`, and `gh pr view|diff|list|checks`), so it can look at
-  a collaborator's branch or pull request while planning. Anything that changes
-  the working tree, commits, pushes or writes to a pull request is denied.
+  fetch origin`, `log`, `diff`, `show`, `status`, `rev-parse`, `ls-files`,
+  `ls-tree`, the listing forms of `branch`, and `gh pr view|diff|list|checks`),
+  so it can look at a collaborator's branch or pull request while planning.
+  Anything else is denied, including the flags that make those commands write a
+  file or run a program, and the permission rules in the project's and your own
+  Claude Code settings do not apply to it.
   `tab` moves to the plan, where `c` writes a comment right under the
   highlighted part (a heading, paragraph, list item or code block); `enter`
   saves it and `shift+enter`/`ctrl+j` adds a line. `shift+↑/↓` (or `K`/`J`)
