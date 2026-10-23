@@ -265,6 +265,14 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		m.moveCursor(m.cursor)
 		return m, m.commentInput.Focus()
+	case key.Matches(msg, k.SendComments):
+		if m.busy {
+			m.status = warn("chunk is still answering; your comments are kept until it finishes.")
+			return m, nil
+		}
+		// What is typed in the chat stays there: it is out of sight from
+		// the plan, so it is not sent unseen.
+		return m.send("")
 	case key.Matches(msg, k.Delete):
 		i := m.commentAt(m.cursor)
 		m.comments = append(m.comments[:i], m.comments[i+1:]...)

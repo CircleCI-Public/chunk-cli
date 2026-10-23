@@ -23,6 +23,9 @@ type keyMap struct {
 	// SectionBack carries the hint for both.
 	SectionBack, SectionNext key.Binding
 	Comment, Delete, Next    key.Binding
+	// SendComments sends the comments waiting to Claude from the plan,
+	// without a trip to the chat; enter does it there.
+	SendComments key.Binding
 	// While a comment is written.
 	SaveComment, CancelComment key.Binding
 	// While sending the plan is confirmed. Any other key, enter too, says
@@ -69,6 +72,7 @@ func (m Model) keys() keyMap {
 		Comment:        key.NewBinding(key.WithKeys("c", "enter"), key.WithHelp("c", "comment")),
 		Delete:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete comment")),
 		Next:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next comment")),
+		SendComments:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "send comments")),
 		SaveComment:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save comment")),
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
@@ -105,6 +109,7 @@ func (m Model) keys() keyMap {
 	// n has nowhere to go with nothing commented below the cursor, so the
 	// footer does not offer it there.
 	k.Next.SetEnabled(inPlan && m.nextComment() != m.cursor)
+	k.SendComments.SetEnabled(inPlan && len(m.comments) > 0)
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)
@@ -119,7 +124,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{
 		k.SaveComment, k.CancelComment,
 		k.Send, k.Newline,
-		k.Comment, k.ClearSelection, k.Up,
+		k.Comment, k.SendComments, k.ClearSelection, k.Up,
 		k.Stop, k.Focus, k.SendPlan, k.Quit,
 		k.SectionBack, k.Delete, k.Next, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
