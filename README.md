@@ -17,6 +17,10 @@ As AI churns out more and more code, CI pipelines get flooded with commits that 
 
 Chunk sidecars fix this by running lightweight microbuilds to validate inside the inner loop — while the agent is still working — ensuring basic checks pass before anything hits CI. Save the CI for the integration and release work that gets code to production.
 
+## Fun fact
+
+The term "chunk" comes from psychology: George Miller's 1956 paper "The Magical Number Seven, Plus or Minus Two" named the chunk as the unit of information short-term memory can hold about seven of at a time.
+
 ## Requirements
 
 - **macOS** (arm64 or x86_64), **Linux** (arm64 or x86_64), or **Windows** (arm64 or x86_64)
