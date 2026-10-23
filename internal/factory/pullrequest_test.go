@@ -88,6 +88,14 @@ func TestPullRequestTitle(t *testing.T) {
 		},
 		{"no tidy place to cut", "Fix " + strings.Repeat("x", 90), "Fix " + strings.Repeat("x", 67) + "…"},
 		{"fits as it is", strings.Repeat("a", 72), strings.Repeat("a", 72)},
+		{"a plan, by its outcome", planPrompt, "chunk sidecar sync --quiet prints nothing but errors"},
+		{"a plan with no title line", strings.TrimPrefix(planPrompt, "# sidecar-sync-quiet-flag\n\n"), "chunk sidecar sync --quiet prints nothing but errors"},
+		{"a plan with nothing in its outcome yet", "# sidecar-sync-quiet-flag\n\n## 1. Outcome\n\n## 2. Design\n", "sidecar-sync-quiet-flag"},
+		{
+			"a long outcome, cut between words",
+			"# x\n\n## 1. Outcome\n\nThe planning screen keeps each plan and its comments in factory, so a plan made here can be built there.\n",
+			"The planning screen keeps each plan and its comments in factory, so a…",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

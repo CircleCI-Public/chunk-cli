@@ -109,6 +109,29 @@ func TestCommitMessageDoesNotRepeatTheSubject(t *testing.T) {
 		"add a flag\n\n    go test ./...\n\nWritten by chunk factory run run-1.\n")
 }
 
+func TestCommitMessageLeavesHeadingMarksOutOfTheSubject(t *testing.T) {
+	assert.Equal(t, CommitMessage("# Add a flag\n\nso users can opt out\n", "run-1", Outcome{}),
+		"Add a flag\n\nso users can opt out\n\nWritten by chunk factory run run-1.\n")
+}
+
+// A plan's first line is a slug and its first heading is "1. Outcome", so its
+// commit is named for what the plan says will be true, with the whole plan in
+// the body.
+func TestCommitMessageNamesAPlanForItsOutcome(t *testing.T) {
+	assert.Equal(t, CommitMessage(planPrompt, "run-1", Outcome{Result: ResultPassed, Rounds: 1}),
+		"chunk sidecar sync --quiet prints nothing but errors\n\n"+strings.TrimSpace(planPrompt)+
+			"\n\nWritten by chunk factory run run-1 (passed after 1 round(s)).\n")
+
+	c := &Continuation{From: Record{RunID: "run-1", Prompt: planPrompt}}
+	assert.Equal(t, c.commitMessage("run-2", Outcome{}),
+		"chunk sidecar sync --quiet prints nothing but errors\n\nWritten by chunk factory run run-2, continuing run run-1.\n")
+}
+
+// planPrompt is a plan as chunk factory plan writes it, in factory's format.
+const planPrompt = "# sidecar-sync-quiet-flag\n\n## 1. Outcome\n\n`chunk sidecar sync --quiet` prints nothing\nbut errors.\n\n" +
+	"## 2. Design\n\n### Context\n\n- Sync prints each file.\n\n## 3. Open Questions\n\n## 4. Worked example\n\n" +
+	"## 5. Units\n\n### Unit 1: flag and output gating\n"
+
 func TestBranchSlug(t *testing.T) {
 	for _, tc := range []struct {
 		prompt string
@@ -121,6 +144,9 @@ func TestBranchSlug(t *testing.T) {
 		{prompt: "Make this deliberately long branch name stop at a readable boundary eventually", want: "make-this-deliberately-long-branch-name-stop-at"},
 		{prompt: "Make this deliberately long branch name stop atop a word", want: "make-this-deliberately-long-branch-name-stop"},
 		{prompt: strings.Repeat("a", 60), want: strings.Repeat("a", 48)},
+		{prompt: planPrompt, want: "sidecar-sync-quiet-flag"},
+		{prompt: strings.TrimPrefix(planPrompt, "# sidecar-sync-quiet-flag\n\n"), want: "chunk-sidecar-sync-quiet-prints-nothing-but"},
+		{prompt: "\n\n# Add a flag\n", want: "add-a-flag"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			assert.Equal(t, branchSlug(tc.prompt), tc.want)
