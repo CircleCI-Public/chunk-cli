@@ -256,12 +256,12 @@ func TestBranchRowIsSelectableButEnterDoesNothing(t *testing.T) {
 func TestFooterHintsFollowTheCursor(t *testing.T) {
 	m, _ := openPRModel(t, openedPR(), nil)
 	foot := func(m Model) string { return stripANSI(m.renderFooter(m.styles())) }
-	assert.Assert(t, strings.Contains(foot(m), "Enter/o open"), foot(m))
+	assert.Assert(t, strings.Contains(foot(m), "enter/o open"), foot(m))
 	assert.Assert(t, strings.Contains(foot(m), "c copy URL"), foot(m))
 	assert.Assert(t, !strings.Contains(foot(m), "⌘"), "a terminal that cannot send Cmd+Enter does not advertise it")
 
 	next, _ := m.Update(tea.KeyboardEnhancementsMsg{Flags: 1})
-	assert.Assert(t, strings.Contains(foot(next.(Model)), "Enter/⌘Enter/o open"), foot(next.(Model)))
+	assert.Assert(t, strings.Contains(foot(next.(Model)), "enter/⌘enter/o open"), foot(next.(Model)))
 
 	m, _ = press(m, tea.KeyUp)
 	assert.Assert(t, !strings.Contains(foot(m), "open"), "the branch row has nothing to open: %s", foot(m))

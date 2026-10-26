@@ -126,7 +126,7 @@ func TestNDraftsAPromptWithClaudeAndSendsItToTheFactory(t *testing.T) {
 	out = view(m)
 	st := m.styles()
 	assert.Assert(t, strings.Contains(out, "1. write a prompt → 2. Claude drafts the change → [3. send to the factory]  ·  finishes the change"), "the breadcrumb is pinned under the panes, with no loss of what each step means:\n%s", out)
-	assert.Assert(t, strings.Contains(out, "[esc] Keep for later   [space] Collapse   [tab] Switch section   [↑/↓] Scroll"), "the secondary keys are named once, in the bottom bar: %s", out)
+	assert.Assert(t, strings.Contains(out, "[esc] keep for later   [space] collapse   [tab] switch section   [↑/↓] scroll"), "the secondary keys are named once, in the bottom bar: %s", out)
 
 	// The change is shown in the right pane as soon as it is ready, with what
 	// Claude said it did: there is no key to press to see it.
@@ -205,7 +205,7 @@ func TestADraftWithNoChangesCanOnlyBeClosed(t *testing.T) {
 	out := view(m)
 	assert.Assert(t, strings.Contains(out, "Claude made no changes, so there is nothing to send"), out)
 	assert.Assert(t, !strings.Contains(out, "Send to factory"), out)
-	assert.Assert(t, strings.Contains(out, "[esc] Close"), "the one key left is named once, in the bottom bar: %s", out)
+	assert.Assert(t, strings.Contains(out, "[esc] close"), "the one key left is named once, in the bottom bar: %s", out)
 
 	m, cmd = press(m, tea.KeyEnter)
 	assert.Assert(t, cmd == nil, "Enter sends nothing")
@@ -487,14 +487,14 @@ func TestTheDraftIsShownAsAPlanAndChanges(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "I didn't check the docs."), "the plan is open: %s", out)
 	assert.Assert(t, strings.Contains(out, "▸ Changes · 1 file, +7 −2"), out)
 	assert.Assert(t, !strings.Contains(out, "+line 00"), "the diff is folded: %s", out)
-	assert.Assert(t, strings.Contains(out, "[space] Collapse"), "the footer says how, for the focused, open plan: %s", out)
+	assert.Assert(t, strings.Contains(out, "[space] collapse"), "the footer says how, for the focused, open plan: %s", out)
 
 	// Space acts on the section in focus: the plan first.
 	m, _ = press(m, ' ')
 	out = view(m)
 	assert.Assert(t, strings.Contains(out, "▸ Plan"), out)
 	assert.Assert(t, !strings.Contains(out, "I didn't check the docs."), out)
-	assert.Assert(t, strings.Contains(out, "[space] Expand"), "the footer follows the fold it just closed: %s", out)
+	assert.Assert(t, strings.Contains(out, "[space] expand"), "the footer follows the fold it just closed: %s", out)
 
 	m, _ = press(m, ' ')
 	assert.Assert(t, strings.Contains(view(m), "I didn't check the docs."), "space unfolds it again")

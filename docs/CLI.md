@@ -273,6 +273,17 @@ chunk
   guessing the wrong prepared environment produces failures that look like the
   repo's own. Selection never fails a run: an unreachable snapshot API is
   warned about and treated as no match.
+- **Keys in `chunk watch` and `chunk factory plan` follow one set of rules**, so
+  a key means the same thing on both screens. `↑↓←→` and `j k h l` move,
+  `g`/`G` and `home`/`end` go to the top and bottom, `pgup`/`pgdn` page and
+  `ctrl+u`/`ctrl+d` page by half. `enter` goes in or confirms and `esc` goes
+  back one level, stopping Claude or cancelling a comment or prompt first when
+  there is one, and leaves from the top; where leaving would drop unsent
+  comments or a message it asks first. `q` quits wherever no text is being
+  typed and `ctrl+c` always quits. A lowercase key is the common action and its
+  capital the bigger one (`d` deletes a comment, `D` a run; `n` and `N` go to
+  the next and previous comment). Plain letters are never actions while a text
+  box has focus. Footer hints read `key action`, in lowercase.
 - Telemetry is opt-out. Events are anonymous until you authenticate with
   CircleCI; after that they include your CircleCI user ID, and earlier
   anonymous events from the same install are linked to it. They never include

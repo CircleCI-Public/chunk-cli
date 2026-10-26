@@ -48,6 +48,10 @@ func (m Model) updateOutputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.output.scrollBy(height, height)
 	case key.Matches(msg, k.PageUp):
 		m.output.scrollBy(-height, height)
+	case key.Matches(msg, k.HalfDown):
+		m.output.scrollBy(height/2, height)
+	case key.Matches(msg, k.HalfUp):
+		m.output.scrollBy(-height/2, height)
 	case key.Matches(msg, k.Top):
 		m.output.scroll = 0
 		m.output.pinned = false

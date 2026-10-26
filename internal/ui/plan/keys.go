@@ -22,7 +22,11 @@ type keyMap struct {
 	HalfUp, HalfDown                     key.Binding
 	// SectionBack carries the hint for both.
 	SectionBack, SectionNext key.Binding
-	Comment, Delete, Next    key.Binding
+	Comment, Delete          key.Binding
+	// Next and Prev share a hint while both have somewhere to go.
+	Next, Prev key.Binding
+	// prevUnlisted is set when Next's hint already names Prev.
+	prevUnlisted bool
 	// SendComments sends the comments waiting to Claude from the plan,
 	// without a trip to the chat; enter does it there.
 	SendComments key.Binding
@@ -72,6 +76,7 @@ func (m Model) keys() keyMap {
 		Comment:        key.NewBinding(key.WithKeys("c", "enter"), key.WithHelp("c", "comment")),
 		Delete:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete comment")),
 		Next:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next comment")),
+		Prev:           key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous comment")),
 		SendComments:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "send comments")),
 		SaveComment:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save comment")),
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
@@ -82,13 +87,21 @@ func (m Model) keys() keyMap {
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 
+	// Esc leaves, unless it has Claude to stop, a comment to cancel, a
+	// selection to clear or a question to answer no to. q leaves from the plan,
+	// where no text is being typed. A screen with a host goes back to it; one
+	// without closes, asking first when that would drop comments or a message.
+	quit := "quit"
 	if m.back {
-		// Esc leaves, as it does elsewhere in the host, unless it has
-		// Claude to stop, a comment to cancel or a question to answer no to.
-		k.Quit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "back to runs"))
-		if !m.busy && !m.commenting && !m.confirming && !m.selecting() {
-			k.Quit = key.NewBinding(key.WithKeys("esc", "ctrl+c"), key.WithHelp("esc", "back to runs"))
+		quit = "back to runs"
+	}
+	k.Quit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", quit))
+	if !m.busy && !m.commenting && !m.confirming && !m.selecting() {
+		keys := []string{"esc", "ctrl+c"}
+		if m.focus == panePlan {
+			keys = append(keys, "q")
 		}
+		k.Quit = key.NewBinding(key.WithKeys(keys...), key.WithHelp("esc", quit))
 	}
 
 	inChat := m.focus == paneChat && !m.commenting
@@ -108,7 +121,15 @@ func (m Model) keys() keyMap {
 	k.Delete.SetEnabled(inPlan && !m.selecting() && m.commentAt(m.cursor) >= 0)
 	// n has nowhere to go with nothing commented below the cursor, so the
 	// footer does not offer it there.
-	k.Next.SetEnabled(inPlan && m.nextComment() != m.cursor)
+	hasNext := inPlan && m.nextComment() != m.cursor
+	hasPrev := inPlan && m.prevComment() != m.cursor
+	k.Next.SetEnabled(hasNext)
+	k.Prev.SetEnabled(hasPrev)
+	if hasNext && hasPrev {
+		// One hint for both, as the paging keys have.
+		k.Next.SetHelp("n/N", "next/prev comment")
+		k.prevUnlisted = true
+	}
 	k.SendComments.SetEnabled(inPlan && len(m.comments) > 0)
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
@@ -121,12 +142,16 @@ func (m Model) keys() keyMap {
 // ShortHelp is the footer's hints, most useful first: the footer drops hints
 // from the end until it fits.
 func (k keyMap) ShortHelp() []key.Binding {
+	prev := k.Prev
+	if k.prevUnlisted {
+		prev.SetEnabled(false)
+	}
 	return []key.Binding{
 		k.SaveComment, k.CancelComment,
 		k.Send, k.Newline,
 		k.Comment, k.SendComments, k.ClearSelection, k.Up,
 		k.Stop, k.Focus, k.SendPlan, k.Quit,
-		k.SectionBack, k.Delete, k.Next, k.ExtendUp, k.PageUp, k.ChatPageUp,
+		k.SectionBack, k.Delete, k.Next, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }
 

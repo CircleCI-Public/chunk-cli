@@ -61,29 +61,29 @@ func (m Model) keys() keyMap {
 	run := m.selectedRun()
 	right := m.focusedPane == paneRight
 	k := keyMap{
-		Up:            key.NewBinding(key.WithKeys("up", "k", "w"), key.WithHelp("↑/↓", "select")),
-		Down:          key.NewBinding(key.WithKeys("down", "j", "s")),
+		Up:            key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/↓", "select")),
+		Down:          key.NewBinding(key.WithKeys("down", "j")),
 		Left:          key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "back")),
 		Right:         key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "run")),
-		Open:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "output")),
+		Open:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "output")),
 		OpenPR:        key.NewBinding(key.WithKeys("o", "super+enter")),
 		Copy:          key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy failure")),
 		CopyBranch:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b/u", "copy branch/PR")),
 		CopyPR:        key.NewBinding(key.WithKeys("u")),
-		Toggle:        key.NewBinding(key.WithKeys("space"), key.WithHelp("Space", "toggle")),
+		Toggle:        key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle")),
 		Search:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search runs")),
-		Keep:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "keep filter")),
-		Clear:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "clear")),
+		Keep:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "keep filter")),
+		Clear:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear")),
 		New:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new run")),
 		Plan:          key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "plan a run")),
 		Send:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "go to step 2")),
 		Discard:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		StopDraft:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "stop Claude")),
-		ScrollDraft:   key.NewBinding(key.WithKeys("up", "down", "k", "j", "pgup", "pgdown"), key.WithHelp("↑/↓", "Scroll")),
-		ToggleSection: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "Expand/collapse")),
-		FocusSection:  key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "Switch section")),
+		ScrollDraft:   key.NewBinding(key.WithKeys("up", "down", "k", "j", "pgup", "pgdown"), key.WithHelp("↑/↓", "scroll")),
+		ToggleSection: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "expand/collapse")),
+		FocusSection:  key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "switch section")),
 		SendDraft:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "Send to factory")),
-		KeepDraft:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "Keep for later")),
+		KeepDraft:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "keep for later")),
 		Rounds:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "about rounds")),
 		Cancel:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
 		Continue:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "continue run")),
@@ -108,9 +108,9 @@ func (m Model) keys() keyMap {
 	k.ScrollDraft.SetEnabled(changed)
 	k.ToggleSection.SetEnabled(changed)
 	if changed {
-		open := "Expand"
+		open := "expand"
 		if m.draftSectionOpen(m.draftFocus) {
-			open = "Collapse"
+			open = "collapse"
 		}
 		k.ToggleSection.SetHelp("space", open)
 	}
@@ -118,7 +118,7 @@ func (m Model) keys() keyMap {
 	k.SendDraft.SetEnabled(changed)
 	k.KeepDraft.SetEnabled(m.draft == draftReady)
 	if m.draft == draftReady && !changed {
-		k.KeepDraft.SetHelp("esc", "Close")
+		k.KeepDraft.SetHelp("esc", "close")
 	}
 	k.Left.SetEnabled(right)
 	k.Right.SetEnabled(!right && run != nil)
@@ -162,9 +162,9 @@ func (k *keyMap) enableBranchAndPR(m Model, run *sessionInfo) {
 	k.CopyPR.SetEnabled(hasPR)
 	switch {
 	case onPR:
-		hint := "Enter/o"
+		hint := "enter/o"
 		if m.superEnter {
-			hint = "Enter/⌘Enter/o"
+			hint = "enter/⌘enter/o"
 		}
 		k.Open.SetHelp(hint, "open")
 		k.Copy.SetHelp("c", "copy URL")
@@ -184,15 +184,15 @@ func (k *keyMap) setToggleHint(m Model, run *sessionInfo, right bool) {
 	switch it.kind {
 	case itemTask:
 		k.Toggle.SetEnabled(right && len(taskLines(run.s.Factory.Prompt, m.taskWidth(), false)) > maxGoalLines)
-		k.Toggle.SetHelp("Space", foldHint(m.taskExpanded(run.s.ID)))
+		k.Toggle.SetHelp("space", foldHint(m.taskExpanded(run.s.ID)))
 		k.Copy.SetHelp("c", "copy task")
 	case itemRound:
-		k.Toggle.SetHelp("Space", foldHint(m.roundOpen(run.s, it.round)))
+		k.Toggle.SetHelp("space", foldHint(m.roundOpen(run.s, it.round)))
 	case itemDetails:
-		k.Toggle.SetHelp("Space", foldHint(m.detailsShown(run.s.ID)))
+		k.Toggle.SetHelp("space", foldHint(m.detailsShown(run.s.ID)))
 	case itemImplement, itemCheck, itemReview:
 		k.Toggle.SetEnabled(right && rowFoldable(run.s, *it))
-		k.Toggle.SetHelp("Space", foldHint(m.rowOpen(run.s.ID, *it)))
+		k.Toggle.SetHelp("space", foldHint(m.rowOpen(run.s.ID, *it)))
 	case itemBranch, itemPR:
 		k.Toggle.SetEnabled(false)
 	}
@@ -211,6 +211,7 @@ type outputKeyMap struct {
 	Close              key.Binding
 	ScrollUp, ScrollDn key.Binding
 	PageUp, PageDown   key.Binding
+	HalfUp, HalfDown   key.Binding
 	Top, Follow        key.Binding
 	ForceQuit          key.Binding
 }
@@ -218,13 +219,15 @@ type outputKeyMap struct {
 func newOutputKeyMap() outputKeyMap {
 	return outputKeyMap{
 		Close:     key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "back")),
-		ScrollUp:  key.NewBinding(key.WithKeys("up", "k", "w"), key.WithHelp("↑/↓", "scroll")),
-		ScrollDn:  key.NewBinding(key.WithKeys("down", "j", "s")),
+		ScrollUp:  key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/↓", "scroll")),
+		ScrollDn:  key.NewBinding(key.WithKeys("down", "j")),
 		PageUp:    key.NewBinding(key.WithKeys("pgup")),
 		PageDown:  key.NewBinding(key.WithKeys("pgdown")),
-		Top:       key.NewBinding(key.WithKeys("g"), key.WithHelp("g/G", "top/follow")),
-		Follow:    key.NewBinding(key.WithKeys("G")),
-		ForceQuit: key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl-c", "quit")),
+		HalfUp:    key.NewBinding(key.WithKeys("ctrl+u")),
+		HalfDown:  key.NewBinding(key.WithKeys("ctrl+d")),
+		Top:       key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g/G", "top/follow")),
+		Follow:    key.NewBinding(key.WithKeys("G", "end")),
+		ForceQuit: key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 }
 
