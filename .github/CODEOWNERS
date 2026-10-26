@@ -1,4 +1,4 @@
 # See GitHub docs for more:
 # https://help.github.com/articles/about-codeowners/
 
-* @CircleCI-Public/factory
+* @CircleCI-Public/factory @circleci-factory-bot
