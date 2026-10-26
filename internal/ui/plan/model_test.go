@@ -69,7 +69,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, approvedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg:
+	case eventMsg, sentMsg, approveStepMsg, approvedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -139,7 +139,7 @@ func TestApprovingApprovesThePlanInFactory(t *testing.T) {
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	agent := turnReturning("ok")
 	sent := false
-	approve := func() (string, error) {
+	approve := func(func(string)) (string, error) {
 		sent = true
 		return "build-1", nil
 	}
@@ -162,7 +162,7 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	store.TextV = "# Plan"
 	store.StateV = "Planning - Agent"
 	sent := false
-	approve := func() (string, error) {
+	approve := func(func(string)) (string, error) {
 		sent = true
 		return "build-1", nil
 	}
@@ -191,7 +191,7 @@ func TestAPlanWithNoUnitsIsNotSent(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
 	sent := false
-	approve := func() (string, error) {
+	approve := func(func(string)) (string, error) {
 		sent = true
 		return "build-1", nil
 	}
@@ -786,6 +786,55 @@ func TestApprovingThePlanClosesTheScreenWithItsBuild(t *testing.T) {
 	}
 }
 
+// While the plan is approved and its build started, the screen says which
+// step it is on, and the header's spinner turns.
+func TestApprovingShowsEachStep(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	release := make(chan struct{})
+	approve := func(step func(string)) (string, error) {
+		step("Approving the plan in factory…")
+		step("Starting the build on the chunk daemon…")
+		<-release
+		return "build-1", nil
+	}
+	m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+
+	m, cmd := m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("approving did not start the approval and the spinner: %#v", cmd())
+	}
+	wait, tick := batch[0], batch[1]
+	for _, want := range []string{"Approving the plan in factory…", "Starting the build on the chunk daemon…"} {
+		step, ok := wait().(approveStepMsg)
+		if !ok {
+			t.Fatalf("no step %q", want)
+		}
+		m, wait = m.Update(step)
+		if view := ansi.Strip(m.Content()); !strings.Contains(view, want) {
+			t.Errorf("the step %q is not shown:\n%s", want, view)
+		}
+	}
+
+	// The spinner keeps turning while the approval works, with nothing busy.
+	_, next := m.Update(tick())
+	if next == nil {
+		t.Error("the spinner stopped while approving")
+	}
+
+	close(release)
+	m, cmd = m.Update(wait())
+	if got, ok := closedBy(cmd); !ok || got.BuildID != "build-1" {
+		t.Fatalf("the approval closed with %+v, %v", got, ok)
+	}
+	if _, next = m.Update(tick()); next != nil {
+		t.Error("the spinner turns on once the approval is done")
+	}
+}
+
 func TestAFailedApprovalKeepsTheScreen(t *testing.T) {
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -910,7 +959,7 @@ func TestEnterDoesNotConfirmSendingThePlan(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan"
 	sent := false
-	approve := func() (string, error) {
+	approve := func(func(string)) (string, error) {
 		sent = true
 		return "build-1", nil
 	}

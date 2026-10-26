@@ -11,11 +11,13 @@ import (
 // approval records the order approveAndBuild calls its steps in.
 type approval struct {
 	steps                []string
+	shown                []string
 	approveErr, buildErr error
 }
 
 func (a *approval) run() (string, error) {
 	return approveAndBuild(
+		func(text string) { a.shown = append(a.shown, text) },
 		func() error { a.steps = append(a.steps, "approve"); return a.approveErr },
 		func() error { a.steps = append(a.steps, "stop"); return errors.New("claude did not exit cleanly") },
 		func() (string, error) {
@@ -34,6 +36,11 @@ func TestApproveAndBuildStopsThePlanningSessionBeforeTheBuild(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(id, "build-1"))
 	assert.Check(t, cmp.DeepEqual(a.steps, []string{"approve", "stop", "build"}))
+	assert.Check(t, cmp.DeepEqual(a.shown, []string{
+		"Approving the plan in factory…",
+		"Approved. Stopping the planning session…",
+		"Starting the build on the chunk daemon…",
+	}))
 }
 
 // A build that does not start leaves the plan approved with its claim
@@ -52,4 +59,5 @@ func TestApproveAndBuildKeepsThePlanningSessionWhenApprovalFails(t *testing.T) {
 	_, err := a.run()
 	assert.Check(t, cmp.ErrorContains(err, "not ready"))
 	assert.Check(t, cmp.DeepEqual(a.steps, []string{"approve"}))
+	assert.Check(t, cmp.DeepEqual(a.shown, []string{"Approving the plan in factory…"}))
 }

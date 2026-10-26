@@ -29,8 +29,9 @@ import (
 
 // Approver approves the plan in factory and starts its build, returning the
 // build's ID. It reads the plan itself rather than taking the screen's copy,
-// which may be behind factory's by a poll.
-type Approver func() (string, error)
+// which may be behind factory's by a poll. It calls step with each step as
+// it starts, as a line for the screen to show while it works.
+type Approver func(step func(string)) (string, error)
 
 // ReadyState is the state a plan waits in for the developer once its review
 // has passed; it can be approved only from there.
@@ -73,6 +74,12 @@ type (
 	approvedMsg struct {
 		buildID string
 		err     error
+	}
+	// approveStepMsg is a step of the approval starting; next is where the
+	// approval's later messages come from.
+	approveStepMsg struct {
+		text string
+		next <-chan tea.Msg
 	}
 	pollMsg      struct{}
 	refreshedMsg struct {
@@ -416,6 +423,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, refreshCmd(m.ctx, m.store)
 
+	case approveStepMsg:
+		if m.approving {
+			m.status = msg.text
+		}
+		return m, waitApproval(msg.next)
+
 	case approvedMsg:
 		m.approving = false
 		if msg.err != nil {
@@ -426,7 +439,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, closed(msg.buildID)
 
 	case spinner.TickMsg:
-		if !m.busy {
+		if !m.busy && !m.approving {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -494,8 +507,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, deleteCmd(m.ctx, m.store, id)
 		}
 		m.approving = true
-		m.status = "Approving the plan in factory…"
-		return m, approveCmd(m.approve)
+		m.status = "Approving the plan…"
+		return m, tea.Batch(approveCmd(m.approve), m.spin.Tick)
 	}
 	if m.commenting {
 		return m.updateCommentKey(msg)
@@ -738,10 +751,37 @@ func (m *Model) syncPlaceholder() {
 	}
 }
 
+// approveCmd runs approve in the background, and reads what it reports: an
+// approveStepMsg as each step starts, then its approvedMsg.
 func approveCmd(approve Approver) tea.Cmd {
+	// Buffered past the steps an approval takes, so it never waits on a
+	// screen that has closed.
+	ch := make(chan tea.Msg, 16)
+	go func() {
+		defer close(ch)
+		id, err := approve(func(text string) {
+			select {
+			case ch <- approveStepMsg{text: text}:
+			default:
+			}
+		})
+		ch <- approvedMsg{buildID: id, err: err}
+	}()
+	return waitApproval(ch)
+}
+
+// waitApproval reads the approval's next message from ch.
+func waitApproval(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		id, err := approve()
-		return approvedMsg{buildID: id, err: err}
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		if step, isStep := msg.(approveStepMsg); isStep {
+			step.next = ch
+			return step
+		}
+		return msg
 	}
 }
 

@@ -151,13 +151,14 @@ func reportPlanLeft(streams iostream.Streams, planID, buildID string) {
 func planSession(ctx context.Context, root, model string, api *circleci.Client) (*factoryplan.Agent, plan.Approver, *factoryplan.Store) {
 	store := factoryplan.NewStore(api)
 	agent := factoryplan.NewAgent(ctx, factory.AgentConfig{Dir: root, Model: model, SessionID: uuid.NewString()}, store)
-	approve := func() (string, error) {
+	approve := func(step func(string)) (string, error) {
 		// The daemon is started first, so a plan is not approved with
 		// nothing to build it.
+		step("Starting the chunk daemon…")
 		if err := chunkd.EnsureRunning(); err != nil {
 			return "", fmt.Errorf("start the chunk daemon: %w", err)
 		}
-		return approveAndBuild(
+		return approveAndBuild(step,
 			func() error { return store.Approve(ctx, agent.SessionID()) },
 			agent.Stop,
 			func() (string, error) { return buildPlan(root, store.ID(), model) },
@@ -172,14 +173,18 @@ func planSession(ctx context.Context, root, model string, api *circleci.Client) 
 // starts: approving released its claim, and a session still running would
 // claim the plan again at the developer's next message, when factory would
 // hand it the build tasks, which it cannot do. A plan whose approval failed
-// keeps its session, to plan on.
-func approveAndBuild(approve, stopPlanning func() error, build func() (string, error)) (string, error) {
+// keeps its session, to plan on. step is called with each step as it
+// starts.
+func approveAndBuild(step func(string), approve, stopPlanning func() error, build func() (string, error)) (string, error) {
+	step("Approving the plan in factory…")
 	if err := approve(); err != nil {
 		return "", err
 	}
+	step("Approved. Stopping the planning session…")
 	// The plan is approved, and the session stopped; how it stopped does not
 	// change what comes next.
 	_ = stopPlanning()
+	step("Starting the build on the chunk daemon…")
 	return build()
 }
 

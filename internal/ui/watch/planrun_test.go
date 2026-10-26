@@ -71,7 +71,7 @@ func (f *fakePlans) planner(_ context.Context, root string) (plan.Agent, plan.Ap
 	if f.err != nil {
 		return nil, nil, nil, f.err
 	}
-	approve := func() (string, error) {
+	approve := func(func(string)) (string, error) {
 		f.sent = true
 		return "build-1", nil
 	}
@@ -173,7 +173,10 @@ func TestApprovingThePlanSelectsItsBuild(t *testing.T) {
 
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-	next, closeCmd := m.Update(cmd()) // the approval
+	// y starts the approval and the spinner; the spinner's ticks are left out.
+	batch, ok := cmd().(tea.BatchMsg)
+	assert.Assert(t, ok && len(batch) == 2, "y did not start the approval")
+	next, closeCmd := m.Update(batch[0]()) // the approval
 	m = deliver(t, next.(Model), closeCmd)
 	assert.Assert(t, f.sent, "the plan was not approved")
 
