@@ -277,11 +277,14 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	}()
 	defer func() { <-d.polled }()
 
+	// Both loops start from the first poll's projects. A conflict pass started
+	// before it would skip every project the poll had not reached yet until the
+	// next ConflictInterval.
 	go func() {
 		<-d.polled
+		go d.checkConflictsLoop(ctx)
 		d.pollLoop(ctx)
 	}()
-	go d.checkConflictsLoop(ctx)
 
 	srv := newServer(d)
 	go func() {
