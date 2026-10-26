@@ -33,6 +33,7 @@ type fakePlanStore struct{ text string }
 func (f *fakePlanStore) Create(context.Context, string) error  { return nil }
 func (f *fakePlanStore) State(context.Context) (string, error) { return plan.ReadyState, nil }
 func (f *fakePlanStore) AddressComments(context.Context) error { return nil }
+func (f *fakePlanStore) ApproveDesign(context.Context) error   { return nil }
 func (f *fakePlanStore) Text(context.Context) (string, error)  { return f.text, nil }
 
 func (f *fakePlanStore) Comments(context.Context) ([]plan.Comment, error) { return nil, nil }

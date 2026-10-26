@@ -75,6 +75,8 @@ type (
 		buildID string
 		err     error
 	}
+	// designApprovedMsg is the end of approving the plan's design.
+	designApprovedMsg struct{ err error }
 	// approveStepMsg is a step of the approval starting; next is where the
 	// approval's later messages come from.
 	approveStepMsg struct {
@@ -210,6 +212,10 @@ type Model struct {
 	activity string
 
 	confirming bool
+	// approvingDesign is set from the developer's y to a design until factory
+	// has the event that approves it; pendingDesign is whether the y being
+	// asked for approves the design rather than the plan.
+	approvingDesign, pendingDesign bool
 	// approving is set from the developer's y until factory answers, so a
 	// second ctrl+s cannot approve the plan twice.
 	approving bool
@@ -429,17 +435,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, waitApproval(msg.next)
 
-	case approvedMsg:
-		m.approving = false
-		if msg.err != nil {
-			m.status = ui.ErrorStyle.Render("Could not approve the plan: " + msg.err.Error())
-			return m, nil
-		}
-		m.BuildID = msg.buildID
-		return m, closed(msg.buildID)
+	case designApprovedMsg, approvedMsg:
+		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
-		if !m.busy && !m.approving {
+		if !m.busy && !m.approving && !m.approvingDesign {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -499,8 +499,13 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.confirming {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
-			m.pendingDelete = ""
+			m.pendingDelete, m.pendingDesign = "", false
 			return m, nil
+		}
+		if m.pendingDesign {
+			m.pendingDesign, m.approvingDesign = false, true
+			m.status = "Approving the design…"
+			return m, tea.Batch(approveDesignCmd(m.ctx, m.store), m.spin.Tick)
 		}
 		if id := m.pendingDelete; id != "" {
 			m.pendingDelete = ""
@@ -529,18 +534,21 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case key.Matches(msg, k.SendPlan):
 		queued := len(queuedComments(m.comments))
 		switch {
-		case m.approving:
+		case m.approving, m.approvingDesign:
 		case m.busy:
 			m.status = warn("Wait for chunk to finish.")
 		case strings.TrimSpace(m.plan) == "":
 			m.status = warn("There is no plan to approve yet.")
 		case m.state != ReadyState:
 			m.status = warn("The plan is not ready yet: wait for its review to pass.")
+		case m.units == 0 && (queued > 0 || m.openComments() > 0):
+			m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
 		case m.units == 0:
 			// The plan waits in ReadyState after early-plan too, for its
-			// design to be reviewed; only once write-units has run is there
-			// anything to build.
-			m.status = warn("The plan has no units yet: comment on it and send, so chunk writes them.")
+			// design to be reviewed; its units come once the design is
+			// approved.
+			m.confirming, m.pendingDesign = true, true
+			m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? (y/n)")
 		case queued > 0:
 			m.confirming = true
 			m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d queued %s will not be saved. Approve the plan and build it anyway? (y/n)",
@@ -749,6 +757,35 @@ func (m *Model) syncPlaceholder() {
 	default:
 		m.input.Placeholder = chatPlaceholder
 	}
+}
+
+// applyApproval is the end of approving the plan's design, or the plan.
+func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case designApprovedMsg:
+		m.approvingDesign = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not approve the design: " + msg.err.Error())
+			return m, nil
+		}
+		m.status = "Design approved: chunk writes the units next."
+		return m, refreshCmd(m.ctx, m.store)
+	case approvedMsg:
+		m.approving = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not approve the plan: " + msg.err.Error())
+			return m, nil
+		}
+		m.BuildID = msg.buildID
+		return m, closed(msg.buildID)
+	}
+	return m, nil
+}
+
+// approveDesignCmd approves the plan's design, for factory to write its
+// units.
+func approveDesignCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg { return designApprovedMsg{err: s.ApproveDesign(ctx)} }
 }
 
 // approveCmd runs approve in the background, and reads what it reports: an

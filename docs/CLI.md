@@ -622,9 +622,9 @@ chunk
   `ctrl+s` approves the plan, after a `y`, once factory's review of it has
   passed and moved it to Planning - Human; until then the header reads In
   review. A plan waits there after its design is written too, before it has
-  units: the header reads Design ready, and `ctrl+s` approves nothing, since
-  comments sent from there have the session write the units. Approving reads
-  the plan as factory has it, not the screen's copy.
+  units: the header reads Design ready, and `ctrl+s` approves the design, so
+  the session writes the units, once its comments are sent and resolved.
+  Approving reads the plan as factory has it, not the screen's copy.
 
   Approving a plan with units has the chunk daemon build it, in a Claude Code
   session in the plan's worktree, through to a pull request, and closes the

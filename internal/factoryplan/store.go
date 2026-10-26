@@ -135,7 +135,7 @@ func (s *Store) Approve(ctx context.Context, session string) error {
 // ErrNoUnits is returned by Approve for a plan in plan.ReadyState with nothing
 // to build: it waits there after early-plan too, for its design to be
 // reviewed, before write-units has written any.
-var ErrNoUnits = errors.New("the plan has no units yet: comment on it and send, so chunk writes them")
+var ErrNoUnits = errors.New("the plan has no units yet: approve its design with ctrl+s, so chunk writes them")
 
 // hasUnits is whether text has a heading under its units section, as the
 // planning screen counts units.
@@ -163,6 +163,19 @@ func (s *Store) AddressComments(ctx context.Context) error {
 	}
 	if err := s.api.CreateFlowEvent(ctx, id, circleci.AddressComments); err != nil {
 		return fmt.Errorf("send the address-comments event: %w", err)
+	}
+	return nil
+}
+
+// ApproveDesign sends the plan's flow factory's approve-for-units event,
+// which approves its design.
+func (s *Store) ApproveDesign(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.CreateFlowEvent(ctx, id, circleci.ApproveForUnits); err != nil {
+		return fmt.Errorf("send the approve-for-units event: %w", err)
 	}
 	return nil
 }

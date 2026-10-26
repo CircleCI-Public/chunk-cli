@@ -18,6 +18,9 @@ type fakeStore struct {
 	CommentsV []Comment
 	nextID    int
 
+	// DesignApproved records the state the plan was in at each
+	// ApproveDesign call, in order.
+	DesignApproved []string
 	// HandedOff records the state the plan was in at each AddressComments
 	// call, in order. Like factory, which moves the plan at its next poll,
 	// AddressComments leaves StateV as it is.
@@ -65,6 +68,16 @@ func (f *fakeStore) AddressComments(context.Context) error {
 		return f.AddressErr
 	}
 	f.HandedOff = append(f.HandedOff, f.StateV)
+	return nil
+}
+
+func (f *fakeStore) ApproveDesign(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.AddressErr != nil {
+		return f.AddressErr
+	}
+	f.DesignApproved = append(f.DesignApproved, f.StateV)
 	return nil
 }
 

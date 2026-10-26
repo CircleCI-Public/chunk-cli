@@ -131,6 +131,20 @@ func TestStoreAddressCommentsSendsTheEvent(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"address-comments"}))
 }
 
+// TestStoreApproveDesignSendsTheEvent checks that ApproveDesign sends the
+// plan's flow factory's approve-for-units event.
+func TestStoreApproveDesignSendsTheEvent(t *testing.T) {
+	store, _, cci := createdStore(t)
+	ctx := context.Background()
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+
+	err := store.ApproveDesign(ctx)
+	assert.NilError(t, err)
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-units"}))
+}
+
 // TestStoreApproveWaitsForTheReview checks that a plan is approved only once
 // its review has passed: a plan still in Planning - Agent may have a review
 // running, or findings unfixed.

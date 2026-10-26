@@ -69,7 +69,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, approveStepMsg, approvedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg:
+	case eventMsg, sentMsg, approveStepMsg, approvedMsg, designApprovedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -186,8 +186,10 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 }
 
 // A plan waits in ReadyState after early-plan too, for its design to be
-// reviewed: with no units yet there is nothing to build, so it is not sent.
-func TestAPlanWithNoUnitsIsNotSent(t *testing.T) {
+// reviewed: with no units yet there is nothing to build, so ctrl+s approves
+// the design instead, for factory to write its units. The plan's build is not
+// started.
+func TestCtrlSApprovesTheDesignOfAPlanWithNoUnits(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
 	sent := false
@@ -201,16 +203,65 @@ func TestAPlanWithNoUnitsIsNotSent(t *testing.T) {
 	if !strings.Contains(view, "Design ready") || strings.Contains(view, "Plan ready") {
 		t.Errorf("header does not say only the design is ready:\n%s", view)
 	}
-	if !strings.Contains(view, "comment so chunk writes the units") {
-		t.Errorf("the action bar offers to approve a plan with no units:\n%s", view)
+	if !strings.Contains(view, "ctrl+s Approve design") || strings.Contains(view, "ctrl+s Approve plan") {
+		t.Errorf("the action bar does not offer to approve the design:\n%s", view)
 	}
+
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	if m.confirming {
-		t.Fatal("ctrl+s asked to send a plan with no units")
+	if !m.confirming || !strings.Contains(ansi.Strip(m.Content()), "Approve the design") {
+		t.Fatalf("ctrl+s did not ask to approve the design:\n%s", ansi.Strip(m.Content()))
 	}
 	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if sent {
-		t.Fatal("a plan with no units was sent")
+		t.Fatal("approving the design started the plan's build")
+	}
+	store.mu.Lock()
+	approved, handedOff := slices.Clone(store.DesignApproved), slices.Clone(store.HandedOff)
+	store.mu.Unlock()
+	if len(approved) != 1 || approved[0] != "Planning - Human" {
+		t.Fatalf("the design was not approved from Planning - Human once: %v", approved)
+	}
+	if len(handedOff) != 0 {
+		t.Errorf("approving the design handed factory comments: %v", handedOff)
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "chunk writes the units next") {
+		t.Errorf("the screen does not say the units come next:\n%s", view)
+	}
+}
+
+// A design with comments still to send or resolve is not approved: those
+// would have factory address them, not write the units.
+func TestCtrlSWaitsForCommentsBeforeApprovingTheDesign(t *testing.T) {
+	m, store := planModel(t)
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	m = drive(t, m, press("enter"))
+
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if m.confirming {
+		t.Fatal("ctrl+s asked to approve a design with a comment queued")
+	}
+	if !strings.Contains(ansi.Strip(m.Content()), "Send or resolve your comments first") {
+		t.Errorf("no word of the comments to send first:\n%s", ansi.Strip(m.Content()))
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.DesignApproved) != 0 {
+		t.Errorf("the design was approved: %v", store.DesignApproved)
+	}
+}
+
+func TestAFailedDesignApprovalSaysSo(t *testing.T) {
+	m, store := planModel(t)
+	store.AddressErr = errors.New("factory is down")
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if m.approvingDesign {
+		t.Error("still approving after the approval failed")
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Could not approve the design: factory is down") {
+		t.Errorf("the failure is not shown:\n%s", view)
 	}
 }
 
@@ -762,7 +813,7 @@ func TestNewlineHintMatchesTheTerminal(t *testing.T) {
 func TestActionBarKeepsApprovingThePlanInReach(t *testing.T) {
 	m, _ := planModel(t)
 	for range 2 {
-		if view := ansi.Strip(m.Content()); !strings.Contains(view, "ctrl+s Approve plan") {
+		if view := ansi.Strip(m.Content()); !strings.Contains(view, "ctrl+s Approve") {
 			t.Errorf("the action bar dropped ctrl+s:\n%s", view)
 		}
 		m = drive(t, m, press("tab"))

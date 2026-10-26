@@ -41,6 +41,10 @@ type FlowEvent string
 // state, where factory hands out a task for the plan's comments.
 const AddressComments FlowEvent = "address-comments"
 
+// ApproveForUnits moves a flow from Planning - Human to Planning - Agent with
+// its design approved, where factory hands out a task to write its units.
+const ApproveForUnits FlowEvent = "approve-for-units"
+
 // ApproveForBuilding moves a flow from Planning - Human to Building - Agent,
 // where factory hands the session claiming the plan its build tasks.
 const ApproveForBuilding FlowEvent = "approve-for-building"

@@ -32,8 +32,9 @@ type keyMap struct {
 	SendComments key.Binding
 	// While a comment is written.
 	SaveComment, CancelComment key.Binding
-	// While approving the plan is confirmed. Any other key, enter too, says
-	// no: approving starts the plan's build, so it takes a y.
+	// While approving the plan, or its design, is confirmed. Any other key,
+	// enter too, says no: approving moves the plan on in factory, so it
+	// takes a y.
 	Confirm key.Binding
 
 	Focus    key.Binding
