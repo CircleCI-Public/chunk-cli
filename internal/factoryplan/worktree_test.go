@@ -51,3 +51,44 @@ func TestPlanWorktreeRemovesThoseOfEndedPlans(t *testing.T) {
 	_, err = os.Stat(mergedDir)
 	assert.Check(t, errors.Is(err, os.ErrNotExist), "the merged plan's worktree is still there")
 }
+
+func TestStoreEndedForEachOfFactorysEnds(t *testing.T) {
+	client, cci := testClient(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		state string
+		want  bool
+	}{
+		{
+			state: "Done",
+			want:  true,
+		},
+		{
+			state: "Canceled",
+			want:  true,
+		},
+		{
+			state: "Won't Do",
+			want:  true,
+		},
+		{
+			state: "Duplicate",
+			want:  true,
+		},
+		{
+			state: "Planning - Human",
+			want:  false,
+		},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			store := NewStore(client)
+			err := store.Create(ctx, "a plan")
+			assert.NilError(t, err)
+			cci.SetFactoryPlanState(store.ID(), tc.state)
+
+			got, err := store.ended(ctx, store.ID())
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(got, tc.want))
+		})
+	}
+}
