@@ -30,6 +30,10 @@ func newServer(d *daemon) *http.Server {
 			http.Error(w, fmt.Sprintf("decode roots: %v", err), http.StatusBadRequest)
 			return
 		}
+		if !d.waitPolled(r.Context()) {
+			http.Error(w, "chunk daemon is still starting", http.StatusServiceUnavailable)
+			return
+		}
 		snap := d.snapshot(roots)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(snap)

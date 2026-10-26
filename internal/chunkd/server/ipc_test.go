@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -532,4 +533,77 @@ func TestRunDaemonRefusesASocketThatAnswers(t *testing.T) {
 	assert.ErrorContains(t, err, "already serving")
 	_, statErr := os.Stat(filepath.Join(dir, "daemon.pid"))
 	assert.Check(t, errors.Is(statErr, os.ErrNotExist), "pid file of the live daemon must be left alone")
+}
+
+// A daemon still on its first poll answers /ping but holds /snapshot. The first
+// poll can take longer than a launching client waits for /ping (FACT-650), and
+// a dashboard served before it would open with no rows.
+func TestPingAnswersWhileTheFirstPollRuns(t *testing.T) {
+	d := newTestDaemon()
+	d.polled = make(chan struct{})
+	h := newServer(d).Handler
+
+	ping := httptest.NewRecorder()
+	h.ServeHTTP(ping, httptest.NewRequest(http.MethodGet, "/ping", nil))
+	assert.Equal(t, ping.Code, http.StatusOK)
+
+	done := make(chan *httptest.ResponseRecorder)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/snapshot", nil))
+		done <- rec
+	}()
+	select {
+	case <-done:
+		t.Fatal("/snapshot answered before the first poll finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(d.polled)
+	select {
+	case rec := <-done:
+		assert.Equal(t, rec.Code, http.StatusOK)
+	case <-time.After(5 * time.Second):
+		t.Fatal("/snapshot never answered after the first poll finished")
+	}
+}
+
+// A client that gives up on /snapshot during the first poll is told the daemon
+// is starting rather than being held until the poll ends.
+func TestSnapshotGivesUpWithItsCaller(t *testing.T) {
+	d := newTestDaemon()
+	d.polled = make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec := httptest.NewRecorder()
+	newServer(d).Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/snapshot", nil).WithContext(ctx))
+	assert.Equal(t, rec.Code, http.StatusServiceUnavailable)
+}
+
+// A root asked about during the first poll may be one the poll has not reached
+// yet, so the daemon says it is starting rather than that it does not track it.
+func TestConflictsDuringTheFirstPollSayTheDaemonIsStarting(t *testing.T) {
+	d := newTestDaemon()
+	d.polled = make(chan struct{})
+	h := newServer(d).Handler
+
+	conflicts := func() chunkd.ConflictReport {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/conflicts?root="+t.TempDir(), nil))
+		assert.Equal(t, rec.Code, http.StatusOK)
+		var report chunkd.ConflictReport
+		assert.NilError(t, json.NewDecoder(rec.Body).Decode(&report))
+		return report
+	}
+
+	report := conflicts()
+	assert.Check(t, !report.Known)
+	assert.Assert(t, report.Conflict != nil)
+	assert.Check(t, cmp.Contains(report.Conflict.Unavailable, "still starting"))
+
+	close(d.polled)
+	report = conflicts()
+	assert.Assert(t, report.Conflict != nil)
+	assert.Check(t, cmp.Contains(report.Conflict.Unavailable, "not tracking"))
 }
