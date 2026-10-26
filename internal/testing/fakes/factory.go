@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,15 +16,15 @@ import (
 type factoryPlan struct {
 	id, title, state, branch, text string
 	createdAt, updatedAt           time.Time
-	claim                          *factoryClaim
-	comments                       []factoryComment
+	// flowed is whether a session has claimed the plan, which gives it the
+	// flow conductor keeps from then on; session is the one claiming it now,
+	// "" when none does.
+	flowed   bool
+	session  string
+	events   []string
+	comments []factoryComment
 	// seq orders plans by creation, as created_at and id order conductor's.
 	seq int
-}
-
-type factoryClaim struct {
-	sessionID, worktree string
-	renewedAt           time.Time
 }
 
 type factoryComment struct {
@@ -32,33 +33,26 @@ type factoryComment struct {
 	resolvedAt           *time.Time
 }
 
-// registerFactory serves the factory plan and comment routes of the V3 API.
+// registerFactory serves the factory plan, comment, flow and event routes of
+// the V3 API.
 func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.POST("/api/v3/factory/plans", f.handleCreatePlan)
 	r.GET("/api/v3/factory/plans", f.handleListPlans)
 	r.GET("/api/v3/factory/plans/:id", f.handleGetPlan)
 	r.GET("/api/v3/factory/plans/:id/text", f.handleGetPlanText)
 	r.PUT("/api/v3/factory/plans/:id/text", f.handlePutPlanText)
-	r.POST("/api/v3/factory/plans/:id/move", f.handleMovePlan)
 	r.POST("/api/v3/factory/comments", f.handleCreateComment)
 	r.GET("/api/v3/factory/comments", f.handleListComments)
 	r.PUT("/api/v3/factory/comments/:id/body", f.handlePutCommentBody)
 	r.POST("/api/v3/factory/comments/:id/resolve", f.handleResolveComment)
 	r.DELETE("/api/v3/factory/comments/:id", f.handleDeleteComment)
+	r.GET("/api/v3/factory/flows/:id", f.handleGetFlow)
+	r.POST("/api/v3/factory/events", f.handleCreateEvent)
 }
 
-// factoryMoves are the edges of conductor's plan state machine
-// (conductor.moves in circleci/factory).
-var factoryMoves = map[string][]string{
-	"Unprioritized":       {"Agent Ready"},
-	"Agent Ready":         {"Planning - Agent"},
-	"Planning - Agent":    {"Planning - Human"},
-	"Planning - Human":    {"Building - Agent", "Planning - Agent"},
-	"Building - Agent":    {"Building - Human", "Integrating - Agent"},
-	"Building - Human":    {"Building - Agent"},
-	"Integrating - Agent": {"Integrating - Human"},
-	"Integrating - Human": {"Integrating - Agent", "Done"},
-}
+// factoryEvents are the events a human may send a flow (flow.EventName in
+// circleci/factory).
+var factoryEvents = []string{"prioritize", "address-comments", "approve-for-building", "abandon-integrate", "abandon"}
 
 // factoryEnds are the states a plan ends in, which the plan list leaves out
 // (conductor.Ends in circleci/factory).
@@ -68,6 +62,11 @@ var factoryEnds = []string{"Done", "Canceled", "Won't Do", "Duplicate"}
 type FactoryPlan struct {
 	ID, Title, State, Text string
 	Comments               int
+	// Events are the events sent the plan's flow, in order. The fake
+	// stores them without applying them: conductor applies them at the
+	// plan's next poll, which a test stands in for with
+	// SetFactoryPlanState.
+	Events []string
 }
 
 // FactoryPlan returns plan id as the fake holds it, and false when there is
@@ -79,7 +78,10 @@ func (f *FakeCircleCI) FactoryPlan(id string) (FactoryPlan, bool) {
 	if p == nil {
 		return FactoryPlan{}, false
 	}
-	return FactoryPlan{ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments)}, true
+	return FactoryPlan{
+		ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments),
+		Events: slices.Clone(p.events),
+	}, true
 }
 
 // SetFactoryPlanState puts plan id in state, as factory's daemon moving it
@@ -93,13 +95,23 @@ func (f *FakeCircleCI) SetFactoryPlanState(id, state string) {
 	}
 }
 
-// ClaimFactoryPlan has a factory session in worktree claim plan id, as
-// factory's daemon would.
-func (f *FakeCircleCI) ClaimFactoryPlan(id, sessionID, worktree string) {
+// ClaimFactoryPlan has factory session sessionID claim plan id, as factory's
+// daemon would, giving the plan its flow.
+func (f *FakeCircleCI) ClaimFactoryPlan(id, sessionID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
-		p.claim = &factoryClaim{sessionID: sessionID, worktree: worktree, renewedAt: time.Now().UTC()}
+		p.flowed, p.session = true, sessionID
+	}
+}
+
+// ReleaseFactoryPlan has the session claiming plan id release it, as
+// factory's daemon would; the plan keeps its flow.
+func (f *FakeCircleCI) ReleaseFactoryPlan(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.session = ""
 	}
 }
 
@@ -127,16 +139,11 @@ func (f *FakeCircleCI) factoryStart(c *gin.Context) bool {
 func planEntity(p *factoryPlan) gin.H {
 	attrs := planListAttrs(p)
 	attrs["branch"] = p.branch
-	if p.claim != nil {
-		attrs["claim"] = gin.H{
-			"session_id": p.claim.sessionID, "worktree": p.claim.worktree, "renewed_at": p.claim.renewedAt,
-		}
-	}
 	return gin.H{"id": p.id, "attributes": attrs}
 }
 
 // planListAttrs are a plan's attributes as the plan list serves them, which
-// leaves out its branch and claim.
+// leaves out its branch.
 func planListAttrs(p *factoryPlan) gin.H {
 	open := 0
 	for _, cm := range p.comments {
@@ -329,32 +336,73 @@ func (f *FakeCircleCI) handlePutPlanText(c *gin.Context) {
 	}
 }
 
-// handleMovePlan moves a plan along one of factoryMoves, answering 400 for
-// any other move, as conductor does.
-func (f *FakeCircleCI) handleMovePlan(c *gin.Context) {
+// handleGetFlow serves a plan's flow, which it has once a session has
+// claimed it, as conductor does; the flow's ID is the plan's.
+func (f *FakeCircleCI) handleGetFlow(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	p := f.factoryPlans[id]
+	if p == nil || !p.flowed {
+		factoryError(c, http.StatusNotFound, "flow not found")
+		return
+	}
+	refs := gin.H{"factory_plan": gin.H{"id": p.id}}
+	if p.session != "" {
+		refs["factory_session"] = gin.H{"id": p.session}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"id": p.id, "attributes": gin.H{"state": p.state}, "references": refs,
+	}})
+}
+
+// handleCreateEvent stores an event for a flow, as conductor does, answering
+// 400 for an event conductor does not know or one with no factory_flow
+// reference, and 404 for a plan with no flow.
+func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
 	}
 	var body struct {
-		State string `json:"state"`
+		Data struct {
+			Attributes struct {
+				Event string `json:"event"`
+			} `json:"attributes"`
+			References struct {
+				FactoryFlow *struct {
+					ID string `json:"id"`
+				} `json:"factory_flow"`
+			} `json:"references"`
+		} `json:"data"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil || body.State == "" {
-		factoryError(c, http.StatusBadRequest, "a move needs a state")
+	if err := c.ShouldBindJSON(&body); err != nil || !slices.Contains(factoryEvents, body.Data.Attributes.Event) {
+		factoryError(c, http.StatusBadRequest, "event is not one of "+strings.Join(factoryEvents, ", "))
 		return
 	}
+	if body.Data.References.FactoryFlow == nil {
+		factoryError(c, http.StatusBadRequest, "an event needs a factory_flow reference")
+		return
+	}
+	flowID := body.Data.References.FactoryFlow.ID
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	p := f.plan(c)
-	if p == nil {
+	p := f.factoryPlans[flowID]
+	if p == nil || !p.flowed {
+		factoryError(c, http.StatusNotFound, "flow not found")
 		return
 	}
-	if !slices.Contains(factoryMoves[p.state], body.State) {
-		factoryError(c, http.StatusBadRequest, "cannot move a plan from "+p.state+" to "+body.State)
-		return
-	}
-	p.state = body.State
-	p.updatedAt = time.Now().UTC()
-	c.JSON(http.StatusOK, gin.H{"data": planEntity(p)})
+	p.events = append(p.events, body.Data.Attributes.Event)
+	c.JSON(http.StatusCreated, gin.H{"data": gin.H{
+		"id":         uuid.NewString(),
+		"attributes": gin.H{"event": body.Data.Attributes.Event, "created_at": time.Now().UTC()},
+		"references": gin.H{"factory_flow": gin.H{"id": p.id}, "user": gin.H{"id": "user-1"}},
+	}})
 }
 
 func (f *FakeCircleCI) handleCreateComment(c *gin.Context) {

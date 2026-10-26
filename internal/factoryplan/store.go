@@ -1,0 +1,227 @@
+// Package factoryplan backs the planning screen with factory: the plan and its
+// comments in factory's V3 API (Store), and the long-lived factory session
+// that plans it (Agent).
+package factoryplan
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"sync"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
+)
+
+// Store is a plan.Store backed by factory's V3 plan and comment API,
+// addressed by the plan's ID, which Create sets. The screen only reads the
+// plan's text: the agent writes it, with plan_set through the factory daemon.
+type Store struct {
+	api *circleci.Client
+
+	mu     sync.Mutex
+	planID string
+}
+
+func NewStore(api *circleci.Client) *Store {
+	return &Store{api: api}
+}
+
+// ID is the plan's ID in factory, or "" before Create.
+func (s *Store) ID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.planID
+}
+
+// skeleton is the empty plan factory's plan_init writes. The plan tools edit
+// a plan by its sections, so a plan created without them gives the agent
+// nothing to write into.
+func skeleton(title string) string {
+	return "# " + title + "\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"
+}
+
+func (s *Store) Create(ctx context.Context, title string) error {
+	p, err := s.api.CreatePlan(ctx, title, skeleton(title))
+	if err != nil {
+		return fmt.Errorf("create the plan in factory: %w", err)
+	}
+	s.mu.Lock()
+	s.planID = p.ID
+	s.mu.Unlock()
+	return nil
+}
+
+// errNotCreated is returned by a write before Create has set an ID to
+// address it with.
+var errNotCreated = errors.New("the plan has not been created in factory yet")
+
+func (s *Store) State(ctx context.Context) (string, error) {
+	id := s.ID()
+	if id == "" {
+		return "", nil
+	}
+	p, err := s.api.GetPlan(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("get the plan's state: %w", err)
+	}
+	return p.State, nil
+}
+
+// holder is the factory session holding the plan's claim, as its flow
+// references it, or "" when none does or the plan has not been created. A
+// plan has no flow until a session first claims it.
+func (s *Store) holder(ctx context.Context) (string, error) {
+	id := s.ID()
+	if id == "" {
+		return "", nil
+	}
+	f, err := s.api.GetFlow(ctx, id)
+	var se *circleci.StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get the plan's claim: %w", err)
+	}
+	return f.SessionID, nil
+}
+
+// ErrNotReady is returned by Ready for a plan whose review has not passed:
+// factory has not moved it to plan.ReadyState.
+var ErrNotReady = errors.New("the plan is not ready yet: wait for its review to pass")
+
+// Ready is the plan's text in factory, to send to the factory to build, once
+// its review has passed; the text is read after the state, so it is no older
+// than the review.
+func (s *Store) Ready(ctx context.Context) (string, error) {
+	state, err := s.State(ctx)
+	if err != nil {
+		return "", err
+	}
+	if state != plan.ReadyState {
+		return "", ErrNotReady
+	}
+	text, err := s.Text(ctx)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", errors.New("the plan in factory is empty")
+	}
+	if !hasUnits(text) {
+		return "", ErrNoUnits
+	}
+	return text, nil
+}
+
+// ErrNoUnits is returned by Ready for a plan in plan.ReadyState with nothing
+// to build: it waits there after early-plan too, for its design to be
+// reviewed, before write-units has written any.
+var ErrNoUnits = errors.New("the plan has no units yet: comment on it and send, so chunk writes them")
+
+// hasUnits is whether text has a heading under its units section, as the
+// planning screen counts units.
+func hasUnits(text string) bool {
+	inUnits := false
+	for _, line := range strings.Split(text, "\n") {
+		switch {
+		case strings.HasPrefix(line, "## "):
+			inUnits = strings.Contains(strings.ToLower(line), "unit")
+		case strings.HasPrefix(line, "# "):
+			inUnits = false
+		case inUnits && strings.HasPrefix(line, "###"):
+			return true
+		}
+	}
+	return false
+}
+
+// AddressComments sends the plan's flow factory's address-comments event,
+// which moves it out of a Human state at its next poll.
+func (s *Store) AddressComments(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.CreateFlowEvent(ctx, id, circleci.AddressComments); err != nil {
+		return fmt.Errorf("send the address-comments event: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) Text(ctx context.Context) (string, error) {
+	id := s.ID()
+	if id == "" {
+		return "", nil
+	}
+	text, err := s.api.PlanText(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("get the plan's text: %w", err)
+	}
+	return text, nil
+}
+
+func (s *Store) Comments(ctx context.Context) ([]plan.Comment, error) {
+	id := s.ID()
+	if id == "" {
+		return nil, nil
+	}
+	cs, err := s.api.ListComments(ctx, id, false)
+	if err != nil {
+		return nil, fmt.Errorf("list the plan's comments: %w", err)
+	}
+	out := make([]plan.Comment, len(cs))
+	for i, c := range cs {
+		out[i] = comment(c)
+	}
+	return out, nil
+}
+
+func (s *Store) AddComment(ctx context.Context, quote, body string) (plan.Comment, error) {
+	id := s.ID()
+	if id == "" {
+		return plan.Comment{}, errNotCreated
+	}
+	c, err := s.api.CreateComment(ctx, id, quote, body)
+	if err != nil {
+		return plan.Comment{}, fmt.Errorf("save the comment: %w", err)
+	}
+	return comment(*c), nil
+}
+
+func comment(c circleci.PlanComment) plan.Comment {
+	return plan.Comment{ID: c.ID, Quote: c.QuotedText, Body: c.Body, Resolved: c.ResolvedAt != nil}
+}
+
+func (s *Store) EditComment(ctx context.Context, id, body string) error {
+	if s.ID() == "" {
+		return errNotCreated
+	}
+	if err := s.api.SetCommentBody(ctx, id, body); err != nil {
+		return fmt.Errorf("save the comment: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ResolveComment(ctx context.Context, id string) error {
+	if s.ID() == "" {
+		return errNotCreated
+	}
+	if _, err := s.api.ResolveComment(ctx, id); err != nil {
+		return fmt.Errorf("resolve the comment: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) DeleteComment(ctx context.Context, id string) error {
+	if s.ID() == "" {
+		return errNotCreated
+	}
+	if err := s.api.DeleteComment(ctx, id); err != nil {
+		return fmt.Errorf("delete the comment: %w", err)
+	}
+	return nil
+}

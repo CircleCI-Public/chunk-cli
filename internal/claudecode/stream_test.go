@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
 // Output arrives in chunks that cut lines anywhere, as the exec stream
@@ -75,4 +76,14 @@ func TestStreamDropsOversizedLines(t *testing.T) {
 	_, ok := s.Result()
 	assert.Assert(t, ok)
 	assert.Assert(t, len(s.lines.buf) < maxLineBytes)
+}
+
+// A long, multi-line command shows on one line, cut short.
+func TestActivityLineFitsOnOneLine(t *testing.T) {
+	a := Activity{Tool: "Bash", Detail: "go test\n  ./...  " + strings.Repeat("x", 200)}
+	line := a.Line()
+	assert.Check(t, !strings.Contains(line, "\n"))
+	assert.Check(t, strings.HasPrefix(line, "Bash go test ./... x"))
+	assert.Check(t, strings.HasSuffix(line, "…"))
+	assert.Check(t, cmp.Equal(Activity{Tool: "Read"}.Line(), "Read"))
 }

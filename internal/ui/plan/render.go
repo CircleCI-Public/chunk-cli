@@ -11,7 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-// The plan Claude writes has a fixed shape (see planSystemPrompt): numbered
+// The plan factory writes has a fixed shape (factory's plan format): numbered
 // sections, the last of which, Units, is the work. The screen sets the
 // sections apart and shows each unit as a step; the rest is markdown as
 // glamour renders it.

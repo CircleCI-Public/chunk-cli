@@ -12,8 +12,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-// newFactoryAgentCmd is scaffolding for trying factory.Agent by hand, before
-// the planning screen (chunk factory plan) uses it in place of PlanSession.
+// newFactoryAgentCmd runs factory.Agent, the session behind the planning
+// screen (chunk factory plan), by hand, for trying it outside the screen.
 func newFactoryAgentCmd() *cobra.Command {
 	var resume, pluginDir, model string
 
@@ -76,7 +76,7 @@ func sendAgentLines(lines *bufio.Scanner, a *factory.Agent) {
 func printAgentEvent(streams iostream.Streams, ev factory.AgentEvent) {
 	switch {
 	case ev.Activity != nil:
-		streams.Println("· " + activityLine(*ev.Activity))
+		streams.Println("· " + ev.Activity.Line())
 	case ev.TurnEnded != nil:
 		reply := ev.TurnEnded.Reply
 		if ev.TurnEnded.ByTask {
@@ -98,6 +98,10 @@ func agentStartError(err error) error {
 	case errors.Is(err, factory.ErrNoFactory):
 		return newUserError("factory is not installed.").
 			withSuggestion("Install factory and put it on PATH.").
+			withoutDetail()
+	case errors.Is(err, factory.ErrNoFactoryDaemon):
+		return newUserError("The factory daemon is not running.").
+			withSuggestion("Run 'factory daemon' in a terminal, with FACTORY_PLAN_STORE=circleci and FACTORY_PLAN_CIRCLECI_TOKEN set to a token for the CircleCI user chunk is signed in as.").
 			withoutDetail()
 	case errors.Is(err, factory.ErrNoFactoryPlugin):
 		return newUserError("factory's f plugin is not loaded.").

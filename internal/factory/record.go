@@ -24,8 +24,9 @@ type Record struct {
 	// Prompt is the original request. A continued run keeps it, so a chain of
 	// runs is all one change.
 	Prompt string `json:"prompt"`
-	// SpecOrigin is the path Prompt was read from, when it named a file rather
-	// than being literal text. A continued run keeps it along with Prompt.
+	// SpecOrigin is where Prompt came from when it was not literal text: the
+	// path it was read from, or "factory plan <ID>" for a plan sent from the
+	// planning screen. A continued run keeps it along with Prompt.
 	SpecOrigin string `json:"spec_origin,omitempty"`
 	Worktree   string `json:"worktree"`
 	Branch     string `json:"branch"`

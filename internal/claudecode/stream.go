@@ -16,6 +16,20 @@ type Activity struct {
 	Description string
 }
 
+// maxLineDetail caps what Line shows of a tool's target, such as a long
+// shell command, so each stays on one line.
+const maxLineDetail = 100
+
+// Line is the activity as one line for a status stream: the tool and its
+// target.
+func (a Activity) Line() string {
+	detail := strings.Join(strings.Fields(a.Detail), " ")
+	if r := []rune(detail); len(r) > maxLineDetail {
+		detail = string(r[:maxLineDetail]) + "…"
+	}
+	return strings.TrimSpace(a.Tool + " " + detail)
+}
+
 // structuredOutputTool is the tool Claude Code answers through when a schema
 // is given. It is how the answer arrives, not something claude did.
 const structuredOutputTool = "StructuredOutput"

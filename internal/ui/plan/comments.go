@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -13,23 +14,97 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-// comment is the developer's note on a run of blocks of the plan, sent to
-// Claude with their next message.
+// comment is the developer's note on a run of blocks of the plan.
 type comment struct {
+	// id is the comment in factory, or "" while it is queued.
+	id       string
+	resolved bool
+	// replaces are the ids of saved comments this queued one took in,
+	// deleted in factory once it is saved.
+	replaces []string
 	// block is the index of the first block the comment is on, or -1 once
 	// Claude has rewritten those blocks and they are gone. Such a comment is
-	// still sent.
+	// still shown and sent.
 	block int
 	// span is how many blocks the comment is on, from block.
 	span int
-	// quote is the blocks' markdown, which is how Claude finds what the
-	// comment is about.
+	// quote is the blocks' markdown, which is how it is anchored to them.
 	quote string
 	text  string
 }
 
+// takesComments is whether sending comments hands them to factory from
+// state: factory's address-comments event moves a plan from any Human state
+// to its phase's Agent state, which hands out a task for its comments.
+func takesComments(state string) bool { return strings.HasSuffix(state, " - Human") }
+
 // last is the index of the last block c is on.
 func (c comment) last() int { return c.block + max(c.span, 1) - 1 }
+
+// queuedComments is the comments in cs that have not been saved to factory.
+func queuedComments(cs []comment) []comment {
+	var out []comment
+	for _, c := range cs {
+		if c.id == "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// dropQueued removes the first n queued comments from cs.
+func dropQueued(cs []comment, n int) []comment {
+	out := make([]comment, 0, len(cs))
+	dropped := 0
+	for _, c := range cs {
+		if c.id == "" && dropped < n {
+			dropped++
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// applyComments rebuilds m.comments and m.resolved from the store's list,
+// keeping the queued comments, and the block/span of the saved ones already
+// on screen, as they were. Saved comments a queued one replaces are left
+// out: they are only hidden locally until that queued comment is sent.
+func (m *Model) applyComments(cs []Comment) {
+	byID := map[string]comment{}
+	var queued []comment
+	replaced := map[string]bool{}
+	for _, c := range m.comments {
+		if c.id != "" {
+			byID[c.id] = c
+			continue
+		}
+		queued = append(queued, c)
+		for _, id := range c.replaces {
+			replaced[id] = true
+		}
+	}
+	var open, resolved []comment
+	for _, api := range cs {
+		if replaced[api.ID] {
+			continue
+		}
+		if api.Resolved {
+			resolved = append(resolved, comment{id: api.ID, resolved: true, quote: api.Quote, text: api.Body})
+			continue
+		}
+		nc := comment{id: api.ID, quote: api.Quote, text: api.Body}
+		if old, ok := byID[api.ID]; ok {
+			nc.block, nc.span = old.block, old.span
+		} else {
+			nc.block, nc.span = -1, len(splitBlocks(api.Quote))
+		}
+		open = append(open, nc)
+	}
+	open = append(open, queued...)
+	m.comments = open
+	m.resolved = resolved
+}
 
 // quoteOf is the markdown of blocks lo to hi as it is in the plan, or, when
 // it cannot be found there as it is, their markdown a blank line apart.
@@ -102,12 +177,20 @@ func (m *Model) orphans() []int {
 }
 
 // stops is how many places the plan's cursor can be: every block, then every
-// orphaned comment.
-func (m *Model) stops() int { return len(m.blocks) + len(m.orphans()) }
+// orphaned comment, then every resolved comment.
+func (m *Model) stops() int { return len(m.blocks) + len(m.orphans()) + len(m.resolved) }
 
-// commentAt is the index of the comment on stop i, or -1. A stop past the
-// last block is an orphaned comment.
+// onResolved is whether cursor stop i is one of the resolved comments, past
+// the blocks and the orphans.
+func (m *Model) onResolved(i int) bool { return i >= len(m.blocks)+len(m.orphans()) }
+
+// commentAt is the index in m.comments of the comment on stop i, or -1. A
+// stop past the last block is an orphaned comment; resolved comments are
+// never in m.comments, so a resolved stop is always -1.
 func (m *Model) commentAt(i int) int {
+	if m.onResolved(i) {
+		return -1
+	}
 	if i >= len(m.blocks) {
 		if o := m.orphans(); i-len(m.blocks) < len(o) {
 			return o[i-len(m.blocks)]
@@ -169,43 +252,49 @@ func (m *Model) widen(lo, hi int) (int, int, []int) {
 	return lo, hi, in
 }
 
-// stopOf is the cursor stop comment c is drawn at, or -1.
-func (m *Model) stopOf(c comment) int {
-	if c.block >= 0 {
-		return c.block
-	}
-	for k, j := range m.orphans() {
-		if m.comments[j] == c {
-			return len(m.blocks) + k
+// saveQueued saves the queued comments in order, deleting the saved comments
+// each replaces once it is saved, then, from a Human state, has factory take
+// them up. It stops at the first failure; saved is how many were saved, so
+// the rest stay queued.
+func saveQueued(ctx context.Context, s Store, queued []comment, state string) tea.Cmd {
+	return func() tea.Msg {
+		for i, c := range queued {
+			if _, err := s.AddComment(ctx, c.quote, c.text); err != nil {
+				return queueSavedMsg{saved: i, err: err}
+			}
+			for _, id := range c.replaces {
+				if err := s.DeleteComment(ctx, id); err != nil {
+					return queueSavedMsg{saved: i + 1, err: err}
+				}
+			}
 		}
+		if !takesComments(state) {
+			return queueSavedMsg{saved: len(queued)}
+		}
+		if err := s.AddressComments(ctx); err != nil {
+			return queueSavedMsg{saved: len(queued), handOff: true, err: fmt.Errorf("hand the comments to factory: %w", err)}
+		}
+		return queueSavedMsg{saved: len(queued), handOff: true, handedOff: true}
 	}
-	return -1
 }
 
-// composeMessage is what Claude is sent: each comment under the markdown it
-// is about, then whatever the developer typed in the chat.
-func composeMessage(text string, cs []comment) string {
-	if len(cs) == 0 {
-		return text
+// editCmd saves text as saved comment id's body; empty text resolves it.
+func (m *Model) editCmd(id, text string) tea.Cmd {
+	ctx, s := m.ctx, m.store
+	return func() tea.Msg {
+		if text == "" {
+			return commentSavedMsg{err: s.ResolveComment(ctx, id)}
+		}
+		return commentSavedMsg{err: s.EditComment(ctx, id, text)}
 	}
-	var b strings.Builder
-	b.WriteString("I left comments on parts of the plan. Address each one in the plan, and reply about any you disagree with.\n")
-	for i, c := range cs {
-		fmt.Fprintf(&b, "\n%d. On this part of the plan:\n\n%s\n\nMy comment: %s\n", i+1, quoteLines(c.quote), c.text)
-	}
-	if text != "" {
-		b.WriteString("\n" + text)
-	}
-	return b.String()
 }
 
-// quoteLines makes md a markdown quote, line by line.
-func quoteLines(md string) string {
-	lines := strings.Split(md, "\n")
-	for i, l := range lines {
-		lines[i] = strings.TrimRight("> "+l, " ")
-	}
-	return strings.Join(lines, "\n")
+func resolveCmd(ctx context.Context, s Store, id string) tea.Cmd {
+	return func() tea.Msg { return commentSavedMsg{err: s.ResolveComment(ctx, id)} }
+}
+
+func deleteCmd(ctx context.Context, s Store, id string) tea.Cmd {
+	return func() tea.Msg { return commentSavedMsg{err: s.DeleteComment(ctx, id)} }
 }
 
 // updatePlanKey handles a key while the plan pane has the keyboard.
@@ -247,45 +336,70 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case key.Matches(msg, k.Prev):
 		m.moveCursor(m.prevComment())
 	case key.Matches(msg, k.Comment):
-		m.commenting, m.status = true, ""
-		m.commentInput.Reset()
-		var texts []string
-		if m.cursor < len(m.blocks) {
-			// The editor opens on the selection and every comment it
-			// touches, with their text, and goes under the last block.
-			lo, hi, in := m.widen(m.selection())
-			for _, j := range in {
-				texts = append(texts, m.comments[j].text)
-			}
-			m.anchor, m.cursor = lo, hi
-		} else if i := m.commentAt(m.cursor); i >= 0 {
-			texts = []string{m.comments[i].text}
+		return m, m.openCommentEditor()
+	case key.Matches(msg, k.Resolve):
+		if i := m.commentAt(m.cursor); i >= 0 && m.comments[i].id != "" {
+			return m, resolveCmd(m.ctx, m.store, m.comments[i].id)
 		}
-		if len(texts) > 0 {
-			m.commentInput.SetValue(strings.Join(texts, "\n\n"))
-			m.commentInput.MoveToEnd()
-		}
-		m.moveCursor(m.cursor)
-		return m, m.commentInput.Focus()
 	case key.Matches(msg, k.SendComments):
-		if m.busy {
-			m.status = warn("chunk is still answering; your comments are kept until it finishes.")
-			return m, nil
-		}
 		// What is typed in the chat stays there: it is out of sight from
 		// the plan, so it is not sent unseen.
-		return m.send("")
+		return m.deliver("")
 	case key.Matches(msg, k.Delete):
-		i := m.commentAt(m.cursor)
-		m.comments = append(m.comments[:i], m.comments[i+1:]...)
-		m.moveCursor(m.cursor)
-		m.syncPlaceholder()
+		m.deleteAtCursor()
 	default:
 		var cmd tea.Cmd
 		m.planView, cmd = m.planView.Update(msg)
 		return m, cmd
 	}
 	return m, nil
+}
+
+// openCommentEditor opens the comment editor on the selection and every
+// comment it touches, with their text, going under the last block. A single
+// saved comment on exactly its own blocks is edited at once instead of being
+// queued. Opened on a stop past the blocks, it is the comment there, if any.
+func (m *Model) openCommentEditor() tea.Cmd {
+	m.commenting, m.status, m.editingID = true, "", ""
+	m.commentInput.Reset()
+	var texts []string
+	if m.cursor < len(m.blocks) {
+		lo, hi, in := m.widen(m.selection())
+		if len(in) == 1 && m.comments[in[0]].id != "" && m.comments[in[0]].block == lo && m.comments[in[0]].last() == hi {
+			m.editingID = m.comments[in[0]].id
+			texts = []string{m.comments[in[0]].text}
+		} else {
+			for _, j := range in {
+				texts = append(texts, m.comments[j].text)
+			}
+		}
+		m.anchor, m.cursor = lo, hi
+	} else if i := m.commentAt(m.cursor); i >= 0 {
+		if m.comments[i].id != "" {
+			m.editingID = m.comments[i].id
+		}
+		texts = []string{m.comments[i].text}
+	}
+	if len(texts) > 0 {
+		m.commentInput.SetValue(strings.Join(texts, "\n\n"))
+		m.commentInput.MoveToEnd()
+	}
+	m.moveCursor(m.cursor)
+	return m.commentInput.Focus()
+}
+
+// deleteAtCursor deletes the queued comment at the cursor at once, or asks to
+// confirm a saved one, since a daemon task may be working on it.
+func (m *Model) deleteAtCursor() {
+	i := m.commentAt(m.cursor)
+	if m.comments[i].id == "" {
+		m.comments = append(m.comments[:i], m.comments[i+1:]...)
+		m.moveCursor(m.cursor)
+		m.syncPlaceholder()
+		return
+	}
+	m.confirming, m.pendingDelete = true, m.comments[i].id
+	m.status = ui.TitleStyle.Render("Delete this comment in factory? (y/n)")
 }
 
 // nextComment is the stop n moves to: the nearest commented block below the
@@ -302,7 +416,7 @@ func (m *Model) nextComment() int {
 	if next >= 0 {
 		return next
 	}
-	if s := max(m.cursor+1, len(m.blocks)); s < m.stops() {
+	if s := max(m.cursor+1, len(m.blocks)); s < len(m.blocks)+len(m.orphans()) {
 		return s
 	}
 	return m.cursor
@@ -336,19 +450,27 @@ func (m *Model) nextHeading(dir int) int {
 
 // updateCommentKey handles a key while a comment is being written.
 func (m Model) updateCommentKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.savingEdit {
+		return m, nil
+	}
 	k := m.keys()
 	switch {
 	case key.Matches(msg, k.CancelComment):
-		m.commenting, m.anchor = false, -1
+		m.commenting, m.anchor, m.editingID = false, -1, ""
 		m.commentInput.Blur()
 		m.drawPlan()
 		return m, nil
 	case key.Matches(msg, k.SaveComment):
 		text := strings.TrimSpace(m.commentInput.Value())
+		if id := m.editingID; id != "" {
+			m.savingEdit = true
+			m.drawPlan()
+			return m, m.editCmd(id, text)
+		}
 		if m.cursor < len(m.blocks) {
 			m.saveOnBlocks(text)
 		} else if i := m.commentAt(m.cursor); i >= 0 {
-			// A comment on a part Claude has since rewritten.
+			// A queued comment on a part Claude has since rewritten.
 			if text == "" {
 				m.comments = append(m.comments[:i], m.comments[i+1:]...)
 			} else {
@@ -367,12 +489,29 @@ func (m Model) updateCommentKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-// saveOnBlocks saves text as the comment on the selection, in place of the
-// comments it took in when the editor opened; empty text deletes them. A
-// comment keeps its place among the others, so it is sent where it was.
+// saveOnBlocks saves text as the queued comment on the selection, in place
+// of the comments it took in when the editor opened; empty text deletes
+// them. A comment keeps its place among the others, so it is sent where it
+// was. The ids of any saved comments it took in, and of any already carried
+// by a queued one it took in, go into replaces, deleted in factory once this
+// one is saved, so a chain of merges keeps every id it has ever absorbed.
 func (m *Model) saveOnBlocks(text string) {
 	lo, hi, in := m.widen(m.selection())
 	c := comment{block: lo, span: hi - lo + 1, quote: m.quoteOf(lo, hi), text: text}
+	seen := map[string]bool{}
+	addReplaces := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			c.replaces = append(c.replaces, id)
+		}
+	}
+	for _, j := range in {
+		old := m.comments[j]
+		addReplaces(old.id)
+		for _, id := range old.replaces {
+			addReplaces(id)
+		}
+	}
 	at := len(m.comments)
 	if len(in) > 0 {
 		at = in[0]
@@ -482,18 +621,39 @@ func (m *Model) commentCard(head, body string, w int) []string {
 	return lines
 }
 
+// dimCard is commentCard's muted twin, for a resolved comment: no ground of
+// its own, so it reads as settled rather than waiting on anyone.
+func (m *Model) dimCard(head, body string, w int) []string {
+	rail := m.style(m.dim()).Render("┃")
+	card := m.style(m.dim()).Render(head) + "\n" + m.style(m.dim()).Width(w-1).Render(body)
+	lines := strings.Split(card, "\n")
+	for j, l := range lines {
+		lines[j] = rail + l
+	}
+	return lines
+}
+
 // commentLines is the card for comment ci, or for the editor when it is the
 // comment being written, width w cells across.
 func (m *Model) commentLines(ci int, editing bool, w int) []string {
 	if editing {
-		return m.commentCard("your comment", m.commentInput.View(), w)
+		body := m.commentInput.View()
+		if m.savingEdit {
+			body = m.style(m.dim()).Render("Saving…")
+		}
+		return m.commentCard("your comment", body, w)
 	}
-	return m.commentCard("your comment · queued", m.style(m.amber()).Width(w-2).Render(m.comments[ci].text), w)
+	head := "your comment · queued"
+	if m.comments[ci].id != "" {
+		head = "your comment · open"
+	}
+	return m.commentCard(head, m.style(m.amber()).Width(w-2).Render(m.comments[ci].text), w)
 }
 
 // drawPlan lays out the rendered blocks with the cursor and comments marked,
 // and notes where each stop starts and ends for scrolling to it. A stop past
-// the last block is a comment on a part Claude has since rewritten.
+// the last block is a comment on a part Claude has since rewritten, and past
+// those, a resolved comment.
 func (m *Model) drawPlan() {
 	if len(m.blocks) == 0 {
 		return
@@ -538,29 +698,69 @@ func (m *Model) drawPlan() {
 		}
 		m.blockEnd[i] = len(lines)
 	}
-	if orphans := m.orphans(); len(orphans) > 0 {
-		lines = append(lines, "", "  "+ui.HelperStyle.Render("On parts chunk has since rewritten"))
-		for k, ci := range orphans {
-			s := len(m.blocks) + k
-			editing := m.commenting && m.cursor == s
-			g := m.gutter(s == m.cursor && m.focus == panePlan, true)
-			m.blockTop[s] = len(lines)
-			lines = append(lines, g+"  "+ui.HelperStyle.Render(excerpt(m.comments[ci].quote, w-2)))
-			for _, l := range m.commentLines(ci, editing, w-4) {
-				lines = append(lines, g+"  "+l)
-			}
-			m.blockEnd[s] = len(lines)
-		}
-	}
+	lines = m.drawOrphans(lines, w)
+	lines = m.drawResolved(lines, w)
 	m.planView.SetContentLines(lines)
 }
 
-// planFooter is the row under the plan: what is waiting to be sent, or a
-// hint when there is nothing. While a comment is being written, its editor
-// lives under its block in the plan pane itself.
+// drawOrphans appends the comments on parts Claude has since rewritten,
+// after lines, and returns the result.
+func (m *Model) drawOrphans(lines []string, w int) []string {
+	orphans := m.orphans()
+	if len(orphans) == 0 {
+		return lines
+	}
+	lines = append(lines, "", "  "+ui.HelperStyle.Render("On parts chunk has since rewritten"))
+	for k, ci := range orphans {
+		s := len(m.blocks) + k
+		editing := m.commenting && m.cursor == s
+		g := m.gutter(s == m.cursor && m.focus == panePlan, true)
+		m.blockTop[s] = len(lines)
+		lines = append(lines, g+"  "+ui.HelperStyle.Render(excerpt(m.comments[ci].quote, w-2)))
+		for _, l := range m.commentLines(ci, editing, w-4) {
+			lines = append(lines, g+"  "+l)
+		}
+		m.blockEnd[s] = len(lines)
+	}
+	return lines
+}
+
+// drawResolved appends the resolved comments, after lines, and returns the
+// result.
+func (m *Model) drawResolved(lines []string, w int) []string {
+	if len(m.resolved) == 0 {
+		return lines
+	}
+	lines = append(lines, "", "  "+ui.HelperStyle.Render("Resolved"))
+	base := len(m.blocks) + len(m.orphans())
+	for k, c := range m.resolved {
+		s := base + k
+		g := m.gutter(s == m.cursor && m.focus == panePlan, true)
+		m.blockTop[s] = len(lines)
+		lines = append(lines, g+"  "+m.style(m.dim()).Render(excerpt(c.quote, w-2)))
+		for _, l := range m.dimCard("resolved", c.text, w-4) {
+			lines = append(lines, g+"  "+l)
+		}
+		m.blockEnd[s] = len(lines)
+	}
+	return lines
+}
+
+// planFooter is the row under the plan: what is queued and what is open, or
+// a hint when there is nothing. A failed poll leaves a quiet note here
+// instead, until the next one succeeds. While a comment is being written,
+// its editor lives under its block in the plan pane itself.
 func (m *Model) planFooter() string {
-	n, orphaned := len(m.comments), 0
+	if m.refreshErr != "" {
+		return ansi.Truncate("  "+m.style(m.faint()).Render(m.refreshErr), m.planView.Width(), "…")
+	}
+	queued, open, orphaned := 0, 0, 0
 	for _, c := range m.comments {
+		if c.id == "" {
+			queued++
+		} else {
+			open++
+		}
 		if c.block < 0 {
 			orphaned++
 		}
@@ -569,12 +769,12 @@ func (m *Model) planFooter() string {
 	case m.selecting() && !m.commenting:
 		lo, hi := m.selection()
 		return "  " + ui.HelperStyle.Render(fmt.Sprintf("%d parts selected · c to comment on them", hi-lo+1))
-	case n == 0 && m.focus == panePlan && !m.commenting:
+	case queued == 0 && open == 0 && m.focus == panePlan && !m.commenting:
 		return "  " + ui.HelperStyle.Render("c to comment on the highlighted part")
-	case n == 0:
+	case queued == 0 && open == 0:
 		return ""
 	}
-	s := fmt.Sprintf("%d %s to send with your next message", n, plural(n, "comment", "comments"))
+	s := fmt.Sprintf("%d queued · %d open", queued, open)
 	if orphaned > 0 {
 		s += fmt.Sprintf(" (%d on parts chunk has since rewritten)", orphaned)
 	}

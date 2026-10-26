@@ -21,17 +21,25 @@ type Plan struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	OpenComments int
-	// Claim is the factory session holding the plan, or nil when none does.
-	// ListPlans leaves it nil, since its rows leave it out.
-	Claim *PlanClaim
 }
 
-// PlanClaim is a factory session's claim on a plan.
-type PlanClaim struct {
+// Flow is a factory plan's progress through the code factory, as
+// /api/v3/factory/flows serves it. Its ID is the plan's.
+type Flow struct {
+	ID    string
+	State string
+	// SessionID is the factory session claiming the plan, or "" when none
+	// does.
 	SessionID string
-	Worktree  string
-	RenewedAt time.Time
 }
+
+// FlowEvent is an event a human sends a plan's flow, which factory applies
+// at the plan's next poll.
+type FlowEvent string
+
+// AddressComments moves a flow from a Human state to its phase's Agent
+// state, where factory hands out a task for the plan's comments.
+const AddressComments FlowEvent = "address-comments"
 
 // PlanComment is a comment on a factory plan. QuotedText is the part of the
 // plan's text it is about, or "" for a comment on the plan as a whole.
@@ -46,30 +54,35 @@ type PlanComment struct {
 }
 
 type planAttrs struct {
-	Title        string      `json:"title"`
-	State        string      `json:"state"`
-	Branch       string      `json:"branch"`
-	CreatedAt    time.Time   `json:"created_at"`
-	UpdatedAt    time.Time   `json:"updated_at"`
-	OpenComments int         `json:"open_comment_count"`
-	Claim        *claimAttrs `json:"claim"`
-}
-
-type claimAttrs struct {
-	SessionID string    `json:"session_id"`
-	Worktree  string    `json:"worktree"`
-	RenewedAt time.Time `json:"renewed_at"`
+	Title        string    `json:"title"`
+	State        string    `json:"state"`
+	Branch       string    `json:"branch"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	OpenComments int       `json:"open_comment_count"`
 }
 
 func (a planAttrs) plan(id string) *Plan {
-	p := &Plan{
+	return &Plan{
 		ID: id, Title: a.Title, State: a.State, Branch: a.Branch,
 		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt, OpenComments: a.OpenComments,
 	}
-	if a.Claim != nil {
-		p.Claim = &PlanClaim{SessionID: a.Claim.SessionID, Worktree: a.Claim.Worktree, RenewedAt: a.Claim.RenewedAt}
-	}
-	return p
+}
+
+type flowAttrs struct {
+	State string `json:"state"`
+}
+
+type flowRefs struct {
+	FactorySession *v3Ref `json:"factory_session"`
+}
+
+type eventAttrs struct {
+	Event FlowEvent `json:"event"`
+}
+
+type eventRefs struct {
+	FactoryFlow v3Ref `json:"factory_flow"`
 }
 
 type createPlanAttrs struct {
@@ -79,10 +92,6 @@ type createPlanAttrs struct {
 
 type planTextAttrs struct {
 	Text string `json:"text"`
-}
-
-type moveBody struct {
-	State string `json:"state"`
 }
 
 type commentBodyAttrs struct {
@@ -224,20 +233,41 @@ func (c *Client) SetPlanText(ctx context.Context, id, text string) error {
 	return nil
 }
 
-// MovePlan moves factory plan id to state and returns it. A move that is not
-// an edge of factory's plan state machine is refused with a 400.
-func (c *Client) MovePlan(ctx context.Context, id, state string) (*Plan, error) {
-	var attrs planAttrs
-	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/plans/%s/move",
-		hc.RouteParams(url.PathEscape(id)),
-		hc.Body(moveBody{State: state}),
+// GetFlow returns factory plan planID's flow. A plan has no flow, a 404,
+// until a factory session first claims it.
+func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
+	var attrs flowAttrs
+	var refs flowRefs
+	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs, References: &refs}}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/flows/%s",
+		hc.RouteParams(url.PathEscape(planID)),
 		hc.JSONDecoder(&env),
 	))
 	if err != nil {
-		return nil, mapErr("move plan", err)
+		return nil, mapErr("get flow", err)
 	}
-	return attrs.plan(env.Data.ID), nil
+	f := &Flow{ID: env.Data.ID, State: attrs.State}
+	if refs.FactorySession != nil {
+		f.SessionID = refs.FactorySession.ID
+	}
+	return f, nil
+}
+
+// CreateFlowEvent sends event to factory plan planID's flow. Factory applies
+// it at the plan's next poll, so the plan has not moved yet when this
+// returns. It is not idempotent: each call stores an event. A plan with no
+// flow is a 404.
+func (c *Client) CreateFlowEvent(ctx context.Context, planID string, event FlowEvent) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/events",
+		hc.Body(v3Envelope{Data: v3DataEntity{
+			Attributes: eventAttrs{Event: event},
+			References: eventRefs{FactoryFlow: v3Ref{ID: planID}},
+		}}),
+	))
+	if err != nil {
+		return mapErr("create flow event", err)
+	}
+	return nil
 }
 
 // CreateComment adds a comment to factory plan planID. quotedText is the part

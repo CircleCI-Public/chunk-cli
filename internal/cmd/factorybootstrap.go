@@ -462,7 +462,7 @@ func writeBootstrapPrompts(ctx context.Context, run promptsRun, statusFn iostrea
 			// Only what claude reads and runs: its passing remarks would
 			// bury the answer when it lands.
 			if a.Tool != "" {
-				statusFn(iostream.LevelInfo, activityLine(a))
+				statusFn(iostream.LevelInfo, a.Line())
 			}
 		},
 	})
@@ -658,19 +658,6 @@ func fetchReviewHistory(ctx context.Context, rc config.ResolvedConfig, owner, re
 	}
 	statusFn(iostream.LevelInfo, fmt.Sprintf("%d comments from %d reviewers", history.Comments(), len(history.Reviewers)))
 	return &history, nil
-}
-
-// maxActivityDetail caps what an activity line shows of a tool's target, such
-// as a long shell command, so each stays on one line.
-const maxActivityDetail = 100
-
-// activityLine is one tool call claude made, for the status stream.
-func activityLine(a claudecode.Activity) string {
-	detail := strings.Join(strings.Fields(a.Detail), " ")
-	if r := []rune(detail); len(r) > maxActivityDetail {
-		detail = string(r[:maxActivityDetail]) + "…"
-	}
-	return strings.TrimSpace(a.Tool + " " + detail)
 }
 
 func promptsExistError(dir string, err error) error {
