@@ -48,6 +48,8 @@ type keyMap struct {
 	Continue key.Binding
 	// ToggleEnded shows or hides finished runs, and Delete forgets one.
 	ToggleEnded, Delete key.Binding
+	// Attention narrows the list to the runs that need a person.
+	Attention key.Binding
 	// Back is Esc: back to the list from the right pane, and quit from the
 	// list. It goes unlisted, since q and ← already say both.
 	Back      key.Binding
@@ -88,6 +90,7 @@ func (m Model) keys() keyMap {
 		Cancel:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel run")),
 		Continue:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "continue run")),
 		ToggleEnded:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "show finished")),
+		Attention:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "needs attention")),
 		Delete:        key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete run")),
 		Back:          key.NewBinding(key.WithKeys("esc")),
 		Quit:          key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
@@ -137,11 +140,15 @@ func (m Model) keys() keyMap {
 	if m.showEnded {
 		k.ToggleEnded.SetHelp("e", "hide finished")
 	}
+	k.Attention.SetEnabled(len(m.allRuns) > 0)
+	if m.attention {
+		k.Attention.SetHelp("a", "show all runs")
+	}
 	k.setToggleHint(m, run, right)
 	if m.searching || m.draft != draftNone {
 		// Typing goes to the search or the prompt, and a draft being made or
 		// shown has keys of its own, so no other key does anything.
-		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.OpenPR, &k.Copy, &k.CopyBranch, &k.CopyPR, &k.Toggle, &k.Search, &k.New, &k.Plan, &k.Rounds, &k.Cancel, &k.Continue, &k.Delete, &k.ToggleEnded, &k.Quit} {
+		for _, b := range []*key.Binding{&k.Up, &k.Down, &k.Left, &k.Right, &k.Open, &k.OpenPR, &k.Copy, &k.CopyBranch, &k.CopyPR, &k.Toggle, &k.Search, &k.New, &k.Plan, &k.Rounds, &k.Cancel, &k.Continue, &k.Delete, &k.ToggleEnded, &k.Attention, &k.Quit} {
 			b.SetEnabled(false)
 		}
 	}
@@ -203,7 +210,7 @@ func (k *keyMap) setToggleHint(m Model, run *sessionInfo, right bool) {
 
 // ShortHelp is the footer's hints, in the order they are shown.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.ToggleSection, k.KeepDraft, k.Keep, k.Clear, k.New, k.Plan, k.Continue, k.Up, k.Right, k.Open, k.Copy, k.CopyBranch, k.Toggle, k.Search, k.Rounds, k.Cancel, k.Delete, k.ToggleEnded, k.Left, k.Quit}
+	return []key.Binding{k.Send, k.Discard, k.StopDraft, k.SendDraft, k.ScrollDraft, k.ToggleSection, k.KeepDraft, k.Keep, k.Clear, k.New, k.Plan, k.Continue, k.Up, k.Right, k.Open, k.Copy, k.CopyBranch, k.Toggle, k.Search, k.Rounds, k.Cancel, k.Delete, k.ToggleEnded, k.Attention, k.Left, k.Quit}
 }
 
 // FullHelp satisfies help.KeyMap; the dashboard only shows the short form.

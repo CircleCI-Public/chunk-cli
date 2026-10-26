@@ -172,7 +172,9 @@ func (m Model) requestRunCancel(run *sessionInfo, wasConfirm string) (tea.Model,
 // result lands.
 func (m Model) listedRuns() []sessionInfo {
 	runs := m.allRuns
-	if !m.showEnded {
+	if m.attention {
+		runs = attentionRuns(runs)
+	} else if !m.showEnded {
 		runs = nil
 		for _, r := range m.allRuns {
 			if !r.s.State.Finished() || r.s.ID == m.selRun {
@@ -181,6 +183,54 @@ func (m Model) listedRuns() []sessionInfo {
 		}
 	}
 	return filterRuns(runs, m.query)
+}
+
+// needsAttention reports whether a run is waiting on a person: it failed, its
+// loop ended without passing, or its pull request has reviewer feedback or
+// failing checks. A run that was cancelled was ended by a person already, and
+// a run still going or one that passed has nothing to be done.
+func needsAttention(s chunkd.Session) bool {
+	switch s.State {
+	case chunkd.SessionFailed:
+		return true
+	case chunkd.SessionDone:
+		if loopFailed(s) {
+			return true
+		}
+		if s.Factory == nil || !s.Factory.PullRequest.Opened() {
+			return false
+		}
+		switch s.Factory.PullRequest.Status {
+		case chunkd.PRStatusFeedback, chunkd.PRStatusChecksFailing:
+			return true
+		}
+	case chunkd.SessionRunning, chunkd.SessionCancelled:
+	}
+	return false
+}
+
+// attentionRuns is the runs of all that need a person, in the same order.
+func attentionRuns(all []sessionInfo) []sessionInfo {
+	var out []sessionInfo
+	for _, r := range all {
+		if needsAttention(r.s) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// toggleAttention narrows the run list to the runs that need a person, or
+// goes back to the list as it was, keeping the selection where it is listed.
+func (m Model) toggleAttention() Model {
+	m.attention = !m.attention
+	prev := m.selRun
+	m.sessions = m.listedRuns()
+	m = m.reselectRun()
+	if m.selRun != prev {
+		m.runItem, m.runConfirm, m.runNote = 0, "", ""
+	}
+	return m
 }
 
 // endedCount is how many finished runs the toggle would reveal.
@@ -604,15 +654,22 @@ func (m Model) updateSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // renderRunList draws the left pane: every run the daemon is tracking, or,
 // when there are none, where runs come from.
 func (m Model) renderRunList(st watchStyles) []string {
-	head := st.vdim("runs")
+	title := "runs"
+	if m.attention {
+		title = fmt.Sprintf("needs attention (%d)", len(attentionRuns(m.allRuns)))
+	}
+	head := st.vdim(title)
 	if m.focusedPane == paneLeft {
-		head = st.emphasis("runs")
+		head = st.emphasis(title)
 	}
 	if len(m.allRuns) == 0 {
 		return []string{head, "", st.muted("no runs yet"), ""}
 	}
 	lines := []string{head, m.searchRow(st)}
 	if len(m.sessions) == 0 {
+		if m.attention && m.query == "" {
+			return append(lines, "  "+st.dim("nothing needs you"), "  "+st.dim("a shows all runs"), "")
+		}
 		if m.query == "" && !m.showEnded {
 			return append(lines, "  "+st.dim("no active runs"), "  "+st.dim("e shows finished"), "")
 		}
@@ -991,6 +1048,33 @@ func feedText(st watchStyles, l chunkd.FeedLine) string {
 	case chunkd.FeedStep, chunkd.FeedInfo:
 	}
 	return st.dim(text)
+}
+
+// attentionTag is the header's count of runs that need a person. It is there
+// while any run needs attention, and while the view is on, so the way back is
+// always in the same place.
+func (m Model) attentionTag(st watchStyles) string {
+	n := len(attentionRuns(m.allRuns))
+	if n == 0 && !m.attention {
+		return ""
+	}
+	text := fmt.Sprintf("%s %d need%s you", ui.IconWarn, n, map[bool]string{true: "", false: "s"}[n != 1])
+	if m.attention {
+		return st.Accent.Padding(0, 1).Render(text) + "  "
+	}
+	return st.warning(text) + "  "
+}
+
+// attentionTagSpan is the columns of the header row the attention tag covers,
+// [start, end), or end == start when there is no tag.
+func (m Model) attentionTagSpan(st watchStyles) (start, end int) {
+	tag := m.attentionTag(st)
+	if tag == "" {
+		return 0, 0
+	}
+	right := m.draftReadyTag(st) + tag + m.runTag(st) + m.connectionTag(st)
+	start = max(m.width-lipgloss.Width(right), 0) + lipgloss.Width(m.draftReadyTag(st))
+	return start, start + lipgloss.Width(strings.TrimRight(tag, " "))
 }
 
 // runTag is the header's note of runs in flight, so one started elsewhere is
