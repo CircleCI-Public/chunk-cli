@@ -1444,8 +1444,8 @@ func TestEscQuitsAScreenWithNoHost(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("esc with an unsent comment quit at once")
 	}
-	if !strings.Contains(ansi.Strip(m.Content()), "1 unsent comment") {
-		t.Errorf("no warning about the unsent comment:\n%s", ansi.Strip(m.Content()))
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "1 unsent comment will be lost. Press esc again") {
+		t.Errorf("no warning naming esc about the unsent comment:\n%s", view)
 	}
 	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape}); cmd == nil {
 		t.Error("a second esc did not quit")

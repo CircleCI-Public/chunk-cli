@@ -346,7 +346,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := m.keys()
 	if key.Matches(msg, k.Quit) {
-		return m.quit()
+		return m.quit(msg.String())
 	}
 	if m.quitting {
 		m.quitting, m.status = false, ""
@@ -426,15 +426,16 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 // quit closes the screen, unless that would drop comments or a message the
-// developer has not sent, when it asks for a second ctrl+c first. A screen
-// its host keeps loses nothing by closing, so it closes at once.
-func (m Model) quit() (Model, tea.Cmd) {
+// developer has not sent, when it asks for a second press of the same key
+// first. A screen its host keeps loses nothing by closing, so it closes at
+// once.
+func (m Model) quit(pressed string) (Model, tea.Cmd) {
 	if m.back {
 		return m, closed("")
 	}
 	if unsent := m.unsent(); unsent != "" && !m.quitting {
 		m.quitting, m.confirming = true, false
-		m.status = warn(fmt.Sprintf("Your %s will be lost. Press ctrl+c again to quit.", unsent))
+		m.status = warn(fmt.Sprintf("Your %s will be lost. Press %s again to quit.", unsent, pressed))
 		return m, nil
 	}
 	if m.cancelTurn != nil {
