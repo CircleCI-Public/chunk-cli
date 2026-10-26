@@ -15,6 +15,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -194,4 +195,75 @@ func TestImplementerReportsMissingClaude(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	_, err := im.Run(context.Background(), "p")
 	assert.Assert(t, errors.Is(err, claudecode.ErrMissing), "got %v", err)
+}
+
+// statusLog collects the status lines a turn reports, from any goroutine.
+type statusLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *statusLog) status(level iostream.Level, msg string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, levelName(level)+" "+msg)
+}
+
+func (l *statusLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.lines...)
+}
+
+// TestImplementerSaysWhichCommandItIs guards looking into a turn that hung:
+// the command's ID is what finds it on the sidecar.
+func TestImplementerSaysWhichCommandItIs(t *testing.T) {
+	im, _, _ := newImplementer(t, streamOK)
+	run := im.Exec
+	im.Exec = func(ctx context.Context, e *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
+		onSubmitted("cmd-1")
+		return run(ctx, e, script, env, onOutput, nil)
+	}
+	var log statusLog
+	im.Status = log.status
+
+	_, err := im.Run(context.Background(), "p")
+	assert.NilError(t, err)
+	assert.DeepEqual(t, log.all(), []string{"info implementer: command cmd-1 on sidecar impl"})
+}
+
+func TestImplementerWarnsWhileQuiet(t *testing.T) {
+	im, _, _ := newImplementer(t, `printf '%s\n' '{"type":"system","subtype":"init","session_id":"s"}' \
+ '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}'
+sleep 1
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"Done."}'`)
+	var log statusLog
+	im.Status = log.status
+	im.QuietWarning = 200 * time.Millisecond
+
+	_, err := im.Run(context.Background(), "p")
+	assert.NilError(t, err)
+	// A slow start can earn a warning before claude's first line, which has
+	// no step to name; the quiet second after the Bash step must name it.
+	var named bool
+	for _, l := range log.all() {
+		assert.Assert(t, strings.HasPrefix(l, "warn the implementer has reported nothing for "), l)
+		named = named || strings.HasSuffix(l, "; its last step was Bash go test ./...")
+	}
+	assert.Assert(t, named, "no warning named the Bash step: %v", log.all())
+}
+
+func TestQuietMessage(t *testing.T) {
+	assert.Equal(t, quietMessage(5*time.Minute+400*time.Millisecond, ""),
+		"the implementer has reported nothing for 5m0s since it started")
+	assert.Equal(t, quietMessage(10*time.Minute, "Bash go test ./..."),
+		"the implementer has reported nothing for 10m0s; its last step was Bash go test ./...")
+}
+
+func TestStepLine(t *testing.T) {
+	assert.Equal(t, stepLine(claudecode.Activity{Tool: "Bash", Detail: "go test\n  ./..."}), "Bash go test ./...")
+	assert.Equal(t, stepLine(claudecode.Activity{Detail: "Running the tests."}), "writing Running the tests.")
+	long := stepLine(claudecode.Activity{Tool: "Bash", Detail: strings.Repeat("x", 200)})
+	assert.Equal(t, len([]rune(long)), maxStepLine+1)
+	assert.Assert(t, strings.HasSuffix(long, "…"))
 }

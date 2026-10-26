@@ -219,7 +219,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Implementer: &Implementer{
 			Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
 			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions,
-			OnActivity: opts.OnActivity,
+			OnActivity: opts.OnActivity, Status: status,
 		},
 		Acquire: pool.Acquire,
 		Release: pool.Release,
