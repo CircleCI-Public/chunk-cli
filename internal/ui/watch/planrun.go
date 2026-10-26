@@ -189,7 +189,7 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 			*m.inbox, cmd = m.inbox.Update(msg)
 			return m, cmd
 		}
-		return m.update(msg)
+		return m.updateInput(msg)
 	case tea.WindowSizeMsg, tea.BackgroundColorMsg, tea.KeyboardEnhancementsMsg:
 		next, cmd := m.update(msg)
 		m = next.(Model)
