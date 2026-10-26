@@ -19,11 +19,11 @@ func (m Model) hue(light, dark string) color.Color {
 	return lipgloss.LightDark(m.dark)(lipgloss.Color(light), lipgloss.Color(dark))
 }
 
-// brand is chunk's accent for what has the keyboard, and marks only the
-// focused pane's own edge; quiet is the border of the pane without the
-// keyboard. dim is one step down from brand, for the active input inside the
-// focused pane; faint is a further step down, for the developer's past
-// messages. amber is the developer's comments; purple is Claude at work;
+// brand is chunk's accent, for what is focused or selected: the focused
+// pane's edge, the active tab, the cursor gutter, the send button. quiet is
+// the border of the pane without the keyboard. dim is one step down from
+// brand, for the active input inside the focused pane; faint is a further
+// step down, for the developer's past messages. amber is the developer's comments; purple is Claude at work;
 // green is a plan that is ready.
 func (m Model) brand() color.Color  { return theme.New(m.dark).Brand.GetForeground() }
 func (m Model) quiet() color.Color  { return theme.New(m.dark).VDim.GetForeground() }

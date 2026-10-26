@@ -26,8 +26,7 @@ type Styles struct {
 	Success  lipgloss.Style
 	Warning  lipgloss.Style
 	Running  lipgloss.Style
-	// Brand is chunk's brand colour as text: navy on a light terminal, yellow
-	// on a dark one. It marks what has the keyboard.
+	// Brand is chunk's accent colour as text.
 	Brand lipgloss.Style
 	Error lipgloss.Style
 	Muted lipgloss.Style

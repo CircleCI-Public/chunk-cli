@@ -867,9 +867,9 @@ func (m Model) Content() string {
 	return lipgloss.JoinVertical(lipgloss.Left, top, panes, m.actionBar())
 }
 
-// inputBox is the message being written, in a box of its own under the chat,
-// one step dimmer than the pane's own accent border: dim while it has the
-// keyboard, quiet otherwise.
+// inputBox is the message being written, in a box of its own under the chat.
+// Its border stays a step below the pane's accent, so the accent shows once
+// per pane.
 func (m Model) inputBox() string {
 	edge := m.quiet()
 	if m.focus == paneChat && !m.commenting {

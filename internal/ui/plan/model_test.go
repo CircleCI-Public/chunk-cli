@@ -586,8 +586,8 @@ func TestMessageBoxIsBelowThePaneAccent(t *testing.T) {
 	}
 }
 
-// Dropping the message box's ground and clearing the chat textarea's cursor
-// line leaves it, like the panes, on the terminal's own background.
+// The message box, like the panes, sits on the terminal's own background: no
+// ground behind it and no band on the cursor's line.
 func TestMessageBoxSitsOnTheTerminalsBackground(t *testing.T) {
 	for _, dark := range []bool{true, false} {
 		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
