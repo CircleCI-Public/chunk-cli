@@ -32,7 +32,14 @@ const defaultQuietWarning = 5 * time.Minute
 // commit, so a commit, reset or branch switch would hide the work from them.
 const baseImplementerSystemPrompt = `You are working in a disposable copy of the repository on a remote machine.
 Make the requested change by editing files. Leave your changes uncommitted: do not run git commit, git stash, git reset, git checkout, git switch or git rebase. Your changes are collected from the working tree and reviewed.
+Every command you run must finish on its own: do not start servers, watch modes or anything else that keeps running in the background, and run only the tests the change needs.
 When you finish, reply with a short summary of what you changed.`
+
+// maxCommandTime caps how long claude lets one Bash command on the
+// implementer's sidecar run, in milliseconds, where Claude Code's own cap is
+// ten minutes. A command still running then is stuck more often than slow, and
+// two or three would use up the turn's timeout.
+const maxCommandTime = "300000"
 
 // implementerSystemPrompt returns the base system prompt, followed by the
 // run's own instructions when there are any.
@@ -121,6 +128,7 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	// The sidecar is a sandbox, which is what lets claude skip permission
 	// prompts there even when the image runs it as root.
 	env["IS_SANDBOX"] = "1"
+	env["BASH_MAX_TIMEOUT_MS"] = maxCommandTime
 	code, err := im.Exec(ctx, im.Entry, im.script(prompt), env, func(stream string, data []byte) {
 		if stream == circleci.StreamStderr {
 			if stderr.Len() < outputTail {

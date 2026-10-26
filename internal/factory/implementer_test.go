@@ -267,3 +267,16 @@ func TestStepLine(t *testing.T) {
 	assert.Equal(t, len([]rune(long)), maxStepLine+1)
 	assert.Assert(t, strings.HasSuffix(long, "…"))
 }
+
+// TestImplementerCapsCommandTime guards against a stuck command on the
+// sidecar holding the implementer for most of its turn.
+func TestImplementerCapsCommandTime(t *testing.T) {
+	im, home, _ := newImplementer(t, `printf '%s\n' "$BASH_MAX_TIMEOUT_MS" > "$HOME/cap"
+`+streamOK)
+
+	_, err := im.Run(context.Background(), "p")
+	assert.NilError(t, err)
+	got, err := os.ReadFile(filepath.Join(home, "cap"))
+	assert.NilError(t, err)
+	assert.Equal(t, strings.TrimSpace(string(got)), maxCommandTime)
+}
