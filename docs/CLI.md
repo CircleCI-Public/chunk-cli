@@ -597,6 +597,13 @@ chunk
   factory says no longer holds it. Closing the screen, or sending the plan
   from `chunk watch`, stops the session, which frees its claim.
 
+  The session works in a worktree of the plan's own rather than the
+  developer's checkout, since that is where factory builds the plan once it
+  is approved. It starts from a fresh fetch of origin's default branch, so
+  unpushed and uncommitted work in the checkout is not in it, but for an
+  uncommitted `.chunk/config.json`, which is copied in. It is removed once
+  the plan has ended, unless it has changes in it.
+
   `tab` moves to the plan, where `c` writes a comment right under the
   highlighted part (a heading, paragraph, list item or code block); `enter`
   queues it and `shift+enter`/`ctrl+j` adds a line. `shift+↑/↓` (or `K`/`J`)
