@@ -122,9 +122,7 @@ func newWatchCmd() *cobra.Command {
 				return err
 			}
 			if fm, ok := final.(watch.Model); ok && fm.HasPlan() {
-				if id := drafts.lastPlan(); id != "" {
-					iostream.FromCmd(cmd).ErrPrintf("The plan was not sent. It is plan %s in factory.\n", id)
-				}
+				reportPlanLeft(iostream.FromCmd(cmd), drafts.lastPlan(), "")
 			}
 			return nil
 		},
@@ -289,10 +287,9 @@ func (d *watchDrafts) draft(ctx context.Context, root, prompt string, activity f
 // checked before the screen opens, so no one plans a change the factory would
 // refuse. Errors come back as one sentence for the dashboard.
 //
-// A session is done with once its plan is sent, so it is stopped then, in
-// the background, freeing its claim; the dashboard waits for it as it ends.
-// Opening a session stops the last one too, should its send not have.
-func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Agent, plan.Submitter, plan.Store, error) {
+// A session is done with once its plan is approved, so the approval stops
+// it. Opening a session stops the last one too, should an approval not have.
+func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Agent, plan.Approver, plan.Store, error) {
 	if err := checkFactoryProject(ctx, root); err != nil {
 		return nil, nil, nil, err
 	}
@@ -306,18 +303,7 @@ func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Agent, plan.S
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	agent, send, store := planSession(d.ctx, root, "", api)
-	submit := func() (string, error) {
-		id, err := send()
-		if err == nil {
-			d.wg.Add(1)
-			go func() {
-				defer d.wg.Done()
-				_ = agent.Stop()
-			}()
-		}
-		return id, err
-	}
+	agent, approve, store := planSession(d.ctx, root, "", api)
 	d.mu.Lock()
 	last := d.planAgent
 	d.planAgent, d.planStore = agent, store
@@ -325,7 +311,7 @@ func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Agent, plan.S
 	if last != nil {
 		_ = last.Stop()
 	}
-	return agent, submit, store, nil
+	return agent, approve, store, nil
 }
 
 // watchFactoryProblem is CheckFactoryDaemon's error as one sentence for the

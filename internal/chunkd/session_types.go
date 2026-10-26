@@ -188,6 +188,13 @@ type FactoryRun struct {
 	// Attempts is the most rounds the run checks.
 	Attempts int    `json:"attempts,omitempty"`
 	RunID    string `json:"run_id,omitempty"`
+	// PlanID is set for a plan build: a session that builds factory plan
+	// PlanID through factory's own tasks, in a build session of Claude Code,
+	// rather than in rounds of its own. Such a session has no rounds; its
+	// Progress is what the build session does, and PlanState where factory
+	// has the plan.
+	PlanID    string `json:"plan_id,omitempty"`
+	PlanState string `json:"plan_state,omitempty"`
 	// SidecarIDs are the live or retained members of this run's pool. The
 	// daemon derives ownership from its pool state so clients do not have to
 	// reconstruct it from sidecar names.
@@ -536,6 +543,17 @@ type FactoryRequest struct {
 	// Draft opens the pull request as a draft.
 	PullRequest string `json:"pull_request,omitempty"`
 	Draft       bool   `json:"draft,omitempty"`
+}
+
+// PlanBuildRequest starts a plan build: a build session of Claude Code that
+// builds factory plan PlanID, approved in factory, through factory's tasks.
+type PlanBuildRequest struct {
+	// ProjectRoot is a project the daemon tracks, or the top of a git
+	// repository. Required.
+	ProjectRoot string `json:"project_root"`
+	// PlanID is the approved plan. Required.
+	PlanID string `json:"plan_id"`
+	Model  string `json:"model,omitempty"`
 }
 
 // WarmRequest asks the daemon to make the sidecars a factory run continuing

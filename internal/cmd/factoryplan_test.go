@@ -1,13 +1,55 @@
 package cmd
 
 import (
+	"errors"
 	"testing"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 )
 
-func TestPlanOriginNamesTheFactoryPlan(t *testing.T) {
-	assert.Check(t, cmp.Equal(planOrigin("1234"), "factory plan 1234"))
-	assert.Check(t, cmp.Equal(planOrigin(""), ""))
+// approval records the order approveAndBuild calls its steps in.
+type approval struct {
+	steps                []string
+	approveErr, buildErr error
+}
+
+func (a *approval) run() (string, error) {
+	return approveAndBuild(
+		func() error { a.steps = append(a.steps, "approve"); return a.approveErr },
+		func() error { a.steps = append(a.steps, "stop"); return errors.New("claude did not exit cleanly") },
+		func() (string, error) {
+			a.steps = append(a.steps, "build")
+			if a.buildErr != nil {
+				return "", a.buildErr
+			}
+			return "build-1", nil
+		},
+	)
+}
+
+func TestApproveAndBuildStopsThePlanningSessionBeforeTheBuild(t *testing.T) {
+	a := &approval{}
+	id, err := a.run()
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(id, "build-1"))
+	assert.Check(t, cmp.DeepEqual(a.steps, []string{"approve", "stop", "build"}))
+}
+
+// A build that does not start leaves the plan approved with its claim
+// released, so the planning session is stopped all the same: it would claim
+// the plan again, and be handed build tasks it cannot do.
+func TestApproveAndBuildStopsThePlanningSessionWhenTheBuildDoesNotStart(t *testing.T) {
+	a := &approval{buildErr: errors.New("the chunk daemon is not reachable")}
+	_, err := a.run()
+	assert.Check(t, cmp.ErrorContains(err, "not reachable"))
+	assert.Check(t, cmp.DeepEqual(a.steps, []string{"approve", "stop", "build"}))
+}
+
+// A plan that was not approved keeps its planning session, to plan on.
+func TestApproveAndBuildKeepsThePlanningSessionWhenApprovalFails(t *testing.T) {
+	a := &approval{approveErr: errors.New("the plan is not ready yet")}
+	_, err := a.run()
+	assert.Check(t, cmp.ErrorContains(err, "not ready"))
+	assert.Check(t, cmp.DeepEqual(a.steps, []string{"approve"}))
 }

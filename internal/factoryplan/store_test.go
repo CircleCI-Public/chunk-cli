@@ -2,6 +2,7 @@ package factoryplan
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -130,32 +131,78 @@ func TestStoreAddressCommentsSendsTheEvent(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"address-comments"}))
 }
 
-// TestStoreReadyWaitsForTheReview checks that the plan sent to the factory is
-// factory's text, and only once its review has passed: a plan still in
-// Planning - Agent may have a review running, or findings unfixed.
-func TestStoreReadyWaitsForTheReview(t *testing.T) {
+// TestStoreApproveWaitsForTheReview checks that a plan is approved only once
+// its review has passed: a plan still in Planning - Agent may have a review
+// running, or findings unfixed.
+func TestStoreApproveWaitsForTheReview(t *testing.T) {
 	store, client, cci := createdStore(t)
 	ctx := context.Background()
-	const planText = "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
-	err := client.SetPlanText(ctx, store.ID(), planText)
+	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	assert.NilError(t, err)
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
 
 	cci.SetFactoryPlanState(store.ID(), "Planning - Agent")
-	_, err = store.Ready(ctx)
+	err = store.Approve(ctx, "s-1")
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
-
-	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
-	text, err := store.Ready(ctx)
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(text, planText))
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.Len(p.Events, 0))
+	assert.Check(t, cmp.Equal(p.Session, "s-1"))
 }
 
-// TestStoreReadyWaitsForUnits checks that a plan in plan.ReadyState with no
-// units is not sent: it waits there after early-plan too, for its design to
-// be reviewed, before write-units has written anything to build.
-func TestStoreReadyWaitsForUnits(t *testing.T) {
+// TestStoreApproveReleasesThePlanningSession checks that approving releases
+// the planning session's claim before it sends the event, so factory hands
+// the build to a session that claims the plan to build it rather than to the
+// planning session.
+func TestStoreApproveReleasesThePlanningSession(t *testing.T) {
 	store, client, cci := createdStore(t)
 	ctx := context.Background()
+	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
+	assert.NilError(t, err)
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+
+	err = store.Approve(ctx, "s-1")
+	assert.NilError(t, err)
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+	assert.Check(t, cmp.Equal(p.Session, ""))
+
+	var paths []string
+	for _, r := range cci.Recorder.AllRequests() {
+		if r.Method == http.MethodPost {
+			paths = append(paths, r.URL.Path)
+		}
+	}
+	assert.Check(t, cmp.DeepEqual(paths[len(paths)-2:], []string{
+		"/api/v3/factory/sessions/s-1/release",
+		"/api/v3/factory/events",
+	}))
+}
+
+// TestStoreApproveKeepsAnotherSessionsClaim checks that approving a plan
+// another session claims leaves it that session's, to build.
+func TestStoreApproveKeepsAnotherSessionsClaim(t *testing.T) {
+	store, client, cci := createdStore(t)
+	ctx := context.Background()
+	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
+	assert.NilError(t, err)
+	cci.ClaimFactoryPlan(store.ID(), "builder")
+	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+
+	err = store.Approve(ctx, "s-1")
+	assert.NilError(t, err)
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+	assert.Check(t, cmp.Equal(p.Session, "builder"))
+}
+
+// TestStoreApproveWaitsForUnits checks that a plan in plan.ReadyState with no
+// units is not approved: it waits there after early-plan too, for its design
+// to be reviewed, before write-units has written anything to build.
+func TestStoreApproveWaitsForUnits(t *testing.T) {
+	store, client, cci := createdStore(t)
+	ctx := context.Background()
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
 
 	for _, text := range []string{
@@ -165,9 +212,11 @@ func TestStoreReadyWaitsForUnits(t *testing.T) {
 	} {
 		err := client.SetPlanText(ctx, store.ID(), text)
 		assert.NilError(t, err)
-		_, err = store.Ready(ctx)
+		err = store.Approve(ctx, "s-1")
 		assert.Check(t, cmp.ErrorIs(err, ErrNoUnits), "text %q", text)
 	}
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.Len(p.Events, 0))
 }
 
 // TestStoreWritesFailBeforeCreate checks that a write before Create has

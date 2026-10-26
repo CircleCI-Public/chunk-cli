@@ -232,6 +232,30 @@ func TestAgentArgs(t *testing.T) {
 	assert.Assert(t, strings.Contains(gotArgs, dir), gotArgs)
 }
 
+func TestAgentArgsBuild(t *testing.T) {
+	agentFakeEnv(t)
+	fakeClaude(t, agentFakeScript)
+	fakeFactory(t)
+	dir := t.TempDir()
+
+	startTestAgent(context.Background(), t, AgentConfig{Dir: dir, SessionID: "s-123", Build: true}, "hello")
+
+	gotArgs := readFile(t, filepath.Dir(os.Getenv("ARGS")), "args")
+	// A build session edits its worktree and runs what factory's build
+	// tasks run, and nothing else without asking.
+	assert.Assert(t, strings.Contains(gotArgs, "--permission-mode acceptEdits"), gotArgs)
+	assert.Check(t, cmp.Contains(gotArgs, "--allowedTools "+buildTools))
+	for _, tool := range []string{
+		"mcp__plugin_f_factory", "Edit", "Write", "Agent",
+		"Bash(factory *)", "Bash(git *)", "Bash(gh *)", "Bash(chunk *)",
+	} {
+		assert.Check(t, cmp.Contains(buildTools, tool))
+	}
+	assert.Check(t, !strings.Contains(gotArgs, "--disallowedTools"), gotArgs)
+	assert.Check(t, !strings.Contains(gotArgs, "bypassPermissions"), gotArgs)
+	assert.Check(t, cmp.Contains(gotArgs, dir))
+}
+
 func TestAgentArgsResume(t *testing.T) {
 	agentFakeEnv(t)
 	fakeClaude(t, agentFakeScript)

@@ -69,7 +69,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, submittedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg:
+	case eventMsg, sentMsg, approvedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -134,24 +134,24 @@ func TestFirstSendCreatesPlan(t *testing.T) {
 	}
 }
 
-func TestApprovingSendsThePlan(t *testing.T) {
+func TestApprovingApprovesThePlanInFactory(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	agent := turnReturning("ok")
 	sent := false
-	submit := func() (string, error) {
+	approve := func() (string, error) {
 		sent = true
-		return "run-1", nil
+		return "build-1", nil
 	}
-	m := New(context.Background(), agent, submit, store, "do it")
+	m := New(context.Background(), agent, approve, store, "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	if !m.confirming {
 		t.Fatal("ctrl+s should ask to confirm")
 	}
 	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if !sent || m.RunID != "run-1" {
-		t.Fatalf("sent %v, run %q", sent, m.RunID)
+	if !sent || m.BuildID != "build-1" {
+		t.Fatalf("approved %v, build %q", sent, m.BuildID)
 	}
 }
 
@@ -162,11 +162,11 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	store.TextV = "# Plan"
 	store.StateV = "Planning - Agent"
 	sent := false
-	submit := func() (string, error) {
+	approve := func() (string, error) {
 		sent = true
-		return "run-1", nil
+		return "build-1", nil
 	}
-	m := New(context.Background(), turnReturning("ok"), submit, store, "do it")
+	m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := ansi.Strip(m.Content())
 	if !strings.Contains(view, "In review") || strings.Contains(view, "Plan ready") {
@@ -191,11 +191,11 @@ func TestAPlanWithNoUnitsIsNotSent(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
 	sent := false
-	submit := func() (string, error) {
+	approve := func() (string, error) {
 		sent = true
-		return "run-1", nil
+		return "build-1", nil
 	}
-	m := New(context.Background(), turnReturning("ok"), submit, store, "do it")
+	m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := ansi.Strip(m.Content())
 	if !strings.Contains(view, "Design ready") || strings.Contains(view, "Plan ready") {
@@ -778,11 +778,27 @@ func closedBy(cmd tea.Cmd) (ClosedMsg, bool) {
 	return msg, ok
 }
 
-func TestSendingThePlanClosesTheScreenWithItsRun(t *testing.T) {
+func TestApprovingThePlanClosesTheScreenWithItsBuild(t *testing.T) {
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
-	_, cmd := m.Update(submittedMsg{runID: "run-1"})
-	if got, ok := closedBy(cmd); !ok || got.RunID != "run-1" {
-		t.Fatalf("sending the plan closed with %+v, %v", got, ok)
+	_, cmd := m.Update(approvedMsg{buildID: "build-1"})
+	if got, ok := closedBy(cmd); !ok || got.BuildID != "build-1" {
+		t.Fatalf("approving the plan closed with %+v, %v", got, ok)
+	}
+}
+
+func TestAFailedApprovalKeepsTheScreen(t *testing.T) {
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.approving = true
+	m, cmd := m.Update(approvedMsg{err: errors.New("factory is down")})
+	if _, ok := closedBy(cmd); ok {
+		t.Fatal("a failed approval closed the screen")
+	}
+	if m.approving || m.BuildID != "" {
+		t.Errorf("approving %v, build %q after a failed approval", m.approving, m.BuildID)
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Could not approve the plan: factory is down") {
+		t.Errorf("the failure is not shown:\n%s", view)
 	}
 }
 
@@ -799,7 +815,7 @@ func TestBackClosesAtOnceAndKeepsWhatIsUnsent(t *testing.T) {
 	}
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if got, ok := closedBy(cmd); !ok || got.RunID != "" {
+	if got, ok := closedBy(cmd); !ok || got.BuildID != "" {
 		t.Fatalf("esc closed with %+v, %v", got, ok)
 	}
 	if len(m.comments) != 1 {
@@ -894,11 +910,11 @@ func TestEnterDoesNotConfirmSendingThePlan(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan"
 	sent := false
-	submit := func() (string, error) {
+	approve := func() (string, error) {
 		sent = true
-		return "run-1", nil
+		return "build-1", nil
 	}
-	m := New(context.Background(), turnReturning("ok"), submit, store, "do it")
+	m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = drive(t, m, press("enter"))
@@ -1216,7 +1232,7 @@ func TestPlanInReviewSaysOnlyCommentsChangeIt(t *testing.T) {
 func TestPlanIsSentOnceWhileTheFactoryAnswers(t *testing.T) {
 	m := New(context.Background(), turnReturning("ok"), nil, newFakeStore(), "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	m.sending = true
+	m.approving = true
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	if m.confirming {
 		t.Error("ctrl+s asked to send the plan again while it is being sent")

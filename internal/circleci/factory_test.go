@@ -225,6 +225,48 @@ func TestFlows(t *testing.T) {
 	})
 }
 
+func TestReleaseClaim(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("releases the session's claim and keeps the flow", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.ClaimFactoryPlan(p.ID, "session-1")
+
+		err = client.ReleaseClaim(ctx, "session-1", p.ID)
+		assert.NilError(t, err)
+
+		reqs := fake.Recorder.AllRequests()
+		last := reqs[len(reqs)-1]
+		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/sessions/session-1/release"))
+		var body map[string]any
+		err = json.Unmarshal(last.Body, &body)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(body, map[string]any{"flow_id": p.ID}))
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.SessionID, ""))
+	})
+
+	t.Run("a claim the session does not hold is a 404", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.ClaimFactoryPlan(p.ID, "session-1")
+
+		assertStatus(t, client.ReleaseClaim(ctx, "session-2", p.ID), http.StatusNotFound)
+		got, _ := fake.FactoryPlan(p.ID)
+		assert.Check(t, cmp.Equal(got.Session, "session-1"))
+	})
+}
+
 func TestPlanComments(t *testing.T) {
 	ctx := context.Background()
 

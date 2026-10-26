@@ -669,7 +669,9 @@ func runStatus(s chunkd.Session) string {
 	switch s.State {
 	case chunkd.SessionRunning:
 		parts := []string{}
-		if f := s.Factory; f != nil && f.Attempts > 0 {
+		if isPlanBuild(s) {
+			parts = append(parts, planBuildPhase(s))
+		} else if f := s.Factory; f != nil && f.Attempts > 0 {
 			parts = append(parts, fmt.Sprintf("round %d/%d", max(len(s.Rounds), 1), f.Attempts))
 		} else if len(s.Rounds) > 0 {
 			parts = append(parts, fmt.Sprintf("round %d", len(s.Rounds)))

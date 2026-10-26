@@ -89,35 +89,50 @@ func (s *Store) holder(ctx context.Context) (string, error) {
 	return f.SessionID, nil
 }
 
-// ErrNotReady is returned by Ready for a plan whose review has not passed:
+// ErrNotReady is returned by Approve for a plan whose review has not passed:
 // factory has not moved it to plan.ReadyState.
 var ErrNotReady = errors.New("the plan is not ready yet: wait for its review to pass")
 
-// Ready is the plan's text in factory, to send to the factory to build, once
-// its review has passed; the text is read after the state, so it is no older
-// than the review.
-func (s *Store) Ready(ctx context.Context) (string, error) {
+// Approve approves the plan for factory to build, once its review has passed,
+// with the approve-for-building event. The planning session, session, may
+// not edit files, so its claim is released first, for a build session to
+// claim the plan instead. The state and text are read from factory, not the
+// screen's copy, so a plan that moved after the screen last polled is still
+// refused.
+func (s *Store) Approve(ctx context.Context, session string) error {
 	state, err := s.State(ctx)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if state != plan.ReadyState {
-		return "", ErrNotReady
+		return ErrNotReady
 	}
 	text, err := s.Text(ctx)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if strings.TrimSpace(text) == "" {
-		return "", errors.New("the plan in factory is empty")
+		return errors.New("the plan in factory is empty")
 	}
 	if !hasUnits(text) {
-		return "", ErrNoUnits
+		return ErrNoUnits
 	}
-	return text, nil
+	h, err := s.holder(ctx)
+	if err != nil {
+		return err
+	}
+	if h != "" && h == session {
+		if err := s.api.ReleaseClaim(ctx, session, s.ID()); err != nil {
+			return fmt.Errorf("release the planning session's claim: %w", err)
+		}
+	}
+	if err := s.api.CreateFlowEvent(ctx, s.ID(), circleci.ApproveForBuilding); err != nil {
+		return fmt.Errorf("send the approve-for-building event: %w", err)
+	}
+	return nil
 }
 
-// ErrNoUnits is returned by Ready for a plan in plan.ReadyState with nothing
+// ErrNoUnits is returned by Approve for a plan in plan.ReadyState with nothing
 // to build: it waits there after early-plan too, for its design to be
 // reviewed, before write-units has written any.
 var ErrNoUnits = errors.New("the plan has no units yet: comment on it and send, so chunk writes them")

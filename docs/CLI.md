@@ -169,7 +169,7 @@ chunk
 │   ├── start [prompt|file|-]       # Hand the factory a diff and a prompt to refine
 │   │   --diff <file|->             # Start from a patch of work done elsewhere
 │   │   --json                      # Output as JSON
-│   ├── plan [prompt]               # Plan a change with Claude, then send the plan to the factory
+│   ├── plan [prompt]               # Plan a change with Claude, then approve it and build it on the daemon
 │   │   --model <model>             # Model Claude plans with (default: your Claude Code default)
 │   ├── bootstrap                   # Set up this project for chunk factory: config, sidecar image, review prompts
 │   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
@@ -581,8 +581,8 @@ chunk
   new way to make a first pass does. Only the worktree's path goes to stdout,
   so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the record
   instead.
-- **`factory plan` makes a plan with a factory planning session, then sends
-  it to the factory.** It opens a two-pane screen: a chat on the left and the
+- **`factory plan` makes a plan with a factory planning session, then
+  approves it in factory and builds it.** It opens a two-pane screen: a chat on the left and the
   plan on the right, rendered as markdown. The first message creates the plan
   in factory and starts one long-lived Claude Code session with factory's f
   plugin, which claims the plan and plans it through the factory daemon's
@@ -594,8 +594,8 @@ chunk
   chunk is signed in as; it checks the daemon before it opens, and says in
   the chat if the session could not claim the plan. A session that ends is
   resumed by the next message, and told to claim the plan again, as is one
-  factory says no longer holds it. Closing the screen, or sending the plan
-  from `chunk watch`, stops the session, which frees its claim.
+  factory says no longer holds it. Closing the screen stops the session,
+  which frees its claim.
 
   The session works in a worktree of the plan's own rather than the
   developer's checkout, since that is where factory builds the plan once it
@@ -619,15 +619,22 @@ chunk
   listed last. A comment on a part since rewritten is listed after the plan,
   naming the part it was on.
 
-  `ctrl+s` sends the plan, as factory has it, to the local daemon as
-  `chunk factory build` would, once factory's review of the plan has passed
-  and moved it to Planning - Human; until then the header reads In review. A
-  plan waits there after its design is written too, before it has units; then
-  the header reads Design ready and `ctrl+s` sends nothing, since comments
-  sent from there have the session write the units. A sent plan goes with
-  `factory plan <ID>` as where it came from; a plan not sent stays in
-  factory, and its ID is printed. It checks what `factory build` checks
-  before it opens. The same screen opens from `chunk watch` with `p`.
+  `ctrl+s` approves the plan, after a `y`, once factory's review of it has
+  passed and moved it to Planning - Human; until then the header reads In
+  review. A plan waits there after its design is written too, before it has
+  units: the header reads Design ready, and `ctrl+s` approves nothing, since
+  comments sent from there have the session write the units. Approving reads
+  the plan as factory has it, not the screen's copy.
+
+  Approving a plan with units has the chunk daemon build it, in a Claude Code
+  session in the plan's worktree, through to a pull request, and closes the
+  screen. Builds outlive the screen and the terminal, and any number go at
+  once; `chunk watch` lists each, with the plan's state in factory and what
+  the session last did, and `x` stops it. A build ends with its plan. A
+  stopped one leaves the plan approved in factory, and `/f:resume <ID>` in
+  Claude Code carries it on. A plan not approved stays in factory, and its ID
+  is printed. The screen checks what `factory build` checks before it opens,
+  and opens from `chunk watch` with `p` too.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans
   three parts, prints the plan, and leaves out each part already done, so a
   rerun finishes a setup that stopped partway; with nothing left to do it fails
@@ -813,10 +820,10 @@ chunk
   stops a draft still being made. `p` opens the `chunk factory plan` screen
   in the same project, to plan the change with Claude before the factory
   builds it. `esc` or `ctrl+c` goes back to the runs with the plan kept, and
-  its session carrying on; `p` opens it again as it was. A sent plan's run is
-  selected once a poll lists it, and a plan not sent when the dashboard closes
-  stays in factory, and its ID is printed. Closing the dashboard stops the
-  planning session. `n` and `p` are not offered
+  its session carrying on; `p` opens it again as it was. An approved plan's
+  build is selected once a poll lists it, and `p` then plans another. A plan
+  not approved when the dashboard closes stays in factory, and its ID is
+  printed. Closing the dashboard stops the planning session, not a build. `n` and `p` are not offered
   against a remote daemon, since a factory run works from files on this
   machine. A selected
   run's pane reads top to bottom: the prompt, a status line that says what the run is doing

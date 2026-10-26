@@ -63,12 +63,34 @@ const (
 	// developer's own settings allow: planning edits plans through the plan
 	// tools, never the working tree.
 	agentDeniedTools = "Edit,Write,NotebookEdit"
+	// buildTools is what a build session allows claude to use without
+	// asking, on top of acceptEdits in its worktree. The project's own
+	// commands are not among them: they run on its sidecar, with chunk.
+	buildTools = "Read,Grep,Glob,Edit,Write,Agent,TodoWrite,mcp__plugin_f_factory," +
+		"Bash(factory *),Bash(git *),Bash(gh *),Bash(chunk *),Bash(codegraph *)," +
+		"mcp__sg__code_finder,mcp__sg__commit_search,mcp__sg__diff_search,mcp__sg__keyword_search," +
+		"mcp__sg__list_files,mcp__sg__list_repos,mcp__sg__read_file"
 )
 
-// AgentConfig starts a long-lived factory planning session.
+// buildMessage is a build session's first message: the plan is approved, so
+// the session claims it and does the build tasks factory hands it.
+const buildMessage = "Plan %s is approved, and factory builds it in this session. " +
+	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the tasks it hands out, through to the pull request. " +
+	"Nobody reads your replies while you build, so keep them short, and do not ask the developer anything: " +
+	"what needs their decision goes in the plan, as factory's tasks say."
+
+// BuildMessage is the first message of a session started with Build to build
+// factory plan planID.
+func BuildMessage(planID string) string { return fmt.Sprintf(buildMessage, planID) }
+
+// AgentConfig starts a long-lived factory session.
 type AgentConfig struct {
-	// Dir is the repository claude plans in.
+	// Dir is the repository claude plans in, or for Build the worktree it
+	// builds in.
 	Dir string
+	// Build makes the session one that builds a plan rather than plans one:
+	// it may edit Dir and run what factory's build tasks run.
+	Build bool
 	// Model is the model to plan with, or "" for the developer's default.
 	Model string
 	// PluginDir loads the f plugin from this directory instead of the
@@ -142,10 +164,14 @@ func agentArgs(cfg AgentConfig) []string {
 	} else {
 		args = append(args, "--session-id", cfg.SessionID)
 	}
-	// default, not the developer's own mode: in -p, a tool agentTools does not
-	// allow is denied rather than asked about.
-	args = append(args, "--permission-mode", "default",
-		"--allowedTools", agentTools, flagDisallowedTools, agentDeniedTools)
+	// Not the developer's own mode: in -p, a tool the list does not allow is
+	// denied rather than asked about.
+	if cfg.Build {
+		args = append(args, "--permission-mode", "acceptEdits", "--allowedTools", buildTools)
+	} else {
+		args = append(args, "--permission-mode", "default",
+			"--allowedTools", agentTools, flagDisallowedTools, agentDeniedTools)
+	}
 	if cfg.PluginDir != "" {
 		args = append(args, "--plugin-dir", cfg.PluginDir)
 	}

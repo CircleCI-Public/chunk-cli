@@ -12,21 +12,21 @@ import (
 
 // Planner opens a planning session about a change in the project at root:
 // the agent the planning screen talks to, the store its plan and comments are
-// kept in, and the send of the plan to the factory. Its error says, as a
+// kept in, and the approval of the plan in factory. Its error says, as a
 // sentence, why there can be none.
-type Planner func(ctx context.Context, root string) (plan.Agent, plan.Submitter, plan.Store, error)
+type Planner func(ctx context.Context, root string) (plan.Agent, plan.Approver, plan.Store, error)
 
 // planReadyMsg is the end of opening a planning conversation.
 type planReadyMsg struct {
-	root   string
-	agent  plan.Agent
-	submit plan.Submitter
-	store  plan.Store
-	err    error
+	root    string
+	agent   plan.Agent
+	approve plan.Approver
+	store   plan.Store
+	err     error
 }
 
 // WithPlans returns a copy of m on which p opens the planning screen, for a
-// plan made with Claude through planner and sent to the factory. Plans are
+// plan made with Claude through planner and approved in factory. Plans are
 // made in the project a draft would be. Claude stops when ctx is cancelled.
 func (m Model) WithPlans(ctx context.Context, planner Planner) Model {
 	m.planCtx, m.planner = ctx, planner
@@ -34,7 +34,7 @@ func (m Model) WithPlans(ctx context.Context, planner Planner) Model {
 }
 
 // HasPlan is whether the dashboard has a planning screen whose plan has not
-// been sent to the factory.
+// been approved.
 func (m Model) HasPlan() bool { return m.planScreen != nil }
 
 // openPlan shows the planning screen: the one left open, or a new one once
@@ -50,8 +50,8 @@ func (m Model) openPlan() (tea.Model, tea.Cmd) {
 	root, planner, ctx := m.startRoot(), m.planner, m.planCtx
 	m.planOpening, m.draftNote = true, "opening the plan…"
 	return m, func() tea.Msg {
-		agent, submit, store, err := planner(ctx, root)
-		return planReadyMsg{root: root, agent: agent, submit: submit, store: store, err: err}
+		agent, approve, store, err := planner(ctx, root)
+		return planReadyMsg{root: root, agent: agent, approve: approve, store: store, err: err}
 	}
 }
 
@@ -65,7 +65,7 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.draftNote = ""
 	branch, _ := gitutil.CurrentBranchIn(msg.root)
-	screen := plan.New(m.planCtx, msg.agent, msg.submit, msg.store, "").
+	screen := plan.New(m.planCtx, msg.agent, msg.approve, msg.store, "").
 		WithTerminal(m.hasDarkBG, m.superEnter).
 		WithBranch(branch).
 		WithBack()
@@ -106,17 +106,18 @@ func (m Model) forwardPlan(msg tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-// withPlanClosed goes back to the dashboard. A plan sent to the factory is
-// done with, and its run selected once a poll lists it; otherwise the screen
-// is kept for p to open again as it was.
+// withPlanClosed goes back to the dashboard. An approved plan is done with
+// here: its build is a run of the daemon's, selected once a poll lists it, so
+// p opens a new plan. Otherwise the screen is kept for p to open again as it
+// was.
 func (m Model) withPlanClosed(msg plan.ClosedMsg) Model {
 	m.planOpen = false
-	if msg.RunID == "" {
+	if msg.BuildID == "" {
 		return m
 	}
 	m.planScreen = nil
-	m.draftNote = "sent the plan to the factory in " + filepath.Base(m.planRoot) + "; its run appears in the list in a moment"
-	m.pendingRun = msg.RunID
+	m.draftNote = "approved the plan; it is building in " + filepath.Base(m.planRoot) + " and appears in the list in a moment"
+	m.pendingRun = msg.BuildID
 	m.focusedPane = paneLeft
 	return m.setQuery("")
 }

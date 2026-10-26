@@ -44,6 +44,14 @@ type ReviewConfig struct {
 	Stream StreamFunc
 	// RunFactory runs a factory session; factory.Run when nil.
 	RunFactory func(ctx context.Context, opts factory.RunOptions) (factory.Report, error)
+	// PlanAPI reads the factory plans a plan build builds; the daemon's
+	// CircleCI client when nil.
+	PlanAPI PlanAPI
+	// OpenPlanWorktree opens a plan's worktree for its build;
+	// factory.OpenPlanWorktree when nil.
+	OpenPlanWorktree func(ctx context.Context, root, planID string) (string, error)
+	// StartBuild starts a plan's build session; factory.StartAgent when nil.
+	StartBuild func(ctx context.Context, cfg factory.AgentConfig, message string) (BuildAgent, error)
 }
 
 // Option customizes RunDaemon.

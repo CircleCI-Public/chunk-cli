@@ -8,21 +8,21 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
 // fakePlans stands in for the planning agent and the factory on the planning
 // screen: the agent answers each message with reply once release is closed,
-// when there is one, and sends answer with runID. The store's text is plan
-// throughout.
+// when there is one, and approving records that it was. The store's text is
+// plan throughout.
 type fakePlans struct {
 	root    string
 	err     error
 	reply   string
 	plan    string
 	release chan struct{}
-	runID   string
 	sent    bool
 }
 
@@ -66,16 +66,16 @@ func (a *fakePlanAgent) Send(ctx context.Context, _ string) error {
 
 func (a *fakePlanAgent) Events() <-chan plan.Event { return a.events }
 
-func (f *fakePlans) planner(_ context.Context, root string) (plan.Agent, plan.Submitter, plan.Store, error) {
+func (f *fakePlans) planner(_ context.Context, root string) (plan.Agent, plan.Approver, plan.Store, error) {
 	f.root = root
 	if f.err != nil {
 		return nil, nil, nil, f.err
 	}
-	submit := func() (string, error) {
+	approve := func() (string, error) {
 		f.sent = true
-		return f.runID, nil
+		return "build-1", nil
 	}
-	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, submit, &fakePlanStore{text: f.plan}, nil
+	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan}, nil
 }
 
 func planModel(t *testing.T, f *fakePlans) Model {
@@ -160,8 +160,8 @@ func TestThePlanIsKeptBehindTheDashboard(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "Wrote a plan.") && strings.Contains(out, "The flag exists."), "the reply that came while away is shown:\n%s", out)
 }
 
-func TestSendingThePlanSelectsItsRun(t *testing.T) {
-	f := &fakePlans{reply: "ok", plan: "# The plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n", runID: "aaa"}
+func TestApprovingThePlanSelectsItsBuild(t *testing.T) {
+	f := &fakePlans{reply: "ok", plan: "# The plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
 	m := openPlanScreen(t, planModel(t, f))
 	m = typeInto(m, "add a flag")
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -173,13 +173,13 @@ func TestSendingThePlanSelectsItsRun(t *testing.T) {
 
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-	next, closeCmd := m.Update(cmd()) // the send
+	next, closeCmd := m.Update(cmd()) // the approval
 	m = deliver(t, next.(Model), closeCmd)
-	assert.Assert(t, f.sent, "the plan was not sent")
+	assert.Assert(t, f.sent, "the plan was not approved")
 
-	assert.Assert(t, !m.planOpen && !m.HasPlan(), "a sent plan is done with")
-	assert.Equal(t, m.pendingRun, "aaa")
-	assert.Assert(t, strings.Contains(view(m), "sent the plan to the factory in chunk-cli"), view(m))
+	assert.Assert(t, !m.planOpen && !m.HasPlan(), "an approved plan is done with")
+	assert.Check(t, cmp.Equal(m.pendingRun, "build-1"))
+	assert.Check(t, cmp.Contains(view(m), "approved the plan; it is building in chunk-cli"))
 }
 
 func TestWindowSizeReachesTheKeptPlan(t *testing.T) {
