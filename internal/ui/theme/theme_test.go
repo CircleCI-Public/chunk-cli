@@ -9,11 +9,11 @@ import (
 )
 
 func TestNewUsesTheBrandAccent(t *testing.T) {
-	if got := New(true).Teal.GetForeground(); got != Yellow {
-		t.Errorf("dark Teal foreground = %v, want Yellow", got)
+	if got := New(true).Brand.GetForeground(); got != Yellow {
+		t.Errorf("dark Brand foreground = %v, want Yellow", got)
 	}
-	if got := New(false).Teal.GetForeground(); got != Navy {
-		t.Errorf("light Teal foreground = %v, want Navy", got)
+	if got := New(false).Brand.GetForeground(); got != Navy {
+		t.Errorf("light Brand foreground = %v, want Navy", got)
 	}
 	if got := New(true).Accent.GetBackground(); got != Yellow {
 		t.Errorf("dark Accent background = %v, want Yellow", got)
@@ -83,7 +83,7 @@ func TestPane(t *testing.T) {
 
 	focused := st.Pane(true, 20, 6, "t", strings.Join(bodyLines(18, 4), "\n"))
 	unfocused := st.Pane(false, 20, 6, "t", strings.Join(bodyLines(18, 4), "\n"))
-	if want := st.Teal.Render("╭"); !strings.HasPrefix(focused, want) {
+	if want := st.Brand.Render("╭"); !strings.HasPrefix(focused, want) {
 		t.Errorf("focused pane does not start with the accent ╭: %q", focused)
 	}
 	if want := st.VDim.Render("╭"); !strings.HasPrefix(unfocused, want) {

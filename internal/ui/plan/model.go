@@ -24,7 +24,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
 // Turner sends the developer's message to the planning agent and returns its
@@ -175,6 +174,9 @@ func New(ctx context.Context, turn Turner, submit Submitter, first string) Model
 	in.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
 	in.SetHeight(3)
 	in.Focus()
+	inStyles := in.Styles()
+	inStyles.Focused.CursorLine = lipgloss.NewStyle()
+	in.SetStyles(inStyles)
 
 	ci := textarea.New()
 	ci.ShowLineNumbers = false
@@ -742,7 +744,7 @@ func (m *Model) userBubble(msg *message, w int) string {
 	// A short message gets a bubble that fits it; a long one wraps at inner.
 	text := strings.Join(parts, "\n")
 	fit := min(lipgloss.Width(text), inner)
-	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.teal()).
+	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.faint()).
 		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
 	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
 }
@@ -828,7 +830,7 @@ func (m Model) Content() string {
 	pane := func(focused bool, w int, title, content string) string {
 		edge := m.quiet()
 		if focused {
-			edge = m.teal()
+			edge = m.brand()
 		}
 		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
 			Padding(padY, padX, 0, padX).
@@ -865,17 +867,17 @@ func (m Model) Content() string {
 	return lipgloss.JoinVertical(lipgloss.Left, top, panes, m.actionBar())
 }
 
-// inputBox is the message being written, in a box of its own under the chat
-// that takes the accent colour when it has the keyboard.
+// inputBox is the message being written, in a box of its own under the chat.
+// Its border stays a step below the pane's accent, so the accent shows once
+// per pane.
 func (m Model) inputBox() string {
 	edge := m.quiet()
 	if m.focus == paneChat && !m.commenting {
-		edge = m.teal()
+		edge = m.dim()
 	}
-	ground := theme.New(m.dark).Field.GetBackground()
 	w := m.chatWidth() - borderSize - 2*padX
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-		Background(ground).Width(w).Render(paint(m.input.View(), w-borderSize, ground))
+		Width(w).Render(m.input.View())
 	return titled(box, ui.TitleStyle.Render("Message"), lipgloss.NewStyle().Foreground(edge).Render)
 }
 

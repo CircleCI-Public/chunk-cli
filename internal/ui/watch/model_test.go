@@ -257,7 +257,7 @@ func TestFocusedBoxIsTheAccent(t *testing.T) {
 
 	m.focusedPane = paneLeft
 	top := strings.Split(m.render(), "\n")[1]
-	if !strings.HasPrefix(top, st.Teal.Render("╭")) {
+	if !strings.HasPrefix(top, st.Brand.Render("╭")) {
 		t.Errorf("left-focused top line does not start with the accent ╭: %q", top)
 	}
 	if !strings.Contains(top, st.VDim.Render("╭")) {
@@ -269,7 +269,7 @@ func TestFocusedBoxIsTheAccent(t *testing.T) {
 	if !strings.HasPrefix(top, st.VDim.Render("╭")) {
 		t.Errorf("right-focused top line does not start with the vdim ╭: %q", top)
 	}
-	if !strings.Contains(top, st.Teal.Render("╭")) {
+	if !strings.Contains(top, st.Brand.Render("╭")) {
 		t.Errorf("right-focused top line does not contain the accent ╭ for the right box: %q", top)
 	}
 }
