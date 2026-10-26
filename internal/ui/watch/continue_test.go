@@ -102,6 +102,8 @@ func TestRDoesNothingForARunWithNothingToContinue(t *testing.T) {
 
 func TestContinueIsOfferedOnlyWhereItCanRun(t *testing.T) {
 	m, _ := continueModel(brokenRun("abc123"), nil)
+	// Wide enough that the hint sits on one line of the run pane.
+	m.width = 120
 	m.focusedPane = paneRight
 	out := m.View().Content
 	assert.Assert(t, strings.Contains(out, "press r to continue it, or chunk factory build --continue first-run"), out)

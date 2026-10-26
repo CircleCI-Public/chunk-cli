@@ -5,6 +5,8 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/lipgloss/v2"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
 // welcoming is whether the dashboard has nothing to show and nothing has ever
@@ -39,6 +41,8 @@ func (m Model) renderWelcome(st watchStyles) string {
 	edge := st.vdim
 	var b strings.Builder
 	b.WriteString(edge("╭"+strings.Repeat("─", inner)+"╮") + "\n")
+	blank := edge("│") + strings.Repeat(" ", inner) + edge("│") + "\n"
+	b.WriteString(strings.Repeat(blank, theme.PadY))
 	for i := 0; i < height; i++ {
 		line := ""
 		if j := i - top; j >= 0 && j < len(rows) {
@@ -48,6 +52,7 @@ func (m Model) renderWelcome(st watchStyles) string {
 		line = padLine(clip(strings.Repeat(" ", pad)+line, inner), inner)
 		b.WriteString(edge("│") + line + edge("│") + "\n")
 	}
+	b.WriteString(strings.Repeat(blank, theme.PadY))
 	b.WriteString(edge("╰"+strings.Repeat("─", inner)+"╯") + "\n")
 	return b.String()
 }
@@ -96,7 +101,7 @@ func (m Model) welcomeRows(st watchStyles, size logoSize) []string {
 		buttons = append(buttons, lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
 			BorderForeground(st.Brand.GetForeground()).
-			Padding(0, 1).
+			Padding(0, theme.PadX).
 			Render(label))
 	}
 	if len(buttons) > 0 {

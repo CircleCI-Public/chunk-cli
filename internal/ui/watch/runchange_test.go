@@ -163,7 +163,18 @@ func TestAWideChangeLineWrapsToThePane(t *testing.T) {
 	for _, w := range strings.Fields(long) {
 		assert.Assert(t, strings.Contains(out, w), "%q is shown: %s", w, out)
 	}
-	assert.Assert(t, strings.Contains(out, "feeding failures back"), out)
+	// The line's tail is wrapped, not cut: "back" follows "feeding failures"
+	// on the same row or the next.
+	rows := strings.Split(stripANSI(out), "\n")
+	tail := false
+	for i, r := range rows {
+		if strings.Contains(r, "feeding failures") {
+			tail = strings.Contains(r, "feeding failures back") ||
+				(i+1 < len(rows) && strings.Contains(rows[i+1], "back"))
+			break
+		}
+	}
+	assert.Assert(t, tail, out)
 	for i, line := range strings.Split(m.render(), "\n") {
 		assert.Assert(t, lipgloss.Width(line) <= m.width, "line %d is %d columns: %s", i, lipgloss.Width(line), line)
 	}

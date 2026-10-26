@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -433,7 +434,7 @@ func wrappedTaskLines(prompt string, width int) []string {
 
 // taskWidth is the room the task row's prompt wraps to.
 func (m Model) taskWidth() int {
-	return max(m.width-leftPaneWidth-8, 20)
+	return max(m.runPaneWidth()-3, 20)
 }
 
 // renderTaskRows draws the task row at the top of the run pane: the prompt,
@@ -490,10 +491,22 @@ func wrapPane(lines []string, width int) (out []string, at []int) {
 			continue
 		}
 		n := len(l) - len(strings.TrimLeft(l, " "))
-		if n > width/2 {
+		// A pane too narrow for the indent and the continuation's two
+		// columns drops the indent, so there is still room to wrap into.
+		if n > width/2 || width-n-2 < 1 {
 			n = 0
 		}
-		for i, w := range strings.Split(lipgloss.Wrap(l[n:], width-n-2, ""), "\n") {
+		room := max(width-n-2, 1)
+		var pieces []string
+		for _, p := range strings.Split(lipgloss.Wrap(l[n:], room, ""), "\n") {
+			// Wrap keeps some words longer than room whole; break those too.
+			if lipgloss.Width(p) > room {
+				pieces = append(pieces, strings.Split(ansi.Hardwrap(p, room, true), "\n")...)
+				continue
+			}
+			pieces = append(pieces, p)
+		}
+		for i, w := range pieces {
 			if i == 0 {
 				out = append(out, strings.Repeat(" ", n)+w)
 				continue
@@ -554,7 +567,7 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 
 	// Every line is wrapped to the pane rather than cut at its edge, and the
 	// selected row's span is carried over to the lines it wrapped to.
-	width := m.width - leftPaneWidth - 5
+	width := m.runPaneWidth()
 	// The title goes into the frame's edge, which cuts it to fit, so only
 	// the status under it is wrapped.
 	status, _ := wrapPane(head[1:], width)
