@@ -644,6 +644,23 @@ func TestSelectionMovesThroughTheRunList(t *testing.T) {
 	assert.Equal(t, m.selRun, "a", "up stops at the first run")
 }
 
+// w and s moved the selection once, as a gaming habit. They are not a
+// convention, and s is the planning screen's send-comments key, so they do
+// nothing; the arrows and j/k move.
+func TestWAndSDoNotMoveTheSelection(t *testing.T) {
+	m := sessModel(factoryRun("a", chunkd.SessionRunning, time.Now()), factoryRun("b", chunkd.SessionDone, time.Now()))
+	m = m.reselectRun()
+
+	m, _ = press(m, 's')
+	assert.Equal(t, m.selRun, "a", "s moved the selection")
+	m, _ = press(m, 'j')
+	assert.Equal(t, m.selRun, "b")
+	m, _ = press(m, 'w')
+	assert.Equal(t, m.selRun, "b", "w moved the selection")
+	m, _ = press(m, 'k')
+	assert.Equal(t, m.selRun, "a")
+}
+
 // With no runs there is nothing to select, and the pane says where runs come
 // from instead of sitting empty.
 func TestNoRunsSaysWhereRunsComeFrom(t *testing.T) {
@@ -928,13 +945,13 @@ func TestFooterNamesWhatSpaceWillDoAtTheCursor(t *testing.T) {
 	for *m.selectedRunItem() != (runItem{kind: itemRound, round: 0}) {
 		m, _ = press(m, tea.KeyDown)
 	}
-	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space expand"), m.renderFooter(m.styles()))
+	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "space expand"), m.renderFooter(m.styles()))
 
 	// Round 2 is the one that failed, open by default.
 	for *m.selectedRunItem() != (runItem{kind: itemRound, round: 1}) {
 		m, _ = press(m, tea.KeyDown)
 	}
-	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space collapse"), m.renderFooter(m.styles()))
+	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "space collapse"), m.renderFooter(m.styles()))
 
 	// A check with nothing kept has nothing to fold.
 	for m.selectedRunItem().kind != itemCheck {
@@ -953,9 +970,9 @@ func TestFooterNamesWhatSpaceWillDoAtTheCursor(t *testing.T) {
 	m.selRun = "abc"
 	m, _ = press(m, tea.KeyRight)
 	m = selectRow(t, m, runItem{kind: itemCheck, round: 1})
-	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space expand"), m.renderFooter(m.styles()))
+	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "space expand"), m.renderFooter(m.styles()))
 	m, _ = press(m, ' ')
-	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "Space collapse"), m.renderFooter(m.styles()))
+	assert.Assert(t, strings.Contains(stripANSI(m.renderFooter(m.styles())), "space collapse"), m.renderFooter(m.styles()))
 }
 
 // An implementer's summary is prose: it is wrapped to the pane rather than

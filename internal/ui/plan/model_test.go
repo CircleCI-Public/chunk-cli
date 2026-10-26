@@ -1414,3 +1414,94 @@ func TestCommentOnSeveralBlocksFollowsThemWhenThePlanChanges(t *testing.T) {
 		t.Errorf("comment on a rewritten block is on %d, want -1", got)
 	}
 }
+
+func idlePlan(t *testing.T) Model {
+	t.Helper()
+	turn := func(context.Context, string, func(string)) (string, string, error) {
+		return "ok", twoParts, nil
+	}
+	m := New(context.Background(), turn, nil, "plan it")
+	return drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 30})
+}
+
+// With no host to go back to, esc closes the screen when it has nothing
+// else to do, asking first when that would drop something unsent.
+func TestEscQuitsAScreenWithNoHost(t *testing.T) {
+	m := idlePlan(t)
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "esc quit") {
+		t.Errorf("the footer does not say esc quits:\n%s", view)
+	}
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape}); cmd == nil {
+		t.Fatal("esc with nothing unsent did not quit")
+	}
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	m = drive(t, m, press("enter"))
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		t.Fatal("esc with an unsent comment quit at once")
+	}
+	if !strings.Contains(ansi.Strip(m.Content()), "1 unsent comment") {
+		t.Errorf("no warning about the unsent comment:\n%s", ansi.Strip(m.Content()))
+	}
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape}); cmd == nil {
+		t.Error("a second esc did not quit")
+	}
+}
+
+// q leaves from the plan, where nothing is being typed, and is only a letter
+// in the chat.
+func TestQQuitsFromThePlanOnly(t *testing.T) {
+	// The chat's text box is shared by copies of the model, so each half
+	// starts from a screen of its own.
+	chat := idlePlan(t)
+	chat, cmd := chat.Update(press("q"))
+	if _, ok := closedBy(cmd); ok {
+		t.Error("q in the chat quit")
+	}
+	if got := chat.input.Value(); got != "q" {
+		t.Errorf("q in the chat typed %q, want q", got)
+	}
+
+	plan := idlePlan(t)
+	plan = drive(t, plan, press("tab"))
+	_, cmd = plan.Update(press("q"))
+	if _, ok := closedBy(cmd); !ok {
+		t.Error("q in the plan did not quit")
+	}
+}
+
+func TestNMovesToThePreviousComment(t *testing.T) {
+	m := idlePlan(t)
+	m = drive(t, m, press("tab"))
+	comment := func(m Model, text string) Model {
+		m = drive(t, m, press("c"))
+		m = typeText(t, m, text)
+		return drive(t, m, press("enter"))
+	}
+	m = comment(m, "first")
+	m = drive(t, m, press("j"))
+	m = drive(t, m, press("j"))
+	m = comment(m, "second")
+	if m.cursor == 0 {
+		t.Fatal("the cursor did not move down")
+	}
+	last := m.cursor
+
+	m = drive(t, m, press("N"))
+	if m.cursor >= last {
+		t.Errorf("N stayed at %d, want a comment above %d", m.cursor, last)
+	}
+	above := m.cursor
+	m = drive(t, m, press("N"))
+	if m.cursor != above {
+		t.Errorf("N with no comment above moved to %d from %d", m.cursor, above)
+	}
+	m = drive(t, m, press("n"))
+	if m.cursor != last {
+		t.Errorf("n went to %d, want back at %d", m.cursor, last)
+	}
+}

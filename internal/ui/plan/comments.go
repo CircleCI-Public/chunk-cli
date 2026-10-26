@@ -244,6 +244,8 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.moveCursor(m.nextHeading(1))
 	case key.Matches(msg, k.Next):
 		m.moveCursor(m.nextComment())
+	case key.Matches(msg, k.Prev):
+		m.moveCursor(m.prevComment())
 	case key.Matches(msg, k.Comment):
 		m.commenting, m.status = true, ""
 		m.commentInput.Reset()
@@ -302,6 +304,21 @@ func (m *Model) nextComment() int {
 	}
 	if s := max(m.cursor+1, len(m.blocks)); s < m.stops() {
 		return s
+	}
+	return m.cursor
+}
+
+// prevComment is the stop of the nearest comment above the cursor, or the
+// cursor itself when there is none, which keeps N in place.
+func (m *Model) prevComment() int {
+	prev := -1
+	for _, c := range m.comments {
+		if c.block < m.cursor && c.block > prev {
+			prev = c.block
+		}
+	}
+	if prev >= 0 {
+		return prev
 	}
 	return m.cursor
 }

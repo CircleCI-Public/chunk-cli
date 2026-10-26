@@ -647,7 +647,7 @@ func (m Model) searchRow(st watchStyles) string {
 	case m.searching:
 		return st.teal("⌕ ") + truncate(m.query, leftPaneWidth-4) + st.teal("▏")
 	case m.query != "":
-		return st.teal("⌕ ") + st.muted(truncate(m.query, leftPaneWidth-14)) + "  " + st.vdim("Esc clear")
+		return st.teal("⌕ ") + st.muted(truncate(m.query, leftPaneWidth-14)) + "  " + st.vdim("esc clear")
 	}
 	return st.vdim("⌕ search runs") + "  " + st.vdim("/")
 }
