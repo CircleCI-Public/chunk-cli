@@ -595,7 +595,10 @@ chunk
   the chat if the session could not claim the plan. A session that ends is
   resumed by the next message, and told to claim the plan again, as is one
   factory says no longer holds it. Closing the screen stops the session,
-  which frees its claim.
+  which frees its claim. A plan opened again in a later screen picks up the
+  conversation that planned it, rather than starting a blank one. One chunk
+  at a time plans a plan: another that opens it can read it and comment, but
+  is refused when it sends a message.
 
   The session works in a worktree of the plan's own rather than the
   developer's checkout, since that is where factory builds the plan once it
@@ -611,8 +614,10 @@ chunk
   a selection that touches a comment takes in all of it, and its text, and
   `esc` clears a selection. Sending (`enter` in the chat, or `s` in the plan,
   which leaves a half-written message in the chat) saves the queued comments
-  to factory and, from a Human state, hands them to the session to address;
-  they never go in a chat message. While the plan waits in a Human state, a
+  to factory and hands them to the session to address; they never go in a
+  chat message. Comments are sent only when factory is ready to take them:
+  while factory works on the plan they stay queued, a message sent with them
+  goes on alone, and `s` is not offered. While the plan waits in a Human state, a
   message gets an answer but only comments change the plan. While comments
   are saved they cannot be changed. A saved comment is edited at once with
   `c`, resolved with `r` and deleted with `d` (after a `y`); resolved ones are
@@ -830,8 +835,9 @@ chunk
   too, to switch to another plan. Each opened plan keeps its own chat, unsent
   message and session. An approved plan's build is selected once a poll lists
   it. Quitting with a message unsent in any plan asks for a second `ctrl+c`;
-  plans and saved comments stay in factory, but chat and unsent messages are
-  not kept. Closing the dashboard stops every planning session, not a build.
+  plans and saved comments stay in factory, and each plan's session keeps its
+  conversation for the next time the plan is opened, but the chat shown and
+  unsent messages are not kept. Closing the dashboard stops every planning session, not a build.
   `n` and `p` are not offered
   against a remote daemon, since a factory run works from files on this
   machine. A selected

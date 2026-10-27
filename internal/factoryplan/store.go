@@ -72,6 +72,29 @@ func (s *Store) State(ctx context.Context) (string, error) {
 	return p.State, nil
 }
 
+// Events are the events factory applies to the plan's flow now, by name, as
+// its applicable_events lists them; none before the plan is created or has a
+// flow.
+func (s *Store) Events(ctx context.Context) ([]string, error) {
+	id := s.ID()
+	if id == "" {
+		return nil, nil
+	}
+	f, err := s.api.GetFlow(ctx, id)
+	var se *circleci.StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get the plan's events: %w", err)
+	}
+	events := make([]string, len(f.ApplicableEvents))
+	for i, e := range f.ApplicableEvents {
+		events[i] = string(e)
+	}
+	return events, nil
+}
+
 // Holder is the factory session holding the plan's claim, as its flow
 // references it, or "" when none does or the plan has not been created. A
 // plan has no flow until a session first claims it.

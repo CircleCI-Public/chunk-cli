@@ -3,6 +3,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -13,7 +14,12 @@ type fakeStore struct {
 	Created bool
 	Title   string
 	StateV  string
-	TextV   string
+	// EventsV, once setEvents sets it, is the events the plan's flow
+	// applies now; until then they follow StateV, as factory's would for
+	// address-comments.
+	EventsV   []string
+	eventsSet bool
+	TextV     string
 	// CommentsV is the comments, ordered as added.
 	CommentsV []Comment
 	nextID    int
@@ -68,6 +74,25 @@ func (f *fakeStore) State(context.Context) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.StateV, f.StateErr
+}
+
+func (f *fakeStore) Events(context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.eventsSet {
+		return f.EventsV, nil
+	}
+	if strings.HasSuffix(f.StateV, " - Human") {
+		return []string{"address-comments"}, nil
+	}
+	return nil, nil
+}
+
+// setEvents has the plan's flow apply events now, whatever its state.
+func (f *fakeStore) setEvents(events ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.EventsV, f.eventsSet = events, true
 }
 
 func (f *fakeStore) AddressComments(context.Context) error {

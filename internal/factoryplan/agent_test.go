@@ -74,6 +74,42 @@ func (s *fakeSession) end() {
 	}
 }
 
+// fakeRecord is a plan's session record: id is the session it records,
+// and openErr fails opening it, as another chunk holding it open would.
+type fakeRecord struct {
+	mu      sync.Mutex
+	id      string
+	openErr error
+	opened  int
+	closed  bool
+}
+
+func (r *fakeRecord) ID() (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.id, nil
+}
+
+func (r *fakeRecord) Record(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.id = id
+	return nil
+}
+
+func (r *fakeRecord) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	return nil
+}
+
+func (r *fakeRecord) recorded() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.id
+}
+
 // testAgent is an Agent for a plan created as planID, whose sessions
 // are fakes; starts records each session started and the config it was
 // started with. holderID is the session factory says holds the plan's claim,
@@ -90,6 +126,10 @@ type testAgent struct {
 	worktreeErr error
 	// started, when set, is called as each session starts.
 	started func()
+	// resumeErr fails starting a session that resumes one.
+	resumeErr error
+	// record is the plan's session record on this machine.
+	record *fakeRecord
 }
 
 func (tp *testAgent) setHolder(id string, err error) {
@@ -108,6 +148,10 @@ func newTestAgent(t *testing.T, planID string) *testAgent {
 		if tp.startErr != nil {
 			return nil, tp.startErr
 		}
+		if cfg.Resume && tp.resumeErr != nil {
+			tp.configs = append(tp.configs, cfg)
+			return nil, tp.resumeErr
+		}
 		s := newFakeSession(message)
 		tp.sessions = append(tp.sessions, s)
 		tp.configs = append(tp.configs, cfg)
@@ -125,6 +169,16 @@ func newTestAgent(t *testing.T, planID string) *testAgent {
 		tp.mu.Lock()
 		defer tp.mu.Unlock()
 		return "/worktrees/" + planID, tp.worktreeErr
+	}
+	tp.record = &fakeRecord{}
+	tp.openRecord = func() (sessionRecord, error) {
+		tp.record.mu.Lock()
+		defer tp.record.mu.Unlock()
+		if tp.record.openErr != nil {
+			return nil, tp.record.openErr
+		}
+		tp.record.opened++
+		return tp.record, nil
 	}
 	return tp
 }
@@ -474,4 +528,89 @@ func TestWithClaimWaitsForAnID(t *testing.T) {
 	msg, claimed := withClaim(false, "", "hello")
 	assert.Check(t, !claimed)
 	assert.Check(t, cmp.Equal(msg, "hello"))
+}
+
+// A plan reopened in a new screen resumes the session an earlier screen
+// recorded as planning it, so claude keeps that conversation, and claims
+// the plan as that session.
+func TestAgentResumesTheSessionRecordedForThePlan(t *testing.T) {
+	tp := newTestAgent(t, "plan-1")
+	tp.record.id = "s-0"
+	var checked string
+	tp.CheckStart(func(context.Context) error {
+		checked = tp.SessionID()
+		return nil
+	})
+
+	err := tp.Send(t.Context(), "can you keep going with this")
+	assert.NilError(t, err)
+	assert.Assert(t, cmp.Len(tp.configs, 1))
+	assert.Check(t, tp.configs[0].Resume)
+	assert.Check(t, cmp.Equal(tp.configs[0].SessionID, "s-0"))
+	assert.Check(t, cmp.Equal(tp.SessionID(), "s-0"))
+	assert.Check(t, cmp.Equal(checked, "s-0"), "the start check saw the screen's own session")
+	assert.Check(t, cmp.Equal(tp.session(0).first, fmt.Sprintf(claimMessage, "plan-1", "can you keep going with this")))
+}
+
+func TestAgentRecordsTheSessionItStarts(t *testing.T) {
+	tp := newTestAgent(t, "plan-1")
+	err := tp.Send(t.Context(), "add a flag")
+	assert.NilError(t, err)
+	assert.Assert(t, cmp.Len(tp.configs, 1))
+	assert.Check(t, !tp.configs[0].Resume)
+	assert.Check(t, cmp.Equal(tp.record.recorded(), "s-1"))
+
+	// A session that ends is resumed without opening the record again.
+	tp.session(0).end()
+	ended := waitFor(func() bool {
+		tp.Agent.mu.Lock()
+		defer tp.Agent.mu.Unlock()
+		return tp.hasEnded()
+	})
+	assert.Assert(t, ended)
+	err = tp.Send(t.Context(), "are you there?")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(tp.record.opened, 1))
+}
+
+// claude may no longer have a recorded session's conversation; the session
+// then starts afresh under the recorded ID.
+func TestAgentStartsTheRecordedSessionAfreshWhenItCannotResume(t *testing.T) {
+	tp := newTestAgent(t, "plan-1")
+	tp.record.id = "s-0"
+	tp.resumeErr = errors.New("claude exited before it started: No conversation found")
+
+	err := tp.Send(t.Context(), "add a flag")
+	assert.NilError(t, err)
+	assert.Assert(t, cmp.Len(tp.configs, 2))
+	assert.Check(t, tp.configs[0].Resume)
+	assert.Check(t, !tp.configs[1].Resume)
+	assert.Check(t, cmp.Equal(tp.configs[1].SessionID, "s-0"))
+	assert.Check(t, cmp.Equal(tp.record.recorded(), "s-0"))
+}
+
+func TestAgentRefusesAPlanOpenInAnotherChunk(t *testing.T) {
+	tp := newTestAgent(t, "plan-1")
+	tp.record.openErr = factory.ErrPlanSessionOpen
+
+	err := tp.Send(t.Context(), "add a flag")
+	assert.Check(t, cmp.ErrorContains(err, "open for planning in another chunk window"))
+	assert.Check(t, cmp.Len(tp.configs, 0))
+
+	// Once the other chunk lets go, the next message starts the session.
+	tp.record.openErr = nil
+	err = tp.Send(t.Context(), "add a flag")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Len(tp.configs, 1))
+}
+
+func TestAgentStopClosesThePlansSessionRecord(t *testing.T) {
+	tp := newTestAgent(t, "plan-1")
+	err := tp.Send(t.Context(), "add a flag")
+	assert.NilError(t, err)
+	err = tp.Stop()
+	assert.NilError(t, err)
+	tp.record.mu.Lock()
+	defer tp.record.mu.Unlock()
+	assert.Check(t, tp.record.closed)
 }

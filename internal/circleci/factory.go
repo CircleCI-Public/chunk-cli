@@ -31,6 +31,9 @@ type Flow struct {
 	// SessionID is the factory session claiming the plan, or "" when none
 	// does.
 	SessionID string
+	// ApplicableEvents are the events factory applies to the flow now;
+	// any other sent now is stored and ignored.
+	ApplicableEvents []FlowEvent
 }
 
 // FlowEvent is an event a human sends a plan's flow, which factory applies
@@ -78,7 +81,8 @@ func (a planAttrs) plan(id string) *Plan {
 }
 
 type flowAttrs struct {
-	State string `json:"state"`
+	State            string      `json:"state"`
+	ApplicableEvents []FlowEvent `json:"applicable_events"`
 }
 
 type flowRefs struct {
@@ -260,7 +264,7 @@ func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	if err != nil {
 		return nil, mapErr("get flow", err)
 	}
-	f := &Flow{ID: env.Data.ID, State: attrs.State}
+	f := &Flow{ID: env.Data.ID, State: attrs.State, ApplicableEvents: attrs.ApplicableEvents}
 	if refs.FactorySession != nil {
 		f.SessionID = refs.FactorySession.ID
 	}

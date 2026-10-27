@@ -32,6 +32,9 @@ type Agent struct {
 	// check is what must hold before the session starts or resumes, as
 	// CheckStart sets it; nil for nothing.
 	check func(context.Context) error
+	// openRecord opens this machine's record of the session planning the
+	// plan; factory.OpenPlanSession but in tests.
+	openRecord func() (sessionRecord, error)
 
 	// sendMu keeps Sends in order. It is not mu: a Send can block writing to
 	// a claude that stopped reading, and Stop must not wait on it.
@@ -48,6 +51,17 @@ type Agent struct {
 	// checkClaim is set until the reply to that message, when the daemon
 	// should hold the plan's claim for this session.
 	checkClaim bool
+	// record is the plan's session record, held open from the first Send
+	// that opens it until Stop, whether or not a session then starts; nil
+	// before then.
+	record sessionRecord
+}
+
+// sessionRecord is what Agent needs of a factory.PlanSession.
+type sessionRecord interface {
+	ID() (string, error)
+	Record(id string) error
+	Close() error
 }
 
 // ErrStopped is returned by a Send after Stop.
@@ -76,13 +90,22 @@ func NewAgent(ctx context.Context, cfg factory.AgentConfig, store *Store) *Agent
 		worktree: func(ctx context.Context) (string, error) {
 			return planWorktree(ctx, cfg.Dir, store)
 		},
+		openRecord: func() (sessionRecord, error) {
+			return factory.OpenPlanSession(cfg.Dir, store.ID())
+		},
 	}
 }
 
 func (p *Agent) Events() <-chan plan.Event { return p.events }
 
-// SessionID is the factory session the agent claims its plan as.
-func (p *Agent) SessionID() string { return p.cfg.SessionID }
+// SessionID is the factory session the agent claims its plan as: the one
+// recorded as planning the plan on this machine, once a Send has opened the
+// record, so a plan reopened in a new screen is planned by the same session.
+func (p *Agent) SessionID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cfg.SessionID
+}
 
 // CheckStart has check run before the session starts or resumes, refusing to
 // start it when check fails, so a plan can be opened and read before what
@@ -132,11 +155,21 @@ func (p *Agent) Send(ctx context.Context, message string) error {
 		p.mu.Unlock()
 		return nil
 	}
+	recorded := false
+	if a == nil {
+		var err error
+		if recorded, err = p.openSession(); err != nil {
+			return err
+		}
+	}
+	p.mu.Lock()
 	cfg := p.cfg
+	p.mu.Unlock()
 	// A session that ended is resumed rather than started afresh, so claude
-	// keeps the conversation so far. The plan's worktree is where it was
-	// started, so claude finds that conversation there.
-	cfg.Resume = a != nil
+	// keeps the conversation so far, as is the one recorded as planning the
+	// plan when an earlier screen started it. The plan's worktree is where it
+	// was started, so claude finds that conversation there.
+	cfg.Resume = a != nil || recorded
 	if p.check != nil {
 		if err := p.check(p.ctx); err != nil {
 			return err
@@ -148,10 +181,20 @@ func (p *Agent) Send(ctx context.Context, message string) error {
 	}
 	cfg.Dir = dir
 	started, err := p.start(p.ctx, cfg, message)
+	if err != nil && recorded && p.ctx.Err() == nil {
+		// The recorded session's conversation may be gone, deleted with
+		// claude's history say; start the session afresh under its ID.
+		cfg.Resume = false
+		started, err = p.start(p.ctx, cfg, message)
+	}
 	if err != nil {
 		return startProblem(err)
 	}
 	p.mu.Lock()
+	if p.record != nil {
+		// A failed write only costs the next screen the conversation.
+		_ = p.record.Record(cfg.SessionID)
+	}
 	p.agent, p.ended = started, make(chan struct{})
 	stopped := p.stopped
 	p.claim(claimed)
@@ -166,12 +209,47 @@ func (p *Agent) Send(ctx context.Context, message string) error {
 	return nil
 }
 
+// openSession opens the plan's session record, once, and adopts the session
+// it records, reporting whether there was one to resume.
+func (p *Agent) openSession() (bool, error) {
+	p.mu.Lock()
+	opened := p.record != nil
+	p.mu.Unlock()
+	if opened || p.store.ID() == "" {
+		return false, nil
+	}
+	rec, err := p.openRecord()
+	if errors.Is(err, factory.ErrPlanSessionOpen) {
+		return false, errors.New("this plan is open for planning in another chunk window; send messages from there")
+	}
+	if err != nil {
+		return false, err
+	}
+	id, err := rec.ID()
+	if err != nil {
+		_ = rec.Close()
+		return false, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopped {
+		_ = rec.Close()
+		return false, ErrStopped
+	}
+	p.record = rec
+	if id == "" {
+		return false, nil
+	}
+	p.cfg.SessionID = id
+	return true, nil
+}
+
 // holds is whether this session holds the plan's claim in factory. A failed
 // read counts as holding it, so a blip in the API does not have the agent
 // claim a plan it has.
 func (p *Agent) holds(ctx context.Context) bool {
 	h, err := p.holder(ctx)
-	return err != nil || h == p.cfg.SessionID
+	return err != nil || h == p.SessionID()
 }
 
 // claim records whether the message just sent left the plan claimed, as
@@ -200,12 +278,17 @@ func (p *Agent) Stop() error {
 	p.stopOnce.Do(func() { close(p.done) })
 	p.mu.Lock()
 	p.stopped = true
-	a := p.agent
+	a, rec := p.agent, p.record
+	p.record = nil
 	p.mu.Unlock()
-	if a == nil {
-		return nil
+	var err error
+	if a != nil {
+		err = a.Stop()
 	}
-	return a.Stop()
+	if rec != nil {
+		err = errors.Join(err, rec.Close())
+	}
+	return err
 }
 
 // forward passes a's events on to the screen until they end. Once ctx ends,
@@ -252,7 +335,7 @@ func (p *Agent) checkClaimed() error {
 	switch {
 	case err != nil:
 		return fmt.Errorf("could not check chunk's claim on the plan: %w", err)
-	case h == p.cfg.SessionID:
+	case h == p.SessionID():
 		return nil
 	case h != "":
 		return fmt.Errorf("plan %s is claimed by another factory session, so no planning tasks will come to chunk", id)

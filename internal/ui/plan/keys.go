@@ -126,7 +126,8 @@ func (m Model) keys() keyMap {
 		k.Comment.SetHelp("c", "comment on selection")
 	}
 	m.commentKeys(&k, inPlan)
-	k.SendComments.SetEnabled(inPlan && !m.savingComments && (len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
+	k.SendComments.SetEnabled(inPlan && !m.savingComments && m.takesComments() &&
+		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)
