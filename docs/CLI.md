@@ -595,7 +595,10 @@ chunk
   the chat if the session could not claim the plan. A session that ends is
   resumed by the next message, and told to claim the plan again, as is one
   factory says no longer holds it. Closing the screen stops the session,
-  which frees its claim.
+  which frees its claim. A plan opened again in a later screen picks up the
+  conversation that planned it, rather than starting a blank one. One chunk
+  at a time plans a plan: another that opens it can read it and comment, but
+  is refused when it sends a message.
 
   The session works in a worktree of the plan's own rather than the
   developer's checkout, since that is where factory builds the plan once it
@@ -830,8 +833,9 @@ chunk
   too, to switch to another plan. Each opened plan keeps its own chat, unsent
   message and session. An approved plan's build is selected once a poll lists
   it. Quitting with a message unsent in any plan asks for a second `ctrl+c`;
-  plans and saved comments stay in factory, but chat and unsent messages are
-  not kept. Closing the dashboard stops every planning session, not a build.
+  plans and saved comments stay in factory, and each plan's session keeps its
+  conversation for the next time the plan is opened, but the chat shown and
+  unsent messages are not kept. Closing the dashboard stops every planning session, not a build.
   `n` and `p` are not offered
   against a remote daemon, since a factory run works from files on this
   machine. A selected
