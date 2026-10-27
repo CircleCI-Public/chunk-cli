@@ -208,6 +208,39 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	}
 }
 
+// A plan in a state chunk does not know, as factory may add before chunk is
+// updated, is shown in that state, is not said to be in review, and is not
+// sent.
+func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
+	for _, state := range []string{"Blocked", "Building - Agent", "Integrating - Bot", "Paused\x1b[31m"} {
+		t.Run(state, func(t *testing.T) {
+			store := newFakeStore()
+			store.TextV = "# Plan"
+			store.StateV = state
+			sent := false
+			approve := func(func(string)) (string, error) {
+				sent = true
+				return "build-1", nil
+			}
+			m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
+			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+			raw := m.Content()
+			assert.Check(t, !strings.Contains(raw, "\x1b[31m"), "the state's escapes were drawn")
+			view := ansi.Strip(raw)
+			shown := strings.TrimSuffix(state, "\x1b[31m")
+			assert.Check(t, !strings.Contains(view, "In review"), "a plan in %q is said to be in review:\n%s", state, view)
+			assert.Check(t, !strings.Contains(view, "Plan ready"), view)
+			assert.Check(t, strings.Contains(view, "the plan is "+shown), "the action bar does not name the state:\n%s", view)
+
+			m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+			assert.Check(t, !m.confirming, "ctrl+s asked to send a plan in %q", state)
+			assert.Check(t, strings.Contains(ansi.Strip(m.status), "while it is "+shown), m.status)
+			drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+			assert.Check(t, !sent, "a plan in %q was sent", state)
+		})
+	}
+}
+
 // A plan waits in ReadyState after early-plan too, for its design to be
 // reviewed: with no units yet there is nothing to build, so ctrl+s approves
 // the design instead, for factory to write its units. The plan's build is not

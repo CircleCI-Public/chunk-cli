@@ -651,8 +651,10 @@ func (m Model) askToApprove() Model {
 		m.status = warn("Wait for chunk to finish.")
 	case strings.TrimSpace(m.plan) == "":
 		m.status = warn("There is no plan to approve yet.")
-	case m.state != ReadyState:
+	case m.state != ReadyState && m.inReview():
 		m.status = warn("The plan is not ready yet: wait for its review to pass.")
+	case m.state != ReadyState:
+		m.status = warn("The plan cannot be approved while it is " + m.stateText() + ".")
 	case m.units == 0 && (queued > 0 || m.openComments() > 0):
 		m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
 	case m.units == 0:
@@ -1219,7 +1221,7 @@ func (m Model) Content() string {
 
 	planName := "Plan"
 	if m.state != "" {
-		planName = "Plan · " + m.state
+		planName = "Plan · " + m.stateText()
 	}
 	planTitle := title(m.focus == panePlan, planName)
 	if m.focus == panePlan {

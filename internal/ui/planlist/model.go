@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
@@ -253,17 +254,20 @@ func (m *Model) keepSelection() {
 	}
 }
 
+// group is where a plan in state goes in the inbox. A state chunk does not
+// know goes in the last group.
 func group(state string) int {
-	switch {
-	case strings.HasSuffix(state, " - Human"):
-		return 0
-	case strings.HasSuffix(state, " - Agent"):
-		return 1
-	case state == "Unprioritized":
+	if planstate.IsUnprioritized(state) {
 		return 2
-	default:
-		return 3
 	}
+	switch _, actor := planstate.Parse(state); actor {
+	case planstate.Human:
+		return 0
+	case planstate.Agent:
+		return 1
+	case planstate.Unknown:
+	}
+	return 3
 }
 
 func (m Model) visible() []circleci.Plan {
