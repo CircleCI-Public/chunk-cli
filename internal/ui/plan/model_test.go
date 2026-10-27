@@ -1697,30 +1697,147 @@ func TestCommentUnderItsBlockHasNoExcerpt(t *testing.T) {
 	}
 }
 
+func TestTaskLabel(t *testing.T) {
+	for _, tc := range []struct {
+		category string
+		want     string
+	}{
+		{
+			category: "early-plan",
+			want:     "Early plan",
+		},
+		{
+			category: "write-units",
+			want:     "Write units",
+		},
+		{
+			category: "address-comments",
+			want:     "Address comments",
+		},
+		{
+			category: "build-unit",
+			want:     "Build unit",
+		},
+		{
+			category: "rebase",
+			want:     "Rebase",
+		},
+		{
+			category: "",
+			want:     "",
+		},
+	} {
+		got := taskLabel(tc.category)
+		assert.Check(t, cmp.Equal(got, tc.want), "category %q", tc.category)
+	}
+}
+
 func TestActivityWithNothingSentIsAFactoryTask(t *testing.T) {
-	m := New(context.Background(), turnReturning("ok"), nil, newFakeStore(), "do it")
+	for _, tc := range []struct {
+		name      string
+		task      string // the category of the task the flow has out; "" for none
+		wantLine  string // the activity block's first line
+		wantMark  string // the reply's header
+		notInView string
+	}{
+		{
+			name:      "a named task",
+			task:      "early-plan",
+			wantLine:  "Early plan",
+			wantMark:  "chunk · Early plan",
+			notInView: "factory task",
+		},
+		{
+			name:     "an unnamed task",
+			wantLine: "working on a factory task",
+			wantMark: "chunk · factory task",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			m := New(context.Background(), turnReturning("ok"), nil, store, "do it")
+			m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+			assert.Assert(t, !m.busy, "still busy after the reply")
+
+			// Factory hands out the task, then claude starts on it.
+			store.setTask(tc.task)
+			m.moving = &transition{kind: movingComments, from: "Planning - Human", since: time.Now()}
+			m = drive(t, m, eventFor(m, Event{Activity: "reading main.go"}))
+			assert.Assert(t, m.busy && m.byTask, "busy %v, byTask %v; want a factory task's turn", m.busy, m.byTask)
+			assert.Check(t, m.moving == nil, "a factory task started and the screen still waits for factory")
+			view := ansi.Strip(m.Content())
+			assert.Check(t, cmp.Contains(view, tc.wantLine))
+			if tc.notInView != "" {
+				assert.Check(t, !strings.Contains(view, tc.notInView), "view:\n%s", view)
+			}
+
+			m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Wrote the units.", ByTask: true}}))
+			assert.Check(t, !m.busy, "still busy after the task's reply")
+			view = ansi.Strip(m.Content())
+			assert.Check(t, cmp.Contains(view, tc.wantMark))
+			assert.Check(t, cmp.Contains(view, "Wrote the units."))
+			assert.Check(t, cmp.Equal(m.task, ""), "the task outlived its reply")
+		})
+	}
+}
+
+// The flow names the task a turn is on only until the agent submits it; a
+// later refresh that sees the next task, or the daemon's review, does not
+// relabel the turn.
+func TestTaskKeepsItsFirstCategory(t *testing.T) {
+	store := newFakeStore()
+	m := New(context.Background(), turnReturning("ok"), nil, store, "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	if m.busy {
-		t.Fatal("still busy after the reply")
-	}
-
-	m.moving = &transition{kind: movingComments, from: "Planning - Human", since: time.Now()}
+	store.setTask("early-plan")
 	m = drive(t, m, eventFor(m, Event{Activity: "reading main.go"}))
-	if !m.busy || !m.byTask {
-		t.Fatalf("busy %v, byTask %v; want a factory task's turn", m.busy, m.byTask)
-	}
-	assert.Check(t, m.moving == nil, "a factory task started and the screen still waits for factory")
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "working on a factory task") {
-		t.Errorf("view does not say chunk is on a factory task:\n%s", view)
-	}
 
-	m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Wrote the units.", ByTask: true}}))
-	if m.busy {
-		t.Error("still busy after the task's reply")
-	}
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "chunk · factory task") || !strings.Contains(view, "Wrote the units.") {
-		t.Errorf("the task's reply is not marked as a factory task's:\n%s", view)
-	}
+	store.setTask("write-units")
+	m = drive(t, m, pollMsg{})
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "Early plan"))
+	assert.Check(t, !strings.Contains(view, "Write units"), "view:\n%s", view)
+
+	m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Wrote sections 1-4.", ByTask: true}}))
+	view = ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "chunk · Early plan"))
+}
+
+// A refresh while the developer's message is in hand labels nothing, and the
+// label does not outlive that turn.
+func TestTaskDuringDevelopersTurnIsNotShown(t *testing.T) {
+	store := newFakeStore()
+	a := newFakeAgent() // never replies, so the developer's turn stays in hand
+	m := New(context.Background(), a, nil, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	assert.Assert(t, m.busy && !m.byTask, "busy %v, byTask %v; want the developer's turn", m.busy, m.byTask)
+
+	store.setTask("early-plan")
+	m = drive(t, m, pollMsg{})
+	m = drive(t, m, eventFor(m, Event{Activity: "reading main.go"}))
+	view := ansi.Strip(m.Content())
+	assert.Check(t, !strings.Contains(view, "Early plan"), "view:\n%s", view)
+
+	m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Done."}}))
+	store.setTask("")
+	m = drive(t, m, eventFor(m, Event{Activity: "reading go.mod"}))
+	assert.Check(t, m.byTask)
+	view = ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "working on a factory task"))
+}
+
+func TestProblemClearsTheTask(t *testing.T) {
+	store := newFakeStore()
+	m := New(context.Background(), turnReturning("ok"), nil, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	store.setTask("early-plan")
+	m = drive(t, m, eventFor(m, Event{Activity: "reading main.go"}))
+	m = drive(t, m, eventFor(m, Event{Problem: errors.New("claude exited")}))
+	assert.Check(t, cmp.Equal(m.task, ""))
+
+	store.setTask("")
+	m = drive(t, m, eventFor(m, Event{Activity: "reading go.mod"}))
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "working on a factory task"))
 }
 
 func TestEventsFromAnotherAgentAreIgnored(t *testing.T) {

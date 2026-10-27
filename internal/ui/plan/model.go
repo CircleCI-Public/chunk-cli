@@ -100,6 +100,9 @@ type message struct {
 	toBusy bool
 	// byTask is a reply to a factory task rather than to the developer.
 	byTask bool
+	// task is the category of the factory task the reply is to, when byTask
+	// and the screen knew it.
+	task string
 	// rendered is a reply's markdown as rendered at renderedWidth, kept so
 	// the chat is not rendered again on every tick of the spinner.
 	rendered      string
@@ -132,8 +135,10 @@ type (
 	refreshedMsg struct {
 		state, text string
 		events      []string
-		comments    []Comment
-		err         error
+		// task is the category of the task the flow has out, "" for none.
+		task     string
+		comments []Comment
+		err      error
 	}
 	commentSavedMsg struct{ err error }
 	// createdMsg is the end of creating the plan in factory, for the
@@ -180,7 +185,7 @@ func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 		if err != nil {
 			return refreshedMsg{err: err}
 		}
-		events, err := s.Events(ctx)
+		flow, err := s.Flow(ctx)
 		if err != nil {
 			return refreshedMsg{err: err}
 		}
@@ -189,7 +194,7 @@ func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 			return refreshedMsg{err: err}
 		}
 		cs, err := s.Comments(ctx)
-		return refreshedMsg{state: state, events: events, text: text, comments: cs, err: err}
+		return refreshedMsg{state: state, events: flow.Events, task: flow.Task, text: text, comments: cs, err: err}
 	}
 }
 
@@ -278,6 +283,10 @@ type Model struct {
 	// byTask is whether what the agent is working on is a factory task's,
 	// rather than the developer's message.
 	byTask bool
+	// task is the category of the factory task the agent's turn is on, as
+	// the turn's first refresh found it on the flow; "" until then, and
+	// when the flow named none.
+	task string
 	// log is what the agent has done this turn, oldest first.
 	log      []string
 	activity string
@@ -468,7 +477,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case sentMsg:
 		if msg.agent == m.agent && msg.err != nil {
-			m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+			m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
 			m.messages = append(m.messages, message{text: "Could not reach chunk: " + msg.err.Error(), failed: true})
 			m.renderPlan()
 			m.renderChat()
@@ -484,7 +493,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case createdMsg:
 		m.creating = false
 		if msg.err != nil {
-			m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+			m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
 			m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
 			m.renderPlan()
 			m.renderChat()
@@ -589,6 +598,11 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		m.status = ""
 	}
 	m.state, m.events, m.plan = msg.state, msg.events, msg.text
+	if m.byTask && m.task == "" {
+		// The first task the flow names in a turn is the one the turn is on:
+		// by its end the agent may have submitted it and the flow moved on.
+		m.task = msg.task
+	}
 	if m.moving != nil && m.state != m.moving.from {
 		m.moving = nil
 	}
@@ -836,7 +850,7 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 	m.status = ""
 	var tick tea.Cmd
 	if !m.busy {
-		m.busy, m.byTask, m.log = true, false, nil
+		m.busy, m.byTask, m.task, m.log = true, false, "", nil
 		tick = m.spin.Tick
 	}
 	m.syncPlaceholder()
@@ -862,12 +876,15 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 	switch {
 	case ev.Activity != "":
 		var tick tea.Cmd
+		var refresh tea.Cmd
 		if !m.busy {
 			// Nothing was sent, so a factory task started this turn.
 			m.busy, m.byTask, m.log = true, true, nil
 			// Factory hands out a task only once it has moved the plan.
 			m.moving = nil
 			tick = m.spin.Tick
+			// The flow names the task; read it now rather than at the next poll.
+			refresh = refreshCmd(m.ctx, m.store)
 		}
 		m.activity = ev.Activity
 		m.log = append(m.log, m.activity)
@@ -876,12 +893,13 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 		}
 		m.renderPlan()
 		m.renderChat()
-		return m, tea.Batch(next, tick)
+		return m, tea.Batch(next, tick, refresh)
 	case ev.Reply != nil:
-		m.busy, m.byTask, m.activity, m.log = false, false, "", nil
-		m.messages = append(m.messages, message{text: ev.Reply.Text, byTask: ev.Reply.ByTask})
+		task := m.task
+		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
+		m.messages = append(m.messages, message{text: ev.Reply.Text, byTask: ev.Reply.ByTask, task: task})
 	case ev.Problem != nil:
-		m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
 		m.messages = append(m.messages, message{text: ev.Problem.Error(), failed: true})
 	}
 	m.renderPlan()
@@ -1224,7 +1242,11 @@ func (m *Model) renderChat() {
 		default:
 			b.WriteString(chunkStyle.Render("chunk"))
 			if msg.byTask {
-				b.WriteString(m.style(m.faint()).Render(" · factory task"))
+				mark := " · factory task"
+				if msg.task != "" {
+					mark = " · " + taskLabel(msg.task)
+				}
+				b.WriteString(m.style(m.faint()).Render(mark))
 			}
 			b.WriteString("\n")
 			if msg.renderedWidth != w {
@@ -1263,7 +1285,11 @@ func (m Model) activityLog(w int) string {
 	}
 	var lines []string
 	if m.byTask {
-		lines = append(lines, m.style(m.faint()).Render("working on a factory task"))
+		label := "working on a factory task"
+		if m.task != "" {
+			label = taskLabel(m.task)
+		}
+		lines = append(lines, m.style(m.faint()).Render(label))
 	}
 	for i, a := range m.log {
 		a = ansi.Truncate(a, w-2, "…")
@@ -1274,6 +1300,17 @@ func (m Model) activityLog(w int) string {
 		lines = append(lines, m.style(m.green()).Render("✓ ")+m.style(m.dim()).Render(a))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// taskLabel is a factory task's category as the chat shows it: in sentence
+// case, with spaces for hyphens, so "early-plan" reads "Early plan".
+func taskLabel(category string) string {
+	if category == "" {
+		return ""
+	}
+	s := strings.ReplaceAll(category, "-", " ")
+	r, n := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[n:]
 }
 
 // restyle renders the plan and the chat again for a change of background.

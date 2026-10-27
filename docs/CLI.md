@@ -583,10 +583,12 @@ chunk
   plugin, which claims the plan and plans it through the factory daemon's
   tasks. The screen refreshes the plan's text, state and comments every 5s;
   the plan's state is in the pane's title. Messages go to the session at
-  once, even while it works, and a reply to a factory task rather than to a
-  message is marked as one. It needs factory, the f plugin, and the factory
-  daemon running with `FACTORY_PLAN_STORE=circleci` as the CircleCI user
-  chunk is signed in as; it checks the daemon before it opens, and says in
+  once, even while it works. While it works on a factory task rather than on
+  a message, the chat names the task, as the plan's flow in factory names it,
+  in sentence case (`Early plan` for `early-plan`), and the reply is marked
+  with it (`chunk · Early plan`). It needs factory, the f plugin, and the
+  factory daemon running with `FACTORY_PLAN_STORE=circleci` as the CircleCI
+  user chunk is signed in as; it checks the daemon before it opens, and says in
   the chat if the session could not claim the plan. A session that ends is
   resumed by the next message, and told to claim the plan again, as is one
   factory says no longer holds it. Closing the screen stops the session,

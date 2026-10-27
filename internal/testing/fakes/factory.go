@@ -25,7 +25,12 @@ type factoryPlan struct {
 	// applicable are the events the flow lists as applicable_events, as a
 	// test sets them with SetFactoryApplicableEvents.
 	applicable []string
-	comments   []factoryComment
+	// taskID and taskCategory are the task the flow has out, as a test sets
+	// it with SetFactoryTask; "" when none is. taskIDOnly serves its
+	// reference as an older factory did, with no attributes.
+	taskID, taskCategory string
+	taskIDOnly           bool
+	comments             []factoryComment
 	// seq orders plans by creation, as created_at and id order conductor's.
 	seq int
 }
@@ -108,6 +113,31 @@ func (f *FakeCircleCI) SetFactoryApplicableEvents(id string, events ...string) {
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.applicable = slices.Clone(events)
+	}
+}
+
+// SetFactoryTask has plan id's flow have a task of category out, as factory
+// handing one out would, or none when category is "".
+func (f *FakeCircleCI) SetFactoryTask(id, category string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.factoryPlans[id]
+	if p == nil {
+		return
+	}
+	p.taskID, p.taskCategory, p.taskIDOnly = "", "", false
+	if category != "" {
+		p.taskID, p.taskCategory = uuid.NewString(), category
+	}
+}
+
+// SetFactoryTaskIDOnly has plan id's flow have a task out that it references
+// by ID alone, as factory did before its flows carried the task's attributes.
+func (f *FakeCircleCI) SetFactoryTaskIDOnly(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.taskID, p.taskCategory, p.taskIDOnly = uuid.NewString(), "", true
 	}
 }
 
@@ -372,6 +402,14 @@ func (f *FakeCircleCI) handleGetFlow(c *gin.Context) {
 	refs := gin.H{"factory_plan": gin.H{"id": p.id}}
 	if p.session != "" {
 		refs["factory_session"] = gin.H{"id": p.session}
+	}
+	switch {
+	case p.taskIDOnly:
+		refs["factory_task"] = gin.H{"id": p.taskID}
+	case p.taskCategory != "":
+		// The reference carries the task's attributes; the fake serves only
+		// its category.
+		refs["factory_task"] = gin.H{"id": p.taskID, "attributes": gin.H{"category": p.taskCategory}}
 	}
 	applicable := p.applicable
 	if applicable == nil {
