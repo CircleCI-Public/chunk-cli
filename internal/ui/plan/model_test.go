@@ -128,8 +128,8 @@ func TestFirstSendCreatesPlan(t *testing.T) {
 	if !store.Created {
 		t.Fatal("Create was not called")
 	}
-	if store.Title != "add a --dry-run flag" {
-		t.Errorf("title is %q, want the first line", store.Title)
+	if store.Title != "add-a-dry-run-flag" {
+		t.Errorf("title is %q, want the first line as a slug", store.Title)
 	}
 	if !createdBeforeTurn {
 		t.Error("the turn started before the plan was created")
@@ -2506,16 +2506,44 @@ func TestSendHandsOffFromEveryHumanState(t *testing.T) {
 	}
 }
 
-// TestTitleOfCutsLongFirstLineTo80Runes checks the 80-rune cut by runes, not
-// bytes, so a multi-byte title is not cut mid-character.
-func TestTitleOfCutsLongFirstLineTo80Runes(t *testing.T) {
-	line := strings.Repeat("é", 90)
-	title := titleOf(line + "\nsecond line")
-	if r := []rune(title); len(r) != 80 {
-		t.Fatalf("title is %d runes, want 80: %q", len(r), title)
-	}
-	if title != strings.Repeat("é", 80) {
-		t.Errorf("title = %q, want the first 80 runes of the line", title)
+// TestTitleOfSlugsFirstLine checks the title is a short slug of the first
+// line, cut at a whole word, and counted in runes so a multi-byte word is not
+// cut mid-character.
+func TestTitleOfSlugsFirstLine(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{
+			name: "first line only",
+			text: "Add a --dry-run flag\nmore detail",
+			want: "add-a-dry-run-flag",
+		},
+		{
+			name: "punctuation and case",
+			text: "  Fix `chunk watch`'s crash (on resize)!  ",
+			want: "fix-chunk-watch-s-crash-on-resize",
+		},
+		{
+			name: "stops at a whole word",
+			text: "make the plan name a short slug instead of the whole first line",
+			want: "make-the-plan-name-a-short-slug-instead",
+		},
+		{
+			name: "cuts one long word",
+			text: strings.Repeat("é", 50) + " tail",
+			want: strings.Repeat("é", 40),
+		},
+		{
+			name: "no words",
+			text: "?!\nsecond line",
+			want: "plan",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := titleOf(tc.text); got != tc.want {
+				t.Errorf("titleOf(%q) = %q, want %q", tc.text, got, tc.want)
+			}
+		})
 	}
 }
 

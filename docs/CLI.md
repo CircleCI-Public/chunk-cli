@@ -584,7 +584,8 @@ chunk
 - **`factory plan` makes a plan with a factory planning session, then
   approves it in factory and builds it.** It opens a two-pane screen: a chat on the left and the
   plan on the right, rendered as markdown. The first message creates the plan
-  in factory and starts one long-lived Claude Code session with factory's f
+  in factory, named for a short slug of its first line (`add-a-dry-run-flag`),
+  and starts one long-lived Claude Code session with factory's f
   plugin, which claims the plan and plans it through the factory daemon's
   tasks. The screen refreshes the plan's text, state and comments every 5s;
   the plan's state is in the pane's title. Messages go to the session at
