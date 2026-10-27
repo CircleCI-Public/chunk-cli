@@ -60,7 +60,10 @@ func (m Model) click(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.runConfirm = ""
-	if mouse.Y < 1 || mouse.Y > m.contentHeight()+1 {
+	if mouse.Y == 0 {
+		return m.clickHeader(mouse.X)
+	}
+	if mouse.Y > m.contentHeight()+1 {
 		return m, nil
 	}
 	if mouse.X >= leftPaneWidth+2 {
@@ -81,6 +84,18 @@ func (m Model) click(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	}
 	m.searching = false
 	return withSelectedChange(m.selectRun(i), nil)
+}
+
+// clickHeader handles a click at column x of the header: on the attention tag
+// it narrows the run list, as a does.
+func (m Model) clickHeader(x int) (tea.Model, tea.Cmd) {
+	if m.searching {
+		return m, nil
+	}
+	if start, end := m.attentionTagSpan(m.styles()); x >= start && x < end {
+		return m.toggleAttention(), nil
+	}
+	return m, nil
 }
 
 // runAt is the index in m.sessions of the run drawn at screen row y.

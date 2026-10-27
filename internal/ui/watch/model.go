@@ -152,7 +152,10 @@ type Model struct {
 	searching bool
 	// showEnded lists finished runs alongside the live ones. Off by default so
 	// history does not crowd out what is going now.
-	showEnded     bool
+	showEnded bool
+	// attention narrows the list to the runs that need a person, finished or
+	// not.
+	attention     bool
 	reviewAuthErr string
 
 	// selRun is the ID of the selected run, "" when there is none to select.
@@ -357,6 +360,8 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.continueRun(run)
 	case key.Matches(msg, k.ToggleEnded):
 		return m.toggleEnded(), nil
+	case key.Matches(msg, k.Attention):
+		return m.toggleAttention(), nil
 	case key.Matches(msg, k.Right):
 		m.focusedPane = paneRight
 	case key.Matches(msg, k.Left):
@@ -597,7 +602,7 @@ func (m Model) renderHeader(st watchStyles) string {
 		title += st.Tabs(tab, "Plans", "Runs") + "  "
 	}
 	title += st.muted(count) + contextTag
-	right := m.draftReadyTag(st) + m.runTag(st) + m.connectionTag(st)
+	right := m.draftReadyTag(st) + m.attentionTag(st) + m.runTag(st) + m.connectionTag(st)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -773,6 +778,8 @@ func (m Model) renderEmptyPane(st watchStyles) []string {
 	lines := make([]string, 0, 5+len(logoLines))
 	lines = append(lines, title, "")
 	switch {
+	case m.attention && m.query == "":
+		lines = append(lines, st.muted("No run needs you."), st.dim("Press ")+st.Brand.Bold(true).Render("a")+st.dim(" to show every run."), "")
 	case len(m.allRuns) > 0 && m.query == "" && !m.showEnded:
 		lines = append(lines, st.muted("No active runs."), st.dim("Press ")+st.Brand.Bold(true).Render("e")+st.dim(" to show finished runs."), "")
 	case len(m.allRuns) > 0:
