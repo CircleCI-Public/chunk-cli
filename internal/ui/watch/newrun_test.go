@@ -230,7 +230,7 @@ func TestKeepingADraftForLater(t *testing.T) {
 
 // Why there is no draft, or why it could not be sent, is shown in the footer.
 func TestFailuresSayWhy(t *testing.T) {
-	f := &fakeDrafts{err: errors.New("No validate commands configured. Run 'chunk init' first")}
+	f := &fakeDrafts{err: errors.New("No validate commands configured. Run 'chunk factory bootstrap' first")}
 	m, _ := press(draftModel(t, f), 'n')
 	m = typeText(m, "add a flag")
 	m, cmd := press(m, tea.KeyEnter)

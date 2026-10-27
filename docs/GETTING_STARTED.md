@@ -36,7 +36,7 @@ Sidecars are available to all CircleCI customers, including the free plans.
 
 ### .chunk/ directory
 
-The `.chunk/` directory lives at the root of your project and holds configuration that should be version-controlled. After `chunk init` it holds your validation commands; `chunk factory bootstrap` adds review prompts if you generate them:
+The `.chunk/` directory lives at the root of your project and holds configuration that should be version-controlled. After `chunk factory bootstrap` (or `chunk init`) it holds your validation commands; bootstrap also adds review prompts if you generate them:
 
 ```
 .chunk/
@@ -81,25 +81,23 @@ Credentials are stored in your system keychain by default. Pass `--insecure-stor
 
 ---
 
-## Step 2: Initialize your project
+## Step 2: Set up your project
 
-Run this once per project. It auto-detects your test and lint commands (using Claude), creates `.chunk/config.json`, and wires up `.claude/settings.json` so hooks run automatically when your AI coding agent commits code.
+Run this once per project. It auto-detects your test and lint commands (using Claude), detects your VCS and CircleCI org, and writes `.chunk/config.json`:
 
 ```bash
-chunk init
+chunk factory bootstrap
 ```
 
-Run this after authenticating — init uses your CircleCI credentials to detect your org ID and save it to the project config. If you belong to one org it's selected automatically; if you belong to several, init shows a picker. Org ID is needed for sidecar commands, so capturing it here means you won't be prompted later.
+Run this after authenticating — bootstrap uses your CircleCI credentials to detect your org ID and save it to the project config. If you belong to one org it's selected automatically; if you belong to several, it shows a picker. Org ID is needed for sidecar commands, so capturing it here means you won't be prompted later.
 
 What it creates:
 
-- **`.chunk/config.json`** — list of validation commands (test, lint, format) and your CircleCI org ID; tracked in git
+- **`.chunk/config.json`** — list of validation commands (test, lint, format), your CircleCI org ID and (once it has set up a sidecar) `validation.sidecarImage`; tracked in git
 - **`.gitignore` entry for `.chunk/*-pool.json`** — pool state (sidecar IDs) written there by older versions; current versions keep it in the project data dir. Keeps `.chunk/config.json` tracked
-- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session, plus one that reports finished background runs before each prompt; tracked in git
-- **`.codex/hooks.json`** — the commit and session hooks, for Codex sessions (only written if Codex is installed); tracked in git
-- **`.git/hooks/pre-commit`** — runs `chunk validate` locally before every commit; not tracked in git
+- **`.chunk/reviews/`** — one review prompt per area, written from your code and your team's past PR review comments; tracked in git — see [Review prompts](#review-prompts) below
 
-`chunk init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.
+It plans what it still needs to do and skips what's already done, so running it again finishes a setup that stopped partway.
 
 Review the generated config and adjust commands if needed:
 
@@ -122,16 +120,30 @@ chunk validate --list    # list what's configured
 chunk validate --dry-run # print commands without executing
 ```
 
+### Commit hooks (optional)
+
+To also run validation automatically when your AI coding agent commits code or finishes a session, run `chunk init`. It wires up `.claude/settings.json` so hooks run, writing these on top of what bootstrap wrote:
+
+```bash
+chunk init
+```
+
+- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session, plus one that reports finished background runs before each prompt; tracked in git
+- **`.codex/hooks.json`** — the commit and session hooks, for Codex sessions (only written if Codex is installed); tracked in git
+- **`.git/hooks/pre-commit`** — runs `chunk validate` locally before every commit; not tracked in git
+
+`chunk init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.
+
 ---
 
 ## Step 3: Create your first sidecar
 
-Sidecar commands need a CircleCI org ID. The recommended path is to authenticate and run `chunk init` before using sidecars — init captures the org ID automatically and saves it to `.chunk/config.json`. After that, `chunk sidecar create` just works.
+Sidecar commands need a CircleCI org ID. The recommended path is to authenticate and run `chunk factory bootstrap` before using sidecars — it captures the org ID automatically and saves it to `.chunk/config.json`. After that, `chunk sidecar create` just works.
 
 If you skipped that or need to set the org ID manually:
 
 ```bash
-# List your orgs — single-org users can skip this, init auto-selected it
+# List your orgs — single-org users can skip this, bootstrap auto-selected it
 chunk org list
 
 # Persist the ID to the project config

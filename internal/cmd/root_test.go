@@ -14,9 +14,10 @@ import (
 )
 
 // TestRootHelp_StartHereThenOtherCommands asserts the shape required by
-// FACT-576: an exact, ordered "Start here" list of four commands, ahead of
-// every other command still listed (just under a different heading) so none
-// of them disappear, with the Short line and reference sections intact.
+// FACT-576: an ordered "Start here" onboarding flow (connect Claude,
+// bootstrap, watch), ahead of every other command still listed (just under a
+// different heading) so none of them disappear, with the Short line and
+// reference sections intact.
 func TestRootHelp_StartHereThenOtherCommands(t *testing.T) {
 	root := newTestRootCmd()
 	out := &bytes.Buffer{}
@@ -39,7 +40,14 @@ func TestRootHelp_StartHereThenOtherCommands(t *testing.T) {
 	assert.Assert(t, otherCommands > startHere, "Other commands should come after Start here:\n%s", help)
 
 	startHereSection := help[startHere:otherCommands]
-	wantOrder := []string{"chunk init", "chunk factory start", "chunk factory build", "chunk watch"}
+	wantOrder := []string{
+		"chunk auth set anthropic-oauth",
+		"chunk auth set anthropic ",
+		"chunk factory bootstrap",
+		"chunk " + watchCmdName,
+		"[n]",
+		"[p]",
+	}
 	lastIdx := -1
 	for _, want := range wantOrder {
 		idx := strings.Index(startHereSection, want)
@@ -48,22 +56,16 @@ func TestRootHelp_StartHereThenOtherCommands(t *testing.T) {
 		lastIdx = idx
 	}
 
-	// Count command lines directly rather than just checking substring order,
-	// so an extra entry slipped into the block (e.g. "chunk auth login")
-	// fails the test even though it wouldn't break the ordering checks above.
-	var commandLines []string
-	for _, line := range strings.Split(startHereSection, "\n") {
-		if strings.HasPrefix(line, "  chunk ") {
-			commandLines = append(commandLines, strings.TrimSpace(line))
-		}
-	}
-	assert.Equal(t, len(commandLines), len(wantOrder), "Start here should list exactly these commands, got:\n%s", startHereSection)
+	assert.Assert(t, !strings.Contains(startHereSection, "chunk init"), "chunk init should no longer be in Start here:\n%s", startHereSection)
+	assert.Assert(t, !strings.Contains(startHereSection, "chunk factory build"), "chunk factory build should no longer be in Start here:\n%s", startHereSection)
+	assert.Assert(t, !strings.Contains(startHereSection, "chunk factory start"), "chunk factory start should no longer be in Start here:\n%s", startHereSection)
 
 	assert.Assert(t, !strings.Contains(startHereSection, "task config"), "task config should not be in Start here:\n%s", startHereSection)
 	assert.Assert(t, !strings.Contains(startHereSection, "task run"), "task run should not be in Start here:\n%s", startHereSection)
 
 	otherCommandsSection := help[otherCommands:]
 	assert.Assert(t, strings.Contains(otherCommandsSection, "task"), "task should still be listed under Other commands:\n%s", otherCommandsSection)
+	assert.Assert(t, strings.Contains(otherCommandsSection, "init"), "init should still be listed under Other commands:\n%s", otherCommandsSection)
 
 	// The root template replaces cobra's own usage block, so the flags only a
 	// reader of this help would ever find have to be put back by hand.

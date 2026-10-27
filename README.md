@@ -38,15 +38,15 @@ Download the latest `chunk-cli_Windows_x86_64.zip` or `chunk-cli_Windows_arm64.z
 ### Start here
 
 ```bash
-chunk init                                     # set up this project: config, sandbox, review prompts
-chunk factory start "add a --verbose flag"     # optional: hand chunk a diff you already started
-chunk factory build "add a --verbose flag"     # build a change from a prompt, review it, open the PR
-chunk watch                                    # follow and manage your factory runs — keep it open
+chunk auth set anthropic-oauth   # 1. connect Claude with your subscription (recommended)
+chunk auth set anthropic         #    or an Anthropic API key (or export ANTHROPIC_API_KEY)
+chunk factory bootstrap          # 2. set up this project for factory runs
+chunk watch                      # 3. follow your runs — keep it open; press n for a run, p for a plan
 ```
 
 ### Project Setup
 
-Initialize your project for hook automation and validation:
+To run quality checks automatically as your agent works, outside of factory runs, set up hooks:
 
 ```bash
 # Detect test commands, configure hooks, set up .claude/settings.json

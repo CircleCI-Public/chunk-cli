@@ -326,10 +326,38 @@ func TestValidateNoConfigShowsSkillHint(t *testing.T) {
 	assert.Assert(t, err != nil, "expected error when no validate commands configured")
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T: %v", err, err)
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk factory bootstrap"),
+		"expected suggestion to recommend 'chunk factory bootstrap', got: %q", ue.Suggestion())
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk init"),
 		"expected suggestion to mention 'chunk init', got: %q", ue.Suggestion())
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk-sidecar"),
 		"expected suggestion to mention chunk-sidecar skill, got: %q", ue.Suggestion())
+}
+
+// A project whose .chunk/config.json already exists but has no commands —
+// e.g. because an earlier bootstrap's command detection found nothing — hits
+// the same "not configured" error. Rerunning bootstrap would not help here
+// (it only (re)detects commands when the config file is absent), so the
+// suggestion must not claim bootstrap alone fixes this and must point at
+// editing the file directly instead.
+func TestValidateNoConfigShowsFallbackWhenConfigExistsWithNoCommands(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755))
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{VCS: &config.VCSConfig{Org: "org", Repo: "repo"}}))
+
+	var outBuf, errBuf bytes.Buffer
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--project", dir})
+	err := root.Execute()
+
+	assert.Assert(t, err != nil, "expected error when the config has no commands")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T: %v", err, err)
+	assert.Assert(t, strings.Contains(ue.Suggestion(), ".chunk/config.json"),
+		"expected suggestion to offer editing .chunk/config.json directly, since bootstrap and 'chunk init' skip redetection once it exists, got: %q", ue.Suggestion())
 }
 
 // TestValidateDefaultsToRemote confirms that running without --local always
@@ -1149,6 +1177,7 @@ func TestValidateMarkRemoteNoCommandsConfigured(t *testing.T) {
 	assert.Assert(t, err != nil)
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T", err)
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk factory bootstrap"), "got: %q", ue.Suggestion())
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk init"), "got: %q", ue.Suggestion())
 }
 
