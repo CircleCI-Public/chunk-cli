@@ -35,7 +35,7 @@ func newDaemonCmd() *cobra.Command {
 			//
 			// This process is detached with no terminal, so resolution must not
 			// prompt. ResolveCircleCIClient returns ErrNeedsAuth instead of
-			// asking; prompting is `chunk watch`'s job, in the parent process.
+			// asking; prompting is `chunk ui`'s job, in the parent process.
 			var client *circleci.Client
 			rc, err := config.ResolveCircleCI(false)
 			if err == nil {

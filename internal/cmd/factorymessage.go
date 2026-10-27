@@ -31,11 +31,11 @@ func runStartMessage(pr prFlags, remote, continuing bool, attempts int) string {
 
 	switch {
 	case remote:
-		// --remote keeps the wording it had: the chunk watch hints are for
+		// --remote keeps the wording it had: the chunk ui hints are for
 		// runs on the local daemon.
 		return first + loop + " It keeps running on its own sidecar; " +
 			"`chunk factory pull` brings the work back. It does not open a pull request yet. " +
-			"Follow along with `chunk watch`, or leave it running."
+			"Follow along with `chunk ui`, or leave it running."
 	case pr.none:
 		return first + loop + " It does not open a pull request; " +
 			"the work stays on the local branch.\n" + watchStartHint
@@ -59,9 +59,9 @@ func runStartMessage(pr prFlags, remote, continuing bool, attempts int) string {
 }
 
 // watchStartHint is the line under a run's start message that says where to
-// follow it: chunk watch, and what it shows that the plain output does not.
+// follow it: chunk ui, and what it shows that the plain output does not.
 // FACT-585's message says what chunk will do; this says where to follow it.
-const watchStartHint = "Best way to follow this run and every other one: `chunk watch` " +
+const watchStartHint = "Best way to follow this run and every other one: `chunk ui` " +
 	"(findings, check output, the pull request). Or leave it running."
 
 // roundsClause is how many review rounds a run gets and the flag that changes
@@ -86,7 +86,7 @@ func factoryStartMessage(diff bool) string {
 	}
 	return msg + " Nothing is reviewed or pushed yet. When the work is ready, " +
 		"`chunk factory build --continue` reviews it, runs your checks until they pass, and, by default, opens the pull request.\n" +
-		"Best way to follow it from there, and every other run: `chunk watch` (findings, check output, the pull request)."
+		"Best way to follow it from there, and every other run: `chunk ui` (findings, check output, the pull request)."
 }
 
 // printRunStartMessage prints msg to streams' stderr once, before anything
@@ -101,7 +101,7 @@ func printRunStartMessage(streams iostream.Streams, jsonOut bool, msg string) {
 }
 
 // showHints reports whether output meant only for a person reading a terminal,
-// such as the start message and the pointers to chunk watch, should be
+// such as the start message and the pointers to chunk ui, should be
 // printed. It is not with --json, whose stdout a program consumes, in CI, or
 // when stdout or stderr is not a terminal (a log file, a pipe): each of those
 // keeps exactly the output it had before these hints existed.

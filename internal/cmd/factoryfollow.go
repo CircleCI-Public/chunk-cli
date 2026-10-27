@@ -75,13 +75,13 @@ func sessionError(err error) error {
 	switch {
 	case errors.Is(err, chunkd.ErrDaemonUnavailable):
 		return newUserError("The chunk daemon is not reachable.").
-			withSuggestion("Start it with 'chunk watch'.").
+			withSuggestion("Start it with 'chunk ui'.").
 			wrap(err)
 	case errors.As(err, &refused):
 		e := newUserError(refused.Message).withoutDetail()
 		switch refused.Status {
 		case http.StatusConflict:
-			e = e.withSuggestion("Follow the active one in 'chunk watch'.")
+			e = e.withSuggestion("Follow the active one in 'chunk ui'.")
 		case http.StatusNotFound:
 			e = e.withSuggestion("The daemon tracks projects it has seen; check the path or the session ID.")
 		}
@@ -132,7 +132,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 				live.clear()
 				printLostFactoryWork(streams, lastFactory)
 				return newUserError("Lost contact with the chunk daemon.").
-					withSuggestion(fmt.Sprintf("Run %s may still be running on the daemon. Follow it in 'chunk watch'.", id)).
+					withSuggestion(fmt.Sprintf("Run %s may still be running on the daemon. Follow it in 'chunk ui'.", id)).
 					wrap(err)
 			}
 		default:
@@ -183,9 +183,9 @@ type sessionReporter struct {
 	// checked marks the factory rounds whose review findings have been said.
 	checked map[int]bool
 	// hints ends a failed check's or a review with findings' line with a
-	// pointer to chunk watch, where the rest of it is. Only on a terminal.
+	// pointer to chunk ui, where the rest of it is. Only on a terminal.
 	hints bool
-	// pointed is whether a line has already pointed at chunk watch, which says
+	// pointed is whether a line has already pointed at chunk ui, which says
 	// it once for the run rather than on every failure.
 	pointed bool
 }
@@ -321,7 +321,7 @@ func (r *sessionReporter) watchSuffix() string {
 		return ""
 	}
 	r.pointed = true
-	return " (details in chunk watch)"
+	return " (details in chunk ui)"
 }
 
 // failedOutputLines is how much of a failed validation command's output is

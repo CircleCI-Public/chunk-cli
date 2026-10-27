@@ -308,7 +308,7 @@ The daemon is split in two. `internal/chunkd` is its API: the types that go over
 the wire, the HTTP client, the socket and pid paths, and starting the process.
 Its internal dependencies are `config`, `eventlog`, `iostream` and `version`.
 `internal/chunkd/server` is the daemon itself and imports `chunkd` for the types
-it serves. Clients — `chunk watch`, `chunk factory build`, hooks, `chunk validate` —
+it serves. Clients — `chunk ui`, `chunk factory build`, hooks, `chunk validate` —
 import `chunkd` only, so they depend on the daemon's API and never on the factory
 loop, the review runner or the sidecar pool behind it. Only `cmd/daemon.go`,
 which runs the daemon, imports `server` (and tests that start a real one).
@@ -328,17 +328,17 @@ The split is in the imports, not yet everywhere at runtime:
   in-process, through the `ValidateRunner` that `cmd/daemon.go` passes in, so
   the code doing the work lives in `cmd/validate.go`.
 - **Projects are registered by writing a file, not by asking the daemon.**
-  `chunk watch`, `chunk validate` and `chunk review` write the breadcrumbs
+  `chunk ui`, `chunk validate` and `chunk review` write the breadcrumbs
   `AllProjectRoots` reads, and the daemon finds projects by scanning them.
 - **The snapshot carries more than the dashboard draws.** It holds each
   project's sidecars, raw `eventlog.Event`s and buffered commands as well as its
-  sessions; `chunk watch` lists the sessions and ignores the rest.
+  sessions; `chunk ui` lists the sessions and ignores the rest.
 - **`chunk factory build` reads the daemon's files to check a request.** With
   `--continue`, `checkFactoryContinue` loads the earlier run's record from the
   repository's data directory before asking the daemon, which loads it again.
   This only works while the two share a filesystem.
 
-The daemon backs `chunk watch` and runs `chunk factory build`. It polls every
+The daemon backs `chunk ui` and runs `chunk factory build`. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte
 offset, and serves snapshots as JSON over a Unix socket at
 `$XDG_STATE_HOME/chunk/daemon/daemon.sock`, default
@@ -356,7 +356,7 @@ release until it exits.
 
 ### Remote viewing
 
-`chunk watch` is a pure client of `/snapshot` and `/output`; it opens no local
+`chunk ui` is a pure client of `/snapshot` and `/output`; it opens no local
 state, so it works unchanged against a daemon reached over TCP. What differs:
 
 - `EnsureRunning` / `EnsureLaunched` are no-ops when `CHUNK_DAEMON_REMOTE_ADDR`
@@ -421,7 +421,7 @@ Design constraints worth preserving:
   `Snapshot.AuthError` and carries on serving. It has no terminal, so a process
   blocked on a hidden prompt would be indistinguishable from one that has hung.
   Resolution is deferred to first use because it can read the OS keychain, and the
-  daemon starts on every `chunk watch` whether or not anything needs a token.
+  daemon starts on every `chunk ui` whether or not anything needs a token.
 
 ### Pre-PR sessions
 
@@ -429,7 +429,7 @@ A session is the daemon's record of one factory run for a project: an
 implementer works in a worktree of its own, and reviews and validation commands
 check the work until it passes.
 The daemon is the **local** one (Unix socket); a run works from files on this
-machine. `chunk factory build` starts and follows one, and `chunk watch` shows it
+machine. `chunk factory build` starts and follows one, and `chunk ui` shows it
 live.
 
 ```
@@ -457,7 +457,7 @@ GET  /snapshot             → each project carries `sessions` (state only), and
 to start (a seed, a snapshot, then a clone per reviewer). A run continuing a
 started run syncs its sidecars from that run's baseline, which is fixed when
 the run is started, and lays the work on the implementer's afterwards. So
-`chunk watch` asks for them with `POST /factory/warm` as soon as Claude starts a
+`chunk ui` asks for them with `POST /factory/warm` as soon as Claude starts a
 draft, and the daemon makes them (`factory.NewWarmPool`) from a detached
 checkout of the baseline beside the run's record while the draft is written
 and read. The next `POST /factory` continuing that run takes them, waiting for

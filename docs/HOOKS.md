@@ -129,7 +129,7 @@ Projects whose checks run against source alone lose nothing by turning it on.
 Two smaller things to know. The copy is a real git worktree, so tools that ask
 git about it get answers; it is removed when the run ends, and a daemon killed
 mid-run leaves an entry that the next cleanup prunes. And remote commands in a
-snapshot run register their output under the copy, so the `chunk watch` logs
+snapshot run register their output under the copy, so the `chunk ui` logs
 pane will not show it — the event log and the run itself are still filed under
 the real project.
 
@@ -319,7 +319,7 @@ break off into a rebase in the middle of an unrelated task.
 
 ### Where the answer comes from
 
-Nothing is computed in the hook. The `chunk watch` daemon previews the merge in
+Nothing is computed in the hook. The `chunk ui` daemon previews the merge in
 the background and the hook reads the stored result over a Unix socket, so it
 returns immediately:
 
@@ -338,7 +338,7 @@ returns immediately:
 - **Committed history only.** Uncommitted changes are invisible to the
   preview, so a conflict that exists solely in unstaged edits is not reported.
   The notice says so every time it fires.
-- **No daemon, no answer.** `chunk watch` starts the daemon, which keeps
+- **No daemon, no answer.** `chunk ui` starts the daemon, which keeps
   running after the dashboard is closed. Without it the hook prints nothing
   and the commit proceeds untouched.
 - **Cases with nothing to compare** — a detached HEAD, a repository with no

@@ -204,6 +204,20 @@ func TestFactoryRefusesPullRequestFlagsThatContradict(t *testing.T) {
 	}
 }
 
+// chunk factory has no ui subcommand of its own — ui is a root-level
+// command — so its help's only way to point at the dashboard is a line in
+// its Long text.
+func TestFactoryHelpPointsAtUI(t *testing.T) {
+	var out bytes.Buffer
+	cmd := newFactoryCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--help"})
+	assert.NilError(t, cmd.Execute())
+
+	assert.Assert(t, strings.Contains(out.String(), "chunk ui"), "missing %q in:\n%s", "chunk ui", out.String())
+	assert.Assert(t, !strings.Contains(out.String(), "chunk watch"), "should not point at the hidden watch alias:\n%s", out.String())
+}
+
 func TestFactoryHelpDescribesOpenPR(t *testing.T) {
 	var out bytes.Buffer
 	cmd := newFactoryBuildCmd()

@@ -1,4 +1,4 @@
-// Package chunkd implements the chunk watch background daemon and its client.
+// Package chunkd implements the chunk ui background daemon and its client.
 package chunkd
 
 import (

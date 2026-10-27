@@ -26,8 +26,8 @@ func TestSkipUpdateCheck(t *testing.T) {
 	}
 
 	// receive-telemetry is re-execed by every chunk invocation, and upgrade
-	// and watch report versions themselves.
-	for _, name := range []string{"completion", "receive-telemetry", "upgrade", "watch"} {
+	// and ui report versions themselves.
+	for _, name := range []string{"completion", "receive-telemetry", "upgrade", "ui"} {
 		cmd, _, err := root.Find([]string{name})
 		if err != nil {
 			t.Fatalf("find %q: %v", name, err)
@@ -39,6 +39,19 @@ func TestSkipUpdateCheck(t *testing.T) {
 		}
 		if !skipUpdateCheck(cmd) {
 			t.Errorf("expected update check to be skipped for %q", name)
+		}
+	}
+
+	// The hidden "watch" alias must resolve to the same command and skip list
+	// entry as "ui", so switching spelling does not lose the skip.
+	if cmd, _, err := root.Find([]string{"watch"}); err != nil {
+		t.Fatalf("find watch: %v", err)
+	} else {
+		if cmd.Name() != "ui" {
+			t.Fatalf("Find(%q) resolved to %q, want the ui command", "watch", cmd.Name())
+		}
+		if !skipUpdateCheck(cmd) {
+			t.Error("expected update check to be skipped for the watch alias")
 		}
 	}
 
@@ -57,6 +70,31 @@ func TestSkipUpdateCheck(t *testing.T) {
 		}
 	}
 
+}
+
+// TestShouldAutoLaunchSkipsUIAndItsWatchAlias pins the other skip list next to
+// noUpdateCheckCommands: ui starts the daemon itself, so auto-launch must not
+// also try to for it or its hidden watch alias. --daemon is set on each found
+// command so a stray skip-list key (e.g. a literal "watch" instead of
+// uiCmdName) would otherwise fall through to a true result here, rather than
+// being masked by the default config's autoLaunchDaemon being false too.
+func TestShouldAutoLaunchSkipsUIAndItsWatchAlias(t *testing.T) {
+	root := NewRootCmd("v1.0.0")
+	for _, name := range []string{"ui", "watch"} {
+		cmd, _, err := root.Find([]string{name})
+		if err != nil {
+			t.Fatalf("find %q: %v", name, err)
+		}
+		if cmd.Name() != "ui" {
+			t.Fatalf("Find(%q) resolved to %q, want the ui command", name, cmd.Name())
+		}
+		if err := cmd.ParseFlags([]string{"--daemon"}); err != nil {
+			t.Fatalf("parse flags for %q: %v", name, err)
+		}
+		if shouldAutoLaunch(cmd) {
+			t.Errorf("expected auto-launch to be skipped for %q even with --daemon", name)
+		}
+	}
 }
 
 func TestPrintUpdateNotice(t *testing.T) {

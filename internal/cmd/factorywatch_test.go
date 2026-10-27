@@ -24,7 +24,7 @@ func onATerminal(t *testing.T) {
 	t.Cleanup(func() { onTerminal = prev })
 }
 
-// The pointers to chunk watch are for a person at a terminal: --json, CI and
+// The pointers to chunk ui are for a person at a terminal: --json, CI and
 // an output that is not a terminal each leave them out.
 func TestShowHints(t *testing.T) {
 	streams, _, _ := testStreams()
@@ -41,9 +41,9 @@ func TestStartMessagesRecommendWatch(t *testing.T) {
 	const what = "(findings, check output, the pull request)"
 	got := runStartMessage(prFlags{}, false, false, 3)
 	assert.Assert(t, strings.HasSuffix(got, "\n"+watchStartHint), got)
-	assert.Assert(t, strings.Contains(watchStartHint, "chunk watch` "+what), watchStartHint)
+	assert.Assert(t, strings.Contains(watchStartHint, "chunk ui` "+what), watchStartHint)
 	got = factoryStartMessage(false)
-	assert.Assert(t, strings.Contains(got, "\nBest way to follow it from there, and every other run: `chunk watch` "+what), got)
+	assert.Assert(t, strings.Contains(got, "\nBest way to follow it from there, and every other run: `chunk ui` "+what), got)
 	// --remote keeps the wording it had.
 	got = runStartMessage(prFlags{}, true, false, 3)
 	assert.Assert(t, !strings.Contains(got, watchStartHint), got)
@@ -72,7 +72,7 @@ func TestSessionReporterPointsFailuresAtWatch(t *testing.T) {
 	}{
 		{name: "terminal", hints: true, want: []string{
 			"round 1: done",
-			"  test failed in 3s (details in chunk watch)",
+			"  test failed in 3s (details in chunk ui)",
 			"  lint passed in 1s",
 			"review bugs: 1 finding(s)",
 			"  [high] a.go:1 x",
@@ -109,7 +109,7 @@ func TestFactoryRunOnATerminalRecommendsWatch(t *testing.T) {
 		watchStartHint,
 		"started on the chunk daemon",
 		"All checks passed after 1 round(s).",
-		"Run run-1: see its reviews and checks in chunk watch.",
+		"Run run-1: see its reviews and checks in chunk ui.",
 	)
 }
 
@@ -122,8 +122,8 @@ func TestFactoryExhaustedOnATerminalPointsAtWatchThenContinue(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assertOrdered(t, stderr,
-		"review bugs: 1 finding(s) (details in chunk watch)",
-		"Run run-1: see the findings in chunk watch.",
+		"review bugs: 1 finding(s) (details in chunk ui)",
+		"Run run-1: see the findings in chunk ui.",
 	)
 	// --continue <run id> follows, as the error's suggestion.
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk factory build --continue run-1"), ue.Suggestion())
@@ -132,10 +132,10 @@ func TestFactoryExhaustedOnATerminalPointsAtWatchThenContinue(t *testing.T) {
 // With --continue naming the run by another ID, the hint leaves its own out.
 func TestWatchHintDoesNotNameTwoIDs(t *testing.T) {
 	same := chunkd.SessionDetail{Session: chunkd.Session{ID: "run-1", Factory: &chunkd.FactoryRun{RunID: "run-1", Branch: "chunk/run-1"}}}
-	assert.Equal(t, watchHint(same, "see the findings"), "Run run-1: see the findings in chunk watch.")
+	assert.Equal(t, watchHint(same, "see the findings"), "Run run-1: see the findings in chunk ui.")
 
 	continued := chunkd.SessionDetail{Session: chunkd.Session{ID: "run-2", Factory: &chunkd.FactoryRun{RunID: "run-2", Branch: "chunk/run-1"}}}
-	assert.Equal(t, watchHint(continued, "see the findings"), "see the findings in chunk watch.")
+	assert.Equal(t, watchHint(continued, "see the findings"), "see the findings in chunk ui.")
 }
 
 // None of the pointers reach --json or an output that is not a terminal.
@@ -156,7 +156,7 @@ func TestFactoryRunLeavesWatchOutOfJSONAndNonTerminals(t *testing.T) {
 			}
 			_, stderr, err := runFactoryBuildCmd(t, append(tc.args, "--max-attempts", "1", "add a --verbose flag")...)
 			assert.Assert(t, err != nil)
-			assert.Assert(t, !strings.Contains(stderr, "chunk watch"), stderr)
+			assert.Assert(t, !strings.Contains(stderr, "chunk ui"), stderr)
 		})
 	}
 }
@@ -164,11 +164,11 @@ func TestFactoryRunLeavesWatchOutOfJSONAndNonTerminals(t *testing.T) {
 func TestPrintInitSummaryRecommendsWatchOnATerminal(t *testing.T) {
 	ui.SetColorEnabled(false)
 	defer ui.SetColorEnabled(true)
-	const line = "Keep chunk watch open in another terminal to stay on top of your runs."
+	const line = "Keep chunk ui open in another terminal to stay on top of your runs."
 
 	streams, _, errOut := testStreams()
 	printInitSummary(nil, streams)
-	assert.Assert(t, !strings.Contains(errOut.String(), "chunk watch"), errOut.String())
+	assert.Assert(t, !strings.Contains(errOut.String(), "chunk ui"), errOut.String())
 
 	onATerminal(t)
 	streams, _, errOut = testStreams()

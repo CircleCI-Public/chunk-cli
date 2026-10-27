@@ -170,7 +170,7 @@ func TestStopForCredentialChangeStopsARunningDaemon(t *testing.T) {
 // path, so two spellings of one root share a log but count as two projects. It
 // took a symlinked path to see it, which on darwin is every temp directory and
 // on linux is none — so the symlink here is built rather than assumed, and the
-// spelling is flipped between polls the way a validate run and chunk watch used
+// spelling is flipped between polls the way a validate run and chunk ui used
 // to flip it.
 func TestPollListsOneProjectPerRootHoweverItIsSpelled(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())

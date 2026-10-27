@@ -14,7 +14,7 @@ import (
 )
 
 // prTrackFor is how long after a run ends its pull request is still followed.
-// It matches how long `chunk watch` keeps an ended run in its list: a merge
+// It matches how long `chunk ui` keeps an ended run in its list: a merge
 // after that would have nowhere to show.
 const prTrackFor = 24 * time.Hour
 

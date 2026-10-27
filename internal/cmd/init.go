@@ -99,7 +99,7 @@ func printInitSummary(commands []config.Command, streams iostream.Streams) {
 	}
 	if showHints(streams, false) {
 		streams.ErrPrintln("")
-		streams.ErrPrintf("Keep %s open in another terminal to stay on top of your runs.\n", ui.Cyan("chunk watch"))
+		streams.ErrPrintf("Keep %s open in another terminal to stay on top of your runs.\n", ui.Cyan("chunk ui"))
 	}
 }
 

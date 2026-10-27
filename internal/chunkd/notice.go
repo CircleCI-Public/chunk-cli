@@ -66,11 +66,11 @@ func ConflictStatus(rep ConflictReport) string {
 	if !rep.Known {
 		// "Tracked" is not the same as "has a sidecar right now": the daemon
 		// discovers projects from the breadcrumbs under the app data dir, which
-		// `chunk watch` writes and which outlive the sidecar that prompted
+		// `chunk ui` writes and which outlive the sidecar that prompted
 		// them. Saying "active sidecar" would send someone looking for a
 		// sidecar when what they need is to point the daemon at the project.
 		return "No conflict information for this project.\n" +
-			"The chunk daemon only tracks projects it has been pointed at — run `chunk watch` here to register it.\n"
+			"The chunk daemon only tracks projects it has been pointed at — run `chunk ui` here to register it.\n"
 	}
 	c := rep.Conflict
 	if c == nil {

@@ -39,7 +39,7 @@ func TestRootHelp_StartHereThenOtherCommands(t *testing.T) {
 	assert.Assert(t, otherCommands > startHere, "Other commands should come after Start here:\n%s", help)
 
 	startHereSection := help[startHere:otherCommands]
-	wantOrder := []string{"chunk init", "chunk factory start", "chunk factory build", "chunk watch"}
+	wantOrder := []string{"chunk init", "chunk factory start", "chunk factory build", "chunk ui"}
 	lastIdx := -1
 	for _, want := range wantOrder {
 		idx := strings.Index(startHereSection, want)
@@ -64,6 +64,8 @@ func TestRootHelp_StartHereThenOtherCommands(t *testing.T) {
 
 	otherCommandsSection := help[otherCommands:]
 	assert.Assert(t, strings.Contains(otherCommandsSection, "task"), "task should still be listed under Other commands:\n%s", otherCommandsSection)
+	assert.Assert(t, strings.Contains(otherCommandsSection, "ui"), "ui should be listed under Other commands:\n%s", otherCommandsSection)
+	assert.Assert(t, !strings.Contains(otherCommandsSection, "watch"), "the watch alias should not be listed under Other commands:\n%s", otherCommandsSection)
 
 	// The root template replaces cobra's own usage block, so the flags only a
 	// reader of this help would ever find have to be put back by hand.

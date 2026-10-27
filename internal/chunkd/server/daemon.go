@@ -181,7 +181,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	// it: alive, polling every project, but unreachable and with no pid file to
 	// stop it by. A client from a release that used another daemon dir
 	// relaunches the binary each time its own dir stays empty, so without
-	// this an old 'chunk watch' left open across an upgrade leaks a daemon per
+	// this an old 'chunk ui' left open across an upgrade leaks a daemon per
 	// poll. A daemon being replaced stops answering before its replacement
 	// starts (see stopDaemon), so this only refuses a live one.
 	if conn, err := net.DialTimeout("unix", sockPath, time.Second); err == nil {
