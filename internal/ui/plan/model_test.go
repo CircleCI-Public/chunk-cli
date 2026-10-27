@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -280,41 +281,69 @@ func TestCtrlSApprovesTheDesignOfAPlanWithNoUnits(t *testing.T) {
 	if len(handedOff) != 0 {
 		t.Errorf("approving the design handed factory comments: %v", handedOff)
 	}
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "chunk writes the units next") {
-		t.Errorf("the screen does not say the units come next:\n%s", view)
-	}
+	assert.Assert(t, m.moving != nil, "no wait for factory after approving the design")
+	assert.Check(t, cmp.Equal(m.moving.kind, movingDesign))
+	assert.Check(t, cmp.Equal(m.status, ""), "a status was left up: %q", m.status)
+	bar := ansi.Strip(m.actionBar())
+	assert.Check(t, cmp.Contains(bar, "Design approved · waiting for factory to start the units…"))
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	assert.Check(t, !m.confirming, "ctrl+s asked a question while factory has yet to move the plan")
+	assert.Check(t, cmp.Equal(m.status, ""), "ctrl+s set a status while waiting: %q", m.status)
+	assert.Check(t, cmp.Equal(ansi.Strip(m.actionBar()), bar), "ctrl+s changed the bar while waiting")
 }
 
-// TestDesignApprovedNoteClearsOnceFactoryMovesThePlan checks that the note
-// left by approving the design goes once a refresh finds the plan in another
-// state, so it does not hide the action bar's approve button when the units
-// come back for review.
-func TestDesignApprovedNoteClearsOnceFactoryMovesThePlan(t *testing.T) {
-	store := newFakeStore()
-	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
-	m := New(context.Background(), turnReturning("ok"), func(func(string)) (string, error) { return "build-1", nil }, store, "do it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-	assert.Assert(t, cmp.Contains(ansi.Strip(m.actionBar()), "chunk writes the units next"))
+// TestWaitingForFactoryEndsWhenTheStateMoves checks that the wait a design
+// approval starts lasts until a refresh finds the plan in another state,
+// however factory names it.
+func TestWaitingForFactoryEndsWhenTheStateMoves(t *testing.T) {
+	tests := []struct {
+		name string
+		to   string
+	}{
+		{
+			name: "agent",
+			to:   "Planning - Agent",
+		},
+		{
+			name: "a state chunk does not know",
+			to:   "Blocked",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			to := tc.to
+			store := newFakeStore()
+			store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
+			m := New(context.Background(), turnReturning("ok"), func(func(string)) (string, error) { return "build-1", nil }, store, "do it")
+			m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+			m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+			m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+			assert.Assert(t, m.moving != nil)
 
-	// A refresh in the same state keeps the note.
-	m = drive(t, m, pollMsg{})
-	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "chunk writes the units next"))
+			// A refresh in the same state keeps the wait.
+			m = drive(t, m, pollMsg{})
+			assert.Check(t, m.moving != nil, "the wait ended with the plan still in Planning - Human")
+			assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "waiting for factory"))
 
-	store.mu.Lock()
-	store.StateV = "Planning - Agent"
-	store.mu.Unlock()
-	m = drive(t, m, pollMsg{})
-	assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "chunk writes the units next"),
-		"the note outlived the plan moving on: %q", ansi.Strip(m.actionBar()))
+			store.mu.Lock()
+			store.StateV = to
+			store.mu.Unlock()
+			m = drive(t, m, pollMsg{})
+			assert.Check(t, m.moving == nil, "the wait outlived the plan moving to %q", to)
+			assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "waiting for factory"), m.actionBar())
+			assert.Check(t, !strings.Contains(m.actionBar(), fgSeq(m.purple())), "the bar's border stayed purple after the wait")
 
-	store.mu.Lock()
-	store.StateV = "Planning - Human"
-	store.TextV += "\n### Unit 1: add the flag\n\nParse it in main.go.\n"
-	store.mu.Unlock()
-	m = drive(t, m, pollMsg{})
-	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "ctrl+s Approve plan"))
+			if to != "Planning - Agent" {
+				return
+			}
+			store.mu.Lock()
+			store.StateV = "Planning - Human"
+			store.TextV += "\n### Unit 1: add the flag\n\nParse it in main.go.\n"
+			store.mu.Unlock()
+			m = drive(t, m, pollMsg{})
+			assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "ctrl+s Approve plan"))
+		})
+	}
 }
 
 // TestQuestionInTheStatusBarOutlivesAChangeOfState checks that a question
@@ -369,6 +398,125 @@ func TestAFailedDesignApprovalSaysSo(t *testing.T) {
 	}
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Could not approve the design: factory is down") {
 		t.Errorf("the failure is not shown:\n%s", view)
+	}
+	assert.Check(t, m.moving == nil, "a failed event started the wait")
+	assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "waiting for factory"))
+}
+
+// TestWaitingBarYieldsToStatuses checks that a prompt or an error during the
+// wait for factory shows in the action bar over the waiting line, which
+// would otherwise hide it until the refresh that ends the wait clears it.
+func TestWaitingBarYieldsToStatuses(t *testing.T) {
+	m, store := planModel(t)
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("s"))
+	assert.Assert(t, m.moving != nil, "no wait for factory after the hand-off")
+
+	// The quit prompt shows over the waiting line, on the purple border.
+	m = drive(t, m, press("tab"))
+	m = typeText(t, m, "draft")
+	m = drive(t, m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	bar := ansi.Strip(m.actionBar())
+	assert.Check(t, cmp.Contains(bar, "will be lost"))
+	assert.Check(t, !strings.Contains(bar, "waiting for factory"), bar)
+	assert.Check(t, strings.Contains(m.actionBar(), fgSeq(m.purple())), "the bar's border is not purple under the quit prompt")
+	m = drive(t, m, press("x"))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "waiting for factory"))
+
+	// An error shows over it too.
+	m = drive(t, m, commentSavedMsg{err: errors.New("edit failed")})
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "edit failed"))
+
+	// The refresh that ends the wait clears the error with it.
+	store.mu.Lock()
+	store.StateV = "Planning - Agent"
+	store.mu.Unlock()
+	m = drive(t, m, pollMsg{})
+	assert.Check(t, m.moving == nil, "the wait outlived the plan moving")
+	bar = ansi.Strip(m.actionBar())
+	assert.Check(t, !strings.Contains(bar, "edit failed"), bar)
+	assert.Check(t, cmp.Contains(bar, "ctrl+s Approve plan"))
+}
+
+func TestWaitingTitleNamesTheMove(t *testing.T) {
+	tests := []struct {
+		name string
+		from string
+		want string
+	}{
+		{
+			name: "planning",
+			from: "Planning - Human",
+			want: "Plan · Planning - Human → Agent",
+		},
+		{
+			name: "building",
+			from: "Building - Human",
+			want: "Plan · Building - Human → Agent",
+		},
+		{
+			name: "unknown state",
+			from: "Blocked",
+			want: "Plan · Blocked → …",
+		},
+		{
+			name: "escapes and a newline",
+			from: "\x1b[31mPlanning\n - Human",
+			want: "Plan · Planning - Human → Agent",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.TextV = twoParts
+			store.StateV = tc.from
+			m := New(context.Background(), turnReturning("ok"), nil, store, "")
+			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+			m = refreshed(t, m)
+			m.moving = &transition{kind: movingComments, from: tc.from, since: time.Now()}
+
+			raw := m.Content()
+			assert.Check(t, cmp.Contains(ansi.Strip(raw), tc.want))
+			assert.Check(t, !strings.Contains(raw, "\x1b[31m"), "the state's escapes were drawn")
+			lines := strings.Split(ansi.Strip(raw), "\n")
+			assert.Assert(t, len(lines) > 1)
+			assert.Check(t, cmp.Contains(lines[1], tc.want))
+		})
+	}
+}
+
+func TestWaitingBarSaysHowLongOnceItIsSlow(t *testing.T) {
+	tests := []struct {
+		name string
+		ago  time.Duration
+		// want is the elapsed time the bar shows, or "" for none.
+		want string
+	}{
+		{
+			name: "not yet slow",
+			ago:  5 * time.Second,
+			want: "",
+		},
+		{
+			name: "slow",
+			ago:  20 * time.Second,
+			want: "20s",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := planModel(t)
+			m.moving = &transition{kind: movingComments, from: m.state, since: time.Now().Add(-tc.ago)}
+			bar := ansi.Strip(m.actionBar())
+			if tc.want == "" {
+				assert.Check(t, !regexp.MustCompile(`\d+s\b`).MatchString(bar), bar)
+				return
+			}
+			assert.Check(t, cmp.Contains(bar, tc.want))
+		})
 	}
 }
 
@@ -445,6 +593,18 @@ func TestSSavesCommentsFromThePlan(t *testing.T) {
 	if m.focus != panePlan || len(queuedComments(m.comments)) != 0 || m.input.Value() != "draft" {
 		t.Errorf("focus %v, comments %+v, draft %q", m.focus, m.comments, m.input.Value())
 	}
+	assert.Assert(t, m.moving != nil, "no wait for factory after the hand-off")
+	assert.Check(t, cmp.Equal(m.moving.kind, movingComments))
+	assert.Check(t, cmp.Equal(m.moving.from, "Planning - Human"))
+
+	bar := ansi.Strip(m.actionBar())
+	assert.Check(t, cmp.Contains(bar, "Comments sent · waiting for factory to hand them to chunk…"))
+	assert.Check(t, !strings.Contains(bar, "Approve"), "the bar offers to approve while waiting: %q", bar)
+	assert.Check(t, strings.Contains(m.actionBar(), fgSeq(m.purple())), "the bar's border is not purple while waiting")
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "Waiting for factory"))
+	assert.Check(t, !strings.Contains(view, "Design ready") && !strings.Contains(view, "Plan ready"), view)
+	assert.Check(t, cmp.Contains(view, "Plan · Planning - Human → Agent"))
 }
 
 func TestSSavesCommentsWhileChunkWorks(t *testing.T) {
@@ -696,6 +856,19 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 
 		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 		assertFits(t, m, width, 24)
+
+		// Waiting for factory once the comment is handed off.
+		m = drive(t, m, press("n"))
+		m = drive(t, m, press("tab"))
+		m = drive(t, m, press("enter"))
+		assert.Check(t, m.moving != nil, "no wait for factory after the hand-off at width %d", width)
+		assertFits(t, m, width, 24)
+		bar := ansi.Strip(m.actionBar())
+		if width < narrowBelow {
+			assert.Check(t, cmp.Contains(bar, "Waiting for factory…"), "width %d", width)
+		} else {
+			assert.Check(t, cmp.Contains(bar, "Comments sent · waiting for factory to hand them to chunk…"), "width %d", width)
+		}
 	}
 }
 
@@ -1342,10 +1515,12 @@ func TestActivityWithNothingSentIsAFactoryTask(t *testing.T) {
 		t.Fatal("still busy after the reply")
 	}
 
+	m.moving = &transition{kind: movingComments, from: "Planning - Human", since: time.Now()}
 	m = drive(t, m, eventFor(m, Event{Activity: "reading main.go"}))
 	if !m.busy || !m.byTask {
 		t.Fatalf("busy %v, byTask %v; want a factory task's turn", m.busy, m.byTask)
 	}
+	assert.Check(t, m.moving == nil, "a factory task started and the screen still waits for factory")
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "working on a factory task") {
 		t.Errorf("view does not say chunk is on a factory task:\n%s", view)
 	}
@@ -1934,11 +2109,13 @@ func TestRefreshErrorKeepsPane(t *testing.T) {
 	m = refreshed(t, m)
 	before := m.plan
 
+	m.moving = &transition{kind: movingComments, from: "Planning - Human", since: time.Now()}
 	store.StateErr = errors.New("network blip")
 	m = refreshed(t, m)
 	if m.plan != before {
 		t.Errorf("plan changed on a failed poll")
 	}
+	assert.Check(t, m.moving != nil, "a failed poll ended the wait")
 	if !strings.Contains(m.refreshErr, "network blip") {
 		t.Errorf("refreshErr: %q", m.refreshErr)
 	}
@@ -2098,6 +2275,34 @@ func TestHeldCommentsSendOnceThePlanWaitsOnTheDeveloper(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Human"}))
 }
 
+// TestCommentsHeldWhileFactoryPicksUpTheHandOff checks that comments queued
+// after a hand-off, before factory has moved the plan, are held rather than
+// sent with a second address-comments event, which factory would store
+// again.
+func TestCommentsHeldWhileFactoryPicksUpTheHandOff(t *testing.T) {
+	m, store := planModel(t)
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "first")
+	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("s"))
+	assert.Assert(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Human"}))
+
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "second")
+	m = drive(t, m, press("enter"))
+	assert.Check(t, !m.keys().SendComments.Enabled(), "s offered while factory has yet to move the plan")
+	m = drive(t, m, press("s"))
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("enter"))
+
+	assert.Check(t, cmp.Len(store.Added, 1))
+	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Human"}))
+	assert.Check(t, cmp.Len(queuedComments(m.comments), 1))
+	assert.Check(t, cmp.Equal(m.status, ""), "the held note covers the wait: %q", m.status)
+}
+
 // TestCommentsFollowTheFlowsEventsNotItsState checks that whether a send
 // hands comments to factory is up to the events its flow applies now, not
 // the name of the plan's state.
@@ -2166,6 +2371,7 @@ func TestHandOffRetriedOnNextSendWithNothingQueued(t *testing.T) {
 	if len(queuedComments(m.comments)) != 0 {
 		t.Fatalf("the saved comment should not stay queued: %+v", m.comments)
 	}
+	assert.Check(t, m.moving == nil, "a failed event started the wait")
 
 	store.AddressErr = nil
 	m = drive(t, m, press("enter"))
@@ -2179,6 +2385,7 @@ func TestHandOffRetriedOnNextSendWithNothingQueued(t *testing.T) {
 	if len(agent.Sent()) != 1 {
 		t.Fatalf("turn calls = %d, want 1", len(agent.Sent()))
 	}
+	assert.Check(t, m.moving != nil)
 }
 
 // TestPlainMessageInHumanStateDoesNotHandOff checks that sending an ordinary

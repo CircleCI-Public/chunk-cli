@@ -612,7 +612,11 @@ chunk
   to factory and hands them to the session to address; they never go in a
   chat message. Comments are sent only when factory is ready to take them:
   while factory works on the plan they stay queued, a message sent with them
-  goes on alone, and `s` is not offered. While the plan waits in a Human state, a
+  goes on alone, and `s` is not offered. Once comments are handed off, the
+  action bar turns purple and says the screen is waiting for factory, until a
+  refresh finds the plan has moved; comments queued meanwhile are held, and
+  after 15 seconds the bar says how long it has waited. While the plan waits
+  in a Human state, a
   message gets an answer but only comments change the plan. While comments
   are saved they cannot be changed. A saved comment is edited at once with
   `c`, resolved with `r` and deleted with `d` (after a `y`); resolved ones are
@@ -623,7 +627,8 @@ chunk
   passed and moved it to Planning - Human; until then the header reads In
   review. A plan waits there after its design is written too, before it has
   units: the header reads Design ready, and `ctrl+s` approves the design, so
-  the session writes the units, once its comments are sent and resolved.
+  the session writes the units, once its comments are sent and resolved; the
+  action bar then waits for factory, as it does after a hand-off.
   Approving reads the plan as factory has it, not the screen's copy.
 
   Approving a plan with units has the chunk daemon build it, in a Claude Code

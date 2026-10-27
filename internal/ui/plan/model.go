@@ -109,6 +109,21 @@ type (
 	}
 )
 
+// transition is a flow event factory has taken but not yet applied: the
+// plan is still in from until factory's next poll moves it.
+type transition struct {
+	kind  transitionKind
+	from  string // m.state when the event was sent
+	since time.Time
+}
+
+type transitionKind int
+
+const (
+	movingComments transitionKind = iota
+	movingDesign
+)
+
 // pollEvery is how often the plan pane polls the store for the plan's text,
 // state and comments while the screen is open.
 const pollEvery = 5 * time.Second
@@ -201,6 +216,9 @@ type Model struct {
 	// event of a send whose comments were saved but whose event failed; the
 	// next send retries it.
 	pendingHandOff bool
+	// moving is what the screen waits on factory for, or nil when it waits
+	// on nothing.
+	moving *transition
 
 	planView viewport.Model
 	chatView viewport.Model
@@ -443,24 +461,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, refreshCmd(m.ctx, m.store)
 
 	case queueSavedMsg:
-		m.savingComments = false
-		// Whatever got saved before the failure, if any, stays saved; only
-		// the rest is still queued.
-		m.comments = dropQueued(m.comments, msg.saved)
-		m.renderPlan()
-		m.syncPlaceholder()
-		m.pendingHandOff = msg.handOff && !msg.handedOff
-		if msg.err != nil {
-			m.status = ui.ErrorStyle.Render(msg.err.Error())
-			return m, refreshCmd(m.ctx, m.store)
-		}
-		text := m.pendingText
-		m.pendingText = ""
-		if text != "" {
-			next, cmd := m.send(text)
-			return next, tea.Batch(cmd, refreshCmd(next.ctx, next.store))
-		}
-		return m, refreshCmd(m.ctx, m.store)
+		return m.applyQueueSaved(msg)
 
 	case approveStepMsg:
 		if m.approving {
@@ -472,7 +473,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
-		if !m.busy && !m.approving && !m.approvingDesign {
+		if !m.busy && !m.approving && !m.approvingDesign && m.moving == nil {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -482,6 +483,34 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 
 	return m.forward(msg)
+}
+
+// applyQueueSaved handles the end of saving the queued comments.
+func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
+	m.savingComments = false
+	// Whatever got saved before the failure, if any, stays saved; only
+	// the rest is still queued.
+	m.comments = dropQueued(m.comments, msg.saved)
+	m.renderPlan()
+	m.syncPlaceholder()
+	m.pendingHandOff = msg.handOff && !msg.handedOff
+	var tick tea.Cmd
+	if msg.handedOff {
+		m.moving = &transition{kind: movingComments, from: m.state, since: time.Now()}
+		m.status = ""
+		tick = m.spin.Tick
+	}
+	if msg.err != nil {
+		m.status = ui.ErrorStyle.Render(msg.err.Error())
+		return m, tea.Batch(refreshCmd(m.ctx, m.store), tick)
+	}
+	text := m.pendingText
+	m.pendingText = ""
+	if text != "" {
+		next, cmd := m.send(text)
+		return next, tea.Batch(cmd, refreshCmd(next.ctx, next.store), tick)
+	}
+	return m, tea.Batch(refreshCmd(m.ctx, m.store), tick)
 }
 
 // awaitingStatus is whether the status bar holds something still under way
@@ -517,6 +546,9 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		m.status = ""
 	}
 	m.state, m.events, m.plan = msg.state, msg.events, msg.text
+	if m.moving != nil && m.state != m.moving.from {
+		m.moving = nil
+	}
 	m.applyComments(msg.comments)
 	m.renderPlan()
 	if held {
@@ -603,7 +635,9 @@ func (m Model) deliver(text string) (Model, tea.Cmd) {
 		if text != "" {
 			next, cmd = m.send(text)
 		}
-		next.status = heldStatus
+		if next.moving == nil {
+			next.status = heldStatus
+		}
 		return next, cmd
 	}
 	m.savingComments = true
@@ -648,7 +682,7 @@ func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.approving, m.approvingDesign:
+	case m.approving, m.approvingDesign, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
 	case strings.TrimSpace(m.plan) == "":
@@ -789,6 +823,8 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 		if !m.busy {
 			// Nothing was sent, so a factory task started this turn.
 			m.busy, m.byTask, m.log = true, true, nil
+			// Factory hands out a task only once it has moved the plan.
+			m.moving = nil
 			tick = m.spin.Tick
 		}
 		m.activity = ev.Activity
@@ -860,8 +896,9 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			m.status = ui.ErrorStyle.Render("Could not approve the design: " + msg.err.Error())
 			return m, nil
 		}
-		m.status = "Design approved: chunk writes the units next."
-		return m, refreshCmd(m.ctx, m.store)
+		m.moving = &transition{kind: movingDesign, from: m.state, since: time.Now()}
+		m.status = ""
+		return m, tea.Batch(refreshCmd(m.ctx, m.store), m.spin.Tick)
 	case approvedMsg:
 		m.approving = false
 		if msg.err != nil {
@@ -1234,7 +1271,9 @@ func (m Model) Content() string {
 	}
 
 	planName := "Plan"
-	if m.state != "" {
+	if m.moving != nil {
+		planName = "Plan · " + m.movingText()
+	} else if m.state != "" {
 		planName = "Plan · " + m.stateText()
 	}
 	planTitle := title(m.focus == panePlan, planName)
