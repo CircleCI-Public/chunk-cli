@@ -10,9 +10,10 @@ type Comment struct {
 	Resolved bool
 }
 
-// Store is where the plan and its comments are kept. Before Create, reads
-// are empty and writes fail.
+// Store is where the plan and its comments are kept. Before Create, ID and
+// reads are empty and writes fail. An existing plan starts with its ID set.
 type Store interface {
+	ID() string
 	Create(ctx context.Context, title string) error
 	State(ctx context.Context) (string, error)
 	// AddressComments has factory take up the plan's comments, moving it

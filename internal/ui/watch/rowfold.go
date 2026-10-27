@@ -160,7 +160,7 @@ type reviewFold struct {
 // per line; the implementer's account and a review's findings are prose,
 // read from the start and wrapped.
 func (m Model) rowFoldLines(st watchStyles, s chunkd.Session, it runItem) []string {
-	width := max(m.runPaneWidth()-len(foldIndent), 20)
+	width := max(m.width-leftPaneWidth-5-len(foldIndent), 20)
 	r := s.Rounds[it.round]
 	var lines []string
 	fromEnd := false

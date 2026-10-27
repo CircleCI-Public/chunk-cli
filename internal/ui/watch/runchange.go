@@ -108,7 +108,7 @@ func (m Model) runChangeLines(st watchStyles, run sessionInfo, room int) []strin
 		return nil
 	}
 	// The pane is the width renderBody clips it to; the change is indented two.
-	width := m.runPaneWidth() - 2
+	width := m.width - leftPaneWidth - 5 - 2
 	lines := []string{""}
 	for i, l := range wrapText(lastLine(f.Stat), width-len("change  ")) {
 		label := st.vdim("change  ")

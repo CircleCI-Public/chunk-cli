@@ -30,7 +30,7 @@ func testClient(t *testing.T) (*circleci.Client, *fakes.FakeCircleCI) {
 func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) {
 	t.Helper()
 	client, cci := testClient(t)
-	store := NewStore(client)
+	store := NewStore(client, "")
 	err := store.Create(context.Background(), "a plan")
 	assert.NilError(t, err)
 	return store, client, cci
@@ -41,7 +41,7 @@ func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) 
 // the plan exists.
 func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 	client, _ := testClient(t)
-	store := NewStore(client)
+	store := NewStore(client, "")
 	ctx := context.Background()
 
 	text, err := store.Text(ctx)
@@ -61,7 +61,7 @@ func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 // into.
 func TestStoreCreateSetsPlanID(t *testing.T) {
 	client, cci := testClient(t)
-	store := NewStore(client)
+	store := NewStore(client, "")
 
 	err := store.Create(context.Background(), "add a --dry-run flag")
 	assert.NilError(t, err)
@@ -238,7 +238,7 @@ func TestStoreApproveWaitsForUnits(t *testing.T) {
 // come back empty.
 func TestStoreWritesFailBeforeCreate(t *testing.T) {
 	client, _ := testClient(t)
-	store := NewStore(client)
+	store := NewStore(client, "")
 	ctx := context.Background()
 
 	_, err := store.AddComment(ctx, "quote", "body")
@@ -265,26 +265,26 @@ func TestStoreWritesFailBeforeCreate(t *testing.T) {
 // it has a flow, and once its claim is released.
 func TestStoreHolderReadsTheClaimFromFactory(t *testing.T) {
 	client, cci := testClient(t)
-	store := NewStore(client)
+	store := NewStore(client, "")
 	ctx := context.Background()
 
-	h, err := store.holder(ctx)
+	h, err := store.Holder(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(h, ""))
 
 	err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
-	h, err = store.holder(ctx)
+	h, err = store.Holder(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(h, ""))
 
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	h, err = store.holder(ctx)
+	h, err = store.Holder(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(h, "s-1"))
 
 	cci.ReleaseFactoryPlan(store.ID())
-	h, err = store.holder(ctx)
+	h, err = store.Holder(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(h, ""))
 }

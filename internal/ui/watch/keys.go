@@ -101,6 +101,9 @@ func (m Model) keys() keyMap {
 	if m.planScreen != nil {
 		k.Plan.SetHelp("p", "back to plan")
 	}
+	if m.inbox != nil {
+		k.Plan = key.NewBinding(key.WithKeys("p", "tab", "1"), key.WithHelp("p/tab", "plans"))
+	}
 	k.Send.SetEnabled(m.draft == draftPrompting)
 	k.Discard.SetEnabled(m.draft == draftPrompting)
 	k.StopDraft.SetEnabled(m.draft == draftWorking)

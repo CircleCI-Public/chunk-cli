@@ -361,8 +361,16 @@ then the draft's diff is shown in the right pane (`↑/↓` scrolls it), and
 `Enter` sends the draft and your prompt to the factory to finish (`Esc` keeps
 the draft for later).
 
-For a bigger change, press `p` to plan it with a factory planning session
-first (it needs the factory daemon running with `FACTORY_PLAN_STORE=circleci`).
+For a bigger change, plan it with a factory planning session first (it needs
+the factory daemon running with `FACTORY_PLAN_STORE=circleci`). `chunk watch`
+opens on **Plans**, your open plans in factory grouped by who they wait on
+(Needs your review, With agent, Not started, Other), with a read-only preview
+of the selected one; `tab` (or `2`) shows your runs and `p` or `tab` comes
+back. `Enter` opens a plan and `n` starts a new one. Opening or
+reading a plan never claims it or starts an agent; your first message does,
+in the project `chunk watch` was opened in. `ctrl+p` goes back to the list to
+switch plans; each open plan keeps its chat, half-written message and session
+while another is shown.
 The chat is on the left and the plan is on the right; `tab` moves to the plan,
 where `c` writes a comment right under the highlighted part, saved to factory
 for chunk to address when you next press `enter`; `shift+↑/↓` selects several
@@ -371,7 +379,8 @@ passed, `ctrl+s` approves the design, and chunk writes the units; once those
 pass review too, `ctrl+s` approves the finished plan in factory, and the
 chunk daemon builds it through to a pull request. The build shows in your
 runs, and keeps going when you close chunk; plan as many as you like.
-`esc` goes back to your runs with the plan kept, and `p` opens it again.
+`esc` goes back to your plans with the plan kept. Quitting with a message
+still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.
 
 ```

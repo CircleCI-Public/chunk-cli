@@ -45,6 +45,15 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{StateV: "Planning - Human", Edited: map[string]string{}}
 }
 
+func (f *fakeStore) ID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Created {
+		return "saved-plan"
+	}
+	return ""
+}
+
 func (f *fakeStore) Create(_ context.Context, title string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

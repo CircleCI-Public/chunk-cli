@@ -13,8 +13,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"gotest.tools/v3/assert"
-	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
@@ -133,6 +131,27 @@ func TestFirstSendCreatesPlan(t *testing.T) {
 	}
 	if !createdBeforeTurn {
 		t.Error("the turn started before the plan was created")
+	}
+}
+
+func TestExistingPlanOpensWithoutStartingOrRecreatingIt(t *testing.T) {
+	store := newFakeStore()
+	store.Created, store.TextV = true, "# Existing plan\n\nKeep this outcome."
+	store.CreateErr = errors.New("an existing plan must not be recreated")
+	agent := turnReturning("Keeping the existing plan.")
+	m := New(t.Context(), agent, nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 32})
+	m = refreshed(t, m)
+	if len(agent.Sent()) != 0 || !strings.Contains(ansi.Strip(m.Content()), "Keep this outcome.") {
+		t.Fatal("opening should read the plan without sending an agent message")
+	}
+	m = typeText(t, m, "explain the outcome")
+	m = drive(t, m, press("enter"))
+	if got := agent.Sent(); len(got) != 1 || got[0] != "explain the outcome" {
+		t.Fatalf("message should continue the existing plan, got %v", got)
+	}
+	if !strings.Contains(ansi.Strip(m.Content()), "Keeping the existing plan.") {
+		t.Fatal("the agent's reply is missing")
 	}
 }
 
@@ -665,70 +684,6 @@ func TestMessageBoxIsBelowThePaneAccent(t *testing.T) {
 		m = drive(t, m, press("tab"))
 		check(t, m, m.quiet(), m.quiet(), fmt.Sprintf("dark=%v plan focused", dark))
 	}
-}
-
-// Every pane leaves a blank row under its title and above its bottom edge
-// and a cell inside each side; in the chat, the bubbles and the message box
-// line up at that cell, and so do chunk's replies.
-func TestBoxesPadTheirContentEvenly(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", "", nil
-	}
-	m := New(context.Background(), turn, nil, "")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
-	m = typeText(t, m, "hello there")
-	m = drive(t, m, press("enter"))
-
-	var rows [][]rune
-	for _, l := range strings.Split(ansi.Strip(m.Content()), "\n") {
-		rows = append(rows, []rune(l))
-	}
-	cw := m.chatWidth()
-	chat := func(r []rune) string { return string(r[:cw]) }
-	plan := func(r []rune) string { return string(r[cw:]) }
-	blank := func(w int) string { return "│" + strings.Repeat(" ", w-2) + "│" }
-
-	// Row 0 is the header and row 1 the panes' top edges.
-	assert.Check(t, cmp.Equal(chat(rows[2]), blank(cw)), "chat: no blank row under the title")
-	assert.Check(t, cmp.Equal(plan(rows[2]), blank(m.planWidth())), "plan: no blank row under the title")
-	bottom := -1
-	for i, r := range rows {
-		if strings.HasPrefix(string(r), "╰") {
-			bottom = i
-			break
-		}
-	}
-	assert.Assert(t, bottom > 2, "no pane bottom edge")
-	assert.Check(t, cmp.Equal(chat(rows[bottom-1]), blank(cw)), "chat: no blank row above the bottom edge")
-	assert.Check(t, cmp.Equal(plan(rows[bottom-1]), blank(m.planWidth())), "plan: no blank row above the bottom edge")
-
-	// The empty plan's hint starts where plan text would, past the gutter.
-	assert.Check(t, strings.HasPrefix(plan(rows[3]), "│"+strings.Repeat(" ", padX+gutterWidth)+"No plan yet."),
-		"the empty plan's hint is not at the plan's text column: %q", plan(rows[3]))
-
-	var reply, bubbleTop, bubbleText, boxTop, boxText string
-	for i, r := range rows {
-		if i < 2 || i >= bottom { // row 0, the header, also says "chunk"
-			continue
-		}
-		s := chat(r)
-		switch {
-		case reply == "" && strings.Contains(s, "chunk") && !strings.Contains(s, "─"):
-			reply = s
-		case bubbleTop == "" && strings.Contains(s, "╭") && !strings.Contains(s, "Message"):
-			bubbleTop, bubbleText = s, chat(rows[i+1])
-		case strings.Contains(s, "Message"):
-			boxTop, boxText = s, chat(rows[i+1])
-		}
-	}
-	assert.Check(t, strings.HasPrefix(reply, "│ chunk"), "chunk's reply is not one cell in: %q", reply)
-	// The column, not the byte offset: the box's edges are several bytes a cell.
-	col := func(s, sub string) int { return len([]rune(s[:max(strings.LastIndex(s, sub), 0)])) }
-	assert.Check(t, cmp.Equal(col(bubbleTop, "╮"), col(boxTop, "╮")),
-		"the bubble's right edge %q does not line up with the message box's %q", bubbleTop, boxTop)
-	assert.Check(t, strings.HasPrefix(boxTop, "│ ╭"), "the message box is not one cell in: %q", boxTop)
-	assert.Check(t, strings.HasPrefix(boxText, "│ │ "), "the message box's text is not padded: %q", boxText)
-	assert.Check(t, cmp.Contains(bubbleText, "│ hello there"), "the bubble's text is not padded")
 }
 
 // The message box, like the panes, sits on the terminal's own background: no

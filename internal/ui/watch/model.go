@@ -16,29 +16,16 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
 
 const (
-	leftPaneWidth = 28
+	leftPaneWidth = theme.ListWidth
 	pollInterval  = 5 * time.Second
 	spinInterval  = 160 * time.Millisecond
 )
-
-// paneChrome is a pane's border and padding, left and right together;
-// paneChromeY is the same top and bottom.
-const (
-	paneChrome  = 2 + 2*theme.PadX
-	paneChromeY = 2 + 2*theme.PadY
-)
-
-// leftBoxWidth is the runs pane's outer width.
-const leftBoxWidth = leftPaneWidth + paneChrome
-
-// runPaneWidth is the run pane's content width, the width its lines are
-// clipped and wrapped to.
-func (m Model) runPaneWidth() int { return max(m.width-leftBoxWidth-paneChrome, 0) }
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -233,17 +220,17 @@ type Model struct {
 	sendingDraft bool
 	// continuing is true from r until the factory answers.
 	continuing bool
-	// planner makes a plan with Claude, opened with p, in startDir's project
-	// like a draft. planScreen is the planning screen once there is one, kept
-	// when it is closed until its plan is sent; planOpen is whether it is
-	// shown, planOpening whether the planner is still opening it, and
-	// planRoot the project its plan is for.
-	planCtx     context.Context
-	planOpening bool
-	planner     Planner
-	planScreen  *plan.Model
-	planOpen    bool
-	planRoot    string
+	// Each workspace keeps its input and session while another is shown.
+	// planScreen points into planWorkspaces, to the last selected workspace.
+	planCtx                                   context.Context
+	planOpening                               bool
+	planner                                   Planner
+	planScreen                                *plan.Model
+	planOpen                                  bool
+	planWorkspaces                            map[uint64]*planWorkspace
+	planKey, planSeq                          uint64
+	inbox                                     *planlist.Model
+	inboxOpen, switchingPlan, confirmPlanQuit bool
 	// runChanges is each finished run's committed change, by run ID, read
 	// once its run is selected.
 	runChanges map[string]runChange
@@ -314,6 +301,9 @@ func (m Model) WithRelaunch() Model {
 }
 
 func (m Model) Init() tea.Cmd {
+	if m.inbox != nil {
+		return tea.Batch(m.loadData, doSpin(), checkUpdateCmd(), m.inbox.Init())
+	}
 	return tea.Batch(m.loadData, doSpin(), checkUpdateCmd())
 }
 
@@ -345,7 +335,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, k.Plan):
 		return m.openPlan()
 	case key.Matches(msg, k.Quit, k.ForceQuit):
-		return m, tea.Quit
+		return m.quitWithPlans()
 	case key.Matches(msg, k.Back):
 		if right {
 			m.focusedPane = paneLeft
@@ -354,7 +344,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.query != "" {
 			return m.setQuery(""), nil
 		}
-		return m, tea.Quit
+		return m.quitWithPlans()
 	case key.Matches(msg, k.Cancel):
 		return m.requestRunCancel(run, wasConfirm)
 	case key.Matches(msg, k.Delete):
@@ -408,10 +398,7 @@ func (m Model) moveSelection(run *sessionInfo, delta int) Model {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.planScreen != nil {
-		return m.updateWithPlan(msg)
-	}
-	return m.update(msg)
+	return m.updateWithPlan(msg)
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -536,6 +523,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
+	if m.inboxOpen {
+		inbox := m.inbox.WithNote(m.draftNote)
+		content := inbox.Content()
+		if m.width > 0 {
+			content = m.renderHeader(m.styles()) + content
+		}
+		v := tea.NewView(content)
+		v.AltScreen = true
+		v.WindowTitle = "chunk watch — plans"
+		return v
+	}
 	if m.planOpen {
 		v := tea.NewView(m.planScreen.Content())
 		v.AltScreen = true
@@ -582,7 +580,18 @@ func (m Model) renderHeader(st watchStyles) string {
 		}
 	}
 
-	title := st.brand("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
+	title := st.brand("◆ ") + st.emphasis("chunk watch") + "  "
+	if m.inbox != nil {
+		// The count is the showing tab's, so it never reads as the other's.
+		tab := 1
+		if m.inboxOpen {
+			tab = 0
+			n = m.inbox.Len()
+			count = fmt.Sprintf("%d plan%s", n, plural(n))
+		}
+		title += st.Tabs(tab, "Plans", "Runs") + "  "
+	}
+	title += st.muted(count) + contextTag
 	right := m.draftReadyTag(st) + m.runTag(st) + m.connectionTag(st)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
@@ -617,8 +626,7 @@ func (m Model) connectionTag(st watchStyles) string {
 // contentHeight is how many lines the two panes get between the header and
 // the footer.
 func (m Model) contentHeight() int {
-	// header + the boxes' edges and padding + the help bar
-	h := m.height - 2 - paneChromeY
+	h := m.height - 4 // header + the boxes' top and bottom edges (2) + the help bar
 	// The footer grows by a line when the daemon is unreachable. Without handing
 	// that line back the message lands past the last row and is clipped at every
 	// terminal size, which is how a daemon that had died came to look like a
@@ -664,7 +672,7 @@ func (m Model) renderBody(st watchStyles) string {
 	leftTitle, leftLines := paneTitle(leftLines)
 	rightTitle, rightLines := paneTitle(rightLines)
 
-	rw := m.runPaneWidth()
+	rw := m.width - leftPaneWidth - 5
 	left := make([]string, contentHeight)
 	right := make([]string, contentHeight)
 	for i := 0; i < contentHeight; i++ {
@@ -680,12 +688,12 @@ func (m Model) renderBody(st watchStyles) string {
 		// Clip rather than let a long line wrap: the two panes are drawn as one
 		// fixed-height block, so a line that wraps shifts everything below it and
 		// the layout no longer matches the height it was built for.
-		right[i] = padLine(clip(r, rw), rw)
+		right[i] = " " + padLine(clip(r, rw), rw)
 	}
-	h := contentHeight + paneChromeY
+	h := contentHeight + 2
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		st.Pane(m.focusedPane == paneLeft, leftBoxWidth, h, leftTitle, strings.Join(left, "\n")),
-		st.Pane(m.focusedPane == paneRight, m.width-leftBoxWidth, h, rightTitle, strings.Join(right, "\n")),
+		st.Pane(m.focusedPane == paneLeft, leftPaneWidth+2, h, leftTitle, strings.Join(left, "\n")),
+		st.Pane(m.focusedPane == paneRight, m.width-leftPaneWidth-2, h, rightTitle, strings.Join(right, "\n")),
 	) + "\n"
 }
 
@@ -759,7 +767,8 @@ func (m Model) renderEmptyPane(st watchStyles) []string {
 		lines = append(lines, m.renderStartHints(st)...)
 	}
 
-	rightWidth := m.runPaneWidth()
+	// right pane content width: the right box's border, then one leading space.
+	rightWidth := m.width - leftPaneWidth - 4
 	logoMaxWidth := 0
 	for _, l := range logoLines {
 		if w := lipgloss.Width(l); w > logoMaxWidth {
