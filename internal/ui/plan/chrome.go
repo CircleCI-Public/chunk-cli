@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"strings"
+	"time"
 	"unicode"
 
 	"charm.land/lipgloss/v2"
@@ -64,6 +65,8 @@ func (m Model) header() string {
 			text = "✦ Drafting"
 		}
 		state = m.pill(m.purple(), "#fbefff", "#22162b", text)
+	case m.moving != nil:
+		state = m.style(m.dim()).Render("Waiting for factory")
 	case strings.TrimSpace(m.plan) == "":
 		state = m.style(m.dim()).Render("No plan yet")
 	case len(queuedComments(m.comments)) > 0:
@@ -158,6 +161,15 @@ func (m Model) tabLabels() (chat, plan string) {
 func (m Model) actionBar() string {
 	inner := m.width - borderSize - 2
 	edge := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.quiet()).Padding(0, 1)
+	if m.moving != nil {
+		// A status during the wait is a prompt or an error, so it shows
+		// over the waiting line; the border still says factory has yet to
+		// move the plan.
+		edge = edge.BorderForeground(m.purple())
+		if m.status == "" {
+			return edge.Width(m.width).Render(m.waitingLine(inner))
+		}
+	}
 	if m.status != "" {
 		return edge.Width(m.width).Render(ansi.Truncate(m.status, inner, "…"))
 	}
@@ -172,6 +184,30 @@ func (m Model) actionBar() string {
 	gap := max(inner-lipgloss.Width(hints)-lipgloss.Width(right), 1)
 	return edge.Width(m.width).Render(hints + strings.Repeat(" ", gap) + right)
 }
+
+// waitingLine is the action bar while factory has yet to apply the event
+// the developer sent: what was sent and what happens next, and how long it
+// has taken once that is long enough to matter.
+func (m Model) waitingLine(w int) string {
+	text := "Comments sent · waiting for factory to hand them to chunk…"
+	if m.moving.kind == movingDesign {
+		text = "Design approved · waiting for factory to start the units…"
+	}
+	if m.narrow() {
+		text = "Waiting for factory…"
+	}
+	line := m.style(m.purple()).Bold(true).Render(m.spin.View() + text)
+	var took string
+	if d := time.Since(m.moving.since); d >= slowWait {
+		took = m.style(m.dim()).Render(fmt.Sprintf("%ds", int(d.Seconds())))
+	}
+	gap := max(w-lipgloss.Width(line)-lipgloss.Width(took), 1)
+	return ansi.Truncate(line+strings.Repeat(" ", gap)+took, w, "…")
+}
+
+// slowWait is how long the wait for factory goes before the bar says how
+// long it has been.
+const slowWait = 15 * time.Second
 
 // barRight is the bar's main button and everything on its right: the button
 // with the one beside it, when there is room for both.
@@ -205,7 +241,7 @@ func (m Model) actions() (main, side string) {
 	switch {
 	// While a comment is written enter saves it and ctrl+s does nothing, so
 	// neither button is on offer: the hints name the keys that work.
-	case m.approving, m.approvingDesign, m.commenting:
+	case m.approving, m.approvingDesign, m.commenting, m.moving != nil:
 		return "", ""
 	case m.busy:
 		return outline(m.purple(), "chunk is working"), m.style(m.faint()).Render(approve)
@@ -258,4 +294,12 @@ func (m Model) stateText() string {
 		return r
 	}, ansi.Strip(m.state))
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// movingText is the move factory has yet to make, for the plan's title.
+func (m Model) movingText() string {
+	if phase, actor := planstate.Parse(m.stateText()); actor == planstate.Human {
+		return phase + " - Human → Agent"
+	}
+	return m.stateText() + " → …"
 }

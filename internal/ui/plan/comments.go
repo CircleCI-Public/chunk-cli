@@ -49,9 +49,12 @@ func (m Model) openComments() int {
 // comments.
 const addressComments = "address-comments"
 
-// takesComments is whether sending comments now hands them to factory: its
-// flow lists address-comments among the events it applies.
-func (m Model) takesComments() bool { return slices.Contains(m.events, addressComments) }
+// takesComments is whether a send hands the queued comments to factory now:
+// the flow lists address-comments, and no earlier event is still waiting for
+// factory to apply it.
+func (m Model) takesComments() bool {
+	return m.moving == nil && slices.Contains(m.events, addressComments)
+}
 
 // last is the index of the last block c is on.
 func (c comment) last() int { return c.block + max(c.span, 1) - 1 }
