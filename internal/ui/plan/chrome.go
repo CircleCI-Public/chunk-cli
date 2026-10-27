@@ -110,22 +110,42 @@ func (m Model) header() string {
 // tabs is the row that stands in for the second pane on a screen too narrow
 // for both: which pane is showing, and what the other one has for it.
 func (m Model) tabs() string {
+	chatText, planText := m.tabLabels()
 	tab := func(on bool, text string) string {
-		s := lipgloss.NewStyle().Padding(0, 2)
+		s := lipgloss.NewStyle().Padding(0, tabPad)
 		if on {
 			return s.Bold(true).Foreground(m.brand()).Background(m.hue("#ddf4ff", "#16222a")).Render(text)
 		}
 		return s.Foreground(m.dim()).Render(text)
 	}
-	chat := "Chat"
+	return ansi.Truncate(" "+tab(m.focus == paneChat, chatText)+" "+tab(m.focus == panePlan, planText), m.width, "…")
+}
+
+// tabPad is the cells either side of a tab's text.
+const tabPad = 2
+
+// tabSpans is the columns each of the narrow screen's tabs takes, from its
+// first column up to its end, as tabs draws them.
+func (m Model) tabSpans() (chatStart, chatEnd, planStart, planEnd int) {
+	chat, plan := m.tabLabels()
+	chatStart = 1
+	chatEnd = chatStart + lipgloss.Width(chat) + 2*tabPad
+	planStart = chatEnd + 1
+	planEnd = planStart + lipgloss.Width(plan) + 2*tabPad
+	return chatStart, chatEnd, planStart, planEnd
+}
+
+// tabLabels is the text of the narrow screen's two tabs.
+func (m Model) tabLabels() (chat, plan string) {
+	chat = "Chat"
 	if m.busy {
 		chat += " " + m.spin.View()
 	}
-	plan := "Plan"
+	plan = "Plan"
 	if m.units > 0 {
 		plan += fmt.Sprintf(" · %d %s", m.units, plural(m.units, "unit", "units"))
 	}
-	return ansi.Truncate(" "+tab(m.focus == paneChat, chat)+" "+tab(m.focus == panePlan, plan), m.width, "…")
+	return chat, plan
 }
 
 // actionBar is the box under the panes: the keys at hand on the left and, on
@@ -138,11 +158,7 @@ func (m Model) actionBar() string {
 		return edge.Width(m.width).Render(ansi.Truncate(m.status, inner, "…"))
 	}
 
-	main, side := m.actions()
-	right := main
-	if side != "" && lipgloss.Width(main)+lipgloss.Width(side)+2 < inner/2 {
-		right = main + "  " + side
-	}
+	_, right := m.barRight()
 	k := m.keys()
 	// What the buttons say is left out of the hints.
 	k.SendPlan.SetEnabled(false)
@@ -151,6 +167,18 @@ func (m Model) actionBar() string {
 	hints := ansi.Truncate(theme.Help(theme.New(m.dark), room).View(k), room, "…")
 	gap := max(inner-lipgloss.Width(hints)-lipgloss.Width(right), 1)
 	return edge.Width(m.width).Render(hints + strings.Repeat(" ", gap) + right)
+}
+
+// barRight is the bar's main button and everything on its right: the button
+// with the one beside it, when there is room for both.
+func (m Model) barRight() (main, right string) {
+	inner := m.width - borderSize - 2
+	main, side := m.actions()
+	right = main
+	if side != "" && lipgloss.Width(main)+lipgloss.Width(side)+2 < inner/2 {
+		right = main + "  " + side
+	}
+	return main, right
 }
 
 // actions is the bar's main button and the one beside it.

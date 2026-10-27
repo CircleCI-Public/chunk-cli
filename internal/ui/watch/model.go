@@ -27,6 +27,10 @@ const (
 	spinInterval  = 160 * time.Millisecond
 )
 
+// listTop is the screen row of the run list's search row: under the header
+// and the pane's top edge. Its runs follow, two rows to a run.
+const listTop = 2
+
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 const logoBlankRow = "███                   ██████"
@@ -543,6 +547,7 @@ func (m Model) View() tea.View {
 	}
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "chunk watch"
 	return v
 }
@@ -715,6 +720,16 @@ func (m Model) renderLeftPane(st watchStyles, maxLines int) []string {
 	return runs
 }
 
+// firstListedRun is the first run runListWindow shows, of a list lines tall,
+// so that a click can be traced back to the run it landed on.
+func firstListedRun(lines, maxLines, selected int) int {
+	if lines <= maxLines || maxLines <= 2 || selected < 0 {
+		return 0
+	}
+	visibleRuns := max((maxLines-2)/2, 1)
+	return min(max(selected-visibleRuns+1, 0), selected)
+}
+
 // runListWindow keeps the selected run visible when the complete run list is
 // taller than the pane. Each run occupies two lines after the two-line header.
 func runListWindow(lines []string, maxLines, selected int) []string {
@@ -725,8 +740,7 @@ func runListWindow(lines []string, maxLines, selected int) []string {
 		return lines[:min(maxLines, len(lines))]
 	}
 	room := maxLines - 2
-	visibleRuns := max(room/2, 1)
-	firstRun := min(max(selected-visibleRuns+1, 0), selected)
+	firstRun := firstListedRun(len(lines), maxLines, selected)
 	firstLine := 2 + firstRun*2
 	lastLine := min(firstLine+room, len(lines)-1) // leave out the trailing blank
 	out := append([]string(nil), lines[:2]...)

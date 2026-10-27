@@ -411,7 +411,7 @@ func (m *Model) deleteAtCursor() {
 		return
 	}
 	m.confirming, m.pendingDelete = true, m.comments[i].id
-	m.status = ui.TitleStyle.Render("Delete this comment in factory? (y/n)")
+	m.status = ui.TitleStyle.Render("Delete this comment in factory? ") + confirmButtons
 }
 
 // nextComment is the stop n moves to: the nearest commented block below the

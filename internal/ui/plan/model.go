@@ -246,6 +246,8 @@ type Model struct {
 	BuildID string
 
 	pending string
+	// lastClick is the plan block last clicked, to tell a double click.
+	lastClick *lastClick
 }
 
 const (
@@ -369,6 +371,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
+
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 
 	case tea.KeyboardEnhancementsMsg:
 		m.disambiguates = msg.SupportsKeyDisambiguation()
@@ -517,18 +522,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.pendingDelete, m.pendingDesign = "", false
 			return m, nil
 		}
-		if m.pendingDesign {
-			m.pendingDesign, m.approvingDesign = false, true
-			m.status = "Approving the design…"
-			return m, tea.Batch(approveDesignCmd(m.ctx, m.store), m.spin.Tick)
-		}
-		if id := m.pendingDelete; id != "" {
-			m.pendingDelete = ""
-			return m, deleteCmd(m.ctx, m.store, id)
-		}
-		m.approving = true
-		m.status = "Approving the plan…"
-		return m, tea.Batch(approveCmd(m.approve), m.spin.Tick)
+		return m.answerYes()
 	}
 	if m.commenting {
 		return m.updateCommentKey(msg)
@@ -536,43 +530,12 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(msg, k.Focus):
-		m.anchor = -1
 		if m.focus == paneChat {
-			m.focus = panePlan
-			m.input.Blur()
-			m.drawPlan()
-			return m, nil
+			return m.focusOn(panePlan)
 		}
-		m.focus = paneChat
-		m.drawPlan()
-		return m, m.input.Focus()
+		return m.focusOn(paneChat)
 	case key.Matches(msg, k.SendPlan):
-		queued := len(queuedComments(m.comments))
-		switch {
-		case m.approving, m.approvingDesign:
-		case m.busy:
-			m.status = warn("Wait for chunk to finish.")
-		case strings.TrimSpace(m.plan) == "":
-			m.status = warn("There is no plan to approve yet.")
-		case m.state != ReadyState:
-			m.status = warn("The plan is not ready yet: wait for its review to pass.")
-		case m.units == 0 && (queued > 0 || m.openComments() > 0):
-			m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
-		case m.units == 0:
-			// The plan waits in ReadyState after early-plan too, for its
-			// design to be reviewed; its units come once the design is
-			// approved.
-			m.confirming, m.pendingDesign = true, true
-			m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? (y/n)")
-		case queued > 0:
-			m.confirming = true
-			m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d queued %s will not be saved. Approve the plan and build it anyway? (y/n)",
-				queued, plural(queued, "comment", "comments")))
-		default:
-			m.confirming = true
-			m.status = ui.TitleStyle.Render("Approve this plan and build it? (y/n)")
-		}
-		return m, nil
+		return m.askToApprove(), nil
 	}
 
 	if m.focus == panePlan {
@@ -611,6 +574,68 @@ func (m Model) deliver(text string) (Model, tea.Cmd) {
 	m.pendingText = text
 	m.status = ""
 	return m, saveQueued(m.ctx, m.store, queued, m.state)
+}
+
+// answerYes does what the question in the status bar asked, now it has been
+// answered yes.
+func (m Model) answerYes() (Model, tea.Cmd) {
+	if m.pendingDesign {
+		m.pendingDesign, m.approvingDesign = false, true
+		m.status = "Approving the design…"
+		return m, tea.Batch(approveDesignCmd(m.ctx, m.store), m.spin.Tick)
+	}
+	if id := m.pendingDelete; id != "" {
+		m.pendingDelete = ""
+		return m, deleteCmd(m.ctx, m.store, id)
+	}
+	m.approving = true
+	m.status = "Approving the plan…"
+	return m, tea.Batch(approveCmd(m.approve), m.spin.Tick)
+}
+
+// focusOn gives the keyboard to pane p, dropping any selection.
+func (m Model) focusOn(p pane) (Model, tea.Cmd) {
+	m.anchor = -1
+	if p == panePlan {
+		m.focus = panePlan
+		m.input.Blur()
+		m.drawPlan()
+		return m, nil
+	}
+	m.focus = paneChat
+	m.drawPlan()
+	return m, m.input.Focus()
+}
+
+// askToApprove starts approving the plan, or its design: it asks the
+// developer to confirm, or says why it cannot go yet.
+func (m Model) askToApprove() Model {
+	queued := len(queuedComments(m.comments))
+	switch {
+	case m.approving, m.approvingDesign:
+	case m.busy:
+		m.status = warn("Wait for chunk to finish.")
+	case strings.TrimSpace(m.plan) == "":
+		m.status = warn("There is no plan to approve yet.")
+	case m.state != ReadyState:
+		m.status = warn("The plan is not ready yet: wait for its review to pass.")
+	case m.units == 0 && (queued > 0 || m.openComments() > 0):
+		m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
+	case m.units == 0:
+		// The plan waits in ReadyState after early-plan too, for its
+		// design to be reviewed; its units come once the design is
+		// approved.
+		m.confirming, m.pendingDesign = true, true
+		m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? ") + confirmButtons
+	case queued > 0:
+		m.confirming = true
+		m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d queued %s will not be saved. Approve the plan and build it anyway? ",
+			queued, plural(queued, "comment", "comments"))) + confirmButtons
+	default:
+		m.confirming = true
+		m.status = ui.TitleStyle.Render("Approve this plan and build it? ") + confirmButtons
+	}
+	return m
 }
 
 // quit closes the screen, unless that would drop comments or a message the
