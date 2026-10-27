@@ -16,7 +16,7 @@ type fakeStore struct {
 	StateV  string
 	// EventsV, once setEvents sets it, is the events the plan's flow
 	// applies now; until then they follow StateV, as factory's would for
-	// address-comments.
+	// address-comments and, in a Human state, both approvals.
 	EventsV   []string
 	eventsSet bool
 	TextV     string
@@ -83,7 +83,9 @@ func (f *fakeStore) Events(context.Context) ([]string, error) {
 		return f.EventsV, nil
 	}
 	if strings.HasSuffix(f.StateV, " - Human") {
-		return []string{"address-comments"}, nil
+		// Both approvals, as a flow factory stored before it told them
+		// apart lists, so the plan's units decide which ctrl+s offers.
+		return []string{"address-comments", "approve-for-units", "approve-for-building"}, nil
 	}
 	return nil, nil
 }

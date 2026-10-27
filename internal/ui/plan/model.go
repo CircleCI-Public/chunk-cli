@@ -12,6 +12,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -38,6 +39,48 @@ type Approver func(step func(string)) (string, error)
 // ReadyState is the state a plan waits in for the developer once its review
 // has passed; it can be approved only from there.
 const ReadyState = "Planning - Human"
+
+// The events that approve a plan in ReadyState: its design, so factory
+// writes its units, or the plan, so factory builds it.
+const (
+	approveForUnits    = "approve-for-units"
+	approveForBuilding = "approve-for-building"
+)
+
+// Stage is what ctrl+s approves for a plan in ReadyState.
+type Stage int
+
+const (
+	// StageDesign is a plan whose design waits for approval, so factory
+	// writes its units.
+	StageDesign Stage = iota
+	// StagePlan is a plan that waits for approval, so factory builds it.
+	StagePlan
+	// StageQuestions is a plan factory offers no approval for: it waits for
+	// a human to answer 3. Open Questions in comments.
+	StageQuestions
+)
+
+// StageOf is what ctrl+s approves, given the events the plan's flow applies
+// and how many units the plan has. When events lists exactly one approval,
+// that one wins. When it lists both, as a flow factory stored before it
+// told the two apart does, or is nil, because it has not loaded or there is
+// no flow, the plan's units decide: none is StageDesign, any is StagePlan.
+// When it is loaded and lists neither, even empty, it is StageQuestions.
+func StageOf(events []string, units int) Stage {
+	design, build := slices.Contains(events, approveForUnits), slices.Contains(events, approveForBuilding)
+	switch {
+	case design && !build:
+		return StageDesign
+	case build && !design:
+		return StagePlan
+	case !design && events != nil:
+		return StageQuestions
+	case units == 0:
+		return StageDesign
+	}
+	return StagePlan
+}
 
 // pane is which side of the screen the keyboard goes to.
 type pane int
@@ -691,12 +734,11 @@ func (m Model) askToApprove() Model {
 		m.status = warn("The plan is not ready yet: wait for its review to pass.")
 	case m.state != ReadyState:
 		m.status = warn("The plan cannot be approved while it is " + m.stateText() + ".")
-	case m.units == 0 && (queued > 0 || m.openComments() > 0):
+	case StageOf(m.events, m.units) == StageQuestions:
+		m.status = warn("Answer 3. Open Questions in comments first; factory offers no approval yet.")
+	case StageOf(m.events, m.units) == StageDesign && (queued > 0 || m.openComments() > 0):
 		m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
-	case m.units == 0:
-		// The plan waits in ReadyState after early-plan too, for its
-		// design to be reviewed; its units come once the design is
-		// approved.
+	case StageOf(m.events, m.units) == StageDesign:
 		m.confirming, m.pendingDesign = true, true
 		m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? ") + confirmButtons
 	case queued > 0:

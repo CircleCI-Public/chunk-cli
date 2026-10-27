@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -139,8 +140,17 @@ func (s *Store) Approve(ctx context.Context, session string) error {
 	if strings.TrimSpace(text) == "" {
 		return errors.New("the plan in factory is empty")
 	}
-	if !hasUnits(text) {
+	events, err := s.Events(ctx)
+	if err != nil {
+		return fmt.Errorf("get the flow's events: %w", err)
+	}
+	switch plan.StageOf(events, unitCount(text)) {
+	case plan.StageDesign:
 		return ErrNoUnits
+	case plan.StageQuestions:
+		return ErrQuestionsOpen
+	case plan.StagePlan:
+		// The plan is what waits for approval: send it below.
 	}
 	h, err := s.Holder(ctx)
 	if err != nil {
@@ -157,14 +167,23 @@ func (s *Store) Approve(ctx context.Context, session string) error {
 	return nil
 }
 
-// ErrNoUnits is returned by Approve for a plan in plan.ReadyState with nothing
-// to build: it waits there after early-plan too, for its design to be
-// reviewed, before write-units has written any.
+// ErrNoUnits is returned by Approve for a plan in plan.ReadyState whose
+// design, not the plan, is what waits for approval, as plan.StageOf
+// decides.
 var ErrNoUnits = errors.New("the plan has no units yet: approve its design with ctrl+s, so chunk writes them")
 
-// hasUnits is whether text has a heading under its units section, as the
-// planning screen counts units.
-func hasUnits(text string) bool {
+// ErrQuestionsOpen is returned by Approve and ApproveDesign for a plan whose
+// flow offers neither approval, as plan.StageOf decides: its 3. Open
+// Questions wait for answers in comments, sent before either is approved.
+var ErrQuestionsOpen = errors.New("the plan has open questions: answer 3. Open Questions in comments, then send them")
+
+// ErrDesignApproved is returned by ApproveDesign for a plan whose flow offers
+// to approve the plan but not its design: the design is approved already.
+var ErrDesignApproved = errors.New("the plan's design is approved already: approve the plan with ctrl+s")
+
+// unitCount is how many headings text has under its units section.
+func unitCount(text string) int {
+	n := 0
 	inUnits := false
 	for _, line := range strings.Split(text, "\n") {
 		switch {
@@ -173,10 +192,10 @@ func hasUnits(text string) bool {
 		case strings.HasPrefix(line, "# "):
 			inUnits = false
 		case inUnits && strings.HasPrefix(line, "###"):
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // AddressComments sends the plan's flow factory's address-comments event,
@@ -193,11 +212,24 @@ func (s *Store) AddressComments(ctx context.Context) error {
 }
 
 // ApproveDesign sends the plan's flow factory's approve-for-units event,
-// which approves its design.
+// which approves its design. A flow that does not list the event now is
+// refused without sending it: with ErrDesignApproved when it lists
+// approve-for-building instead, and with ErrQuestionsOpen when it lists
+// neither. A plan with no flow yet sends it.
 func (s *Store) ApproveDesign(ctx context.Context) error {
 	id := s.ID()
 	if id == "" {
 		return errNotCreated
+	}
+	events, err := s.Events(ctx)
+	if err != nil {
+		return fmt.Errorf("get the flow's events: %w", err)
+	}
+	if events != nil && !slices.Contains(events, string(circleci.ApproveForUnits)) {
+		if slices.Contains(events, string(circleci.ApproveForBuilding)) {
+			return ErrDesignApproved
+		}
+		return ErrQuestionsOpen
 	}
 	if err := s.api.CreateFlowEvent(ctx, id, circleci.ApproveForUnits); err != nil {
 		return fmt.Errorf("send the approve-for-units event: %w", err)

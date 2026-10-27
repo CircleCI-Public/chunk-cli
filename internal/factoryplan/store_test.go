@@ -138,11 +138,48 @@ func TestStoreApproveDesignSendsTheEvent(t *testing.T) {
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "approve-for-units", "abandon")
 
 	err := store.ApproveDesign(ctx)
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-units"}))
+}
+
+// TestStoreApproveDesignRefusesWhatFactoryDoesNotOffer checks that
+// ApproveDesign sends nothing for a plan whose flow does not offer design
+// approval, and keeps the planning session's claim.
+func TestStoreApproveDesignRefusesWhatFactoryDoesNotOffer(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		events []string
+		want   error
+	}{
+		{
+			name:   "questions open",
+			events: []string{"address-comments", "abandon"},
+			want:   ErrQuestionsOpen,
+		},
+		{
+			name:   "only building offered",
+			events: []string{"approve-for-building"},
+			want:   ErrDesignApproved,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _, cci := createdStore(t)
+			ctx := context.Background()
+			cci.ClaimFactoryPlan(store.ID(), "s-1")
+			cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+			cci.SetFactoryApplicableEvents(store.ID(), tc.events...)
+
+			err := store.ApproveDesign(ctx)
+			assert.Check(t, cmp.ErrorIs(err, tc.want))
+			p, _ := cci.FactoryPlan(store.ID())
+			assert.Check(t, cmp.Len(p.Events, 0))
+			assert.Check(t, cmp.Equal(p.Session, "s-1"))
+		})
+	}
 }
 
 // TestStoreApproveWaitsForTheReview checks that a plan is approved only once
@@ -174,6 +211,7 @@ func TestStoreApproveReleasesThePlanningSession(t *testing.T) {
 	assert.NilError(t, err)
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryApplicableEvents(store.ID(), "approve-for-building")
 
 	err = store.Approve(ctx, "s-1")
 	assert.NilError(t, err)
@@ -202,6 +240,7 @@ func TestStoreApproveKeepsAnotherSessionsClaim(t *testing.T) {
 	assert.NilError(t, err)
 	cci.ClaimFactoryPlan(store.ID(), "builder")
 	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryApplicableEvents(store.ID(), "approve-for-building")
 
 	err = store.Approve(ctx, "s-1")
 	assert.NilError(t, err)
@@ -210,24 +249,78 @@ func TestStoreApproveKeepsAnotherSessionsClaim(t *testing.T) {
 	assert.Check(t, cmp.Equal(p.Session, "builder"))
 }
 
-// TestStoreApproveWaitsForUnits checks that a plan in plan.ReadyState with no
-// units is not approved: it waits there after early-plan too, for its design
-// to be reviewed, before write-units has written anything to build.
+// TestStoreApproveSendsBuildingWhenFactoryOffersIt checks that a plan
+// whose flow offers only building approval is approved even when its units
+// are a list rather than headings, as a parent plan's sub-plans are.
+func TestStoreApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
+	store, client, cci := createdStore(t)
+	ctx := context.Background()
+	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n1. FNDSF-21 api: add it\n")
+	assert.NilError(t, err)
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "approve-for-building", "abandon")
+
+	err = store.Approve(ctx, "s-1")
+	assert.Check(t, err)
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+}
+
+// TestStoreApproveRefusesAPlanWithQuestionsOpen checks that Approve sends
+// nothing for a plan whose flow offers neither approval, and keeps the
+// planning session's claim.
+func TestStoreApproveRefusesAPlanWithQuestionsOpen(t *testing.T) {
+	store, client, cci := createdStore(t)
+	ctx := context.Background()
+	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
+	assert.NilError(t, err)
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "abandon")
+
+	err = store.Approve(ctx, "s-1")
+	assert.Check(t, cmp.ErrorIs(err, ErrQuestionsOpen))
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.Len(p.Events, 0))
+	assert.Check(t, cmp.Equal(p.Session, "s-1"))
+}
+
+// TestStoreApproveWaitsForUnits checks that Approve refuses a plan whose design is what waits for approval.
 func TestStoreApproveWaitsForUnits(t *testing.T) {
 	store, client, cci := createdStore(t)
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
 
-	for _, text := range []string{
-		"# A plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n",
-		// A heading in another section is no unit.
-		"# A plan\n\n## 2. Design\n\n### Context\n\n## 5. Units\n",
+	for _, tc := range []struct {
+		name   string
+		text   string
+		events []string
+	}{
+		{
+			name:   "no units",
+			text:   "# A plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n",
+			events: []string{"approve-for-units", "approve-for-building"},
+		},
+		{
+			name:   "a heading in another section is no unit",
+			text:   "# A plan\n\n## 2. Design\n\n### Context\n\n## 5. Units\n",
+			events: []string{"approve-for-units", "approve-for-building"},
+		},
+		{
+			name:   "factory offers only design approval",
+			text:   "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n",
+			events: []string{"address-comments", "approve-for-units", "abandon"},
+		},
 	} {
-		err := client.SetPlanText(ctx, store.ID(), text)
-		assert.NilError(t, err)
-		err = store.Approve(ctx, "s-1")
-		assert.Check(t, cmp.ErrorIs(err, ErrNoUnits), "text %q", text)
+		t.Run(tc.name, func(t *testing.T) {
+			err := client.SetPlanText(ctx, store.ID(), tc.text)
+			assert.NilError(t, err)
+			cci.SetFactoryApplicableEvents(store.ID(), tc.events...)
+			err = store.Approve(ctx, "s-1")
+			assert.Check(t, cmp.ErrorIs(err, ErrNoUnits))
+		})
 	}
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.Len(p.Events, 0))

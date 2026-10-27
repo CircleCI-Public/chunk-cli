@@ -292,6 +292,65 @@ func TestCtrlSApprovesTheDesignOfAPlanWithNoUnits(t *testing.T) {
 	assert.Check(t, cmp.Equal(ansi.Strip(m.actionBar()), bar), "ctrl+s changed the bar while waiting")
 }
 
+// A plan whose units are a list rather than headings, as a parent plan's
+// sub-plans are, is one factory offers to build: ctrl+s approves the plan,
+// not its design.
+func TestCtrlSApprovesThePlanWhenFactoryOffersOnlyBuilding(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n\n1. FNDSF-21 api: add it\n2. FNDSF-22 ui: show it\n"
+	store.setEvents("address-comments", "approve-for-building", "abandon")
+	sent := false
+	approve := func(func(string)) (string, error) {
+		sent = true
+		return "build-1", nil
+	}
+	m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "Plan ready"))
+	assert.Check(t, !strings.Contains(view, "Design ready"), view)
+	assert.Check(t, cmp.Contains(view, "ctrl+s Approve plan"))
+
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	assert.Assert(t, m.confirming)
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Approve this plan and build it?"))
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	assert.Check(t, sent, "approving did not start the plan's build")
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	assert.Check(t, cmp.Len(store.DesignApproved, 0))
+}
+
+// A plan factory still offers only design approval for is a design, even
+// with unit headings written by hand.
+func TestCtrlSApprovesTheDesignWhenFactoryOffersOnlyUnits(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	store.setEvents("address-comments", "approve-for-units", "abandon")
+	sent := false
+	approve := func(func(string)) (string, error) {
+		sent = true
+		return "build-1", nil
+	}
+	m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "Design ready"))
+	assert.Check(t, !strings.Contains(view, "Plan ready"), view)
+	assert.Check(t, cmp.Contains(view, "ctrl+s Approve design"))
+
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	assert.Assert(t, m.confirming)
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Approve the design"))
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	assert.Check(t, !sent, "approving the design started the plan's build")
+	assert.Assert(t, m.moving != nil, "no wait for factory after approving the design")
+	assert.Check(t, cmp.Equal(m.moving.kind, movingDesign))
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	assert.Check(t, cmp.DeepEqual(store.DesignApproved, []string{"Planning - Human"}))
+}
+
 // TestWaitingForFactoryEndsWhenTheStateMoves checks that the wait a design
 // approval starts lasts until a refresh finds the plan in another state,
 // however factory names it.
@@ -368,24 +427,154 @@ func TestQuestionInTheStatusBarOutlivesAChangeOfState(t *testing.T) {
 // A design with comments still to send or resolve is not approved: those
 // would have factory address them, not write the units.
 func TestCtrlSWaitsForCommentsBeforeApprovingTheDesign(t *testing.T) {
-	m, store := planModel(t)
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("c"))
-	m = typeText(t, m, "too vague")
-	m = drive(t, m, press("enter"))
+	cases := []struct {
+		name  string
+		model func(t *testing.T) (Model, *fakeStore)
+	}{
+		{
+			name:  "no units",
+			model: planModel,
+		},
+		{
+			name: "units, factory offers only design approval",
+			model: func(t *testing.T) (Model, *fakeStore) {
+				t.Helper()
+				store := newFakeStore()
+				store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+				store.setEvents("address-comments", "approve-for-units")
+				m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+				m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+				return m, store
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, store := tc.model(t)
+			m = drive(t, m, press("tab"))
+			m = drive(t, m, press("c"))
+			m = typeText(t, m, "too vague")
+			m = drive(t, m, press("enter"))
+
+			m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+			assert.Check(t, !m.confirming, "ctrl+s asked to approve a design with a comment queued")
+			assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Send or resolve your comments first"))
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			assert.Check(t, cmp.Len(store.DesignApproved, 0))
+		})
+	}
+}
+
+func TestStageOf(t *testing.T) {
+	both := []string{"approve-for-units", "approve-for-building"}
+	cases := []struct {
+		name   string
+		events []string
+		units  int
+		want   Stage
+	}{
+		{
+			name: "no events, no units",
+			want: StageDesign,
+		},
+		{
+			name:  "no events, units",
+			units: 2,
+			want:  StagePlan,
+		},
+		{
+			name:   "both, no units",
+			events: both,
+			want:   StageDesign,
+		},
+		{
+			name:   "both, units",
+			events: both,
+			units:  2,
+			want:   StagePlan,
+		},
+		{
+			name:   "only units, no units",
+			events: []string{"approve-for-units"},
+			want:   StageDesign,
+		},
+		{
+			name:   "only units, units",
+			events: []string{"address-comments", "approve-for-units"},
+			units:  2,
+			want:   StageDesign,
+		},
+		{
+			name:   "only building, no units",
+			events: []string{"address-comments", "approve-for-building"},
+			want:   StagePlan,
+		},
+		{
+			name:   "only building, units",
+			events: []string{"approve-for-building"},
+			units:  2,
+			want:   StagePlan,
+		},
+		{
+			name:   "unrelated, no units",
+			events: []string{"address-comments", "abandon"},
+			want:   StageQuestions,
+		},
+		{
+			name:   "unrelated, units",
+			events: []string{"address-comments", "abandon"},
+			units:  2,
+			want:   StageQuestions,
+		},
+		{
+			name:   "empty, no units",
+			events: []string{},
+			want:   StageQuestions,
+		},
+		{
+			name:   "empty, units",
+			events: []string{},
+			units:  2,
+			want:   StageQuestions,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(StageOf(tc.events, tc.units), tc.want))
+		})
+	}
+}
+
+// A plan whose flow offers neither approval waits for its open questions to
+// be answered: ctrl+s approves nothing and says so.
+func TestCtrlSApprovesNothingWhileQuestionsAreOpen(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 3. Open Questions\n\n* Which store?\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	store.setEvents("address-comments", "abandon")
+	sent := false
+	approve := func(func(string)) (string, error) {
+		sent = true
+		return "build-1", nil
+	}
+	m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "Questions open"))
+	assert.Check(t, !strings.Contains(view, "Plan ready"), view)
+	assert.Check(t, !strings.Contains(view, "Design ready"), view)
+	assert.Check(t, !strings.Contains(view, "Approve plan"), view)
+	assert.Check(t, !strings.Contains(view, "Approve design"), view)
 
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	if m.confirming {
-		t.Fatal("ctrl+s asked to approve a design with a comment queued")
-	}
-	if !strings.Contains(ansi.Strip(m.Content()), "Send or resolve your comments first") {
-		t.Errorf("no word of the comments to send first:\n%s", ansi.Strip(m.Content()))
-	}
+	assert.Check(t, !m.confirming, "ctrl+s asked to approve a plan with questions open")
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Answer 3. Open Questions in comments first"))
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	assert.Check(t, !m.confirming)
+	assert.Check(t, !sent, "ctrl+s started the plan's build with questions open")
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if len(store.DesignApproved) != 0 {
-		t.Errorf("the design was approved: %v", store.DesignApproved)
-	}
+	assert.Check(t, cmp.Len(store.DesignApproved, 0))
 }
 
 func TestAFailedDesignApprovalSaysSo(t *testing.T) {

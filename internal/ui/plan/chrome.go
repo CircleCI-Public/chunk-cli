@@ -80,7 +80,9 @@ func (m Model) header() string {
 		state = m.style(m.dim()).Render("In review")
 	case m.state != ReadyState:
 		state = m.style(m.dim()).Render(ansi.Truncate(m.stateText(), 24, "…"))
-	case m.units == 0:
+	case StageOf(m.events, m.units) == StageQuestions:
+		state = m.style(m.dim()).Render("Questions open")
+	case StageOf(m.events, m.units) == StageDesign:
 		state = m.style(m.dim()).Render("Design ready")
 	default:
 		state = m.pill(m.green(), "#dafbe1", "#162226", ui.IconOK+" Plan ready")
@@ -260,7 +262,9 @@ func (m Model) actions() (main, side string) {
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
 	case m.state != ReadyState:
 		return "", m.style(m.faint()).Render(approve + " · " + m.notReady())
-	case m.units == 0:
+	case StageOf(m.events, m.units) == StageQuestions:
+		return "", m.style(m.faint()).Render("ctrl+s Approve · answer 3. Open Questions first")
+	case StageOf(m.events, m.units) == StageDesign:
 		return button(m.green(), "ctrl+s Approve design"), ""
 	}
 	return button(m.green(), approve), ""
