@@ -26,6 +26,9 @@ type Agent struct {
 	// holder is the session holding the plan's claim in factory, "" when
 	// none does; the store's but in tests.
 	holder func(context.Context) (string, error)
+	// worktree is the directory each session starts in: the plan's
+	// worktree, opened by planWorktree but in tests.
+	worktree func(context.Context) (string, error)
 
 	// sendMu keeps Sends in order. It is not mu: a Send can block writing to
 	// a claude that stopped reading, and Stop must not wait on it.
@@ -67,6 +70,9 @@ func NewAgent(ctx context.Context, cfg factory.AgentConfig, store *Store) *Agent
 			return factory.StartAgent(ctx, cfg, message)
 		},
 		holder: store.holder,
+		worktree: func(ctx context.Context) (string, error) {
+			return planWorktree(ctx, cfg.Dir, store)
+		},
 	}
 }
 
@@ -117,8 +123,14 @@ func (p *Agent) Send(ctx context.Context, message string) error {
 	}
 	cfg := p.cfg
 	// A session that ended is resumed rather than started afresh, so claude
-	// keeps the conversation so far.
+	// keeps the conversation so far. The plan's worktree is where it was
+	// started, so claude finds that conversation there.
 	cfg.Resume = a != nil
+	dir, err := p.worktree(p.ctx)
+	if err != nil {
+		return err
+	}
+	cfg.Dir = dir
 	started, err := p.start(p.ctx, cfg, message)
 	if err != nil {
 		return startProblem(err)

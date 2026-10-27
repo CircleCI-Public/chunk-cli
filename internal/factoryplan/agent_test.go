@@ -86,6 +86,8 @@ type testAgent struct {
 	startErr  error
 	holderID  string
 	holderErr error
+	// worktreeErr fails opening the plan's worktree.
+	worktreeErr error
 	// started, when set, is called as each session starts.
 	started func()
 }
@@ -118,6 +120,11 @@ func newTestAgent(t *testing.T, planID string) *testAgent {
 		tp.mu.Lock()
 		defer tp.mu.Unlock()
 		return tp.holderID, tp.holderErr
+	}
+	tp.worktree = func(context.Context) (string, error) {
+		tp.mu.Lock()
+		defer tp.mu.Unlock()
+		return "/worktrees/" + planID, tp.worktreeErr
 	}
 	return tp
 }
@@ -289,6 +296,38 @@ func TestAgentResumesASessionThatEnded(t *testing.T) {
 	// The ended session's claim was freed with it, so the resumed one claims
 	// the plan again.
 	assert.Check(t, cmp.Equal(tp.session(1).first, fmt.Sprintf(claimMessage, "plan-1", "are you there?")))
+}
+
+// Each session, the resumed one too, starts in the plan's worktree rather
+// than the developer's checkout, where another session ending would free the
+// plan's claim.
+func TestAgentStartsEachSessionInThePlansWorktree(t *testing.T) {
+	tp := newTestAgent(t, "plan-1")
+	tp.setHolder("s-1", nil)
+	err := tp.Send(t.Context(), "add a flag")
+	assert.NilError(t, err)
+	tp.session(0).end()
+	ended := waitFor(func() bool {
+		tp.Agent.mu.Lock()
+		defer tp.Agent.mu.Unlock()
+		return tp.hasEnded()
+	})
+	assert.Assert(t, ended)
+	err = tp.Send(t.Context(), "are you there?")
+	assert.NilError(t, err)
+
+	assert.Assert(t, cmp.Len(tp.configs, 2))
+	assert.Check(t, cmp.Equal(tp.configs[0].Dir, "/worktrees/plan-1"))
+	assert.Check(t, cmp.Equal(tp.configs[1].Dir, "/worktrees/plan-1"))
+}
+
+func TestAgentWithoutAWorktreeStartsNoSession(t *testing.T) {
+	tp := newTestAgent(t, "plan-1")
+	tp.worktreeErr = errors.New("open the plan's worktree: no origin/main")
+
+	err := tp.Send(t.Context(), "add a flag")
+	assert.Check(t, cmp.ErrorContains(err, "no origin/main"))
+	assert.Check(t, cmp.Len(tp.sessions, 0))
 }
 
 func TestAgentStartFailureIsASentence(t *testing.T) {
