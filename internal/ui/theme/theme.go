@@ -96,9 +96,16 @@ func EdgeSegment(line func(string) string, title string, n int) string {
 	return line("─ ") + title + line(" "+strings.Repeat("─", max(n-3-lipgloss.Width(title), 0)))
 }
 
+// PadX is the cells between a box's side border and its content.
+const PadX = 1
+
+// PadY is the rows between a pane's top and bottom border and its content.
+const PadY = 1
+
 // Pane draws body in a rounded box w cells wide and h tall, border included,
 // with title set into its top edge. The focused pane's border is the accent
-// and the others' are quiet. body must already fit inside the border.
+// and the others' are quiet. body must already fit inside the border and the
+// padding: w - 2 - 2*PadX cells by h - 2 - 2*PadY rows.
 func (s Styles) Pane(focused bool, w, h int, title, body string) string {
 	edge := s.VDim
 	if focused {
@@ -107,7 +114,8 @@ func (s Styles) Pane(focused bool, w, h int, title, body string) string {
 	// Render is variadic; EdgeSegment draws with a func(string) string.
 	line := func(t string) string { return edge.Render(t) }
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
-		BorderForeground(edge.GetForeground()).Width(w).Height(h).MaxHeight(h).Render(body)
+		BorderForeground(edge.GetForeground()).Padding(PadY, PadX).
+		Width(w).Height(h).MaxHeight(h).Render(body)
 	top, rest, _ := strings.Cut(box, "\n")
 	n := lipgloss.Width(top) - 2
 	if n < 5 {

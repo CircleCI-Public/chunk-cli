@@ -858,7 +858,7 @@ func (m Model) implementRow(st watchStyles, r chunkd.Round, impl *chunkd.RoundIm
 		// What the implementer last said, under the row: what it is doing,
 		// in its own words.
 		if said := impl.Progress.Said; said != "" {
-			row.extra = append(row.extra, "        "+st.muted(truncate(said, max(m.width-leftPaneWidth-16, 20))))
+			row.extra = append(row.extra, "        "+st.muted(truncate(said, max(m.runPaneWidth()-11, 20))))
 		}
 	case chunkd.ImplementApplied:
 		row.icon = st.success(ui.IconOK)

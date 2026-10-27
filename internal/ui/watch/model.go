@@ -26,6 +26,20 @@ const (
 	spinInterval  = 160 * time.Millisecond
 )
 
+// paneChrome is a pane's border and padding, left and right together;
+// paneChromeY is the same top and bottom.
+const (
+	paneChrome  = 2 + 2*theme.PadX
+	paneChromeY = 2 + 2*theme.PadY
+)
+
+// leftBoxWidth is the runs pane's outer width.
+const leftBoxWidth = leftPaneWidth + paneChrome
+
+// runPaneWidth is the run pane's content width, the width its lines are
+// clipped and wrapped to.
+func (m Model) runPaneWidth() int { return max(m.width-leftBoxWidth-paneChrome, 0) }
+
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 const logoBlankRow = "███                   ██████"
@@ -603,7 +617,8 @@ func (m Model) connectionTag(st watchStyles) string {
 // contentHeight is how many lines the two panes get between the header and
 // the footer.
 func (m Model) contentHeight() int {
-	h := m.height - 4 // header + the boxes' top and bottom edges (2) + the help bar
+	// header + the boxes' edges and padding + the help bar
+	h := m.height - 2 - paneChromeY
 	// The footer grows by a line when the daemon is unreachable. Without handing
 	// that line back the message lands past the last row and is clipped at every
 	// terminal size, which is how a daemon that had died came to look like a
@@ -649,7 +664,7 @@ func (m Model) renderBody(st watchStyles) string {
 	leftTitle, leftLines := paneTitle(leftLines)
 	rightTitle, rightLines := paneTitle(rightLines)
 
-	rw := m.width - leftPaneWidth - 5
+	rw := m.runPaneWidth()
 	left := make([]string, contentHeight)
 	right := make([]string, contentHeight)
 	for i := 0; i < contentHeight; i++ {
@@ -665,12 +680,12 @@ func (m Model) renderBody(st watchStyles) string {
 		// Clip rather than let a long line wrap: the two panes are drawn as one
 		// fixed-height block, so a line that wraps shifts everything below it and
 		// the layout no longer matches the height it was built for.
-		right[i] = " " + padLine(clip(r, rw), rw)
+		right[i] = padLine(clip(r, rw), rw)
 	}
-	h := contentHeight + 2
+	h := contentHeight + paneChromeY
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		st.Pane(m.focusedPane == paneLeft, leftPaneWidth+2, h, leftTitle, strings.Join(left, "\n")),
-		st.Pane(m.focusedPane == paneRight, m.width-leftPaneWidth-2, h, rightTitle, strings.Join(right, "\n")),
+		st.Pane(m.focusedPane == paneLeft, leftBoxWidth, h, leftTitle, strings.Join(left, "\n")),
+		st.Pane(m.focusedPane == paneRight, m.width-leftBoxWidth, h, rightTitle, strings.Join(right, "\n")),
 	) + "\n"
 }
 
@@ -744,8 +759,7 @@ func (m Model) renderEmptyPane(st watchStyles) []string {
 		lines = append(lines, m.renderStartHints(st)...)
 	}
 
-	// right pane content width: the right box's border, then one leading space.
-	rightWidth := m.width - leftPaneWidth - 4
+	rightWidth := m.runPaneWidth()
 	logoMaxWidth := 0
 	for _, l := range logoLines {
 		if w := lipgloss.Width(l); w > logoMaxWidth {

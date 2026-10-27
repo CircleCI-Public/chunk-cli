@@ -497,8 +497,8 @@ func lastLine(s string) string {
 // maxDraftLog is how many of Claude's actions the draft pane keeps.
 const maxDraftLog = 500
 
-// draftPaneWidth is the right pane's width, as renderBody pads it.
-func (m Model) draftPaneWidth() int { return max(m.width-leftPaneWidth-5, 10) }
+// draftPaneWidth is the width the draft wraps to.
+func (m Model) draftPaneWidth() int { return max(m.runPaneWidth(), 10) }
 
 // renderDraftPane is the right pane while a draft is made or shown: what
 // Claude is doing as it drafts, then what it said and the whole change, so
