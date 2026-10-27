@@ -595,20 +595,17 @@ chunk
   the chat if the session could not claim the plan. A session that ends is
   resumed by the next message, and told to claim the plan again, as is one
   factory says no longer holds it. Closing the screen stops the session,
-  which frees its claim. The session's ID is recorded beside the plan's
-  worktree, so a plan opened again in a later screen resumes the session
-  that planned it, with its whole conversation, rather than starting a blank
-  one; a recorded session claude no longer has starts afresh under its ID.
-  One chunk at a time plans a plan: another that opens it can read it and
-  comment, but is refused when it sends a message.
+  which frees its claim. A plan opened again in a later screen picks up the
+  conversation that planned it, rather than starting a blank one. One chunk
+  at a time plans a plan: another that opens it can read it and comment, but
+  is refused when it sends a message.
 
   The session works in a worktree of the plan's own rather than the
   developer's checkout, since that is where factory builds the plan once it
   is approved. It starts from a fresh fetch of origin's default branch, so
   unpushed and uncommitted work in the checkout is not in it, but for an
   uncommitted `.chunk/config.json`, which is copied in. It is removed once
-  the plan has ended, unless it has changes in it, and its session's record
-  with it.
+  the plan has ended, unless it has changes in it.
 
   `tab` moves to the plan, where `c` writes a comment right under the
   highlighted part (a heading, paragraph, list item or code block); `enter`

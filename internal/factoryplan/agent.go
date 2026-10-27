@@ -51,8 +51,9 @@ type Agent struct {
 	// checkClaim is set until the reply to that message, when the daemon
 	// should hold the plan's claim for this session.
 	checkClaim bool
-	// record is the plan's session record, held open from the first start
-	// until Stop; nil before then.
+	// record is the plan's session record, held open from the first Send
+	// that opens it until Stop, whether or not a session then starts; nil
+	// before then.
 	record sessionRecord
 }
 

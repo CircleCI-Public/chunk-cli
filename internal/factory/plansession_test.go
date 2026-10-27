@@ -2,7 +2,6 @@ package factory
 
 import (
 	"context"
-	"errors"
 	"os"
 	"testing"
 
@@ -18,11 +17,31 @@ func newSessionProject(t *testing.T) string {
 	return gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 }
 
+// openPlanSession opens plan planID's session record for the rest of the
+// test.
+func openPlanSession(t *testing.T, root, planID string) *PlanSession {
+	t.Helper()
+	s, err := OpenPlanSession(root, planID)
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+// recordPlanSession records id as plan planID's session, and lets go of the
+// record.
+func recordPlanSession(t *testing.T, root, planID, id string) {
+	t.Helper()
+	s, err := OpenPlanSession(root, planID)
+	assert.NilError(t, err)
+	err = s.Record(id)
+	assert.NilError(t, err)
+	err = s.Close()
+	assert.NilError(t, err)
+}
+
 func TestPlanSessionRecordsNoneAtFirst(t *testing.T) {
 	root := newSessionProject(t)
-	s, err := OpenPlanSession(root, "plan-1")
-	assert.NilError(t, err)
-	defer s.Close()
+	s := openPlanSession(t, root, "plan-1")
 
 	id, err := s.ID()
 	assert.NilError(t, err)
@@ -31,22 +50,13 @@ func TestPlanSessionRecordsNoneAtFirst(t *testing.T) {
 
 func TestPlanSessionKeepsTheRecordedSessionForTheNextOpen(t *testing.T) {
 	root := newSessionProject(t)
-	s, err := OpenPlanSession(root, "plan-1")
-	assert.NilError(t, err)
-	assert.NilError(t, s.Record("s-1"))
-	assert.NilError(t, s.Close())
+	recordPlanSession(t, root, "plan-1", "s-1")
 
-	again, err := OpenPlanSession(root, "plan-1")
-	assert.NilError(t, err)
-	defer again.Close()
-	id, err := again.ID()
+	id, err := openPlanSession(t, root, "plan-1").ID()
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(id, "s-1"))
 
-	other, err := OpenPlanSession(root, "plan-2")
-	assert.NilError(t, err)
-	defer other.Close()
-	id, err = other.ID()
+	id, err = openPlanSession(t, root, "plan-2").ID()
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(id, ""), "another plan's record is its own")
 }
@@ -57,12 +67,11 @@ func TestPlanSessionIsOpenInOneProcessAtATime(t *testing.T) {
 	assert.NilError(t, err)
 
 	_, err = OpenPlanSession(root, "plan-1")
-	assert.Check(t, errors.Is(err, ErrPlanSessionOpen))
+	assert.Check(t, cmp.ErrorIs(err, ErrPlanSessionOpen))
 
-	assert.NilError(t, s.Close())
-	again, err := OpenPlanSession(root, "plan-1")
+	err = s.Close()
 	assert.NilError(t, err)
-	assert.NilError(t, again.Close())
+	openPlanSession(t, root, "plan-1")
 }
 
 func TestPlanSessionRefusesAnIDThatIsNotOneDirectory(t *testing.T) {
@@ -77,10 +86,7 @@ func TestPrunePlanWorktreesDropsAnEndedPlansSession(t *testing.T) {
 	for _, id := range []string{"done", "open"} {
 		_, err := OpenPlanWorktree(ctx, root, id)
 		assert.NilError(t, err)
-		s, err := OpenPlanSession(root, id)
-		assert.NilError(t, err)
-		assert.NilError(t, s.Record("s-"+id))
-		assert.NilError(t, s.Close())
+		recordPlanSession(t, root, id, "s-"+id)
 	}
 
 	err := PrunePlanWorktrees(ctx, root, func(_ context.Context, id string) (bool, error) {
@@ -91,11 +97,26 @@ func TestPrunePlanWorktreesDropsAnEndedPlansSession(t *testing.T) {
 	done, err := planSessionPath(root, "done")
 	assert.NilError(t, err)
 	_, err = os.Stat(done)
-	assert.Check(t, errors.Is(err, os.ErrNotExist), "the ended plan's session record is still there")
-	s, err := OpenPlanSession(root, "open")
-	assert.NilError(t, err)
-	defer s.Close()
-	id, err := s.ID()
+	assert.Check(t, cmp.ErrorIs(err, os.ErrNotExist), "the ended plan's session record is still there")
+	id, err := openPlanSession(t, root, "open").ID()
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(id, "s-open"))
+}
+
+// A worktree kept for its changes keeps its session record, so the plan
+// can still be reopened on its conversation.
+func TestPrunePlanWorktreesKeepsTheSessionOfAWorktreeItKeeps(t *testing.T) {
+	ctx := context.Background()
+	root, _ := newPlanProject(t)
+	path, err := OpenPlanWorktree(ctx, root, "done")
+	assert.NilError(t, err)
+	writeFile(t, path, "main.go", "package main\n\n// unsaved\n")
+	recordPlanSession(t, root, "done", "s-done")
+
+	err = PrunePlanWorktrees(ctx, root, func(context.Context, string) (bool, error) { return true, nil })
+	assert.Check(t, cmp.ErrorContains(err, "remove the worktree of plan done"))
+
+	id, err := openPlanSession(t, root, "done").ID()
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(id, "s-done"))
 }
