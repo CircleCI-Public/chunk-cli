@@ -38,7 +38,8 @@ func editedFrom(t *testing.T, m Model, lo, hi int, text string) editedMsg {
 	start, end, ok := m.spanOf(lo, hi)
 	assert.Assert(t, ok)
 	path := filepath.Join(t.TempDir(), "edit.md")
-	assert.NilError(t, os.WriteFile(path, []byte(text), 0o600))
+	err := os.WriteFile(path, []byte(text), 0o600)
+	assert.NilError(t, err)
 	return editedMsg{path: path, before: m.renderedFrom, start: start, end: end, heading: m.headingAbove(lo), text: text}
 }
 
@@ -171,9 +172,21 @@ func TestEditorCommandIsTheUsersEditor(t *testing.T) {
 		visual, editor string
 		want           string
 	}{
-		{name: "visual first", visual: "code --wait", editor: "nano", want: "code --wait"},
-		{name: "editor", editor: "nano", want: "nano"},
-		{name: "vi when none is set", want: "vi"},
+		{
+			name:   "visual first",
+			visual: "code --wait",
+			editor: "nano",
+			want:   "code --wait",
+		},
+		{
+			name:   "editor",
+			editor: "nano",
+			want:   "nano",
+		},
+		{
+			name: "vi when none is set",
+			want: "vi",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,7 +202,8 @@ func TestEditorCommandRunsTheEditorOnThePath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plan with spaces.md")
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", "touch")
-	assert.NilError(t, editorCommand(path).Run())
-	_, err := os.Stat(path)
+	err := editorCommand(path).Run()
+	assert.NilError(t, err)
+	_, err = os.Stat(path)
 	assert.Check(t, err == nil, "the editor was not run on the path")
 }

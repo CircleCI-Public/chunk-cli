@@ -17,9 +17,7 @@ import (
 )
 
 // Store is a plan.Store backed by factory's V3 plan and comment API,
-// addressed by the plan's ID, which Create sets. The agent writes the plan's
-// text, with plan_set through the factory daemon; the screen writes it only
-// for an edit the developer makes by hand, with SetText.
+// addressed by the plan's ID, which Create sets.
 type Store struct {
 	api *circleci.Client
 

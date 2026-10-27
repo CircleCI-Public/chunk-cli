@@ -137,7 +137,6 @@ func (f *fakeStore) Text(context.Context) (string, error) {
 	return f.TextV, f.TextErr
 }
 
-// SetText replaces the plan's text, recording it in Set.
 func (f *fakeStore) SetText(_ context.Context, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
