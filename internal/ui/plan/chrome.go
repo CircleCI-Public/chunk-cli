@@ -80,7 +80,9 @@ func (m Model) header() string {
 	}
 
 	left := " " + ui.TitleStyle.Render("chunk") + " " + m.style(m.dim()).Render("plan")
-	if m.branch != "" {
+	if m.title != "" {
+		left += " / " + ansi.Truncate(m.title, max(m.width/2-16, 8), "…")
+	} else if m.branch != "" {
 		left += m.style(m.dim()).Render(" / " + m.branch)
 	}
 	var facts []string
@@ -130,8 +132,8 @@ func (m Model) tabs() string {
 // the right, the one thing the developer most likely does next, which changes
 // with the state: send comments first, and only then approve.
 func (m Model) actionBar() string {
-	inner := m.width - borderSize - 2*padX
-	edge := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.quiet()).Padding(0, padX)
+	inner := m.width - borderSize - 2
+	edge := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.quiet()).Padding(0, 1)
 	if m.status != "" {
 		return edge.Width(m.width).Render(ansi.Truncate(m.status, inner, "…"))
 	}

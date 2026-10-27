@@ -817,13 +817,22 @@ chunk
   `origin` remote, validation commands or review prompts, Claude Code being
   installed) is checked before Claude starts, and why there is no draft, or
   why it could not be sent, is shown in the footer. Closing the dashboard
-  stops a draft still being made. `p` opens the `chunk factory plan` screen
-  in the same project, to plan the change with Claude before the factory
-  builds it. `esc` or `ctrl+c` goes back to the runs with the plan kept, and
-  its session carrying on; `p` opens it again as it was. An approved plan's
-  build is selected once a poll lists it, and `p` then plans another. A plan
-  not approved when the dashboard closes stays in factory, and its ID is
-  printed. Closing the dashboard stops the planning session, not a build. `n` and `p` are not offered
+  stops a draft still being made. The dashboard opens on Plans: the open plans in
+  factory, grouped by who they wait on, with the selected plan's text and open
+  comments previewed beside it. `tab`, `2` or `esc` shows the runs, and `p`,
+  `tab` or `1` the plans again. `Enter` opens the `chunk factory plan` screen
+  on the selected plan, and `n` on a new one, to plan the change with Claude
+  before the factory builds it. Opening a plan only reads it: no session
+  claims it until a message is sent, and then in the project the dashboard
+  was opened in, since factory does not record a plan's repository; a plan
+  another session holds is refused rather than taken over. `esc` or `ctrl+c`
+  goes back to the plans with the plan and its session kept; `ctrl+p` does
+  too, to switch to another plan. Each opened plan keeps its own chat, unsent
+  message and session. An approved plan's build is selected once a poll lists
+  it. Quitting with a message unsent in any plan asks for a second `ctrl+c`;
+  plans and saved comments stay in factory, but chat and unsent messages are
+  not kept. Closing the dashboard stops every planning session, not a build.
+  `n` and `p` are not offered
   against a remote daemon, since a factory run works from files on this
   machine. A selected
   run's pane reads top to bottom: the prompt, a status line that says what the run is doing

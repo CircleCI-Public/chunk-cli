@@ -162,6 +162,22 @@ func TestAgentStartsOnTheFirstMessageWithTheClaim(t *testing.T) {
 	assert.Check(t, !tp.configs[0].Resume)
 }
 
+func TestAgentStartsOnlyOnceItsCheckPasses(t *testing.T) {
+	tp := newTestAgent(t, "plan-1")
+	problem := errors.New("open chunk watch in this plan's repository")
+	tp.CheckStart(func(context.Context) error { return problem })
+	err := tp.Send(t.Context(), "add a flag")
+	assert.Check(t, cmp.ErrorIs(err, problem))
+	tp.mu.Lock()
+	assert.Check(t, cmp.Len(tp.sessions, 0))
+	tp.mu.Unlock()
+
+	tp.CheckStart(func(context.Context) error { return nil })
+	err = tp.Send(t.Context(), "add a flag")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Contains(tp.session(0).first, "factory plan claim plan-1"))
+}
+
 func TestAgentPassesEventsOn(t *testing.T) {
 	tp := newTestAgent(t, "plan-1")
 	tp.setHolder("s-1", nil)

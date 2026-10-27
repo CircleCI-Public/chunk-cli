@@ -25,7 +25,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
 // Approver approves the plan in factory and starts its build, returning the
@@ -235,6 +234,10 @@ type Model struct {
 	// back is whether the host keeps the screen to reopen once it is closed,
 	// so leaving it loses nothing and stops nothing.
 	back bool
+	// inbox is whether the host offers a plan inbox and Ctrl+P switching.
+	inbox   bool
+	title   string
+	project string
 	// branch is the git branch the plan is for, shown in the header.
 	branch string
 	// units and questions are how many of each the plan has.
@@ -294,6 +297,7 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 		agent:        agent,
 		approve:      approve,
 		store:        store,
+		created:      store.ID() != "",
 		planView:     planView,
 		chatView:     viewport.New(),
 		input:        in,
@@ -328,8 +332,18 @@ func (m Model) WithBack() Model {
 	return m
 }
 
+// WithInbox names the plan and local project and returns to the host's inbox.
+// No agent starts until a message is sent. Chat history belongs to this visit.
+func (m Model) WithInbox(title, project string) Model {
+	m.back, m.inbox, m.title, m.project = true, true, title, project
+	return m
+}
+
+// Unsent reports local input that quitting the host would discard.
+func (m Model) Unsent() string { return m.unsent() }
+
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, pollCmd(), waitEvent(m.ctx, m.agent))
+	return tea.Batch(textarea.Blink, m.Poll(), pollCmd(), waitEvent(m.ctx, m.agent))
 }
 
 // Poll reads the plan's state, text and comments from the store, as the
@@ -828,19 +842,20 @@ func waitApproval(ch <-chan tea.Msg) tea.Cmd {
 // set into the top edge; the plan has a row under it for comments, and the
 // screen a header row above the panes and a footer row below them.
 const (
-	borderSize = 2
-	// bubbleChrome is a bubble's border and padding, left and right together.
-	bubbleChrome = borderSize + 2*padX
-	headerRows   = 1
-	tabRows      = 1
-	footerRows   = 3
-	inputRows    = 3
+	borderSize   = 2
+	bubbleChrome = borderSize + 2
+	// chatGutter is the cells of room left and right of the messages.
+	chatGutter = 1
+	headerRows = 1
+	tabRows    = 1
+	footerRows = 3
+	inputRows  = 3
 	// inputBoxRows is the input and its border, which has the input's title
 	// set into the top edge.
 	inputBoxRows = inputRows + borderSize
-	// padX and padY alias the theme's.
-	padX           = theme.PadX
-	padY           = theme.PadY
+	// padX and padY are the room between a pane's border and its content.
+	padX           = 1
+	padY           = 1
 	planFooterRows = 1
 	planPercent    = 60
 )
@@ -870,13 +885,13 @@ func (m *Model) topRows() int {
 func (m *Model) layout() {
 	inner := m.height - m.topRows() - footerRows - borderSize
 	m.planView.SetWidth(m.planWidth() - borderSize - 2*padX)
-	m.planView.SetHeight(inner - planFooterRows - 2*padY)
+	m.planView.SetHeight(inner - planFooterRows - padY)
 	// The editor is the text of a comment's card, which sits past the gutter
 	// on a rail, indented, with a cell either side.
 	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 6)
 	m.chatView.SetWidth(m.chatWidth() - borderSize - 2*padX)
-	m.chatView.SetHeight(inner - inputBoxRows - 2*padY)
-	m.input.SetWidth(m.chatWidth() - 2*borderSize - 4*padX)
+	m.chatView.SetHeight(inner - inputBoxRows - padY)
+	m.input.SetWidth(m.chatWidth() - 2*borderSize - 2*padX)
 	m.renderPlan()
 	m.renderChat()
 }
@@ -934,10 +949,10 @@ func (m *Model) renderPlan() {
 		m.blocks = nil
 		m.units, m.questions = 0, 0
 		if m.busy {
-			m.planView.SetContent(lipgloss.NewStyle().PaddingLeft(gutterWidth).Render(m.skeleton(m.planView.Width() - gutterWidth)))
+			m.planView.SetContent(lipgloss.NewStyle().Padding(1, 2).Render(m.skeleton(m.planView.Width() - 4)))
 			return
 		}
-		m.planView.SetContent(ui.HelperStyle.PaddingLeft(gutterWidth).Width(m.planView.Width()).
+		m.planView.SetContent(ui.HelperStyle.Padding(1, 2).Width(m.planView.Width()).
 			Render("No plan yet. Tell chunk what you want to change, and the plan it writes appears here."))
 		return
 	}
@@ -1018,16 +1033,26 @@ func (m *Model) queuedBubble(cs []comment, w int) string {
 	text := strings.Join(parts, "\n")
 	fit := min(lipgloss.Width(text), inner)
 	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.faint()).
-		Padding(0, padX).Width(fit + bubbleChrome).Render(text)
+		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
 	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
 }
 
 func (m *Model) renderChat() {
-	w := m.chatView.Width()
+	// A cell of room each side keeps the messages off the pane's border.
+	w := m.chatView.Width() - 2*chatGutter
 	if w <= 0 {
 		return
 	}
 	var b strings.Builder
+	if m.inbox {
+		note := "Reading this plan does not start an agent."
+		if m.project == "" {
+			note += " Open chunk watch in its repository to chat or build."
+		} else {
+			note += " Sending a message starts or resumes it in " + m.project + "."
+		}
+		b.WriteString(m.style(m.dim()).Width(w).Render(note) + "\n\n")
+	}
 	for i := range m.messages {
 		msg := &m.messages[i]
 		switch {
@@ -1067,7 +1092,7 @@ func (m *Model) renderChat() {
 	// The chat follows what is added to it unless the developer has
 	// scrolled up to read, when it stays where they are.
 	follow := m.chatView.AtBottom()
-	m.chatView.SetContent(b.String())
+	m.chatView.SetContent(lipgloss.NewStyle().PaddingLeft(chatGutter).Render(b.String()))
 	if follow {
 		m.chatView.GotoBottom()
 	}
@@ -1119,7 +1144,7 @@ func (m Model) Content() string {
 			edge = m.brand()
 		}
 		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-			Padding(padY, padX).
+			Padding(padY, padX, 0, padX).
 			Width(w).Height(m.height - m.topRows() - footerRows)
 		return titled(s.Render(content), title, lipgloss.NewStyle().Foreground(edge).Render)
 	}
@@ -1167,7 +1192,7 @@ func (m Model) inputBox() string {
 	}
 	w := m.chatWidth() - borderSize - 2*padX
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-		Padding(0, padX).Width(w).Render(m.input.View())
+		Width(w).Render(m.input.View())
 	return titled(box, ui.TitleStyle.Render("Message"), lipgloss.NewStyle().Foreground(edge).Render)
 }
 

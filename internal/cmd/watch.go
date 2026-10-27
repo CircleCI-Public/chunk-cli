@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
@@ -25,6 +26,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 )
 
@@ -115,14 +117,15 @@ func newWatchCmd() *cobra.Command {
 			m := watch.New(entries, !focus).WithRelaunch().WithBottomMargin(editorRowMargin()).
 				WithDrafts(drafts.ctx, startDir, drafts.draft, sendDraft).
 				WithContinue(continueRun).
-				WithPlans(drafts.ctx, drafts.plan)
+				WithPlans(drafts.ctx, drafts.plan).
+				WithPlanInbox(planlist.New(drafts.ctx, listFactoryPlans, previewFactoryPlan))
 			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
 			if err != nil {
 				return err
 			}
 			if fm, ok := final.(watch.Model); ok && fm.HasPlan() {
-				reportPlanLeft(iostream.FromCmd(cmd), drafts.lastPlan(), "")
+				iostream.FromCmd(cmd).ErrPrintln("Plans and saved comments remain in Factory. Reopen them with chunk watch; local chat and unsent input are not kept after quitting.")
 			}
 			return nil
 		},
@@ -187,10 +190,9 @@ type watchDrafts struct {
 	wg     sync.WaitGroup
 
 	mu sync.Mutex
-	// planAgent and planStore are the planning session last opened from
-	// the dashboard, and where its plan is kept.
-	planAgent *factoryplan.Agent
-	planStore *factoryplan.Store
+	// planAgents are the agents of every plan opened from the dashboard,
+	// stopped as it closes. Approving a plan stops its agent already.
+	planAgents []*factoryplan.Agent
 }
 
 func newWatchDrafts(parent context.Context) *watchDrafts {
@@ -201,9 +203,9 @@ func newWatchDrafts(parent context.Context) *watchDrafts {
 func (d *watchDrafts) stop() {
 	d.cancel()
 	d.mu.Lock()
-	agent := d.planAgent
+	agents := append([]*factoryplan.Agent(nil), d.planAgents...)
 	d.mu.Unlock()
-	if agent != nil {
+	for _, agent := range agents {
 		_ = agent.Stop()
 	}
 	d.wg.Wait()
@@ -282,36 +284,81 @@ func (d *watchDrafts) draft(ctx context.Context, root, prompt string, activity f
 	return draft, err
 }
 
-// plan opens a factory planning session on this machine about a plan for a
-// change in root, as `chunk factory plan` does. What a build checks first is
-// checked before the screen opens, so no one plans a change the factory would
-// refuse. Errors come back as one sentence for the dashboard.
-//
-// A session is done with once its plan is approved, so the approval stops
-// it. Opening a session stops the last one too, should an approval not have.
-func (d *watchDrafts) plan(ctx context.Context, root string) (plan.Agent, plan.Approver, plan.Store, error) {
-	if err := checkFactoryProject(ctx, root); err != nil {
-		return nil, nil, nil, err
-	}
-	if err := factory.CheckClaude(); err != nil {
-		return nil, nil, nil, errors.New("this machine has no Claude Code to plan with; install it from https://claude.com/claude-code")
-	}
-	if err := factory.CheckFactoryDaemon(ctx); err != nil {
-		return nil, nil, nil, watchFactoryProblem(err)
-	}
+// plan opens an existing plan or a new workspace. Reading requires only the
+// API; local project, daemon and claim checks happen when starting an agent.
+// Approving the plan stops its session.
+func (d *watchDrafts) plan(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
 	api, err := factoryPlanClient()
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	agent, approve, store := planSession(d.ctx, root, "", api)
-	d.mu.Lock()
-	last := d.planAgent
-	d.planAgent, d.planStore = agent, store
-	d.mu.Unlock()
-	if last != nil {
-		_ = last.Stop()
+	if id != "" {
+		if _, err := api.GetPlan(ctx, id); err != nil {
+			return nil, nil, nil, fmt.Errorf("open plan: %w", err)
+		}
 	}
+	agent, build, store := planSession(d.ctx, root, id, "", api)
+	agent.CheckStart(func(ctx context.Context) error {
+		holder, err := store.Holder(ctx)
+		if err != nil {
+			return err
+		}
+		if holder != "" && holder != agent.SessionID() {
+			return errors.New("this plan is claimed by another factory session; you can read and comment without taking its claim")
+		}
+		if err := watchPlanProject(ctx, root); err != nil {
+			return err
+		}
+		if err := factory.CheckClaude(); err != nil {
+			return errors.New("this machine has no Claude Code to plan with; install it from https://claude.com/claude-code")
+		}
+		if err := factory.CheckFactoryDaemon(ctx); err != nil {
+			return watchFactoryProblem(err)
+		}
+		return nil
+	})
+	approve := func(step func(string)) (string, error) {
+		if err := watchPlanProject(ctx, root); err != nil {
+			return "", err
+		}
+		return build(step)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.ctx.Err(); err != nil {
+		_ = agent.Stop()
+		return nil, nil, nil, err
+	}
+	d.planAgents = append(d.planAgents, agent)
 	return agent, approve, store, nil
+}
+
+func watchPlanProject(ctx context.Context, root string) error {
+	if root == "" {
+		return errors.New("open chunk watch in this plan's local repository to chat or build")
+	}
+	return checkFactoryProject(ctx, root)
+}
+
+func listFactoryPlans(ctx context.Context) ([]circleci.Plan, error) {
+	api, err := factoryPlanClient()
+	if err != nil {
+		return nil, err
+	}
+	return api.ListPlans(ctx)
+}
+
+func previewFactoryPlan(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
+	api, err := factoryPlanClient()
+	if err != nil {
+		return "", nil, err
+	}
+	text, err := api.PlanText(ctx, id)
+	if err != nil {
+		return "", nil, err
+	}
+	comments, err := api.ListComments(ctx, id, true)
+	return text, comments, err
 }
 
 // watchFactoryProblem is CheckFactoryDaemon's error as one sentence for the
@@ -324,17 +371,6 @@ func watchFactoryProblem(err error) error {
 		return errors.New("the factory daemon is not running; run `factory daemon` with FACTORY_PLAN_STORE=circleci to plan")
 	}
 	return err
-}
-
-// lastPlan is the ID in factory of the plan last opened from the dashboard,
-// or "" when there is none.
-func (d *watchDrafts) lastPlan() string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.planStore == nil {
-		return ""
-	}
-	return d.planStore.ID()
 }
 
 // draftModel is the model a change started from the dashboard is made with:

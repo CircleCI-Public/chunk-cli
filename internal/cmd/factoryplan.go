@@ -74,7 +74,7 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 			// its own, so it would outlive chunk: it is stopped, and waited
 			// for, as the screen closes.
 			planCtx, cancel := context.WithCancel(ctx)
-			agent, approve, store := planSession(planCtx, root, model, api)
+			agent, approve, store := planSession(planCtx, root, "", model, api)
 			// Cancelling first ends a session that is still starting, which
 			// Stop would otherwise wait out.
 			defer func() {
@@ -144,12 +144,12 @@ func reportPlanLeft(streams iostream.Streams, planID, buildID string) {
 }
 
 // planSession is a factory planning session in root for the planning
-// screen: the agent it talks to, which lives as long as ctx, the store its
-// plan and comments are kept in through api, and the approval it ends with,
-// which approves the plan in factory and has the chunk daemon build it. The
-// caller must Stop the agent.
-func planSession(ctx context.Context, root, model string, api *circleci.Client) (*factoryplan.Agent, plan.Approver, *factoryplan.Store) {
-	store := factoryplan.NewStore(api)
+// screen, on plan id or a new plan when id is "": the agent it talks to,
+// which lives as long as ctx, the store its plan and comments are kept in
+// through api, and the approval it ends with, which approves the plan in
+// factory and has the chunk daemon build it. The caller must Stop the agent.
+func planSession(ctx context.Context, root, id, model string, api *circleci.Client) (*factoryplan.Agent, plan.Approver, *factoryplan.Store) {
+	store := factoryplan.NewStore(api, id)
 	agent := factoryplan.NewAgent(ctx, factory.AgentConfig{Dir: root, Model: model, SessionID: uuid.NewString()}, store)
 	approve := func(step func(string)) (string, error) {
 		// The daemon is started first, so a plan is not approved with

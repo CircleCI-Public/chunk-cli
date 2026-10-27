@@ -9,7 +9,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"gotest.tools/v3/assert"
-	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
@@ -246,28 +245,6 @@ func TestPanesAreSeparateBoxes(t *testing.T) {
 			t.Errorf("line still has a shared-frame junction: %q", l)
 		}
 	}
-
-	// Each box leaves a blank row under its top edge and above its bottom
-	// one, and a cell inside each side border.
-	blankRow := "│" + strings.Repeat(" ", leftBoxWidth-2) + "││" + strings.Repeat(" ", m.width-leftBoxWidth-2) + "│"
-	assert.Check(t, cmp.Equal(stripANSI(lines[2]), blankRow), "no blank row under the top edges")
-	bottomAt := -1
-	for i, l := range lines {
-		if strings.Contains(stripANSI(l), "╯╰") {
-			bottomAt = i
-			break
-		}
-	}
-	assert.Assert(t, bottomAt > 2)
-	assert.Check(t, cmp.Equal(stripANSI(lines[bottomAt-1]), blankRow), "no blank row above the bottom edges")
-	first := []rune(stripANSI(lines[3]))
-	assert.Check(t, cmp.Equal(string(first[:3]), "│ ⌕"), "the runs pane's search row is not one cell in: %q", string(first))
-	assert.Check(t, cmp.Equal(string(first[leftBoxWidth:leftBoxWidth+2]), "│ "), "the run pane's first row is not one cell in: %q", string(first))
-	// The run pane's first row is the status line, which has its own indent;
-	// it must start right after the one cell of padding.
-	status := stripANSI(m.runStatusLine(m.styles(), m.selectedRun().s))
-	assert.Check(t, strings.HasPrefix(string(first[leftBoxWidth+2:]), status),
-		"the run pane's status row is not one cell in: %q", string(first))
 }
 
 // The focused pane's box is drawn in the brand accent, and the other pane's

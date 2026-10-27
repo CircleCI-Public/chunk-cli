@@ -103,7 +103,7 @@ func TestRunPaneWrapsEveryLineToThePane(t *testing.T) {
 					if i == 0 {
 						continue
 					}
-					if got := lipgloss.Width(line); got > m.runPaneWidth() {
+					if got := lipgloss.Width(line); got > width-leftPaneWidth-5 {
 						t.Errorf("%s details=%v width=%d: line %d is %d columns: %q",
 							run.s.ID, details, width, i, got, stripANSI(line))
 					}

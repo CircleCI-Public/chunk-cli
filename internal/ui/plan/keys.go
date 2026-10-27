@@ -38,6 +38,7 @@ type keyMap struct {
 	Confirm key.Binding
 
 	Focus    key.Binding
+	Switch   key.Binding
 	SendPlan key.Binding
 	Quit     key.Binding
 }
@@ -83,6 +84,7 @@ func (m Model) keys() keyMap {
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
 		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", focusHelp)),
+		Switch:         key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
@@ -96,6 +98,10 @@ func (m Model) keys() keyMap {
 	if m.back {
 		quit = "back to runs"
 	}
+	if m.inbox {
+		quit = "back to plans"
+	}
+	k.Switch.SetEnabled(m.inbox)
 	k.Quit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", quit))
 	if !m.commenting && !m.confirming && !m.selecting() {
 		keys := []string{"esc", "ctrl+c"}
@@ -162,6 +168,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 	}
 	return []key.Binding{
 		k.SaveComment, k.CancelComment,
+		k.Switch,
 		k.Send, k.Newline,
 		k.Comment, k.Next, k.SendComments, k.ClearSelection, k.Up,
 		k.Focus, k.SendPlan, k.Quit,

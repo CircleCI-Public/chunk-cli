@@ -18,6 +18,10 @@ var (
 	Green  = lipgloss.Color("#00DB73")
 )
 
+// ListWidth is the text width of the list pane on the left of chunk watch's
+// tabs, so the panes keep their place when switching between them.
+const ListWidth = 28
+
 // Styles holds lipgloss styles computed for the current terminal background,
 // shared by the full-screen TUIs.
 type Styles struct {
@@ -74,6 +78,19 @@ func Help(st Styles, width int) help.Model {
 	return h
 }
 
+// Tabs names a screen's tabs, the one showing in the accent and the others
+// quiet.
+func (s Styles) Tabs(active int, names ...string) string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = s.Dim.Render(n)
+		if i == active {
+			out[i] = s.Brand.Bold(true).Underline(true).Render(n)
+		}
+	}
+	return strings.Join(out, "  ")
+}
+
 // clip cuts a line to at most width display columns, measuring with lipgloss so
 // ANSI sequences are not counted as visible width and are not cut mid-escape.
 func clip(s string, width int) string {
@@ -96,16 +113,9 @@ func EdgeSegment(line func(string) string, title string, n int) string {
 	return line("─ ") + title + line(" "+strings.Repeat("─", max(n-3-lipgloss.Width(title), 0)))
 }
 
-// PadX is the cells between a box's side border and its content.
-const PadX = 1
-
-// PadY is the rows between a pane's top and bottom border and its content.
-const PadY = 1
-
 // Pane draws body in a rounded box w cells wide and h tall, border included,
 // with title set into its top edge. The focused pane's border is the accent
-// and the others' are quiet. body must already fit inside the border and the
-// padding: w - 2 - 2*PadX cells by h - 2 - 2*PadY rows.
+// and the others' are quiet. body must already fit inside the border.
 func (s Styles) Pane(focused bool, w, h int, title, body string) string {
 	edge := s.VDim
 	if focused {
@@ -114,8 +124,7 @@ func (s Styles) Pane(focused bool, w, h int, title, body string) string {
 	// Render is variadic; EdgeSegment draws with a func(string) string.
 	line := func(t string) string { return edge.Render(t) }
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
-		BorderForeground(edge.GetForeground()).Padding(PadY, PadX).
-		Width(w).Height(h).MaxHeight(h).Render(body)
+		BorderForeground(edge.GetForeground()).Width(w).Height(h).MaxHeight(h).Render(body)
 	top, rest, _ := strings.Cut(box, "\n")
 	n := lipgloss.Width(top) - 2
 	if n < 5 {

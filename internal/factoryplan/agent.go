@@ -29,6 +29,9 @@ type Agent struct {
 	// worktree is the directory each session starts in: the plan's
 	// worktree, opened by planWorktree but in tests.
 	worktree func(context.Context) (string, error)
+	// check is what must hold before the session starts or resumes, as
+	// CheckStart sets it; nil for nothing.
+	check func(context.Context) error
 
 	// sendMu keeps Sends in order. It is not mu: a Send can block writing to
 	// a claude that stopped reading, and Stop must not wait on it.
@@ -69,7 +72,7 @@ func NewAgent(ctx context.Context, cfg factory.AgentConfig, store *Store) *Agent
 		start: func(ctx context.Context, cfg factory.AgentConfig, message string) (session, error) {
 			return factory.StartAgent(ctx, cfg, message)
 		},
-		holder: store.holder,
+		holder: store.Holder,
 		worktree: func(ctx context.Context) (string, error) {
 			return planWorktree(ctx, cfg.Dir, store)
 		},
@@ -77,6 +80,14 @@ func NewAgent(ctx context.Context, cfg factory.AgentConfig, store *Store) *Agent
 }
 
 func (p *Agent) Events() <-chan plan.Event { return p.events }
+
+// SessionID is the factory session the agent claims its plan as.
+func (p *Agent) SessionID() string { return p.cfg.SessionID }
+
+// CheckStart has check run before the session starts or resumes, refusing to
+// start it when check fails, so a plan can be opened and read before what
+// planning needs is in place. It must be called before the first Send.
+func (p *Agent) CheckStart(check func(context.Context) error) { p.check = check }
 
 // Send delivers message to the session, starting it on the first message and
 // resuming it if it has ended. A message tells the agent to claim the plan
@@ -126,6 +137,11 @@ func (p *Agent) Send(ctx context.Context, message string) error {
 	// keeps the conversation so far. The plan's worktree is where it was
 	// started, so claude finds that conversation there.
 	cfg.Resume = a != nil
+	if p.check != nil {
+		if err := p.check(p.ctx); err != nil {
+			return err
+		}
+	}
 	dir, err := p.worktree(p.ctx)
 	if err != nil {
 		return err
@@ -149,9 +165,6 @@ func (p *Agent) Send(ctx context.Context, message string) error {
 	}
 	return nil
 }
-
-// SessionID is the factory session the agent plans as.
-func (p *Agent) SessionID() string { return p.cfg.SessionID }
 
 // holds is whether this session holds the plan's claim in factory. A failed
 // read counts as holding it, so a blip in the API does not have the agent

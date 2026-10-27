@@ -25,8 +25,10 @@ type Store struct {
 	planID string
 }
 
-func NewStore(api *circleci.Client) *Store {
-	return &Store{api: api}
+// NewStore is the store for plan id in factory, or for a plan Create makes
+// when id is "".
+func NewStore(api *circleci.Client, id string) *Store {
+	return &Store{api: api, planID: id}
 }
 
 // ID is the plan's ID in factory, or "" before Create.
@@ -70,10 +72,10 @@ func (s *Store) State(ctx context.Context) (string, error) {
 	return p.State, nil
 }
 
-// holder is the factory session holding the plan's claim, as its flow
+// Holder is the factory session holding the plan's claim, as its flow
 // references it, or "" when none does or the plan has not been created. A
 // plan has no flow until a session first claims it.
-func (s *Store) holder(ctx context.Context) (string, error) {
+func (s *Store) Holder(ctx context.Context) (string, error) {
 	id := s.ID()
 	if id == "" {
 		return "", nil
@@ -117,7 +119,7 @@ func (s *Store) Approve(ctx context.Context, session string) error {
 	if !hasUnits(text) {
 		return ErrNoUnits
 	}
-	h, err := s.holder(ctx)
+	h, err := s.Holder(ctx)
 	if err != nil {
 		return err
 	}

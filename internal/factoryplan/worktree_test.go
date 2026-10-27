@@ -31,14 +31,14 @@ func TestPlanWorktreeRemovesThoseOfEndedPlans(t *testing.T) {
 	client, cci := testClient(t)
 	ctx := context.Background()
 
-	merged := NewStore(client)
+	merged := NewStore(client, "")
 	err := merged.Create(ctx, "a merged plan")
 	assert.NilError(t, err)
 	mergedDir, err := planWorktree(ctx, root, merged)
 	assert.NilError(t, err)
 	cci.SetFactoryPlanState(merged.ID(), "Done")
 
-	store := NewStore(client)
+	store := NewStore(client, "")
 	err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	dir, err := planWorktree(ctx, root, store)
@@ -81,7 +81,7 @@ func TestStoreEndedForEachOfFactorysEnds(t *testing.T) {
 		},
 	} {
 		t.Run(tc.state, func(t *testing.T) {
-			store := NewStore(client)
+			store := NewStore(client, "")
 			err := store.Create(ctx, "a plan")
 			assert.NilError(t, err)
 			cci.SetFactoryPlanState(store.ID(), tc.state)
