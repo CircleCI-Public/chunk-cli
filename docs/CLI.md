@@ -614,8 +614,10 @@ chunk
   a selection that touches a comment takes in all of it, and its text, and
   `esc` clears a selection. Sending (`enter` in the chat, or `s` in the plan,
   which leaves a half-written message in the chat) saves the queued comments
-  to factory and, from a Human state, hands them to the session to address;
-  they never go in a chat message. While the plan waits in a Human state, a
+  to factory and hands them to the session to address; they never go in a
+  chat message. Comments are sent only when factory is ready to take them:
+  while factory works on the plan they stay queued, a message sent with them
+  goes on alone, and `s` is not offered. While the plan waits in a Human state, a
   message gets an answer but only comments change the plan. While comments
   are saved they cannot be changed. A saved comment is edited at once with
   `c`, resolved with `r` and deleted with `d` (after a `y`); resolved ones are

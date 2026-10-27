@@ -45,10 +45,13 @@ func (m Model) openComments() int {
 	return n
 }
 
-// takesComments is whether sending comments hands them to factory from
-// state: factory's address-comments event moves a plan from any Human state
-// to its phase's Agent state, which hands out a task for its comments.
-func takesComments(state string) bool { return strings.HasSuffix(state, " - Human") }
+// addressComments is factory's event that has it take up the plan's
+// comments.
+const addressComments = "address-comments"
+
+// takesComments is whether sending comments now hands them to factory: its
+// flow lists address-comments among the events it applies.
+func (m Model) takesComments() bool { return slices.Contains(m.events, addressComments) }
 
 // last is the index of the last block c is on.
 func (c comment) last() int { return c.block + max(c.span, 1) - 1 }
@@ -265,10 +268,10 @@ func (m *Model) widen(lo, hi int) (int, int, []int) {
 }
 
 // saveQueued saves the queued comments in order, deleting the saved comments
-// each replaces once it is saved, then, from a Human state, has factory take
-// them up. It stops at the first failure; saved is how many were saved, so
-// the rest stay queued.
-func saveQueued(ctx context.Context, s Store, queued []comment, state string) tea.Cmd {
+// each replaces once it is saved, then, when handOff, has factory take them
+// up. It stops at the first failure; saved is how many were saved, so the
+// rest stay queued.
+func saveQueued(ctx context.Context, s Store, queued []comment, handOff bool) tea.Cmd {
 	return func() tea.Msg {
 		for i, c := range queued {
 			if _, err := s.AddComment(ctx, c.quote, c.text); err != nil {
@@ -280,7 +283,7 @@ func saveQueued(ctx context.Context, s Store, queued []comment, state string) te
 				}
 			}
 		}
-		if !takesComments(state) {
+		if !handOff {
 			return queueSavedMsg{saved: len(queued)}
 		}
 		if err := s.AddressComments(ctx); err != nil {

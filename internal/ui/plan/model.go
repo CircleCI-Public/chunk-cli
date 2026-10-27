@@ -86,6 +86,7 @@ type (
 	pollMsg      struct{}
 	refreshedMsg struct {
 		state, text string
+		events      []string
 		comments    []Comment
 		err         error
 	}
@@ -119,12 +120,16 @@ func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 		if err != nil {
 			return refreshedMsg{err: err}
 		}
+		events, err := s.Events(ctx)
+		if err != nil {
+			return refreshedMsg{err: err}
+		}
 		text, err := s.Text(ctx)
 		if err != nil {
 			return refreshedMsg{err: err}
 		}
 		cs, err := s.Comments(ctx)
-		return refreshedMsg{state: state, text: text, comments: cs, err: err}
+		return refreshedMsg{state: state, events: events, text: text, comments: cs, err: err}
 	}
 }
 
@@ -145,8 +150,11 @@ type Model struct {
 	approve Approver
 	store   Store
 
-	plan     string
-	state    string
+	plan  string
+	state string
+	// events are the events factory applies to the plan's flow now, as the
+	// last refresh read them.
+	events   []string
 	messages []message
 	// created is whether the plan has been made in factory with store.Create,
 	// and creating whether that is under way.
@@ -253,6 +261,9 @@ type Model struct {
 const (
 	chatPlaceholder     = "Describe the change, or give feedback on the plan…"
 	commentsPlaceholder = "Press enter to save your comments, or add a message…"
+	// heldPlaceholder is the placeholder while comments are queued but the
+	// plan is not waiting on the developer, so they cannot be sent yet.
+	heldPlaceholder = "Your comments send once factory is waiting on you; add a message…"
 	// reviewPlaceholder is for a plan waiting on the developer's review, which
 	// the agent may not change until comments move it back to the agent.
 	reviewPlaceholder = "Ask chunk about the plan; comment on it to change it…"
@@ -491,7 +502,7 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		}
 	}
 
-	m.state, m.plan = msg.state, msg.text
+	m.state, m.events, m.plan = msg.state, msg.events, msg.text
 	m.applyComments(msg.comments)
 	m.renderPlan()
 	if held {
@@ -555,9 +566,12 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m.forward(msg)
 }
 
-// deliver is a send from the developer: it saves the queued comments to
-// factory, handing them to factory from a Human state, then sends
-// text to the agent, if there is any.
+// heldStatus says why a send left the queued comments unsent.
+const heldStatus = "Comments not sent: factory is working on the plan. Send them once it is waiting on you."
+
+// deliver is a send from the developer: from a Human state it saves the
+// queued comments to factory and hands them to it, then sends text to the
+// agent, if there is any; from any other state the comments stay queued.
 func (m Model) deliver(text string) (Model, tea.Cmd) {
 	if m.savingComments {
 		return m, nil
@@ -570,10 +584,18 @@ func (m Model) deliver(text string) (Model, tea.Cmd) {
 	if len(queued) == 0 && !m.pendingHandOff {
 		return m.send(text)
 	}
+	if !m.takesComments() {
+		next, cmd := m, tea.Cmd(nil)
+		if text != "" {
+			next, cmd = m.send(text)
+		}
+		next.status = heldStatus
+		return next, cmd
+	}
 	m.savingComments = true
 	m.pendingText = text
 	m.status = ""
-	return m, saveQueued(m.ctx, m.store, queued, m.state)
+	return m, saveQueued(m.ctx, m.store, queued, m.takesComments())
 }
 
 // answerYes does what the question in the status bar asked, now it has been
@@ -790,9 +812,11 @@ func titleOf(text string) string {
 // their review.
 func (m *Model) syncPlaceholder() {
 	switch {
+	case len(queuedComments(m.comments)) > 0 && !m.takesComments():
+		m.input.Placeholder = heldPlaceholder
 	case len(queuedComments(m.comments)) > 0:
 		m.input.Placeholder = commentsPlaceholder
-	case takesComments(m.state):
+	case m.takesComments():
 		m.input.Placeholder = reviewPlaceholder
 	default:
 		m.input.Placeholder = chatPlaceholder
