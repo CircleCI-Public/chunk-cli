@@ -181,6 +181,7 @@ func PrunePlanWorktrees(ctx context.Context, root string, ended func(ctx context
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		dropPlanSession(root, e.Name())
 		dropCopiedConfig(ctx, path)
 		if out, err := git.CombinedOutput(ctx, "worktree", "remove", path); err != nil {
 			errs = append(errs, fmt.Errorf("remove the worktree of plan %s: %w: %s", e.Name(), err, strings.TrimSpace(string(out))))
