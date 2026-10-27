@@ -442,3 +442,11 @@ func share(n, d int) string {
 	}
 	return fmt.Sprintf("%d%%", n*100/d)
 }
+
+// markExclusiveWith makes flag exclusive with each of others, which stay
+// usable together.
+func markExclusiveWith(cmd *cobra.Command, flag string, others ...string) {
+	for _, f := range others {
+		cmd.MarkFlagsMutuallyExclusive(flag, f)
+	}
+}
