@@ -477,7 +477,7 @@ func TestRemoveActiveSidecar_ClearsWhenLastMemberRemoved(t *testing.T) {
 // resolved path, so a symlinked spelling of a root and a real one share it — but
 // the chunk daemon keys projects by the breadcrumb string, and the writers
 // disagree about the spelling: a validate run passes the working directory it
-// was given, chunk watch passes git's top-level. Left as written, the two
+// was given, chunk ui passes git's top-level. Left as written, the two
 // spellings listed one log as two projects, which the dashboard drew as
 // duplicate rows.
 func TestProjectRootRegistrationCanonicalisesTheRoot(t *testing.T) {

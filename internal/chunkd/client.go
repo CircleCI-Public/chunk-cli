@@ -246,7 +246,7 @@ var ErrDaemonTimeout = errors.New("the chunk daemon did not answer in time")
 //
 // Kept apart from ErrDaemonUnreachable for the same reason ErrDaemonTimeout is:
 // the advice differs. Starting a second daemon leaves the same socket just as
-// unreadable, so "run chunk watch" is the one thing that cannot help here.
+// unreadable, so "run chunk ui" is the one thing that cannot help here.
 var ErrDaemonPermission = errors.New("the chunk daemon socket is not accessible to this user")
 
 // FetchConflicts asks the running daemon whether root's branch still merges
@@ -355,9 +355,9 @@ func stopDaemon(pid int, sockPath string) error {
 // The daemon resolves its CircleCI client once, at startup, so one that started
 // before a login holds a nil client for the rest of its life and streams no
 // output however many times the developer retries. Stopping it here is what
-// makes `chunk auth login` take effect: a `chunk watch` already on screen
+// makes `chunk auth login` take effect: a `chunk ui` already on screen
 // relaunches it through EnsureLaunched on its next poll, and otherwise the next
-// `chunk watch` starts a daemon that can authenticate.
+// `chunk ui` starts a daemon that can authenticate.
 //
 // Best-effort and silent, like RegisterCommand. Failing to stop the daemon must
 // not fail a login that has otherwise succeeded, and the cost of not stopping it

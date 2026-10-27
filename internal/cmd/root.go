@@ -75,7 +75,7 @@ Start here
   chunk init                 Set up this project (config, sandbox, review prompts)
   chunk factory start        Optional: hand chunk a diff you already started
   chunk factory build        Build a change from a prompt, review it, open the PR
-  chunk watch                Follow and manage your factory runs. Keep it open.
+  chunk ui                   Follow and manage your factory runs. Keep it open.
 
 Other commands
 {{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}  {{rpad .Name .NamePadding}} {{.Short}}
@@ -129,7 +129,7 @@ Configuration:
 	rootCmd.AddCommand(newConflictsCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
 	rootCmd.AddCommand(newReceiveTelemetryCmd())
-	rootCmd.AddCommand(newWatchCmd())
+	rootCmd.AddCommand(newUICmd())
 	rootCmd.AddCommand(newDaemonCmd())
 
 	rootCmd.AddCommand(newCommandsCmd())
@@ -256,7 +256,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 // Completion helpers run on every TAB press and receive-telemetry is re-execed
 // by every chunk invocation, so checking there would burn through GitHub's
 // unauthenticated rate limit; upgrade would compare against the version it is
-// replacing; watch renders its own notice in the TUI footer; and the daemon
+// replacing; ui renders its own notice in the TUI footer; and the daemon
 // has no terminal to print one to.
 var noUpdateCheckCommands = map[string]bool{
 	cobra.ShellCompRequestCmd:       true,
@@ -264,7 +264,7 @@ var noUpdateCheckCommands = map[string]bool{
 	"completion":                    true,
 	"receive-telemetry":             true,
 	"upgrade":                       true,
-	watchCmdName:                    true,
+	uiCmdName:                       true,
 	chunkd.DaemonSubcommand:         true,
 }
 
@@ -294,13 +294,13 @@ func startUpdateCheck(cmd *cobra.Command) {
 
 // noAutoLaunchCommands lists commands for which the auto-launch daemon check is
 // skipped: completion helpers (called on every TAB press), the daemon itself,
-// and commands that manage the daemon directly (watch starts it on its own).
+// and commands that manage the daemon directly (ui starts it on its own).
 var noAutoLaunchCommands = map[string]bool{
 	cobra.ShellCompRequestCmd:       true,
 	cobra.ShellCompNoDescRequestCmd: true,
 	"completion":                    true,
 	"receive-telemetry":             true,
-	watchCmdName:                    true,
+	uiCmdName:                       true,
 	chunkd.DaemonSubcommand:         true,
 }
 

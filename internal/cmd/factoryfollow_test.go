@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
@@ -158,4 +161,89 @@ func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
 		"  [high] main.go:3 nil deref",
 	)
 	assert.DeepEqual(t, lines, want)
+}
+
+// sessionError is what followSession returns when the daemon is unreachable,
+// refuses a session that is already active (409), or cannot find one (404).
+// Every case but the last points at `chunk ui`, where the rest of the story
+// is.
+func TestSessionErrorPointsAtChunkUI(t *testing.T) {
+	t.Run("daemon unreachable", func(t *testing.T) {
+		var ue *userError
+		assert.Assert(t, errors.As(sessionError(chunkd.ErrDaemonUnavailable), &ue))
+		assert.Equal(t, ue.Suggestion(), "Start it with 'chunk ui'.")
+	})
+
+	t.Run("session already active", func(t *testing.T) {
+		refused := &chunkd.SessionRefused{Status: http.StatusConflict, Message: "a run is already active"}
+		var ue *userError
+		assert.Assert(t, errors.As(sessionError(refused), &ue))
+		assert.Equal(t, ue.Suggestion(), "Follow the active one in 'chunk ui'.")
+	})
+
+	t.Run("session not found", func(t *testing.T) {
+		refused := &chunkd.SessionRefused{Status: http.StatusNotFound, Message: "no such session"}
+		var ue *userError
+		assert.Assert(t, errors.As(sessionError(refused), &ue))
+		assert.Assert(t, !strings.Contains(ue.Suggestion(), "chunk ui"), ue.Suggestion())
+	})
+}
+
+// The poll-failure path (maxSessionPollFailures in a row) builds its own
+// message rather than going through sessionError, but points at the same
+// place: stopping the daemon out from under a run in progress must still
+// read "chunk ui", not the hidden alias.
+func TestFactoryLostContactPointsAtChunkUI(t *testing.T) {
+	factoryProject(t)
+	started := make(chan struct{})
+	cfg := fakeSessionConfig()
+	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1", opts.Prompt)
+		if err != nil {
+			return factory.Report{}, fmt.Errorf("create the run's worktree: %w", err)
+		}
+		opts.OnStart("run-1", wt)
+		close(started)
+		<-ctx.Done()
+		return factory.Report{RunID: "run-1", Worktree: wt, Started: true}, ctx.Err()
+	}
+
+	dir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_DAEMON_DIR", dir)
+
+	daemonCtx, stopDaemon := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- server.RunDaemon(daemonCtx, nil, "", nil, nil, server.WithReview(cfg)) }()
+	t.Cleanup(func() {
+		stopDaemon()
+		select {
+		case <-errc:
+		case <-time.After(5 * time.Second):
+			t.Error("daemon did not shut down")
+		}
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for !chunkd.IsDaemonRunning() {
+		if time.Now().After(deadline) {
+			t.Fatal("daemon did not become reachable")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Stopping the daemon mid-run, rather than the build command's own
+	// context, is what drives followSession into failed polls rather than
+	// the clean "cancelled" path TestFactoryInterruptCancelsTheRunAndReportsTheWork
+	// covers.
+	go func() {
+		<-started
+		stopDaemon()
+	}()
+
+	_, _, buildErr := runFactoryBuildCmd(t, "add a --verbose flag")
+	var ue *userError
+	assert.Assert(t, errors.As(buildErr, &ue), "got %v", buildErr)
+	assert.Equal(t, ue.UserMessage(), "Lost contact with the chunk daemon.")
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk ui"), ue.Suggestion())
 }

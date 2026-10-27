@@ -40,7 +40,7 @@ func TestRunStartMessage(t *testing.T) {
 		{
 			name: "default",
 			want: []string{"Chunk will implement this change", "review it", "run your checks",
-				"opens a pull request if it can", "chunk watch"},
+				"opens a pull request if it can", "chunk ui"},
 		},
 		{
 			name:    "--open-pr",

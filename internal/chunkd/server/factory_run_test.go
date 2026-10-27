@@ -412,7 +412,7 @@ func TestStartFactoryRefusesToContinueARunOnASidecar(t *testing.T) {
 }
 
 // A continued run keeps the earlier run's spec origin on its own record, so a
-// chain of runs started from a file keeps saying so in chunk watch and the
+// chain of runs started from a file keeps saying so in chunk ui and the
 // run's JSON.
 func TestStartFactoryKeepsTheContinuedRunsSpecOrigin(t *testing.T) {
 	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))

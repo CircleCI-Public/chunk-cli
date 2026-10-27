@@ -162,7 +162,7 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 		return err
 	}
 	pruneRekeyedState(dir, path, a.SidecarIDs)
-	// Write a breadcrumb so chunk watch can discover this project.
+	// Write a breadcrumb so chunk ui can discover this project.
 	_ = RegisterProjectRoot(dir, root)
 	return nil
 }
@@ -224,7 +224,7 @@ func ProjectRootPath(dataDir string) string {
 //
 // The root is canonicalised before it is written, because the callers disagree
 // about how to spell one: a validate run passes the working directory it was
-// given, while chunk watch passes git's top-level, which on macOS comes back
+// given, while chunk ui passes git's top-level, which on macOS comes back
 // through /private. Both hash to the same data directory, so the breadcrumb
 // would flip between spellings as each wrote it, and a reader that keys on the
 // string sees one project as two sharing a single log.

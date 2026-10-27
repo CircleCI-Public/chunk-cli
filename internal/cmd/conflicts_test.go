@@ -99,7 +99,7 @@ func TestConflictsExitsZeroWithoutADaemon(t *testing.T) {
 }
 
 func TestConflictsHookModeSaysNothingWithoutADaemon(t *testing.T) {
-	// Silence, not an explanation. Most people do not have `chunk watch` open,
+	// Silence, not an explanation. Most people do not have `chunk ui` open,
 	// and a hook that announced that on every commit would be pure noise.
 	noDaemon(t)
 	out, errOut, err := runConflictsCmd(t, t.TempDir(), "--hook")
@@ -114,7 +114,7 @@ func TestConflictsManualModeExplainsAMissingDaemon(t *testing.T) {
 	noDaemon(t)
 	out, _, err := runConflictsCmd(t, t.TempDir())
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Contains(out, "chunk watch"))
+	assert.Check(t, cmp.Contains(out, "chunk ui"))
 }
 
 // The complaint this split exists for: a socket the user cannot open is not a
@@ -134,7 +134,7 @@ func TestConflictsManualModeDoesNotSendAnUnreadableSocketToStartADaemon(t *testi
 
 	out, _, runErr := runConflictsCmd(t, t.TempDir())
 	assert.NilError(t, runErr)
-	assert.Check(t, !cmp.Contains(out, "chunk watch")().Success(),
+	assert.Check(t, !cmp.Contains(out, "chunk ui")().Success(),
 		"starting a second daemon leaves the same socket unreadable: %s", out)
 	assert.Check(t, cmp.Contains(out, "cannot be opened"))
 }
@@ -266,7 +266,7 @@ func stalledDaemon(t *testing.T) {
 
 func TestConflictsManualModeDoesNotBlameAMissingDaemonForASlowOne(t *testing.T) {
 	// What the reader is told has to match what happened. A daemon that is up
-	// but busy was being reported with "Run `chunk watch` to start it", sending
+	// but busy was being reported with "Run `chunk ui` to start it", sending
 	// someone to start a daemon they already have.
 	stalledDaemon(t)
 

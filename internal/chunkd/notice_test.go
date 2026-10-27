@@ -66,7 +66,7 @@ func TestConflictStatusDistinguishesEveryQuietCase(t *testing.T) {
 	// got nothing back cannot tell a clean merge from an absent daemon, and the
 	// two change what they do next.
 	unknown := ConflictStatus(ConflictReport{Root: "/x"})
-	assert.Check(t, cmp.Contains(unknown, "chunk watch"))
+	assert.Check(t, cmp.Contains(unknown, "chunk ui"))
 
 	// The shape the daemon actually returns for a root it does not track: Known
 	// false *and* a reason in Unavailable. Known is read first on purpose — the
@@ -75,7 +75,7 @@ func TestConflictStatusDistinguishesEveryQuietCase(t *testing.T) {
 	untracked := ConflictStatus(ConflictReport{Root: "/x", Conflict: &ConflictState{
 		Unavailable: "the chunk daemon is not tracking this project",
 	}})
-	assert.Check(t, cmp.Contains(untracked, "chunk watch"))
+	assert.Check(t, cmp.Contains(untracked, "chunk ui"))
 	assert.Check(t, !cmp.Contains(untracked, "No merge comparison")().Success(),
 		"an untracked project needs registering, not a merge-comparison excuse")
 

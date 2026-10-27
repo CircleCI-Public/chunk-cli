@@ -30,6 +30,7 @@ func newFactoryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "factory",
 		Short: "Build and manage factory runs",
+		Long:  "Build and manage factory runs.\n\nFollow every run live with 'chunk ui'.",
 		RunE:  groupRunE,
 	}
 	cmd.AddCommand(newFactoryBuildCmd())
@@ -124,7 +125,7 @@ sidecar, and run the project's validation commands, feeding failures back to
 the implementer until every check passes or attempts run out.
 
 The run happens on the local chunk daemon, as a session: watch it in
-'chunk watch'. Ctrl-C stops the run, and what the implementer did so far is
+'chunk ui'. Ctrl-C stops the run, and what the implementer did so far is
 still committed.
 
 The run works in a git worktree of its own, on a branch named from the prompt:
@@ -136,7 +137,7 @@ ends; the worktree is kept so you can look at it or carry on in it.
 A single argument with no spaces that names an existing file is read as the
 prompt, wherever the file is: chunk factory build ../notes/spec.md reads that
 file and still runs on this repo, never the file's own. The run's record
-keeps the file's path as where the prompt came from, shown in 'chunk watch'
+keeps the file's path as where the prompt came from, shown in 'chunk ui'
 too. A missing .md, .markdown or .txt path is an error rather than literal
 text, since that is a far likelier mistyped path than a prompt; a directory, a
 binary file and a file over 1 MiB are refused the same way. Anything else,
@@ -853,7 +854,7 @@ func finishFactory(streams iostream.Streams, detail chunkd.SessionDetail, jsonOu
 	return reportPullRequest(f)
 }
 
-// printFactoryWatchHint points a run that did not pass at chunk watch, by its
+// printFactoryWatchHint points a run that did not pass at chunk ui, by its
 // ID, before how to carry it on (--continue) is said. A run that passed is
 // pointed there after its outcome instead, by finishFactory.
 func printFactoryWatchHint(detail chunkd.SessionDetail, status iostream.StatusFunc) {
@@ -868,17 +869,17 @@ func printFactoryWatchHint(detail chunkd.SessionDetail, status iostream.StatusFu
 	}
 }
 
-// watchHint is the line that says what chunk watch shows of the run. It names
+// watchHint is the line that says what chunk ui shows of the run. It names
 // the run by its ID, unless --continue would name it by another (the first
 // run of its branch), when two IDs side by side would read as one run.
 func watchHint(detail chunkd.SessionDetail, what string) string {
 	if f := detail.Factory; f != nil && f.Branch != "" && f.ContinueID() != factoryRunID(detail) {
-		return what + " in chunk watch."
+		return what + " in chunk ui."
 	}
-	return fmt.Sprintf("Run %s: %s in chunk watch.", factoryRunID(detail), what)
+	return fmt.Sprintf("Run %s: %s in chunk ui.", factoryRunID(detail), what)
 }
 
-// factoryRunID is the ID the run is known by in chunk watch and to --continue.
+// factoryRunID is the ID the run is known by in chunk ui and to --continue.
 func factoryRunID(detail chunkd.SessionDetail) string {
 	if detail.Factory != nil && detail.Factory.RunID != "" {
 		return detail.Factory.RunID

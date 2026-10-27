@@ -51,8 +51,14 @@ func TestWatchRootsFocusLimitsToCwdAndArgs(t *testing.T) {
 	assert.DeepEqual(t, roots, []string{cwd, explicit})
 }
 
+func TestUICmdIsNamedUIWithAWatchAlias(t *testing.T) {
+	cmd := newUICmd()
+	assert.Equal(t, cmd.Name(), "ui")
+	assert.Assert(t, cmd.HasAlias("watch"), "ui should keep watch as a hidden alias")
+}
+
 func TestWatchAllFlagIsDeprecatedButAccepted(t *testing.T) {
-	cmd := newWatchCmd()
+	cmd := newUICmd()
 
 	focus := cmd.Flags().Lookup("focus")
 	assert.Assert(t, focus != nil, "--focus should be registered")

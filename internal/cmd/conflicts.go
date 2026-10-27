@@ -99,7 +99,7 @@ func runConflicts(cmd *cobra.Command, projectDir string, hookMode, jsonOut bool)
 // reportConflictLookupError explains a missing answer, but only where an
 // explanation is wanted. A hook stays silent: the daemon is optional, and a
 // hook that announced its absence would fire on every commit for everyone not
-// running `chunk watch`.
+// running `chunk ui`.
 func reportConflictLookupError(streams iostream.Streams, root string, err error, hookMode, jsonOut bool) {
 	if hookMode {
 		return
@@ -121,7 +121,7 @@ func reportConflictLookupError(streams iostream.Streams, root string, err error,
 		return
 	}
 	if errors.Is(err, chunkd.ErrDaemonTimeout) {
-		// Deliberately not the "run chunk watch" advice below: the daemon is
+		// Deliberately not the "run chunk ui" advice below: the daemon is
 		// already running, and telling someone to start it sends them to fix
 		// something that is not broken.
 		streams.Printf("%s", "The chunk daemon did not answer in time, so there is no conflict information.\n"+
@@ -129,7 +129,7 @@ func reportConflictLookupError(streams iostream.Streams, root string, err error,
 		return
 	}
 	if errors.Is(err, chunkd.ErrDaemonPermission) {
-		// Also not the "run chunk watch" advice: the socket exists, so this is
+		// Also not the "run chunk ui" advice: the socket exists, so this is
 		// not an absent daemon but one this user cannot open. A second daemon
 		// would find the same socket in its way and leave it just as unreadable.
 		streams.Printf("%s", "The chunk daemon socket cannot be opened, so there is no conflict information.\n"+
@@ -138,7 +138,7 @@ func reportConflictLookupError(streams iostream.Streams, root string, err error,
 	}
 	if errors.Is(err, chunkd.ErrDaemonUnreachable) {
 		streams.Printf("%s", "No chunk daemon is running, so there is no conflict information.\n"+
-			"Run `chunk watch` to start it.\n")
+			"Run `chunk ui` to start it.\n")
 		return
 	}
 	streams.Printf("Conflict information is unavailable: %v\n", err)

@@ -273,7 +273,7 @@ chunk
   guessing the wrong prepared environment produces failures that look like the
   repo's own. Selection never fails a run: an unreachable snapshot API is
   warned about and treated as no match.
-- **Keys in `chunk watch` and `chunk factory plan` follow one set of rules**, so
+- **Keys in `chunk ui` and `chunk factory plan` follow one set of rules**, so
   a key means the same thing on both screens. `↑↓←→` and `j k h l` move,
   `g`/`G` and `home`/`end` go to the top and bottom, `pgup`/`pgdn` page and
   `ctrl+u`/`ctrl+d` page by half. `enter` goes in or confirms and `esc` goes
@@ -344,7 +344,7 @@ chunk
   `chunk factory start`, the same way) reads that file on this machine and
   runs on the repository where the command was triggered, never the file's
   own repository, which is untouched. The run's record keeps the file's path
-  as where the prompt came from (`spec_origin` in its JSON, and `chunk watch`
+  as where the prompt came from (`spec_origin` in its JSON, and `chunk ui`
   shows it above the prompt). A word with no spaces and a `.md`, `.markdown`
   or `.txt` extension that does not exist is an error, `file not found`,
   rather than literal text, since that is a far likelier mistyped path than a
@@ -361,7 +361,7 @@ chunk
   runs the project's checks until they pass, for how many review rounds and
   the flag that changes that ("up to 3 review rounds (change with
   --max-attempts)"), and what the run ends with. A second line recommends
-  `chunk watch` as the best way to follow it and every other run, and what it
+  `chunk ui` as the best way to follow it and every other run, and what it
   shows (findings, check output, the pull request); you can also leave it
   running. What it says the run ends with matches the flags: a pull request by
   default (hedged, since a project with no GitHub token or origin still runs
@@ -375,13 +375,13 @@ chunk
   These lines are left out with `--json`, in CI (`CI` set), and when stdout or
   stderr is not a terminal (a log file, a pipe), so none of those changes
   anything already being parsed.
-- **`chunk watch` is the recommended way to interact with chunk.** The plain
-  output of `factory build` is a log of a run; `chunk watch` shows every run
+- **`chunk ui` is the recommended way to interact with chunk.** The plain
+  output of `factory build` is a log of a run; `chunk ui` shows every run
   in every project, each review finding with its severity and location, the
   output of each failed check, the implementer's live activity and the pull
   request, with keys to copy, expand and cancel. So on a terminal chunk points
   there when it helps: at the start of a run (above), at the end of a failed
-  check's or a review with findings' line ("details in chunk watch"), at the
+  check's or a review with findings' line ("details in chunk ui"), at the
   end of every run with its run ID (before `--continue <run id>`, when the
   run can be carried on), after `chunk init`, and in bare `chunk` help. Each
   pointer follows the same rule as the start message: never with `--json`, in
@@ -407,7 +407,7 @@ chunk
   project for if it has not seen it before; it follows the run
   until it ends. Ctrl-C stops the run and waits for it to commit the work done
   so far; the run belongs to the daemon, so if `chunk factory build` loses contact it
-  keeps going and `chunk watch` still shows it. It uses the daemon's
+  keeps going and `chunk ui` still shows it. It uses the daemon's
   Claude and CircleCI credentials, resolved when the daemon started, and the
   project's configured org and image unless `--org-id` or `--image` say
   otherwise. It is refused when `CHUNK_DAEMON_REMOTE_ADDR` is set, since a run
@@ -482,14 +482,14 @@ chunk
   pushed if the push got that far; the command prints why, says where the work is,
   and exits non-zero. The session's `factory.pull_request` records
   `state` (`pending`, `pushing`, `opening`, `opened`, `failed` or `skipped`), `url`,
-  `number`, `base` and a `message` for the last two, which `chunk watch` draws as
+  `number`, `base` and a `message` for the last two, which `chunk ui` draws as
   the run pane's `Pull request` row and as `PR #<n>` beside an ended run in the run list.
   Once it is open, the daemon asks GitHub about it about once a minute and records
   `status`: `up` (nobody has reviewed it or been asked to), `in_review`, `feedback`
   (changes requested, or review threads still unresolved), `checks_failing`,
   `merged` or `closed`. Feedback outranks failing checks, and a reviewer's latest
   verdict is the one that counts, so one who asked for changes and then approved
-  no longer blocks. `chunk watch` shows it as the run's chip in place of `passed`
+  no longer blocks. `chunk ui` shows it as the run's chip in place of `passed`
   (`PR up`, `in review`, `feedback`, `checks failing`, `merged`, `closed`) and on
   the `Pull request` row, and the run list search finds it. It is followed while the run is
   going and for a day after it ends, which is as long as the run list keeps it, and
@@ -499,7 +499,7 @@ chunk
 - **`factory build --continue` picks up a finished run's work.** A run that
   ends with committed work short of passing (exhausted or stuck, or failed or
   cancelled part way, such as on a reviewer sidecar that could not be made)
-  prints `chunk factory build --continue <run id>`, and `r` in `chunk watch`
+  prints `chunk factory build --continue <run id>`, and `r` in `chunk ui`
   starts the same run, with no prompt, from the run's pane. The continued run reopens the earlier
   run's worktree (adding it back from its branch if it was removed, and first
   committing any edits made in it by hand), adds a commit to the same branch,

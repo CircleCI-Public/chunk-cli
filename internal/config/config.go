@@ -133,7 +133,7 @@ type UserConfig struct {
 
 	// AutoLaunchDaemon controls whether chunk commands automatically start the
 	// chunk daemon when it is not running. false (zero value / default) means
-	// the daemon must be started explicitly with `chunk watch`.
+	// the daemon must be started explicitly with `chunk ui`.
 	AutoLaunchDaemon bool `json:"autoLaunchDaemon,omitempty"`
 
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
