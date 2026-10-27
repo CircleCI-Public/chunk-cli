@@ -377,8 +377,9 @@ for chunk to address when you next press `enter`; `shift+↑/↓` selects severa
 parts to comment on together. Once factory's review of the design has
 passed, `ctrl+s` approves the design, and chunk writes the units; once those
 pass review too, `ctrl+s` approves the finished plan in factory, and the
-chunk daemon builds it through to a pull request. The build shows in your
-runs, and keeps going when you close chunk; plan as many as you like.
+chunk daemon builds it through to a pull request. The header says which of
+the two factory is waiting for: Design ready or Plan ready. The build shows
+in your runs, and keeps going when you close chunk; plan as many as you like.
 `esc` goes back to your plans with the plan kept. Quitting with a message
 still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.
