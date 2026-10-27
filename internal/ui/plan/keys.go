@@ -23,6 +23,8 @@ type keyMap struct {
 	// SectionBack carries the hint for both.
 	SectionBack, SectionNext key.Binding
 	Comment, Delete, Resolve key.Binding
+	// Edit opens the highlighted part of the plan in $EDITOR.
+	Edit key.Binding
 	// Next and Prev share a hint while both have somewhere to go.
 	Next, Prev key.Binding
 	// prevUnlisted is set when Next's hint already names Prev.
@@ -75,6 +77,7 @@ func (m Model) keys() keyMap {
 		SectionBack:    key.NewBinding(key.WithKeys("["), key.WithHelp("[/]", "section")),
 		SectionNext:    key.NewBinding(key.WithKeys("]")),
 		Comment:        key.NewBinding(key.WithKeys("c", "enter"), key.WithHelp("c", "comment")),
+		Edit:           key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 		Delete:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete comment")),
 		Resolve:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resolve comment")),
 		Next:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next comment")),
@@ -126,6 +129,8 @@ func (m Model) keys() keyMap {
 		k.Comment.SetHelp("c", "comment on selection")
 	}
 	m.commentKeys(&k, inPlan)
+	// A comment on a part since rewritten has no text in the plan to edit.
+	k.Edit.SetEnabled(inPlan && m.cursor < len(m.blocks) && !m.editing && !m.savingComments)
 	k.SendComments.SetEnabled(inPlan && !m.savingComments && m.takesComments() &&
 		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
 	k.SaveComment.SetEnabled(m.commenting)
@@ -171,7 +176,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.SaveComment, k.CancelComment,
 		k.Switch,
 		k.Send, k.Newline,
-		k.Comment, k.Next, k.SendComments, k.ClearSelection, k.Up,
+		k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
 		k.Focus, k.SendPlan, k.Quit,
 		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}

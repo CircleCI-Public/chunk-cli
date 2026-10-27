@@ -420,3 +420,20 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(f.Task, ""))
 }
+
+// TestStoreSetTextReplacesThePlanInFactory checks that SetText writes the
+// developer's edit as the plan's whole text, and fails before the plan exists.
+func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
+	client, _ := testClient(t)
+	store := NewStore(client, "")
+	ctx := context.Background()
+
+	err := store.SetText(ctx, "# A plan\n")
+	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
+
+	assert.NilError(t, store.Create(ctx, "a plan"))
+	assert.NilError(t, store.SetText(ctx, "# A plan\n\n## 1. Outcome\n\nEdited by hand.\n"))
+	text, err := store.Text(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(text, "# A plan\n\n## 1. Outcome\n\nEdited by hand.\n"))
+}

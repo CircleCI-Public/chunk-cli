@@ -17,8 +17,9 @@ import (
 )
 
 // Store is a plan.Store backed by factory's V3 plan and comment API,
-// addressed by the plan's ID, which Create sets. The screen only reads the
-// plan's text: the agent writes it, with plan_set through the factory daemon.
+// addressed by the plan's ID, which Create sets. The agent writes the plan's
+// text, with plan_set through the factory daemon; the screen writes it only
+// for an edit the developer makes by hand, with SetText.
 type Store struct {
 	api *circleci.Client
 
@@ -250,6 +251,17 @@ func (s *Store) Text(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("get the plan's text: %w", err)
 	}
 	return text, nil
+}
+
+func (s *Store) SetText(ctx context.Context, text string) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.SetPlanText(ctx, id, text); err != nil {
+		return fmt.Errorf("set the plan's text: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Comments(ctx context.Context) ([]plan.Comment, error) {

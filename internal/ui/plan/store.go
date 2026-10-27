@@ -38,6 +38,10 @@ type Store interface {
 	// poll, not before ApproveDesign returns.
 	ApproveDesign(ctx context.Context) error
 	Text(ctx context.Context) (string, error)
+	// SetText replaces the plan's text with text, which the developer
+	// has edited. It is a whole-text write: the caller checks the plan is
+	// as it last read it first.
+	SetText(ctx context.Context, text string) error
 	Comments(ctx context.Context) ([]Comment, error)
 	AddComment(ctx context.Context, quote, body string) (Comment, error)
 	EditComment(ctx context.Context, id, body string) error

@@ -255,6 +255,9 @@ type Model struct {
 	// comments have been saved (and handed to factory), so a second send cannot
 	// start a second save.
 	savingComments bool
+	// editing is set from the developer's e until an edit made in $EDITOR
+	// has been saved to factory, or has failed to be.
+	editing bool
 	// pendingText is the message waiting to go to the agent once the queued
 	// comments this send carried have been saved.
 	pendingText string
@@ -514,6 +517,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case queueSavedMsg:
 		return m.applyQueueSaved(msg)
+
+	case editedMsg:
+		return m.applyEdited(msg)
+
+	case editSavedMsg:
+		return m.applyEditSaved(msg)
 
 	case approveStepMsg:
 		if m.approving {

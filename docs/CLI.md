@@ -625,6 +625,18 @@ chunk
   listed last. A comment on a part since rewritten is listed after the plan,
   naming the part it was on.
 
+  `e` edits the highlighted part, or the run of parts `shift+↑/↓` selected,
+  in `$VISUAL` or `$EDITOR` (`vi` when neither is set), for a change that is
+  quicker to make than to ask for. It is offered only while factory waits on
+  the developer, the same time comments are sent, so the planning session is
+  not writing the plan too. Factory takes only a whole plan, so chunk reads
+  the plan again when the editor closes and saves the edit only if it is as
+  the screen last showed it and factory still waits; otherwise nothing is
+  saved and the edit is kept in the temporary file the status names. A saved
+  edit is told to the planning session in a chat message, so it reads the plan
+  again before it goes on. Comments on an edited part follow it, or are listed
+  after the plan as for any part rewritten.
+
   `ctrl+s` approves the plan, after a `y`, once factory's review of it has
   passed and moved it to Planning - Human; until then the header reads In
   review. A plan waits there after its design is written too: while factory
