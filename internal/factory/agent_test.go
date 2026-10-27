@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 	"gotest.tools/v3/poll"
 )
 
@@ -211,7 +212,14 @@ func TestAgentArgs(t *testing.T) {
 	gotArgs := readFile(t, filepath.Dir(os.Getenv("ARGS")), "args")
 	assert.Assert(t, strings.Contains(gotArgs, "--session-id s-123"), gotArgs)
 	assert.Assert(t, !strings.Contains(gotArgs, "--resume"), gotArgs)
-	assert.Assert(t, strings.Contains(gotArgs, "--allowedTools Read,Grep,Glob,Bash(factory daemon wait),mcp__plugin_f_factory"), gotArgs)
+	assert.Check(t, cmp.Contains(gotArgs, "--allowedTools "+agentTools))
+	// What a factory planning session runs.
+	for _, tool := range []string{
+		"mcp__plugin_f_factory", "Bash(factory daemon wait)", "Bash(factory plan claim *)",
+		"Bash(factory daemon release *)", "Agent", "mcp__sg__code_finder", "Bash(git log *)",
+	} {
+		assert.Check(t, cmp.Contains(agentTools, tool))
+	}
 	assert.Assert(t, strings.Contains(gotArgs, "--plugin-dir /plugins"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, "--model sonnet"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, "--input-format stream-json"), gotArgs)
@@ -619,7 +627,27 @@ func TestAgentClaimsWhenTheDaemonFails(t *testing.T) {
 	a := startTestAgent(context.Background(), t, AgentConfig{SessionID: "s1"}, "hello")
 
 	_, err := a.Claims(context.Background())
-	assert.ErrorContains(t, err, "factory daemon isn't running")
+	assert.Check(t, cmp.ErrorIs(err, ErrNoFactoryDaemon))
+	err = CheckFactoryDaemon(context.Background())
+	assert.Check(t, cmp.ErrorIs(err, ErrNoFactoryDaemon))
+}
+
+func TestAgentClaimsPassOtherDaemonFailuresOn(t *testing.T) {
+	agentFakeEnv(t)
+	t.Setenv("FAKE_CLAIMS_ERR", "claims store is corrupt")
+	fakeClaude(t, agentFakeScript)
+	fakeFactory(t)
+	a := startTestAgent(context.Background(), t, AgentConfig{SessionID: "s1"}, "hello")
+
+	_, err := a.Claims(context.Background())
+	assert.Check(t, cmp.ErrorContains(err, "claims store is corrupt"))
+	assert.Check(t, !errors.Is(err, ErrNoFactoryDaemon))
+}
+
+func TestCheckFactoryDaemonWithoutFactory(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	err := CheckFactoryDaemon(context.Background())
+	assert.Check(t, cmp.ErrorIs(err, ErrNoFactory))
 }
 
 // A Send stuck writing to a claude that stopped reading its stdin must not hold

@@ -28,8 +28,15 @@ var ErrNoFactoryPlugin = errors.New("factory's f plugin is not loaded")
 // claude has no factory tools to plan with.
 var ErrFactoryMCP = errors.New("factory's MCP server is not connected")
 
+// ErrNoFactoryDaemon is returned when the factory daemon, which hands an
+// Agent its planning tasks, is not running.
+var ErrNoFactoryDaemon = errors.New("the factory daemon is not running")
+
 // factoryBinary is the factory command an Agent checks is installed.
 const factoryBinary = "factory"
+
+// daemonNotRunning is in what factory says when its daemon isn't running.
+const daemonNotRunning = "factory daemon isn't running"
 
 // Package variables so tests can shorten them.
 var (
@@ -42,14 +49,16 @@ const (
 	// factoryMCP is the name claude's init event reports the factory MCP
 	// server under.
 	factoryMCP = "plugin:f:factory"
-	// agentTools is what an Agent allows claude to use without asking: the
-	// read-only tools, the one Bash command it needs to keep a plan's tasks
-	// flowing, and every factory MCP tool. It is enough to plan, not to build:
-	// the daemon hands a claimed plan's building tasks (build-unit,
-	// write-commits, rebase) to the same session, and those need builder
-	// subagents, git and edits. Until chunk builds with factory, the planning
-	// screen must free the plan's claim once it leaves Planning.
-	agentTools = "Read,Grep,Glob,Bash(factory daemon wait),mcp__plugin_f_factory"
+	// agentTools is what an Agent allows claude to use without asking: what
+	// a factory planning session uses, and nothing that writes outside the
+	// plan. It is enough to plan, not to build.
+	agentTools = "Read,Grep,Glob,Agent,mcp__plugin_f_factory," +
+		"Bash(factory daemon wait),Bash(factory plan claim *),Bash(factory daemon release *)," +
+		"Bash(codegraph *)," +
+		"mcp__sg__code_finder,mcp__sg__commit_search,mcp__sg__diff_search,mcp__sg__keyword_search," +
+		"mcp__sg__list_files,mcp__sg__list_repos,mcp__sg__read_file," +
+		"Bash(git log *),Bash(git show *),Bash(git diff *),Bash(git merge-base *),Bash(git rev-parse *)," +
+		"Bash(gh pr view *)"
 	// agentDeniedTools is what an Agent never lets claude use, whatever the
 	// developer's own settings allow: planning edits plans through the plan
 	// tools, never the working tree.
@@ -311,24 +320,9 @@ func (a *Agent) Events() <-chan AgentEvent { return a.events }
 // Claims is the plans the factory daemon holds a claim on for this session,
 // by address, as `factory daemon claim list` reports them.
 func (a *Agent) Claims(ctx context.Context) ([]string, error) {
-	cmd := exec.CommandContext(ctx, factoryBinary, "daemon", "claim", "list")
-	// factory retries for a minute by default while the daemon isn't running;
-	// fail at once instead, so the screen can say so.
-	cmd.Env = append(os.Environ(), "FACTORY_DAEMON_NOT_RUNNING_RETRY=0s")
-	out, err := cmd.Output()
+	all, err := listClaims(ctx)
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("list factory claims: %s", strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		return nil, fmt.Errorf("list factory claims: %w", err)
-	}
-	var all []struct {
-		Plan    string `json:"plan"`
-		Session string `json:"session"`
-	}
-	if err := json.Unmarshal(out, &all); err != nil {
-		return nil, fmt.Errorf("read factory claims: %w", err)
+		return nil, err
 	}
 	var plans []string
 	for _, c := range all {
@@ -337,6 +331,50 @@ func (a *Agent) Claims(ctx context.Context) ([]string, error) {
 		}
 	}
 	return plans, nil
+}
+
+// claim is one entry of `factory daemon claim list`.
+type claim struct {
+	Plan    string `json:"plan"`
+	Session string `json:"session"`
+}
+
+// listClaims is every claim the factory daemon holds. It returns
+// ErrNoFactory when factory is not installed and ErrNoFactoryDaemon when its
+// daemon is not running.
+func listClaims(ctx context.Context) ([]claim, error) {
+	if _, err := exec.LookPath(factoryBinary); err != nil {
+		return nil, ErrNoFactory
+	}
+	cmd := exec.CommandContext(ctx, factoryBinary, "daemon", "claim", "list")
+	// factory retries for a minute by default while the daemon isn't running;
+	// fail at once instead, so the screen can say so.
+	cmd.Env = append(os.Environ(), "FACTORY_DAEMON_NOT_RUNNING_RETRY=0s")
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			if strings.Contains(stderr, daemonNotRunning) {
+				return nil, ErrNoFactoryDaemon
+			}
+			return nil, fmt.Errorf("list factory claims: %s", stderr)
+		}
+		return nil, fmt.Errorf("list factory claims: %w", err)
+	}
+	var all []claim
+	if err := json.Unmarshal(out, &all); err != nil {
+		return nil, fmt.Errorf("read factory claims: %w", err)
+	}
+	return all, nil
+}
+
+// CheckFactoryDaemon reports ErrNoFactory when factory is not installed and
+// ErrNoFactoryDaemon when its daemon is not running, so there is nothing to
+// hand an Agent planning tasks.
+func CheckFactoryDaemon(ctx context.Context) error {
+	_, err := listClaims(ctx)
+	return err
 }
 
 // Stop ends the session: SIGINT, then stdin closed, then SIGTERM if claude has

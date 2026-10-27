@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,15 @@ func drive(t *testing.T, m Model, msg tea.Msg) Model {
 		var cmd tea.Cmd
 		m, cmd = m.Update(queue[0])
 		queue = append(queue[1:], run(cmd)...)
+		if len(queue) == 0 {
+			// What a fake agent says is handed over once the screen has
+			// settled, as the agent would answer after the send.
+			if a, ok := m.agent.(*fakeAgent); ok {
+				for _, ev := range a.take() {
+					queue = append(queue, eventMsg{agent: a, Event: ev})
+				}
+			}
+		}
 	}
 	return m
 }
@@ -42,8 +52,8 @@ func run(cmd tea.Cmd) []tea.Msg {
 	if cmd == nil {
 		return nil
 	}
-	// Timers (the cursor's blink, the spinner) are dropped rather than
-	// waited for; everything else the screen does answers at once.
+	// Timers (the cursor's blink, the spinner, the poll) are dropped rather
+	// than waited for; everything else the screen does answers at once.
 	done := make(chan tea.Msg, 1)
 	go func() { done <- cmd() }()
 	var got tea.Msg
@@ -59,23 +69,40 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case turnDoneMsg, submittedMsg:
+	case eventMsg, sentMsg, submittedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
 }
 
-func TestFirstMessageRendersPlanAndReply(t *testing.T) {
-	var got string
-	turn := func(_ context.Context, message string, _ func(string)) (string, string, error) {
-		got = message
-		return "Wrote a first plan.", "# Add a flag\n\n## 1. Outcome\n\nThe flag exists.", nil
+// turnReturning is an agent that answers every message with reply. The
+// plan's text comes from the store, not the agent, so there is nothing else
+// to return.
+func turnReturning(reply string) *fakeAgent {
+	a := newFakeAgent()
+	a.reply = func(string) []Event { return []Event{{Reply: &Reply{Text: reply}}} }
+	return a
+}
+
+// refreshed runs a poll, as the screen's own timer would, and drives its
+// result through m, deterministically rather than waiting on the timer.
+func refreshed(t *testing.T, m Model) Model {
+	t.Helper()
+	for _, msg := range run(m.Poll()) {
+		m = drive(t, m, msg)
 	}
-	m := New(context.Background(), turn, nil, "add a --dry-run flag")
+	return m
+}
+
+func TestFirstMessageRendersPlanAndReply(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Add a flag\n\n## 1. Outcome\n\nThe flag exists."
+	agent := turnReturning("Wrote a first plan.")
+	m := New(context.Background(), agent, nil, store, "add a --dry-run flag")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	if got != "add a --dry-run flag" {
-		t.Fatalf("turn got %q", got)
+	if got := agent.Sent(); len(got) != 1 || got[0] != "add a --dry-run flag" {
+		t.Fatalf("agent got %q", got)
 	}
 	view := ansi.Strip(m.Content())
 	for _, want := range []string{"Add a flag", "The flag exists.", "Wrote a first plan.", "add a --dry-run flag"} {
@@ -85,24 +112,105 @@ func TestFirstMessageRendersPlanAndReply(t *testing.T) {
 	}
 }
 
-func TestApprovingSendsThePlan(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", "# Plan", nil
+func TestFirstSendCreatesPlan(t *testing.T) {
+	store := newFakeStore()
+	var createdBeforeTurn bool
+	agent := newFakeAgent()
+	agent.reply = func(string) []Event {
+		createdBeforeTurn = store.Created
+		return nil
 	}
-	var sent string
-	submit := func(p string) (string, error) {
-		sent = p
+	m := New(context.Background(), agent, nil, store, "add a --dry-run flag\nmore detail")
+	drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if !store.Created {
+		t.Fatal("Create was not called")
+	}
+	if store.Title != "add a --dry-run flag" {
+		t.Errorf("title is %q, want the first line", store.Title)
+	}
+	if !createdBeforeTurn {
+		t.Error("the turn started before the plan was created")
+	}
+}
+
+func TestApprovingSendsThePlan(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	agent := turnReturning("ok")
+	sent := false
+	submit := func() (string, error) {
+		sent = true
 		return "run-1", nil
 	}
-	m := New(context.Background(), turn, submit, "do it")
+	m := New(context.Background(), agent, submit, store, "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	if !m.confirming {
 		t.Fatal("ctrl+s should ask to confirm")
 	}
 	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if sent != "# Plan" || m.RunID != "run-1" {
-		t.Fatalf("sent %q, run %q", sent, m.RunID)
+	if !sent || m.RunID != "run-1" {
+		t.Fatalf("sent %v, run %q", sent, m.RunID)
+	}
+}
+
+// A plan still with the agent, its review among what it waits on, is not
+// sent: the factory would build what the review has not passed.
+func TestAPlanNotReadyIsNotSent(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan"
+	store.StateV = "Planning - Agent"
+	sent := false
+	submit := func() (string, error) {
+		sent = true
+		return "run-1", nil
+	}
+	m := New(context.Background(), turnReturning("ok"), submit, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := ansi.Strip(m.Content())
+	if !strings.Contains(view, "In review") || strings.Contains(view, "Plan ready") {
+		t.Errorf("header does not say the plan is in review:\n%s", view)
+	}
+	if !strings.Contains(view, "wait for the review") {
+		t.Errorf("the action bar offers to approve a plan in review:\n%s", view)
+	}
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if m.confirming {
+		t.Fatal("ctrl+s asked to send a plan in review")
+	}
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if sent {
+		t.Fatal("a plan in review was sent")
+	}
+}
+
+// A plan waits in ReadyState after early-plan too, for its design to be
+// reviewed: with no units yet there is nothing to build, so it is not sent.
+func TestAPlanWithNoUnitsIsNotSent(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
+	sent := false
+	submit := func() (string, error) {
+		sent = true
+		return "run-1", nil
+	}
+	m := New(context.Background(), turnReturning("ok"), submit, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := ansi.Strip(m.Content())
+	if !strings.Contains(view, "Design ready") || strings.Contains(view, "Plan ready") {
+		t.Errorf("header does not say only the design is ready:\n%s", view)
+	}
+	if !strings.Contains(view, "comment so chunk writes the units") {
+		t.Errorf("the action bar offers to approve a plan with no units:\n%s", view)
+	}
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if m.confirming {
+		t.Fatal("ctrl+s asked to send a plan with no units")
+	}
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if sent {
+		t.Fatal("a plan with no units was sent")
 	}
 }
 
@@ -138,77 +246,23 @@ func typeText(t *testing.T, m Model, s string) Model {
 
 const twoParts = "## 1. Outcome\n\nThe flag exists.\n\n## 2. Spec\n\n* [AGENT] parse it in main.go"
 
-func TestCommentGoesToClaudeWithTheBlockItQuotes(t *testing.T) {
-	var sent []string
-	turn := func(_ context.Context, msg string, _ func(string)) (string, string, error) {
-		sent = append(sent, msg)
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
+// planModel is a screen whose plan is already text, with turn replying ok.
+func planModel(t *testing.T) (Model, *fakeStore) {
+	t.Helper()
+	store := newFakeStore()
+	store.TextV = twoParts
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-
-	// To the plan, down to the bullet, and comment on it.
-	m = drive(t, m, press("tab"))
-	for range 3 {
-		m = drive(t, m, press("down"))
-	}
-	m = drive(t, m, press("c"))
-	m = typeText(t, m, "use cobra flags")
-	m = drive(t, m, press("enter"))
-	if len(m.comments) != 1 || m.comments[0].quote != "* [AGENT] parse it in main.go" {
-		t.Fatalf("comments: %+v", m.comments)
-	}
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "use cobra flags") {
-		t.Errorf("the comment is not shown under its block:\n%s", view)
-	}
-
-	// Enter in the chat with nothing typed sends the comment alone.
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("enter"))
-	if len(sent) != 2 {
-		t.Fatalf("turns: %d", len(sent))
-	}
-	for _, want := range []string{"> * [AGENT] parse it in main.go", "My comment: use cobra flags"} {
-		if !strings.Contains(sent[1], want) {
-			t.Errorf("Claude was sent %q, missing %q", sent[1], want)
-		}
-	}
-	if len(m.comments) != 0 {
-		t.Errorf("sent comments are still waiting: %+v", m.comments)
-	}
+	return m, store
 }
 
-func TestCommentsComeBackWhenTheTurnFails(t *testing.T) {
-	fail := false
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		if fail {
-			return "", "", errors.New("claude exited")
-		}
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
+func TestSSavesCommentsFromThePlan(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	agent := turnReturning("ok")
+	m := New(context.Background(), agent, nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("c"))
-	m = typeText(t, m, "too vague")
-	m = drive(t, m, press("enter"))
-
-	fail = true
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("enter"))
-	if len(m.comments) != 1 || m.comments[0].text != "too vague" {
-		t.Fatalf("comments after a failed turn: %+v", m.comments)
-	}
-}
-
-func TestSSendsCommentsFromThePlan(t *testing.T) {
-	var sent []string
-	turn := func(_ context.Context, msg string, _ func(string)) (string, string, error) {
-		sent = append(sent, msg)
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	agent.reset()
 
 	// A message started in the chat, then a comment in the plan.
 	m = typeText(t, m, "draft")
@@ -216,48 +270,46 @@ func TestSSendsCommentsFromThePlan(t *testing.T) {
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "too vague")
 	m = drive(t, m, press("enter"))
-	if bar := ansi.Strip(m.actionBar()); !strings.Contains(bar, "s Send 1 comment to chunk") {
+	if bar := ansi.Strip(m.actionBar()); !strings.Contains(bar, "s Save 1 comment") {
 		t.Errorf("the action bar does not offer s:\n%s", bar)
 	}
 
 	m = drive(t, m, press("s"))
-	if len(sent) != 2 || !strings.Contains(sent[1], "My comment: too vague") {
-		t.Fatalf("turns: %q", sent)
+	if len(store.Added) != 1 || store.Added[0][1] != "too vague" {
+		t.Fatalf("comments saved: %+v", store.Added)
 	}
-	if strings.Contains(sent[1], "draft") {
-		t.Errorf("the chat's draft, out of sight, was sent: %q", sent[1])
+	if len(store.HandedOff) != 1 || store.HandedOff[0] != "Planning - Human" {
+		t.Errorf("handed off: %+v", store.HandedOff)
 	}
-	if m.focus != panePlan || len(m.comments) != 0 || m.input.Value() != "draft" {
+	if got := agent.Sent(); len(got) != 0 {
+		t.Errorf("the chat's draft, out of sight, was sent: %q", got)
+	}
+	if m.focus != panePlan || len(queuedComments(m.comments)) != 0 || m.input.Value() != "draft" {
 		t.Errorf("focus %v, comments %+v, draft %q", m.focus, m.comments, m.input.Value())
 	}
 }
 
-func TestSInThePlanWaitsForClaude(t *testing.T) {
-	var turns int
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		turns++
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
+func TestSSavesCommentsWhileChunkWorks(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "too vague")
 	m = drive(t, m, press("enter"))
 
+	// Comments go to factory, not to the agent, so a busy agent does not
+	// hold them up.
 	m.busy = true
-	m = drive(t, m, press("s"))
-	if turns != 1 || len(m.comments) != 1 || !strings.Contains(ansi.Strip(m.status), "still answering") {
-		t.Errorf("turns %d, comments %+v, status %q", turns, m.comments, m.status)
+	drive(t, m, press("s"))
+	if len(store.Added) != 1 {
+		t.Errorf("comments saved while chunk works: %+v", store.Added)
 	}
 }
 
 func TestCommentEditorOpensUnderItsBlock(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m, _ := planModel(t)
 	m = drive(t, m, press("tab"))
 	for range 3 {
 		m = drive(t, m, press("down"))
@@ -286,11 +338,7 @@ func TestCommentEditorOpensUnderItsBlock(t *testing.T) {
 }
 
 func TestCommentTakesNewLines(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m, _ := planModel(t)
 	m = drive(t, m, press("tab"))
 	for range 3 {
 		m = drive(t, m, press("down"))
@@ -318,11 +366,7 @@ func TestCommentTakesNewLines(t *testing.T) {
 }
 
 func TestCommentEditorGrowsWithWrappedText(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m, _ := planModel(t)
 	m = drive(t, m, press("tab"))
 	for range 3 {
 		m = drive(t, m, press("down"))
@@ -346,11 +390,7 @@ func TestCommentEditorGrowsWithWrappedText(t *testing.T) {
 }
 
 func TestCommentTakesMoreLinesThanTheEditorShows(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m, _ := planModel(t)
 	m = drive(t, m, press("tab"))
 	for range 3 {
 		m = drive(t, m, press("down"))
@@ -378,11 +418,7 @@ func TestCommentTakesMoreLinesThanTheEditorShows(t *testing.T) {
 }
 
 func TestEscCancelsTheCommentInPlace(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m, _ := planModel(t)
 	m = drive(t, m, press("tab"))
 	for range 3 {
 		m = drive(t, m, press("down"))
@@ -400,7 +436,7 @@ func TestEscCancelsTheCommentInPlace(t *testing.T) {
 }
 
 func TestCommentFollowsItsBlockWhenThePlanChanges(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -420,11 +456,7 @@ func TestCommentFollowsItsBlockWhenThePlanChanges(t *testing.T) {
 }
 
 func TestCursorDoesNotHideTheCommentBar(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m, _ := planModel(t)
 	m = drive(t, m, press("tab"))
 	for range 3 {
 		m = drive(t, m, press("down"))
@@ -482,16 +514,12 @@ func assertFits(t *testing.T, m Model, width, height int) {
 }
 
 func TestScreenFitsTheTerminal(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
 	for _, width := range []int{60, 80, 110} {
-		m := New(context.Background(), turn, nil, "")
+		store := newFakeStore()
+		store.TextV = twoParts
+		m := New(context.Background(), turnReturning("ok"), nil, store, "")
 		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
 		assertFits(t, m, width, 24)
-		if view := ansi.Strip(m.Content()); width >= narrowBelow && !strings.Contains(view, "here.") {
-			t.Errorf("at %d wide the empty plan's hint is cut off:\n%s", width, view)
-		}
 
 		m = drive(t, m, press("x"))
 		m = drive(t, m, press("enter"))
@@ -518,7 +546,7 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 // on a light one.
 func TestFocusedPaneUsesTheBrandAccent(t *testing.T) {
 	for _, dark := range []bool{true, false} {
-		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
+		m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithTerminal(dark, false)
 		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		st := theme.New(dark)
 		top := strings.Split(m.Content(), "\n")[1]
@@ -573,7 +601,7 @@ func TestMessageBoxIsBelowThePaneAccent(t *testing.T) {
 	}
 
 	for _, dark := range []bool{true, false} {
-		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
+		m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithTerminal(dark, false)
 		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		// The chat has the keyboard: its own gutter is the accent, and the
 		// message box one step down, dim.
@@ -590,7 +618,7 @@ func TestMessageBoxIsBelowThePaneAccent(t *testing.T) {
 // ground behind it and no band on the cursor's line.
 func TestMessageBoxSitsOnTheTerminalsBackground(t *testing.T) {
 	for _, dark := range []bool{true, false} {
-		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
+		m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithTerminal(dark, false)
 		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		lines := strings.Split(m.Content(), "\n")
 		start := -1
@@ -614,11 +642,8 @@ func TestMessageBoxSitsOnTheTerminalsBackground(t *testing.T) {
 // The developer's message bubbles are content, not focus: they get a faint
 // border, never the pane's accent.
 func TestUserBubbleIsQuiet(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", "", nil
-	}
 	for _, dark := range []bool{true, false} {
-		m := New(context.Background(), turn, nil, "").WithTerminal(dark, false)
+		m := New(context.Background(), turnReturning("ok"), nil, newFakeStore(), "").WithTerminal(dark, false)
 		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		m = typeText(t, m, "hello there")
 		m = drive(t, m, press("enter"))
@@ -644,7 +669,7 @@ func TestUserBubbleIsQuiet(t *testing.T) {
 // comments, code) has a ground of its own.
 func TestPanesSitOnTheTerminalsBackground(t *testing.T) {
 	for _, dark := range []bool{true, false} {
-		m := New(context.Background(), nil, nil, "").WithTerminal(dark, false)
+		m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithTerminal(dark, false)
 		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		lines := strings.Split(m.Content(), "\n")
 		for _, i := range []int{2, len(lines) - 2} {
@@ -656,10 +681,8 @@ func TestPanesSitOnTheTerminalsBackground(t *testing.T) {
 }
 
 func TestChatStaysWhereTheDeveloperScrolled(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return strings.Repeat("A long reply.\n\n", 30), "", nil
-	}
-	m := New(context.Background(), turn, nil, "first")
+	agent := turnReturning(strings.Repeat("A long reply.\n\n", 30))
+	m := New(context.Background(), agent, nil, newFakeStore(), "first")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 	if !m.chatView.AtBottom() {
 		t.Fatal("the chat should follow a new reply")
@@ -674,11 +697,7 @@ func TestChatStaysWhereTheDeveloperScrolled(t *testing.T) {
 }
 
 func TestQuitAsksAgainWhenCommentsAreUnsent(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m, _ := planModel(t)
 	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "too vague")
@@ -704,8 +723,25 @@ func TestQuitAsksAgainWhenCommentsAreUnsent(t *testing.T) {
 	}
 }
 
+func TestQuitWarnsOfQueuedOnly(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.AddComment(context.Background(), "The flag exists.", "saved")
+	m := New(context.Background(), turnReturning("ok"), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+	if len(m.comments) != 1 || m.comments[0].id == "" {
+		t.Fatalf("comments after refresh: %+v", m.comments)
+	}
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if got, ok := closedBy(cmd); !ok {
+		t.Fatalf("quitting with only a saved comment should close at once, got %+v %v", got, ok)
+	}
+}
+
 func TestNewlineHintMatchesTheTerminal(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 160, Height: 30})
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "ctrl+j new line") {
 		t.Errorf("a terminal that sends shift+enter as enter should be told ctrl+j:\n%s", view)
@@ -715,11 +751,7 @@ func TestNewlineHintMatchesTheTerminal(t *testing.T) {
 		t.Errorf("a terminal that tells shift+enter apart should be told it:\n%s", view)
 	}
 
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m2 := New(context.Background(), turn, nil, "plan it")
-	m2 = drive(t, m2, tea.WindowSizeMsg{Width: 160, Height: 30})
+	m2, _ := planModel(t)
 	m2 = drive(t, m2, press("tab"))
 	m2 = drive(t, m2, press("c"))
 	if view := ansi.Strip(m2.Content()); !strings.Contains(view, "ctrl+j new line") {
@@ -728,11 +760,7 @@ func TestNewlineHintMatchesTheTerminal(t *testing.T) {
 }
 
 func TestActionBarKeepsApprovingThePlanInReach(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 110, Height: 30})
+	m, _ := planModel(t)
 	for range 2 {
 		if view := ansi.Strip(m.Content()); !strings.Contains(view, "ctrl+s Approve plan") {
 			t.Errorf("the action bar dropped ctrl+s:\n%s", view)
@@ -751,7 +779,7 @@ func closedBy(cmd tea.Cmd) (ClosedMsg, bool) {
 }
 
 func TestSendingThePlanClosesTheScreenWithItsRun(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	_, cmd := m.Update(submittedMsg{runID: "run-1"})
 	if got, ok := closedBy(cmd); !ok || got.RunID != "run-1" {
 		t.Fatalf("sending the plan closed with %+v, %v", got, ok)
@@ -759,10 +787,8 @@ func TestSendingThePlanClosesTheScreenWithItsRun(t *testing.T) {
 }
 
 func TestBackClosesAtOnceAndKeepsWhatIsUnsent(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it").WithBack()
+	m, _ := planModel(t)
+	m = m.WithBack()
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 30})
 	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("c"))
@@ -781,19 +807,16 @@ func TestBackClosesAtOnceAndKeepsWhatIsUnsent(t *testing.T) {
 	}
 }
 
-func TestBackLeavesEscToStopClaude(t *testing.T) {
-	m := New(context.Background(), nil, nil, "").WithBack()
+func TestBackEscLeavesWhileChunkWorks(t *testing.T) {
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithBack()
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 30})
-	stopped := false
-	m.busy, m.cancelTurn = true, func() { stopped = true }
+	m.busy = true
 
+	// The session is the host's and goes on working, so leaving stops
+	// nothing.
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if _, ok := closedBy(cmd); ok || !stopped {
-		t.Fatalf("esc while Claude works closed %v, stopped %v", ok, stopped)
-	}
-	_, cmd = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if _, ok := closedBy(cmd); !ok {
-		t.Fatal("ctrl+c while Claude works did not go back")
+		t.Fatal("esc while chunk works did not go back")
 	}
 }
 
@@ -807,12 +830,16 @@ func longPlan() string {
 	return b.String()
 }
 
+func longPlanModel(t *testing.T) Model {
+	t.Helper()
+	store := newFakeStore()
+	store.TextV = longPlan()
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+	return drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+}
+
 func TestDOnABlockWithoutACommentDoesNotScroll(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", longPlan(), nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m := longPlanModel(t)
 	m = drive(t, m, press("tab"))
 	for _, k := range []string{"d", "u", "f", "b", " "} {
 		m = drive(t, m, press(k))
@@ -823,11 +850,7 @@ func TestDOnABlockWithoutACommentDoesNotScroll(t *testing.T) {
 }
 
 func TestPagingMovesTheCursorWithTheView(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", longPlan(), nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m := longPlanModel(t)
 	m = drive(t, m, press("tab"))
 
 	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
@@ -850,10 +873,8 @@ func TestPagingMovesTheCursorWithTheView(t *testing.T) {
 }
 
 func TestPageKeysScrollTheChat(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return strings.Repeat("A long reply.\n\n", 30), "", nil
-	}
-	m := New(context.Background(), turn, nil, "first")
+	agent := turnReturning(strings.Repeat("A long reply.\n\n", 30))
+	m := New(context.Background(), agent, nil, newFakeStore(), "first")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "pgup/pgdn scroll chat") {
 		t.Errorf("chat scrolling is not in the footer:\n%s", view)
@@ -870,15 +891,14 @@ func TestPageKeysScrollTheChat(t *testing.T) {
 }
 
 func TestEnterDoesNotConfirmSendingThePlan(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", "# Plan", nil
-	}
+	store := newFakeStore()
+	store.TextV = "# Plan"
 	sent := false
-	submit := func(string) (string, error) {
+	submit := func() (string, error) {
 		sent = true
 		return "run-1", nil
 	}
-	m := New(context.Background(), turn, submit, "do it")
+	m := New(context.Background(), turnReturning("ok"), submit, store, "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = drive(t, m, press("enter"))
@@ -888,7 +908,7 @@ func TestEnterDoesNotConfirmSendingThePlan(t *testing.T) {
 }
 
 func TestTwoCommentsOnIdenticalBlocksStayOnSeparateBlocks(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = "## Spec\n\n* Tests\n* Tests"
 	m.renderPlan()
@@ -906,7 +926,7 @@ func TestTwoCommentsOnIdenticalBlocksStayOnSeparateBlocks(t *testing.T) {
 }
 
 func TestCommentOnARewrittenPartIsStillShown(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -927,7 +947,7 @@ func TestCommentOnARewrittenPartIsStillShown(t *testing.T) {
 }
 
 func TestCommentOnARewrittenPartCanBeEditedAndDeleted(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -978,7 +998,7 @@ func TestCommentOnARewrittenPartCanBeEditedAndDeleted(t *testing.T) {
 }
 
 func TestNextReachesTheNearestCommentThenRewrittenParts(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1003,7 +1023,7 @@ func TestNextReachesTheNearestCommentThenRewrittenParts(t *testing.T) {
 }
 
 func TestNextReachesARewrittenPartsCommentFromAnywhereAbove(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1020,7 +1040,7 @@ func TestNextReachesARewrittenPartsCommentFromAnywhereAbove(t *testing.T) {
 }
 
 func TestNextStaysPutWithNoCommentBelow(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1048,56 +1068,12 @@ func TestNextStaysPutWithNoCommentBelow(t *testing.T) {
 	}
 }
 
-func TestCursorLeavesARewrittenPartsCommentWhenItIsSent(t *testing.T) {
-	// A turn that does not answer while the test looks at the screen, so the
-	// cursor is seen as it is for the length of the turn.
-	hold := make(chan struct{})
-	defer close(hold)
-	turn := func(ctx context.Context, _ string, _ func(string)) (string, string, error) {
-		<-hold
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "")
+func TestCursorStaysOnARewrittenPartsCommentAcrossAPoll(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
-	m.renderPlan()
-	m.comments = []comment{{block: -1, quote: "gone", text: "x"}}
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("G"))
-	if m.cursor != len(m.blocks) {
-		t.Fatalf("cursor is not on the comment: %d", m.cursor)
-	}
-
-	// Sending takes the comment, and the stop it was drawn at, with it.
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("enter"))
-	if len(m.comments) != 0 || !m.busy {
-		t.Fatalf("comments: %+v, busy: %v", m.comments, m.busy)
-	}
-	if m.cursor >= len(m.blocks) {
-		t.Fatalf("cursor is %d, past the last of %d blocks", m.cursor, len(m.blocks))
-	}
-
-	// It is on the last block, the nearest stop to where it was, and back in
-	// the plan it is drawn there and moves from there.
-	if m.cursor != len(m.blocks)-1 {
-		t.Fatalf("cursor is %d, want the last block %d", m.cursor, len(m.blocks)-1)
-	}
-	m = drive(t, m, press("tab"))
-	if view := ansi.Strip(m.planView.View()); !strings.Contains(view, "▌") {
-		t.Errorf("the focused plan pane draws no cursor:\n%s", view)
-	}
-	m = drive(t, m, press("up"))
-	if m.cursor != len(m.blocks)-2 {
-		t.Errorf("cursor after up: %d, want %d", m.cursor, len(m.blocks)-2)
-	}
-}
-
-func TestCursorStaysOnARewrittenPartsCommentWhenATurnEnds(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
-	m.renderPlan()
+	m = refreshed(t, m)
 	m.comments = []comment{{block: -1, quote: "gone", text: "x"}}
 	m = drive(t, m, press("tab"))
 	m.moveCursor(len(m.blocks))
@@ -1106,12 +1082,12 @@ func TestCursorStaysOnARewrittenPartsCommentWhenATurnEnds(t *testing.T) {
 	}
 	m = drive(t, m, press("c"))
 
-	newPlan := "## 0. New\n\nAdded.\n\n" + twoParts
-	m, _ = m.Update(turnDoneMsg{plan: newPlan})
+	store.TextV = "## 0. New\n\nAdded.\n\n" + twoParts
+	m = refreshed(t, m)
 
 	ci := m.commentAt(m.cursor)
 	if ci < 0 || m.comments[ci].text != "x" {
-		t.Fatalf("cursor is not on the orphan after the turn: cursor=%d comments=%+v", m.cursor, m.comments)
+		t.Fatalf("cursor is not on the orphan after the poll: cursor=%d comments=%+v", m.cursor, m.comments)
 	}
 
 	m = typeText(t, m, "z")
@@ -1122,11 +1098,7 @@ func TestCursorStaysOnARewrittenPartsCommentWhenATurnEnds(t *testing.T) {
 }
 
 func TestCommentUnderItsBlockHasNoExcerpt(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m, _ := planModel(t)
 	m = drive(t, m, press("tab"))
 	for range 3 {
 		m = drive(t, m, press("down"))
@@ -1140,45 +1112,109 @@ func TestCommentUnderItsBlockHasNoExcerpt(t *testing.T) {
 	}
 }
 
-func TestSentCommentNamesItsTarget(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
+func TestActivityWithNothingSentIsAFactoryTask(t *testing.T) {
+	m := New(context.Background(), turnReturning("ok"), nil, newFakeStore(), "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	if m.busy {
+		t.Fatal("still busy after the reply")
 	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m = drive(t, m, press("tab"))
-	for range 3 {
-		m = drive(t, m, press("down"))
+
+	m = drive(t, m, eventFor(m, Event{Activity: "reading main.go"}))
+	if !m.busy || !m.byTask {
+		t.Fatalf("busy %v, byTask %v; want a factory task's turn", m.busy, m.byTask)
 	}
-	m = drive(t, m, press("c"))
-	m = typeText(t, m, "use cobra flags")
-	m = drive(t, m, press("enter"))
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "working on a factory task") {
+		t.Errorf("view does not say chunk is on a factory task:\n%s", view)
+	}
 
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("enter"))
-
-	if view := ansi.Strip(m.chatView.View()); !strings.Contains(view, `on "* [AGENT] parse it in main.go"`) {
-		t.Errorf("chat is missing the comment's target:\n%s", view)
+	m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Wrote the units.", ByTask: true}}))
+	if m.busy {
+		t.Error("still busy after the task's reply")
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "chunk · factory task") || !strings.Contains(view, "Wrote the units.") {
+		t.Errorf("the task's reply is not marked as a factory task's:\n%s", view)
 	}
 }
 
-func TestActivityAfterTheTurnEndsIsDropped(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", "# Plan", nil
-	}
-	m := New(context.Background(), turn, nil, "do it")
+func TestEventsFromAnotherAgentAreIgnored(t *testing.T) {
+	m := New(context.Background(), turnReturning("ok"), nil, newFakeStore(), "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = drive(t, m, activityMsg("reading main.go"))
-	if m.activity != "" {
-		t.Errorf("activity after the turn is %q, want none", m.activity)
+	before := len(m.messages)
+
+	// A host that kept an earlier screen's wait running can deliver what that
+	// screen's agent says to this one.
+	other := newFakeAgent()
+	m = drive(t, m, eventMsg{agent: other, Event: Event{Reply: &Reply{Text: "an old session"}}})
+	m = drive(t, m, sentMsg{agent: other, err: errors.New("an old failure")})
+	if len(m.messages) != before || m.busy {
+		t.Errorf("another agent's events reached the screen: %+v", m.messages[before:])
+	}
+}
+
+func TestMessageWhileChunkWorksGoesToItAtOnce(t *testing.T) {
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, nil, newFakeStore(), "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	if !m.busy {
+		t.Fatal("not busy after the first send")
+	}
+
+	m = typeText(t, m, "and keep it small")
+	m = drive(t, m, press("enter"))
+	if got := agent.Sent(); len(got) != 2 || got[1] != "and keep it small" {
+		t.Fatalf("agent got %q", got)
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "sent while chunk was working") {
+		t.Errorf("the message does not say it went to a busy chunk:\n%s", view)
+	}
+}
+
+func TestFailedSendShowsInTheChat(t *testing.T) {
+	agent := newFakeAgent()
+	agent.err = errors.New("no f plugin")
+	m := New(context.Background(), agent, nil, newFakeStore(), "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	if m.busy {
+		t.Error("still busy after the send failed")
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "no f plugin") {
+		t.Errorf("the failure is not in the chat:\n%s", view)
+	}
+}
+
+func TestProblemEndsTheTurn(t *testing.T) {
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = drive(t, m, eventFor(m, Event{Problem: errors.New("claude exited (code 1)")}))
+	if m.busy {
+		t.Error("still busy after the session's problem")
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "claude exited") {
+		t.Errorf("the problem is not in the chat:\n%s", view)
+	}
+}
+
+func TestPlanInReviewSaysOnlyCommentsChangeIt(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	if store.StateV != "Planning - Human" {
+		t.Fatalf("test assumes the fake store starts in Planning - Human, got %q", store.StateV)
+	}
+	if m.input.Placeholder != reviewPlaceholder {
+		t.Errorf("placeholder in review is %q", m.input.Placeholder)
+	}
+
+	store.StateV = "Planning - Agent"
+	m = refreshed(t, m)
+	if m.input.Placeholder != chatPlaceholder {
+		t.Errorf("placeholder while chunk plans is %q", m.input.Placeholder)
 	}
 }
 
 func TestPlanIsSentOnceWhileTheFactoryAnswers(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", "# Plan", nil
-	}
-	m := New(context.Background(), turn, nil, "do it")
+	m := New(context.Background(), turnReturning("ok"), nil, newFakeStore(), "do it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m.sending = true
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
@@ -1190,13 +1226,13 @@ func TestPlanIsSentOnceWhileTheFactoryAnswers(t *testing.T) {
 func TestBubbleFitsAShortMessageAndWrapsALongOne(t *testing.T) {
 	m := &Model{}
 	const w = 60
-	short := m.userBubble(&message{fromUser: true, text: "hi"}, w)
+	short := m.userBubble("hi", w)
 	top, _, _ := strings.Cut(ansi.Strip(short), "\n")
 	if got := ansi.StringWidth(strings.TrimSpace(top)); got != len("hi")+bubbleChrome {
 		t.Errorf("bubble for %q is %d wide, want %d:\n%s", "hi", got, len("hi")+bubbleChrome, ansi.Strip(short))
 	}
 
-	long := m.userBubble(&message{fromUser: true, text: strings.Repeat("word ", 30)}, w)
+	long := m.userBubble(strings.Repeat("word ", 30), w)
 	lines := strings.Split(ansi.Strip(long), "\n")
 	if len(lines) < 4 {
 		t.Errorf("long message did not wrap:\n%s", ansi.Strip(long))
@@ -1212,18 +1248,22 @@ func TestBubbleFitsAShortMessageAndWrapsALongOne(t *testing.T) {
 }
 
 func TestHeaderShowsPlanState(t *testing.T) {
-	turn := func(_ context.Context, _ string, _ func(string)) (string, string, error) {
-		return "Wrote a plan.", "# Add a flag\n\n## 1. Outcome\n\nThe flag exists.", nil
-	}
-	m := New(context.Background(), turn, nil, "")
+	store := newFakeStore()
+	m := New(context.Background(), turnReturning("Wrote a plan."), nil, store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "No plan yet") {
 		t.Errorf("header does not say there is no plan:\n%s", view)
 	}
 
-	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	store.TextV = "# Add a flag\n\n## 1. Outcome\n\nThe flag exists."
 	m, _ = m.send("add a flag")
-	m = drive(t, m, turnDoneMsg{reply: "Wrote a plan.", plan: "# Add a flag\n\n## 1. Outcome\n\nThe flag exists."})
+	m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Wrote a plan."}}))
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Design ready") {
+		t.Errorf("header does not say the design is ready:\n%s", view)
+	}
+
+	store.TextV += "\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Wrote the units."}}))
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Plan ready") {
 		t.Errorf("header does not say the plan is ready:\n%s", view)
 	}
@@ -1231,7 +1271,7 @@ func TestHeaderShowsPlanState(t *testing.T) {
 	m.comments = []comment{{block: 0, quote: "# Add a flag", text: "name it --dry"}}
 	m.renderPlan()
 	view := ansi.Strip(m.Content())
-	for _, want := range []string{"1 comment waiting for chunk", "your comment · queued", "name it --dry"} {
+	for _, want := range []string{"1 comment queued", "your comment · queued", "name it --dry"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
@@ -1263,10 +1303,9 @@ Code.
 More code.`
 
 func TestPlanShowsUnitsAsSteps(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", planWithUnits, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it").WithBranch("hanabel/retry-429")
+	store := newFakeStore()
+	store.TextV = planWithUnits
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it").WithBranch("hanabel/retry-429")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := ansi.Strip(m.Content())
 	for _, want := range []string{"hanabel/retry-429", "OUTCOME ─", "OPEN QUESTIONS", "○ 1  Add RetryPolicy", "○ 2  Wire it in", "2 units", "1 open question", "ctrl+s Approve plan"} {
@@ -1277,10 +1316,9 @@ func TestPlanShowsUnitsAsSteps(t *testing.T) {
 }
 
 func TestNarrowScreenTakesTurnsWithTabs(t *testing.T) {
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "Wrote it.", planWithUnits, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
+	store := newFakeStore()
+	store.TextV = planWithUnits
+	m := New(context.Background(), turnReturning("Wrote it."), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 70, Height: 30})
 	view := ansi.Strip(m.Content())
 	if !strings.Contains(view, "Chat") || !strings.Contains(view, "Plan · 2 units") {
@@ -1300,29 +1338,22 @@ func TestNarrowScreenTakesTurnsWithTabs(t *testing.T) {
 }
 
 func TestFirstPlanShowsASkeletonWhileClaudeWrites(t *testing.T) {
-	release := make(chan struct{})
-	turn := func(_ context.Context, _ string, activity func(string)) (string, string, error) {
-		activity("Read create.go")
-		<-release
-		return "ok", planWithUnits, nil
-	}
-	m := New(context.Background(), turn, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m, _ = m.send("plan it")
-	m = drive(t, m, activityMsg("Read create.go"))
+	m = drive(t, m, eventFor(m, Event{Activity: "Read create.go"}))
 	view := ansi.Strip(m.Content())
-	for _, want := range []string{"chunk is drafting", "Read create.go", "███", "esc Stop chunk"} {
+	for _, want := range []string{"chunk is drafting", "Read create.go", "███", "chunk is working"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
 	}
-	close(release)
 }
 
 // While a comment is written enter saves it, so the bar does not offer enter
-// as the key that sends comments to Claude.
+// as the key that sends comments to the factory.
 func TestActionBarOffersNoButtonWhileACommentIsWritten(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 110, Height: 30})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1334,7 +1365,7 @@ func TestActionBarOffersNoButtonWhileACommentIsWritten(t *testing.T) {
 	if !strings.Contains(view, "enter save comment") {
 		t.Fatalf("the bar does not say enter saves:\n%s", view)
 	}
-	for _, not := range []string{"Send 1 comment", "Approve plan"} {
+	for _, not := range []string{"Save 1 comment", "Approve plan"} {
 		if strings.Contains(view, not) {
 			t.Errorf("the bar offers %q while a comment is written:\n%s", not, view)
 		}
@@ -1342,13 +1373,7 @@ func TestActionBarOffersNoButtonWhileACommentIsWritten(t *testing.T) {
 }
 
 func TestShiftSelectsSeveralBlocksForOneComment(t *testing.T) {
-	var sent []string
-	turn := func(_ context.Context, msg string, _ func(string)) (string, string, error) {
-		sent = append(sent, msg)
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m, _ := planModel(t)
 
 	// From the second heading, up over the paragraph above it.
 	m = drive(t, m, press("tab"))
@@ -1375,16 +1400,10 @@ func TestShiftSelectsSeveralBlocksForOneComment(t *testing.T) {
 	if m.commentAt(m.cursor) != 0 {
 		t.Errorf("block %d is not on the comment", m.cursor)
 	}
-
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("enter"))
-	if !strings.Contains(sent[1], "> The flag exists.\n>\n> ## 2. Spec") {
-		t.Errorf("Claude was not sent both parts:\n%s", sent[1])
-	}
 }
 
 func TestCommentOnSeveralBlocksHangsUnderTheLast(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1415,7 +1434,7 @@ func TestCommentOnSeveralBlocksHangsUnderTheLast(t *testing.T) {
 }
 
 func TestSelectionTakesInTheCommentsItTouches(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1455,7 +1474,7 @@ func TestSelectionTakesInTheCommentsItTouches(t *testing.T) {
 }
 
 func TestEmptyCommentOnASelectionDeletesWhatItTookIn(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1471,7 +1490,7 @@ func TestEmptyCommentOnASelectionDeletesWhatItTookIn(t *testing.T) {
 }
 
 func TestEscClearsTheSelectionBeforeItLeaves(t *testing.T) {
-	m := New(context.Background(), nil, nil, "").WithBack()
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithBack()
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1493,7 +1512,7 @@ func TestEscClearsTheSelectionBeforeItLeaves(t *testing.T) {
 }
 
 func TestMovingWithoutShiftDropsTheSelection(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1510,7 +1529,7 @@ func TestMovingWithoutShiftDropsTheSelection(t *testing.T) {
 }
 
 func TestCommentOnSeveralBlocksFollowsThemWhenThePlanChanges(t *testing.T) {
-	m := New(context.Background(), nil, nil, "")
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.plan = twoParts
 	m.renderPlan()
@@ -1530,13 +1549,801 @@ func TestCommentOnSeveralBlocksFollowsThemWhenThePlanChanges(t *testing.T) {
 	}
 }
 
+// --- Store-backed polling and comments ---
+
+func TestPaneRendersStoreText(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 1. Outcome\n\nDone."
+	store.StateV = "Planning - Agent"
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = refreshed(t, m)
+
+	view := ansi.Strip(m.Content())
+	if !strings.Contains(view, "Done.") {
+		t.Errorf("plan text not shown:\n%s", view)
+	}
+	if !strings.Contains(view, "Plan · Planning - Agent") {
+		t.Errorf("title does not show the state:\n%s", view)
+	}
+}
+
+func TestSavedCommentAnchorsByQuote(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.AddComment(context.Background(), "## 2. Spec", "needs more detail")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	view := ansi.Strip(m.planView.View())
+	if !strings.Contains(view, "needs more detail") || strings.Contains(view, "On parts chunk has since rewritten") {
+		t.Fatalf("comment is not drawn under its block:\n%s", view)
+	}
+
+	store.TextV = "## 1. Outcome\n\nRewritten."
+	m = refreshed(t, m)
+	view = ansi.Strip(m.planView.View())
+	if !strings.Contains(view, "On parts chunk has since rewritten") || !strings.Contains(view, "needs more detail") {
+		t.Errorf("comment did not become an orphan:\n%s", view)
+	}
+}
+
+// TestSavedCommentHeadSaysOpen checks that a comment already in factory
+// heads its card "your comment · open", not "queued" like one still
+// waiting to be sent.
+func TestSavedCommentHeadSaysOpen(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.AddComment(context.Background(), "The flag exists.", "needs more detail")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	view := ansi.Strip(m.planView.View())
+	if !strings.Contains(view, "your comment · open") {
+		t.Fatalf("saved comment's head does not say it is open:\n%s", view)
+	}
+	if strings.Contains(view, "your comment · queued") {
+		t.Errorf("saved comment is headed as queued:\n%s", view)
+	}
+}
+
+// TestPlanFooterCountsQueuedAndOpen checks that the footer counts queued
+// and already-saved comments separately.
+func TestPlanFooterCountsQueuedAndOpen(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.AddComment(context.Background(), "The flag exists.", "saved one")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "queued one")
+	m = drive(t, m, press("enter"))
+
+	footer := ansi.Strip(m.planFooter())
+	if !strings.Contains(footer, "1 queued · 1 open") {
+		t.Errorf("footer is %q, want counts for both queued and open comments", footer)
+	}
+}
+
+func TestResolvedCommentsListedAsResolved(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	c, _ := store.AddComment(context.Background(), "The flag exists.", "looks good")
+	store.ResolveComment(context.Background(), c.ID)
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	if len(m.comments) != 0 || len(m.resolved) != 1 {
+		t.Fatalf("comments=%+v resolved=%+v", m.comments, m.resolved)
+	}
+	view := ansi.Strip(m.planView.View())
+	for _, want := range []string{"Resolved", "resolved", "looks good"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+// TestResolvedStopDisablesCommentKeys checks that c, r and d do nothing on
+// a resolved comment's stop: the cursor can reach it, but none of them act
+// on it.
+func TestResolvedStopDisablesCommentKeys(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	c, _ := store.AddComment(context.Background(), "The flag exists.", "looks good")
+	store.ResolveComment(context.Background(), c.ID)
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("G"))
+	if !m.onResolved(m.cursor) {
+		t.Fatalf("cursor did not reach the resolved stop: %d", m.cursor)
+	}
+
+	m = drive(t, m, press("c"))
+	if m.commenting {
+		t.Error("c opened an editor on a resolved comment")
+	}
+	m = drive(t, m, press("r"))
+	if len(store.Resolved) != 1 {
+		t.Errorf("r resolved something on a resolved comment: %+v", store.Resolved)
+	}
+	m = drive(t, m, press("d"))
+	if len(store.Deleted) != 0 || m.confirming {
+		t.Errorf("d deleted or asked to delete a resolved comment: deleted=%+v confirming=%v", store.Deleted, m.confirming)
+	}
+}
+
+func TestPollKeepsCommentPlace(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "## Spec\n\n* Tests\n* Tests"
+	store.AddComment(context.Background(), "* Tests", "second one")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+	if len(m.comments) != 1 || m.comments[0].block < 0 {
+		t.Fatalf("comment not anchored: %+v", m.comments)
+	}
+	block := m.comments[0].block
+
+	m = refreshed(t, m)
+	if m.comments[0].block != block {
+		t.Errorf("comment moved from block %d to %d across a poll", block, m.comments[0].block)
+	}
+}
+
+func TestRefreshErrorKeepsPane(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+	before := m.plan
+
+	store.StateErr = errors.New("network blip")
+	m = refreshed(t, m)
+	if m.plan != before {
+		t.Errorf("plan changed on a failed poll")
+	}
+	if !strings.Contains(m.refreshErr, "network blip") {
+		t.Errorf("refreshErr: %q", m.refreshErr)
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "could not refresh the plan") {
+		t.Errorf("no quiet note in the footer:\n%s", view)
+	}
+
+	store.StateErr = nil
+	m = refreshed(t, m)
+	if m.refreshErr != "" {
+		t.Errorf("refreshErr not cleared after a successful poll: %q", m.refreshErr)
+	}
+}
+
+func TestQueuedCommentsSavedOnSend(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	agent := turnReturning("ok")
+	m := New(context.Background(), agent, nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "first")
+	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "second")
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 2 {
+		t.Fatalf("comments before send: %+v", m.comments)
+	}
+
+	m = drive(t, m, press("tab"))
+	m = typeText(t, m, "please address these")
+	m = drive(t, m, press("enter"))
+
+	if len(store.Added) != 2 || store.Added[0] != [2]string{"The flag exists.", "first"} ||
+		store.Added[1] != [2]string{"* [AGENT] parse it in main.go", "second"} {
+		t.Fatalf("added: %+v", store.Added)
+	}
+	if len(store.HandedOff) != 1 || store.HandedOff[0] != "Planning - Human" {
+		t.Fatalf("handed off: %+v", store.HandedOff)
+	}
+	if got := agent.Sent(); len(got) != 2 || got[1] != "please address these" {
+		t.Fatalf("agent got %q, want only the typed message after the first", got)
+	}
+	if len(queuedComments(m.comments)) != 0 {
+		t.Errorf("comments still queued: %+v", m.comments)
+	}
+	// Saved with new IDs, the comments stay on their blocks while the plan's
+	// text is unchanged.
+	for _, c := range m.comments {
+		if c.id == "" || c.block < 0 {
+			t.Errorf("saved comment not anchored after send: %+v", c)
+		}
+	}
+	if view := ansi.Strip(m.planView.View()); strings.Contains(view, "On parts chunk has since rewritten") {
+		t.Errorf("saved comments fell into the orphan list after send:\n%s", view)
+	}
+}
+
+func TestSendWithOnlyCommentsStartsNoTurn(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	agent := turnReturning("ok")
+	m := New(context.Background(), agent, nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	agent.reset()
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "first")
+	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("tab"))
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Press enter to save your comments") {
+		t.Errorf("placeholder does not say comments are saved:\n%s", view)
+	}
+	m = drive(t, m, press("enter"))
+
+	if len(agent.Sent()) != 0 {
+		t.Error("a turn started with nothing typed")
+	}
+	if len(store.Added) != 1 {
+		t.Fatalf("comments saved: %+v", store.Added)
+	}
+	if len(queuedComments(m.comments)) != 0 {
+		t.Errorf("comments still queued: %+v", m.comments)
+	}
+}
+
+func TestNoHandOffOutsideHumanStates(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.StateV = "Planning - Agent"
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "x")
+	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("tab"))
+	drive(t, m, press("enter"))
+
+	if len(store.Added) != 1 {
+		t.Fatalf("comments saved: %+v", store.Added)
+	}
+	if len(store.HandedOff) != 0 {
+		t.Errorf("handed off: %+v", store.HandedOff)
+	}
+}
+
+// TestHandOffRetriedOnNextSendWithNothingQueued checks that an
+// address-comments event failing after every comment was saved is retried on
+// the next send, even with nothing queued, rather than leaving the plan stuck
+// in its Human state.
+func TestHandOffRetriedOnNextSendWithNothingQueued(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.AddressErr = errors.New("transient")
+	agent := turnReturning("ok")
+	m := New(context.Background(), agent, nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	agent.reset()
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "first")
+	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("tab"))
+	m = typeText(t, m, "go")
+	m = drive(t, m, press("enter"))
+
+	if len(store.Added) != 1 {
+		t.Fatalf("comment not saved: %+v", store.Added)
+	}
+	if len(store.HandedOff) != 0 {
+		t.Fatalf("hand-off should have failed: %+v", store.HandedOff)
+	}
+	if len(agent.Sent()) != 0 {
+		t.Fatalf("a turn started despite the hand-off failing")
+	}
+	if strings.TrimSpace(m.input.Value()) != "go" {
+		t.Errorf("message not kept in the input: %q", m.input.Value())
+	}
+	if len(queuedComments(m.comments)) != 0 {
+		t.Fatalf("the saved comment should not stay queued: %+v", m.comments)
+	}
+
+	store.AddressErr = nil
+	m = drive(t, m, press("enter"))
+
+	if len(store.HandedOff) != 1 || store.HandedOff[0] != "Planning - Human" {
+		t.Fatalf("hand-off not retried: %+v", store.HandedOff)
+	}
+	if len(store.Added) != 1 {
+		t.Fatalf("the already-saved comment was saved again: %+v", store.Added)
+	}
+	if len(agent.Sent()) != 1 {
+		t.Fatalf("turn calls = %d, want 1", len(agent.Sent()))
+	}
+}
+
+// TestPlainMessageInHumanStateDoesNotHandOff checks that sending an ordinary
+// chat message while the plan sits in a Human state, with no comment ever
+// queued or saved, sends factory no address-comments event.
+func TestPlainMessageInHumanStateDoesNotHandOff(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	agent := turnReturning("ok")
+	m := New(context.Background(), agent, nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	agent.reset()
+
+	if store.StateV != "Planning - Human" {
+		t.Fatalf("test assumes the fake store starts in Planning - Human, got %q", store.StateV)
+	}
+	m = typeText(t, m, "also handle edge case X")
+	drive(t, m, press("enter"))
+
+	if len(store.HandedOff) != 0 {
+		t.Fatalf("handed off on a plain message with no comments ever saved: %+v", store.HandedOff)
+	}
+	if len(store.Added) != 0 {
+		t.Fatalf("comments saved on a plain message: %+v", store.Added)
+	}
+	if len(agent.Sent()) != 1 {
+		t.Fatalf("turn calls = %d, want 1", len(agent.Sent()))
+	}
+}
+
+func TestSaveFailureKeepsRestQueued(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.FailAddAfter = 1
+	agent := turnReturning("ok")
+	m := New(context.Background(), agent, nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	agent.reset()
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "first")
+	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "second")
+	m = drive(t, m, press("enter"))
+	if len(m.comments) != 2 {
+		t.Fatalf("comments before send: %+v", m.comments)
+	}
+
+	m = drive(t, m, press("tab"))
+	m = typeText(t, m, "go")
+	m = drive(t, m, press("enter"))
+
+	if len(store.Added) != 1 {
+		t.Fatalf("saved: %+v", store.Added)
+	}
+	queued := queuedComments(m.comments)
+	if len(queued) != 1 || queued[0].text != "second" {
+		t.Fatalf("queued comments after failure: %+v (all comments: %+v)", queued, m.comments)
+	}
+	if len(m.comments) != 2 {
+		t.Fatalf("the saved comment should still show as open: %+v", m.comments)
+	}
+	if len(store.HandedOff) != 0 {
+		t.Errorf("handed off despite the failure: %+v", store.HandedOff)
+	}
+	if len(agent.Sent()) != 0 {
+		t.Errorf("a turn started despite the failure")
+	}
+	if strings.TrimSpace(m.input.Value()) != "go" {
+		t.Errorf("message not kept in the input: %q", m.input.Value())
+	}
+}
+
+func TestEditingSavedCommentPutsBody(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	c, _ := store.AddComment(context.Background(), "The flag exists.", "orig")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+	if len(m.comments) != 1 || m.comments[0].id == "" {
+		t.Fatalf("comments after refresh: %+v", m.comments)
+	}
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	if m.editingID == "" {
+		t.Fatalf("editingID not set for a saved comment")
+	}
+	m.commentInput.SetValue("")
+	m = typeText(t, m, "better text")
+	m = drive(t, m, press("enter"))
+
+	if store.Edited[c.ID] != "better text" {
+		t.Errorf("edited: %+v", store.Edited)
+	}
+	if m.commenting {
+		t.Error("the editor is still open after saving")
+	}
+}
+
+// TestClearingSavedCommentResolvesIt checks editCmd's documented contract:
+// clearing a saved comment's editor to empty and saving resolves it rather
+// than editing its body to empty text.
+func TestClearingSavedCommentResolvesIt(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	c, _ := store.AddComment(context.Background(), "The flag exists.", "orig")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m.commentInput.SetValue("")
+	m = drive(t, m, press("enter"))
+
+	if len(store.Resolved) != 1 || store.Resolved[0] != c.ID {
+		t.Fatalf("resolved: %+v, want [%s]", store.Resolved, c.ID)
+	}
+	if _, edited := store.Edited[c.ID]; edited {
+		t.Errorf("EditComment was called instead of ResolveComment: %+v", store.Edited)
+	}
+}
+
+// TestEditFailureKeepsEditorOpen checks that editing a saved comment shows
+// "Saving…" while the request is in flight, and, on failure, stays open
+// with the typed text and no committed edit.
+func TestEditFailureKeepsEditorOpen(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	c, _ := store.AddComment(context.Background(), "The flag exists.", "orig")
+	store.EditErr = errors.New("boom")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m.commentInput.SetValue("")
+	m = typeText(t, m, "better text")
+
+	m, cmd := m.Update(press("enter"))
+	if !m.savingEdit || !m.commenting {
+		t.Fatalf("editor did not enter the saving state: savingEdit=%v commenting=%v", m.savingEdit, m.commenting)
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Saving…") {
+		t.Errorf("view does not show Saving…:\n%s", view)
+	}
+	for _, msg := range run(cmd) {
+		m = drive(t, m, msg)
+	}
+
+	if !m.commenting {
+		t.Error("the editor closed despite the save failing")
+	}
+	if got := m.commentInput.Value(); got != "better text" {
+		t.Errorf("editor text is %q, want the typed text kept", got)
+	}
+	if store.Edited[c.ID] == "better text" {
+		t.Error("the edit should not have gone through")
+	}
+	if !strings.Contains(ansi.Strip(m.status), "boom") {
+		t.Errorf("status does not show the error: %q", m.status)
+	}
+}
+
+func TestSelectionOverSavedCommentDeletesItAfterPost(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	c, _ := store.AddComment(context.Background(), "The flag exists.", "orig")
+	m := New(context.Background(), turnReturning("ok"), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("shift+down"))
+	m = drive(t, m, press("c"))
+	if got := m.commentInput.Value(); got != "orig" {
+		t.Fatalf("editor holds %q, want the saved comment's text", got)
+	}
+	m = typeText(t, m, " plus the spec")
+	m = drive(t, m, press("enter"))
+
+	if len(m.comments) != 1 || m.comments[0].id != "" {
+		t.Fatalf("the saved comment is not hidden at once: %+v", m.comments)
+	}
+	if len(store.Deleted) != 0 {
+		t.Fatalf("the saved comment was deleted before sending: %+v", store.Deleted)
+	}
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("enter"))
+
+	if len(store.Deleted) != 1 || store.Deleted[0] != c.ID {
+		t.Fatalf("deleted: %+v, want [%s]", store.Deleted, c.ID)
+	}
+}
+
+// TestMergeAccumulatesReplacesAcrossQueuedComments checks that merging a
+// queued comment, which already carries a saved comment's id in replaces,
+// into a further selection keeps that id, so a chain of merges still
+// deletes every saved comment it ever absorbed once it is sent.
+func TestMergeAccumulatesReplacesAcrossQueuedComments(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	saved, _ := store.AddComment(context.Background(), "## 1. Outcome", "orig")
+	m := New(context.Background(), turnReturning("ok"), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	// Merge the saved comment (block 0) with block 1 into a queued one.
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("shift+down"))
+	m = drive(t, m, press("c"))
+	m.commentInput.SetValue("")
+	m = typeText(t, m, "merge1")
+	m = drive(t, m, press("enter"))
+
+	if len(m.comments) != 1 || m.comments[0].id != "" || !slices.Contains(m.comments[0].replaces, saved.ID) {
+		t.Fatalf("after first merge: %+v", m.comments)
+	}
+
+	// Merge that queued comment with block 2 into a second one.
+	m = drive(t, m, press("shift+down"))
+	m = drive(t, m, press("c"))
+	m.commentInput.SetValue("")
+	m = typeText(t, m, "merge2")
+	m = drive(t, m, press("enter"))
+
+	if len(m.comments) != 1 || m.comments[0].id != "" {
+		t.Fatalf("after second merge: %+v", m.comments)
+	}
+	if !slices.Contains(m.comments[0].replaces, saved.ID) {
+		t.Fatalf("second merge lost the original saved comment's id: %+v", m.comments[0].replaces)
+	}
+
+	// Sending must delete the originally saved comment, not just the one
+	// absorbed directly into this queued comment.
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("enter"))
+
+	if len(store.Deleted) != 1 || store.Deleted[0] != saved.ID {
+		t.Fatalf("deleted: %+v, want [%s]", store.Deleted, saved.ID)
+	}
+}
+
+func TestResolveKeyResolves(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	c, _ := store.AddComment(context.Background(), "The flag exists.", "x")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	drive(t, m, press("r"))
+
+	if len(store.Resolved) != 1 || store.Resolved[0] != c.ID {
+		t.Fatalf("resolved: %+v", store.Resolved)
+	}
+}
+
+func TestDeleteSavedCommentAsksFirst(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	c, _ := store.AddComment(context.Background(), "The flag exists.", "x")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("d"))
+	if !m.confirming || len(store.Deleted) != 0 {
+		t.Fatalf("delete happened without asking: confirming=%v deleted=%+v", m.confirming, store.Deleted)
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Delete this comment in factory?") {
+		t.Errorf("no confirmation shown:\n%s", view)
+	}
+	m = drive(t, m, press("y"))
+	if len(store.Deleted) != 1 || store.Deleted[0] != c.ID {
+		t.Fatalf("deleted: %+v", store.Deleted)
+	}
+}
+
+// TestSendHandsOffFromEveryHumanState checks that sending comments hands
+// them to factory from each Human state, as factory's address-comments event
+// moves any of them to its phase's Agent state, not just from the Planning
+// state every other hand-off test exercises.
+func TestSendHandsOffFromEveryHumanState(t *testing.T) {
+	for _, state := range []string{"Building - Human", "Integrating - Human"} {
+		t.Run(state, func(t *testing.T) {
+			store := newFakeStore()
+			store.TextV = twoParts
+			store.StateV = state
+			m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+
+			m = drive(t, m, press("tab"))
+			m = drive(t, m, press("down"))
+			m = drive(t, m, press("c"))
+			m = typeText(t, m, "first")
+			m = drive(t, m, press("enter"))
+			m = drive(t, m, press("tab"))
+			drive(t, m, press("enter"))
+
+			if len(store.Added) != 1 {
+				t.Fatalf("comment not saved: %+v", store.Added)
+			}
+			if len(store.HandedOff) != 1 || store.HandedOff[0] != state {
+				t.Fatalf("handed off: %+v, want [%s]", store.HandedOff, state)
+			}
+		})
+	}
+}
+
+// TestTitleOfCutsLongFirstLineTo80Runes checks the 80-rune cut by runes, not
+// bytes, so a multi-byte title is not cut mid-character.
+func TestTitleOfCutsLongFirstLineTo80Runes(t *testing.T) {
+	line := strings.Repeat("é", 90)
+	title := titleOf(line + "\nsecond line")
+	if r := []rune(title); len(r) != 80 {
+		t.Fatalf("title is %d runes, want 80: %q", len(r), title)
+	}
+	if title != strings.Repeat("é", 80) {
+		t.Errorf("title = %q, want the first 80 runes of the line", title)
+	}
+}
+
+// TestSecondSendWhileSavingCommentsDoesNothing checks that a second enter in
+// the chat while queued comments are still being saved does not start a
+// second save.
+func TestSecondSendWhileSavingCommentsDoesNothing(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "first")
+	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("tab"))
+
+	m.savingComments = true
+	before := len(store.Added)
+	next, cmd := m.Update(press("enter"))
+	if cmd != nil {
+		t.Error("a second enter while saving comments started another save")
+	}
+	if len(store.Added) != before {
+		t.Errorf("comments saved again while already saving: %+v", store.Added)
+	}
+	if len(queuedComments(next.comments)) != 1 {
+		t.Errorf("the queued comment was dropped by the second enter: %+v", next.comments)
+	}
+}
+
+func TestFailedCreateShowsInTheChatAndIsTriedAgain(t *testing.T) {
+	store := newFakeStore()
+	store.CreateErr = errors.New("factory said no")
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, nil, store, "add a --dry-run flag")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	if got := agent.Sent(); len(got) != 0 {
+		t.Fatalf("sent before the plan existed: %q", got)
+	}
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Could not create the plan: factory said no") {
+		t.Errorf("the failure is not in the chat:\n%s", view)
+	}
+	if m.busy {
+		t.Error("still busy after the create failed")
+	}
+
+	store.mu.Lock()
+	store.CreateErr = nil
+	store.mu.Unlock()
+	m = typeText(t, m, "add a flag")
+	drive(t, m, press("enter"))
+	if got := agent.Sent(); len(got) != 1 || got[0] != "add a flag" {
+		t.Errorf("agent got %q", got)
+	}
+}
+
+// The plan is created off the screen's loop; a message sent meanwhile waits
+// in the input rather than racing the create.
+func TestMessageWhileThePlanIsCreatedWaitsInTheInput(t *testing.T) {
+	store := newFakeStore()
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = typeText(t, m, "first")
+	m, create := m.Update(press("enter"))
+	if !m.creating {
+		t.Fatal("the plan is not being created")
+	}
+
+	m = typeText(t, m, "second")
+	m, _ = m.Update(press("enter"))
+	if m.input.Value() != "second" {
+		t.Errorf("input is %q, want the waiting message", m.input.Value())
+	}
+
+	for _, msg := range run(create) {
+		m = drive(t, m, msg)
+	}
+	if got := agent.Sent(); len(got) != 1 || got[0] != "first" {
+		t.Errorf("agent got %q", got)
+	}
+	if !m.created || m.creating {
+		t.Errorf("created %v, creating %v", m.created, m.creating)
+	}
+}
+
+// Saving drops the queued comments it saved, so they cannot change until it
+// is done; one deleted or rewritten meanwhile would be lost.
+func TestQueuedCommentsStayAsTheyAreWhileSaved(t *testing.T) {
+	m, store := planModel(t)
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	m = drive(t, m, press("enter"))
+
+	m, save := m.Update(press("s"))
+	if !m.savingComments {
+		t.Fatal("the comments are not being saved")
+	}
+	m, _ = m.Update(press("c"))
+	if m.commenting {
+		t.Error("the editor opened while the comments were saved")
+	}
+	m, _ = m.Update(press("d"))
+	if n := len(queuedComments(m.comments)); n != 1 {
+		t.Errorf("%d queued while saving, want 1", n)
+	}
+
+	for _, msg := range run(save) {
+		m = drive(t, m, msg)
+	}
+	if len(store.Added) != 1 || len(queuedComments(m.comments)) != 0 {
+		t.Errorf("saved %+v, still queued %+v", store.Added, queuedComments(m.comments))
+	}
+}
+
 func idlePlan(t *testing.T) Model {
 	t.Helper()
-	turn := func(context.Context, string, func(string)) (string, string, error) {
-		return "ok", twoParts, nil
-	}
-	m := New(context.Background(), turn, nil, "plan it")
-	return drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 30})
+	m, _ := planModel(t)
+	return m
 }
 
 // With no host to go back to, esc closes the screen when it has nothing

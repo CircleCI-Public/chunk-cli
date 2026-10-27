@@ -93,7 +93,7 @@ func TestPlans(t *testing.T) {
 		assertStatus(t, client.SetPlanText(ctx, "no-such-plan", "x"), http.StatusBadRequest)
 	})
 
-	t.Run("reports when a plan was made and changed, its open comments and its claim", func(t *testing.T) {
+	t.Run("reports when a plan was made and changed, and its open comments", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
@@ -102,7 +102,6 @@ func TestPlans(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Check(t, !p.CreatedAt.IsZero())
 		assert.Check(t, cmp.Equal(p.UpdatedAt, p.CreatedAt))
-		assert.Check(t, cmp.Nil(p.Claim))
 
 		open, err := client.CreateComment(ctx, p.ID, "", "one")
 		assert.NilError(t, err)
@@ -111,16 +110,11 @@ func TestPlans(t *testing.T) {
 		_, err = client.ResolveComment(ctx, open.ID)
 		assert.NilError(t, err)
 		assert.NilError(t, client.SetPlanText(ctx, p.ID, "# a-plan\n"))
-		fake.ClaimFactoryPlan(p.ID, "session-1", "/work/a-plan")
 
 		got, err := client.GetPlan(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.Equal(got.OpenComments, 1))
 		assert.Check(t, got.UpdatedAt.After(p.CreatedAt))
-		assert.Assert(t, got.Claim != nil)
-		assert.Check(t, cmp.Equal(got.Claim.SessionID, "session-1"))
-		assert.Check(t, cmp.Equal(got.Claim.Worktree, "/work/a-plan"))
-		assert.Check(t, !got.Claim.RenewedAt.IsZero())
 	})
 
 	t.Run("lists the caller's open plans, oldest first, every page", func(t *testing.T) {
@@ -163,43 +157,71 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(queries, []string{"me ", "me 2", "me 4"}))
 	})
 
-	t.Run("moves a plan along an edge of its state machine", func(t *testing.T) {
+}
+
+func TestFlows(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("reads a plan's flow and the session claiming it", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
-		defer srv.Close()
+		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
 		p, err := client.CreatePlan(ctx, "a plan", "")
 		assert.NilError(t, err)
 
-		moved, err := client.MovePlan(ctx, p.ID, "Agent Ready")
+		_, err = client.GetFlow(ctx, p.ID)
+		assertStatus(t, err, http.StatusNotFound)
+
+		fake.ClaimFactoryPlan(p.ID, "session-1")
+		f, err := client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.Equal(moved.ID, p.ID))
-		assert.Check(t, cmp.Equal(moved.State, "Agent Ready"))
+		assert.Check(t, cmp.Equal(f.ID, p.ID))
+		assert.Check(t, cmp.Equal(f.State, "Unprioritized"))
+		assert.Check(t, cmp.Equal(f.SessionID, "session-1"))
+
+		fake.ReleaseFactoryPlan(p.ID)
+		f, err = client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.SessionID, ""))
+	})
+
+	t.Run("sends a flow an event", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.ClaimFactoryPlan(p.ID, "session-1")
+
+		err = client.CreateFlowEvent(ctx, p.ID, AddressComments)
+		assert.NilError(t, err)
 
 		reqs := fake.Recorder.AllRequests()
 		last := reqs[len(reqs)-1]
-		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/plans/"+p.ID+"/move"))
+		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/events"))
 		var body map[string]any
-		assert.NilError(t, json.Unmarshal(last.Body, &body))
-		assert.Check(t, cmp.DeepEqual(body, map[string]any{"state": "Agent Ready"}))
-
-		got, err := client.GetPlan(ctx, p.ID)
+		err = json.Unmarshal(last.Body, &body)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.Equal(got.State, "Agent Ready"))
+		assert.Check(t, cmp.DeepEqual(body, map[string]any{"data": map[string]any{
+			"attributes": map[string]any{"event": "address-comments"},
+			"references": map[string]any{"factory_flow": map[string]any{"id": p.ID}},
+		}}))
+		got, _ := fake.FactoryPlan(p.ID)
+		assert.Check(t, cmp.DeepEqual(got.Events, []string{"address-comments"}))
 	})
 
-	t.Run("a move off the state machine is a 400", func(t *testing.T) {
+	t.Run("an event for a plan with no flow is a 404", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
-		defer srv.Close()
+		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
 		p, err := client.CreatePlan(ctx, "a plan", "")
 		assert.NilError(t, err)
 
-		_, err = client.MovePlan(ctx, p.ID, "Building - Agent")
-		assertStatus(t, err, http.StatusBadRequest)
-		_, err = client.MovePlan(ctx, uuid.NewString(), "Agent Ready")
-		assertStatus(t, err, http.StatusNotFound)
+		assertStatus(t, client.CreateFlowEvent(ctx, p.ID, AddressComments), http.StatusNotFound)
+		assertStatus(t, client.CreateFlowEvent(ctx, uuid.NewString(), AddressComments), http.StatusNotFound)
 	})
 }
 

@@ -26,6 +26,7 @@ chunk-cli/
     ├── circleci/              # CircleCI REST API client
     ├── claudecode/            # Runs claude -p on a sidecar and explains how the run ended
     ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
+    ├── factoryplan/           # The planning screen's plan and session in factory
     ├── filecache/             # Generic JSON-on-disk cache (FileCache[T])
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitexec/               # Low-level local Git process execution
