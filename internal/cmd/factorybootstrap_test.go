@@ -1,14 +1,12 @@
 package cmd
 
 import (
-	"errors"
-	"path/filepath"
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory/eval"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // Bootstrap sits beside build, not under it. Registered on the build command
@@ -20,27 +18,6 @@ func TestFactoryBootstrapIsRegisteredUnderFactory(t *testing.T) {
 	assert.Equal(t, cmd.Name(), "bootstrap")
 }
 
-// An explicit --template is a name to look up, even when it is empty. Gating
-// on the value instead of the flag sends `--template ""` down the sidecar path,
-// where it boots an environment and runs Claude.
-func TestFactoryBootstrapEmptyTemplateIsUnknown(t *testing.T) {
-	t.Chdir(t.TempDir())
-	cmd := newFactoryBootstrapCmd()
-	cmd.SetArgs([]string{"--template", "", "--output", filepath.Join(t.TempDir(), "reviews")})
-	cmd.SilenceUsage, cmd.SilenceErrors = true, true
-
-	err := cmd.Execute()
-
-	assert.ErrorIs(t, err, factory.ErrUnknownTemplate)
-}
-
-// Scoring from bootstrap stays out of its help while factory eval is hidden.
-func TestFactoryBootstrapEvalCommitsIsHidden(t *testing.T) {
-	f := newFactoryBootstrapCmd().Flags().Lookup("eval-commits")
-	assert.Assert(t, f != nil)
-	assert.Assert(t, f.Hidden)
-}
-
 func TestFactoryEvalIsRegisteredUnderFactoryAndHidden(t *testing.T) {
 	cmd, _, err := newFactoryCmd().Find([]string{"eval"})
 	assert.NilError(t, err)
@@ -48,19 +25,101 @@ func TestFactoryEvalIsRegisteredUnderFactoryAndHidden(t *testing.T) {
 	assert.Assert(t, cmd.Hidden)
 }
 
-func TestReadyScoringOnlyAfterBothPartsSucceed(t *testing.T) {
-	cases := &evalRun{Root: "/repo", Suite: eval.Suite{Cases: []eval.Case{{Name: "c"}}}, Source: "1 commit(s) on HEAD"}
-	wrote := bootstrapOutcome{paths: []string{"a.md"}}
-	run := evalRun{PromptsDir: "/repo/.chunk/reviews", Image: "snap-1"}
+// Each of these flags is an unknown flag to bootstrap.
+func TestFactoryBootstrapRemovedFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--output", "x"}, {"--model", "x"}, {"--timeout", "1m"}, {"--no-history"},
+		{"--since", "2026-01-01"}, {"--top", "1"}, {"--template", "python"}, {"--eval-commits", "1"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			cmd := newFactoryBootstrapCmd()
+			cmd.SetArgs(args)
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
+			err := cmd.Execute()
+			assert.Check(t, cmp.ErrorContains(err, "unknown flag: "+args[0]))
+		})
+	}
+}
 
-	got := readyScoring(cases, wrote, nil, run)
-	assert.Assert(t, got != nil)
-	assert.Equal(t, got.Root, "/repo")
-	assert.Equal(t, len(got.Suite.Cases), 1)
-	assert.Equal(t, got.Image, "snap-1")
-	assert.Equal(t, got.PromptsDir, "/repo/.chunk/reviews")
+// --image and --snapshot-name only say how to make the sidecar image, which
+// --skip-sidecar leaves out.
+func TestFactoryBootstrapSkipSidecarExcludesTheImageFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		flag string
+	}{
+		{
+			name: "--image",
+			args: []string{"--skip-sidecar", "--image", "x"},
+			flag: "image",
+		},
+		{
+			name: "--snapshot-name",
+			args: []string{"--skip-sidecar", "--snapshot-name", "x"},
+			flag: "snapshot-name",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			cmd := newFactoryBootstrapCmd()
+			cmd.SetArgs(tt.args)
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
+			err := cmd.Execute()
+			assert.Check(t, cmp.ErrorContains(err, "skip-sidecar"))
+			assert.Check(t, cmp.ErrorContains(err, tt.flag))
+		})
+	}
+}
 
-	assert.Assert(t, readyScoring(nil, wrote, nil, run) == nil, "not asked for")
-	assert.Assert(t, readyScoring(cases, wrote, errors.New("sidecar image failed"), run) == nil, "a part failed")
-	assert.Assert(t, readyScoring(cases, bootstrapOutcome{}, nil, run) == nil, "no prompts written")
+func TestPlanBootstrap(t *testing.T) {
+	withImage := &config.ProjectConfig{Validation: &config.ValidationConfig{SidecarImage: "snap-1"}}
+	tests := []struct {
+		name        string
+		in          planInputs
+		want        bootstrapPlan
+		wantSkipped []string
+		empty       bool
+	}{
+		{
+			name: "a new project gets everything",
+			in:   planInputs{},
+			want: bootstrapPlan{Config: true, Sidecar: true},
+		},
+		{
+			name:        "an existing config is kept",
+			in:          planInputs{Cfg: &config.ProjectConfig{}},
+			want:        bootstrapPlan{Sidecar: true},
+			wantSkipped: []string{".chunk/config.json already exists"},
+		},
+		{
+			name:        "--skip-sidecar leaves the image out",
+			in:          planInputs{SkipSidecar: true},
+			want:        bootstrapPlan{Config: true},
+			wantSkipped: []string{"sidecar image: --skip-sidecar"},
+		},
+		{
+			name:        "a config and --skip-sidecar leave nothing to do",
+			in:          planInputs{Cfg: &config.ProjectConfig{}, SkipSidecar: true},
+			empty:       true,
+			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: --skip-sidecar"},
+		},
+		{
+			name:        "a project set up already has nothing to do",
+			in:          planInputs{Cfg: withImage},
+			empty:       true,
+			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: validation.sidecarImage is snap-1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := planBootstrap(tt.in)
+			assert.Check(t, cmp.DeepEqual(got.skipped, tt.wantSkipped))
+			assert.Check(t, cmp.Equal(got.Config, tt.want.Config))
+			assert.Check(t, cmp.Equal(got.Sidecar, tt.want.Sidecar))
+			assert.Check(t, cmp.Equal(got.empty(), tt.empty))
+		})
+	}
 }

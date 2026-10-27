@@ -171,17 +171,11 @@ chunk
 │   │   --json                      # Output as JSON
 │   ├── plan [prompt]               # Plan a change with Claude, then approve it and build it on the daemon
 │   │   --model <model>             # Model Claude plans with (default: your Claude Code default)
-│   ├── bootstrap                   # Set up this project for chunk factory: config, sidecar image, review prompts
-│   │   --output <dir>              # Directory to write them to (default: .chunk/reviews)
+│   ├── bootstrap                   # Set up this project for chunk factory: config and sidecar image
 │   │   --skip-sidecar              # Leave out setting up and recording the sidecar image
 │   │   --snapshot-name <name>      # Name the sidecar image's snapshot (default: <repo>-<YYYY-MM-DD>-<HHMMSS>)
 │   │   --org-id <id>               # Organization ID
-│   │   --image <id>                # Image with Claude Code, for both sidecars (default: cimg-base:2026.09-claude)
-│   │   --model <name>              # Claude model (default: Claude Code's default)
-│   │   --timeout <duration>        # Max time for writing the prompts (default: 30m)
-│   │   --no-history                # Leave out the team's review comments from GitHub
-│   │   --since <YYYY-MM-DD>        # Use review comments from this date on (default: 90 days ago)
-│   │   --top <n>                   # Use review comments from this many reviewers (default: 5)
+│   │   --image <id>                # Image the sidecar starts from (default: cimg-base:2026.09-claude)
 │   │   --json                      # Output as JSON
 │   └── eval [prompts-dir]          # (hidden) Score review prompts by reviewing past changes and grading what they find
 │       --commits <n>               # Review this many recent commits (this or --suite is required)
@@ -642,96 +636,31 @@ chunk
   is printed. The screen checks what `factory build` checks before it opens,
   and opens from `chunk watch` with `p` too.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans
-  three parts, prints the plan, and leaves out each part already done, so a
+  two parts, prints the plan, and leaves out each part already done, so a
   rerun finishes a setup that stopped partway; with nothing left to do it fails
-  as it does for existing prompts. Without `.chunk/config.json` it detects the
-  VCS, the validation commands and the org and writes the config, as
-  `chunk init` does, but without init's hooks, skills and completions, which
-  are for `chunk validate`. Without `validation.sidecarImage` (and unless
-  `--skip-sidecar`), it does what `sidecar setup` and then `sidecar snapshot
-  create` do, on a sidecar of its own rather than the active one: it starts the
-  sidecar from `cimg-base:2026.09-claude` (or `--image`) rather than the
-  provisioner's default `cimg-base`, which has no Claude Code, since
-  `chunk factory` runs its implementer and reviewers as Claude Code on sidecars
-  made from the snapshot. It syncs the project to `/home/user/<repo>`, runs the
-  environment's setup steps, checks that `claude` is on the sidecar's `PATH`
-  (with `~/.local/bin`, as every Claude run does) and stops without a snapshot
-  when it is not, then snapshots the sidecar as `<repo>-<YYYY-MM-DD>-<HHMMSS>` (`--snapshot-name` picks
-  another; a name the org already has is explained rather than left as a bare
-  409, and is looked for before the sidecar is made), records the snapshot as
-  `validation.sidecarImage`, marks the install and gate commands remote, and
-  deletes the sidecar.
-  An environment with no setup steps gets no sidecar or snapshot: it warns and
-  the default image stays. `--json` reports the snapshot as `sidecar_image`.
-  The sidecar image is set up first, its setup steps' output shown on stderr
-  as they run, and the review prompts are written after it. A sidecar image
-  that fails does not stop the prompts: it is warned of, the prompts are
-  written, and the command then fails with it, so a rerun has only the image
-  left to do. An image without Claude Code, or an interrupted run, stops the
-  prompts too, since they would fail the same way. With `--json`, what one part
-  made is reported even when the other fails.
-  Existing review prompts in `.chunk/reviews` are left out of the run; in an
-  `--output` directory they are an error. A prompts directory that cannot be read is
-  an error rather than taken for one with prompts. The plan is worked out from
-  local files and flags alone, so it is shown before any login prompt: without
-  a GitHub token it says up front that the team's review comments are left out.
-  A Claude credential is required even when the prompts exist, since
-  `chunk factory build` runs Claude on every change. The review prompts part runs
-  Claude Code once, read-only, on a sidecar of its own (pool
-  `factory-bootstrap`, destroyed when it ends). The sidecar runs the system image
-  `cimg-base:2026.09-claude`, not the project's `validation.sidecarImage`:
-  bootstrap needs Claude Code rather than the project's toolchain, and a project
-  image may not have it. `--image` overrides it. Claude Code reads what the project
-  says about itself: AGENTS.md, CLAUDE.md, docs, CI and linter configuration,
-  and the code and tests. With a GitHub token and a GitHub `origin`, it also
-  fetches the review comments the repository's most active reviewers (`--top`,
-  default 5) left on its pull requests since `--since` (default 90 days ago),
-  keeping each one's 200 newest. That happens before any sidecar starts, so a
-  failed fetch costs nothing; it fails the command, with `--no-history` as the
-  way out. No token is not an error: bootstrap warns and goes on from the code
-  alone. Bootstrap needs a GitHub `origin` either way, since the sidecar's copy
-  of the repository is named from it; without one it fails before any sidecar
-  starts. The comments go to the sidecar as
-  `.chunk/review-history.md` in its copy of the repository, over SSH rather than
-  in the request, so their size is not bounded by the request's, and Claude is
-  told to read them as data and make recurring pushback into rules. `--json`
-  reports how many were used as `review_comments`. The
-  project's validation commands are named in the request so the reviews leave
-  to them what they already enforce. While it reads, each tool call it
-  makes (the file it reads, the pattern it searches for) is shown as it happens,
-  and the run's cost is shown when it ends. The answer comes back against a JSON
-  schema; prompts with a name that is not lowercase words joined by hyphens, a
-  repeated name, an empty or oversized body, or past the sixth are left out and
-  counted. It never overwrites: a target directory that already has `.md` or
-  `.txt` prompts is refused before any sidecar starts, and each file is created
-  exclusively. `--output` writes elsewhere. `factory` with nothing to check
-  points at it. `--template <name>` writes a standard set embedded in the binary
-  instead (`generic`, `go-service`, `node-service`, `python`, `react`, `rust`),
-  for a new project with little for Claude to read: no sidecar starts, no
-  credential is needed, and the same overwrite refusal applies. An unknown name
-  is refused with the list of sets. It cannot be combined with `--org-id`,
-  `--image`, `--model`, `--timeout` or `--eval-commits`.
-- **`factory bootstrap --eval-commits <n>` scores the prompts it writes, and is
-  hidden** while `factory eval` is. Once the prompts are written, it runs
-  `factory eval --commits <n>` on them: the `n` most recent usable commits on
-  `HEAD` are made into cases before any sidecar starts, so a history with none
-  fails then, and the cases are reviewed and graded on `factory-eval` sidecars
-  from the project's `validation.sidecarImage`, not bootstrap's Claude image,
-  so they review as factory would. Scoring runs after both of bootstrap's
-  parts, so it uses an image the run has just recorded, and bootstrap's own
-  sidecar is destroyed first. It is only for the prompts the run writes: when
-  the prompts already exist, or `--skip-sidecar` leaves no image to score on,
-  the plan says scoring is skipped, and `factory eval --commits <n>` scores
-  existing prompts. A run whose sidecar image or prompts part fails is not
-  scored.
-  Reviews and the grader use Claude Code's default model and timeouts. The
-  prompts are kept whatever the score: an eval that fails or scores no case is
-  a warning, and the command still succeeds. The summary follows the list of
-  prompts; `--json` reports it as `eval`, in `factory eval`'s report format.
-  With history, the prompts come from comments on the same recent changes the
-  commits are, so the scores flatter them.
+  as already set up and points at `chunk factory plan`. Without
+  `.chunk/config.json` it detects the VCS, the validation commands and the org
+  and writes the config, as `chunk init` does, but without init's hooks, skills
+  and completions, which are for `chunk validate`. Without
+  `validation.sidecarImage` (and unless `--skip-sidecar`), it does what
+  `sidecar setup` and then `sidecar snapshot create` do, on a sidecar of its
+  own rather than the active one: it starts the sidecar from
+  `cimg-base:2026.09-claude` rather than the provisioner's default
+  `cimg-base`, since `chunk factory build` runs its implementer and reviewers
+  as Claude Code on sidecars made from the snapshot. `--image` may name any
+  image instead; bootstrap does not check it for Claude Code. It syncs the
+  project to `/home/user/<repo>`, runs the environment's setup steps, then
+  snapshots the sidecar as `<repo>-<YYYY-MM-DD>-<HHMMSS>` (`--snapshot-name`
+  picks another; a name the org already has is explained rather than left as a
+  bare 409, and is looked for before the sidecar is made), records the
+  snapshot as `validation.sidecarImage`, marks the install and gate commands
+  remote, and deletes the sidecar. An environment with no setup steps gets no
+  sidecar or snapshot: it warns and the default image stays. Its credential is
+  a CircleCI token; it needs no Claude credential, GitHub token or GitHub
+  `origin`. `--json` reports `config_written` and the snapshot as
+  `sidecar_image` (empty when no image was recorded).
 - **`factory eval` scores review prompts, and is hidden.** It is for tuning
-  prompts and what writes them, such as bootstrap, not for everyday use. It
+  review prompts, not for everyday use. It
   reviews a set of cases, each a change to the repository at a pinned revision
   and the request it answers. `--commits <n>` makes cases of the `n` most recent
   commits on the first-parent history of `--from`: each commit's diff against its
