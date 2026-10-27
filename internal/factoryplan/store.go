@@ -73,27 +73,29 @@ func (s *Store) State(ctx context.Context) (string, error) {
 	return p.State, nil
 }
 
-// Events are the events factory applies to the plan's flow now, by name, as
-// its applicable_events lists them; none before the plan is created or has a
-// flow.
-func (s *Store) Events(ctx context.Context) ([]string, error) {
+// Flow is the plan's flow as factory has it now; empty before the plan is
+// created or has a flow.
+func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 	id := s.ID()
 	if id == "" {
-		return nil, nil
+		return plan.Flow{}, nil
 	}
 	f, err := s.api.GetFlow(ctx, id)
 	var se *circleci.StatusError
 	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
-		return nil, nil
+		return plan.Flow{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get the plan's events: %w", err)
+		return plan.Flow{}, fmt.Errorf("get the plan's flow: %w", err)
 	}
-	events := make([]string, len(f.ApplicableEvents))
+	out := plan.Flow{Events: make([]string, len(f.ApplicableEvents))}
 	for i, e := range f.ApplicableEvents {
-		events[i] = string(e)
+		out.Events[i] = string(e)
 	}
-	return events, nil
+	if f.Task != nil {
+		out.Task = f.Task.Category
+	}
+	return out, nil
 }
 
 // Holder is the factory session holding the plan's claim, as its flow
@@ -140,11 +142,11 @@ func (s *Store) Approve(ctx context.Context, session string) error {
 	if strings.TrimSpace(text) == "" {
 		return errors.New("the plan in factory is empty")
 	}
-	events, err := s.Events(ctx)
+	f, err := s.Flow(ctx)
 	if err != nil {
 		return fmt.Errorf("get the flow's events: %w", err)
 	}
-	switch plan.StageOf(events, unitCount(text)) {
+	switch plan.StageOf(f.Events, unitCount(text)) {
 	case plan.StageDesign:
 		return ErrNoUnits
 	case plan.StageQuestions:
@@ -221,10 +223,11 @@ func (s *Store) ApproveDesign(ctx context.Context) error {
 	if id == "" {
 		return errNotCreated
 	}
-	events, err := s.Events(ctx)
+	f, err := s.Flow(ctx)
 	if err != nil {
 		return fmt.Errorf("get the flow's events: %w", err)
 	}
+	events := f.Events
 	if events != nil && !slices.Contains(events, string(circleci.ApproveForUnits)) {
 		if slices.Contains(events, string(circleci.ApproveForBuilding)) {
 			return ErrDesignApproved

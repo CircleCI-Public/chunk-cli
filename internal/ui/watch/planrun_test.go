@@ -35,8 +35,8 @@ type fakePlanStore struct{ text, id string }
 func (f *fakePlanStore) ID() string                            { return f.id }
 func (f *fakePlanStore) Create(context.Context, string) error  { return nil }
 func (f *fakePlanStore) State(context.Context) (string, error) { return plan.ReadyState, nil }
-func (f *fakePlanStore) Events(context.Context) ([]string, error) {
-	return []string{"address-comments", "approve-for-units", "approve-for-building"}, nil
+func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
+	return plan.Flow{Events: []string{"address-comments", "approve-for-units", "approve-for-building"}}, nil
 }
 func (f *fakePlanStore) AddressComments(context.Context) error { return nil }
 func (f *fakePlanStore) ApproveDesign(context.Context) error   { return nil }

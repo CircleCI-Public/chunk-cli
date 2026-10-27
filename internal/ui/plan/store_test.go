@@ -19,7 +19,10 @@ type fakeStore struct {
 	// address-comments and, in a Human state, both approvals.
 	EventsV   []string
 	eventsSet bool
-	TextV     string
+	// TaskV is the category of the task the plan's flow has out, as setTask
+	// sets it; "" for none.
+	TaskV string
+	TextV string
 	// CommentsV is the comments, ordered as added.
 	CommentsV []Comment
 	nextID    int
@@ -76,18 +79,25 @@ func (f *fakeStore) State(context.Context) (string, error) {
 	return f.StateV, f.StateErr
 }
 
-func (f *fakeStore) Events(context.Context) ([]string, error) {
+func (f *fakeStore) Flow(context.Context) (Flow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.eventsSet {
-		return f.EventsV, nil
+		return Flow{Events: f.EventsV, Task: f.TaskV}, nil
 	}
 	if strings.HasSuffix(f.StateV, " - Human") {
 		// Both approvals, as a flow factory stored before it told them
 		// apart lists, so the plan's units decide which ctrl+s offers.
-		return []string{"address-comments", "approve-for-units", "approve-for-building"}, nil
+		return Flow{Events: []string{"address-comments", "approve-for-units", "approve-for-building"}, Task: f.TaskV}, nil
 	}
-	return nil, nil
+	return Flow{Task: f.TaskV}, nil
+}
+
+// setTask has the plan's flow have a task of category out, or none for "".
+func (f *fakeStore) setTask(category string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.TaskV = category
 }
 
 // setEvents has the plan's flow apply events now, whatever its state.

@@ -382,27 +382,41 @@ func TestStoreHolderReadsTheClaimFromFactory(t *testing.T) {
 	assert.Check(t, cmp.Equal(h, ""))
 }
 
-// TestStoreEventsReadsTheFlowsApplicableEvents checks that Events are the
-// events the plan's flow lists as applicable, and none before the plan
-// exists or has a flow.
-func TestStoreEventsReadsTheFlowsApplicableEvents(t *testing.T) {
+// TestStoreFlowReadsTheFlow checks that Flow is the events the plan's flow
+// lists as applicable and the category of the task it has out, and empty
+// before the plan exists or has a flow.
+func TestStoreFlowReadsTheFlow(t *testing.T) {
 	client, cci := testClient(t)
 	store := NewStore(client, "")
 	ctx := context.Background()
 
-	events, err := store.Events(ctx)
+	f, err := store.Flow(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Len(events, 0))
+	assert.Check(t, cmp.Len(f.Events, 0))
+	assert.Check(t, cmp.Equal(f.Task, ""))
 
 	err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
-	events, err = store.Events(ctx)
+	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Len(events, 0), "a plan with no flow takes no events")
+	assert.Check(t, cmp.Len(f.Events, 0), "a plan with no flow takes no events")
+	assert.Check(t, cmp.Equal(f.Task, ""))
 
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "abandon")
-	events, err = store.Events(ctx)
+	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.DeepEqual(events, []string{"address-comments", "abandon"}))
+	assert.Check(t, cmp.DeepEqual(f.Events, []string{"address-comments", "abandon"}))
+	assert.Check(t, cmp.Equal(f.Task, ""), "a flow with no task out")
+
+	cci.SetFactoryTask(store.ID(), "early-plan")
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(f.Task, "early-plan"))
+
+	// An older factory references the task by ID alone, with no category.
+	cci.SetFactoryTaskIDOnly(store.ID())
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(f.Task, ""))
 }

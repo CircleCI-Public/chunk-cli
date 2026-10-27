@@ -205,6 +205,39 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(f.ApplicableEvents, []FlowEvent{AddressComments, "abandon"}))
 	})
 
+	t.Run("reads the task the flow has out", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.ClaimFactoryPlan(p.ID, "session-1")
+
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, f.Task == nil, "a flow with no task out: %+v", f.Task)
+
+		fake.SetFactoryTask(p.ID, "early-plan")
+		f, err = client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Assert(t, f.Task != nil)
+		assert.Check(t, cmp.Equal(f.Task.Category, "early-plan"))
+		assert.Check(t, f.Task.ID != "")
+
+		fake.SetFactoryTaskIDOnly(p.ID)
+		f, err = client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Assert(t, f.Task != nil, "an older factory's id-only reference is still a task")
+		assert.Check(t, cmp.Equal(f.Task.Category, ""))
+		assert.Check(t, f.Task.ID != "")
+
+		fake.SetFactoryTask(p.ID, "")
+		f, err = client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, f.Task == nil, "the task outlived its submit: %+v", f.Task)
+	})
+
 	t.Run("sends a flow an event", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)

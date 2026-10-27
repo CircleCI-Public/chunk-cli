@@ -34,6 +34,17 @@ type Flow struct {
 	// ApplicableEvents are the events factory applies to the flow now;
 	// any other sent now is stored and ignored.
 	ApplicableEvents []FlowEvent
+	// Task is the task factory has handed out for the plan and not yet had
+	// back, or nil when none is out.
+	Task *FlowTask
+}
+
+// FlowTask is a flow's outstanding task, as its factory_task reference
+// carries it.
+type FlowTask struct {
+	ID string
+	// Category is what kind of task it is, such as "early-plan".
+	Category string
 }
 
 // FlowEvent is an event a human sends a plan's flow, which factory applies
@@ -86,7 +97,15 @@ type flowAttrs struct {
 }
 
 type flowRefs struct {
-	FactorySession *v3Ref `json:"factory_session"`
+	FactorySession *v3Ref   `json:"factory_session"`
+	FactoryTask    *taskRef `json:"factory_task"`
+}
+
+type taskRef struct {
+	ID         string `json:"id"`
+	Attributes struct {
+		Category string `json:"category"`
+	} `json:"attributes"`
 }
 
 type eventAttrs struct {
@@ -267,6 +286,9 @@ func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	f := &Flow{ID: env.Data.ID, State: attrs.State, ApplicableEvents: attrs.ApplicableEvents}
 	if refs.FactorySession != nil {
 		f.SessionID = refs.FactorySession.ID
+	}
+	if refs.FactoryTask != nil {
+		f.Task = &FlowTask{ID: refs.FactoryTask.ID, Category: refs.FactoryTask.Attributes.Category}
 	}
 	return f, nil
 }
