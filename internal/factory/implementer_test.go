@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -278,5 +279,5 @@ func TestImplementerCapsCommandTime(t *testing.T) {
 	assert.NilError(t, err)
 	got, err := os.ReadFile(filepath.Join(home, "cap"))
 	assert.NilError(t, err)
-	assert.Equal(t, strings.TrimSpace(string(got)), maxCommandTime)
+	assert.Equal(t, strings.TrimSpace(string(got)), strconv.FormatInt(maxCommandTime.Milliseconds(), 10))
 }

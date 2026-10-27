@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,10 +37,10 @@ Every command you run must finish on its own: do not start servers, watch modes 
 When you finish, reply with a short summary of what you changed.`
 
 // maxCommandTime caps how long claude lets one Bash command on the
-// implementer's sidecar run, in milliseconds, where Claude Code's own cap is
+// implementer's sidecar run, where Claude Code's own cap is
 // ten minutes. A command still running then is stuck more often than slow, and
 // two or three would use up the turn's timeout.
-const maxCommandTime = "300000"
+const maxCommandTime = 5 * time.Minute
 
 // implementerSystemPrompt returns the base system prompt, followed by the
 // run's own instructions when there are any.
@@ -90,8 +91,11 @@ type Implementer struct {
 	Instructions string
 	OnActivity   func(claudecode.Activity)
 	// Status, when set, hears which command on the sidecar a turn is, and
-	// that a turn has gone quiet.
+	// that a turn has gone quiet. It can be called from several goroutines at
+	// once, so it must be safe for that.
 	Status func(iostream.Level, string)
+	// CommandTimeout is maxCommandTime when zero.
+	CommandTimeout time.Duration
 	// QuietWarning is defaultQuietWarning when zero.
 	QuietWarning time.Duration
 
@@ -128,7 +132,11 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	// The sidecar is a sandbox, which is what lets claude skip permission
 	// prompts there even when the image runs it as root.
 	env["IS_SANDBOX"] = "1"
-	env["BASH_MAX_TIMEOUT_MS"] = maxCommandTime
+	cmdTimeout := im.CommandTimeout
+	if cmdTimeout <= 0 {
+		cmdTimeout = maxCommandTime
+	}
+	env["BASH_MAX_TIMEOUT_MS"] = strconv.FormatInt(cmdTimeout.Milliseconds(), 10)
 	code, err := im.Exec(ctx, im.Entry, im.script(prompt), env, func(stream string, data []byte) {
 		if stream == circleci.StreamStderr {
 			if stderr.Len() < outputTail {
@@ -136,7 +144,6 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 			}
 			return
 		}
-		watch.heard()
 		s.Write(data)
 	}, func(commandID string) {
 		// The command's ID is what finds it on the sidecar, and in the exec
@@ -221,21 +228,20 @@ func newQuietWatch(after time.Duration, warn func(time.Duration, string)) *quiet
 	return w
 }
 
-// heard records that the turn reported something.
-func (w *quietWatch) heard() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.stopped {
-		return
-	}
-	w.since = time.Now()
-	w.timer.Reset(w.after)
-}
-
-// saw records a, the turn's latest step, for the warning to name.
+// saw records a, the turn's latest step, for the warning to name. Only parsed
+// steps count as the turn reporting something: output that carries no step,
+// such as keepalives, does not.
 func (w *quietWatch) saw(a claudecode.Activity) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.since = time.Now()
+	if w.stopped {
+		return
+	}
+	w.timer.Reset(w.after)
+	if a.Tool == "" && strings.TrimSpace(a.Detail) == "" {
+		return
+	}
 	w.last = stepLine(a)
 }
 
@@ -247,14 +253,15 @@ func (w *quietWatch) fire() {
 	}
 	quiet, last := time.Since(w.since), w.last
 	// The turn may have reported something while this waited for the lock;
-	// heard has already set the timer again for that.
+	// saw has already set the timer again for that.
 	if quiet < w.after {
 		w.mu.Unlock()
 		return
 	}
 	w.timer.Reset(w.after)
-	w.mu.Unlock()
+	// warn runs under the lock so that stop, and so Run, waits for it.
 	w.warn(quiet, last)
+	w.mu.Unlock()
 }
 
 func (w *quietWatch) stop() {
