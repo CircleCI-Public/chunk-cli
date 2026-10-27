@@ -84,6 +84,8 @@ func TestCheckFactoryRemotePreflightNeedsReviewsDir(t *testing.T) {
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Assert(t, ue.UserMessage() != "", "expected a message")
 	assert.Assert(t, ue.UserMessage() != msgValidateNotConfigured, "wrong failure: %s", ue.UserMessage())
+	assert.Assert(t, strings.Contains(ue.suggestion, "Add one .md or .txt file per review"), "suggestion: %s", ue.suggestion)
+	assert.Assert(t, !strings.Contains(ue.suggestion, "bootstrap"), "suggestion: %s", ue.suggestion)
 }
 
 // A dev build has no tagged release matching its version, so it is refused

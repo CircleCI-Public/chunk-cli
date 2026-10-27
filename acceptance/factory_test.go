@@ -169,7 +169,8 @@ func TestFactoryWithNothingToCheck(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	assert.Assert(t, strings.Contains(result.Stderr, "Nothing to check the implementer's work with."), "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stderr, ".chunk/reviews"), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory bootstrap"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Add one .md or .txt file per review to .chunk/reviews"), "stderr: %s", result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stderr, "chunk factory bootstrap"), "stderr: %s", result.Stderr)
 }
 
 // chunk factory build --remote provisions a sidecar of its own for the run,

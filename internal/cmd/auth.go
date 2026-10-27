@@ -546,7 +546,7 @@ func newAuthStatusCmd() *cobra.Command {
 
 			io.Println(ui.Bold("Command requirements:"))
 			io.Println("  task run, task config, sidecar  → CircleCI token")
-			io.Println("  factory bootstrap               → CircleCI + Claude tokens (GitHub for review history)")
+			io.Println("  factory bootstrap               → CircleCI token")
 			io.Println("  validate --remote               → CircleCI token")
 			io.Println("")
 

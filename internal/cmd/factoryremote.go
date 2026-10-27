@@ -403,7 +403,7 @@ func checkFactoryRemotePreflight(root, reviewsDir, chunkBinary string) (*config.
 	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
 		return nil, &userError{
 			msg:        fmt.Sprintf("No review prompts directory at %s.", dir),
-			suggestion: "Run 'chunk factory bootstrap' to write review prompts there.",
+			suggestion: fmt.Sprintf("Add one .md or .txt file per review to %s.", dir),
 			blocked:    true,
 			hideDetail: true,
 		}
