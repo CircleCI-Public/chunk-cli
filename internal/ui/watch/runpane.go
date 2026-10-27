@@ -277,6 +277,9 @@ func runPhase(s chunkd.Session) string {
 func runHeadline(st watchStyles, s chunkd.Session) string {
 	switch s.State {
 	case chunkd.SessionRunning:
+		if isPlanBuild(s) {
+			return st.running(planBuildLabel(s))
+		}
 		return st.running(roundLabel(s) + " · " + runPhase(s))
 	case chunkd.SessionCancelled:
 		return st.warning("cancelled")
@@ -298,6 +301,54 @@ func runHeadline(st watchStyles, s chunkd.Session) string {
 		note += " · blocked by " + b
 	}
 	return st.err(note)
+}
+
+// isPlanBuild is whether s builds a factory plan through factory's tasks
+// rather than in rounds of its own.
+func isPlanBuild(s chunkd.Session) bool { return s.Factory != nil && s.Factory.PlanID != "" }
+
+// planBuildLabel says where a running plan build stands: the plan's state in
+// factory, once the daemon has read it.
+func planBuildLabel(s chunkd.Session) string {
+	if st := s.Factory.PlanState; st != "" {
+		return "Building plan · " + st
+	}
+	return "Building plan"
+}
+
+// planBuildPhase is the plan's phase in factory, short for the run list:
+// Building, Integrating, or planning still, until the build session's claim
+// has applied the approval.
+func planBuildPhase(s chunkd.Session) string {
+	phase, _, _ := strings.Cut(s.Factory.PlanState, " - ")
+	if phase == "" || phase == "Planning" {
+		return "starting"
+	}
+	return strings.ToLower(phase)
+}
+
+// maxBuildLines is how much of a plan build's progress its pane shows
+// without opening its details.
+const maxBuildLines = 6
+
+// planBuildLines is the latest of what a plan build's session did, for its
+// pane: with no rounds, it is how the build is followed.
+func planBuildLines(st watchStyles, s chunkd.Session) []string {
+	feed := s.Factory.Progress.Lines
+	if len(feed) == 0 {
+		return nil
+	}
+	feed = feed[max(len(feed)-maxBuildLines, 0):]
+	lines := []string{""}
+	for _, l := range feed {
+		text := strings.Join(strings.Fields(l.Text), " ")
+		if l.Level == chunkd.FeedStep || l.Level == chunkd.FeedDone {
+			lines = append(lines, "  "+st.muted(text))
+			continue
+		}
+		lines = append(lines, "  "+st.vdim(text))
+	}
+	return lines
 }
 
 // roundLabel is which round a running run is on, out of the most it will
@@ -532,6 +583,9 @@ func (m Model) renderRunPane(st watchStyles, run sessionInfo, maxLines int) []st
 	}
 	if s.Error != "" {
 		body = append(body, "  "+st.err(truncate(strings.Join(strings.Fields(s.Error), " "), 200)))
+	}
+	if isPlanBuild(s) {
+		body = append(body, planBuildLines(st, s)...)
 	}
 
 	for ri := range s.Rounds {

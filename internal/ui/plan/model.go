@@ -1,8 +1,8 @@
 // Package plan is the planning screen: a chat with Claude beside the plan
 // factory is writing, rendered as markdown. The developer can comment
 // on any part of the plan; comments are queued locally and saved to factory
-// when the developer sends. When the developer approves the plan it is
-// handed to the factory to build.
+// when the developer sends. When the developer approves the plan, chunk
+// builds it through factory.
 //
 // The screen is a component: its host passes it messages and draws what
 // Content returns, and it reports that it is done with a ClosedMsg. Screen
@@ -27,13 +27,14 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-// Submitter hands the approved plan, as factory has it, to the factory and
-// returns the run's ID. It reads the plan itself rather than taking the
-// screen's copy, which may be behind factory's by a poll.
-type Submitter func() (string, error)
+// Approver approves the plan in factory and starts its build, returning the
+// build's ID. It reads the plan itself rather than taking the screen's copy,
+// which may be behind factory's by a poll. It calls step with each step as
+// it starts, as a line for the screen to show while it works.
+type Approver func(step func(string)) (string, error)
 
 // ReadyState is the state a plan waits in for the developer once its review
-// has passed; it can be sent to the factory only from there.
+// has passed; it can be approved only from there.
 const ReadyState = "Planning - Human"
 
 // pane is which side of the screen the keyboard goes to.
@@ -70,9 +71,17 @@ type renderedBlock struct {
 }
 
 type (
-	submittedMsg struct {
-		runID string
-		err   error
+	approvedMsg struct {
+		buildID string
+		err     error
+	}
+	// designApprovedMsg is the end of approving the plan's design.
+	designApprovedMsg struct{ err error }
+	// approveStepMsg is a step of the approval starting; next is where the
+	// approval's later messages come from.
+	approveStepMsg struct {
+		text string
+		next <-chan tea.Msg
 	}
 	pollMsg      struct{}
 	refreshedMsg struct {
@@ -119,22 +128,22 @@ func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 	}
 }
 
-// ClosedMsg is the screen asking its host to close it: the plan was sent to
-// the factory as run RunID, or, when RunID is "", the developer left.
+// ClosedMsg is the screen asking its host to close it: the plan was approved
+// and is being built as BuildID, or, when BuildID is "", the developer left.
 type ClosedMsg struct {
-	RunID string
+	BuildID string
 }
 
-func closed(runID string) tea.Cmd {
-	return func() tea.Msg { return ClosedMsg{RunID: runID} }
+func closed(buildID string) tea.Cmd {
+	return func() tea.Msg { return ClosedMsg{BuildID: buildID} }
 }
 
 // Model is the planning screen.
 type Model struct {
-	ctx    context.Context
-	agent  Agent
-	submit Submitter
-	store  Store
+	ctx     context.Context
+	agent   Agent
+	approve Approver
+	store   Store
 
 	plan     string
 	state    string
@@ -203,9 +212,13 @@ type Model struct {
 	activity string
 
 	confirming bool
-	// sending is set from the developer's y until the factory answers, so a
-	// second send cannot start a second run.
-	sending bool
+	// approvingDesign is set from the developer's y to a design until factory
+	// has the event that approves it; pendingDesign is whether the y being
+	// asked for approves the design rather than the plan.
+	approvingDesign, pendingDesign bool
+	// approving is set from the developer's y until factory answers, so a
+	// second ctrl+s cannot approve the plan twice.
+	approving bool
 	// quitting is set by a ctrl+c that would drop what the developer has not
 	// sent; a second ctrl+c quits.
 	quitting bool
@@ -225,8 +238,8 @@ type Model struct {
 	branch string
 	// units and questions are how many of each the plan has.
 	units, questions int
-	// RunID is the factory run the plan was sent to, once it has been.
-	RunID string
+	// BuildID is the build of the plan, once it has been approved.
+	BuildID string
 
 	pending string
 }
@@ -241,7 +254,7 @@ const (
 
 // New returns the planning screen. A non-empty first message is sent as soon
 // as the screen opens.
-func New(ctx context.Context, agent Agent, submit Submitter, store Store, first string) Model {
+func New(ctx context.Context, agent Agent, approve Approver, store Store, first string) Model {
 	in := textarea.New()
 	in.Placeholder = chatPlaceholder
 	in.ShowLineNumbers = false
@@ -278,7 +291,7 @@ func New(ctx context.Context, agent Agent, submit Submitter, store Store, first 
 	return Model{
 		ctx:          ctx,
 		agent:        agent,
-		submit:       submit,
+		approve:      approve,
 		store:        store,
 		planView:     planView,
 		chatView:     viewport.New(),
@@ -416,17 +429,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, refreshCmd(m.ctx, m.store)
 
-	case submittedMsg:
-		m.sending = false
-		if msg.err != nil {
-			m.status = ui.ErrorStyle.Render("Could not send the plan: " + msg.err.Error())
-			return m, nil
+	case approveStepMsg:
+		if m.approving {
+			m.status = msg.text
 		}
-		m.RunID = msg.runID
-		return m, closed(msg.runID)
+		return m, waitApproval(msg.next)
+
+	case designApprovedMsg, approvedMsg:
+		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
-		if !m.busy {
+		if !m.busy && !m.approving && !m.approvingDesign {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -486,16 +499,21 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.confirming {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
-			m.pendingDelete = ""
+			m.pendingDelete, m.pendingDesign = "", false
 			return m, nil
+		}
+		if m.pendingDesign {
+			m.pendingDesign, m.approvingDesign = false, true
+			m.status = "Approving the design…"
+			return m, tea.Batch(approveDesignCmd(m.ctx, m.store), m.spin.Tick)
 		}
 		if id := m.pendingDelete; id != "" {
 			m.pendingDelete = ""
 			return m, deleteCmd(m.ctx, m.store, id)
 		}
-		m.sending = true
-		m.status = "Sending the plan to the factory…"
-		return m, submitCmd(m.submit)
+		m.approving = true
+		m.status = "Approving the plan…"
+		return m, tea.Batch(approveCmd(m.approve), m.spin.Tick)
 	}
 	if m.commenting {
 		return m.updateCommentKey(msg)
@@ -516,25 +534,28 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case key.Matches(msg, k.SendPlan):
 		queued := len(queuedComments(m.comments))
 		switch {
-		case m.sending:
+		case m.approving, m.approvingDesign:
 		case m.busy:
 			m.status = warn("Wait for chunk to finish.")
 		case strings.TrimSpace(m.plan) == "":
-			m.status = warn("There is no plan to send yet.")
+			m.status = warn("There is no plan to approve yet.")
 		case m.state != ReadyState:
 			m.status = warn("The plan is not ready yet: wait for its review to pass.")
+		case m.units == 0 && (queued > 0 || m.openComments() > 0):
+			m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
 		case m.units == 0:
 			// The plan waits in ReadyState after early-plan too, for its
-			// design to be reviewed; only once write-units has run is there
-			// anything to build.
-			m.status = warn("The plan has no units yet: comment on it and send, so chunk writes them.")
+			// design to be reviewed; its units come once the design is
+			// approved.
+			m.confirming, m.pendingDesign = true, true
+			m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? (y/n)")
 		case queued > 0:
 			m.confirming = true
-			m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d queued %s will not be saved. Send the plan to the factory anyway? (y/n)",
+			m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d queued %s will not be saved. Approve the plan and build it anyway? (y/n)",
 				queued, plural(queued, "comment", "comments")))
 		default:
 			m.confirming = true
-			m.status = ui.TitleStyle.Render("Send this plan to the factory to build? (y/n)")
+			m.status = ui.TitleStyle.Render("Approve this plan and build it? (y/n)")
 		}
 		return m, nil
 	}
@@ -738,10 +759,66 @@ func (m *Model) syncPlaceholder() {
 	}
 }
 
-func submitCmd(submit Submitter) tea.Cmd {
+// applyApproval is the end of approving the plan's design, or the plan.
+func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case designApprovedMsg:
+		m.approvingDesign = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not approve the design: " + msg.err.Error())
+			return m, nil
+		}
+		m.status = "Design approved: chunk writes the units next."
+		return m, refreshCmd(m.ctx, m.store)
+	case approvedMsg:
+		m.approving = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not approve the plan: " + msg.err.Error())
+			return m, nil
+		}
+		m.BuildID = msg.buildID
+		return m, closed(msg.buildID)
+	}
+	return m, nil
+}
+
+// approveDesignCmd approves the plan's design, for factory to write its
+// units.
+func approveDesignCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg { return designApprovedMsg{err: s.ApproveDesign(ctx)} }
+}
+
+// approveCmd runs approve in the background, and reads what it reports: an
+// approveStepMsg as each step starts, then its approvedMsg.
+func approveCmd(approve Approver) tea.Cmd {
+	// Buffered past the steps an approval takes, so it never waits on a
+	// screen that has closed.
+	ch := make(chan tea.Msg, 16)
+	go func() {
+		defer close(ch)
+		id, err := approve(func(text string) {
+			select {
+			case ch <- approveStepMsg{text: text}:
+			default:
+			}
+		})
+		ch <- approvedMsg{buildID: id, err: err}
+	}()
+	return waitApproval(ch)
+}
+
+// waitApproval reads the approval's next message from ch.
+func waitApproval(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		id, err := submit()
-		return submittedMsg{runID: id, err: err}
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		if step, isStep := msg.(approveStepMsg); isStep {
+			step.next = ch
+			return step
+		}
+		return msg
 	}
 }
 

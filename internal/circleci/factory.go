@@ -41,6 +41,14 @@ type FlowEvent string
 // state, where factory hands out a task for the plan's comments.
 const AddressComments FlowEvent = "address-comments"
 
+// ApproveForUnits moves a flow from Planning - Human to Planning - Agent with
+// its design approved, where factory hands out a task to write its units.
+const ApproveForUnits FlowEvent = "approve-for-units"
+
+// ApproveForBuilding moves a flow from Planning - Human to Building - Agent,
+// where factory hands the session claiming the plan its build tasks.
+const ApproveForBuilding FlowEvent = "approve-for-building"
+
 // PlanComment is a comment on a factory plan. QuotedText is the part of the
 // plan's text it is about, or "" for a comment on the plan as a whole.
 type PlanComment struct {
@@ -83,6 +91,12 @@ type eventAttrs struct {
 
 type eventRefs struct {
 	FactoryFlow v3Ref `json:"factory_flow"`
+}
+
+// releaseRequest is the body of a release, which conductor takes bare rather
+// than in a data envelope.
+type releaseRequest struct {
+	FlowID string `json:"flow_id"`
 }
 
 type createPlanAttrs struct {
@@ -266,6 +280,20 @@ func (c *Client) CreateFlowEvent(ctx context.Context, planID string, event FlowE
 	))
 	if err != nil {
 		return mapErr("create flow event", err)
+	}
+	return nil
+}
+
+// ReleaseClaim has factory session sessionID release its claim on plan
+// planID, as the session itself would. The plan keeps its flow, and waits
+// for a session to claim it again.
+func (c *Client) ReleaseClaim(ctx context.Context, sessionID, planID string) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/sessions/%s/release",
+		hc.RouteParams(url.PathEscape(sessionID)),
+		hc.Body(releaseRequest{FlowID: planID}),
+	))
+	if err != nil {
+		return mapErr("release claim", err)
 	}
 	return nil
 }

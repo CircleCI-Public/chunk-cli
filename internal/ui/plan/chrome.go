@@ -52,8 +52,10 @@ func (m Model) narrow() bool { return m.width < narrowBelow }
 func (m Model) header() string {
 	var state string
 	switch {
-	case m.sending:
-		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Sending to the factory")
+	case m.approving:
+		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Approving")
+	case m.approvingDesign:
+		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Approving design")
 	case m.busy:
 		text := "✦ chunk is drafting"
 		if m.narrow() {
@@ -169,7 +171,7 @@ func (m Model) actions() (main, side string) {
 	switch {
 	// While a comment is written enter saves it and ctrl+s does nothing, so
 	// neither button is on offer: the hints name the keys that work.
-	case m.sending, m.commenting:
+	case m.approving, m.approvingDesign, m.commenting:
 		return "", ""
 	case m.busy:
 		return outline(m.purple(), "chunk is working"), m.style(m.faint()).Render(approve)
@@ -186,7 +188,7 @@ func (m Model) actions() (main, side string) {
 	case m.state != ReadyState:
 		return "", m.style(m.faint()).Render(approve + " · wait for the review")
 	case m.units == 0:
-		return "", m.style(m.faint()).Render(approve + " · comment so chunk writes the units")
+		return button(m.green(), "ctrl+s Approve design"), ""
 	}
 	return button(m.green(), approve), ""
 }

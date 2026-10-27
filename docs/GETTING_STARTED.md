@@ -366,8 +366,11 @@ first (it needs the factory daemon running with `FACTORY_PLAN_STORE=circleci`).
 The chat is on the left and the plan is on the right; `tab` moves to the plan,
 where `c` writes a comment right under the highlighted part, saved to factory
 for chunk to address when you next press `enter`; `shift+↑/↓` selects several
-parts to comment on together. `ctrl+s` sends the finished plan to the
-factory to build, once factory's review of it has passed and it has units.
+parts to comment on together. Once factory's review of the design has
+passed, `ctrl+s` approves the design, and chunk writes the units; once those
+pass review too, `ctrl+s` approves the finished plan in factory, and the
+chunk daemon builds it through to a pull request. The build shows in your
+runs, and keeps going when you close chunk; plan as many as you like.
 `esc` goes back to your runs with the plan kept, and `p` opens it again.
 `chunk factory plan` opens the same screen on its own.
 

@@ -48,11 +48,12 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.DELETE("/api/v3/factory/comments/:id", f.handleDeleteComment)
 	r.GET("/api/v3/factory/flows/:id", f.handleGetFlow)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
+	r.POST("/api/v3/factory/sessions/:id/release", f.handleReleaseClaim)
 }
 
 // factoryEvents are the events a human may send a flow (flow.EventName in
 // circleci/factory).
-var factoryEvents = []string{"prioritize", "address-comments", "approve-for-building", "abandon-integrate", "abandon"}
+var factoryEvents = []string{"prioritize", "address-comments", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
 
 // factoryEnds are the states a plan ends in, which the plan list leaves out
 // (conductor.Ends in circleci/factory).
@@ -62,6 +63,8 @@ var factoryEnds = []string{"Done", "Canceled", "Won't Do", "Duplicate"}
 type FactoryPlan struct {
 	ID, Title, State, Text string
 	Comments               int
+	// Session is the factory session claiming the plan, "" when none does.
+	Session string
 	// Events are the events sent the plan's flow, in order. The fake
 	// stores them without applying them: conductor applies them at the
 	// plan's next poll, which a test stands in for with
@@ -80,7 +83,7 @@ func (f *FakeCircleCI) FactoryPlan(id string) (FactoryPlan, bool) {
 	}
 	return FactoryPlan{
 		ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments),
-		Events: slices.Clone(p.events),
+		Session: p.session, Events: slices.Clone(p.events),
 	}, true
 }
 
@@ -360,6 +363,31 @@ func (f *FakeCircleCI) handleGetFlow(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"id": p.id, "attributes": gin.H{"state": p.state}, "references": refs,
 	}})
+}
+
+// handleReleaseClaim drops session :id's claim on the plan flow_id names, as
+// conductor does; the plan keeps its flow. It answers 404 for a plan that
+// session does not claim.
+func (f *FakeCircleCI) handleReleaseClaim(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	var body struct {
+		FlowID string `json:"flow_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.FlowID == "" {
+		factoryError(c, http.StatusBadRequest, "a release needs a flow_id")
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.factoryPlans[body.FlowID]
+	if p == nil || !p.flowed || p.session != c.Param("id") {
+		factoryError(c, http.StatusNotFound, "claim not found")
+		return
+	}
+	p.session = ""
+	c.Status(http.StatusNoContent)
 }
 
 // handleCreateEvent stores an event for a flow, as conductor does, answering

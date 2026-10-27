@@ -445,6 +445,11 @@ GET  /factory[?root=<path>] → {sessions: [Session...]}, newest first
 GET  /factory/{id}         → SessionDetail: the session plus each round's review findings
 POST /factory/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
 DELETE /factory/{id}       → 204: forget a finished session; 409 while it is still running
+POST /factory/plans        {project_root, plan_id, model?} → 202 {id}: build an approved
+                             factory plan in a build session of Claude Code in the plan's
+                             worktree, through factory's tasks; a run with no rounds, whose
+                             factory.plan_id is set (409 plan over or already building,
+                             503 not authenticated to CircleCI)
 POST /factory/warm         {project_root, run_id} → 202: make the sidecars a run
                              continuing run_id would use, from its baseline, before
                              that run starts (503 no credential or not authenticated,

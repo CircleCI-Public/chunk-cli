@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
@@ -155,7 +156,7 @@ func TestFactoryRunPaneShowsImplementerChecksAndReviews(t *testing.T) {
 			// whether to open it without having to.
 			"▸ details · worktree, progress",
 		} {
-			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+			assert.Check(t, cmp.Contains(out, want), "missing %q", want)
 		}
 		// The finished round is a line; the run's details are folded.
 		for _, absent := range []string{"review: bugs", "lint", "/tmp/wt/abc", "syncing the implementer", "not built yet"} {
@@ -1720,4 +1721,36 @@ func TestHidingFinishedRunsHidesTheSelectedOne(t *testing.T) {
 	m, _ = press(m, 'e')
 	assert.DeepEqual(t, listedIDs(m), []string{"live"})
 	assert.Equal(t, m.selRun, "live")
+}
+
+// A plan build has no rounds: its pane says where factory has the plan and
+// shows the latest of what its build session did, and the run list its
+// phase.
+func TestPlanBuildPaneShowsThePlanAndWhatTheBuildDid(t *testing.T) {
+	r := liveSession("b1", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	r.s.Branch = "scott/add-a-flag"
+	r.s.Factory = &chunkd.FactoryRun{
+		Prompt:     "# add-verbose-flag\n\n## 1. Outcome\n\nchunk validate takes --verbose.\n",
+		SpecOrigin: "factory plan p-1", PlanID: "p-1", PlanState: "Building - Agent",
+		Branch: "scott/add-a-flag", Worktree: "/data/plans/p-1",
+		Progress: chunkd.Feed{Lines: []chunkd.FeedLine{
+			{Level: chunkd.FeedStep, Text: "Building plan p-1 in /data/plans/p-1"},
+			{Level: chunkd.FeedInfo, Text: "Bash factory daemon wait"},
+			{Level: chunkd.FeedStep, Text: "Built unit 1."},
+		}, Total: 3},
+	}
+	m := sessModel(r)
+	m.selRun = "b1"
+	out := view(m)
+	for _, want := range []string{
+		"Building plan · Building - Agent", "from factory plan p-1", "add-verbose-flag",
+		"Bash factory daemon wait", "Built unit 1.", "building",
+	} {
+		assert.Check(t, cmp.Contains(out, want), "missing %q", want)
+	}
+	assert.Check(t, !strings.Contains(out, "Round"), "a plan build has no rounds:\n%s", out)
+	assert.Check(t, cmp.Equal(runStatus(r.s), "building · 1m0s"))
+
+	r.s.Factory.PlanState = "Planning - Human"
+	assert.Check(t, cmp.Equal(runStatus(r.s), "starting · 1m0s"), "a plan whose approval has not applied yet")
 }

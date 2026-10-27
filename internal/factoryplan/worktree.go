@@ -3,7 +3,6 @@ package factoryplan
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 )
@@ -30,14 +29,11 @@ func planWorktree(ctx context.Context, root string, store *Store) (string, error
 	return dir, nil
 }
 
-// endedStates are the states of a plan that is over, merged or dropped.
-var endedStates = []string{"Done", "Canceled", "Won't Do", "Duplicate"}
-
 // ended is whether factory plan planID is over, so its worktree can go.
 func (s *Store) ended(ctx context.Context, planID string) (bool, error) {
 	p, err := s.api.GetPlan(ctx, planID)
 	if err != nil {
 		return false, fmt.Errorf("get the state of plan %s: %w", planID, err)
 	}
-	return slices.Contains(endedStates, p.State), nil
+	return factory.PlanEnded(p.State), nil
 }

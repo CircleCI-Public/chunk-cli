@@ -84,6 +84,17 @@ func StartFactory(req FactoryRequest) (string, error) {
 	return resp.ID, nil
 }
 
+// StartPlanBuild asks the daemon to build an approved factory plan, and
+// returns the build's session ID without waiting for it. It is followed and
+// cancelled like any other session.
+func StartPlanBuild(req PlanBuildRequest) (string, error) {
+	var resp SessionStartResponse
+	if err := sessionCall(http.MethodPost, "/factory/plans", req, &resp); err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
 // FetchSession returns one session with the text of its reviews.
 func FetchSession(id string) (SessionDetail, error) {
 	var detail SessionDetail

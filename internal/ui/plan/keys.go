@@ -32,8 +32,9 @@ type keyMap struct {
 	SendComments key.Binding
 	// While a comment is written.
 	SaveComment, CancelComment key.Binding
-	// While sending the plan is confirmed. Any other key, enter too, says
-	// no: sending starts a factory run, so it takes a y.
+	// While approving the plan, or its design, is confirmed. Any other key,
+	// enter too, says no: approving moves the plan on in factory, so it
+	// takes a y.
 	Confirm key.Binding
 
 	Focus    key.Binding
@@ -82,7 +83,7 @@ func (m Model) keys() keyMap {
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
 		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", focusHelp)),
-		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "send plan to factory")),
+		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +23,13 @@ func planWorktreesDir(root string) (string, error) {
 	}
 	return filepath.Join(dataDir, "plans"), nil
 }
+
+// planEnds are the states of a factory plan that is over, merged or dropped.
+var planEnds = []string{"Done", "Canceled", "Won't Do", "Duplicate"}
+
+// PlanEnded is whether a factory plan in state is over, so nothing more
+// happens to it: its worktree can go, and a session building it can stop.
+func PlanEnded(state string) bool { return slices.Contains(planEnds, state) }
 
 // PlanWorktreePath is where the worktree of factory plan planID goes, for the
 // repository at root. It is the same for every session planning it, so a

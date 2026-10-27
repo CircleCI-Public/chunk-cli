@@ -19,6 +19,10 @@ type Store interface {
 	// from a Human state to its phase's Agent state. Factory moves it at
 	// its next poll, not before AddressComments returns.
 	AddressComments(ctx context.Context) error
+	// ApproveDesign approves the plan's design, moving it from Planning -
+	// Human for factory to write its units. Factory moves it at its next
+	// poll, not before ApproveDesign returns.
+	ApproveDesign(ctx context.Context) error
 	Text(ctx context.Context) (string, error)
 	Comments(ctx context.Context) ([]Comment, error)
 	AddComment(ctx context.Context, quote, body string) (Comment, error)

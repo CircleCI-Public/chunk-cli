@@ -33,6 +33,18 @@ type comment struct {
 	text  string
 }
 
+// openComments is how many of the plan's comments are saved in factory and
+// not resolved: m.comments holds them beside the queued ones.
+func (m Model) openComments() int {
+	n := 0
+	for _, c := range m.comments {
+		if c.id != "" {
+			n++
+		}
+	}
+	return n
+}
+
 // takesComments is whether sending comments hands them to factory from
 // state: factory's address-comments event moves a plan from any Human state
 // to its phase's Agent state, which hands out a task for its comments.

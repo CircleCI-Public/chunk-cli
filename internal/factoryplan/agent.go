@@ -150,6 +150,9 @@ func (p *Agent) Send(ctx context.Context, message string) error {
 	return nil
 }
 
+// SessionID is the factory session the agent plans as.
+func (p *Agent) SessionID() string { return p.cfg.SessionID }
+
 // holds is whether this session holds the plan's claim in factory. A failed
 // read counts as holding it, so a blip in the API does not have the agent
 // claim a plan it has.

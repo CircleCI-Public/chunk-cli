@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -29,11 +28,13 @@ func newFactoryPlanCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "plan [prompt]",
-		Short: "Plan a change with Claude, then send the plan to the factory",
+		Short: "Plan a change with Claude, then approve it and build it on the daemon",
 		Long: `Plan a change in a chat with a factory planning session of Claude Code on
 this machine. The plan is kept in factory and shown beside the chat as it
-changes; comment on it until it is right, then press ctrl+s to send it to the
-factory to build.
+changes; comment on it until it is right, then press ctrl+s to approve it in
+factory, and the chunk daemon builds it, in a build session of Claude Code
+in the plan's own worktree, through to a pull request. Follow the build in
+chunk watch.
 
 Needs factory, its f plugin for Claude Code, and the factory daemon running
 with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
@@ -73,7 +74,7 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 			// its own, so it would outlive chunk: it is stopped, and waited
 			// for, as the screen closes.
 			planCtx, cancel := context.WithCancel(ctx)
-			agent, submit, store := planSession(planCtx, root, model, api)
+			agent, approve, store := planSession(planCtx, root, model, api)
 			// Cancelling first ends a session that is still starting, which
 			// Stop would otherwise wait out.
 			defer func() {
@@ -87,7 +88,7 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 			}
 			// The branch is only for the header; a repo without one has none.
 			branch, _ := gitutil.CurrentBranchIn(root)
-			screen := plan.New(planCtx, agent, submit, store, first).
+			screen := plan.New(planCtx, agent, approve, store, first).
 				WithTerminal(lipgloss.HasDarkBackground(os.Stdin, os.Stdout), false).
 				WithBranch(branch)
 			p := tea.NewProgram(plan.Screen{Model: screen}, tea.WithContext(ctx))
@@ -95,22 +96,12 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 			if err != nil {
 				return err
 			}
-			m := final.(plan.Screen).Model
-			if m.RunID == "" {
-				if id := store.ID(); id != "" {
-					streams.ErrPrintf("The plan was not sent. It is plan %s in factory.\n", id)
-				}
-				return nil
-			}
-			streams.ErrPrintf("Factory run %s started on the chunk daemon from plan %s in factory.\n", m.RunID, store.ID())
-			if showHints(streams, false) {
-				streams.ErrPrintln(watchStartHint)
-			}
+			reportPlanLeft(streams, store.ID(), final.(plan.Screen).Model.BuildID)
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&model, "model", "", "model Claude plans with (default: your Claude Code default)")
+	cmd.Flags().StringVar(&model, "model", "", "model Claude plans and builds with (default: your Claude Code default)")
 	return cmd
 }
 
@@ -137,51 +128,82 @@ func factoryPlanClient() (*circleci.Client, error) {
 	return client, nil
 }
 
+// reportPlanLeft says, as the screen closes, where the plan with ID planID
+// was left: not approved, or being built as build buildID.
+func reportPlanLeft(streams iostream.Streams, planID, buildID string) {
+	switch {
+	case planID == "":
+	case buildID == "":
+		streams.ErrPrintf("The plan was not approved. It is plan %s in factory.\n", planID)
+	default:
+		streams.ErrPrintf("Plan %s is approved and building on the chunk daemon, as run %s.\n", planID, buildID)
+		if showHints(streams, false) {
+			streams.ErrPrintln(watchStartHint)
+		}
+	}
+}
+
 // planSession is a factory planning session in root for the planning
 // screen: the agent it talks to, which lives as long as ctx, the store its
-// plan and comments are kept in through api, and the send of the plan it ends
-// with to the factory. The caller must Stop the agent.
-func planSession(ctx context.Context, root, model string, api *circleci.Client) (*factoryplan.Agent, plan.Submitter, *factoryplan.Store) {
+// plan and comments are kept in through api, and the approval it ends with,
+// which approves the plan in factory and has the chunk daemon build it. The
+// caller must Stop the agent.
+func planSession(ctx context.Context, root, model string, api *circleci.Client) (*factoryplan.Agent, plan.Approver, *factoryplan.Store) {
 	store := factoryplan.NewStore(api)
 	agent := factoryplan.NewAgent(ctx, factory.AgentConfig{Dir: root, Model: model, SessionID: uuid.NewString()}, store)
-	submit := func() (string, error) {
-		text, err := store.Ready(ctx)
-		if err != nil {
-			return "", err
-		}
+	approve := func(step func(string)) (string, error) {
+		// The daemon is started first, so a plan is not approved with
+		// nothing to build it.
+		step("Starting the chunk daemon…")
 		if err := chunkd.EnsureRunning(); err != nil {
 			return "", fmt.Errorf("start the chunk daemon: %w", err)
 		}
-		return sendPlan(root, store.ID(), text)
+		return approveAndBuild(step,
+			func() error { return store.Approve(ctx, agent.SessionID()) },
+			agent.Stop,
+			func() (string, error) { return buildPlan(root, store.ID(), model) },
+		)
 	}
-	return agent, submit, store
+	return agent, approve, store
 }
 
-// planOrigin is a run's SpecOrigin for factory plan planID, or "" for none.
-func planOrigin(planID string) string {
-	if planID == "" {
-		return ""
+// approveAndBuild approves a plan in factory, stops its planning session,
+// then has the plan built, returning the build's ID. The planning session is
+// stopped as soon as the approval is in, whether or not the build then
+// starts: approving released its claim, and a session still running would
+// claim the plan again at the developer's next message, when factory would
+// hand it the build tasks, which it cannot do. A plan whose approval failed
+// keeps its session, to plan on. step is called with each step as it
+// starts.
+func approveAndBuild(step func(string), approve, stopPlanning func() error, build func() (string, error)) (string, error) {
+	step("Approving the plan in factory…")
+	if err := approve(); err != nil {
+		return "", err
 	}
-	return "factory plan " + planID
+	step("Approved. Stopping the planning session…")
+	// The plan is approved, and the session stopped; how it stopped does not
+	// change what comes next.
+	_ = stopPlanning()
+	step("Starting the build on the chunk daemon…")
+	return build()
 }
 
-// sendPlan hands an approved plan, planID in factory, to the factory, as
-// 'chunk factory build' would. The run names the plan as where it came from.
-func sendPlan(root, planID, text string) (string, error) {
-	id, err := chunkd.StartFactory(chunkd.FactoryRequest{
-		ProjectRoot: root,
-		Prompt:      strings.TrimSpace(text),
-		SpecOrigin:  planOrigin(planID),
-		PullRequest: chunkd.PullRequestAuto,
-	})
+// buildPlan has the chunk daemon build approved factory plan planID, in the
+// project at root, and returns the build's session ID. A plan it cannot
+// start building stays approved in factory, so the error says how to build
+// it another way.
+func buildPlan(root, planID, model string) (string, error) {
+	id, err := chunkd.StartPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: root, PlanID: planID, Model: model})
 	var refused *chunkd.SessionRefused
 	switch {
 	case errors.As(err, &refused):
-		return "", errors.New(refused.Message)
+		err = errors.New(refused.Message)
 	case errors.Is(err, chunkd.ErrDaemonUnavailable):
-		return "", errors.New("the chunk daemon is not reachable")
-	case err != nil:
-		return "", fmt.Errorf("talk to the chunk daemon: %w", err)
+		err = errors.New("the chunk daemon is not reachable")
+	}
+	if err != nil {
+		return "", fmt.Errorf("the plan is approved in factory, but chunk could not start building it (%w); "+
+			"build it in Claude Code with /f:resume %s", err, planID)
 	}
 	return id, nil
 }

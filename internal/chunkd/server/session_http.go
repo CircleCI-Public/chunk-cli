@@ -22,6 +22,7 @@ const maxRequestBytes = 64 * 1024
 //	GET  /factory/{id}         one session with its review findings
 //	POST /factory/{id}/cancel  stop a session
 //	DELETE /factory/{id}       forget a finished session (409 while it is running)
+//	POST /factory/plans        build an approved factory plan
 //	POST /factory/warm         make the sidecars a run continuing run_id would use
 //	POST /factory/warm/{run}/cancel  delete those sidecars
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
@@ -30,6 +31,7 @@ func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("GET /factory/{id}", d.handleSessionGet)
 	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
 	mux.HandleFunc("DELETE /factory/{id}", d.handleSessionDelete)
+	mux.HandleFunc("POST /factory/plans", d.handlePlanBuild)
 	mux.HandleFunc("POST /factory/warm", d.handleFactoryWarm)
 	mux.HandleFunc("POST /factory/warm/{run}/cancel", d.handleFactoryWarmCancel)
 }
@@ -61,6 +63,24 @@ func (d *daemon) handleFactoryStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := d.startFactory(req)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, chunkd.SessionStartResponse{ID: sess.ID})
+}
+
+func (d *daemon) handlePlanBuild(w http.ResponseWriter, r *http.Request) {
+	var req chunkd.PlanBuildRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ProjectRoot == "" || req.PlanID == "" {
+		http.Error(w, "project_root and plan_id required", http.StatusBadRequest)
+		return
+	}
+	sess, err := d.startPlanBuild(req)
 	if err != nil {
 		writeAPIError(w, err)
 		return
