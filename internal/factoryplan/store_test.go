@@ -420,3 +420,20 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(f.Task, ""))
 }
+
+func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
+	client, _ := testClient(t)
+	store := NewStore(client, "")
+	ctx := context.Background()
+
+	err := store.SetText(ctx, "# A plan\n")
+	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
+
+	err = store.Create(ctx, "a plan")
+	assert.NilError(t, err)
+	err = store.SetText(ctx, "# A plan\n\n## 1. Outcome\n\nEdited by hand.\n")
+	assert.NilError(t, err)
+	text, err := store.Text(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(text, "# A plan\n\n## 1. Outcome\n\nEdited by hand.\n"))
+}

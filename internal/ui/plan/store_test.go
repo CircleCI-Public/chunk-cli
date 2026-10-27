@@ -42,7 +42,11 @@ type fakeStore struct {
 	Resolved []string
 	Deleted  []string
 
+	// Set records the texts SetText was called with, in order.
+	Set []string
+
 	CreateErr, StateErr, AddressErr, TextErr, CommentsErr error
+	SetTextErr                                            error
 	AddErr, EditErr, ResolveErr, DeleteErr                error
 	// FailAddAfter, when > 0, fails AddComment calls numbered after this
 	// many successes.
@@ -131,6 +135,17 @@ func (f *fakeStore) Text(context.Context) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.TextV, f.TextErr
+}
+
+func (f *fakeStore) SetText(_ context.Context, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.SetTextErr != nil {
+		return f.SetTextErr
+	}
+	f.TextV = text
+	f.Set = append(f.Set, text)
+	return nil
 }
 
 func (f *fakeStore) Comments(context.Context) ([]Comment, error) {

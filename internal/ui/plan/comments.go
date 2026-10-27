@@ -124,12 +124,22 @@ func (m *Model) applyComments(cs []Comment) {
 	m.resolved = resolved
 }
 
+// spanOf is where blocks lo to hi sit in the plan they were split from, as
+// the offsets of their first byte and the one after their last, or false
+// when they cannot be found there as they are.
+func (m *Model) spanOf(lo, hi int) (start, end int, ok bool) {
+	first, last := m.blocks[lo], m.blocks[hi]
+	if first.at >= 0 && last.at >= first.at && last.at+len(last.source) <= len(m.renderedFrom) {
+		return first.at, last.at + len(last.source), true
+	}
+	return 0, 0, false
+}
+
 // quoteOf is the markdown of blocks lo to hi as it is in the plan, or, when
 // it cannot be found there as it is, their markdown a blank line apart.
 func (m *Model) quoteOf(lo, hi int) string {
-	first, last := m.blocks[lo], m.blocks[hi]
-	if first.at >= 0 && last.at >= first.at && last.at+len(last.source) <= len(m.renderedFrom) {
-		return m.renderedFrom[first.at : last.at+len(last.source)]
+	if start, end, ok := m.spanOf(lo, hi); ok {
+		return m.renderedFrom[start:end]
 	}
 	sources := make([]string, 0, hi-lo+1)
 	for _, b := range m.blocks[lo : hi+1] {
@@ -319,7 +329,7 @@ func deleteCmd(ctx context.Context, s Store, id string) tea.Cmd {
 func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := m.keys()
 	// Only the keys that grow or shrink the selection keep it.
-	if !key.Matches(msg, k.ExtendUp, k.ExtendDown, k.Comment) {
+	if !key.Matches(msg, k.ExtendUp, k.ExtendDown, k.Comment, k.Edit) {
 		m.anchor = -1
 	}
 	switch {
@@ -355,6 +365,8 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.moveCursor(m.prevComment())
 	case key.Matches(msg, k.Comment):
 		return m, m.openCommentEditor()
+	case key.Matches(msg, k.Edit):
+		return m.startEdit()
 	case key.Matches(msg, k.Resolve):
 		if i := m.commentAt(m.cursor); i >= 0 && m.comments[i].id != "" {
 			return m, resolveCmd(m.ctx, m.store, m.comments[i].id)
