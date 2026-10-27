@@ -19,10 +19,13 @@ type factoryPlan struct {
 	// flowed is whether a session has claimed the plan, which gives it the
 	// flow conductor keeps from then on; session is the one claiming it now,
 	// "" when none does.
-	flowed   bool
-	session  string
-	events   []string
-	comments []factoryComment
+	flowed  bool
+	session string
+	events  []string
+	// applicable are the events the flow lists as applicable_events, as a
+	// test sets them with SetFactoryApplicableEvents.
+	applicable []string
+	comments   []factoryComment
 	// seq orders plans by creation, as created_at and id order conductor's.
 	seq int
 }
@@ -95,6 +98,16 @@ func (f *FakeCircleCI) SetFactoryPlanState(id, state string) {
 	if p := f.factoryPlans[id]; p != nil {
 		p.state = state
 		p.updatedAt = time.Now().UTC()
+	}
+}
+
+// SetFactoryApplicableEvents has plan id's flow list events as the ones
+// factory applies now, as conductor's applicable_events would for its state.
+func (f *FakeCircleCI) SetFactoryApplicableEvents(id string, events ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.applicable = slices.Clone(events)
 	}
 }
 
@@ -360,8 +373,12 @@ func (f *FakeCircleCI) handleGetFlow(c *gin.Context) {
 	if p.session != "" {
 		refs["factory_session"] = gin.H{"id": p.session}
 	}
+	applicable := p.applicable
+	if applicable == nil {
+		applicable = []string{}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"id": p.id, "attributes": gin.H{"state": p.state}, "references": refs,
+		"id": p.id, "attributes": gin.H{"state": p.state, "applicable_events": applicable}, "references": refs,
 	}})
 }
 

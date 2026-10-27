@@ -207,6 +207,9 @@ func (m Model) actions() (main, side string) {
 		return outline(m.purple(), "chunk is working"), m.style(m.faint()).Render(approve)
 	case strings.TrimSpace(m.plan) == "":
 		return "", ""
+	case queued > 0 && !m.takesComments():
+		held := fmt.Sprintf("%d %s held until factory is waiting on you", queued, plural(queued, "comment", "comments"))
+		return "", m.style(m.faint()).Render(held)
 	case queued > 0:
 		save := fmt.Sprintf("enter Save %d %s", queued, plural(queued, "comment", "comments"))
 		if m.focus == panePlan {

@@ -186,6 +186,25 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.Equal(f.SessionID, ""))
 	})
 
+	t.Run("reads the events the flow applies now", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.ClaimFactoryPlan(p.ID, "session-1")
+
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Len(f.ApplicableEvents, 0))
+
+		fake.SetFactoryApplicableEvents(p.ID, "address-comments", "abandon")
+		f, err = client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(f.ApplicableEvents, []FlowEvent{AddressComments, "abandon"}))
+	})
+
 	t.Run("sends a flow an event", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)

@@ -13,6 +13,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
@@ -1947,7 +1949,46 @@ func TestSendWithOnlyCommentsStartsNoTurn(t *testing.T) {
 	}
 }
 
-func TestNoHandOffOutsideHumanStates(t *testing.T) {
+// TestCommentsHeldOutsideHumanStates checks that a send outside a Human
+// state leaves the queued comments queued, unsaved and not handed off, and
+// sends the message with them on alone.
+func TestCommentsHeldOutsideHumanStates(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.StateV = "Planning - Agent"
+	agent := turnReturning("ok")
+	m := New(context.Background(), agent, nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	agent.reset()
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "x")
+	m = drive(t, m, press("enter"))
+	assert.Check(t, !m.keys().SendComments.Enabled(), "s sends comments outside a Human state")
+	bar := ansi.Strip(m.actionBar())
+	assert.Check(t, !strings.Contains(bar, "Save 1 comment"), "the bar offers to save held comments: %q", bar)
+	assert.Check(t, cmp.Contains(bar, "1 comment held until factory is waiting on you"))
+	main, _ := m.barRight()
+	assert.Check(t, cmp.Equal(main, ""), "the bar has a button for held comments")
+	m = drive(t, m, press("tab"))
+	assert.Check(t, cmp.Equal(m.input.Placeholder, heldPlaceholder))
+	m = typeText(t, m, "keep going")
+	m = drive(t, m, press("enter"))
+
+	assert.Check(t, cmp.Len(store.Added, 0))
+	assert.Check(t, cmp.Len(store.HandedOff, 0))
+	assert.Check(t, cmp.Len(queuedComments(m.comments), 1))
+	assert.Check(t, cmp.DeepEqual(agent.Sent(), []string{"keep going"}))
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "Comments not sent: factory is working on the plan"))
+}
+
+// TestHeldCommentsSendOnceThePlanWaitsOnTheDeveloper checks that comments
+// held while factory worked are saved and handed off by the first send once
+// the plan is in a Human state.
+func TestHeldCommentsSendOnceThePlanWaitsOnTheDeveloper(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = twoParts
 	store.StateV = "Planning - Agent"
@@ -1959,15 +2000,49 @@ func TestNoHandOffOutsideHumanStates(t *testing.T) {
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "x")
 	m = drive(t, m, press("enter"))
-	m = drive(t, m, press("tab"))
-	drive(t, m, press("enter"))
+	m = drive(t, m, press("s"))
+	assert.Assert(t, cmp.Len(store.Added, 0), "s saved comments outside a Human state")
 
-	if len(store.Added) != 1 {
-		t.Fatalf("comments saved: %+v", store.Added)
-	}
-	if len(store.HandedOff) != 0 {
-		t.Errorf("handed off: %+v", store.HandedOff)
-	}
+	store.mu.Lock()
+	store.StateV = "Planning - Human"
+	store.mu.Unlock()
+	m = drive(t, m, pollMsg{})
+	assert.Assert(t, m.keys().SendComments.Enabled(), "s does not send comments from a Human state")
+	drive(t, m, press("s"))
+
+	assert.Check(t, cmp.Len(store.Added, 1))
+	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Human"}))
+}
+
+// TestCommentsFollowTheFlowsEventsNotItsState checks that whether a send
+// hands comments to factory is up to the events its flow applies now, not
+// the name of the plan's state.
+func TestCommentsFollowTheFlowsEventsNotItsState(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.setEvents("approve-for-building")
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "x")
+	m = drive(t, m, press("enter"))
+	assert.Check(t, !m.keys().SendComments.Enabled(), "s sends comments the flow does not take")
+	m = drive(t, m, press("s"))
+	assert.Assert(t, cmp.Len(store.Added, 0), "comments saved with address-comments not applicable")
+
+	store.mu.Lock()
+	store.StateV = "Planning - Agent"
+	store.mu.Unlock()
+	store.setEvents("address-comments")
+	m = drive(t, m, pollMsg{})
+	assert.Assert(t, m.keys().SendComments.Enabled(), "s does not send comments the flow takes")
+	drive(t, m, press("s"))
+
+	assert.Check(t, cmp.Len(store.Added, 1))
+	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Agent"}))
 }
 
 // TestHandOffRetriedOnNextSendWithNothingQueued checks that an

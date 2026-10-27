@@ -288,3 +288,28 @@ func TestStoreHolderReadsTheClaimFromFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(h, ""))
 }
+
+// TestStoreEventsReadsTheFlowsApplicableEvents checks that Events are the
+// events the plan's flow lists as applicable, and none before the plan
+// exists or has a flow.
+func TestStoreEventsReadsTheFlowsApplicableEvents(t *testing.T) {
+	client, cci := testClient(t)
+	store := NewStore(client, "")
+	ctx := context.Background()
+
+	events, err := store.Events(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Len(events, 0))
+
+	err = store.Create(ctx, "a plan")
+	assert.NilError(t, err)
+	events, err = store.Events(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Len(events, 0), "a plan with no flow takes no events")
+
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "abandon")
+	events, err = store.Events(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(events, []string{"address-comments", "abandon"}))
+}

@@ -16,6 +16,9 @@ type Store interface {
 	ID() string
 	Create(ctx context.Context, title string) error
 	State(ctx context.Context) (string, error)
+	// Events are the events factory applies to the plan's flow now, by
+	// name; one sent at any other time is ignored.
+	Events(ctx context.Context) ([]string, error)
 	// AddressComments has factory take up the plan's comments, moving it
 	// from a Human state to its phase's Agent state. Factory moves it at
 	// its next poll, not before AddressComments returns.
