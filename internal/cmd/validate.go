@@ -1797,8 +1797,8 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 	return base + "-validate"
 }
 
-const suggestionValidateNotConfigured = "Run 'chunk init' to detect and configure validation commands.\n" +
-	"This also installs the /chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
+const suggestionValidateNotConfigured = "Run 'chunk factory bootstrap' to detect and configure validation commands, or add them directly to .chunk/config.json if one already exists with none.\n" +
+	"Run 'chunk init' instead (or as well) to also install the /chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
 
 // validateCacheDir returns the directory used to store validate result cache
 // entries for the repository at workDir. Entries are keyed by the tree's

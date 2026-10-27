@@ -337,3 +337,10 @@ func TestExecerForRegisteredCommandStopsWhenTheDaemonStops(t *testing.T) {
 		t.Fatal("registered command's stream outlived the daemon context")
 	}
 }
+
+// A project with no .chunk/config.json points the caller at bootstrap, the
+// command that now writes it, rather than the retired 'chunk init' wording.
+func TestLoadProjectConfigPointsAtBootstrapWhenMissing(t *testing.T) {
+	_, err := loadProjectConfig(t.TempDir())
+	assert.ErrorContains(t, err, "run 'chunk factory bootstrap' in the project")
+}

@@ -108,6 +108,23 @@ func TestFactoryChecksOnlyToleratesMissingDefaultReviews(t *testing.T) {
 	assert.ErrorIs(t, err, review.ErrNoPrompts)
 }
 
+// With neither review prompts nor validation commands, factoryChecks points
+// at bootstrap for prompts and at the config file directly for commands,
+// since at this point .chunk/config.json already exists (loadFactoryConfig
+// ensures that before factoryChecks is ever called) and a bootstrap rerun
+// would skip the command-detection step rather than redo it.
+func TestFactoryChecksNothingToCheckSuggestsBootstrapAndConfig(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := &config.ProjectConfig{}
+
+	_, _, err := factoryChecks(workDir, "", cfg, false)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T", err)
+	assert.Equal(t, ue.UserMessage(), "Nothing to check the implementer's work with.")
+	assert.Equal(t, ue.Suggestion(),
+		"Run 'chunk factory bootstrap' to write review prompts to .chunk/reviews, or add validation commands directly to .chunk/config.json.")
+}
+
 func TestFactoryPrompt(t *testing.T) {
 	tests := []struct {
 		name    string

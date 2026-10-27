@@ -31,6 +31,20 @@ type updateCheckKey struct{}
 // both ever land in the same Segment workspace.
 const writeKey = "AbgkrgN4cbRhAVEwlzMkHbwvrXnxHh35"
 
+// startHereHelp is the root help's onboarding flow. The watch command's name
+// comes from watchCmdName so renaming it (chunk watch -> chunk ui) is a
+// one-line change.
+func startHereHelp() string {
+	return fmt.Sprintf(`Start here
+  1. Connect Claude (pick one)
+       chunk auth set anthropic-oauth   Use your Claude subscription (recommended)
+       chunk auth set anthropic         Use an Anthropic API key (or set ANTHROPIC_API_KEY)
+  2. chunk factory bootstrap            Set up this project for factory runs
+  3. chunk %s%s Follow and manage your runs. Keep it open.
+     then press [n] to start a run or [p] to start a plan
+`, watchCmdName, strings.Repeat(" ", max(1, 40-len(watchCmdName)-len("  3. chunk "))))
+}
+
 func NewRootCmd(version string) *cobra.Command {
 	cobra.EnableTraverseRunHooks = true
 
@@ -71,12 +85,7 @@ func NewRootCmd(version string) *cobra.Command {
 
 {{end}}{{if or .Runnable .HasSubCommands}}{{.UsageString}}{{end}}{{else}}{{.Short}}
 
-Start here
-  chunk init                 Set up this project (config, sandbox, review prompts)
-  chunk factory start        Optional: hand chunk a diff you already started
-  chunk factory build        Build a change from a prompt, review it, open the PR
-  chunk watch                Follow and manage your factory runs. Keep it open.
-
+` + startHereHelp() + `
 Other commands
 {{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}  {{rpad .Name .NamePadding}} {{.Short}}
 {{end}}{{end}}

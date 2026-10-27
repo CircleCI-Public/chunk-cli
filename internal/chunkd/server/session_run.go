@@ -167,7 +167,7 @@ func sessionPromptsDir(root, rel string) (string, error) {
 func loadProjectConfig(root string) (*config.ProjectConfig, error) {
 	cfg, err := config.LoadProjectConfig(root)
 	if err != nil {
-		return nil, fmt.Errorf("load project config (run 'chunk init' in the project): %w", err)
+		return nil, fmt.Errorf("load project config (run 'chunk factory bootstrap' in the project): %w", err)
 	}
 	return cfg, nil
 }

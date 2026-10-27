@@ -64,7 +64,7 @@ func TestWatchDraftChecksWhatBuildChecksFirst(t *testing.T) {
 	defer drafts.stop()
 
 	_, err := drafts.draft(t.Context(), project, "add a flag", func(string) {})
-	assert.Error(t, err, "No validate commands configured. Run 'chunk init' first.")
+	assert.Error(t, err, "No validate commands configured. Run 'chunk factory bootstrap' first.")
 	_, statErr := os.Stat(asked)
 	assert.Assert(t, os.IsNotExist(statErr), "Claude was not asked")
 }
