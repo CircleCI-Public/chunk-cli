@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -809,16 +811,28 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 	return m, tea.Batch(next, refreshCmd(m.ctx, m.store))
 }
 
-// titleOf is the plan's title from the developer's message: its first line,
-// cut to 80 runes.
+// maxTitleLen keeps a plan's title short enough to read in the plan list.
+const maxTitleLen = 40
+
+// titleOf is the plan's title from the developer's message: a slug of its
+// first line, cut at a whole word.
 func titleOf(text string) string {
 	line, _, _ := strings.Cut(text, "\n")
-	line = strings.TrimSpace(line)
-	r := []rune(line)
-	if len(r) > 80 {
-		r = r[:80]
+	words := strings.FieldsFunc(strings.ToLower(line), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	if len(words) == 0 {
+		return "plan"
 	}
-	return string(r)
+	first := []rune(words[0])
+	slug := string(first[:min(len(first), maxTitleLen)])
+	for _, w := range words[1:] {
+		if utf8.RuneCountInString(slug)+1+utf8.RuneCountInString(w) > maxTitleLen {
+			break
+		}
+		slug += "-" + w
+	}
+	return slug
 }
 
 // syncPlaceholder tells the developer that enter saves their comments when
