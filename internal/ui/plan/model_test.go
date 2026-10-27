@@ -252,6 +252,57 @@ func TestCtrlSApprovesTheDesignOfAPlanWithNoUnits(t *testing.T) {
 	}
 }
 
+// TestDesignApprovedNoteClearsOnceFactoryMovesThePlan checks that the note
+// left by approving the design goes once a refresh finds the plan in another
+// state, so it does not hide the action bar's approve button when the units
+// come back for review.
+func TestDesignApprovedNoteClearsOnceFactoryMovesThePlan(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
+	m := New(context.Background(), turnReturning("ok"), func(func(string)) (string, error) { return "build-1", nil }, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	assert.Assert(t, cmp.Contains(ansi.Strip(m.actionBar()), "chunk writes the units next"))
+
+	// A refresh in the same state keeps the note.
+	m = drive(t, m, pollMsg{})
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "chunk writes the units next"))
+
+	store.mu.Lock()
+	store.StateV = "Planning - Agent"
+	store.mu.Unlock()
+	m = drive(t, m, pollMsg{})
+	assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "chunk writes the units next"),
+		"the note outlived the plan moving on: %q", ansi.Strip(m.actionBar()))
+
+	store.mu.Lock()
+	store.StateV = "Planning - Human"
+	store.TextV += "\n### Unit 1: add the flag\n\nParse it in main.go.\n"
+	store.mu.Unlock()
+	m = drive(t, m, pollMsg{})
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "ctrl+s Approve plan"))
+}
+
+// TestQuestionInTheStatusBarOutlivesAChangeOfState checks that a question
+// waiting on the developer's y stays up when a refresh finds the plan in
+// another state.
+func TestQuestionInTheStatusBarOutlivesAChangeOfState(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
+	m := New(context.Background(), turnReturning("ok"), nil, store, "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	assert.Assert(t, m.confirming)
+
+	store.mu.Lock()
+	store.StateV = "Planning - Agent"
+	store.mu.Unlock()
+	m = drive(t, m, pollMsg{})
+	assert.Check(t, m.confirming)
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "Approve the design"))
+}
+
 // A design with comments still to send or resolve is not approved: those
 // would have factory address them, not write the units.
 func TestCtrlSWaitsForCommentsBeforeApprovingTheDesign(t *testing.T) {

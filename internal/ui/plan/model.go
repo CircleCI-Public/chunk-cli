@@ -482,6 +482,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m.forward(msg)
 }
 
+// awaitingStatus is whether the status bar holds something still under way
+// or waiting on the developer: a question to answer, the quit prompt, or an
+// approval or save factory has not answered yet.
+func (m Model) awaitingStatus() bool {
+	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.savingComments
+}
+
 // applyRefresh is a successful or failed poll of the plan's state, text and
 // comments.
 func (m Model) applyRefresh(msg refreshedMsg) Model {
@@ -502,6 +509,11 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		}
 	}
 
+	if msg.state != m.state && !m.awaitingStatus() {
+		// A note on what happened is out of date once factory moves the
+		// plan, and left up it would hide the bar's buttons.
+		m.status = ""
+	}
 	m.state, m.events, m.plan = msg.state, msg.events, msg.text
 	m.applyComments(msg.comments)
 	m.renderPlan()
