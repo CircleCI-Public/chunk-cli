@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"image/color"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
@@ -71,8 +73,10 @@ func (m Model) header() string {
 			text = fmt.Sprintf("● %d %s", n, plural(n, "comment", "comments"))
 		}
 		state = m.pill(m.amber(), "#fff8c5", "#2a2210", text)
-	case m.state != ReadyState:
+	case m.state != ReadyState && m.inReview():
 		state = m.style(m.dim()).Render("In review")
+	case m.state != ReadyState:
+		state = m.style(m.dim()).Render(ansi.Truncate(m.stateText(), 24, "…"))
 	case m.units == 0:
 		state = m.style(m.dim()).Render("Design ready")
 	default:
@@ -219,9 +223,39 @@ func (m Model) actions() (main, side string) {
 	case open > 0:
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
 	case m.state != ReadyState:
-		return "", m.style(m.faint()).Render(approve + " · wait for the review")
+		return "", m.style(m.faint()).Render(approve + " · " + m.notReady())
 	case m.units == 0:
 		return button(m.green(), "ctrl+s Approve design"), ""
 	}
 	return button(m.green(), approve), ""
+}
+
+// inReview is whether factory's agent is reviewing the plan, so it will be
+// ready to approve once the review passes. No state yet counts: the plan has
+// just been made.
+func (m Model) inReview() bool {
+	phase, actor := planstate.Parse(m.state)
+	return strings.TrimSpace(m.state) == "" || actor == planstate.Agent && strings.EqualFold(phase, "Planning")
+}
+
+// notReady says why a plan not in ReadyState cannot be approved yet: its
+// review is running, or factory has it in some other state, which is named
+// as factory gives it, since chunk may not know it.
+func (m Model) notReady() string {
+	if m.inReview() {
+		return "wait for the review"
+	}
+	return "the plan is " + m.stateText()
+}
+
+// stateText is the plan's state as factory names it, safe to draw on one
+// line.
+func (m Model) stateText() string {
+	s := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, ansi.Strip(m.state))
+	return strings.Join(strings.Fields(s), " ")
 }

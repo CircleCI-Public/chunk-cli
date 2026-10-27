@@ -328,6 +328,7 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 		now := time.Now()
 		plans := []circleci.Plan{
 			{ID: "other", Title: "Other plan", State: "Custom exact state"},
+			{ID: "bot", Title: "Bot plan", State: "Integrating - Bot"},
 			{ID: "new", Title: "New plan", State: "Unprioritized"},
 			{ID: "agent", Title: "Agent plan", State: "Planning - Agent"},
 			{ID: "human", Title: "Human plan", State: "Review - Human", OpenComments: 2, UpdatedAt: now},
@@ -340,10 +341,10 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 		})
 		d.load()
 		text := d.content()
-		for _, want := range []string{"Needs your review", "With agent", "Not started", "Other", "custom exact state"} {
+		for _, want := range []string{"Needs your review", "With agent", "Not started", "Other", "custom exact state", "integrating - bot"} {
 			assert.Check(t, cmp.Contains(text, want))
 		}
-		order := []string{"Human plan", "Agent plan", "New plan", "Other plan"}
+		order := []string{"Human plan", "Agent plan", "New plan", "Other plan", "Bot plan"}
 		for i := 1; i < len(order); i++ {
 			assert.Assert(t, strings.Index(text, order[i-1]) < strings.Index(text, order[i]), "wrong group order:\n%s", text)
 		}

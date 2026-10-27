@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -318,10 +319,10 @@ func planBuildLabel(s chunkd.Session) string {
 
 // planBuildPhase is the plan's phase in factory, short for the run list:
 // Building, Integrating, or planning still, until the build session's claim
-// has applied the approval.
+// has applied the approval. A state chunk does not know is shown whole.
 func planBuildPhase(s chunkd.Session) string {
-	phase, _, _ := strings.Cut(s.Factory.PlanState, " - ")
-	if phase == "" || phase == "Planning" {
+	phase, _ := planstate.Parse(s.Factory.PlanState)
+	if phase == "" || strings.EqualFold(phase, "Planning") {
 		return "starting"
 	}
 	return strings.ToLower(phase)

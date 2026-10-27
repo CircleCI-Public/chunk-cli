@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
@@ -130,9 +131,10 @@ func (m Model) listLines(width, height int) []string {
 
 // stateChip is the plan's state as a coloured block, as the run list shows a
 // run's: amber when it waits on you, the brand yellow while an agent has it.
+// A state chunk does not know is shown whole, on grey.
 func stateChip(st theme.Styles, state string, width int) string {
-	text := strings.ToLower(oneLine(state))
-	text = strings.TrimSuffix(strings.TrimSuffix(text, " - human"), " - agent")
+	phase, _ := planstate.Parse(oneLine(state))
+	text := strings.ToLower(phase)
 	if text == "" {
 		text = "unknown"
 	}
@@ -145,7 +147,7 @@ func stateChip(st theme.Styles, state string, width int) string {
 	case 2:
 		bg = lipgloss.Color("250")
 	default:
-		bg = theme.Green
+		bg = lipgloss.Color("244")
 	}
 	return st.Chip.Background(bg).Render(" " + ansi.Truncate(text, max(width-2, 1), "…") + " ")
 }
