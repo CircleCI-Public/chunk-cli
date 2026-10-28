@@ -125,6 +125,8 @@ type (
 	}
 	// designApprovedMsg is the end of approving the plan's design.
 	designApprovedMsg struct{ err error }
+	// conflictsSentMsg is the end of sending resolve-conflicts.
+	conflictsSentMsg struct{ err error }
 	// approveStepMsg is a step of the approval starting; next is where the
 	// approval's later messages come from.
 	approveStepMsg struct {
@@ -170,6 +172,7 @@ type transitionKind int
 const (
 	movingComments transitionKind = iota
 	movingDesign
+	movingConflicts
 )
 
 // pollEvery is how often the plan pane polls the store for the plan's text,
@@ -299,6 +302,10 @@ type Model struct {
 	// has the event that approves it; pendingDesign is whether the y being
 	// asked for approves the design rather than the plan.
 	approvingDesign, pendingDesign bool
+	// resolvingConflicts is set from the developer's y to resolving the PR's
+	// conflicts until factory has the event; pendingConflicts is whether the
+	// y being asked for resolves them.
+	resolvingConflicts, pendingConflicts bool
 	// approving is set from the developer's y until factory answers, so a
 	// second ctrl+s cannot approve the plan twice.
 	approving bool
@@ -530,11 +537,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, waitApproval(msg.next)
 
-	case designApprovedMsg, approvedMsg:
+	case designApprovedMsg, approvedMsg, conflictsSentMsg:
 		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
-		if !m.busy && !m.approving && !m.approvingDesign && m.moving == nil {
+		if !m.spinning() {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -574,11 +581,17 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 	return m, tea.Batch(refreshCmd(m.ctx, m.store), tick)
 }
 
+// spinning is whether something the spinner shows is under way: the agent's
+// turn, an approval or event not yet answered, or the wait for factory.
+func (m Model) spinning() bool {
+	return m.busy || m.approving || m.approvingDesign || m.resolvingConflicts || m.moving != nil
+}
+
 // awaitingStatus is whether the status bar holds something still under way
 // or waiting on the developer: a question to answer, the quit prompt, or an
 // approval or save factory has not answered yet.
 func (m Model) awaitingStatus() bool {
-	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.savingComments
+	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.resolvingConflicts || m.savingComments
 }
 
 // applyRefresh is a successful or failed poll of the plan's state, text and
@@ -642,7 +655,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.confirming {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
-			m.pendingDelete, m.pendingDesign = "", false
+			m.pendingDelete, m.pendingDesign, m.pendingConflicts = "", false, false
 			return m, nil
 		}
 		return m.answerYes()
@@ -715,6 +728,11 @@ func (m Model) deliver(text string) (Model, tea.Cmd) {
 // answerYes does what the question in the status bar asked, now it has been
 // answered yes.
 func (m Model) answerYes() (Model, tea.Cmd) {
+	if m.pendingConflicts {
+		m.pendingConflicts, m.resolvingConflicts = false, true
+		m.status = "Sending resolve-conflicts…"
+		return m, tea.Batch(resolveConflictsCmd(m.ctx, m.store), m.spin.Tick)
+	}
 	if m.pendingDesign {
 		m.pendingDesign, m.approvingDesign = false, true
 		m.status = "Approving the design…"
@@ -748,9 +766,14 @@ func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.approving, m.approvingDesign, m.moving != nil:
+	case m.approving, m.approvingDesign, m.resolvingConflicts, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
+	case m.conflicting() && queued > 0:
+		m.status = warn("Send your comments first: they hand the plan to the agent, which rebases it too.")
+	case m.conflicting():
+		m.confirming, m.pendingConflicts = true, true
+		m.status = ui.TitleStyle.Render("Hand the plan back to the agent to rebase its PR onto its base? ") + confirmButtons
 	case strings.TrimSpace(m.plan) == "":
 		m.status = warn("There is no plan to approve yet.")
 	case m.state != ReadyState && m.inReview():
@@ -932,7 +955,8 @@ func (m *Model) syncPlaceholder() {
 	}
 }
 
-// applyApproval is the end of approving the plan's design, or the plan.
+// applyApproval is the end of approving the plan's design, or the plan, or
+// of sending resolve-conflicts.
 func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case designApprovedMsg:
@@ -942,6 +966,15 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.moving = &transition{kind: movingDesign, from: m.state, since: time.Now()}
+		m.status = ""
+		return m, tea.Batch(refreshCmd(m.ctx, m.store), m.spin.Tick)
+	case conflictsSentMsg:
+		m.resolvingConflicts = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not send resolve-conflicts: " + msg.err.Error())
+			return m, nil
+		}
+		m.moving = &transition{kind: movingConflicts, from: m.state, since: time.Now()}
 		m.status = ""
 		return m, tea.Batch(refreshCmd(m.ctx, m.store), m.spin.Tick)
 	case approvedMsg:
@@ -960,6 +993,11 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 // units.
 func approveDesignCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg { return designApprovedMsg{err: s.ApproveDesign(ctx)} }
+}
+
+// resolveConflictsCmd has factory rebase the plan's conflicting PR.
+func resolveConflictsCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg { return conflictsSentMsg{err: s.ResolveConflicts(ctx)} }
 }
 
 // approveCmd runs approve in the background, and reads what it reports: an

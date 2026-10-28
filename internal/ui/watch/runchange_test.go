@@ -155,7 +155,7 @@ func TestAWideChangeLineWrapsToThePane(t *testing.T) {
 	long := "`chunk factory` has an implementer agent change your code on a sidecar, then reviews the result with each prompt in `.chunk/reviews/` and runs your validation commands, feeding failures back"
 	stubRunChange(t, "+++ b/README.md\n@@ -1 +1 @@\n+"+long+"\n+\tindented with a tab\n", nil)
 	m := sessModel()
-	m.width = 80
+	m.width = 84
 
 	m = pollAndRead(t, m, finishedRun("run-1"))
 

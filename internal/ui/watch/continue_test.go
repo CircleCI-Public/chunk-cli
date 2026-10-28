@@ -102,7 +102,8 @@ func TestRDoesNothingForARunWithNothingToContinue(t *testing.T) {
 
 func TestContinueIsOfferedOnlyWhereItCanRun(t *testing.T) {
 	m, _ := continueModel(brokenRun("abc123"), nil)
-	m.focusedPane = paneRight
+	// Wide enough that the hint fits on one line of the run pane.
+	m.width, m.focusedPane = 114, paneRight
 	out := m.View().Content
 	assert.Assert(t, strings.Contains(out, "press r to continue it, or chunk factory build --continue first-run"), out)
 	assert.Assert(t, strings.Contains(out, "continue run"), out)
@@ -110,7 +111,7 @@ func TestContinueIsOfferedOnlyWhereItCanRun(t *testing.T) {
 	// A dashboard with no way to start runs, such as one on a remote daemon,
 	// shows the command alone.
 	bare := sessModel(brokenRun("abc123"))
-	bare.selRun, bare.focusedPane = "abc123", paneRight
+	bare.width, bare.selRun, bare.focusedPane = 114, "abc123", paneRight
 	out = bare.View().Content
 	assert.Assert(t, strings.Contains(out, "chunk factory build --continue first-run"), out)
 	assert.Assert(t, !strings.Contains(out, "press r"), out)

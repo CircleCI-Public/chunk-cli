@@ -233,6 +233,19 @@ func (s *Store) AddressComments(ctx context.Context) error {
 	return nil
 }
 
+// ResolveConflicts sends the plan's flow factory's resolve-conflicts event,
+// which hands a plan whose PR conflicts back to the agent to rebase.
+func (s *Store) ResolveConflicts(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.CreateFlowEvent(ctx, id, circleci.ResolveConflicts); err != nil {
+		return fmt.Errorf("send the resolve-conflicts event: %w", err)
+	}
+	return nil
+}
+
 // ApproveDesign sends the plan's flow factory's approve-for-units event,
 // which approves its design. A flow that does not list the event now is
 // refused without sending it: with ErrDesignApproved when it lists

@@ -648,6 +648,14 @@ chunk
   and `ctrl+s` offers no approval until they are answered in comments and
   sent. Approving reads the plan as factory has it, not the screen's copy.
 
+  A plan in Integrating - Human whose PR still conflicts with its base, after
+  factory's own rebase of that head, reads PR conflicts in the header.
+  `ctrl+s` then hands it back to factory's agent to rebase, after a `y`, by
+  sending factory's `resolve-conflicts` event, and the action bar waits for
+  factory to move it. While comments are queued on it, `ctrl+s` does not
+  hand it back: the comments must be saved first, and saving them hands the
+  plan to the agent too, which rebases it.
+
   Approving a plan with units has the chunk daemon build it, in a Claude Code
   session in the plan's worktree, through to a pull request, and closes the
   screen. Builds outlive the screen and the terminal, and any number go at

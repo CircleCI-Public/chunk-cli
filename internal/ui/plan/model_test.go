@@ -72,7 +72,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, approveStepMsg, approvedMsg, designApprovedMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg:
+	case eventMsg, sentMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, refreshedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -210,10 +210,11 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 }
 
 // A plan in a state chunk does not know, as factory may add before chunk is
-// updated, is shown in that state, is not said to be in review, and is not
-// sent.
+// updated, or one chunk offers no action for, such as Integrating - Human
+// with no conflict, is shown in that state, is not said to be in review, and
+// is not sent.
 func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
-	for _, state := range []string{"Blocked", "Building - Agent", "Integrating - Bot", "Paused\x1b[31m"} {
+	for _, state := range []string{"Blocked", "Building - Agent", "Integrating - Bot", "Integrating - Human", "Paused\x1b[31m"} {
 		t.Run(state, func(t *testing.T) {
 			store := newFakeStore()
 			store.TextV = "# Plan"
@@ -231,6 +232,7 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 			shown := strings.TrimSuffix(state, "\x1b[31m")
 			assert.Check(t, !strings.Contains(view, "In review"), "a plan in %q is said to be in review:\n%s", state, view)
 			assert.Check(t, !strings.Contains(view, "Plan ready"), view)
+			assert.Check(t, !strings.Contains(view, "PR conflicts"), view)
 			assert.Check(t, strings.Contains(view, "the plan is "+shown), "the action bar does not name the state:\n%s", view)
 
 			m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
@@ -592,6 +594,16 @@ func TestAFailedDesignApprovalSaysSo(t *testing.T) {
 	assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "waiting for factory"))
 }
 
+func TestAFailedConflictResolutionSaysSo(t *testing.T) {
+	m, store := conflictingModel(t)
+	store.AddressErr = errors.New("factory is down")
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	assert.Check(t, !m.resolvingConflicts, "still sending after the send failed")
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Could not send resolve-conflicts: factory is down"))
+	assert.Check(t, m.moving == nil, "a failed event started the wait")
+}
+
 // TestWaitingBarYieldsToStatuses checks that a prompt or an error during the
 // wait for factory shows in the action bar over the waiting line, which
 // would otherwise hide it until the refresh that ends the wait clears it.
@@ -749,6 +761,92 @@ func planModel(t *testing.T) (Model, *fakeStore) {
 	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	return m, store
+}
+
+// conflictingModel is the screen on a plan in Integrating - Human whose PR
+// factory found conflicting, so its flow takes resolve-conflicts.
+func conflictingModel(t *testing.T) (Model, *fakeStore) {
+	t.Helper()
+	store := newFakeStore()
+	store.Created = true
+	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	store.StateV = "Integrating - Human"
+	store.setEvents("address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
+	m := New(context.Background(), turnReturning("ok"), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+	return m, store
+}
+
+// A plan whose PR factory found conflicting says so, and ctrl+s, after a y,
+// sends resolve-conflicts and waits for factory to move the plan.
+func TestCtrlSResolvesConflicts(t *testing.T) {
+	m, store := conflictingModel(t)
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "PR conflicts"))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "ctrl+s Resolve conflicts"))
+	assert.Check(t, !strings.Contains(view, "Approve plan"), view)
+
+	// A no leaves nothing pending for a later y to send.
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	assert.Assert(t, m.confirming)
+	m = drive(t, m, press("n"))
+	assert.Check(t, !m.confirming)
+	assert.Check(t, !m.pendingConflicts)
+	assert.Check(t, m.moving == nil)
+	store.mu.Lock()
+	assert.Check(t, cmp.Len(store.ConflictsSent, 0))
+	store.mu.Unlock()
+
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	assert.Assert(t, m.confirming)
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "rebase its PR onto its base?"))
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	store.mu.Lock()
+	sent := slices.Clone(store.ConflictsSent)
+	store.mu.Unlock()
+	assert.Check(t, cmp.DeepEqual(sent, []string{"Integrating - Human"}))
+	assert.Assert(t, m.moving != nil, "no wait for factory after resolve-conflicts")
+	assert.Check(t, cmp.Equal(m.moving.kind, movingConflicts))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "Conflicts sent · waiting for factory to hand the rebase to the agent…"))
+
+	store.mu.Lock()
+	store.StateV = "Integrating - Agent"
+	store.EventsV = []string{}
+	store.mu.Unlock()
+	m = drive(t, m, pollMsg{})
+	assert.Check(t, m.moving == nil, "the wait outlived the move to Integrating - Agent")
+	assert.Check(t, !strings.Contains(ansi.Strip(m.Content()), "PR conflicts"))
+}
+
+// Comments queued on a conflicting plan go first, since sending them hands it
+// to the agent too; comments already saved leave ctrl+s resolving conflicts.
+func TestConflictsWithComments(t *testing.T) {
+	t.Run("queued", func(t *testing.T) {
+		m, store := conflictingModel(t)
+		m = drive(t, m, press("tab"))
+		m = drive(t, m, press("c"))
+		m = typeText(t, m, "too vague")
+		m = drive(t, m, press("enter"))
+		bar := ansi.Strip(m.actionBar())
+		assert.Check(t, cmp.Contains(bar, "Save 1 comment"))
+		assert.Check(t, !strings.Contains(bar, "Resolve conflicts"), bar)
+
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		assert.Check(t, !m.confirming)
+		assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Send your comments first"))
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		assert.Check(t, cmp.Len(store.ConflictsSent, 0))
+	})
+	t.Run("open", func(t *testing.T) {
+		m, store := conflictingModel(t)
+		store.mu.Lock()
+		store.CommentsV = []Comment{{ID: "c1", Quote: "Add the flag", Body: "why?"}}
+		store.mu.Unlock()
+		m = refreshed(t, m)
+		assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "ctrl+s Resolve conflicts"))
+	})
 }
 
 func TestSSavesCommentsFromThePlan(t *testing.T) {
@@ -1057,6 +1155,27 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 			assert.Check(t, cmp.Contains(bar, "Waiting for factory…"), "width %d", width)
 		} else {
 			assert.Check(t, cmp.Contains(bar, "Comments sent · waiting for factory to hand them to chunk…"), "width %d", width)
+		}
+
+		// A conflicting plan, its prompt, and the wait once it is sent.
+		store = newFakeStore()
+		store.Created = true
+		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+		store.StateV = "Integrating - Human"
+		store.setEvents("address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
+		m = New(context.Background(), turnReturning("ok"), nil, store, "")
+		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
+		m = refreshed(t, m)
+		assertFits(t, m, width, 24)
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		assertFits(t, m, width, 24)
+		m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+		assertFits(t, m, width, 24)
+		bar = ansi.Strip(m.actionBar())
+		if width < narrowBelow {
+			assert.Check(t, cmp.Contains(bar, "Waiting for factory…"), "width %d", width)
+		} else {
+			assert.Check(t, cmp.Contains(bar, "Conflicts sent"), "width %d", width)
 		}
 	}
 }

@@ -62,7 +62,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 
 // factoryEvents are the events a human may send a flow (flow.EventName in
 // circleci/factory).
-var factoryEvents = []string{"prioritize", "address-comments", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
+var factoryEvents = []string{"prioritize", "address-comments", "resolve-conflicts", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
 
 // factoryEnds are the states a plan ends in, which the plan list leaves out
 // (conductor.Ends in circleci/factory).

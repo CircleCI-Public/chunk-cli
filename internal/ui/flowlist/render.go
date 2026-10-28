@@ -3,6 +3,7 @@ package flowlist
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
@@ -106,6 +108,9 @@ func (m Model) listLines(width, height int) []string {
 		}
 		chip := stateChip(st, f.State, width-4)
 		var detail []string
+		if slices.Contains(f.ApplicableEvents, circleci.ResolveConflicts) {
+			detail = append(detail, st.Warning.Render("⚠"))
+		}
 		if f.Task != nil && f.Task.Category != "" {
 			detail = append(detail, st.VDim.Render(oneLine(f.Task.Category)))
 		}

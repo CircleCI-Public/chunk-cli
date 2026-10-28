@@ -20,7 +20,7 @@ var (
 
 // ListWidth is the text width of the list pane on the left of chunk watch's
 // tabs, so the panes keep their place when switching between them.
-const ListWidth = 28
+const ListWidth = 32
 
 // Styles holds lipgloss styles computed for the current terminal background,
 // shared by the full-screen TUIs.

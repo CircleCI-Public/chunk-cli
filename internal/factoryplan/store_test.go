@@ -230,6 +230,27 @@ func TestStoreAddressCommentsSendsTheEvent(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"address-comments"}))
 }
 
+// TestStoreResolveConflictsSendsTheEvent checks that ResolveConflicts sends
+// the plan's flow factory's resolve-conflicts event, and fails for a plan
+// with no flow to send it.
+func TestStoreResolveConflictsSendsTheEvent(t *testing.T) {
+	store, _, cci := createdStore(t)
+	ctx := context.Background()
+	cci.DropFactoryFlow(store.ID())
+
+	err := store.ResolveConflicts(ctx)
+	assert.Check(t, cmp.ErrorContains(err, "send the resolve-conflicts event"))
+
+	store, _, cci = createdStore(t)
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	cci.SetFactoryPlanState(store.ID(), "Integrating - Human")
+	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
+	err = store.ResolveConflicts(ctx)
+	assert.Check(t, err)
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"resolve-conflicts"}))
+}
+
 // TestStoreApproveDesignSendsTheEvent checks that ApproveDesign sends the
 // plan's flow factory's approve-for-units event.
 func TestStoreApproveDesignSendsTheEvent(t *testing.T) {
@@ -442,6 +463,8 @@ func TestStoreWritesFailBeforeCreate(t *testing.T) {
 	_, err := store.AddComment(ctx, "quote", "body")
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 	err = store.AddressComments(ctx)
+	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
+	err = store.ResolveConflicts(ctx)
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 	err = store.EditComment(ctx, "comment-1", "body")
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))

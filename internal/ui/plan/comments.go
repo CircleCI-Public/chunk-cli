@@ -56,6 +56,12 @@ func (m Model) takesComments() bool {
 	return m.moving == nil && slices.Contains(m.events, addressComments)
 }
 
+// resolveConflicts is factory's event that has it rebase the plan's PR.
+const resolveConflicts = "resolve-conflicts"
+
+// conflicting is whether the plan's PR conflicts with its base.
+func (m Model) conflicting() bool { return slices.Contains(m.events, resolveConflicts) }
+
 // last is the index of the last block c is on.
 func (c comment) last() int { return c.block + max(c.span, 1) - 1 }
 

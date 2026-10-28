@@ -423,6 +423,7 @@ func TestGroupsAndRows(t *testing.T) {
 			{
 				ID: "human", Title: "Planned", State: "Planning - Human", UpdatedAt: now,
 				SessionID: "s1", Task: &circleci.FlowTask{ID: "t1", Category: "build-unit"},
+				ApplicableEvents: []circleci.FlowEvent{circleci.AddressComments, circleci.ResolveConflicts},
 			},
 			{ID: "zeta", Title: "Zeta", State: "Zeta - Human"},
 			{ID: "alpha", Title: "Alpha", State: "Alpha - Human"},
@@ -471,8 +472,9 @@ func TestGroupsAndRows(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(rows[other+1:other+5], []string{"Other plan", "custom exact state", "Bot plan", "integrating - bot"}), "rows:\n%s", all)
 		notStarted := index("Not started")
 		assert.Check(t, cmp.DeepEqual(rows[notStarted+1:notStarted+3], []string{"New plan", "unprioritized"}), "rows:\n%s", all)
-		// The row details: task category, claimed and updated-ago, each only
-		// when there is one.
+		// The row details: a conflict marker first, then task category,
+		// claimed and updated-ago, each only when there is one.
+		assert.Check(t, strings.HasPrefix(rows[planned+1], "planning  ⚠ · build-unit"), "rows:\n%s", all)
 		assert.Check(t, cmp.Contains(rows[planned+1], "build-unit"))
 		assert.Check(t, cmp.Contains(rows[planned+1], "claimed"))
 		assert.Check(t, cmp.Contains(rows[planned+1], "just now"))
@@ -498,7 +500,7 @@ func TestGroupsAndRows(t *testing.T) {
 					assert.Check(t, cmp.Contains(lines[len(lines)-2], "tab runs"))
 				}
 				if size.Width >= 80 && size.Height > 2 {
-					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose"} {
+					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose", "⚠"} {
 						assert.Check(t, cmp.Contains(text, want))
 					}
 					for _, not := range []string{"RESOLVED SECRET", "# Markdown", "**Plan prose**"} {
