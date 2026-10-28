@@ -36,7 +36,7 @@ Sidecars are available to all CircleCI customers, including the free plans.
 
 ### .chunk/ directory
 
-The `.chunk/` directory lives at the root of your project and holds configuration that should be version-controlled. After `chunk init` it holds your validation commands; `chunk factory bootstrap` adds review prompts if you generate them:
+The `.chunk/` directory lives at the root of your project and holds configuration that should be version-controlled. After `chunk init` it holds your validation commands; add review prompts under `reviews/` yourself:
 
 ```
 .chunk/
@@ -60,7 +60,7 @@ chunk auth signup          # new CircleCI account
 chunk auth set circleci
 
 chunk auth set anthropic   # required for init (command detection); review and factory accept it too
-chunk auth set github      # optional: lets factory bootstrap learn from past review comments
+chunk auth set github      # optional: lets factory open pull requests
 ```
 
 Check status at any time:
@@ -75,7 +75,7 @@ Credentials are stored in your system keychain by default. Pass `--insecure-stor
 |---|---|
 | `ANTHROPIC_API_KEY` | `init`, `review`, `factory` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `review`, `factory` (when no API key is set) |
-| `GITHUB_TOKEN` | `factory bootstrap` (optional) |
+| `GITHUB_TOKEN` | `factory` (optional, to open pull requests) |
 | `CIRCLE_TOKEN` | `sidecar`, `task` |
 | `CIRCLECI_ORG_ID` | `sidecar` (optional; overrides `orgID` in `.chunk/config.json`) |
 
@@ -363,10 +363,12 @@ the draft for later).
 
 For a bigger change, plan it with a factory planning session first (it needs
 the factory daemon running with `FACTORY_PLAN_STORE=circleci`). `chunk watch`
-opens on **Plans**, your open plans in factory grouped by who they wait on
-(Needs your review, With agent, Not started, Other), with a read-only preview
-of the selected one; `tab` (or `2`) shows your runs and `p` or `tab` comes
-back. `Enter` opens a plan and `n` starts a new one. Opening or
+opens on **Flows**, your open flows in factory grouped by who they wait on
+(Needs your review, With agent, Not started, Other) and then by phase
+(Planning, Building, ...), a flow whose PR factory could not rebase marked ⚠,
+with a read-only preview of the selected one's plan; `tab` (or `2`) shows your
+runs and `p` or `tab` comes back. `Enter` opens a flow's plan and `n` starts a
+new one. Opening or
 reading a plan never claims it or starts an agent; your first message does,
 in the project `chunk watch` was opened in. `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its chat, half-written message and session
@@ -377,8 +379,11 @@ for chunk to address when you next press `enter`; `shift+↑/↓` selects severa
 parts to comment on together. Once factory's review of the design has
 passed, `ctrl+s` approves the design, and chunk writes the units; once those
 pass review too, `ctrl+s` approves the finished plan in factory, and the
-chunk daemon builds it through to a pull request. The build shows in your
-runs, and keeps going when you close chunk; plan as many as you like.
+chunk daemon builds it through to a pull request. The header says which of
+the two factory is waiting for: Design ready or Plan ready. A plan whose PR
+conflicts after factory's rebase reads PR conflicts, and `ctrl+s` hands it
+back to factory to rebase again. The build shows
+in your runs, and keeps going when you close chunk; plan as many as you like.
 `esc` goes back to your plans with the plan kept. Quitting with a message
 still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.
@@ -556,19 +561,15 @@ See [docs/HOOKS.md](HOOKS.md) for configuration details and [Result Caching](HOO
 
 ## Review prompts
 
-An additional tool, independent of the sidecar workflow above. `chunk factory bootstrap` sets a project up for `chunk factory` in one command. It writes `.chunk/config.json` if there is none, sets up a sidecar with your project's environment, on an image that has Claude Code since `chunk factory` runs Claude there, and records a snapshot of it as `validation.sidecarImage` (`--skip-sidecar` leaves this out), and has Claude Code read your project on a sidecar and write review prompts for it, one file per area in `.chunk/reviews/`. It prints what it will do first and leaves out any part already done, so running it again finishes a setup that stopped partway. Read and edit the prompts it writes, and commit them with the config.
+An additional tool, independent of the sidecar workflow above. Review prompts are one `.md` or `.txt` file per area in `.chunk/reviews/`, such as `testing.md`, written by your team. `chunk review` and `chunk factory build` review changes with them. Commit them with the config so the whole team shares them.
+
+`chunk factory bootstrap` sets a project up for `chunk factory` in one command. It writes `.chunk/config.json` if there is none, sets up a sidecar with your project's environment, and records a snapshot of it as `validation.sidecarImage` (`--skip-sidecar` leaves this out). It prints what it will do first and leaves out any part already done, so running it again finishes a setup that stopped partway.
 
 ```bash
 chunk factory bootstrap
-
-# Choose which review comments it learns from, or leave them out
-chunk factory bootstrap --top 10 --since 2026-01-01
-chunk factory bootstrap --no-history
 ```
 
-Claude reads what the project says about itself (AGENTS.md, CLAUDE.md, docs, CI and linter configuration, the code and its tests). With a GitHub token set, bootstrap also fetches the review comments your most active reviewers left on the repository's pull requests, and Claude turns what they keep pushing back on into rules in the prompts.
-
-Requires a CircleCI token and a Claude credential (`chunk auth set anthropic-oauth` for your subscription, or `chunk auth set anthropic`). `chunk auth set github` is optional.
+Requires a CircleCI token.
 
 Once the prompts exist and skills are installed, ask your agent to review:
 

@@ -25,8 +25,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 )
 
@@ -118,7 +118,7 @@ func newWatchCmd() *cobra.Command {
 				WithDrafts(drafts.ctx, startDir, drafts.draft, sendDraft).
 				WithContinue(continueRun).
 				WithPlans(drafts.ctx, drafts.plan).
-				WithPlanInbox(planlist.New(drafts.ctx, listFactoryPlans, previewFactoryPlan))
+				WithFlowList(flowlist.New(drafts.ctx, listFactoryFlows, previewFactoryPlan))
 			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
 			if err != nil {
@@ -340,12 +340,29 @@ func watchPlanProject(ctx context.Context, root string) error {
 	return checkFactoryProject(ctx, root)
 }
 
-func listFactoryPlans(ctx context.Context) ([]circleci.Plan, error) {
+// listFactoryFlows is the caller's open flows, for the flow list.
+func listFactoryFlows(ctx context.Context) ([]circleci.Flow, error) {
 	api, err := factoryPlanClient()
 	if err != nil {
 		return nil, err
 	}
-	return api.ListPlans(ctx)
+	flows, err := api.ListFlows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return openFlows(flows), nil
+}
+
+// openFlows is flows without the ended ones. A flow from a conductor that
+// serves no phase is kept.
+func openFlows(flows []circleci.Flow) []circleci.Flow {
+	out := make([]circleci.Flow, 0, len(flows))
+	for _, f := range flows {
+		if f.Phase != circleci.PhaseEnded {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func previewFactoryPlan(ctx context.Context, id string) (string, []circleci.PlanComment, error) {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/uuid"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -31,14 +32,15 @@ func TestPlanWorktreeRemovesThoseOfEndedPlans(t *testing.T) {
 	client, cci := testClient(t)
 	ctx := context.Background()
 
-	merged := NewStore(client, "")
+	merged := newStore(client, "")
 	err := merged.Create(ctx, "a merged plan")
 	assert.NilError(t, err)
 	mergedDir, err := planWorktree(ctx, root, merged)
 	assert.NilError(t, err)
 	cci.SetFactoryPlanState(merged.ID(), "Done")
+	cci.DropFactoryFlow(merged.ID())
 
-	store := NewStore(client, "")
+	store := newStore(client, "")
 	err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	dir, err := planWorktree(ctx, root, store)
@@ -81,7 +83,7 @@ func TestStoreEndedForEachOfFactorysEnds(t *testing.T) {
 		},
 	} {
 		t.Run(tc.state, func(t *testing.T) {
-			store := NewStore(client, "")
+			store := newStore(client, "")
 			err := store.Create(ctx, "a plan")
 			assert.NilError(t, err)
 			cci.SetFactoryPlanState(store.ID(), tc.state)
@@ -91,4 +93,41 @@ func TestStoreEndedForEachOfFactorysEnds(t *testing.T) {
 			assert.Check(t, cmp.Equal(got, tc.want))
 		})
 	}
+}
+
+func TestStoreEndedReadsThePlanNotItsFlow(t *testing.T) {
+	client, cci := testClient(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		state string
+		want  bool
+	}{
+		{
+			state: "Planning - Human",
+			want:  false,
+		},
+		{
+			state: "Done",
+			want:  true,
+		},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			store := newStore(client, "")
+			err := store.Create(ctx, "a plan")
+			assert.NilError(t, err)
+			cci.SetFactoryPlanState(store.ID(), tc.state)
+			cci.DropFactoryFlow(store.ID())
+
+			got, err := store.ended(ctx, store.ID())
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(got, tc.want))
+		})
+	}
+}
+
+func TestStoreEndedErrsOnAMissingPlan(t *testing.T) {
+	client, _ := testClient(t)
+	store := newStore(client, "")
+	_, err := store.ended(context.Background(), uuid.NewString())
+	assert.Check(t, err != nil, "a plan factory does not have read as ended or not")
 }

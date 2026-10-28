@@ -4,22 +4,26 @@
 package factoryplan
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
 // Store is a plan.Store backed by factory's V3 plan and comment API,
-// addressed by the plan's ID, which Create sets. The screen only reads the
-// plan's text: the agent writes it, with plan_set through the factory daemon.
+// addressed by the plan's ID, which Create sets.
 type Store struct {
 	api *circleci.Client
+	// name names a new plan for the developer's first message.
+	name func(ctx context.Context, message string) (string, error)
 
 	mu     sync.Mutex
 	planID string
@@ -28,7 +32,7 @@ type Store struct {
 // NewStore is the store for plan id in factory, or for a plan Create makes
 // when id is "".
 func NewStore(api *circleci.Client, id string) *Store {
-	return &Store{api: api, planID: id}
+	return &Store{api: api, name: factory.NamePlan, planID: id}
 }
 
 // ID is the plan's ID in factory, or "" before Create.
@@ -45,7 +49,8 @@ func skeleton(title string) string {
 	return "# " + title + "\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"
 }
 
-func (s *Store) Create(ctx context.Context, title string) error {
+func (s *Store) Create(ctx context.Context, message string) error {
+	title := s.title(ctx, message)
 	p, err := s.api.CreatePlan(ctx, title, skeleton(title))
 	if err != nil {
 		return fmt.Errorf("create the plan in factory: %w", err)
@@ -56,48 +61,66 @@ func (s *Store) Create(ctx context.Context, title string) error {
 	return nil
 }
 
+// title is the plan's title for message, as Claude names it or, when Claude
+// gives no usable name, as fallbackTitle.
+func (s *Store) title(ctx context.Context, message string) string {
+	name, err := s.name(ctx, message)
+	if err != nil {
+		// A plan Claude cannot name is still made; the developer is not told.
+		return fallbackTitle(message)
+	}
+	return cmp.Or(slug(name, maxNameWords), fallbackTitle(message))
+}
+
 // errNotCreated is returned by a write before Create has set an ID to
 // address it with.
 var errNotCreated = errors.New("the plan has not been created in factory yet")
 
+// State is the plan's flow state; "" before the plan is created, or when it
+// has no flow.
 func (s *Store) State(ctx context.Context) (string, error) {
 	id := s.ID()
 	if id == "" {
 		return "", nil
 	}
-	p, err := s.api.GetPlan(ctx, id)
+	f, err := s.api.GetFlow(ctx, id)
+	var se *circleci.StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("get the plan's state: %w", err)
 	}
-	return p.State, nil
+	return f.State, nil
 }
 
-// Events are the events factory applies to the plan's flow now, by name, as
-// its applicable_events lists them; none before the plan is created or has a
-// flow.
-func (s *Store) Events(ctx context.Context) ([]string, error) {
+// Flow is the plan's flow as factory has it now; empty before the plan is
+// created or has a flow.
+func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 	id := s.ID()
 	if id == "" {
-		return nil, nil
+		return plan.Flow{}, nil
 	}
 	f, err := s.api.GetFlow(ctx, id)
 	var se *circleci.StatusError
 	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
-		return nil, nil
+		return plan.Flow{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get the plan's events: %w", err)
+		return plan.Flow{}, fmt.Errorf("get the plan's flow: %w", err)
 	}
-	events := make([]string, len(f.ApplicableEvents))
+	out := plan.Flow{Events: make([]string, len(f.ApplicableEvents))}
 	for i, e := range f.ApplicableEvents {
-		events[i] = string(e)
+		out.Events[i] = string(e)
 	}
-	return events, nil
+	if f.Task != nil {
+		out.Task = f.Task.Category
+	}
+	return out, nil
 }
 
 // Holder is the factory session holding the plan's claim, as its flow
-// references it, or "" when none does or the plan has not been created. A
-// plan has no flow until a session first claims it.
+// references it, or "" when none does or the plan has not been created.
 func (s *Store) Holder(ctx context.Context) (string, error) {
 	id := s.ID()
 	if id == "" {
@@ -139,8 +162,17 @@ func (s *Store) Approve(ctx context.Context, session string) error {
 	if strings.TrimSpace(text) == "" {
 		return errors.New("the plan in factory is empty")
 	}
-	if !hasUnits(text) {
+	f, err := s.Flow(ctx)
+	if err != nil {
+		return fmt.Errorf("get the flow's events: %w", err)
+	}
+	switch plan.StageOf(f.Events, unitCount(text)) {
+	case plan.StageDesign:
 		return ErrNoUnits
+	case plan.StageQuestions:
+		return ErrQuestionsOpen
+	case plan.StagePlan:
+		// The plan is what waits for approval: send it below.
 	}
 	h, err := s.Holder(ctx)
 	if err != nil {
@@ -157,14 +189,23 @@ func (s *Store) Approve(ctx context.Context, session string) error {
 	return nil
 }
 
-// ErrNoUnits is returned by Approve for a plan in plan.ReadyState with nothing
-// to build: it waits there after early-plan too, for its design to be
-// reviewed, before write-units has written any.
+// ErrNoUnits is returned by Approve for a plan in plan.ReadyState whose
+// design, not the plan, is what waits for approval, as plan.StageOf
+// decides.
 var ErrNoUnits = errors.New("the plan has no units yet: approve its design with ctrl+s, so chunk writes them")
 
-// hasUnits is whether text has a heading under its units section, as the
-// planning screen counts units.
-func hasUnits(text string) bool {
+// ErrQuestionsOpen is returned by Approve and ApproveDesign for a plan whose
+// flow offers neither approval, as plan.StageOf decides: its 3. Open
+// Questions wait for answers in comments, sent before either is approved.
+var ErrQuestionsOpen = errors.New("the plan has open questions: answer 3. Open Questions in comments, then send them")
+
+// ErrDesignApproved is returned by ApproveDesign for a plan whose flow offers
+// to approve the plan but not its design: the design is approved already.
+var ErrDesignApproved = errors.New("the plan's design is approved already: approve the plan with ctrl+s")
+
+// unitCount is how many headings text has under its units section.
+func unitCount(text string) int {
+	n := 0
 	inUnits := false
 	for _, line := range strings.Split(text, "\n") {
 		switch {
@@ -173,10 +214,10 @@ func hasUnits(text string) bool {
 		case strings.HasPrefix(line, "# "):
 			inUnits = false
 		case inUnits && strings.HasPrefix(line, "###"):
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // AddressComments sends the plan's flow factory's address-comments event,
@@ -192,12 +233,39 @@ func (s *Store) AddressComments(ctx context.Context) error {
 	return nil
 }
 
+// ResolveConflicts sends the plan's flow factory's resolve-conflicts event,
+// which hands a plan whose PR conflicts back to the agent to rebase.
+func (s *Store) ResolveConflicts(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.CreateFlowEvent(ctx, id, circleci.ResolveConflicts); err != nil {
+		return fmt.Errorf("send the resolve-conflicts event: %w", err)
+	}
+	return nil
+}
+
 // ApproveDesign sends the plan's flow factory's approve-for-units event,
-// which approves its design.
+// which approves its design. A flow that does not list the event now is
+// refused without sending it: with ErrDesignApproved when it lists
+// approve-for-building instead, and with ErrQuestionsOpen when it lists
+// neither. A plan with no flow yet sends it.
 func (s *Store) ApproveDesign(ctx context.Context) error {
 	id := s.ID()
 	if id == "" {
 		return errNotCreated
+	}
+	f, err := s.Flow(ctx)
+	if err != nil {
+		return fmt.Errorf("get the flow's events: %w", err)
+	}
+	events := f.Events
+	if events != nil && !slices.Contains(events, string(circleci.ApproveForUnits)) {
+		if slices.Contains(events, string(circleci.ApproveForBuilding)) {
+			return ErrDesignApproved
+		}
+		return ErrQuestionsOpen
 	}
 	if err := s.api.CreateFlowEvent(ctx, id, circleci.ApproveForUnits); err != nil {
 		return fmt.Errorf("send the approve-for-units event: %w", err)
@@ -215,6 +283,17 @@ func (s *Store) Text(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("get the plan's text: %w", err)
 	}
 	return text, nil
+}
+
+func (s *Store) SetText(ctx context.Context, text string) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.SetPlanText(ctx, id, text); err != nil {
+		return fmt.Errorf("set the plan's text: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Comments(ctx context.Context) ([]plan.Comment, error) {

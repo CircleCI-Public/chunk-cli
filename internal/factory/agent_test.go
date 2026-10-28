@@ -217,6 +217,7 @@ func TestAgentArgs(t *testing.T) {
 	for _, tool := range []string{
 		"mcp__plugin_f_factory", "Bash(factory daemon wait)", "Bash(factory plan claim *)",
 		"Bash(factory daemon release *)", "Agent", "mcp__sg__code_finder", "Bash(git log *)",
+		"Bash(git switch --detach *)",
 	} {
 		assert.Check(t, cmp.Contains(agentTools, tool))
 	}
@@ -250,6 +251,15 @@ func TestAgentArgsBuild(t *testing.T) {
 		"Bash(factory *)", "Bash(git *)", "Bash(gh *)", "Bash(chunk *)",
 	} {
 		assert.Check(t, cmp.Contains(buildTools, tool))
+	}
+	msg := BuildMessage("plan-1")
+	for _, want := range []string{"chunk validate", "chunk sidecar sync", "chunk sidecar exec", "denied", "builder"} {
+		assert.Check(t, cmp.Contains(msg, want))
+	}
+	// The message says local project commands are denied; that holds only
+	// while buildTools leaves them out.
+	for _, tool := range []string{"Bash(go", "Bash(task", "Bash(gofmt"} {
+		assert.Check(t, !strings.Contains(buildTools, tool), tool)
 	}
 	assert.Check(t, !strings.Contains(gotArgs, "--disallowedTools"), gotArgs)
 	assert.Check(t, !strings.Contains(gotArgs, "bypassPermissions"), gotArgs)

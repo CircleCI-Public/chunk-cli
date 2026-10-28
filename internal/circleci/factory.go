@@ -13,11 +13,15 @@ import (
 // Plan is a factory plan, as /api/v3/factory/plans serves it. Its text is read
 // and replaced on its own, with PlanText and SetPlanText.
 type Plan struct {
-	ID    string
-	Title string
-	State string
-	// Branch is "" in ListPlans, whose rows leave it out.
-	Branch       string
+	ID     string
+	Title  string
+	Branch string
+	// Phase is PhaseReceived, PhaseStarted or PhaseEnded. Unlike the flow's,
+	// it is served once the plan has ended and its flow is gone.
+	Phase string
+	// Outcome is how an ended plan ended, as factory names it; "" before it
+	// ends.
+	Outcome      string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	OpenComments int
@@ -26,15 +30,41 @@ type Plan struct {
 // Flow is a factory plan's progress through the code factory, as
 // /api/v3/factory/flows serves it. Its ID is the plan's.
 type Flow struct {
-	ID    string
-	State string
+	ID string
+	// Title is the flow's plan's title, "" from a conductor that does not
+	// serve it.
+	Title string
+	// UpdatedAt is when the flow last changed, zero when not served.
+	UpdatedAt time.Time
+	State     string
+	// Phase is PhaseReceived until the plan is prioritized, PhaseStarted
+	// while its flow runs and PhaseEnded once it ends.
+	Phase string
 	// SessionID is the factory session claiming the plan, or "" when none
 	// does.
 	SessionID string
 	// ApplicableEvents are the events factory applies to the flow now;
 	// any other sent now is stored and ignored.
 	ApplicableEvents []FlowEvent
+	// Task is the task factory has handed out for the plan and not yet had
+	// back, or nil when none is out.
+	Task *FlowTask
 }
+
+// FlowTask is a flow's outstanding task, as its factory_task reference
+// carries it.
+type FlowTask struct {
+	ID string
+	// Category is what kind of task it is, such as "early-plan".
+	Category string
+}
+
+// The phases a plan or its flow is in, as factory serves them.
+const (
+	PhaseReceived = "received"
+	PhaseStarted  = "started"
+	PhaseEnded    = "ended"
+)
 
 // FlowEvent is an event a human sends a plan's flow, which factory applies
 // at the plan's next poll.
@@ -52,6 +82,11 @@ const ApproveForUnits FlowEvent = "approve-for-units"
 // where factory hands the session claiming the plan its build tasks.
 const ApproveForBuilding FlowEvent = "approve-for-building"
 
+// ResolveConflicts moves a flow from Integrating - Human to Integrating -
+// Agent while its PR conflicts with its base, for factory to rebase it.
+// Factory lists it in applicable_events only then.
+const ResolveConflicts FlowEvent = "resolve-conflicts"
+
 // PlanComment is a comment on a factory plan. QuotedText is the part of the
 // plan's text it is about, or "" for a comment on the plan as a whole.
 type PlanComment struct {
@@ -66,8 +101,9 @@ type PlanComment struct {
 
 type planAttrs struct {
 	Title        string    `json:"title"`
-	State        string    `json:"state"`
 	Branch       string    `json:"branch"`
+	Phase        string    `json:"phase"`
+	Outcome      string    `json:"outcome"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	OpenComments int       `json:"open_comment_count"`
@@ -75,18 +111,46 @@ type planAttrs struct {
 
 func (a planAttrs) plan(id string) *Plan {
 	return &Plan{
-		ID: id, Title: a.Title, State: a.State, Branch: a.Branch,
+		ID: id, Title: a.Title, Branch: a.Branch, Phase: a.Phase, Outcome: a.Outcome,
 		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt, OpenComments: a.OpenComments,
 	}
 }
 
 type flowAttrs struct {
+	Title            string      `json:"title"`
+	UpdatedAt        *time.Time  `json:"updated_at"`
 	State            string      `json:"state"`
+	Phase            string      `json:"phase"`
 	ApplicableEvents []FlowEvent `json:"applicable_events"`
 }
 
+func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
+	f := &Flow{
+		ID: id, Title: a.Title, State: a.State, Phase: a.Phase,
+		ApplicableEvents: a.ApplicableEvents,
+	}
+	if a.UpdatedAt != nil {
+		f.UpdatedAt = *a.UpdatedAt
+	}
+	if refs.FactorySession != nil {
+		f.SessionID = refs.FactorySession.ID
+	}
+	if refs.FactoryTask != nil {
+		f.Task = &FlowTask{ID: refs.FactoryTask.ID, Category: refs.FactoryTask.Attributes.Category}
+	}
+	return f
+}
+
 type flowRefs struct {
-	FactorySession *v3Ref `json:"factory_session"`
+	FactorySession *v3Ref   `json:"factory_session"`
+	FactoryTask    *taskRef `json:"factory_task"`
+}
+
+type taskRef struct {
+	ID         string `json:"id"`
+	Attributes struct {
+		Category string `json:"category"`
+	} `json:"attributes"`
 }
 
 type eventAttrs struct {
@@ -173,44 +237,6 @@ func (c *Client) CreatePlan(ctx context.Context, title, text string) (*Plan, err
 	return attrs.plan(env.Data.ID), nil
 }
 
-// ListPlans returns the caller's open plans, oldest first, reading every
-// page. A plan is open until it is Done, Canceled, Won't Do or Duplicate.
-func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
-	var out []Plan
-	var cursor string
-	for pages := 1; ; pages++ {
-		var page struct {
-			Data []struct {
-				ID         string    `json:"id"`
-				Attributes planAttrs `json:"attributes"`
-			} `json:"data"`
-			Page v3Page `json:"page"`
-		}
-		opts := []func(*hc.Request){
-			hc.QueryParam("filter[user_id]", "me"),
-			hc.JSONDecoder(&page),
-		}
-		if cursor != "" {
-			opts = append(opts, hc.QueryParam("page[cursor]", cursor))
-		}
-		_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/plans", opts...))
-		if err != nil {
-			return nil, mapErr("list plans", err)
-		}
-		for _, item := range page.Data {
-			out = append(out, *item.Attributes.plan(item.ID))
-		}
-		next, err := nextCursor(cursor, page.Page, pages)
-		if err != nil {
-			return nil, err
-		}
-		if next == "" {
-			return out, nil
-		}
-		cursor = next
-	}
-}
-
 // GetPlan returns factory plan id.
 func (c *Client) GetPlan(ctx context.Context, id string) (*Plan, error) {
 	var attrs planAttrs
@@ -251,8 +277,8 @@ func (c *Client) SetPlanText(ctx context.Context, id, text string) error {
 	return nil
 }
 
-// GetFlow returns factory plan planID's flow. A plan has no flow, a 404,
-// until a factory session first claims it.
+// GetFlow returns factory plan planID's flow. A plan made before conductor
+// gave every plan a flow has none, a 404.
 func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	var attrs flowAttrs
 	var refs flowRefs
@@ -264,11 +290,30 @@ func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	if err != nil {
 		return nil, mapErr("get flow", err)
 	}
-	f := &Flow{ID: env.Data.ID, State: attrs.State, ApplicableEvents: attrs.ApplicableEvents}
-	if refs.FactorySession != nil {
-		f.SessionID = refs.FactorySession.ID
+	return attrs.flow(env.Data.ID, refs), nil
+}
+
+// ListFlows returns the caller's flows, ended ones included.
+func (c *Client) ListFlows(ctx context.Context) ([]Flow, error) {
+	var page struct {
+		Data []struct {
+			ID         string    `json:"id"`
+			Attributes flowAttrs `json:"attributes"`
+			References flowRefs  `json:"references"`
+		} `json:"data"`
 	}
-	return f, nil
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/flows",
+		hc.QueryParam("filter[user_id]", "me"),
+		hc.JSONDecoder(&page),
+	))
+	if err != nil {
+		return nil, mapErr("list flows", err)
+	}
+	out := make([]Flow, 0, len(page.Data))
+	for _, item := range page.Data {
+		out = append(out, *item.Attributes.flow(item.ID, item.References))
+	}
+	return out, nil
 }
 
 // CreateFlowEvent sends event to factory plan planID's flow. Factory applies

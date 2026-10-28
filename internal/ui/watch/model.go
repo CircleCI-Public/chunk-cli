@@ -15,8 +15,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/browser"
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
@@ -236,8 +236,8 @@ type Model struct {
 	planOpen                                  bool
 	planWorkspaces                            map[uint64]*planWorkspace
 	planKey, planSeq                          uint64
-	inbox                                     *planlist.Model
-	inboxOpen, switchingPlan, confirmPlanQuit bool
+	flows                                     *flowlist.Model
+	flowsOpen, switchingPlan, confirmPlanQuit bool
 	// runChanges is each finished run's committed change, by run ID, read
 	// once its run is selected.
 	runChanges map[string]runChange
@@ -308,8 +308,8 @@ func (m Model) WithRelaunch() Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	if m.inbox != nil {
-		return tea.Batch(m.loadData, doSpin(), checkUpdateCmd(), m.inbox.Init())
+	if m.flows != nil {
+		return tea.Batch(m.loadData, doSpin(), checkUpdateCmd(), m.flows.Init())
 	}
 	return tea.Batch(m.loadData, doSpin(), checkUpdateCmd())
 }
@@ -532,15 +532,15 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
-	if m.inboxOpen {
-		inbox := m.inbox.WithNote(m.draftNote)
-		content := inbox.Content()
+	if m.flowsOpen {
+		flows := m.flows.WithNote(m.draftNote)
+		content := flows.Content()
 		if m.width > 0 {
 			content = m.renderHeader(m.styles()) + content
 		}
 		v := tea.NewView(content)
 		v.AltScreen = true
-		v.WindowTitle = "chunk watch — plans"
+		v.WindowTitle = "chunk watch — flows"
 		return v
 	}
 	if m.planOpen {
@@ -591,15 +591,15 @@ func (m Model) renderHeader(st watchStyles) string {
 	}
 
 	title := st.brand("◆ ") + st.emphasis("chunk watch") + "  "
-	if m.inbox != nil {
+	if m.flows != nil {
 		// The count is the showing tab's, so it never reads as the other's.
 		tab := 1
-		if m.inboxOpen {
+		if m.flowsOpen {
 			tab = 0
-			n = m.inbox.Len()
-			count = fmt.Sprintf("%d plan%s", n, plural(n))
+			n = m.flows.Len()
+			count = fmt.Sprintf("%d flow%s", n, plural(n))
 		}
-		title += st.Tabs(tab, "Plans", "Runs") + "  "
+		title += st.Tabs(tab, "Flows", "Runs") + "  "
 	}
 	title += st.muted(count) + contextTag
 	right := m.draftReadyTag(st) + m.attentionTag(st) + m.runTag(st) + m.connectionTag(st)

@@ -94,7 +94,9 @@ func TestRunPaneWrapsEveryLineToThePane(t *testing.T) {
 
 	for _, run := range []sessionInfo{widestRun(), done} {
 		for _, details := range []bool{false, true} {
-			for _, width := range []int{40, 50, 60, 70, 80, 120} {
+			// 44 is the narrowest that leaves the run pane room for an
+			// indented one-letter line.
+			for _, width := range []int{44, 50, 60, 70, 80, 120} {
 				m := pollAndRead(t, sessModel(), run)
 				m.width = width
 				m.detailsOpen = map[string]bool{run.s.ID: details}

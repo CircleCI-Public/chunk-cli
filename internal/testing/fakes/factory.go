@@ -12,20 +12,25 @@ import (
 )
 
 // factoryPlan is a plan the fake holds, with its comments in the order they
-// were made, as conductor keeps them.
+// were made, as conductor keeps them. Its state is its flow's.
 type factoryPlan struct {
 	id, title, state, branch, text string
 	createdAt, updatedAt           time.Time
-	// flowed is whether a session has claimed the plan, which gives it the
-	// flow conductor keeps from then on; session is the one claiming it now,
-	// "" when none does.
-	flowed  bool
+	// noFlow is whether DropFactoryFlow took the plan's flow away, as a plan
+	// made before conductor gave every plan one has none; session is the one
+	// claiming the plan now, "" when none does.
+	noFlow  bool
 	session string
 	events  []string
 	// applicable are the events the flow lists as applicable_events, as a
 	// test sets them with SetFactoryApplicableEvents.
 	applicable []string
-	comments   []factoryComment
+	// taskID and taskCategory are the task the flow has out, as a test sets
+	// it with SetFactoryTask; "" when none is. taskIDOnly serves its
+	// reference as an older factory did, with no attributes.
+	taskID, taskCategory string
+	taskIDOnly           bool
+	comments             []factoryComment
 	// seq orders plans by creation, as created_at and id order conductor's.
 	seq int
 }
@@ -49,6 +54,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.PUT("/api/v3/factory/comments/:id/body", f.handlePutCommentBody)
 	r.POST("/api/v3/factory/comments/:id/resolve", f.handleResolveComment)
 	r.DELETE("/api/v3/factory/comments/:id", f.handleDeleteComment)
+	r.GET("/api/v3/factory/flows", f.handleListFlows)
 	r.GET("/api/v3/factory/flows/:id", f.handleGetFlow)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
 	r.POST("/api/v3/factory/sessions/:id/release", f.handleReleaseClaim)
@@ -56,7 +62,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 
 // factoryEvents are the events a human may send a flow (flow.EventName in
 // circleci/factory).
-var factoryEvents = []string{"prioritize", "address-comments", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
+var factoryEvents = []string{"prioritize", "address-comments", "resolve-conflicts", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
 
 // factoryEnds are the states a plan ends in, which the plan list leaves out
 // (conductor.Ends in circleci/factory).
@@ -111,13 +117,38 @@ func (f *FakeCircleCI) SetFactoryApplicableEvents(id string, events ...string) {
 	}
 }
 
+// SetFactoryTask has plan id's flow have a task of category out, as factory
+// handing one out would, or none when category is "".
+func (f *FakeCircleCI) SetFactoryTask(id, category string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.factoryPlans[id]
+	if p == nil {
+		return
+	}
+	p.taskID, p.taskCategory, p.taskIDOnly = "", "", false
+	if category != "" {
+		p.taskID, p.taskCategory = uuid.NewString(), category
+	}
+}
+
+// SetFactoryTaskIDOnly has plan id's flow have a task out that it references
+// by ID alone, as factory did before its flows carried the task's attributes.
+func (f *FakeCircleCI) SetFactoryTaskIDOnly(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.taskID, p.taskCategory, p.taskIDOnly = uuid.NewString(), "", true
+	}
+}
+
 // ClaimFactoryPlan has factory session sessionID claim plan id, as factory's
-// daemon would, giving the plan its flow.
+// daemon would.
 func (f *FakeCircleCI) ClaimFactoryPlan(id, sessionID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
-		p.flowed, p.session = true, sessionID
+		p.session = sessionID
 	}
 }
 
@@ -128,6 +159,17 @@ func (f *FakeCircleCI) ReleaseFactoryPlan(id string) {
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.session = ""
+	}
+}
+
+// DropFactoryFlow takes plan id's flow away, as a plan made before conductor
+// gave every plan a flow has none: GET /flows/:id answers 404 and GET /flows
+// leaves it out.
+func (f *FakeCircleCI) DropFactoryFlow(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.noFlow = true
 	}
 }
 
@@ -155,8 +197,31 @@ func (f *FakeCircleCI) factoryStart(c *gin.Context) bool {
 func planEntity(p *factoryPlan) gin.H {
 	attrs := planListAttrs(p)
 	attrs["branch"] = p.branch
+	attrs["phase"] = factoryPhase(p.state)
+	if o := factoryOutcome(p.state); o != "" {
+		attrs["outcome"] = o
+	}
 	return gin.H{"id": p.id, "attributes": attrs}
 }
+
+// factoryPhase is the phase factory serves for a plan or flow in state.
+func factoryPhase(state string) string {
+	switch {
+	case strings.EqualFold(state, "Unprioritized"):
+		return "received"
+	case slices.ContainsFunc(factoryEnds, func(s string) bool { return strings.EqualFold(s, state) }):
+		return "ended"
+	}
+	return "started"
+}
+
+// factoryOutcomes are how a plan in each end state ended, as factory names it.
+var factoryOutcomes = map[string]string{
+	"Done": "merged", "Canceled": "canceled", "Won't Do": "rejected", "Duplicate": "duplicated",
+}
+
+// factoryOutcome is how a plan in state ended, "" before it ends.
+func factoryOutcome(state string) string { return factoryOutcomes[state] }
 
 // planListAttrs are a plan's attributes as the plan list serves them, which
 // leaves out its branch.
@@ -168,7 +233,7 @@ func planListAttrs(p *factoryPlan) gin.H {
 		}
 	}
 	return gin.H{
-		"title": p.title, "state": p.state,
+		"title":      p.title,
 		"created_at": p.createdAt.Format(time.RFC3339Nano), "updated_at": p.updatedAt.Format(time.RFC3339Nano),
 		"open_comment_count": open,
 	}
@@ -352,8 +417,8 @@ func (f *FakeCircleCI) handlePutPlanText(c *gin.Context) {
 	}
 }
 
-// handleGetFlow serves a plan's flow, which it has once a session has
-// claimed it, as conductor does; the flow's ID is the plan's.
+// handleGetFlow serves a plan's flow, which conductor makes with the plan; the
+// flow's ID is the plan's.
 func (f *FakeCircleCI) handleGetFlow(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
@@ -365,21 +430,69 @@ func (f *FakeCircleCI) handleGetFlow(c *gin.Context) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	p := f.factoryPlans[id]
-	if p == nil || !p.flowed {
+	if p == nil || p.noFlow {
 		factoryError(c, http.StatusNotFound, "flow not found")
 		return
 	}
+	c.JSON(http.StatusOK, gin.H{"data": flowEntity(p)})
+}
+
+// handleListFlows serves every plan's flow, ended ones included, oldest plan
+// first and unpaged, as conductor does. The fake has one user, so
+// filter[user_id]=me or none lists every flow and any other user's UUID none.
+func (f *FakeCircleCI) handleListFlows(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	user := c.Query("filter[user_id]")
+	if user != "" && user != "me" && uuid.Validate(user) != nil {
+		factoryError(c, http.StatusBadRequest, "filter[user_id] is not a uuid or me")
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	var plans []*factoryPlan
+	if user == "" || user == "me" {
+		for _, p := range f.factoryPlans {
+			if !p.noFlow {
+				plans = append(plans, p)
+			}
+		}
+	}
+	slices.SortFunc(plans, func(a, b *factoryPlan) int { return a.seq - b.seq })
+	items := []gin.H{}
+	for _, p := range plans {
+		items = append(items, flowEntity(p))
+	}
+	c.JSON(http.StatusOK, gin.H{"data": items})
+}
+
+// flowEntity is plan p's flow as both flow routes serve it.
+func flowEntity(p *factoryPlan) gin.H {
 	refs := gin.H{"factory_plan": gin.H{"id": p.id}}
 	if p.session != "" {
 		refs["factory_session"] = gin.H{"id": p.session}
+	}
+	switch {
+	case p.taskIDOnly:
+		refs["factory_task"] = gin.H{"id": p.taskID}
+	case p.taskCategory != "":
+		// The reference carries the task's attributes; the fake serves only
+		// its category.
+		refs["factory_task"] = gin.H{"id": p.taskID, "attributes": gin.H{"category": p.taskCategory}}
 	}
 	applicable := p.applicable
 	if applicable == nil {
 		applicable = []string{}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"id": p.id, "attributes": gin.H{"state": p.state, "applicable_events": applicable}, "references": refs,
-	}})
+	return gin.H{
+		"id": p.id,
+		"attributes": gin.H{
+			"title": p.title, "updated_at": p.updatedAt.Format(time.RFC3339Nano),
+			"state": p.state, "phase": factoryPhase(p.state), "applicable_events": applicable,
+		},
+		"references": refs,
+	}
 }
 
 // handleReleaseClaim drops session :id's claim on the plan flow_id names, as
@@ -399,7 +512,7 @@ func (f *FakeCircleCI) handleReleaseClaim(c *gin.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	p := f.factoryPlans[body.FlowID]
-	if p == nil || !p.flowed || p.session != c.Param("id") {
+	if p == nil || p.noFlow || p.session != c.Param("id") {
 		factoryError(c, http.StatusNotFound, "claim not found")
 		return
 	}
@@ -438,7 +551,7 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	p := f.factoryPlans[flowID]
-	if p == nil || !p.flowed {
+	if p == nil || p.noFlow {
 		factoryError(c, http.StatusNotFound, "flow not found")
 		return
 	}

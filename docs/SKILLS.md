@@ -41,7 +41,7 @@ Skills are versioned. Run `chunk skill install` again after upgrading `chunk` to
 Applies the project's review prompts in `.chunk/reviews/` to the current diff, one isolated subagent per prompt, so prior conversation context does not influence findings.
 
 **Prerequisites**:
-- `.chunk/reviews/` must hold at least one `.md` or `.txt` prompt (`chunk factory bootstrap` writes a first set)
+- `.chunk/reviews/` must hold at least one `.md` or `.txt` prompt
 - For PR reviews: `gh` CLI must be installed and authenticated
 
 **What it does**:
@@ -231,4 +231,4 @@ Confirm the skill is installed (`chunk skill list`). Some agents require a resta
 
 **`chunk-review` says it found no review prompts**
 
-The project has no prompts in `.chunk/reviews/` yet. Run `chunk factory bootstrap` to write a first set, read and edit them, then commit `.chunk/reviews/` so all team members have them.
+The project has no prompts in `.chunk/reviews/` yet. Write one `.md` file per review area, then commit `.chunk/reviews/` so all team members have them.

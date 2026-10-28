@@ -17,13 +17,16 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 )
 
-// fakePlans is factory's plan API with one plan in it, whose state a test
-// moves as factory would.
+// fakePlans is factory's plan API with one plan in it and its flow, whose
+// state a test moves as factory would.
 type fakePlans struct {
-	mu           sync.Mutex
-	id, state    string
-	branch, text string
-	getErr       error
+	mu             sync.Mutex
+	id, state      string
+	phase, outcome string
+	branch, text   string
+	getErr         error
+	noFlow         bool
+	flowErr        error
 }
 
 func (f *fakePlans) GetPlan(_ context.Context, id string) (*circleci.Plan, error) {
@@ -35,7 +38,19 @@ func (f *fakePlans) GetPlan(_ context.Context, id string) (*circleci.Plan, error
 	if id != f.id {
 		return nil, errors.New("plan not found")
 	}
-	return &circleci.Plan{ID: id, State: f.state, Branch: f.branch}, nil
+	return &circleci.Plan{ID: id, Branch: f.branch, Phase: f.phase, Outcome: f.outcome}, nil
+}
+
+func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.flowErr != nil {
+		return nil, f.flowErr
+	}
+	if id != f.id || f.noFlow {
+		return nil, &circleci.StatusError{StatusCode: http.StatusNotFound}
+	}
+	return &circleci.Flow{ID: id, State: f.state}, nil
 }
 
 func (f *fakePlans) PlanText(_ context.Context, id string) (string, error) {
@@ -49,6 +64,14 @@ func (f *fakePlans) set(state, branch string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state, f.branch = state, branch
+}
+
+// end ends the plan with outcome, as factory does: its phase is ended, and
+// its flow is gone.
+func (f *fakePlans) end(outcome string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.phase, f.outcome, f.noFlow = circleci.PhaseEnded, outcome, true
 }
 
 // fakeBuild is a build session whose events a test sends.
@@ -103,7 +126,7 @@ func newPlanBuildDaemon(t *testing.T) *planBuildDaemon {
 	t.Cleanup(func() { planBuildPoll = old })
 	pb := &planBuildDaemon{
 		daemon: d, root: root, build: newFakeBuild(),
-		plans: &fakePlans{id: "plan-1", state: "Planning - Human", text: "# Add a flag\n\n## 5. Units\n\n### Unit 1: Add it\n"},
+		plans: &fakePlans{id: "plan-1", state: "Planning - Human", phase: circleci.PhaseStarted, text: "# Add a flag\n\n## 5. Units\n\n### Unit 1: Add it\n"},
 	}
 	d.rcfg.PlanAPI = pb.plans
 	d.rcfg.OpenPlanWorktree = func(_ context.Context, root, planID string) (string, error) {
@@ -186,25 +209,41 @@ func TestPlanBuildFeedsWhatTheSessionDoes(t *testing.T) {
 }
 
 // The build follows factory's plan, its branch included, and ends once the
-// plan has, stopping the session.
+// plan's phase has, though its flow is gone, stopping the session.
 func TestPlanBuildEndsWithThePlan(t *testing.T) {
-	pb := newPlanBuildDaemon(t)
-	sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
-	assert.NilError(t, err)
-	entry := pb.sessions.get(sess.ID)
+	for _, tc := range []struct {
+		outcome string
+		note    string
+	}{
+		{
+			outcome: "merged",
+			note:    "plan merged",
+		},
+		{
+			outcome: "",
+			note:    "plan ended",
+		},
+	} {
+		t.Run(tc.note, func(t *testing.T) {
+			pb := newPlanBuildDaemon(t)
+			sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+			assert.NilError(t, err)
+			entry := pb.sessions.get(sess.ID)
 
-	pb.plans.set("Building - Agent", "scott/add-a-flag")
-	waitUntil(t, "the plan's state and branch", func() bool {
-		f := entry.snapshot().Factory
-		return f.PlanState == "Building - Agent" && f.Branch == "scott/add-a-flag"
-	})
-	assert.Check(t, cmp.Equal(entry.snapshot().Branch, "scott/add-a-flag"))
+			pb.plans.set("Building - Agent", "scott/add-a-flag")
+			waitUntil(t, "the plan's state and branch", func() bool {
+				f := entry.snapshot().Factory
+				return f.PlanState == "Building - Agent" && f.Branch == "scott/add-a-flag"
+			})
+			assert.Check(t, cmp.Equal(entry.snapshot().Branch, "scott/add-a-flag"))
 
-	pb.plans.set("Done", "scott/add-a-flag")
-	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
-	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionDone))
-	assert.Check(t, cmp.Equal(detail.Stages[0].Note, "plan Done"))
-	assert.Check(t, pb.build.wasStopped(), "the build session was left running")
+			pb.plans.end(tc.outcome)
+			detail := waitForSessionEnd(t, pb.daemon, sess.ID)
+			assert.Check(t, cmp.Equal(detail.State, chunkd.SessionDone))
+			assert.Check(t, cmp.Equal(detail.Stages[0].Note, tc.note))
+			assert.Check(t, pb.build.wasStopped(), "the build session was left running")
+		})
+	}
 }
 
 func TestPlanBuildCancelStopsTheSession(t *testing.T) {
@@ -245,14 +284,112 @@ func TestPlanBuildFailsWithoutAWorktree(t *testing.T) {
 	assert.Check(t, cmp.Len(pb.cfgs, 0), "a build session started with no worktree")
 }
 
+// An ended plan is refused on its phase alone: its flow is not read.
 func TestPlanBuildRefusesAnEndedPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		flowErr error
+	}{
+		{
+			name: "no flow",
+		},
+		{
+			name:    "a failed flow read",
+			flowErr: errors.New("factory is down"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pb := newPlanBuildDaemon(t)
+			pb.plans.end("rejected")
+			pb.plans.mu.Lock()
+			pb.plans.flowErr = tc.flowErr
+			pb.plans.mu.Unlock()
+			_, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+			var ae *apiError
+			assert.Assert(t, errors.As(err, &ae), "err %v", err)
+			assert.Check(t, cmp.Equal(ae.status, http.StatusConflict))
+			assert.Check(t, cmp.Contains(ae.Error(), "rejected"))
+			assert.Check(t, cmp.Len(pb.sessions.forProject(pb.root), 0))
+		})
+	}
+}
+
+func TestPlanBuildRefusesWhenTheFlowReadFails(t *testing.T) {
 	pb := newPlanBuildDaemon(t)
-	pb.plans.set("Won't Do", "")
+	pb.plans.flowErr = errors.New("factory is down")
 	_, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae), "err %v", err)
-	assert.Check(t, cmp.Equal(ae.status, http.StatusConflict))
-	assert.Check(t, cmp.Len(pb.sessions.forProject(pb.root), 0))
+	assert.Check(t, cmp.Equal(ae.status, http.StatusBadGateway))
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	assert.Check(t, cmp.Len(pb.cfgs, 0), "a build started on a failed flow read")
+}
+
+// A plan with no flow has no flow state: its build starts, and runs until the
+// plan ends.
+func TestPlanBuildOfAPlanWithNoFlow(t *testing.T) {
+	pb := newPlanBuildDaemon(t)
+	pb.plans.noFlow = true
+	sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(sess.Factory.PlanState, ""))
+	entry := pb.sessions.get(sess.ID)
+
+	time.Sleep(10 * planBuildPoll)
+	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
+	assert.Check(t, !pb.build.wasStopped(), "the build of a plan with no flow was stopped")
+
+	pb.plans.end("merged")
+	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
+	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionDone))
+	assert.Check(t, pb.build.wasStopped(), "the build session was left running")
+}
+
+// A flow read that fails mid-build keeps the last flow state, and does not
+// hold the build up once the plan ends.
+func TestPlanBuildSkipsAFailedFlowRead(t *testing.T) {
+	pb := newPlanBuildDaemon(t)
+	sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+	assert.NilError(t, err)
+	entry := pb.sessions.get(sess.ID)
+
+	pb.plans.mu.Lock()
+	pb.plans.flowErr = errors.New("factory is down")
+	pb.plans.state = "Done"
+	pb.plans.mu.Unlock()
+	time.Sleep(10 * planBuildPoll)
+	f := entry.snapshot().Factory
+	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
+	assert.Check(t, cmp.Equal(f.PlanState, "Planning - Human"))
+
+	pb.plans.end("merged")
+	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
+	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionDone))
+	assert.Check(t, pb.build.wasStopped(), "the build session was left running")
+}
+
+// A plan read that fails mid-build skips the tick: the build goes on, and
+// ends once a later read says the plan has.
+func TestPlanBuildSkipsAFailedPlanRead(t *testing.T) {
+	pb := newPlanBuildDaemon(t)
+	sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+	assert.NilError(t, err)
+	entry := pb.sessions.get(sess.ID)
+
+	pb.plans.mu.Lock()
+	pb.plans.getErr = errors.New("factory is down")
+	pb.plans.mu.Unlock()
+	pb.plans.end("merged")
+	time.Sleep(10 * planBuildPoll)
+	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
+	assert.Check(t, !pb.build.wasStopped(), "the build was stopped on a failed plan read")
+
+	pb.plans.mu.Lock()
+	pb.plans.getErr = nil
+	pb.plans.mu.Unlock()
+	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
+	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionDone))
 }
 
 func TestPlanBuildRefusesAPlanAlreadyBuilding(t *testing.T) {

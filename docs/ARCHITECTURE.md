@@ -28,14 +28,13 @@ chunk-cli/
     ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
     ├── factoryplan/           # The planning screen's plan and session in factory
     ├── filecache/             # Generic JSON-on-disk cache (FileCache[T])
-    ├── github/                # GitHub GraphQL client (reviews, repos)
+    ├── github/                # GitHub GraphQL client (pull requests, repos)
     ├── gitexec/               # Low-level local Git process execution
     ├── gitremote/             # Git remote URL parsing for org/repo detection
     ├── gitutil/               # Git utility helpers, working-tree fingerprints
     ├── hashutil/              # Collision-free digests of string parts (cache keys)
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
-    ├── reviewhistory/         # A repo's top reviewers' PR review comments, for factory bootstrap
     ├── sidecar/               # CircleCI sidecar operations
     ├── skills/                # Skill definitions (go:embed) and installation
     ├── task/                  # Task run config and CircleCI trigger
@@ -85,23 +84,15 @@ is printed. Both exit with code 1.
 ## Data Flow: `factory bootstrap`
 
 ```
-1. History           gitremote/ → owner/repo of origin
-                     → reviewhistory.Fetch() → github/ FetchReviewActivity()
-                     → top reviewers by comment count, newest comments each
-                     (skipped with --no-history or no GitHub token; a non-GitHub
-                     origin fails the command before any sidecar starts)
+1. Config            writeBootstrapConfig() → validate.DetectCommands()
+                     → .chunk/config.json
+                     (skipped when the config exists)
 
-2. Sidecar           sidecar/ pool "factory-bootstrap" on the Claude image
-                     → sidecar.WriteFile() puts History.Markdown() at
-                       .chunk/review-history.md in the sidecar's repo, over SSH stdin
-
-3. Write prompts     factory.RunBootstrap() → claudecode/ claude -p, read-only tools,
-                     --json-schema → validated prompts → .chunk/reviews/<name>.md
+2. Sidecar image     sidecar.Create() from cimg-base:2026.09-claude (or --image)
+                     → sidecar.Provision() → CreateSnapshot()
+                     → validation.sidecarImage
+                     (skipped when it is set, or with --skip-sidecar)
 ```
-
-The history is a file rather than part of the request so a busy repository's
-comments are not bounded by the size of one request, and Claude reads it a
-part at a time.
 
 ## Configuration and Environment Variables
 

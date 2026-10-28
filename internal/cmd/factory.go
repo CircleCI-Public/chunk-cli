@@ -650,7 +650,7 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 	case errors.Is(err, factory.ErrNothingToCheck):
 		return nil, nil, &userError{
 			msg:        "Nothing to check the implementer's work with.",
-			suggestion: fmt.Sprintf("Run 'chunk factory bootstrap' to write review prompts to %s, or add validation commands with 'chunk init'.", review.DefaultDir),
+			suggestion: fmt.Sprintf("Add one .md or .txt file per review to %s, or add validation commands with 'chunk init'.", review.DefaultDir),
 			hideDetail: true,
 			blocked:    true,
 		}

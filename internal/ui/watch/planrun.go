@@ -9,8 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
 )
 
 // Planner opens a workspace without starting an agent: the agent the
@@ -63,17 +63,17 @@ func (m Model) WithPlans(ctx context.Context, planner Planner) Model {
 	return m
 }
 
-// WithPlanInbox adds the read-only plan browser as the initial destination.
-func (m Model) WithPlanInbox(inbox planlist.Model) Model {
-	m.inbox, m.inboxOpen = &inbox, true
+// WithFlowList adds the read-only flow list as the initial destination.
+func (m Model) WithFlowList(flows flowlist.Model) Model {
+	m.flows, m.flowsOpen = &flows, true
 	return m
 }
 
 func (m Model) HasPlan() bool { return len(m.planWorkspaces) > 0 }
 
 func (m Model) openPlan() (tea.Model, tea.Cmd) {
-	if m.inbox != nil {
-		return m.showInbox(false)
+	if m.flows != nil {
+		return m.showFlows(false)
 	}
 	if m.planScreen != nil {
 		m.planOpen = true
@@ -89,7 +89,7 @@ func (m Model) openPlanID(id, title string) (tea.Model, tea.Cmd) {
 	for key, ws := range m.planWorkspaces {
 		if ws.store.ID() == id {
 			m.planKey, m.planScreen = key, &ws.screen
-			m.planOpen, m.inboxOpen, m.switchingPlan = true, false, false
+			m.planOpen, m.flowsOpen, m.switchingPlan = true, false, false
 			return m, nil
 		}
 	}
@@ -119,7 +119,7 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	branch, _ := gitutil.CurrentBranchIn(msg.root)
 	screen := plan.New(m.planCtx, msg.agent, msg.approve, msg.store, "").
 		WithTerminal(m.hasDarkBG, m.superEnter).WithBranch(branch).WithBack()
-	if m.inbox != nil {
+	if m.flows != nil {
 		screen = screen.WithInbox(msg.title, msg.root)
 	}
 	screen, cmd := screen.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
@@ -127,36 +127,36 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	ws := &planWorkspace{screen: screen, store: msg.store, root: msg.root}
 	m.planWorkspaces[m.planSeq] = ws
 	m.planKey, m.planScreen = m.planSeq, &ws.screen
-	m.planOpen, m.inboxOpen, m.switchingPlan = true, false, false
+	m.planOpen, m.flowsOpen, m.switchingPlan = true, false, false
 	return m, workspaceCmd(m.planKey, tea.Batch(screen.Init(), cmd))
 }
 
-// showInbox shows the plans. switching is ctrl+p from a plan, whose way back
-// returns to that plan rather than to the runs.
-func (m Model) showInbox(switching bool) (Model, tea.Cmd) {
+// showFlows shows the flow list. switching is ctrl+p from a plan, whose way
+// back returns to that plan rather than to the runs.
+func (m Model) showFlows(switching bool) (Model, tea.Cmd) {
 	m.switchingPlan = switching && m.planOpen
-	m.planOpen, m.inboxOpen = false, true
+	m.planOpen, m.flowsOpen = false, true
 	m.draftNote = ""
 	if ws := m.planWorkspaces[m.planKey]; ws != nil {
-		*m.inbox = m.inbox.Select(ws.store.ID())
+		*m.flows = m.flows.Select(ws.store.ID())
 	}
-	return m, m.inbox.Refresh()
+	return m, m.flows.Refresh()
 }
 
 func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case workspaceMsg:
 		return m.updateWorkspace(msg.key, msg.msg)
-	case planlist.OpenMsg:
+	case flowlist.OpenMsg:
 		return m.openPlanID(msg.ID, msg.Title)
-	case planlist.NewMsg:
+	case flowlist.NewMsg:
 		return m.openPlanID("", "New plan")
-	case planlist.BackMsg:
-		m.inboxOpen = false
+	case flowlist.BackMsg:
+		m.flowsOpen = false
 		m.planOpen = m.switchingPlan && m.planScreen != nil
 		m.switchingPlan = false
 		return m, nil
-	case planlist.QuitMsg:
+	case flowlist.QuitMsg:
 		return m.quitWithPlans()
 	case tea.KeyPressMsg:
 		if m.confirmPlanQuit {
@@ -165,28 +165,28 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.confirmPlanQuit, m.draftNote = false, ""
 		}
-		if m.inbox != nil && msg.String() == "ctrl+p" {
-			return m.showInbox(true)
+		if m.flows != nil && msg.String() == "ctrl+p" {
+			return m.showFlows(true)
 		}
 		if m.planOpen {
 			return m.forwardPlan(msg)
 		}
-		if m.inboxOpen {
+		if m.flowsOpen {
 			var cmd tea.Cmd
-			*m.inbox, cmd = m.inbox.Update(msg)
+			*m.flows, cmd = m.flows.Update(msg)
 			return m, cmd
 		}
-		if m.inbox != nil && m.draft == draftNone && !m.searching && m.output == nil && (msg.String() == "tab" || msg.String() == "1") {
-			return m.showInbox(false)
+		if m.flows != nil && m.draft == draftNone && !m.searching && m.output == nil && (msg.String() == "tab" || msg.String() == "1") {
+			return m.showFlows(false)
 		}
 		return m.update(msg)
 	case tea.PasteMsg, tea.MouseMsg:
 		if m.planOpen {
 			return m.forwardPlan(msg)
 		}
-		if m.inboxOpen {
+		if m.flowsOpen {
 			var cmd tea.Cmd
-			*m.inbox, cmd = m.inbox.Update(msg)
+			*m.flows, cmd = m.flows.Update(msg)
 			return m, cmd
 		}
 		return m.updateInput(msg)
@@ -201,23 +201,23 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m, cmd = m.updateWorkspace(key, msg)
 			cmds = append(cmds, cmd)
 		}
-		if m.inbox != nil {
-			// The inbox draws under the dashboard's header.
+		if m.flows != nil {
+			// The flow list draws under the dashboard's header.
 			if size, ok := msg.(tea.WindowSizeMsg); ok {
 				size.Height = max(size.Height-1, 0)
 				msg = size
 			}
-			*m.inbox, cmd = m.inbox.Update(msg)
+			*m.flows, cmd = m.flows.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 		return m, tea.Batch(cmds...)
 	}
 	next, cmd := m.update(msg)
 	m = next.(Model)
-	if m.inbox != nil {
-		var inboxCmd tea.Cmd
-		*m.inbox, inboxCmd = m.inbox.Update(msg)
-		cmd = tea.Batch(cmd, inboxCmd)
+	if m.flows != nil {
+		var flowsCmd tea.Cmd
+		*m.flows, flowsCmd = m.flows.Update(msg)
+		cmd = tea.Batch(cmd, flowsCmd)
 	}
 	return m, cmd
 }
@@ -234,13 +234,13 @@ func (m Model) updateWorkspace(key uint64, msg tea.Msg) (Model, tea.Cmd) {
 	if closed, ok := msg.(plan.ClosedMsg); ok {
 		if closed.BuildID == "" {
 			m.planOpen = false
-			if m.inbox != nil {
-				return m.showInbox(false)
+			if m.flows != nil {
+				return m.showFlows(false)
 			}
 			return m, nil
 		}
 		delete(m.planWorkspaces, key)
-		m.planScreen, m.planOpen, m.inboxOpen = nil, false, false
+		m.planScreen, m.planOpen, m.flowsOpen = nil, false, false
 		m.draftNote = "approved the plan; it is building in " + filepath.Base(ws.root) + " and appears in the list in a moment"
 		m.pendingRun, m.focusedPane = closed.BuildID, paneLeft
 		return m.setQuery(""), nil

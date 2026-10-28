@@ -1,8 +1,9 @@
-package planlist
+package flowlist
 
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
@@ -17,7 +20,7 @@ import (
 // takes the whole screen; Enter still opens the workspace.
 const minPreview = 30
 
-// Content draws the inbox, its footer included, within the last
+// Content draws the flow list, its footer included, within the last
 // WindowSizeMsg. The host draws the header above it.
 func (m Model) Content() string {
 	if m.width == 0 || m.height == 0 {
@@ -34,7 +37,7 @@ func (m Model) Content() string {
 	if m.width-theme.ListWidth-4 >= minPreview {
 		listWidth = theme.ListWidth
 	}
-	left := m.styles.Pane(true, listWidth+2, h, m.styles.Emphasis.Render("plans"),
+	left := m.styles.Pane(true, listWidth+2, h, m.styles.Emphasis.Render("flows"),
 		strings.Join(fit(m.listLines(listWidth, contentHeight), listWidth, contentHeight), "\n"))
 	body := left
 	if listWidth == theme.ListWidth {
@@ -64,7 +67,7 @@ func (m Model) footerLines() []string {
 		rows = append(rows, "  "+m.styles.Muted.Render(m.note))
 	}
 	if m.listErr != nil {
-		note := "plans unavailable"
+		note := "flows unavailable"
 		if m.loaded {
 			note += " (stale)"
 		}
@@ -76,35 +79,46 @@ func (m Model) footerLines() []string {
 func (m Model) listLines(width, height int) []string {
 	st := m.styles
 	var rows []string
-	selected, lastGroup := 0, -1
+	selected, lastGroup, lastPhase := 0, -1, ""
 	labels := []string{"Needs your review", "With agent", "Not started", "Other"}
-	for _, p := range m.visible() {
-		g := group(p.State)
+	for _, f := range m.visible() {
+		g := group(f.State)
 		if g != lastGroup {
 			if lastGroup != -1 {
 				rows = append(rows, "")
 			}
 			rows = append(rows, st.Dim.Render(labels[g]))
-			lastGroup = g
+			lastGroup, lastPhase = g, ""
 		}
-		title := oneLine(p.Title)
+		// A sub-heading is spelled as the first flow in it spells its phase.
+		if p := phase(f.State); p != "" && !samePhase(p, lastPhase) {
+			rows = append(rows, " "+st.Dim.Render(oneLine(p)))
+			lastPhase = p
+		}
+		title := oneLine(f.Title)
 		if title == "" {
 			title = "Untitled plan"
 		}
 		title = ansi.Truncate(title, max(width-2, 1), "…")
-		if p.ID == m.id {
+		if f.ID == m.id {
 			selected = len(rows)
 			rows = append(rows, st.Success.Render("▶ ")+st.Emphasis.Render(title))
 		} else {
 			rows = append(rows, "  "+title)
 		}
-		chip := stateChip(st, p.State, width-4)
+		chip := stateChip(st, f.State, width-4)
 		var detail []string
-		if p.OpenComments > 0 {
-			detail = append(detail, st.Warning.Render(fmt.Sprintf("● %d", p.OpenComments)))
+		if slices.Contains(f.ApplicableEvents, circleci.ResolveConflicts) {
+			detail = append(detail, st.Warning.Render("⚠"))
 		}
-		if !p.UpdatedAt.IsZero() {
-			detail = append(detail, st.VDim.Render(ago(p.UpdatedAt)))
+		if f.Task != nil && f.Task.Category != "" {
+			detail = append(detail, st.VDim.Render(oneLine(f.Task.Category)))
+		}
+		if f.SessionID != "" {
+			detail = append(detail, st.VDim.Render("claimed"))
+		}
+		if !f.UpdatedAt.IsZero() {
+			detail = append(detail, st.VDim.Render(ago(f.UpdatedAt)))
 		}
 		line := "  " + chip
 		if len(detail) > 0 {
@@ -113,26 +127,28 @@ func (m Model) listLines(width, height int) []string {
 		rows = append(rows, line)
 	}
 	if len(rows) == 0 {
-		message := []string{"  " + st.Dim.Render("no open plans"), "  " + st.Dim.Render("n starts one")}
+		message := []string{"  " + st.Dim.Render("no open flows"), "  " + st.Dim.Render("n starts one")}
 		switch {
 		case !m.loaded && m.listErr != nil:
 			message = []string{"  " + st.Dim.Render("retrying…")}
 		case !m.loaded:
-			message = []string{"  " + st.Dim.Render("loading plans…")}
+			message = []string{"  " + st.Dim.Render("loading flows…")}
 		}
 		rows = message
 	}
-	// The rows scroll to keep the selected plan's title and state line in view.
+	// The rows scroll to keep the selected flow's title and state line in
+	// view. A phase sub-heading is above the title, so may scroll off.
 	start := max(0, selected+2-height)
 	start = min(start, max(len(rows)-height, 0))
 	return rows[start:]
 }
 
-// stateChip is the plan's state as a coloured block, as the run list shows a
-// run's: amber when it waits on you, the brand yellow while an agent has it.
+// stateChip is the flow's state as a coloured block, as the run list shows
+// a run's: amber when it waits on you, the brand yellow while an agent has it.
+// A state chunk does not know is shown whole, on grey.
 func stateChip(st theme.Styles, state string, width int) string {
-	text := strings.ToLower(oneLine(state))
-	text = strings.TrimSuffix(strings.TrimSuffix(text, " - human"), " - agent")
+	phase, _ := planstate.Parse(oneLine(state))
+	text := strings.ToLower(phase)
 	if text == "" {
 		text = "unknown"
 	}
@@ -145,7 +161,7 @@ func stateChip(st theme.Styles, state string, width int) string {
 	case 2:
 		bg = lipgloss.Color("250")
 	default:
-		bg = theme.Green
+		bg = lipgloss.Color("244")
 	}
 	return st.Chip.Background(bg).Render(" " + ansi.Truncate(text, max(width-2, 1), "…") + " ")
 }
@@ -168,7 +184,7 @@ func ago(t time.Time) string {
 func (m Model) previewLines(width int) []string {
 	var rows []string
 	if m.id == "" {
-		return append(rows, m.styles.Dim.Render("Select a plan to preview."))
+		return append(rows, m.styles.Dim.Render("Select a flow to preview."))
 	}
 	// Select may be called between updates. Never display the previous plan's
 	// content under the newly selected row while its request is being started.

@@ -2,21 +2,20 @@ package acceptance
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
@@ -24,7 +23,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fixtures"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
@@ -171,7 +169,8 @@ func TestFactoryWithNothingToCheck(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	assert.Assert(t, strings.Contains(result.Stderr, "Nothing to check the implementer's work with."), "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stderr, ".chunk/reviews"), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory bootstrap"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Add one .md or .txt file per review to .chunk/reviews"), "stderr: %s", result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stderr, "chunk factory bootstrap"), "stderr: %s", result.Stderr)
 }
 
 // chunk factory build --remote provisions a sidecar of its own for the run,
@@ -508,329 +507,82 @@ func assertFileContent(t *testing.T, dir, name, want string) {
 	assert.Equal(t, string(data), want)
 }
 
-func TestFactoryBootstrapWritesReviewPrompts(t *testing.T) {
-	answer, err := json.Marshal(map[string]any{
-		"type": "result", "subtype": "success", "is_error": false, "result": "done",
-		"structured_output": map[string]any{
-			"summary": "A small Go project.",
-			"reviews": []map[string]any{
-				{"name": "testing", "body": "# Testing\n\nCheck the tests."},
-				{"name": "correctness", "body": "# Correctness"},
-			},
-		},
-	})
-	assert.NilError(t, err)
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: string(answer)})
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history", "--skip-sidecar"}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
-	assert.NilError(t, err)
-	assert.Equal(t, string(data), "# Testing\n\nCheck the tests.\n")
-	_, err = os.Stat(filepath.Join(workDir, ".chunk", "reviews", "correctness.md"))
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(result.Stdout, filepath.Join(".chunk", "reviews", "testing.md")), "stdout: %s", result.Stdout)
-	assert.Assert(t, strings.Contains(result.Stdout, "A small Go project."), "stdout: %s", result.Stdout)
-
-	var bootstraps int
-	for _, r := range cci.Recorder.AllRequests() {
-		if strings.HasSuffix(r.URL.Path, "/exec") && strings.Contains(string(r.Body), "--json-schema") {
-			bootstraps++
-		}
-	}
-	assert.Equal(t, bootstraps, 1)
-
-	// Bootstrap needs Claude Code rather than the project's toolchain, so its
-	// sidecar is made from the Claude image, not the project's own.
-	var created int
-	for _, r := range filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances") {
-		if r.URL.Path != "/api/v3/sidecar/instances" {
-			continue
-		}
-		var req struct {
-			Data struct {
-				Attributes struct {
-					Image string `json:"image"`
-				} `json:"attributes"`
-			} `json:"data"`
-		}
-		assert.NilError(t, json.Unmarshal(r.Body, &req))
-		assert.Equal(t, req.Data.Attributes.Image, "cimg-base:2026.09-claude")
-		created++
-	}
-	assert.Equal(t, created, 1)
-}
-
-// bootstrapPrompts returns the prompt of every bootstrap claude run the CLI
-// sent to a sidecar.
-func bootstrapPrompts(t *testing.T, cci *fakes.FakeCircleCI) []string {
-	t.Helper()
-	echoed := regexp.MustCompile(`echo '?([A-Za-z0-9+/=]+)'? \| base64 -d`)
-	var prompts []string
-	for _, r := range cci.Recorder.AllRequests() {
-		if !strings.HasSuffix(r.URL.Path, "/exec") || !strings.Contains(string(r.Body), "--json-schema") {
-			continue
-		}
-		var req struct {
-			Args []string `json:"args"`
-		}
-		assert.NilError(t, json.Unmarshal(r.Body, &req))
-		m := echoed.FindStringSubmatch(strings.Join(req.Args, " "))
-		assert.Assert(t, m != nil, "no prompt in exec: %s", r.Body)
-		prompt, err := base64.StdEncoding.DecodeString(m[1])
-		assert.NilError(t, err)
-		prompts = append(prompts, string(prompt))
-	}
-	return prompts
-}
-
-func bootstrapAnswer(t *testing.T) string {
-	t.Helper()
-	answer, err := json.Marshal(map[string]any{
-		"type": "result", "subtype": "success", "is_error": false, "result": "done",
-		"structured_output": map[string]any{
-			"summary": "", "reviews": []map[string]any{{"name": "testing", "body": "# Testing"}},
-		},
-	})
-	assert.NilError(t, err)
-	return string(answer)
-}
-
-// The review comments on the project's GitHub repository reach the sidecar as
-// a file, and Claude is told to read it.
-func TestFactoryBootstrapUsesTheTeamsReviewHistory(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
-	gh := fakes.NewFakeGitHub()
-	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
-	ghSrv := httptest.NewServer(gh)
-	t.Cleanup(ghSrv.Close)
-	env.GithubURL = ghSrv.URL
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--json"}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "Fetching review comments on test-org/test-repo"), "stderr: %s", result.Stderr)
-	var report struct {
-		ReviewComments int `json:"review_comments"`
-	}
-	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
-	assert.Equal(t, report.ReviewComments, 3)
-
-	prompts := bootstrapPrompts(t, cci)
-	assert.Equal(t, len(prompts), 1)
-	assert.Assert(t, strings.Contains(prompts[0], "`.chunk/review-history.md` holds 3 review comments"), prompts[0])
-	assert.Assert(t, !strings.Contains(prompts[0], "Consider using early return"), "the comments go in the file, not the prompt: %s", prompts[0])
-
-	files, err := filepath.Glob(filepath.Join(env.Extra["CHUNK_SIDECAR_HOME"], "*", ".chunk", "review-history.md"))
-	assert.NilError(t, err)
-	assert.Equal(t, len(files), 1, "history on the sidecar: %v", files)
-	data, err := os.ReadFile(files[0])
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "> Consider using early return here to reduce nesting"), string(data))
-}
-
-// --top keeps only the most active reviewers' comments.
-func TestFactoryBootstrapKeepsTheTopReviewers(t *testing.T) {
-	env, _, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
-	gh := fakes.NewFakeGitHub()
-	gh.SetReviewActivity("test-repo", fixtures.MultiReviewerResponse())
-	ghSrv := httptest.NewServer(gh)
-	t.Cleanup(ghSrv.Close)
-	env.GithubURL = ghSrv.URL
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--json", "--top", "1"}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	var report struct {
-		ReviewComments int `json:"review_comments"`
-	}
-	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
-	assert.Equal(t, report.ReviewComments, 3)
-}
-
-// --since leaves out the comments made before it.
-func TestFactoryBootstrapOnlyUsesCommentsSinceTheGivenDate(t *testing.T) {
-	env, _, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
-	gh := fakes.NewFakeGitHub()
-	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
-	ghSrv := httptest.NewServer(gh)
-	t.Cleanup(ghSrv.Close)
-	env.GithubURL = ghSrv.URL
-	since := time.Now().AddDate(0, 0, -10).Format(time.DateOnly)
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--json", "--since", since}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "since "+since), "stderr: %s", result.Stderr)
-	var report struct {
-		ReviewComments int `json:"review_comments"`
-	}
-	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
-	assert.Equal(t, report.ReviewComments, 0)
-}
-
-// A bad --since or --top fails before any sidecar boots.
-func TestFactoryBootstrapRejectsBadHistoryFlags(t *testing.T) {
+// Bootstrap writes the config and sets up the sidecar image, neither of which
+// needs GitHub, so a project with another origin, or none, and no GitHub
+// token is set up all the same.
+func TestFactoryBootstrapNeedsNoGitHubOrigin(t *testing.T) {
 	tests := []struct {
 		name string
-		args []string
-		want string
+		git  []string
 	}{
-		{name: "since", args: []string{"--since", "31/01/2026"}, want: "--since must be a date"},
-		{name: "top", args: []string{"--top", "0"}, want: "--top must be at least 1, not 0."},
+		{
+			name: "gitlab origin",
+			git:  []string{"remote", "set-url", "origin", "https://gitlab.com/test-org/test-repo.git"},
+		},
+		{
+			name: "no origin",
+			git:  []string{"remote", "remove", "origin"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env, cci, workDir := setupReviewProject(t, nil)
-
-			result := binary.RunCLI(t, append([]string{"factory", "bootstrap"}, tt.args...), env, workDir)
-
-			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-			assert.Assert(t, strings.Contains(result.Stderr, tt.want), "stderr: %s", result.Stderr)
-			assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
-		})
-	}
-}
-
-// --eval-commits that cannot score anything fails before any sidecar boots,
-// including when the history has no commit to make a case of.
-func TestFactoryBootstrapRefusesEvalCommitsThatScoreNothing(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "zero", args: []string{"--eval-commits", "0"}, want: "--eval-commits must be at least 1, not 0."},
-		{name: "template", args: []string{"--eval-commits", "3", "--template", "generic"}, want: "[eval-commits template] were all set"},
-		{name: "no usable commits", args: []string{"--eval-commits", "3", "--no-history"}, want: "--eval-commits found no commits on HEAD to score the prompts with."},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			env, cci, workDir := setupReviewProject(t, nil)
-
-			result := binary.RunCLI(t, append([]string{"factory", "bootstrap"}, tt.args...), env, workDir)
-
-			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-			assert.Assert(t, strings.Contains(result.Stderr, tt.want), "stderr: %s", result.Stderr)
-			assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
-		})
-	}
-}
-
-// Without a GitHub token there is no history to fetch, and bootstrap goes on
-// from the code alone.
-func TestFactoryBootstrapGoesOnWithoutAGitHubToken(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
-	env.GithubToken = ""
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk auth set github"), "stderr: %s", result.Stderr)
-	// The plan says so up front, rather than promising comments it then
-	// leaves out.
-	assert.Assert(t, strings.Contains(result.Stderr, "Write review prompts to .chunk/reviews from the code\n"), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "Skipping: the team's review comments: no GitHub token"), "stderr: %s", result.Stderr)
-	prompts := bootstrapPrompts(t, cci)
-	assert.Equal(t, len(prompts), 1)
-	assert.Assert(t, !strings.Contains(prompts[0], "review-history.md"), prompts[0])
-}
-
-// A token that cannot read the repository fails before any sidecar boots.
-func TestFactoryBootstrapFailsWhenTheHistoryCannotBeFetched(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, nil)
-	gh := fakes.NewFakeGitHub()
-	gh.SetRepoError("test-repo", fixtures.RepoNotFoundError("test-org", "test-repo"))
-	ghSrv := httptest.NewServer(gh)
-	t.Cleanup(ghSrv.Close)
-	env.GithubURL = ghSrv.URL
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "Could not fetch the review comments on test-org/test-repo."), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "--no-history"), "stderr: %s", result.Stderr)
-	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
-}
-
-// A template is written from the binary, so no sidecar boots and Claude never
-// runs.
-func TestFactoryBootstrapWritesATemplate(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, nil)
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--template", "python"}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	for _, name := range []string{"correctness", "security", "testing"} {
-		data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", name+".md"))
-		assert.NilError(t, err)
-		assert.Assert(t, strings.Contains(string(data), "## Severity"), "%s: %s", name, data)
-		assert.Assert(t, strings.Contains(result.Stdout, filepath.Join(".chunk", "reviews", name+".md")), "stdout: %s", result.Stdout)
-	}
-	assert.Equal(t, len(cci.Recorder.AllRequests()), 0)
-}
-
-func TestFactoryBootstrapNamesTheTemplates(t *testing.T) {
-	env, _, workDir := setupReviewProject(t, nil)
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--template", "rails"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, `No review template is named "rails"`), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "go-service"), "stderr: %s", result.Stderr)
-	entries, err := os.ReadDir(filepath.Join(workDir, ".chunk", "reviews"))
-	assert.NilError(t, err)
-	assert.Equal(t, len(entries), 0)
-}
-
-func TestFactoryBootstrapTemplateLeavesExistingPromptsAlone(t *testing.T) {
-	env, _, workDir := setupReviewProject(t, nil, "mine")
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--template", "generic"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "already has review prompts"), "stderr: %s", result.Stderr)
-	_, err := os.Stat(filepath.Join(workDir, ".chunk", "reviews", "correctness.md"))
-	assert.Assert(t, os.IsNotExist(err), "correctness.md: %v", err)
-}
-
-// The sidecar's copy of the repository is named from origin, so a non-GitHub
-// origin fails before any sidecar boots, with or without history.
-func TestFactoryBootstrapNeedsAGitHubOrigin(t *testing.T) {
-	for _, args := range [][]string{{"factory", "bootstrap"}, {"factory", "bootstrap", "--no-history"}} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			env, cci, workDir := setupReviewProject(t, nil)
-			git := exec.Command("git", "remote", "set-url", "origin", "https://gitlab.com/test-org/test-repo.git")
+			env, _, workDir := setupReviewProject(t, nil)
+			env.GithubToken = ""
+			git := exec.Command("git", tt.git...)
 			git.Dir = workDir
 			git.Env = gitrepo.GitEnv(workDir)
 			out, err := git.CombinedOutput()
 			assert.NilError(t, err, string(out))
+			err = os.Remove(filepath.Join(workDir, ".chunk", "config.json"))
+			assert.NilError(t, err)
 
-			result := binary.RunCLI(t, args, env, workDir)
+			result := binary.RunCLI(t, []string{"factory", "bootstrap", "--skip-sidecar"}, env, workDir)
 
-			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-			assert.Assert(t, strings.Contains(result.Stderr, "needs a GitHub origin"), "stderr: %s", result.Stderr)
-			assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+			assert.Check(t, cmp.Equal(result.ExitCode, 0), "stderr: %s", result.Stderr)
+			_, err = os.Stat(filepath.Join(workDir, ".chunk", "config.json"))
+			assert.Check(t, err)
+			// Narrowed to "needs a GitHub origin": detecting the VCS may warn
+			// without a GitHub origin.
+			assert.Check(t, !strings.Contains(result.Stderr, "needs a GitHub origin"), "stderr: %s", result.Stderr)
 		})
 	}
 }
 
-// A project that is set up already keeps its review prompts, and no sidecar
-// boots to find that out.
-func TestFactoryBootstrapLeavesExistingPromptsAlone(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, nil, "mine")
-	writeChunkConfig(t, workDir, map[string]interface{}{"validation": map[string]interface{}{"sidecarImage": "snap-old"}})
+// A project with nothing left to set up is told it is ready for chunk
+// factory, its review prompts are left as they are, and no sidecar boots to
+// find that out.
+func TestFactoryBootstrapSaysTheProjectIsAlreadySetUp(t *testing.T) {
+	tests := []struct {
+		name   string
+		args   []string
+		config map[string]interface{}
+	}{
+		{
+			name:   "config and image",
+			args:   []string{"factory", "bootstrap"},
+			config: map[string]interface{}{"validation": map[string]interface{}{"sidecarImage": "snap-old"}},
+		},
+		{
+			name: "config and --skip-sidecar",
+			args: []string{"factory", "bootstrap", "--skip-sidecar"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env, cci, workDir := setupReviewProject(t, nil, "mine")
+			writeChunkConfig(t, workDir, tt.config)
 
-	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+			result := binary.RunCLI(t, tt.args, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "already has review prompts"), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "--output"), "stderr: %s", result.Stderr)
-	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
-	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", "mine.md"))
-	assert.NilError(t, err)
-	assert.Equal(t, string(data), "review mine")
+			assert.Check(t, result.ExitCode != 0, "expected non-zero exit code")
+			assert.Check(t, cmp.Contains(result.Stderr, "This project is already set up for chunk factory."))
+			assert.Check(t, cmp.Contains(result.Stderr, "chunk factory plan"))
+			assert.Check(t, cmp.Len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances"), 0))
+			data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", "mine.md"))
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(string(data), "review mine"))
+		})
+	}
 }
 
 // A suite that cannot run here is refused before any sidecar starts: no
@@ -910,17 +662,21 @@ func readProjectConfig(t *testing.T, workDir string) map[string]any {
 	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "config.json"))
 	assert.NilError(t, err)
 	var cfg map[string]any
-	assert.NilError(t, json.Unmarshal(data, &cfg))
+	err = json.Unmarshal(data, &cfg)
+	assert.NilError(t, err)
 	return cfg
 }
 
 // claudeOnSidecar answers the check for Claude Code on a sidecar, which would
-// otherwise depend on whether this machine has it.
-func claudeOnSidecar(sshSrv *fakes.SSHServer, installed bool) {
+// otherwise depend on whether this machine has it. It returns how many times
+// the check was run.
+func claudeOnSidecar(sshSrv *fakes.SSHServer, installed bool) *atomic.Int32 {
+	var checks atomic.Int32
 	sshSrv.OverrideLocally(func(command string) (string, int, bool) {
 		if !strings.Contains(command, "command -v claude") {
 			return "", 0, false
 		}
+		checks.Add(1)
 		// A real sidecar runs the command without a shell, so a script not
 		// handed to one fails there the way a missing program does.
 		if !strings.HasPrefix(command, "bash -l -c ") {
@@ -931,6 +687,7 @@ func claudeOnSidecar(sshSrv *fakes.SSHServer, installed bool) {
 		}
 		return "", 97, true
 	})
+	return &checks
 }
 
 // sidecarImages returns the image of each sidecar the CLI created.
@@ -948,7 +705,8 @@ func sidecarImages(t *testing.T, cci *fakes.FakeCircleCI) []string {
 				} `json:"attributes"`
 			} `json:"data"`
 		}
-		assert.NilError(t, json.Unmarshal(r.Body, &req))
+		err := json.Unmarshal(r.Body, &req)
+		assert.NilError(t, err)
 		images = append(images, req.Data.Attributes.Image)
 	}
 	return images
@@ -964,7 +722,7 @@ func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
 	writeChunkConfig(t, workDir, map[string]interface{}{
 		"environment": map[string]any{
 			"stack": "go",
-			"setup": []map[string]any{{"name": "install", "command": "touch " + marker}},
+			"setup": []map[string]any{{"name": "install", "command": "touch " + marker + " && echo installing"}},
 		},
 	})
 
@@ -975,8 +733,8 @@ func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
 	assert.NilError(t, err, "the setup step did not run")
 	cfg := readProjectConfig(t, workDir)
 	assert.Equal(t, cfg["validation"].(map[string]any)["sidecarImage"], "snap-1")
-	// chunk factory runs Claude on sidecars made from the snapshot, so the
-	// sidecar it is taken of starts from the image that has Claude.
+	// With no --image, the sidecar starts from the image that has Claude
+	// Code, which chunk factory build runs on snapshots of.
 	assert.DeepEqual(t, sidecarImages(t, cci), []string{"cimg-base:2026.09-claude"})
 
 	snaps := filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots")
@@ -988,87 +746,23 @@ func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
 			} `json:"attributes"`
 		} `json:"data"`
 	}
-	assert.NilError(t, json.Unmarshal(snaps[0].Body, &body))
+	err = json.Unmarshal(snaps[0].Body, &body)
+	assert.NilError(t, err)
 	// Dated to the second, so a rerun on the same day gets a name of its own.
 	assert.Assert(t, regexp.MustCompile(`^test-repo-\d{4}-\d{2}-\d{2}-\d{6}$`).MatchString(body.Data.Attributes.Name),
 		"snapshot name: %s", body.Data.Attributes.Name)
 	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "DELETE", "/api/v3/sidecar/instances/")), 1,
 		"the sidecar that was snapshotted is deleted")
 
-	// The prompts were there already, so no Claude ran to write more.
-	assert.Equal(t, len(bootstrapPrompts(t, cci)), 0)
+	// The setup steps' output is shown as they run, on stderr: stdout is for
+	// the --json report.
+	assert.Check(t, cmp.Contains(result.Stderr, "installing"))
+	assert.Check(t, !strings.Contains(result.Stdout, "installing"), "stdout: %s", result.Stdout)
+	assert.Check(t, cmp.Contains(result.Stderr, `chunk factory plan "<what to change>"`))
+	// Bootstrap never touches the review prompts the project has.
 	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "reviews", "mine.md"))
 	assert.NilError(t, err)
-	assert.Equal(t, string(data), "review mine")
-}
-
-// The sidecar image is set up first and the review prompts after it, so each
-// part's output reads as a whole.
-func TestFactoryBootstrapSetsUpTheImageBeforeThePrompts(t *testing.T) {
-	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
-	claudeOnSidecar(sshSrv, true)
-	writeChunkConfig(t, workDir, map[string]interface{}{
-		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "echo installing"}}},
-	})
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history"}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Equal(t, readProjectConfig(t, workDir)["validation"].(map[string]any)["sidecarImage"], "snap-1")
-	_, err := os.Stat(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
-	assert.NilError(t, err)
-	assert.Equal(t, len(bootstrapPrompts(t, cci)), 1)
-
-	recorded := strings.Index(result.Stderr, "Recorded snapshot snap-1")
-	prompts := strings.Index(result.Stderr, "Reading the project and writing review prompts")
-	assert.Assert(t, recorded >= 0 && prompts > recorded, "the prompts came before the image: %s", result.Stderr)
-	// The setup steps' output is shown as they run, on stderr: stdout is for
-	// the prompts.
-	assert.Assert(t, strings.Contains(result.Stderr, "installing"), "stderr: %s", result.Stderr)
-	assert.Assert(t, !strings.Contains(result.Stdout, "installing"), "stdout: %s", result.Stdout)
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory build"), "stderr: %s", result.Stderr)
-}
-
-// A sidecar image that cannot be set up does not stop the review prompts, so
-// a rerun has only the image left to do.
-func TestFactoryBootstrapWritesThePromptsWhenTheImageFails(t *testing.T) {
-	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
-	claudeOnSidecar(sshSrv, true)
-	writeChunkConfig(t, workDir, map[string]interface{}{
-		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "exit 3"}}},
-	})
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, `Setup step "install" exited with status 3`), "stderr: %s", result.Stderr)
-	_, err := os.Stat(filepath.Join(workDir, ".chunk", "reviews", "testing.md"))
-	assert.NilError(t, err, "the prompts were not written")
-	assert.Equal(t, len(filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots")), 0)
-	_, hasValidation := readProjectConfig(t, workDir)["validation"]
-	assert.Assert(t, !hasValidation, "no image is recorded")
-}
-
-// With --json, the prompts written after the image failed are still reported:
-// a rerun skips them, so this is the only report of them.
-func TestFactoryBootstrapReportsThePromptsAsJSONWhenTheImageFails(t *testing.T) {
-	env, _, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
-	claudeOnSidecar(sshSrv, true)
-	writeChunkConfig(t, workDir, map[string]interface{}{
-		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "exit 3"}}},
-	})
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history", "--json"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, `Setup step "install" exited with status 3`), "stderr: %s", result.Stderr)
-	var report struct {
-		Prompts      []string `json:"prompts"`
-		SidecarImage string   `json:"sidecar_image"`
-	}
-	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
-	assert.Assert(t, slices.Contains(report.Prompts, filepath.Join(".chunk", "reviews", "testing.md")), "prompts: %v", report.Prompts)
-	assert.Equal(t, report.SidecarImage, "")
+	assert.Check(t, cmp.Equal(string(data), "review mine"))
 }
 
 // An environment with no setup steps has nothing for a snapshot to hold, so no
@@ -1089,53 +783,73 @@ func TestFactoryBootstrapRecordsNoImageWithoutSetupSteps(t *testing.T) {
 // A project without .chunk/config.json gets one, as chunk init would write it,
 // rather than being sent to run init first.
 func TestFactoryBootstrapWritesTheConfig(t *testing.T) {
-	env, _, workDir := setupReviewProject(t, nil, "mine")
-	assert.NilError(t, os.Remove(filepath.Join(workDir, ".chunk", "config.json")))
+	for _, extra := range [][]string{{}, {"--json"}} {
+		t.Run(strings.Join(append([]string{"bootstrap"}, extra...), " "), func(t *testing.T) {
+			env, _, workDir := setupReviewProject(t, nil, "mine")
+			err := os.Remove(filepath.Join(workDir, ".chunk", "config.json"))
+			assert.NilError(t, err)
 
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--skip-sidecar"}, env, workDir)
+			result := binary.RunCLI(t, append([]string{"factory", "bootstrap", "--skip-sidecar"}, extra...), env, workDir)
 
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	cfg := readProjectConfig(t, workDir)
-	assert.Equal(t, cfg["orgID"], "org-aaa")
-	vcs := cfg["vcs"].(map[string]any)
-	assert.Equal(t, vcs["org"], "test-org")
-	assert.Equal(t, vcs["repo"], "test-repo")
-	// Hooks belong to chunk init.
-	_, err := os.Stat(filepath.Join(workDir, ".claude", "settings.json"))
-	assert.Assert(t, os.IsNotExist(err), "bootstrap wrote agent hooks")
+			assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+			cfg := readProjectConfig(t, workDir)
+			assert.Equal(t, cfg["orgID"], "org-aaa")
+			vcs := cfg["vcs"].(map[string]any)
+			assert.Equal(t, vcs["org"], "test-org")
+			assert.Equal(t, vcs["repo"], "test-repo")
+			// Hooks belong to chunk init.
+			_, err = os.Stat(filepath.Join(workDir, ".claude", "settings.json"))
+			assert.Assert(t, os.IsNotExist(err), "bootstrap wrote agent hooks")
+			if len(extra) == 0 {
+				return
+			}
+			var report map[string]any
+			err = json.Unmarshal([]byte(result.Stdout), &report)
+			assert.NilError(t, err, result.Stdout)
+			assert.Check(t, cmp.DeepEqual(report, map[string]any{"config_written": true, "sidecar_image": ""}))
+		})
+	}
 }
 
-// Prompts already in an --output directory are an error: the run was asked to
-// write there.
-func TestFactoryBootstrapRefusesAnOutputWithPrompts(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, nil, "mine")
+// With --json, what the run made is reported even when the sidecar image
+// could not be set up. A project with a config is used, since a fresh one's
+// environment is detected rather than chosen, so its setup step cannot be
+// made to fail; TestFactoryBootstrapWritesTheConfig covers config_written.
+func TestFactoryBootstrapReportsAsJSONWhenTheImageFails(t *testing.T) {
+	env, _, sshSrv, workDir := setupReviewProjectWithSSH(t, nil, "mine")
+	claudeOnSidecar(sshSrv, true)
+	writeChunkConfig(t, workDir, map[string]interface{}{
+		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "exit 3"}}},
+	})
 
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--output", filepath.Join(workDir, ".chunk", "reviews")}, env, workDir)
+	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--json"}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "already has review prompts"), "stderr: %s", result.Stderr)
-	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+	assert.Check(t, result.ExitCode != 0, "expected non-zero exit code")
+	// With --json the error is JSON on stderr too, so its quotes are escaped.
+	assert.Check(t, cmp.Contains(result.Stderr, `Setup step \"install\" exited with status 3`))
+	var report map[string]any
+	err := json.Unmarshal([]byte(result.Stdout), &report)
+	assert.NilError(t, err, result.Stdout)
+	assert.Check(t, cmp.DeepEqual(report, map[string]any{"config_written": false, "sidecar_image": ""}))
 }
 
-// An image without Claude Code is never recorded: chunk factory could not run
-// on a snapshot of it.
-func TestFactoryBootstrapRecordsNoImageWithoutClaude(t *testing.T) {
+// An --image without Claude Code is snapshotted and recorded, and no
+// `command -v claude` check runs on the sidecar.
+func TestFactoryBootstrapRecordsAnImageWithoutClaude(t *testing.T) {
 	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, nil, "mine")
-	claudeOnSidecar(sshSrv, false)
+	checks := claudeOnSidecar(sshSrv, false)
 	writeChunkConfig(t, workDir, map[string]interface{}{
 		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
 	})
 
 	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--image", "cimg-base:2026.09"}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "Claude Code is not installed in the image cimg-base:2026.09"), "stderr: %s", result.Stderr)
-	assert.DeepEqual(t, sidecarImages(t, cci), []string{"cimg-base:2026.09"})
-	assert.Equal(t, len(filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots")), 0)
-	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "DELETE", "/api/v3/sidecar/instances/")), 1,
-		"the sidecar is deleted")
-	_, hasValidation := readProjectConfig(t, workDir)["validation"]
-	assert.Assert(t, !hasValidation, "no image is recorded")
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Check(t, cmp.DeepEqual(sidecarImages(t, cci), []string{"cimg-base:2026.09"}))
+	assert.Check(t, cmp.Len(filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots"), 1))
+	cfg := readProjectConfig(t, workDir)
+	assert.Check(t, cmp.Equal(cfg["validation"].(map[string]any)["sidecarImage"], "snap-1"))
+	assert.Check(t, cmp.Equal(checks.Load(), int32(0)), "bootstrap checked for Claude Code")
 }
 
 // Bootstrap's sidecar has a workspace of its own, which the setup steps run
@@ -1151,10 +865,12 @@ func TestFactoryBootstrapLeavesTheActiveSidecarAlone(t *testing.T) {
 		},
 	})
 	stateDir := projectDataDir(t, env, workDir)
-	assert.NilError(t, os.MkdirAll(stateDir, 0o755))
+	err := os.MkdirAll(stateDir, 0o755)
+	assert.NilError(t, err)
 	statePath := filepath.Join(stateDir, sidecar.StateFileName("", gitCurrentBranch(t, workDir)))
 	state := []byte(`{"sidecar_ids":["sidecar-mine"],"workspace":"/home/user/mine"}`)
-	assert.NilError(t, os.WriteFile(statePath, state, 0o644))
+	err = os.WriteFile(statePath, state, 0o644)
+	assert.NilError(t, err)
 
 	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
 
@@ -1169,28 +885,8 @@ func TestFactoryBootstrapLeavesTheActiveSidecarAlone(t *testing.T) {
 	assert.Equal(t, string(after), string(state))
 }
 
-// An image without Claude Code would fail the review prompts the same way, on
-// another sidecar, so they are not written either.
-func TestFactoryBootstrapWritesNoPromptsWithoutClaude(t *testing.T) {
-	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: bootstrapAnswer(t)})
-	claudeOnSidecar(sshSrv, false)
-	writeChunkConfig(t, workDir, map[string]interface{}{
-		"environment": map[string]any{"stack": "go", "setup": []map[string]any{{"name": "install", "command": "true"}}},
-	})
-
-	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--no-history", "--image", "cimg-base:2026.09"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "Claude Code is not installed in the image cimg-base:2026.09"), "stderr: %s", result.Stderr)
-	assert.Assert(t, !strings.Contains(result.Stderr, "Writing the review prompts anyway"), "stderr: %s", result.Stderr)
-	assert.Equal(t, len(bootstrapPrompts(t, cci)), 0)
-	files, err := filepath.Glob(filepath.Join(workDir, ".chunk", "reviews", "*"))
-	assert.NilError(t, err)
-	assert.Equal(t, len(files), 0, "prompts were written: %v", files)
-}
-
-// sidecarImageProject is a project with review prompts and a saved
-// environment, so a bootstrap run only sets up the sidecar image.
+// sidecarImageProject is a project with a saved environment, so a bootstrap
+// run only sets up the sidecar image.
 func sidecarImageProject(t *testing.T) (*testenv.TestEnv, *fakes.FakeCircleCI, string) {
 	t.Helper()
 	env, cci, sshSrv, workDir := setupReviewProjectWithSSH(t, nil, "mine")
@@ -1213,7 +909,8 @@ func snapshotNames(t *testing.T, cci *fakes.FakeCircleCI) []string {
 				} `json:"attributes"`
 			} `json:"data"`
 		}
-		assert.NilError(t, json.Unmarshal(r.Body, &body))
+		err := json.Unmarshal(r.Body, &body)
+		assert.NilError(t, err)
 		names = append(names, body.Data.Attributes.Name)
 	}
 	return names
@@ -1253,12 +950,11 @@ func TestFactoryBootstrapReportsTheSidecarImageAsJSON(t *testing.T) {
 	result := binary.RunCLI(t, []string{"factory", "bootstrap", "--json"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	var report struct {
-		Prompts      []string `json:"prompts"`
-		SidecarImage string   `json:"sidecar_image"`
-	}
-	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
-	assert.Equal(t, report.SidecarImage, "snap-1")
+	var report map[string]any
+	err := json.Unmarshal([]byte(result.Stdout), &report)
+	assert.NilError(t, err, result.Stdout)
+	// sidecarImageProject has a config, so none is written.
+	assert.Check(t, cmp.DeepEqual(report, map[string]any{"config_written": false, "sidecar_image": "snap-1"}))
 }
 
 // A name the org already has is explained, with the ways out, rather than
@@ -1300,34 +996,57 @@ func TestFactoryBootstrapExplainsATakenSnapshotNameAtTheSnapshot(t *testing.T) {
 		"the sidecar is deleted")
 }
 
-// chunk factory build runs Claude on every change, so a missing Claude
-// credential is found out before a sidecar image is set up for it, even when
-// the review prompts need no Claude.
-func TestFactoryBootstrapNeedsAClaudeCredentialWhenThePromptsExist(t *testing.T) {
-	env, cci, workDir := sidecarImageProject(t)
+// Bootstrap never runs Claude, so it needs no Claude credential: chunk
+// factory build asks for its own when it starts.
+func TestFactoryBootstrapNeedsNoClaudeCredential(t *testing.T) {
+	env, _, workDir := sidecarImageProject(t)
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "No Claude credential found"), "stderr: %s", result.Stderr)
-	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Check(t, !strings.Contains(result.Stderr, "No Claude credential"), "stderr: %s", result.Stderr)
+	cfg := readProjectConfig(t, workDir)
+	assert.Check(t, cmp.Equal(cfg["validation"].(map[string]any)["sidecarImage"], "snap-1"))
 }
 
-// A prompts directory that cannot be read is reported, not taken for one that
-// has prompts and skipped.
-func TestFactoryBootstrapReportsAnUnreadablePromptsDir(t *testing.T) {
+// Bootstrap does not read .chunk/reviews, so one it cannot read changes
+// nothing: a configured project is still set up already, and a fresh one
+// still gets its config.
+func TestFactoryBootstrapIgnoresTheReviewsDir(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads the directory whatever its mode")
 	}
-	env, cci, workDir := setupReviewProject(t, nil, "mine")
-	reviews := filepath.Join(workDir, ".chunk", "reviews")
-	assert.NilError(t, os.Chmod(reviews, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(reviews, 0o755) })
+	unreadableReviews := func(t *testing.T, workDir string) {
+		t.Helper()
+		reviews := filepath.Join(workDir, ".chunk", "reviews")
+		err := os.Chmod(reviews, 0o000)
+		assert.NilError(t, err)
+		t.Cleanup(func() { _ = os.Chmod(reviews, 0o755) })
+	}
 
-	result := binary.RunCLI(t, []string{"factory", "bootstrap"}, env, workDir)
+	t.Run("configured project", func(t *testing.T) {
+		env, _, workDir := setupReviewProject(t, nil, "mine")
+		unreadableReviews(t, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "Could not read .chunk/reviews"), "stderr: %s", result.Stderr)
-	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
+		result := binary.RunCLI(t, []string{"factory", "bootstrap", "--skip-sidecar"}, env, workDir)
+
+		assert.Check(t, result.ExitCode != 0, "expected non-zero exit code")
+		assert.Check(t, cmp.Contains(result.Stderr, "This project is already set up for chunk factory."))
+		assert.Check(t, !strings.Contains(result.Stderr, ".chunk/reviews"), "stderr: %s", result.Stderr)
+	})
+
+	t.Run("fresh project", func(t *testing.T) {
+		env, _, workDir := setupReviewProject(t, nil, "mine")
+		err := os.Remove(filepath.Join(workDir, ".chunk", "config.json"))
+		assert.NilError(t, err)
+		unreadableReviews(t, workDir)
+
+		result := binary.RunCLI(t, []string{"factory", "bootstrap", "--skip-sidecar"}, env, workDir)
+
+		assert.Check(t, cmp.Equal(result.ExitCode, 0), "stderr: %s", result.Stderr)
+		_, err = os.Stat(filepath.Join(workDir, ".chunk", "config.json"))
+		assert.Check(t, err)
+		assert.Check(t, !strings.Contains(result.Stderr, "Could not read .chunk/reviews"), "stderr: %s", result.Stderr)
+	})
 }

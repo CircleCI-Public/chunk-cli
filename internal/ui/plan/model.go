@@ -12,8 +12,11 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -37,6 +40,48 @@ type Approver func(step func(string)) (string, error)
 // has passed; it can be approved only from there.
 const ReadyState = "Planning - Human"
 
+// The events that approve a plan in ReadyState: its design, so factory
+// writes its units, or the plan, so factory builds it.
+const (
+	approveForUnits    = "approve-for-units"
+	approveForBuilding = "approve-for-building"
+)
+
+// Stage is what ctrl+s approves for a plan in ReadyState.
+type Stage int
+
+const (
+	// StageDesign is a plan whose design waits for approval, so factory
+	// writes its units.
+	StageDesign Stage = iota
+	// StagePlan is a plan that waits for approval, so factory builds it.
+	StagePlan
+	// StageQuestions is a plan factory offers no approval for: it waits for
+	// a human to answer 3. Open Questions in comments.
+	StageQuestions
+)
+
+// StageOf is what ctrl+s approves, given the events the plan's flow applies
+// and how many units the plan has. When events lists exactly one approval,
+// that one wins. When it lists both, as a flow factory stored before it
+// told the two apart does, or is nil, because it has not loaded or there is
+// no flow, the plan's units decide: none is StageDesign, any is StagePlan.
+// When it is loaded and lists neither, even empty, it is StageQuestions.
+func StageOf(events []string, units int) Stage {
+	design, build := slices.Contains(events, approveForUnits), slices.Contains(events, approveForBuilding)
+	switch {
+	case design && !build:
+		return StageDesign
+	case build && !design:
+		return StagePlan
+	case !design && events != nil:
+		return StageQuestions
+	case units == 0:
+		return StageDesign
+	}
+	return StagePlan
+}
+
 // pane is which side of the screen the keyboard goes to.
 type pane int
 
@@ -55,6 +100,9 @@ type message struct {
 	toBusy bool
 	// byTask is a reply to a factory task rather than to the developer.
 	byTask bool
+	// task is the category of the factory task the reply is to, when byTask
+	// and the screen knew it.
+	task string
 	// rendered is a reply's markdown as rendered at renderedWidth, kept so
 	// the chat is not rendered again on every tick of the spinner.
 	rendered      string
@@ -77,6 +125,8 @@ type (
 	}
 	// designApprovedMsg is the end of approving the plan's design.
 	designApprovedMsg struct{ err error }
+	// conflictsSentMsg is the end of sending resolve-conflicts.
+	conflictsSentMsg struct{ err error }
 	// approveStepMsg is a step of the approval starting; next is where the
 	// approval's later messages come from.
 	approveStepMsg struct {
@@ -87,8 +137,10 @@ type (
 	refreshedMsg struct {
 		state, text string
 		events      []string
-		comments    []Comment
-		err         error
+		// task is the category of the task the flow has out, "" for none.
+		task     string
+		comments []Comment
+		err      error
 	}
 	commentSavedMsg struct{ err error }
 	// createdMsg is the end of creating the plan in factory, for the
@@ -107,6 +159,22 @@ type (
 	}
 )
 
+// transition is a flow event factory has taken but not yet applied: the
+// plan is still in from until factory's next poll moves it.
+type transition struct {
+	kind  transitionKind
+	from  string // m.state when the event was sent
+	since time.Time
+}
+
+type transitionKind int
+
+const (
+	movingComments transitionKind = iota
+	movingDesign
+	movingConflicts
+)
+
 // pollEvery is how often the plan pane polls the store for the plan's text,
 // state and comments while the screen is open.
 const pollEvery = 5 * time.Second
@@ -120,7 +188,7 @@ func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 		if err != nil {
 			return refreshedMsg{err: err}
 		}
-		events, err := s.Events(ctx)
+		flow, err := s.Flow(ctx)
 		if err != nil {
 			return refreshedMsg{err: err}
 		}
@@ -129,7 +197,7 @@ func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 			return refreshedMsg{err: err}
 		}
 		cs, err := s.Comments(ctx)
-		return refreshedMsg{state: state, events: events, text: text, comments: cs, err: err}
+		return refreshedMsg{state: state, events: flow.Events, task: flow.Task, text: text, comments: cs, err: err}
 	}
 }
 
@@ -190,6 +258,9 @@ type Model struct {
 	// comments have been saved (and handed to factory), so a second send cannot
 	// start a second save.
 	savingComments bool
+	// editing is set from the developer's e until an edit made in $EDITOR
+	// has been saved to factory, or has failed to be.
+	editing bool
 	// pendingText is the message waiting to go to the agent once the queued
 	// comments this send carried have been saved.
 	pendingText string
@@ -199,6 +270,9 @@ type Model struct {
 	// event of a send whose comments were saved but whose event failed; the
 	// next send retries it.
 	pendingHandOff bool
+	// moving is what the screen waits on factory for, or nil when it waits
+	// on nothing.
+	moving *transition
 
 	planView viewport.Model
 	chatView viewport.Model
@@ -215,6 +289,10 @@ type Model struct {
 	// byTask is whether what the agent is working on is a factory task's,
 	// rather than the developer's message.
 	byTask bool
+	// task is the category of the factory task the agent's turn is on, as
+	// the turn's first refresh found it on the flow; "" until then, and
+	// when the flow named none.
+	task string
 	// log is what the agent has done this turn, oldest first.
 	log      []string
 	activity string
@@ -224,6 +302,10 @@ type Model struct {
 	// has the event that approves it; pendingDesign is whether the y being
 	// asked for approves the design rather than the plan.
 	approvingDesign, pendingDesign bool
+	// resolvingConflicts is set from the developer's y to resolving the PR's
+	// conflicts until factory has the event; pendingConflicts is whether the
+	// y being asked for resolves them.
+	resolvingConflicts, pendingConflicts bool
 	// approving is set from the developer's y until factory answers, so a
 	// second ctrl+s cannot approve the plan twice.
 	approving bool
@@ -405,7 +487,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case sentMsg:
 		if msg.agent == m.agent && msg.err != nil {
-			m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+			m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
 			m.messages = append(m.messages, message{text: "Could not reach chunk: " + msg.err.Error(), failed: true})
 			m.renderPlan()
 			m.renderChat()
@@ -421,7 +503,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case createdMsg:
 		m.creating = false
 		if msg.err != nil {
-			m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+			m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
 			m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
 			m.renderPlan()
 			m.renderChat()
@@ -441,24 +523,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, refreshCmd(m.ctx, m.store)
 
 	case queueSavedMsg:
-		m.savingComments = false
-		// Whatever got saved before the failure, if any, stays saved; only
-		// the rest is still queued.
-		m.comments = dropQueued(m.comments, msg.saved)
-		m.renderPlan()
-		m.syncPlaceholder()
-		m.pendingHandOff = msg.handOff && !msg.handedOff
-		if msg.err != nil {
-			m.status = ui.ErrorStyle.Render(msg.err.Error())
-			return m, refreshCmd(m.ctx, m.store)
-		}
-		text := m.pendingText
-		m.pendingText = ""
-		if text != "" {
-			next, cmd := m.send(text)
-			return next, tea.Batch(cmd, refreshCmd(next.ctx, next.store))
-		}
-		return m, refreshCmd(m.ctx, m.store)
+		return m.applyQueueSaved(msg)
+
+	case editedMsg:
+		return m.applyEdited(msg)
+
+	case editSavedMsg:
+		return m.applyEditSaved(msg)
 
 	case approveStepMsg:
 		if m.approving {
@@ -466,11 +537,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, waitApproval(msg.next)
 
-	case designApprovedMsg, approvedMsg:
+	case designApprovedMsg, approvedMsg, conflictsSentMsg:
 		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
-		if !m.busy && !m.approving && !m.approvingDesign {
+		if !m.spinning() {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -480,6 +551,47 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 
 	return m.forward(msg)
+}
+
+// applyQueueSaved handles the end of saving the queued comments.
+func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
+	m.savingComments = false
+	// Whatever got saved before the failure, if any, stays saved; only
+	// the rest is still queued.
+	m.comments = dropQueued(m.comments, msg.saved)
+	m.renderPlan()
+	m.syncPlaceholder()
+	m.pendingHandOff = msg.handOff && !msg.handedOff
+	var tick tea.Cmd
+	if msg.handedOff {
+		m.moving = &transition{kind: movingComments, from: m.state, since: time.Now()}
+		m.status = ""
+		tick = m.spin.Tick
+	}
+	if msg.err != nil {
+		m.status = ui.ErrorStyle.Render(msg.err.Error())
+		return m, tea.Batch(refreshCmd(m.ctx, m.store), tick)
+	}
+	text := m.pendingText
+	m.pendingText = ""
+	if text != "" {
+		next, cmd := m.send(text)
+		return next, tea.Batch(cmd, refreshCmd(next.ctx, next.store), tick)
+	}
+	return m, tea.Batch(refreshCmd(m.ctx, m.store), tick)
+}
+
+// spinning is whether something the spinner shows is under way: the agent's
+// turn, an approval or event not yet answered, or the wait for factory.
+func (m Model) spinning() bool {
+	return m.busy || m.approving || m.approvingDesign || m.resolvingConflicts || m.moving != nil
+}
+
+// awaitingStatus is whether the status bar holds something still under way
+// or waiting on the developer: a question to answer, the quit prompt, or an
+// approval or save factory has not answered yet.
+func (m Model) awaitingStatus() bool {
+	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.resolvingConflicts || m.savingComments
 }
 
 // applyRefresh is a successful or failed poll of the plan's state, text and
@@ -502,7 +614,20 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		}
 	}
 
+	if msg.state != m.state && !m.awaitingStatus() {
+		// A note on what happened is out of date once factory moves the
+		// plan, and left up it would hide the bar's buttons.
+		m.status = ""
+	}
 	m.state, m.events, m.plan = msg.state, msg.events, msg.text
+	if m.byTask && m.task == "" {
+		// The first task the flow names in a turn is the one the turn is on:
+		// by its end the agent may have submitted it and the flow moved on.
+		m.task = msg.task
+	}
+	if m.moving != nil && m.state != m.moving.from {
+		m.moving = nil
+	}
 	m.applyComments(msg.comments)
 	m.renderPlan()
 	if held {
@@ -530,7 +655,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.confirming {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
-			m.pendingDelete, m.pendingDesign = "", false
+			m.pendingDelete, m.pendingDesign, m.pendingConflicts = "", false, false
 			return m, nil
 		}
 		return m.answerYes()
@@ -589,7 +714,9 @@ func (m Model) deliver(text string) (Model, tea.Cmd) {
 		if text != "" {
 			next, cmd = m.send(text)
 		}
-		next.status = heldStatus
+		if next.moving == nil {
+			next.status = heldStatus
+		}
 		return next, cmd
 	}
 	m.savingComments = true
@@ -601,6 +728,11 @@ func (m Model) deliver(text string) (Model, tea.Cmd) {
 // answerYes does what the question in the status bar asked, now it has been
 // answered yes.
 func (m Model) answerYes() (Model, tea.Cmd) {
+	if m.pendingConflicts {
+		m.pendingConflicts, m.resolvingConflicts = false, true
+		m.status = "Sending resolve-conflicts…"
+		return m, tea.Batch(resolveConflictsCmd(m.ctx, m.store), m.spin.Tick)
+	}
 	if m.pendingDesign {
 		m.pendingDesign, m.approvingDesign = false, true
 		m.status = "Approving the design…"
@@ -634,19 +766,25 @@ func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.approving, m.approvingDesign:
+	case m.approving, m.approvingDesign, m.resolvingConflicts, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
+	case m.conflicting() && queued > 0:
+		m.status = warn("Send your comments first: they hand the plan to the agent, which rebases it too.")
+	case m.conflicting():
+		m.confirming, m.pendingConflicts = true, true
+		m.status = ui.TitleStyle.Render("Hand the plan back to the agent to rebase its PR onto its base? ") + confirmButtons
 	case strings.TrimSpace(m.plan) == "":
 		m.status = warn("There is no plan to approve yet.")
-	case m.state != ReadyState:
+	case m.state != ReadyState && m.inReview():
 		m.status = warn("The plan is not ready yet: wait for its review to pass.")
-	case m.units == 0 && (queued > 0 || m.openComments() > 0):
+	case m.state != ReadyState:
+		m.status = warn("The plan cannot be approved while it is " + m.stateText() + ".")
+	case StageOf(m.events, m.units) == StageQuestions:
+		m.status = warn("Answer 3. Open Questions in comments first; factory offers no approval yet.")
+	case StageOf(m.events, m.units) == StageDesign && (queued > 0 || m.openComments() > 0):
 		m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
-	case m.units == 0:
-		// The plan waits in ReadyState after early-plan too, for its
-		// design to be reviewed; its units come once the design is
-		// approved.
+	case StageOf(m.events, m.units) == StageDesign:
 		m.confirming, m.pendingDesign = true, true
 		m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? ") + confirmButtons
 	case queued > 0:
@@ -744,7 +882,7 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 	m.status = ""
 	var tick tea.Cmd
 	if !m.busy {
-		m.busy, m.byTask, m.log = true, false, nil
+		m.busy, m.byTask, m.task, m.log = true, false, "", nil
 		tick = m.spin.Tick
 	}
 	m.syncPlaceholder()
@@ -758,10 +896,10 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 	return m, tea.Batch(sendCmd(m.ctx, m.agent, text), tick)
 }
 
-// createCmd creates the plan in factory, titled for text, the developer's
-// first message.
+// createCmd creates the plan in factory for text, the developer's first
+// message, which the store names it for.
 func createCmd(ctx context.Context, s Store, text string) tea.Cmd {
-	return func() tea.Msg { return createdMsg{text: text, err: s.Create(ctx, titleOf(text))} }
+	return func() tea.Msg { return createdMsg{text: text, err: s.Create(ctx, text)} }
 }
 
 // applyEvent shows one thing the agent reported, then waits for the next.
@@ -770,10 +908,15 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 	switch {
 	case ev.Activity != "":
 		var tick tea.Cmd
+		var refresh tea.Cmd
 		if !m.busy {
 			// Nothing was sent, so a factory task started this turn.
 			m.busy, m.byTask, m.log = true, true, nil
+			// Factory hands out a task only once it has moved the plan.
+			m.moving = nil
 			tick = m.spin.Tick
+			// The flow names the task; read it now rather than at the next poll.
+			refresh = refreshCmd(m.ctx, m.store)
 		}
 		m.activity = ev.Activity
 		m.log = append(m.log, m.activity)
@@ -782,29 +925,18 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 		}
 		m.renderPlan()
 		m.renderChat()
-		return m, tea.Batch(next, tick)
+		return m, tea.Batch(next, tick, refresh)
 	case ev.Reply != nil:
-		m.busy, m.byTask, m.activity, m.log = false, false, "", nil
-		m.messages = append(m.messages, message{text: ev.Reply.Text, byTask: ev.Reply.ByTask})
+		task := m.task
+		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
+		m.messages = append(m.messages, message{text: ev.Reply.Text, byTask: ev.Reply.ByTask, task: task})
 	case ev.Problem != nil:
-		m.busy, m.byTask, m.activity, m.log = false, false, "", nil
+		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
 		m.messages = append(m.messages, message{text: ev.Problem.Error(), failed: true})
 	}
 	m.renderPlan()
 	m.renderChat()
 	return m, tea.Batch(next, refreshCmd(m.ctx, m.store))
-}
-
-// titleOf is the plan's title from the developer's message: its first line,
-// cut to 80 runes.
-func titleOf(text string) string {
-	line, _, _ := strings.Cut(text, "\n")
-	line = strings.TrimSpace(line)
-	r := []rune(line)
-	if len(r) > 80 {
-		r = r[:80]
-	}
-	return string(r)
 }
 
 // syncPlaceholder tells the developer that enter saves their comments when
@@ -823,7 +955,8 @@ func (m *Model) syncPlaceholder() {
 	}
 }
 
-// applyApproval is the end of approving the plan's design, or the plan.
+// applyApproval is the end of approving the plan's design, or the plan, or
+// of sending resolve-conflicts.
 func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case designApprovedMsg:
@@ -832,8 +965,18 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			m.status = ui.ErrorStyle.Render("Could not approve the design: " + msg.err.Error())
 			return m, nil
 		}
-		m.status = "Design approved: chunk writes the units next."
-		return m, refreshCmd(m.ctx, m.store)
+		m.moving = &transition{kind: movingDesign, from: m.state, since: time.Now()}
+		m.status = ""
+		return m, tea.Batch(refreshCmd(m.ctx, m.store), m.spin.Tick)
+	case conflictsSentMsg:
+		m.resolvingConflicts = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not send resolve-conflicts: " + msg.err.Error())
+			return m, nil
+		}
+		m.moving = &transition{kind: movingConflicts, from: m.state, since: time.Now()}
+		m.status = ""
+		return m, tea.Batch(refreshCmd(m.ctx, m.store), m.spin.Tick)
 	case approvedMsg:
 		m.approving = false
 		if msg.err != nil {
@@ -850,6 +993,11 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 // units.
 func approveDesignCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg { return designApprovedMsg{err: s.ApproveDesign(ctx)} }
+}
+
+// resolveConflictsCmd has factory rebase the plan's conflicting PR.
+func resolveConflictsCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg { return conflictsSentMsg{err: s.ResolveConflicts(ctx)} }
 }
 
 // approveCmd runs approve in the background, and reads what it reports: an
@@ -1117,7 +1265,11 @@ func (m *Model) renderChat() {
 		default:
 			b.WriteString(chunkStyle.Render("chunk"))
 			if msg.byTask {
-				b.WriteString(m.style(m.faint()).Render(" · factory task"))
+				mark := " · factory task"
+				if msg.task != "" {
+					mark = " · " + taskLabel(msg.task)
+				}
+				b.WriteString(m.style(m.faint()).Render(mark))
 			}
 			b.WriteString("\n")
 			if msg.renderedWidth != w {
@@ -1156,7 +1308,11 @@ func (m Model) activityLog(w int) string {
 	}
 	var lines []string
 	if m.byTask {
-		lines = append(lines, m.style(m.faint()).Render("working on a factory task"))
+		label := "working on a factory task"
+		if m.task != "" {
+			label = taskLabel(m.task)
+		}
+		lines = append(lines, m.style(m.faint()).Render(label))
 	}
 	for i, a := range m.log {
 		a = ansi.Truncate(a, w-2, "…")
@@ -1167,6 +1323,17 @@ func (m Model) activityLog(w int) string {
 		lines = append(lines, m.style(m.green()).Render("✓ ")+m.style(m.dim()).Render(a))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// taskLabel is a factory task's category as the chat shows it: in sentence
+// case, with spaces for hyphens, so "early-plan" reads "Early plan".
+func taskLabel(category string) string {
+	if category == "" {
+		return ""
+	}
+	s := strings.ReplaceAll(category, "-", " ")
+	r, n := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[n:]
 }
 
 // restyle renders the plan and the chat again for a change of background.
@@ -1206,8 +1373,10 @@ func (m Model) Content() string {
 	}
 
 	planName := "Plan"
-	if m.state != "" {
-		planName = "Plan · " + m.state
+	if m.moving != nil {
+		planName = "Plan · " + m.movingText()
+	} else if m.state != "" {
+		planName = "Plan · " + m.stateText()
 	}
 	planTitle := title(m.focus == panePlan, planName)
 	if m.focus == panePlan {

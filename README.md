@@ -144,7 +144,7 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 `chunk factory` has an implementer agent change your code on a sidecar, then reviews the result with each prompt in `.chunk/reviews/` and runs your validation commands, feeding failures back until every check passes or attempts run out. When they all pass, it pushes the run's branch and opens a pull request on GitHub, ready for review (`--no-open-pr` leaves the branch alone). It works in a git worktree of its own, so your checkout is never touched, and you can follow a run in `chunk watch`.
 
 ```bash
-# Write a first set of review prompts from your code and past PR review comments
+# Set the project up: .chunk/config.json and a sidecar image with its environment
 chunk factory bootstrap
 
 # Implement a prompt, then review and validate it until it passes
@@ -156,7 +156,7 @@ cd "$(chunk factory start "add a --verbose flag")"
 chunk factory build --continue <run-id>
 ```
 
-`factory bootstrap` only writes prompts when `.chunk/reviews/` has none, and the prompts are a starting point: read and edit them before relying on them.
+Add your own review prompts to `.chunk/reviews/`, one `.md` file per area, for `factory build` to review with.
 
 ## Other Tools
 
@@ -217,7 +217,7 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API key (optional for `init`; for `factory`, or use `CLAUDE_CODE_OAUTH_TOKEN`) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription token from `claude setup-token` (for `factory`, when no API key is set) |
-| `GITHUB_TOKEN` | GitHub PAT with `repo` scope (optional, for `factory bootstrap` to learn from past review comments) |
+| `GITHUB_TOKEN` | GitHub PAT with `repo` scope (optional, for `factory build` to open pull requests) |
 | `CIRCLECI_TOKEN` | CircleCI personal API token (for `sidecar` and `task`); `CIRCLE_TOKEN` also works |
 | `CIRCLECI_ORG_ID` | CircleCI organization ID, used instead of `--org-id` |
 | `CODE_REVIEW_CLI_MODEL` | Claude model override |

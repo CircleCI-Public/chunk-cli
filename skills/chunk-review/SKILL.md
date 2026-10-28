@@ -29,7 +29,7 @@ Use the project's review prompts in `.chunk/reviews/` to review recent code chan
      ```
      From the PR metadata fetched in step 1, substitute `{headRepositoryOwner}` with `headRepositoryOwner.login`, `{headRepository}` with `headRepository.name`, and `{headRefName}` directly. If the directory does not exist on that branch, fall back to the local `.chunk/reviews/`.
    - **Local review**: read every `.md` and `.txt` file in `.chunk/reviews/` at the root of the current project.
-   - If no review prompts are found in either location, tell the user and suggest they run `chunk factory bootstrap` to write a first set from the project and its review history. Do not proceed without them.
+   - If no review prompts are found in either location, tell the user and suggest they add one `.md` file per review area to `.chunk/reviews/`. Do not proceed without them.
    - Store each prompt's name and full contents — you will pass them inline to the subagents.
 
 4. **Delegate to one subagent per prompt**: Launch a general-purpose subagent for each review prompt, all in parallel, each with a self-contained prompt built from the template below. Substitute `{{REVIEW_NAME}}`, `{{REVIEW_PROMPT}}`, `{{PR_CONTEXT}}`, and `{{DIFF}}` with the actual content collected in steps 1–3. The subagents have no access to your conversation history — everything they need must be in the prompt.
@@ -114,7 +114,7 @@ Use the project's review prompts in `.chunk/reviews/` to review recent code chan
 
 ## Notes
 
-- The prompts in `.chunk/reviews/` are the project's own. `chunk factory bootstrap` writes a first set from the code and the review comments its team left on past pull requests, and the team edits them from there. Treat them as the authoritative source of review standards.
+- The prompts in `.chunk/reviews/` are the project's own. Treat them as the authoritative source of review standards.
 - If `.chunk/reviews/` has no prompts, do not fall back to generic review criteria — prompt the user to write them first.
 - Keep review feedback grounded in the diff. Do not comment on code that was not changed.
 - Each subagent must receive the prompt, diff and PR context inline — it has no access to the conversation history.

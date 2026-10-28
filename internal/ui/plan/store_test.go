@@ -12,14 +12,17 @@ type fakeStore struct {
 	mu sync.Mutex
 
 	Created bool
-	Title   string
+	Message string
 	StateV  string
 	// EventsV, once setEvents sets it, is the events the plan's flow
 	// applies now; until then they follow StateV, as factory's would for
-	// address-comments.
+	// address-comments and, in a Human state, both approvals.
 	EventsV   []string
 	eventsSet bool
-	TextV     string
+	// TaskV is the category of the task the plan's flow has out, as setTask
+	// sets it; "" for none.
+	TaskV string
+	TextV string
 	// CommentsV is the comments, ordered as added.
 	CommentsV []Comment
 	nextID    int
@@ -31,6 +34,9 @@ type fakeStore struct {
 	// call, in order. Like factory, which moves the plan at its next poll,
 	// AddressComments leaves StateV as it is.
 	HandedOff []string
+	// ConflictsSent records the state the plan was in at each
+	// ResolveConflicts call, in order.
+	ConflictsSent []string
 	// Added records the AddComment calls, in order.
 	Added [][2]string // {quote, body}
 	// Edited, Resolved and Deleted record the ids EditComment,
@@ -39,7 +45,11 @@ type fakeStore struct {
 	Resolved []string
 	Deleted  []string
 
+	// Set records the texts SetText was called with, in order.
+	Set []string
+
 	CreateErr, StateErr, AddressErr, TextErr, CommentsErr error
+	SetTextErr                                            error
 	AddErr, EditErr, ResolveErr, DeleteErr                error
 	// FailAddAfter, when > 0, fails AddComment calls numbered after this
 	// many successes.
@@ -60,13 +70,13 @@ func (f *fakeStore) ID() string {
 	return ""
 }
 
-func (f *fakeStore) Create(_ context.Context, title string) error {
+func (f *fakeStore) Create(_ context.Context, message string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.CreateErr != nil {
 		return f.CreateErr
 	}
-	f.Created, f.Title = true, title
+	f.Created, f.Message = true, message
 	return nil
 }
 
@@ -76,16 +86,25 @@ func (f *fakeStore) State(context.Context) (string, error) {
 	return f.StateV, f.StateErr
 }
 
-func (f *fakeStore) Events(context.Context) ([]string, error) {
+func (f *fakeStore) Flow(context.Context) (Flow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.eventsSet {
-		return f.EventsV, nil
+		return Flow{Events: f.EventsV, Task: f.TaskV}, nil
 	}
 	if strings.HasSuffix(f.StateV, " - Human") {
-		return []string{"address-comments"}, nil
+		// Both approvals, as a flow factory stored before it told them
+		// apart lists, so the plan's units decide which ctrl+s offers.
+		return Flow{Events: []string{"address-comments", "approve-for-units", "approve-for-building"}, Task: f.TaskV}, nil
 	}
-	return nil, nil
+	return Flow{Task: f.TaskV}, nil
+}
+
+// setTask has the plan's flow have a task of category out, or none for "".
+func (f *fakeStore) setTask(category string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.TaskV = category
 }
 
 // setEvents has the plan's flow apply events now, whatever its state.
@@ -115,10 +134,31 @@ func (f *fakeStore) ApproveDesign(context.Context) error {
 	return nil
 }
 
+func (f *fakeStore) ResolveConflicts(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.AddressErr != nil {
+		return f.AddressErr
+	}
+	f.ConflictsSent = append(f.ConflictsSent, f.StateV)
+	return nil
+}
+
 func (f *fakeStore) Text(context.Context) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.TextV, f.TextErr
+}
+
+func (f *fakeStore) SetText(_ context.Context, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.SetTextErr != nil {
+		return f.SetTextErr
+	}
+	f.TextV = text
+	f.Set = append(f.Set, text)
+	return nil
 }
 
 func (f *fakeStore) Comments(context.Context) ([]Comment, error) {

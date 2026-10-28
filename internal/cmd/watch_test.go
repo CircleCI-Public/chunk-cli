@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -89,4 +91,17 @@ func TestWatchRootsAreCanonicalForTheDaemonFilter(t *testing.T) {
 	roots, err := sidecar.AllProjectRoots()
 	assert.NilError(t, err)
 	assert.DeepEqual(t, roots, []string{canonical})
+}
+
+func TestOpenFlows(t *testing.T) {
+	flows := []circleci.Flow{
+		{ID: "a", Phase: circleci.PhaseStarted, SessionID: "s1", Task: &circleci.FlowTask{ID: "t", Category: "build-unit"}},
+		{ID: "b", Phase: circleci.PhaseReceived},
+		{ID: "ended", State: "Done", Phase: circleci.PhaseEnded},
+		{ID: "old", State: "Done"}, // a conductor that serves no phase
+	}
+
+	got := openFlows(flows)
+
+	assert.Check(t, cmp.DeepEqual(got, []circleci.Flow{flows[0], flows[1], flows[3]}))
 }

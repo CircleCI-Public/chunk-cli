@@ -11,8 +11,8 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
 )
 
 // fakePlans stands in for the planning agent and the factory on the planning
@@ -35,12 +35,14 @@ type fakePlanStore struct{ text, id string }
 func (f *fakePlanStore) ID() string                            { return f.id }
 func (f *fakePlanStore) Create(context.Context, string) error  { return nil }
 func (f *fakePlanStore) State(context.Context) (string, error) { return plan.ReadyState, nil }
-func (f *fakePlanStore) Events(context.Context) ([]string, error) {
-	return []string{"address-comments", "approve-for-units", "approve-for-building"}, nil
+func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
+	return plan.Flow{Events: []string{"address-comments", "approve-for-units", "approve-for-building"}}, nil
 }
-func (f *fakePlanStore) AddressComments(context.Context) error { return nil }
-func (f *fakePlanStore) ApproveDesign(context.Context) error   { return nil }
-func (f *fakePlanStore) Text(context.Context) (string, error)  { return f.text, nil }
+func (f *fakePlanStore) AddressComments(context.Context) error  { return nil }
+func (f *fakePlanStore) ResolveConflicts(context.Context) error { return nil }
+func (f *fakePlanStore) ApproveDesign(context.Context) error    { return nil }
+func (f *fakePlanStore) Text(context.Context) (string, error)   { return f.text, nil }
+func (f *fakePlanStore) SetText(context.Context, string) error  { return nil }
 
 func (f *fakePlanStore) Comments(context.Context) ([]plan.Comment, error) { return nil, nil }
 func (f *fakePlanStore) AddComment(context.Context, string, string) (plan.Comment, error) {
@@ -211,13 +213,13 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 		}
 		return b.planner(ctx, root, id)
 	}
-	inbox := planlist.New(t.Context(), func(context.Context) ([]circleci.Plan, error) { return nil, nil },
+	flows := flowlist.New(t.Context(), func(context.Context) ([]circleci.Flow, error) { return nil, nil },
 		func(context.Context, string) (string, []circleci.PlanComment, error) { return "", nil, nil })
 	m := searchModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).
-		WithPlans(t.Context(), planner).WithPlanInbox(inbox)
+		WithPlans(t.Context(), planner).WithFlowList(flows)
 	open := func(id string) {
 		t.Helper()
-		next, cmd := m.Update(planlist.OpenMsg{ID: id, Title: id})
+		next, cmd := m.Update(flowlist.OpenMsg{ID: id, Title: id})
 		m = next.(Model)
 		if cmd != nil { // switching to an open workspace has nothing to load
 			m = deliver(t, m, cmd)
@@ -232,7 +234,7 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 	lateReply := workspaceCmd(keyA, m.planScreen.Next())()
 	m = typeInto(m, "unsent upload message")
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	assert.Assert(t, m.inboxOpen && !m.planOpen)
+	assert.Assert(t, m.flowsOpen && !m.planOpen)
 	open("cache")
 	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
 	m = typeInto(m, "unsent cache message")
@@ -259,7 +261,7 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 	// Hidden workspaces' drafts also participate in the quit warning.
 	m, cmd = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = deliver(t, m, cmd)
-	next, cmd = m.Update(planlist.QuitMsg{})
+	next, cmd = m.Update(flowlist.QuitMsg{})
 	m = next.(Model)
 	assert.Assert(t, cmd == nil)
 	assert.Assert(t, strings.Contains(screen(m), "2 plan workspace(s) have unsent input"), screen(m))
@@ -291,26 +293,26 @@ func deliverThen(t *testing.T, m Model, cmd tea.Cmd, n int) Model {
 	return m
 }
 
-// The inbox is drawn under the dashboard's own header, with tabs naming the
-// one showing, and the two together fit the terminal.
-func TestInboxSharesTheDashboardHeader(t *testing.T) {
-	plans := []circleci.Plan{{ID: "p1", Title: "Retry uploads", State: "Review - Human"}}
-	inbox := planlist.New(t.Context(), func(context.Context) ([]circleci.Plan, error) { return plans, nil },
+// The flow list is drawn under the dashboard's own header, with tabs naming
+// the one showing, and the two together fit the terminal.
+func TestFlowListSharesTheDashboardHeader(t *testing.T) {
+	list := []circleci.Flow{{ID: "p1", Title: "Retry uploads", State: "Review - Human"}}
+	flows := flowlist.New(t.Context(), func(context.Context) ([]circleci.Flow, error) { return list, nil },
 		func(context.Context, string) (string, []circleci.PlanComment, error) {
 			return "# Retry uploads", nil, nil
 		})
-	m := searchModel().WithPlans(t.Context(), (&fakePlans{}).planner).WithPlanInbox(inbox)
+	m := searchModel().WithPlans(t.Context(), (&fakePlans{}).planner).WithFlowList(flows)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
 	m = next.(Model)
-	// Up to the list; deeper waits out the inbox's poll.
-	m = deliverThen(t, m, m.inbox.Init(), 1)
+	// Up to the list; deeper waits out the flow list's poll.
+	m = deliverThen(t, m, m.flows.Init(), 1)
 
 	lines := strings.Split(stripANSI(m.View().Content), "\n")
-	assert.Assert(t, strings.Contains(lines[0], "chunk watch  Plans  Runs  1 plan"), lines[0])
-	assert.Assert(t, strings.HasPrefix(lines[1], "╭─ plans"), lines[1])
+	assert.Assert(t, strings.Contains(lines[0], "chunk watch  Flows  Runs  1 flow"), lines[0])
+	assert.Assert(t, strings.HasPrefix(lines[1], "╭─ flows"), lines[1])
 	assert.Equal(t, len(lines), 20)
 
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	m = deliver(t, m, cmd)
-	assert.Assert(t, strings.Contains(stripANSI(m.render()), "chunk watch  Plans  Runs  2 runs"))
+	assert.Assert(t, strings.Contains(stripANSI(m.render()), "chunk watch  Flows  Runs  2 runs"))
 }

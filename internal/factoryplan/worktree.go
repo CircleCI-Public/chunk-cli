@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 )
 
@@ -35,5 +36,5 @@ func (s *Store) ended(ctx context.Context, planID string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("get the state of plan %s: %w", planID, err)
 	}
-	return factory.PlanEnded(p.State), nil
+	return p.Phase == circleci.PhaseEnded, nil
 }
