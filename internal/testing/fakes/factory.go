@@ -22,8 +22,8 @@ type factoryPlan struct {
 	noFlow  bool
 	session string
 	events  []string
-	// applicable are the events the flow lists as applicable_events, as a
-	// test sets them with SetFactoryApplicableEvents.
+	// applicable are the human events the flow serves in next, as a test
+	// sets them with SetFactoryApplicableEvents.
 	applicable []string
 	// taskID and taskCategory are the task the flow has out, as a test sets
 	// it with SetFactoryTask; "" when none is. taskIDOnly serves its
@@ -107,8 +107,9 @@ func (f *FakeCircleCI) SetFactoryPlanState(id, state string) {
 	}
 }
 
-// SetFactoryApplicableEvents has plan id's flow list events as the ones
-// factory applies now, as conductor's applicable_events would for its state.
+// SetFactoryApplicableEvents has plan id's flow serve events as the human
+// events of its next, the ones factory applies now, as conductor would for
+// its state.
 func (f *FakeCircleCI) SetFactoryApplicableEvents(id string, events ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -481,18 +482,29 @@ func flowEntity(p *factoryPlan) gin.H {
 		// its category.
 		refs["factory_task"] = gin.H{"id": p.taskID, "attributes": gin.H{"category": p.taskCategory}}
 	}
-	applicable := p.applicable
-	if applicable == nil {
-		applicable = []string{}
-	}
 	return gin.H{
 		"id": p.id,
 		"attributes": gin.H{
 			"title": p.title, "updated_at": p.updatedAt.Format(time.RFC3339Nano),
-			"state": p.state, "phase": factoryPhase(p.state), "applicable_events": applicable,
+			"state": p.state, "phase": factoryPhase(p.state), "next": flowNext(p),
 		},
 		"references": refs,
 	}
+}
+
+// flowNext is p's flow's next.
+func flowNext(p *factoryPlan) []gin.H {
+	next := []gin.H{}
+	if p.taskCategory != "" {
+		next = append(next, gin.H{"actor": "session", "task_category": p.taskCategory, "is_dispatched": true})
+	}
+	if strings.EqualFold(p.state, "Integrating - Human") {
+		next = append(next, gin.H{"actor": "human", "action": "merge-pr"})
+	}
+	for _, e := range p.applicable {
+		next = append(next, gin.H{"actor": "human", "event": e})
+	}
+	return next
 }
 
 // handleReleaseClaim drops session :id's claim on the plan flow_id names, as

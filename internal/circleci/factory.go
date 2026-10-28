@@ -84,7 +84,7 @@ const ApproveForBuilding FlowEvent = "approve-for-building"
 
 // ResolveConflicts moves a flow from Integrating - Human to Integrating -
 // Agent while its PR conflicts with its base, for factory to rebase it.
-// Factory lists it in applicable_events only then.
+// Factory offers it only then.
 const ResolveConflicts FlowEvent = "resolve-conflicts"
 
 // PlanComment is a comment on a factory plan. QuotedText is the part of the
@@ -117,17 +117,17 @@ func (a planAttrs) plan(id string) *Plan {
 }
 
 type flowAttrs struct {
-	Title            string      `json:"title"`
-	UpdatedAt        *time.Time  `json:"updated_at"`
-	State            string      `json:"state"`
-	Phase            string      `json:"phase"`
-	ApplicableEvents []FlowEvent `json:"applicable_events"`
+	Title     string           `json:"title"`
+	UpdatedAt *time.Time       `json:"updated_at"`
+	State     string           `json:"state"`
+	Phase     string           `json:"phase"`
+	Next      []flowTransition `json:"next"`
 }
 
 func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 	f := &Flow{
 		ID: id, Title: a.Title, State: a.State, Phase: a.Phase,
-		ApplicableEvents: a.ApplicableEvents,
+		ApplicableEvents: humanEvents(a.Next),
 	}
 	if a.UpdatedAt != nil {
 		f.UpdatedAt = *a.UpdatedAt
@@ -139,6 +139,28 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 		f.Task = &FlowTask{ID: refs.FactoryTask.ID, Category: refs.FactoryTask.Attributes.Category}
 	}
 	return f
+}
+
+// flowTransition is one entry of a flow's next: a way it can move on now,
+// and who takes it.
+type flowTransition struct {
+	Actor string    `json:"actor"`
+	Event FlowEvent `json:"event"`
+}
+
+// humanEvents is next's human events, in order: nil when next is, as from a
+// conductor that serves none, else non-nil.
+func humanEvents(next []flowTransition) []FlowEvent {
+	if next == nil {
+		return nil
+	}
+	out := []FlowEvent{}
+	for _, t := range next {
+		if t.Actor == "human" && t.Event != "" {
+			out = append(out, t.Event)
+		}
+	}
+	return out
 }
 
 type flowRefs struct {

@@ -204,6 +204,14 @@ func TestFlows(t *testing.T) {
 		f, err = client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(f.ApplicableEvents, []FlowEvent{AddressComments, "abandon"}))
+
+		fake.SetFactoryTask(p.ID, "rebase")
+		fake.SetFactoryPlanState(p.ID, "Integrating - Human")
+		fake.SetFactoryApplicableEvents(p.ID, "address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
+		f, err = client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(f.ApplicableEvents,
+			[]FlowEvent{AddressComments, ResolveConflicts, "abandon-integrate", "abandon"}))
 	})
 
 	t.Run("reads the task the flow has out", func(t *testing.T) {
@@ -361,6 +369,38 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.Equal(flows[0].Title, ""))
 		assert.Check(t, flows[0].UpdatedAt.IsZero())
 		assert.Check(t, cmp.Equal(flows[0].Phase, ""))
+	})
+
+	t.Run("reads a flow's events from next alone", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, attrs string
+			want        []FlowEvent
+		}{
+			{
+				name:  "from a conductor that serves applicable_events and next",
+				attrs: `"applicable_events":["abandon"],"next":[{"actor":"human","event":"address-comments"},{"actor":"human","event":"abandon"}]`,
+				want:  []FlowEvent{AddressComments, "abandon"},
+			},
+			{
+				name:  "from a conductor that serves no next",
+				attrs: `"applicable_events":["abandon"]`,
+				want:  nil,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				id := uuid.NewString()
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"data":{"id":"` + id + `","attributes":{"state":"Planning - Human",` + tc.attrs + `}}}`))
+				}))
+				t.Cleanup(srv.Close)
+				client := newTestClient(t, srv.URL)
+
+				f, err := client.GetFlow(ctx, id)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.DeepEqual(f.ApplicableEvents, tc.want))
+			})
+		}
 	})
 }
 
