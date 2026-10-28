@@ -31,6 +31,14 @@ type factoryPlan struct {
 	taskID, taskCategory string
 	taskIDOnly           bool
 	comments             []factoryComment
+	// parent is the plan this one is a sub-plan of, "" for none, as a test
+	// sets it with SetFactoryParent.
+	parent string
+	// status is the flow's status fields, as a test sets them with
+	// SetFactoryFlowStatus.
+	status FactoryFlowStatus
+	// blockedBy are the plans blocking this one, in the order blocked.
+	blockedBy []string
 	// seq orders plans by creation, as created_at and id order conductor's.
 	seq int
 }
@@ -56,6 +64,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.DELETE("/api/v3/factory/comments/:id", f.handleDeleteComment)
 	r.GET("/api/v3/factory/flows", f.handleListFlows)
 	r.GET("/api/v3/factory/flows/:id", f.handleGetFlow)
+	r.GET("/api/v3/factory/flows/:id/blockers", f.handleListFlowBlockers)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
 	r.POST("/api/v3/factory/sessions/:id/release", f.handleReleaseClaim)
 }
@@ -143,6 +152,55 @@ func (f *FakeCircleCI) SetFactoryTaskIDOnly(id string) {
 	}
 }
 
+// FactoryTransition is a transition as conductor serves it in a flow's next.
+type FactoryTransition struct {
+	Actor, Event, TaskCategory, Action string
+	IsDispatched                       bool
+}
+
+// FactoryFlowStatus is the part of a flow a test sets beyond its state.
+type FactoryFlowStatus struct {
+	Control, Outcome, PR string
+	Deviations           []string
+	// Next, when not nil, is served as the flow's next in place of the one
+	// the fake makes from its task, state and applicable events.
+	Next []FactoryTransition
+	// TaskUnit is served on the flow's task reference, when it has one.
+	TaskUnit string
+}
+
+// SetFactoryParent makes plan id a sub-plan of plan parent, or of none when
+// parent is "", as factory's plan init --parent would.
+func (f *FakeCircleCI) SetFactoryParent(id, parent string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.parent = parent
+	}
+}
+
+// SetFactoryFlowStatus has plan id's flow serve s, as conductor would for
+// where its flow is.
+func (f *FakeCircleCI) SetFactoryFlowStatus(id string, s FactoryFlowStatus) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		s.Deviations = slices.Clone(s.Deviations)
+		s.Next = slices.Clone(s.Next)
+		p.status = s
+	}
+}
+
+// BlockFactoryPlan has the plans by block plan id, after any already
+// blocking it, as factory's plan block would.
+func (f *FakeCircleCI) BlockFactoryPlan(id string, by ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.blockedBy = append(p.blockedBy, by...)
+	}
+}
+
 // ClaimFactoryPlan has factory session sessionID claim plan id, as factory's
 // daemon would.
 func (f *FakeCircleCI) ClaimFactoryPlan(id, sessionID string) {
@@ -202,7 +260,17 @@ func planEntity(p *factoryPlan) gin.H {
 	if o := factoryOutcome(p.state); o != "" {
 		attrs["outcome"] = o
 	}
-	return gin.H{"id": p.id, "attributes": attrs}
+	ent := gin.H{"id": p.id, "attributes": attrs}
+	addPlanRefs(ent, p)
+	return ent
+}
+
+// addPlanRefs adds plan p's parent to ent's references, as conductor serves
+// it, when p has one.
+func addPlanRefs(ent gin.H, p *factoryPlan) {
+	if p.parent != "" {
+		ent["references"] = gin.H{"factory_plans": []gin.H{{"id": p.parent, "rel": "parent"}}}
+	}
 }
 
 // factoryPhase is the phase factory serves for a plan or flow in state.
@@ -318,7 +386,9 @@ func (f *FakeCircleCI) handleListPlans(c *gin.Context) {
 	end := min(after+f.pageSize(), len(open))
 	items := []gin.H{}
 	for _, p := range open[min(after, len(open)):end] {
-		items = append(items, gin.H{"id": p.id, "attributes": planListAttrs(p)})
+		item := gin.H{"id": p.id, "attributes": planListAttrs(p)}
+		addPlanRefs(item, p)
+		items = append(items, item)
 	}
 	resp := gin.H{"data": items}
 	if end < len(open) {
@@ -480,21 +550,34 @@ func flowEntity(p *factoryPlan) gin.H {
 	case p.taskCategory != "":
 		// The reference carries the task's attributes; the fake serves only
 		// its category.
-		refs["factory_task"] = gin.H{"id": p.taskID, "attributes": gin.H{"category": p.taskCategory}}
+		refs["factory_task"] = gin.H{"id": p.taskID, "attributes": gin.H{
+			"category": p.taskCategory, "unit": p.status.TaskUnit,
+		}}
 	}
-	return gin.H{
-		"id": p.id,
-		"attributes": gin.H{
-			"title": p.title, "updated_at": p.updatedAt.Format(time.RFC3339Nano),
-			"state": p.state, "phase": factoryPhase(p.state), "next": flowNext(p),
-		},
-		"references": refs,
+	attrs := gin.H{
+		"title": p.title, "updated_at": p.updatedAt.Format(time.RFC3339Nano),
+		"state": p.state, "phase": factoryPhase(p.state), "next": flowNext(p),
+		"control": p.status.Control, "pr": p.status.PR, "deviations": p.status.Deviations,
 	}
+	if p.status.Deviations == nil {
+		attrs["deviations"] = []string{}
+	}
+	if p.status.Outcome != "" {
+		attrs["outcome"] = p.status.Outcome
+	}
+	return gin.H{"id": p.id, "attributes": attrs, "references": refs}
 }
 
-// flowNext is p's flow's next.
+// flowNext is p's flow's next: the one a test set with SetFactoryFlowStatus,
+// else one made from its task, state and applicable events.
 func flowNext(p *factoryPlan) []gin.H {
 	next := []gin.H{}
+	if p.status.Next != nil {
+		for _, t := range p.status.Next {
+			next = append(next, transitionEntity(t))
+		}
+		return next
+	}
 	if p.taskCategory != "" {
 		next = append(next, gin.H{"actor": "session", "task_category": p.taskCategory, "is_dispatched": true})
 	}
@@ -505,6 +588,59 @@ func flowNext(p *factoryPlan) []gin.H {
 		next = append(next, gin.H{"actor": "human", "event": e})
 	}
 	return next
+}
+
+// transitionEntity is t as conductor serves it in a flow's next.
+func transitionEntity(t FactoryTransition) gin.H {
+	ent := gin.H{"actor": t.Actor}
+	switch {
+	case t.Event != "":
+		ent["event"] = t.Event
+	case t.TaskCategory != "":
+		ent["task_category"] = t.TaskCategory
+	case t.Action != "":
+		ent["action"] = t.Action
+	}
+	if t.IsDispatched {
+		ent["is_dispatched"] = true
+	}
+	return ent
+}
+
+// handleListFlowBlockers serves the plans blocking plan :id, in the order
+// blocked, each with its own flow's state, phase and control. A blocker
+// with no flow is served with an empty state and no phase or control, as
+// conductor serves it. It answers 404 for an unknown plan.
+func (f *FakeCircleCI) handleListFlowBlockers(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	p := f.factoryPlans[id]
+	if p == nil {
+		factoryError(c, http.StatusNotFound, "plan not found")
+		return
+	}
+	items := []gin.H{}
+	for _, bid := range p.blockedBy {
+		b := f.factoryPlans[bid]
+		if b == nil {
+			continue
+		}
+		attrs := gin.H{"title": b.title, "state": ""}
+		if !b.noFlow {
+			attrs["state"] = b.state
+			attrs["phase"] = factoryPhase(b.state)
+			attrs["control"] = b.status.Control
+		}
+		items = append(items, gin.H{"id": b.id, "attributes": attrs})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": items})
 }
 
 // handleReleaseClaim drops session :id's claim on the plan flow_id names, as

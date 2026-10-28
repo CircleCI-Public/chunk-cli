@@ -25,6 +25,9 @@ type Plan struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	OpenComments int
+	// Parent is the ID of the plan this one is a sub-plan of, "" for a
+	// top-level plan.
+	Parent string
 }
 
 // Flow is a factory plan's progress through the code factory, as
@@ -49,6 +52,33 @@ type Flow struct {
 	// Task is the task factory has handed out for the plan and not yet had
 	// back, or nil when none is out.
 	Task *FlowTask
+	// Control is who holds the flow, as factory names it; "" when no one
+	// does, or from a conductor that does not serve it.
+	Control string
+	// Outcome is how an ended flow ended, as factory names it; "" until then.
+	Outcome string
+	// PR is the flow's pull request's URL; "" while it has none.
+	PR string
+	// Deviations are what the flow's build is fixing now, as factory names
+	// them.
+	Deviations []string
+	// Next is every way the flow can move on now, in order; empty when it
+	// cannot move.
+	Next []Transition
+}
+
+// Transition is a way a flow can move on now, and who takes it. Actor is
+// as factory names it, and factory sets one of Event, TaskCategory and
+// Action. A transition is kept as served, even one chunk does not know.
+type Transition struct {
+	Actor        string
+	Event        FlowEvent
+	TaskCategory string
+	// Action is what the human does outside factory, such as "merge-pr".
+	Action string
+	// IsDispatched is whether the task that takes it is the flow's
+	// outstanding one.
+	IsDispatched bool
 }
 
 // FlowTask is a flow's outstanding task, as its factory_task reference
@@ -57,6 +87,15 @@ type FlowTask struct {
 	ID string
 	// Category is what kind of task it is, such as "early-plan".
 	Category string
+	// Unit is the heading of the unit a build-unit task builds, without
+	// " (done)"; "" for other tasks, or from an older factory.
+	Unit string
+}
+
+// Blocker is a plan blocking another, with its own flow's state; State is
+// "" for a blocker with no flow.
+type Blocker struct {
+	ID, Title, State string
 }
 
 // The phases a plan or its flow is in, as factory serves them.
@@ -116,18 +155,43 @@ func (a planAttrs) plan(id string) *Plan {
 	}
 }
 
+type planRefs struct {
+	Plans []planRef `json:"factory_plans"`
+}
+
+type planRef struct {
+	ID  string `json:"id"`
+	Rel string `json:"rel"`
+}
+
+// parent is the plan r names with rel parent, "" for none.
+func (r planRefs) parent() string {
+	for _, p := range r.Plans {
+		if p.Rel == "parent" {
+			return p.ID
+		}
+	}
+	return ""
+}
+
 type flowAttrs struct {
-	Title     string           `json:"title"`
-	UpdatedAt *time.Time       `json:"updated_at"`
-	State     string           `json:"state"`
-	Phase     string           `json:"phase"`
-	Next      []flowTransition `json:"next"`
+	Title      string            `json:"title"`
+	UpdatedAt  *time.Time        `json:"updated_at"`
+	State      string            `json:"state"`
+	Phase      string            `json:"phase"`
+	Control    string            `json:"control"`
+	Outcome    string            `json:"outcome"`
+	PR         string            `json:"pr"`
+	Deviations []string          `json:"deviations"`
+	Next       []transitionAttrs `json:"next"`
 }
 
 func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 	f := &Flow{
 		ID: id, Title: a.Title, State: a.State, Phase: a.Phase,
 		ApplicableEvents: humanEvents(a.Next),
+		Control:          a.Control, Outcome: a.Outcome, PR: a.PR, Deviations: a.Deviations,
+		Next: transitions(a.Next),
 	}
 	if a.UpdatedAt != nil {
 		f.UpdatedAt = *a.UpdatedAt
@@ -136,21 +200,40 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 		f.SessionID = refs.FactorySession.ID
 	}
 	if refs.FactoryTask != nil {
-		f.Task = &FlowTask{ID: refs.FactoryTask.ID, Category: refs.FactoryTask.Attributes.Category}
+		f.Task = &FlowTask{
+			ID: refs.FactoryTask.ID, Category: refs.FactoryTask.Attributes.Category,
+			Unit: refs.FactoryTask.Attributes.Unit,
+		}
 	}
 	return f
 }
 
-// flowTransition is one entry of a flow's next: a way it can move on now,
+// transitionAttrs is one entry of a flow's next: a way it can move on now,
 // and who takes it.
-type flowTransition struct {
-	Actor string    `json:"actor"`
-	Event FlowEvent `json:"event"`
+type transitionAttrs struct {
+	Actor        string    `json:"actor"`
+	Event        FlowEvent `json:"event"`
+	TaskCategory string    `json:"task_category"`
+	Action       string    `json:"action"`
+	IsDispatched bool      `json:"is_dispatched"`
+}
+
+// transitions is next as served, every entry kept in order: nil when next
+// is, as from a conductor that serves none, else non-nil.
+func transitions(next []transitionAttrs) []Transition {
+	if next == nil {
+		return nil
+	}
+	out := make([]Transition, 0, len(next))
+	for _, t := range next {
+		out = append(out, Transition(t))
+	}
+	return out
 }
 
 // humanEvents is next's human events, in order: nil when next is, as from a
 // conductor that serves none, else non-nil.
-func humanEvents(next []flowTransition) []FlowEvent {
+func humanEvents(next []transitionAttrs) []FlowEvent {
 	if next == nil {
 		return nil
 	}
@@ -172,6 +255,7 @@ type taskRef struct {
 	ID         string `json:"id"`
 	Attributes struct {
 		Category string `json:"category"`
+		Unit     string `json:"unit"`
 	} `json:"attributes"`
 }
 
@@ -259,10 +343,52 @@ func (c *Client) CreatePlan(ctx context.Context, title, text string) (*Plan, err
 	return attrs.plan(env.Data.ID), nil
 }
 
+// ListPlans returns the caller's open plans, oldest first, reading every
+// page. A plan is open until its flow ends; ended plans are not listed.
+func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
+	var out []Plan
+	var cursor string
+	for pages := 1; ; pages++ {
+		var page struct {
+			Data []struct {
+				ID         string    `json:"id"`
+				Attributes planAttrs `json:"attributes"`
+				References planRefs  `json:"references"`
+			} `json:"data"`
+			Page v3Page `json:"page"`
+		}
+		opts := []func(*hc.Request){
+			hc.QueryParam("filter[user_id]", "me"),
+			hc.JSONDecoder(&page),
+		}
+		if cursor != "" {
+			opts = append(opts, hc.QueryParam("page[cursor]", cursor))
+		}
+		_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/plans", opts...))
+		if err != nil {
+			return nil, mapErr("list plans", err)
+		}
+		for _, item := range page.Data {
+			p := item.Attributes.plan(item.ID)
+			p.Parent = item.References.parent()
+			out = append(out, *p)
+		}
+		next, err := nextCursor(cursor, page.Page, pages)
+		if err != nil {
+			return nil, err
+		}
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
 // GetPlan returns factory plan id.
 func (c *Client) GetPlan(ctx context.Context, id string) (*Plan, error) {
 	var attrs planAttrs
-	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
+	var refs planRefs
+	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs, References: &refs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/plans/%s",
 		hc.RouteParams(url.PathEscape(id)),
 		hc.JSONDecoder(&env),
@@ -270,7 +396,9 @@ func (c *Client) GetPlan(ctx context.Context, id string) (*Plan, error) {
 	if err != nil {
 		return nil, mapErr("get plan", err)
 	}
-	return attrs.plan(env.Data.ID), nil
+	p := attrs.plan(env.Data.ID)
+	p.Parent = refs.parent()
+	return p, nil
 }
 
 // PlanText returns factory plan id's text.
@@ -334,6 +462,33 @@ func (c *Client) ListFlows(ctx context.Context) ([]Flow, error) {
 	out := make([]Flow, 0, len(page.Data))
 	for _, item := range page.Data {
 		out = append(out, *item.Attributes.flow(item.ID, item.References))
+	}
+	return out, nil
+}
+
+// ListFlowBlockers returns the plans blocking plan planID, in the order
+// the API lists them.
+// A plan that is not the caller's, or that does not exist, is a 404.
+func (c *Client) ListFlowBlockers(ctx context.Context, planID string) ([]Blocker, error) {
+	var page struct {
+		Data []struct {
+			ID         string `json:"id"`
+			Attributes struct {
+				Title string `json:"title"`
+				State string `json:"state"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/flows/%s/blockers",
+		hc.RouteParams(url.PathEscape(planID)),
+		hc.JSONDecoder(&page),
+	))
+	if err != nil {
+		return nil, mapErr("list flow blockers", err)
+	}
+	out := make([]Blocker, 0, len(page.Data))
+	for _, item := range page.Data {
+		out = append(out, Blocker{ID: item.ID, Title: item.Attributes.Title, State: item.Attributes.State})
 	}
 	return out, nil
 }
