@@ -3655,8 +3655,45 @@ func TestTheChatHidesWhenThePlanLeavesPlanning(t *testing.T) {
 	m = refreshed(t, m)
 	assert.Check(t, m.chatShown())
 	view := ansi.Strip(m.Content())
-	assert.Check(t, cmp.Contains(view, "Planning chat"))
+	assert.Check(t, cmp.Contains(view, "Planning chat · not started"))
 	assert.Check(t, !strings.Contains(view, "why sqlite?"), "the earlier transcript came back:\n%s", view)
+}
+
+// The chat's title names it as the planning session's, with what that
+// session is doing: not started, working on a factory task, then idle.
+func TestTheChatNamesThePlanningSession(t *testing.T) {
+	store := newFakeStore()
+	store.Created, store.TextV = true, twoParts
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Planning chat · not started"))
+
+	m, _ = m.Update(eventMsg{agent: agent, Event: Event{Activity: "Read plan"}})
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Planning chat · working"))
+	// Stands in for the refresh the activity starts, which names the task.
+	m.task = "early-plan"
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Planning chat · working · Early plan"))
+
+	m, _ = m.Update(eventMsg{agent: agent, Event: Event{Reply: &Reply{Text: "done", ByTask: true}}})
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Planning chat · idle"))
+}
+
+// On a chat too narrow for the title and its badge, the badge is cut and the
+// title stays whole.
+func TestTheChatTitleCutsTheBadgeFirst(t *testing.T) {
+	store := newFakeStore()
+	store.Created, store.TextV = true, twoParts
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	m, _ = m.Update(eventMsg{agent: agent, Event: Event{Activity: "Read plan"}})
+	m.task = "address-comments"
+
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "Planning chat · working · Address… ─╮"))
+	assertFits(t, m, 100, 30)
 }
 
 func TestSSavesCommentsWithTheChatHidden(t *testing.T) {

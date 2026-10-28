@@ -1534,6 +1534,32 @@ func taskLabel(category string) string {
 	return string(unicode.ToUpper(r)) + s[n:]
 }
 
+// sessionBadge is what the planning session is doing, for the chat's title:
+// not started while nothing has gone to it or come from it in this screen,
+// working (naming the factory task) during a turn, idle after one.
+func (m Model) sessionBadge() string {
+	switch {
+	case m.busy && m.task != "":
+		return " · working · " + taskLabel(m.task)
+	case m.busy:
+		return " · working"
+	case len(m.messages) == 0:
+		return " · not started"
+	}
+	return " · idle"
+}
+
+// chatTitle is the chat pane's title, already styled, with the session's
+// badge after it in faint. On a chat too narrow for both the badge is cut
+// first, so the title stays whole.
+func (m Model) chatTitle(title string) string {
+	room := m.chatWidth() - titleFrame - lipgloss.Width(title)
+	if room < 4 {
+		return title
+	}
+	return title + m.style(m.faint()).Render(ansi.Truncate(m.sessionBadge(), room, "…"))
+}
+
 // restyle renders the plan and the chat again for a change of background.
 func (m *Model) restyle() {
 	m.renderedWidth = 0
@@ -1589,7 +1615,7 @@ func (m Model) Content() string {
 	if m.focus == panePlan {
 		planTitle += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", view.ScrollPercent()*100))
 	}
-	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, "Planning chat"),
+	chat := pane(m.focus == paneChat, m.chatWidth(), m.chatTitle(title(m.focus == paneChat, "Planning chat")),
 		m.chatView.View()+"\n"+m.inputBox())
 	plan := pane(m.focus == panePlan, m.planWidth(), planTitle, body)
 
@@ -1628,11 +1654,16 @@ func (m Model) inputBox() string {
 // after it. line draws the edge in the border's colour.
 func titled(box, title string, line func(...string) string) string {
 	top, rest, _ := strings.Cut(box, "\n")
-	n := lipgloss.Width(top) - 2
-	if n < 5 {
+	room := lipgloss.Width(top) - titleFrame
+	if room < 1 {
 		return box
 	}
-	title = ansi.Truncate(title, n-4, "…")
-	edge := line("╭─ ") + title + line(" "+strings.Repeat("─", max(n-3-lipgloss.Width(title), 0))+"╮")
+	title = ansi.Truncate(title, room, "…")
+	edge := line("╭─ ") + title + line(" "+strings.Repeat("─", max(room+1-lipgloss.Width(title), 0))+"╮")
 	return edge + "\n" + rest
 }
+
+// titleFrame is how much of a pane's top edge titled keeps for the border
+// around its title: "╭─ " before it, and " " and at least "─╮" after it. A
+// title fits a pane w wide in w-titleFrame cells.
+const titleFrame = 6
