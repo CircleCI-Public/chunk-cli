@@ -2,8 +2,10 @@ package factoryplan
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -26,11 +28,24 @@ func testClient(t *testing.T) (*circleci.Client, *fakes.FakeCircleCI) {
 	return client, cci
 }
 
+// newStore is NewStore with a namer that gives no name, so Create titles
+// the plan with fallbackTitle and runs no claude.
+func newStore(client *circleci.Client, id string) *Store {
+	s := NewStore(client, id)
+	s.name = namedAs("", errors.New("no claude in tests"))
+	return s
+}
+
+// namedAs is a namer that gives name and err whatever the message.
+func namedAs(name string, err error) func(context.Context, string) (string, error) {
+	return func(context.Context, string) (string, error) { return name, err }
+}
+
 // createdStore is a Store whose plan has been created in a fake factory.
 func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) {
 	t.Helper()
 	client, cci := testClient(t)
-	store := NewStore(client, "")
+	store := newStore(client, "")
 	err := store.Create(context.Background(), "a plan")
 	assert.NilError(t, err)
 	return store, client, cci
@@ -41,7 +56,7 @@ func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) 
 // the plan exists.
 func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 	client, _ := testClient(t)
-	store := NewStore(client, "")
+	store := newStore(client, "")
 	ctx := context.Background()
 
 	text, err := store.Text(ctx)
@@ -57,21 +72,103 @@ func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 	assert.Check(t, cmp.Equal(text, "# A plan\n"))
 }
 
-// The plan starts as the skeleton so the plan tools have sections to write
-// into.
-func TestStoreCreateSetsPlanID(t *testing.T) {
+// A new plan is titled with Claude's name for it, made a slug, or with a
+// slug of the message's first line when Claude gives none, and starts as
+// the skeleton under that title.
+func TestStoreCreateNamesThePlan(t *testing.T) {
+	const msg = "add a --dry-run flag"
+	for _, tc := range []struct {
+		name    string
+		message string
+		reply   string
+		err     error
+		want    string
+	}{
+		{
+			name:    "claude's name",
+			message: msg,
+			reply:   "dry-run-flag",
+			want:    "dry-run-flag",
+		},
+		{
+			name:    "quoted with a period",
+			message: msg,
+			reply:   `"Dry-run flag."`,
+			want:    "dry-run-flag",
+		},
+		{
+			name:    "cut to three words",
+			message: msg,
+			reply:   "add dry run flag support",
+			want:    "add-dry-run",
+		},
+		{
+			name:    "one long word",
+			message: msg,
+			reply:   strings.Repeat("é", 50),
+			want:    strings.Repeat("é", 40),
+		},
+		{
+			name:    "namer fails",
+			message: msg,
+			err:     errors.New("claude exited 1"),
+			want:    "add-a-dry-run-flag",
+		},
+		{
+			name:    "empty reply",
+			message: msg,
+			reply:   "",
+			want:    "add-a-dry-run-flag",
+		},
+		{
+			name:    "reply with no words",
+			message: msg,
+			reply:   "?!",
+			want:    "add-a-dry-run-flag",
+		},
+		{
+			name:    "no words anywhere",
+			message: "?!\nsecond line",
+			err:     errors.New("no"),
+			want:    "plan",
+		},
+		{
+			name:    "empty message",
+			message: "",
+			err:     errors.New("no"),
+			want:    "plan",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, cci := testClient(t)
+			store := NewStore(client, "")
+			store.name = namedAs(tc.reply, tc.err)
+
+			err := store.Create(context.Background(), tc.message)
+			assert.NilError(t, err)
+
+			p, ok := cci.FactoryPlan(store.ID())
+			assert.Assert(t, ok)
+			assert.Check(t, cmp.Equal(p.Title, tc.want))
+			assert.Check(t, cmp.Equal(p.Text, skeleton(tc.want)))
+			assert.Check(t, cmp.Equal(p.State, "Unprioritized"))
+		})
+	}
+}
+
+// With no claude installed, the real namer fails and the plan is still made,
+// titled with the slug.
+func TestStoreCreateWithoutClaude(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	client, cci := testClient(t)
 	store := NewStore(client, "")
 
 	err := store.Create(context.Background(), "add a --dry-run flag")
 	assert.NilError(t, err)
-	assert.Assert(t, store.ID() != "")
 
 	p, ok := cci.FactoryPlan(store.ID())
 	assert.Assert(t, ok)
-	assert.Check(t, cmp.Equal(p.Title, "add a --dry-run flag"))
-	assert.Check(t, cmp.Equal(p.Text, skeleton("add a --dry-run flag")))
-	assert.Check(t, cmp.Equal(p.State, "Unprioritized"))
+	assert.Check(t, cmp.Equal(p.Title, "add-a-dry-run-flag"))
 }
 
 func TestStoreCommentsRoundTrip(t *testing.T) {
@@ -339,7 +436,7 @@ func TestStoreApproveWaitsForUnits(t *testing.T) {
 // come back empty.
 func TestStoreWritesFailBeforeCreate(t *testing.T) {
 	client, _ := testClient(t)
-	store := NewStore(client, "")
+	store := newStore(client, "")
 	ctx := context.Background()
 
 	_, err := store.AddComment(ctx, "quote", "body")
@@ -366,7 +463,7 @@ func TestStoreWritesFailBeforeCreate(t *testing.T) {
 // a session claims it, and once its claim is released.
 func TestStoreHolderReadsTheClaimFromFactory(t *testing.T) {
 	client, cci := testClient(t)
-	store := NewStore(client, "")
+	store := newStore(client, "")
 	ctx := context.Background()
 
 	h, err := store.Holder(ctx)
@@ -395,7 +492,7 @@ func TestStoreHolderReadsTheClaimFromFactory(t *testing.T) {
 // before the plan exists or has a flow.
 func TestStoreFlowReadsTheFlow(t *testing.T) {
 	client, cci := testClient(t)
-	store := NewStore(client, "")
+	store := newStore(client, "")
 	ctx := context.Background()
 
 	f, err := store.Flow(ctx)
@@ -459,7 +556,7 @@ func TestStoreStateReadsTheFlow(t *testing.T) {
 
 func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
 	client, _ := testClient(t)
-	store := NewStore(client, "")
+	store := newStore(client, "")
 	ctx := context.Background()
 
 	err := store.SetText(ctx, "# A plan\n")
