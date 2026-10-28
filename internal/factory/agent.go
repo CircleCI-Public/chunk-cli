@@ -92,6 +92,13 @@ const buildMessage = "Plan %s is approved, and factory builds it in this session
 // factory plan planID.
 func BuildMessage(planID string) string { return fmt.Sprintf(buildMessage, planID) }
 
+const buildRetryMessage = "Plan %s's claim has been released. " +
+	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the tasks it hands out, through to the pull request, as your first message said."
+
+// BuildRetryMessage is what a build session that could not claim factory
+// plan planID is sent once the claim is released.
+func BuildRetryMessage(planID string) string { return fmt.Sprintf(buildRetryMessage, planID) }
+
 // AgentConfig starts a long-lived factory session.
 type AgentConfig struct {
 	// Dir is the repository claude plans in, or for Build the worktree it

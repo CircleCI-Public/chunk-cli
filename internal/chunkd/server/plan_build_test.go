@@ -3,9 +3,12 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"gotest.tools/v3/assert"
@@ -27,6 +30,7 @@ type fakePlans struct {
 	getErr         error
 	noFlow         bool
 	flowErr        error
+	holder         string
 }
 
 func (f *fakePlans) GetPlan(_ context.Context, id string) (*circleci.Plan, error) {
@@ -50,7 +54,15 @@ func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error
 	if id != f.id || f.noFlow {
 		return nil, &circleci.StatusError{StatusCode: http.StatusNotFound}
 	}
-	return &circleci.Flow{ID: id, State: f.state}, nil
+	return &circleci.Flow{ID: id, State: f.state, SessionID: f.holder}, nil
+}
+
+// claim has holder claim the plan, as factory plan claim would; "" releases
+// it.
+func (f *fakePlans) claim(holder string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.holder = holder
 }
 
 func (f *fakePlans) PlanText(_ context.Context, id string) (string, error) {
@@ -74,15 +86,32 @@ func (f *fakePlans) end(outcome string) {
 	f.phase, f.outcome, f.noFlow = circleci.PhaseEnded, outcome, true
 }
 
-// fakeBuild is a build session whose events a test sends.
+// fakeBuild is a build session whose events a test sends, recording what it
+// is sent.
 type fakeBuild struct {
 	events  chan factory.AgentEvent
 	once    sync.Once
 	mu      sync.Mutex
 	stopped bool
+	sent    []string
+	sendErr error
 }
 
 func newFakeBuild() *fakeBuild { return &fakeBuild{events: make(chan factory.AgentEvent, 8)} }
+
+func (b *fakeBuild) Send(message string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sent = append(b.sent, message)
+	return b.sendErr
+}
+
+// messages is what the session has been sent, failed sends included.
+func (b *fakeBuild) messages() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.sent...)
+}
 
 func (b *fakeBuild) Events() <-chan factory.AgentEvent { return b.events }
 
@@ -413,4 +442,235 @@ func TestPlanBuildNeedsCircleCI(t *testing.T) {
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae), "err %v", err)
 	assert.Check(t, cmp.Equal(ae.status, http.StatusServiceUnavailable))
+}
+
+// nudge drives a build through a nudge test, inside a synctest bubble: it
+// ends and starts the build session's turns, waiting for the daemon to see
+// each, and moves the plan's claim between ticks.
+type nudge struct {
+	t     *testing.T
+	pb    *planBuildDaemon
+	entry *sessionEntry
+	turns int
+}
+
+// own is the build session's own session ID.
+func (n *nudge) own() string {
+	n.pb.mu.Lock()
+	defer n.pb.mu.Unlock()
+	return n.pb.cfgs[0].SessionID
+}
+
+// idle ends the session's turn, and waits for the daemon to see it.
+func (n *nudge) idle() {
+	n.turns++
+	reply := fmt.Sprintf("Turn %d ended.", n.turns)
+	n.pb.build.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: reply}}
+	synctest.Wait()
+}
+
+// busy has the session do something, and waits for the daemon to see it.
+func (n *nudge) busy() {
+	n.turns++
+	a := &claudecode.Activity{Tool: "Bash", Detail: fmt.Sprintf("step %d", n.turns)}
+	n.pb.build.events <- factory.AgentEvent{Activity: a}
+	synctest.Wait()
+}
+
+// claim has holder claim the plan, "" releasing it, and lets a couple of
+// ticks pass.
+func (n *nudge) claim(holder string) {
+	n.pb.plans.claim(holder)
+	ticks()
+}
+
+// ticks lets a couple of the build's polls pass in the bubble's clock, and
+// waits for the build to act on them.
+func ticks() {
+	time.Sleep(2 * planBuildPoll)
+	synctest.Wait()
+}
+
+// lines is the feed's lines about the plan's claim.
+func (n *nudge) lines() []string {
+	var out []string
+	for _, l := range n.entry.snapshot().Factory.Progress.Lines {
+		if strings.HasPrefix(l.Text, "Plan plan-1") || strings.HasPrefix(l.Text, "Could not tell") {
+			out = append(out, l.Text)
+		}
+	}
+	return out
+}
+
+func claimedLine(holder string) string {
+	return "Plan plan-1 is claimed by session " + holder + "; release it with factory daemon release plan-1 and the build picks it up"
+}
+
+const releasedLine = "Plan plan-1's claim was released; telling the build session to claim it"
+
+// A build session that could not claim its plan, because another session
+// held it, is told once to claim it again after the claim is released, and
+// only while it is idle.
+func TestPlanBuildNudgesOnceTheClaimIsReleased(t *testing.T) {
+	retry := factory.BuildRetryMessage("plan-1")
+	for _, tc := range []struct {
+		name    string
+		sendErr error
+		run     func(n *nudge)
+		lines   []string
+		sent    int
+	}{
+		{
+			name: "claimed by one session then another",
+			run: func(n *nudge) {
+				n.idle()
+				n.claim("parent")
+				n.claim("other")
+			},
+			lines: []string{claimedLine("parent"), claimedLine("other")},
+		},
+		{
+			name: "released while idle",
+			run: func(n *nudge) {
+				n.idle()
+				n.claim("parent")
+				n.claim("")
+				ticks()
+			},
+			lines: []string{claimedLine("parent"), releasedLine},
+			sent:  1,
+		},
+		{
+			name: "released while busy",
+			run: func(n *nudge) {
+				n.idle()
+				n.claim("parent")
+				n.busy()
+				n.claim("")
+				assert.Check(n.t, cmp.Len(n.pb.build.messages(), 0), "a busy session was nudged")
+				n.idle()
+				ticks()
+			},
+			lines: []string{claimedLine("parent"), releasedLine},
+			sent:  1,
+		},
+		{
+			name: "claimed by the build session itself",
+			run: func(n *nudge) {
+				n.idle()
+				n.claim(n.own())
+				n.claim("")
+			},
+		},
+		{
+			name: "claimed by another session, then by the build session",
+			run: func(n *nudge) {
+				n.idle()
+				n.claim("parent")
+				n.claim(n.own())
+				n.claim("")
+			},
+			lines: []string{claimedLine("parent")},
+		},
+		{
+			name: "claimed while busy, noted once idle",
+			run: func(n *nudge) {
+				n.idle()
+				n.busy()
+				n.claim("parent")
+				assert.Check(n.t, cmp.Len(n.lines(), 0), "a busy session's plan was said to be claimed")
+				n.idle()
+				ticks()
+				n.claim("")
+			},
+			lines: []string{claimedLine("parent"), releasedLine},
+			sent:  1,
+		},
+		{
+			name: "never claimed",
+			run: func(n *nudge) {
+				n.idle()
+				ticks()
+				n.busy()
+				n.idle()
+				ticks()
+			},
+		},
+		{
+			name: "claimed and released again after a nudge",
+			run: func(n *nudge) {
+				n.idle()
+				n.claim("parent")
+				n.claim("")
+				n.idle()
+				ticks()
+				assert.Check(n.t, cmp.Len(n.pb.build.messages(), 1), "an unclaimed plan was nudged again")
+				n.claim("parent")
+				n.claim("")
+			},
+			lines: []string{claimedLine("parent"), releasedLine, claimedLine("parent"), releasedLine},
+			sent:  2,
+		},
+		{
+			name: "failed and missing flow reads keep it armed",
+			run: func(n *nudge) {
+				n.idle()
+				n.claim("parent")
+				n.pb.plans.mu.Lock()
+				n.pb.plans.flowErr = errors.New("factory is down")
+				n.pb.plans.mu.Unlock()
+				n.claim("")
+				n.pb.plans.mu.Lock()
+				n.pb.plans.flowErr, n.pb.plans.noFlow = nil, true
+				n.pb.plans.mu.Unlock()
+				ticks()
+				assert.Check(n.t, cmp.Len(n.pb.build.messages(), 0), "nudged on a failed or missing flow")
+				n.pb.plans.mu.Lock()
+				n.pb.plans.noFlow = false
+				n.pb.plans.mu.Unlock()
+				ticks()
+			},
+			lines: []string{claimedLine("parent"), releasedLine},
+			sent:  1,
+		},
+		{
+			name:    "a failed send is not retried",
+			sendErr: errors.New("claude's stdin is closed"),
+			run: func(n *nudge) {
+				n.idle()
+				n.claim("parent")
+				n.claim("")
+				ticks()
+			},
+			lines: []string{claimedLine("parent"), releasedLine, "Could not tell the build session to claim the plan: claude's stdin is closed"},
+			sent:  1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The daemon, its fakes and the build all live in the bubble, so
+			// a tick is a step of its clock rather than a wait.
+			synctest.Test(t, func(t *testing.T) {
+				pb := newPlanBuildDaemon(t)
+				pb.build.sendErr = tc.sendErr
+				sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+				assert.NilError(t, err)
+				n := &nudge{t: t, pb: pb, entry: pb.sessions.get(sess.ID)}
+				synctest.Wait()
+				pb.mu.Lock()
+				started := len(pb.cfgs)
+				pb.mu.Unlock()
+				assert.Assert(t, cmp.Equal(started, 1), "the build session did not start")
+
+				tc.run(n)
+
+				assert.Check(t, cmp.DeepEqual(n.lines(), tc.lines))
+				sent := pb.build.messages()
+				assert.Check(t, cmp.Len(sent, tc.sent))
+				for _, m := range sent {
+					assert.Check(t, cmp.Equal(m, retry))
+				}
+				_ = pb.stopBuild(t, sess.ID)
+			})
+		})
+	}
 }

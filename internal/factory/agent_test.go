@@ -262,6 +262,10 @@ func TestAgentArgsBuild(t *testing.T) {
 	for _, want := range []string{"chunk validate", "chunk sidecar sync", "chunk sidecar exec", "denied", "builder"} {
 		assert.Check(t, cmp.Contains(msg, want))
 	}
+	retry := BuildRetryMessage("plan-1")
+	for _, want := range []string{"factory plan claim plan-1", "factory daemon wait"} {
+		assert.Check(t, cmp.Contains(retry, want))
+	}
 	// The message says local project commands are denied; that holds only
 	// while buildTools leaves them out.
 	for _, tool := range []string{"Bash(go", "Bash(task", "Bash(gofmt"} {
