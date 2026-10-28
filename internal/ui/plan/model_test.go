@@ -1456,7 +1456,7 @@ func messagesOf(cmd tea.Cmd) []tea.Msg {
 }
 
 // A host that keeps the screen keeps it after the approval, on the Flow tab,
-// with its chat closed: the planning session has stopped.
+// with its chat hidden: the planning session has stopped.
 func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
@@ -1486,13 +1486,13 @@ func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 	assert.Check(t, cmp.Equal(m.BuildID, "build-1"))
 	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Approved · building as run build-1"))
 
+	assert.Check(t, !m.chatShown())
+	assert.Check(t, !strings.Contains(ansi.Strip(m.Content()), "Planning chat"))
 	for _, k := range []string{"m", "o", "r", "e"} {
 		m = drive(t, m, press(k))
 	}
 	m = drive(t, m, press("enter"))
-	assert.Check(t, cmp.Len(agent.Sent(), 0), "the closed chat sent to the agent")
-	assert.Check(t, cmp.Equal(m.input.Value(), "more"))
-	assert.Check(t, cmp.Contains(m.input.Placeholder, "chat is closed"))
+	assert.Check(t, cmp.Len(agent.Sent(), 0), "the hidden chat sent to the agent")
 
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	assert.Check(t, !m.confirming, "ctrl+s asks to approve a plan already building")
@@ -3248,15 +3248,14 @@ func TestSendHandsOffFromEveryHumanState(t *testing.T) {
 			m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
 			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 
-			m = drive(t, m, press("tab"))
-			// A plan past Planning opens on the Flow tab.
+			// A plan past Planning has no chat, and opens on the Flow tab.
+			assert.Assert(t, !m.chatShown())
 			m = drive(t, m, press("p"))
 			m = drive(t, m, press("down"))
 			m = drive(t, m, press("c"))
 			m = typeText(t, m, "first")
 			m = drive(t, m, press("enter"))
-			m = drive(t, m, press("tab"))
-			drive(t, m, press("enter"))
+			drive(t, m, press("s"))
 
 			if len(store.Added) != 1 {
 				t.Fatalf("comment not saved: %+v", store.Added)
@@ -3525,6 +3524,156 @@ func TestRightPaneOpensOnTheTabForItsPhase(t *testing.T) {
 			assert.Check(t, cmp.Equal(m.tab, tc.want), "a state change switched the tab")
 		})
 	}
+}
+
+// The chat is the planning session's: it is drawn only while the plan is being
+// planned, and otherwise the right pane takes the screen.
+func TestTheChatShowsOnlyWhilePlanning(t *testing.T) {
+	for _, tc := range []struct {
+		state string
+		shown bool
+	}{
+		{
+			state: "",
+			shown: true,
+		},
+		{
+			state: "Unprioritized",
+			shown: true,
+		},
+		{
+			state: "Planning - Agent",
+			shown: true,
+		},
+		{
+			state: "Planning - Human",
+			shown: true,
+		},
+		{
+			state: "Building - Agent",
+		},
+		{
+			state: "Integrating - Human",
+		},
+		{
+			state: "Done",
+		},
+		{
+			state: "Blocked",
+		},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			store := newFakeStore()
+			store.Created, store.StateV, store.TextV = true, tc.state, twoParts
+			m := New(context.Background(), newFakeAgent(), nil, store, "").WithInbox("Plan", "/src/p")
+			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+			m = refreshed(t, m)
+			view := ansi.Strip(m.Content())
+			assert.Check(t, cmp.Equal(m.chatShown(), tc.shown))
+			assert.Check(t, cmp.Equal(strings.Contains(view, "Planning chat"), tc.shown), view)
+			assert.Check(t, cmp.Equal(strings.Contains(view, "does not start an agent"), tc.shown), view)
+			assertFits(t, m, 140, 40)
+			if tc.shown {
+				return
+			}
+			assert.Check(t, cmp.Equal(m.planWidth(), 140))
+			assert.Check(t, cmp.Equal(m.focus, panePlan))
+			m = drive(t, m, press("tab"))
+			assert.Check(t, cmp.Equal(m.focus, panePlan), "tab focused a hidden chat")
+			m = typeText(t, m, "hi")
+			m = drive(t, m, press("enter"))
+			assert.Check(t, cmp.Len(m.agent.(*fakeAgent).Sent(), 0), "a hidden chat sent to the agent")
+		})
+	}
+}
+
+// A narrow screen with the chat hidden has no Chat tab: tab goes between
+// Flow and Plan.
+func TestANarrowScreenWithTheChatHiddenHasNoChatTab(t *testing.T) {
+	store := newFakeStore()
+	store.Created, store.StateV, store.TextV = true, "Building - Agent", planWithUnits
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 70, Height: 30})
+	m = refreshed(t, m)
+	view := ansi.Strip(m.Content())
+	assert.Check(t, regexp.MustCompile(`Flow +Plan · 2 units`).MatchString(view), view)
+	assert.Check(t, !strings.Contains(view, "Chat"), view)
+	assert.Check(t, cmp.Equal(m.focus, panePlan))
+	assert.Check(t, cmp.Equal(m.tab, tabFlow))
+	assertFits(t, m, 70, 30)
+
+	m = drive(t, m, press("tab"))
+	assert.Check(t, cmp.Equal(m.focus, panePlan))
+	assert.Check(t, cmp.Equal(m.tab, tabPlan))
+	m = drive(t, m, press("tab"))
+	assert.Check(t, cmp.Equal(m.focus, panePlan))
+	assert.Check(t, cmp.Equal(m.tab, tabFlow))
+	assertFits(t, m, 70, 30)
+}
+
+func TestTheChatHidesWhenThePlanLeavesPlanning(t *testing.T) {
+	store := newFakeStore()
+	store.Created, store.StateV, store.TextV = true, "Planning - Human", twoParts
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	// A message the session has not answered yet, and a draft.
+	m = typeText(t, m, "why sqlite?")
+	m = drive(t, m, press("enter"))
+	assert.Assert(t, m.busy)
+	m = typeText(t, m, "half a thought")
+	assert.Check(t, cmp.Contains(m.Unsent(), "unsent message"))
+
+	store.mu.Lock()
+	store.StateV = "Building - Agent"
+	store.mu.Unlock()
+	m = refreshed(t, m)
+
+	// The session answers after the chat hid: its event is read, and the screen
+	// waits for the next, but nothing is shown.
+	m, cmd := m.Update(eventMsg{agent: agent, Event: Event{Reply: &Reply{Text: "because it is embedded"}}})
+	assert.Check(t, cmd != nil, "the screen stopped reading the agent's events")
+	assert.Check(t, !strings.Contains(ansi.Strip(m.Content()), "because it is embedded"))
+	assert.Check(t, !m.chatShown())
+	assert.Check(t, cmp.Equal(m.focus, panePlan))
+	assert.Check(t, cmp.Equal(m.input.Value(), ""), "the hidden chat kept its draft")
+	assert.Check(t, cmp.Equal(m.Unsent(), ""))
+
+	// A failed poll changes nothing.
+	store.mu.Lock()
+	store.StateV, store.FlowErr = "Planning - Human", errors.New("blip")
+	store.mu.Unlock()
+	m = refreshed(t, m)
+	assert.Check(t, !m.chatShown(), "a failed poll brought the chat back")
+
+	// factory reopening the plan brings the chat back, empty.
+	store.mu.Lock()
+	store.FlowErr = nil
+	store.mu.Unlock()
+	m = refreshed(t, m)
+	assert.Check(t, m.chatShown())
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "Planning chat"))
+	assert.Check(t, !strings.Contains(view, "why sqlite?"), "the earlier transcript came back:\n%s", view)
+}
+
+func TestSSavesCommentsWithTheChatHidden(t *testing.T) {
+	store := newFakeStore()
+	store.Created, store.StateV, store.TextV = true, "Integrating - Human", twoParts
+	m := flowModel(t, store)
+	assert.Assert(t, !m.chatShown())
+	m = drive(t, m, press("p"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "rename it")
+	m = drive(t, m, press("enter"))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.planFooter()), "1 queued · 0 open"))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "s Save 1 comment"))
+	m = drive(t, m, press("s"))
+	assert.Check(t, cmp.Len(store.Added, 1))
+	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Integrating - Human"}))
+	assert.Check(t, cmp.Len(m.agent.(*fakeAgent).Sent(), 0))
 }
 
 func TestTabKeysSwitchTheRightPane(t *testing.T) {

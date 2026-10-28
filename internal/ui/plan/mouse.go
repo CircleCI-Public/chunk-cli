@@ -45,7 +45,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 
 // planLeft is the column the plan pane starts at.
 func (m Model) planLeft() int {
-	if m.narrow() {
+	if m.narrow() || !m.chatShown() {
 		return 0
 	}
 	return m.chatWidth()
@@ -54,6 +54,9 @@ func (m Model) planLeft() int {
 // inPane is which pane is drawn at column x, when a row of the panes is
 // clicked.
 func (m Model) inPane(x int) pane {
+	if !m.chatShown() {
+		return panePlan
+	}
 	if m.narrow() {
 		return m.focus
 	}
@@ -134,6 +137,7 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 // clickTab picks chat, Flow or Plan from the tabs of a narrow screen.
 func (m Model) clickTab(x int) (Model, tea.Cmd) {
 	for i, s := range m.tabSpans() {
+		i += m.tabOffset()
 		switch {
 		case !s.has(x) || i == m.narrowTab():
 		case i == narrowChat:

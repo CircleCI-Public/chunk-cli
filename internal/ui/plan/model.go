@@ -382,12 +382,13 @@ type Model struct {
 	branch string
 	// units and questions are how many of each the plan has.
 	units, questions int
-	// BuildID is the build of the plan, once it has been approved.
+	// BuildID is the build of the plan, once it has been approved. Its chat
+	// is hidden from then on, since a message would resume the stopped
+	// planning session.
 	BuildID string
-	// built is whether the plan was approved and is being built while the
-	// screen stays open; its chat is closed, since a message would resume
-	// the stopped planning session.
-	built bool
+	// chatWasShown is chatShown as syncChat last found it, so it can tell
+	// when the chat hides or comes back.
+	chatWasShown bool
 
 	pending string
 	// lastClick is the plan block last clicked, to tell a double click.
@@ -403,9 +404,6 @@ const (
 	// reviewPlaceholder is for a plan waiting on the developer's review, which
 	// the agent may not change until comments move it back to the agent.
 	reviewPlaceholder = "Ask chunk about the plan; comment on it to change it…"
-	// builtPlaceholder is the chat once the plan is approved and building:
-	// its planning session has stopped.
-	builtPlaceholder = "chunk is building this plan; chat is closed"
 )
 
 // New returns the planning screen. A non-empty first message is sent as soon
@@ -463,6 +461,8 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 		pending:      strings.TrimSpace(first),
 		dark:         true,
 		anchor:       -1,
+		// With no state read yet the plan counts as being planned.
+		chatWasShown: true,
 	}
 }
 
@@ -550,7 +550,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.applyEvent(msg.Event)
 
 	case sentMsg:
-		if msg.agent == m.agent && msg.err != nil {
+		if msg.agent == m.agent && msg.err != nil && m.chatShown() {
 			m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
 			m.messages = append(m.messages, message{text: "Could not reach chunk: " + msg.err.Error(), failed: true})
 			m.renderPlan()
@@ -722,7 +722,39 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 	m.syncPlaceholder()
 	m.renderChat()
 	m.renderFlow()
+	m.syncChat()
 	return m
+}
+
+// chatShown is whether the screen has a chat: the planning session's, which
+// is there only while the plan is being planned, or has not started, and not
+// once it has been approved here.
+func (m Model) chatShown() bool {
+	if m.BuildID != "" {
+		return false
+	}
+	phase, _ := planstate.Parse(m.state)
+	return strings.TrimSpace(m.state) == "" || planstate.IsUnprioritized(m.state) ||
+		strings.EqualFold(phase, "Planning")
+}
+
+// syncChat follows the chat hiding or coming back. A chat that hides drops
+// its draft, its transcript and the turn under way, so it comes back empty if
+// the plan returns to planning, and gives the keyboard to the right pane.
+func (m *Model) syncChat() {
+	shown := m.chatShown()
+	if shown == m.chatWasShown {
+		return
+	}
+	m.chatWasShown = shown
+	if !shown {
+		m.input.Reset()
+		m.input.Blur()
+		m.messages = nil
+		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
+		m.focus = panePlan
+	}
+	m.layout()
 }
 
 // tabFor is the tab the right pane opens on for a plan in state: the plan
@@ -758,8 +790,15 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, k.Focus):
 		// A narrow screen shows one of chat, Flow and Plan at a time, so tab
-		// goes round all three.
+		// goes round all three, or Flow and Plan with the chat hidden; a wide
+		// one with the chat hidden has only the right pane.
 		switch {
+		case !m.chatShown() && m.narrow() && m.tab == tabFlow:
+			return m.showTab(tabPlan)
+		case !m.chatShown() && m.narrow():
+			return m.showTab(tabFlow)
+		case !m.chatShown():
+			return m.focusOn(panePlan)
 		case m.focus == paneChat && m.narrow():
 			return m.showTab(tabFlow)
 		case m.focus == paneChat:
@@ -802,9 +841,14 @@ const heldStatus = "Comments not sent: factory is working on the plan. Send them
 // deliver is a send from the developer: from a Human state it saves the
 // queued comments to factory and hands them to it, then sends text to the
 // agent, if there is any; from any other state the comments stay queued.
+// With the chat hidden there is no session to send text to, so only the
+// comments go.
 func (m Model) deliver(text string) (Model, tea.Cmd) {
-	if m.savingComments || m.built {
+	if m.savingComments {
 		return m, nil
+	}
+	if !m.chatShown() {
+		text = ""
 	}
 	queued := queuedComments(m.comments)
 	if text == "" && len(queued) == 0 && !m.pendingHandOff {
@@ -884,7 +928,7 @@ func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.built, m.approving, m.approvingDesign, m.resolvingConflicts, m.startingWork, m.moving != nil:
+	case m.BuildID != "", m.approving, m.approvingDesign, m.resolvingConflicts, m.startingWork, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
 	case m.conflicting() && queued > 0:
@@ -1027,9 +1071,14 @@ func createCmd(ctx context.Context, s Store, text string) tea.Cmd {
 	return func() tea.Msg { return createdMsg{text: text, err: s.Create(ctx, text)} }
 }
 
-// applyEvent shows one thing the agent reported, then waits for the next.
+// applyEvent shows one thing the agent reported, then waits for the next. With
+// the chat hidden it shows nothing, but still reads on, so the session never
+// waits on the screen.
 func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 	next := waitEvent(m.ctx, m.agent)
+	if !m.chatShown() {
+		return m, next
+	}
 	switch {
 	case ev.Activity != "":
 		var tick tea.Cmd
@@ -1069,8 +1118,6 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 // their review.
 func (m *Model) syncPlaceholder() {
 	switch {
-	case m.built:
-		m.input.Placeholder = builtPlaceholder
 	case len(queuedComments(m.comments)) > 0 && !m.takesComments():
 		m.input.Placeholder = heldPlaceholder
 	case len(queuedComments(m.comments)) > 0:
@@ -1121,9 +1168,9 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 		if !m.back {
 			return m, closed(msg.buildID)
 		}
-		m.built, m.tab, m.tabChosen = true, tabFlow, true
+		m.tab, m.tabChosen = tabFlow, true
 		m.status = "Approved · building as run " + msg.buildID + "; it is also in Runs"
-		m.syncPlaceholder()
+		m.syncChat()
 		return m, tea.Batch(
 			func() tea.Msg { return BuildingMsg{BuildID: msg.buildID} },
 			refreshCmd(m.ctx, m.store),
@@ -1206,7 +1253,7 @@ const (
 )
 
 func (m *Model) planWidth() int {
-	if m.narrow() {
+	if m.narrow() || !m.chatShown() {
 		return m.width
 	}
 	return m.width * planPercent / 100
@@ -1542,7 +1589,7 @@ func (m Model) Content() string {
 	if m.focus == panePlan {
 		planTitle += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", view.ScrollPercent()*100))
 	}
-	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, "Chat"),
+	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, "Planning chat"),
 		m.chatView.View()+"\n"+m.inputBox())
 	plan := pane(m.focus == panePlan, m.planWidth(), planTitle, body)
 
@@ -1555,6 +1602,9 @@ func (m Model) Content() string {
 			panes = plan
 		}
 		top += "\n" + m.tabs()
+	}
+	if !m.chatShown() {
+		panes = plan
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, top, panes, m.actionBar())
 }

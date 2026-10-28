@@ -53,6 +53,17 @@ func TestClickingABlockMovesTheCursorToIt(t *testing.T) {
 	assert.Check(t, cmp.Equal(m.cursor, 2))
 }
 
+func TestAClickWhereTheChatWasHitsThePlan(t *testing.T) {
+	store := newFakeStore()
+	store.Created, store.StateV, store.TextV = true, "Building - Agent", twoParts
+	m := flowModel(t, store)
+	m = drive(t, m, press("p"))
+	assert.Check(t, cmp.Equal(m.planLeft(), 0))
+	m = drive(t, m, click(10, rowOf(t, m, "SPEC")))
+	assert.Check(t, cmp.Equal(m.focus, panePlan))
+	assert.Check(t, cmp.Equal(m.cursor, 2))
+}
+
 func TestShiftClickSelectsFromTheCursor(t *testing.T) {
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "OUTCOME")))

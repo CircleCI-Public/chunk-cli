@@ -125,7 +125,7 @@ func TestPOpensThePlanningScreenInTheProject(t *testing.T) {
 	assert.Equal(t, f.root, "/src/chunk-cli")
 	assert.Assert(t, m.planOpen)
 	out := screen(m)
-	assert.Assert(t, strings.Contains(out, "Chat") && strings.Contains(out, "No plan yet"), "the planning screen is shown:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "Planning chat") && strings.Contains(out, "No plan yet"), "the planning screen is shown:\n%s", out)
 	assert.Assert(t, strings.Contains(out, "esc back to runs"), "the way back is in the footer:\n%s", out)
 	assert.Assert(t, m.View().MouseMode == tea.MouseModeCellMotion, "the plan and chat scroll with the mouse")
 }
