@@ -584,7 +584,7 @@ chunk
   **Plan**, the plan rendered as markdown, and **Flow**, which shows progress
   (each unit ✓ done, ▸ being built, ○ to do, or for a plan with sub-plans its
   open sub-plans), the pull request and its deviations, and related plans
-  (parent, sub-plans, blockers). With the right pane focused, `f` and `p`
+  (parent, sub-plans, blockers). With the right pane focused, `←` and `→`
   switch tabs. The screen opens on Plan while the plan is being planned and on
   Flow once it is building. The first message creates the plan
   in factory, named by Claude for what the message asks for, as a 2-3 word

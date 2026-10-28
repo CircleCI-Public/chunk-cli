@@ -170,6 +170,22 @@ func TestThePlanIsKeptBehindTheDashboard(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "Wrote a plan.") && strings.Contains(out, "The flag exists."), "the reply that came while away is shown:\n%s", out)
 }
 
+// The open flow screen gets the arrows, not watch's own Left/Right.
+func TestArrowsReachTheOpenFlowScreen(t *testing.T) {
+	m := openPlanScreen(t, planModel(t, &fakePlans{}))
+	sel := m.selRun
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	assert.Assert(t, m.planOpen, "← left the flow screen")
+	s := screen(m)
+	assert.Check(t, cmp.Contains(s, "PROGRESS"))
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	assert.Assert(t, m.planOpen)
+	s = screen(m)
+	assert.Check(t, !strings.Contains(s, "PROGRESS"), "→ did not show the Plan tab:\n%s", s)
+	assert.Check(t, cmp.Equal(m.selRun, sel))
+}
+
 func TestApprovingThePlanSelectsItsBuild(t *testing.T) {
 	f := &fakePlans{reply: "ok", plan: "# The plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
 	m := openPlanScreen(t, planModel(t, f))

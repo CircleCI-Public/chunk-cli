@@ -697,6 +697,50 @@ func TestWaitingTitleNamesTheMove(t *testing.T) {
 	}
 }
 
+func TestFocusedPlanPaneTitleHasNoPercentage(t *testing.T) {
+	tests := []struct {
+		name   string
+		keys   []string
+		moving bool
+		want   string
+	}{
+		{
+			name: "plan tab",
+			keys: []string{"tab", "down", "down"},
+			want: "Flow  Plan",
+		},
+		{
+			name: "flow tab",
+			keys: []string{"tab", "left", "down", "down"},
+			want: "Flow  Plan",
+		},
+		{
+			name:   "moving a comment",
+			keys:   []string{"tab", "down"},
+			moving: true,
+			want:   "Flow  Plan · ",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := planModel(t)
+			m = refreshed(t, m)
+			for _, k := range tc.keys {
+				m = drive(t, m, press(k))
+			}
+			if tc.moving {
+				m.moving = &transition{kind: movingComments, from: m.state, since: time.Now()}
+			}
+			assert.Assert(t, cmp.Equal(m.focus, panePlan))
+
+			top := strings.Split(ansi.Strip(m.Content()), "\n")[headerRows+stripRows]
+			assert.Check(t, cmp.Contains(top, "Chat"))
+			assert.Check(t, cmp.Contains(top, tc.want))
+			assert.Check(t, !regexp.MustCompile(`\d+%`).MatchString(top), top)
+		})
+	}
+}
+
 func TestWaitingBarSaysHowLongOnceItIsSlow(t *testing.T) {
 	tests := []struct {
 		name string
@@ -744,6 +788,10 @@ func press(k string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}
 	case "shift+up":
 		return tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift}
+	case "left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
+	case "right":
+		return tea.KeyPressMsg{Code: tea.KeyRight}
 	case "esc":
 		return tea.KeyPressMsg{Code: tea.KeyEscape}
 	}
@@ -834,7 +882,7 @@ func TestConflictsWithComments(t *testing.T) {
 		m, store := conflictingModel(t)
 		m = drive(t, m, press("tab"))
 		// An Integrating plan opens on the Flow tab; comments are the Plan's.
-		m = drive(t, m, press("p"))
+		m = drive(t, m, press("right"))
 		m = drive(t, m, press("c"))
 		m = typeText(t, m, "too vague")
 		m = drive(t, m, press("enter"))
@@ -1140,7 +1188,7 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 		m = drive(t, m, press("enter"))
 		m = drive(t, m, press("tab"))
 		// A narrow screen's tab goes to the Flow tab first.
-		m = drive(t, m, press("p"))
+		m = drive(t, m, press("right"))
 
 		m = drive(t, m, press("c"))
 		m.commentInput.SetValue(strings.Repeat("a long word ", 20) + "\nand a second line")
@@ -3250,7 +3298,7 @@ func TestSendHandsOffFromEveryHumanState(t *testing.T) {
 
 			m = drive(t, m, press("tab"))
 			// A plan past Planning opens on the Flow tab.
-			m = drive(t, m, press("p"))
+			m = drive(t, m, press("right"))
 			m = drive(t, m, press("down"))
 			m = drive(t, m, press("c"))
 			m = typeText(t, m, "first")
@@ -3530,7 +3578,11 @@ func TestRightPaneOpensOnTheTabForItsPhase(t *testing.T) {
 func TestTabKeysSwitchTheRightPane(t *testing.T) {
 	m, store := planModel(t)
 	m = typeText(t, m, "fp")
-	assert.Check(t, cmp.Equal(m.input.Value(), "fp"), "f and p typed in the chat are text")
+	m = drive(t, m, press("left"))
+	m = drive(t, m, press("left"))
+	m = drive(t, m, press("right"))
+	m = typeText(t, m, "x")
+	assert.Check(t, cmp.Equal(m.input.Value(), "fxp"), "← and → in the chat move the cursor")
 	assert.Check(t, cmp.Equal(m.tab, tabPlan))
 	m.input.Reset()
 
@@ -3542,6 +3594,8 @@ func TestTabKeysSwitchTheRightPane(t *testing.T) {
 	assert.Assert(t, cmp.Len(queuedComments(m.comments), 1))
 
 	m = drive(t, m, press("f"))
+	assert.Check(t, cmp.Equal(m.tab, tabPlan), "f still switches to Flow")
+	m = drive(t, m, press("left"))
 	view := ansi.Strip(m.Content())
 	assert.Check(t, cmp.Contains(view, "PROGRESS"))
 	assert.Check(t, !strings.Contains(view, "The flag exists."), view)
@@ -3559,9 +3613,37 @@ func TestTabKeysSwitchTheRightPane(t *testing.T) {
 	store.mu.Unlock()
 
 	m = drive(t, m, press("p"))
+	assert.Check(t, cmp.Equal(m.tab, tabFlow), "p still switches to Plan")
+	m = drive(t, m, press("right"))
 	view = ansi.Strip(m.Content())
 	assert.Check(t, cmp.Contains(view, "The flag exists."))
 	assert.Check(t, !strings.Contains(view, "PROGRESS"), view)
+
+	h := m.keys().FlowTab.Help()
+	assert.Check(t, cmp.Equal(h.Key, "←/→"))
+	assert.Check(t, cmp.Equal(h.Desc, "flow/plan"))
+
+	m = drive(t, m, press("right"))
+	assert.Check(t, cmp.Equal(m.tab, tabPlan), "→ on the Plan tab moved")
+	m = drive(t, m, press("left"))
+	assert.Check(t, cmp.Equal(m.tab, tabFlow))
+	m = drive(t, m, press("left"))
+	assert.Check(t, cmp.Equal(m.tab, tabFlow), "← on the Flow tab moved")
+	m = drive(t, m, press("right"))
+	assert.Check(t, cmp.Equal(m.tab, tabPlan))
+
+	// While a comment is written the arrows move its cursor. The block under
+	// the cursor has the queued comment, so move to the next one first.
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	assert.Assert(t, m.commenting)
+	assert.Assert(t, cmp.Equal(m.commentInput.Value(), ""))
+	m = typeText(t, m, "ab")
+	m = drive(t, m, press("left"))
+	m = typeText(t, m, "x")
+	assert.Check(t, cmp.Equal(m.commentInput.Value(), "axb"))
+	m = drive(t, m, press("right"))
+	assert.Check(t, cmp.Equal(m.tab, tabPlan), "an arrow in the comment editor switched tabs")
 }
 
 func TestFlowTabShowsProgress(t *testing.T) {
