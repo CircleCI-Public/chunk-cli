@@ -105,3 +105,11 @@ func TestOpenFlows(t *testing.T) {
 
 	assert.Check(t, cmp.DeepEqual(got, []circleci.Flow{flows[0], flows[1], flows[3]}))
 }
+
+func TestPlanParents(t *testing.T) {
+	plans := []circleci.Plan{{ID: "p1"}, {ID: "c1", Parent: "p1"}, {ID: "c2", Parent: "p1"}}
+
+	got := planParents(plans)
+
+	assert.Check(t, cmp.DeepEqual(got, map[string]string{"c1": "p1", "c2": "p1"}))
+}

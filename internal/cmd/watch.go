@@ -118,7 +118,7 @@ func newWatchCmd() *cobra.Command {
 				WithDrafts(drafts.ctx, startDir, drafts.draft, sendDraft).
 				WithContinue(continueRun).
 				WithPlans(drafts.ctx, drafts.plan).
-				WithFlowList(flowlist.New(drafts.ctx, listFactoryFlows, previewFactoryPlan))
+				WithFlowList(flowlist.New(drafts.ctx, listFactoryFlows, previewFactoryPlan).WithParents(listFactoryParents))
 			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
 			if err != nil {
@@ -360,6 +360,31 @@ func openFlows(flows []circleci.Flow) []circleci.Flow {
 	for _, f := range flows {
 		if f.Phase != circleci.PhaseEnded {
 			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// listFactoryParents is each open sub-plan's parent, by plan ID, for the
+// flow list.
+func listFactoryParents(ctx context.Context) (map[string]string, error) {
+	api, err := factoryPlanClient()
+	if err != nil {
+		return nil, fmt.Errorf("connect to factory: %w", err)
+	}
+	plans, err := api.ListPlans(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list plans: %w", err)
+	}
+	return planParents(plans), nil
+}
+
+// planParents is each of plans that has a parent, mapped to it.
+func planParents(plans []circleci.Plan) map[string]string {
+	out := make(map[string]string)
+	for _, p := range plans {
+		if p.Parent != "" {
+			out[p.ID] = p.Parent
 		}
 	}
 	return out

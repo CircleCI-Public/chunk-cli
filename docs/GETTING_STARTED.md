@@ -365,7 +365,8 @@ For a bigger change, plan it with a factory planning session first (it needs
 the factory daemon running with `FACTORY_PLAN_STORE=circleci`). `chunk watch`
 opens on **Flows**, your open flows in factory grouped by who they wait on
 (Needs your review, With agent, Not started, Other) and then by phase
-(Planning, Building, ...), a flow whose PR factory could not rebase marked ⚠,
+(Planning, Building, ...), a sub-plan marked `↳` with its parent (and indented
+under it when both are under the same heading), a flow whose PR factory could not rebase marked ⚠,
 with a read-only preview of the selected one's plan; `tab` (or `2`) shows your
 runs and `p` or `tab` comes back. `Enter` opens a flow's plan and `n` starts a
 new one. Opening or

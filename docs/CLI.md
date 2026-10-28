@@ -784,7 +784,12 @@ chunk
   why it could not be sent, is shown in the footer. Closing the dashboard
   stops a draft still being made. The dashboard opens on Flows: your open flows
   in factory, grouped by who they wait on, then by phase, with the selected
-  flow's plan text and open comments previewed beside it. `tab`, `2` or `esc`
+  flow's plan text and open comments previewed beside it. A sub-plan stays
+  in its own group and is marked `↳` with its parent's title; one listed
+  under the same heading as its parent (same group, same phase) is indented
+  under it. Sub-plans that have
+  ended are not shown. When chunk cannot read the plans' parents the list
+  is shown flat, with `sub-plans unavailable` under it. `tab`, `2` or `esc`
   shows the runs, and `p`, `tab` or `1` the flows again. `Enter` opens the
   `chunk factory plan` screen on the selected flow's plan, and `n` on a new one, to plan the change with Claude
   before the factory builds it. Opening a plan only reads it: no session

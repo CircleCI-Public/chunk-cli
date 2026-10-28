@@ -15,7 +15,7 @@ func (m Model) keys() keyMap {
 		Runs:   key.NewBinding(key.WithKeys("tab", "2", "esc"), key.WithHelp("tab", "runs")),
 		Quit:   key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 	}
-	listed := len(m.visible()) > 0
+	listed := len(m.flows) > 0
 	k.Select.SetEnabled(listed)
 	k.Open.SetEnabled(listed)
 	return k
