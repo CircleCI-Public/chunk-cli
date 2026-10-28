@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -104,6 +105,28 @@ func preview(_ context.Context, id string) (string, []circleci.PlanComment, erro
 	return "# Preview " + id, nil, nil
 }
 
+// listRows is the list's rows at a size that shows every one, without the
+// pane's border and the rows' indent.
+func listRows(d *driver) []string {
+	d.t.Helper()
+	d.send(tea.WindowSizeMsg{Width: 50, Height: 60})
+	var rows []string
+	for _, line := range strings.Split(d.content(), "\n") {
+		rows = append(rows, strings.Trim(line, "│ "))
+	}
+	return rows
+}
+
+func count(rows []string, row string) int {
+	n := 0
+	for _, r := range rows {
+		if r == row {
+			n++
+		}
+	}
+	return n
+}
+
 func open(d *driver, id string) {
 	d.t.Helper()
 	d.send(press(tea.KeyEnter))
@@ -117,6 +140,9 @@ func TestNavigation(t *testing.T) {
 		d := newDriver(t, fixed(
 			circleci.Flow{ID: "a1", Title: "Fix parser", State: "Planning - Human"},
 			circleci.Flow{ID: "b2", Title: "Cache café\x1b[31m\x00", State: "Review - Agent"},
+			// Listed in reverse phase order: Planning shows before Building.
+			circleci.Flow{ID: "c3", Title: "Build it", State: "Building - Human"},
+			circleci.Flow{ID: "d4", Title: "Plan it", State: "Planning - Human"},
 		), preview)
 		d.load()
 		text := d.content()
@@ -128,13 +154,19 @@ func TestNavigation(t *testing.T) {
 		d.send(press('/'))
 		d.send(press('j'))
 		d.step()
+		open(d, "d4")
+		d.send(press('j'))
+		d.step()
+		open(d, "c3")
+		d.send(press('j'))
+		d.step()
 		open(d, "b2")
 		text = d.content()
 		assert.Check(t, cmp.Contains(text, "Fix parser"))
 		assert.Check(t, cmp.Contains(text, "▶ Cache café"))
 		d.send(press('k'))
 		d.step()
-		open(d, "a1")
+		open(d, "c3")
 		d.send(press(tea.KeyDown))
 		d.step()
 		open(d, "b2")
@@ -163,11 +195,14 @@ func TestStableRefreshAndSelect(t *testing.T) {
 		a := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
 		b := circleci.Flow{ID: "b", Title: "Beta", State: "Planning - Human"}
 		c := circleci.Flow{ID: "c", Title: "Gamma", State: "Planning - Human"}
+		zeta := circleci.Flow{ID: "z", Title: "Zeta plan", State: "Zeta - Human"}
+		alphaPhase := circleci.Flow{ID: "al", Title: "Alpha plan", State: "Alpha - Human"}
+		zetaToo := circleci.Flow{ID: "z2", Title: "Zeta too", State: " zeta - Human"}
 		d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 			if call.Add(1) == 1 {
-				return []circleci.Flow{a, b}, nil
+				return []circleci.Flow{a, b, zeta, alphaPhase}, nil
 			}
-			return []circleci.Flow{c, b, a}, nil
+			return []circleci.Flow{c, b, a, alphaPhase, zeta, zetaToo}, nil
 		}, preview)
 		d.load()
 		d.send(press('j'))
@@ -178,6 +213,14 @@ func TestStableRefreshAndSelect(t *testing.T) {
 		assert.Check(t, cmp.Contains(text, "▶ Beta"))
 		alpha, beta, gamma := strings.Index(text, "Alpha"), strings.Index(text, "Beta"), strings.Index(text, "Gamma")
 		assert.Assert(t, alpha < beta && beta < gamma, "refresh reordered existing rows:\n%s", text)
+		// Unknown phases keep the order the list first saw them in, and a
+		// phase spelled differently joins its sub-group.
+		rows := listRows(d)
+		zetaRow, zetaTooRow, alphaRow := slices.Index(rows, "Zeta plan"), slices.Index(rows, "Zeta too"), slices.Index(rows, "Alpha plan")
+		assert.Check(t, zetaRow >= 0 && zetaTooRow == zetaRow+2 && alphaRow == zetaTooRow+3, "wrong phase order:\n%s", strings.Join(rows, "\n"))
+		assert.Check(t, cmp.Equal(count(rows, "Zeta"), 1), "want one Zeta sub-heading:\n%s", strings.Join(rows, "\n"))
+		assert.Check(t, cmp.Equal(rows[zetaRow-1], "Zeta"))
+		assert.Check(t, cmp.Equal(rows[alphaRow-1], "Alpha"))
 		open(d, "b")
 		d.m = d.m.Select("c")
 		d.send(nil)
@@ -329,7 +372,45 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 	})
 }
 
-func TestGroupsCommentsAndDimensions(t *testing.T) {
+func TestPhase(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state string
+		want  string
+	}{
+		{
+			name:  "bare word",
+			state: "Planning",
+			want:  "",
+		},
+		{
+			name:  "any case",
+			state: "planning - human",
+			want:  "planning",
+		},
+		{
+			name:  "empty",
+			state: "",
+			want:  "",
+		},
+		{
+			name:  "unknown phase",
+			state: "Integrating - Agent",
+			want:  "Integrating",
+		},
+		{
+			name:  "unknown actor",
+			state: "Integrating - Bot",
+			want:  "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(flowlist.Phase(tc.state), tc.want))
+		})
+	}
+}
+
+func TestGroupsAndRows(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now()
 		flows := []circleci.Flow{
@@ -338,7 +419,14 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 			{ID: "new", Title: "New plan", State: "Unprioritized"},
 			{ID: "agent", Title: "Agent plan", State: "Planning - Agent"},
 			{ID: "untitled", State: "Building - Agent"},
-			{ID: "human", Title: "Human plan", State: "Review - Human", UpdatedAt: now},
+			{ID: "built", Title: "Built", State: "Building - Human", Task: &circleci.FlowTask{ID: "t"}},
+			{
+				ID: "human", Title: "Planned", State: "Planning - Human", UpdatedAt: now,
+				SessionID: "s1", Task: &circleci.FlowTask{ID: "t1", Category: "build-unit"},
+			},
+			{ID: "zeta", Title: "Zeta", State: "Zeta - Human"},
+			{ID: "alpha", Title: "Alpha", State: "Alpha - Human"},
+			{ID: "planned-too", Title: "Planned too", State: "planning - human"},
 		}
 		d := newDriver(t, fixed(flows...), func(context.Context, string) (string, []circleci.PlanComment, error) {
 			return "# Markdown heading\n\n**Plan prose**\n\n" + strings.Repeat("界", 150), []circleci.PlanComment{
@@ -347,20 +435,56 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 			}, nil
 		})
 		d.load()
-		text := d.content()
+		rows := listRows(d)
+		all := strings.Join(rows, "\n")
 		for _, want := range []string{"flows", "Needs your review", "With agent", "Not started", "Other", "custom exact state", "integrating - bot", "Untitled plan"} {
-			assert.Check(t, cmp.Contains(text, want))
+			assert.Check(t, cmp.Contains(all, want))
 		}
-		order := []string{"Human plan", "Agent plan", "New plan", "Other plan", "Bot plan"}
+		index := func(row string) int {
+			t.Helper()
+			for i := len(rows) - 1; i >= 0; i-- {
+				// The last match, so a title is not taken for the
+				// sub-heading of the same name above it.
+				if strings.TrimPrefix(rows[i], "▶ ") == row {
+					return i
+				}
+			}
+			t.Fatalf("no row %q:\n%s", row, all)
+			return -1
+		}
+		order := []string{"Planned", "Built", "Zeta", "Alpha", "Agent plan", "New plan", "Other plan", "Bot plan"}
 		for i := 1; i < len(order); i++ {
-			assert.Assert(t, strings.Index(text, order[i-1]) < strings.Index(text, order[i]), "wrong group order:\n%s", text)
+			assert.Check(t, index(order[i-1]) < index(order[i]), "%q is not before %q:\n%s", order[i-1], order[i], all)
 		}
+		// A phase spelled differently shares its sub-heading.
+		planned := index("Planned")
+		assert.Check(t, cmp.Equal(rows[planned+2], "Planned too"), "rows:\n%s", all)
+		review := rows[index("Needs your review"):index("With agent")]
+		assert.Check(t, cmp.Equal(count(review, "Planning"), 1), "want one Planning sub-heading:\n%s", all)
+		assert.Check(t, cmp.Equal(count(review, "Building"), 1), "want one Building sub-heading:\n%s", all)
+		// Each sub-heading is directly above its first title.
+		for title, heading := range map[string]string{"Planned": "Planning", "Built": "Building", "Zeta": "Zeta", "Alpha": "Alpha"} {
+			assert.Check(t, cmp.Equal(rows[index(title)-1], heading), "rows:\n%s", all)
+		}
+		// Not started and Other have no sub-headings: only titles and chips.
+		other := index("Other")
+		assert.Check(t, cmp.DeepEqual(rows[other+1:other+5], []string{"Other plan", "custom exact state", "Bot plan", "integrating - bot"}), "rows:\n%s", all)
+		notStarted := index("Not started")
+		assert.Check(t, cmp.DeepEqual(rows[notStarted+1:notStarted+3], []string{"New plan", "unprioritized"}), "rows:\n%s", all)
+		// The row details: task category, claimed and updated-ago, each only
+		// when there is one.
+		assert.Check(t, cmp.Contains(rows[planned+1], "build-unit"))
+		assert.Check(t, cmp.Contains(rows[planned+1], "claimed"))
+		assert.Check(t, cmp.Contains(rows[planned+1], "just now"))
+		assert.Check(t, cmp.Equal(rows[index("Built")+1], "building"), "a blank category or no session shows a detail")
+		assert.Check(t, !strings.Contains(all, "ago"), "a zero UpdatedAt shows an age:\n%s", all)
+
 		for _, size := range []tea.WindowSizeMsg{{Width: 50, Height: 20}, {Width: 80, Height: 24}, {Width: 120, Height: 35}, {Width: 1, Height: 1}, {Width: 100, Height: 2}} {
 			for _, bg := range []color.Color{color.White, color.Black} {
 				d.send(size)
 				d.send(tea.BackgroundColorMsg{Color: bg})
 				d.m = d.m.WithNote("Unsent draft: " + strings.Repeat("界", 200) + "\nunsafe\x1b[2J")
-				text = d.content()
+				text := d.content()
 				lines := strings.Split(text, "\n")
 				assert.Assert(t, len(lines) <= size.Height, "height %d exceeds %d", len(lines), size.Height)
 				for _, line := range lines {
@@ -374,7 +498,7 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 					assert.Check(t, cmp.Contains(lines[len(lines)-2], "tab runs"))
 				}
 				if size.Width >= 80 && size.Height > 2 {
-					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose", "just now"} {
+					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose"} {
 						assert.Check(t, cmp.Contains(text, want))
 					}
 					for _, not := range []string{"RESOLVED SECRET", "# Markdown", "**Plan prose**"} {

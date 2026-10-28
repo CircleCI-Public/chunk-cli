@@ -77,7 +77,7 @@ func (m Model) footerLines() []string {
 func (m Model) listLines(width, height int) []string {
 	st := m.styles
 	var rows []string
-	selected, lastGroup := 0, -1
+	selected, lastGroup, lastPhase := 0, -1, ""
 	labels := []string{"Needs your review", "With agent", "Not started", "Other"}
 	for _, f := range m.visible() {
 		g := group(f.State)
@@ -86,7 +86,12 @@ func (m Model) listLines(width, height int) []string {
 				rows = append(rows, "")
 			}
 			rows = append(rows, st.Dim.Render(labels[g]))
-			lastGroup = g
+			lastGroup, lastPhase = g, ""
+		}
+		// A sub-heading is spelled as the first flow in it spells its phase.
+		if p := phase(f.State); p != "" && !samePhase(p, lastPhase) {
+			rows = append(rows, " "+st.Dim.Render(oneLine(p)))
+			lastPhase = p
 		}
 		title := oneLine(f.Title)
 		if title == "" {
@@ -101,6 +106,12 @@ func (m Model) listLines(width, height int) []string {
 		}
 		chip := stateChip(st, f.State, width-4)
 		var detail []string
+		if f.Task != nil && f.Task.Category != "" {
+			detail = append(detail, st.VDim.Render(oneLine(f.Task.Category)))
+		}
+		if f.SessionID != "" {
+			detail = append(detail, st.VDim.Render("claimed"))
+		}
 		if !f.UpdatedAt.IsZero() {
 			detail = append(detail, st.VDim.Render(ago(f.UpdatedAt)))
 		}
@@ -120,7 +131,8 @@ func (m Model) listLines(width, height int) []string {
 		}
 		rows = message
 	}
-	// The rows scroll to keep the selected flow's title and state line in view.
+	// The rows scroll to keep the selected flow's title and state line in
+	// view. A phase sub-heading is above the title, so may scroll off.
 	start := max(0, selected+2-height)
 	start = min(start, max(len(rows)-height, 0))
 	return rows[start:]

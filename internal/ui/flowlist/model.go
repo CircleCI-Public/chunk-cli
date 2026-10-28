@@ -3,7 +3,9 @@
 package flowlist
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -49,12 +51,16 @@ type Model struct {
 	list    func(context.Context) ([]circleci.Flow, error)
 	preview func(context.Context, string) (string, []circleci.PlanComment, error)
 	flows   []circleci.Flow
-	id      string
-	note    string
-	width   int
-	height  int
-	dark    bool
-	styles  theme.Styles
+	// phases are the phases outside phaseOrder, in the order the list
+	// first saw them. They are kept across refreshes, so a sub-group does
+	// not move when its first flow leaves and comes back.
+	phases []string
+	id     string
+	note   string
+	width  int
+	height int
+	dark   bool
+	styles theme.Styles
 
 	loaded, listing bool
 	listErr         error
@@ -137,6 +143,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.listErr = msg.err
 		if msg.err == nil {
 			m.flows = stableFlows(m.flows, msg.flows)
+			m.phases = seenPhases(m.phases, m.flows)
 			m.loaded = true
 			m.keepSelection()
 			refreshPreview = true
@@ -271,15 +278,61 @@ func group(state string) int {
 	return 3
 }
 
-func (m Model) visible() []circleci.Flow {
-	var out []circleci.Flow
-	for g := 0; g < 4; g++ {
-		for _, f := range m.flows {
-			if group(f.State) == g {
-				out = append(out, f)
-			}
-		}
+// phaseOrder is how the phases chunk knows sort within an actor group;
+// others follow in the order they first appear.
+var phaseOrder = []string{"Planning", "Building"}
+
+// phase is the sub-group a flow in state goes in: the phase part of a
+// "Phase - Actor" state, or "" for a state with no actor.
+func phase(state string) string {
+	p, actor := planstate.Parse(state)
+	if actor != planstate.Human && actor != planstate.Agent {
+		return ""
 	}
+	return p
+}
+
+// samePhase is whether a and b are one sub-group.
+func samePhase(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+// seenPhases is known with the phases of flows that are in neither
+// phaseOrder nor known appended, in the order flows has them.
+func seenPhases(known []string, flows []circleci.Flow) []string {
+	for _, f := range flows {
+		p := phase(f.State)
+		match := func(o string) bool { return samePhase(o, p) }
+		if p == "" || slices.ContainsFunc(phaseOrder, match) || slices.ContainsFunc(known, match) {
+			continue
+		}
+		known = append(known, p)
+	}
+	return known
+}
+
+// phaseRank is where phase p sorts within an actor group.
+func (m Model) phaseRank(p string) int {
+	match := func(o string) bool { return samePhase(o, p) }
+	if i := slices.IndexFunc(phaseOrder, match); i >= 0 {
+		return i
+	}
+	if i := slices.IndexFunc(m.phases, match); i >= 0 {
+		return len(phaseOrder) + i
+	}
+	return len(phaseOrder) + len(m.phases)
+}
+
+// visible is the flows in the order the list shows them: by actor group,
+// then by phase, then in the order the list keeps them.
+func (m Model) visible() []circleci.Flow {
+	out := slices.Clone(m.flows)
+	slices.SortStableFunc(out, func(a, b circleci.Flow) int {
+		if c := cmp.Compare(group(a.State), group(b.State)); c != 0 {
+			return c
+		}
+		return cmp.Compare(m.phaseRank(phase(a.State)), m.phaseRank(phase(b.State)))
+	})
 	return out
 }
 
