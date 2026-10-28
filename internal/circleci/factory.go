@@ -25,8 +25,16 @@ type Plan struct {
 // Flow is a factory plan's progress through the code factory, as
 // /api/v3/factory/flows serves it. Its ID is the plan's.
 type Flow struct {
-	ID    string
-	State string
+	ID string
+	// Title is the flow's plan's title, "" from a conductor that does not
+	// serve it.
+	Title string
+	// UpdatedAt is when the flow last changed, zero when not served.
+	UpdatedAt time.Time
+	State     string
+	// Phase is PhaseReceived until the plan is prioritized, PhaseStarted
+	// while its flow runs and PhaseEnded once it ends.
+	Phase string
 	// SessionID is the factory session claiming the plan, or "" when none
 	// does.
 	SessionID string
@@ -45,6 +53,13 @@ type FlowTask struct {
 	// Category is what kind of task it is, such as "early-plan".
 	Category string
 }
+
+// The phases a flow is in, as factory serves them.
+const (
+	PhaseReceived = "received"
+	PhaseStarted  = "started"
+	PhaseEnded    = "ended"
+)
 
 // FlowEvent is an event a human sends a plan's flow, which factory applies
 // at the plan's next poll.
@@ -90,12 +105,21 @@ func (a planAttrs) plan(id string) *Plan {
 }
 
 type flowAttrs struct {
+	Title            string      `json:"title"`
+	UpdatedAt        *time.Time  `json:"updated_at"`
 	State            string      `json:"state"`
+	Phase            string      `json:"phase"`
 	ApplicableEvents []FlowEvent `json:"applicable_events"`
 }
 
 func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
-	f := &Flow{ID: id, State: a.State, ApplicableEvents: a.ApplicableEvents}
+	f := &Flow{
+		ID: id, Title: a.Title, State: a.State, Phase: a.Phase,
+		ApplicableEvents: a.ApplicableEvents,
+	}
+	if a.UpdatedAt != nil {
+		f.UpdatedAt = *a.UpdatedAt
+	}
 	if refs.FactorySession != nil {
 		f.SessionID = refs.FactorySession.ID
 	}

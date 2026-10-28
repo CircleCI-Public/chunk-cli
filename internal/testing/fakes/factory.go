@@ -462,8 +462,20 @@ func flowEntity(p *factoryPlan) gin.H {
 	if applicable == nil {
 		applicable = []string{}
 	}
+	phase := "started"
+	switch {
+	case strings.EqualFold(p.state, "Unprioritized"):
+		phase = "received"
+	case slices.ContainsFunc(factoryEnds, func(s string) bool { return strings.EqualFold(s, p.state) }):
+		phase = "ended"
+	}
 	return gin.H{
-		"id": p.id, "attributes": gin.H{"state": p.state, "applicable_events": applicable}, "references": refs,
+		"id": p.id,
+		"attributes": gin.H{
+			"title": p.title, "updated_at": p.updatedAt.Format(time.RFC3339Nano),
+			"state": p.state, "phase": phase, "applicable_events": applicable,
+		},
+		"references": refs,
 	}
 }
 
