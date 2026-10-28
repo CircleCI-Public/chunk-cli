@@ -160,8 +160,8 @@ type FactoryTransition struct {
 
 // FactoryFlowStatus is the part of a flow a test sets beyond its state.
 type FactoryFlowStatus struct {
-	Control, Outcome, PR string
-	Deviations           []string
+	Outcome, PR string
+	Deviations  []string
 	// Next, when not nil, is served as the flow's next in place of the one
 	// the fake makes from its task, state and applicable events.
 	Next []FactoryTransition
@@ -557,7 +557,7 @@ func flowEntity(p *factoryPlan) gin.H {
 	attrs := gin.H{
 		"title": p.title, "updated_at": p.updatedAt.Format(time.RFC3339Nano),
 		"state": p.state, "phase": factoryPhase(p.state), "next": flowNext(p),
-		"control": p.status.Control, "pr": p.status.PR, "deviations": p.status.Deviations,
+		"pr": p.status.PR, "deviations": p.status.Deviations,
 	}
 	if p.status.Deviations == nil {
 		attrs["deviations"] = []string{}
@@ -608,8 +608,8 @@ func transitionEntity(t FactoryTransition) gin.H {
 }
 
 // handleListFlowBlockers serves the plans blocking plan :id, in the order
-// blocked, each with its own flow's state, phase and control. A blocker
-// with no flow is served with an empty state and no phase or control, as
+// blocked, each with its own flow's state and phase. A blocker with no flow
+// is served with an empty state and no phase, as
 // conductor serves it. It answers 404 for an unknown plan.
 func (f *FakeCircleCI) handleListFlowBlockers(c *gin.Context) {
 	if !f.factoryStart(c) {
@@ -636,7 +636,6 @@ func (f *FakeCircleCI) handleListFlowBlockers(c *gin.Context) {
 		if !b.noFlow {
 			attrs["state"] = b.state
 			attrs["phase"] = factoryPhase(b.state)
-			attrs["control"] = b.status.Control
 		}
 		items = append(items, gin.H{"id": b.id, "attributes": attrs})
 	}

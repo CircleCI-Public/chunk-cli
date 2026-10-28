@@ -77,6 +77,9 @@ type Store interface {
 	// it from Integrating - Human to Integrating - Agent. Factory moves it at
 	// its next poll, not before ResolveConflicts returns.
 	ResolveConflicts(ctx context.Context) error
+	// StartWork has factory start work on the Unprioritized plan. Factory
+	// moves it at its next poll, not before StartWork returns.
+	StartWork(ctx context.Context) error
 	// ApproveDesign approves the plan's design, moving it from Planning -
 	// Human for factory to write its units. Factory moves it at its next
 	// poll, not before ApproveDesign returns.

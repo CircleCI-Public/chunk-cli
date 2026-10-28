@@ -136,6 +136,8 @@ type (
 	designApprovedMsg struct{ err error }
 	// conflictsSentMsg is the end of sending resolve-conflicts.
 	conflictsSentMsg struct{ err error }
+	// startedMsg is the end of sending prioritize.
+	startedMsg struct{ err error }
 	// approveStepMsg is a step of the approval starting; next is where the
 	// approval's later messages come from.
 	approveStepMsg struct {
@@ -350,6 +352,10 @@ type Model struct {
 	// conflicts until factory has the event; pendingConflicts is whether the
 	// y being asked for resolves them.
 	resolvingConflicts, pendingConflicts bool
+	// startingWork is set from the developer's y to starting work on an
+	// Unprioritized plan until factory has the event; pendingStart is
+	// whether the y being asked for starts it.
+	startingWork, pendingStart bool
 	// approving is set from the developer's y until factory answers, so a
 	// second ctrl+s cannot approve the plan twice.
 	approving bool
@@ -605,7 +611,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, waitApproval(msg.next)
 
-	case designApprovedMsg, approvedMsg, conflictsSentMsg:
+	case designApprovedMsg, approvedMsg, conflictsSentMsg, startedMsg:
 		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
@@ -740,7 +746,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.confirming {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
-			m.pendingDelete, m.pendingDesign, m.pendingConflicts = "", false, false
+			m.pendingDelete, m.pendingDesign, m.pendingConflicts, m.pendingStart = "", false, false, false
 			return m, nil
 		}
 		return m.answerYes()
@@ -832,6 +838,11 @@ func (m Model) answerYes() (Model, tea.Cmd) {
 		m.status = "Sending resolve-conflicts…"
 		return m, tea.Batch(resolveConflictsCmd(m.ctx, m.store), m.spin.Tick)
 	}
+	if m.pendingStart {
+		m.pendingStart, m.startingWork = false, true
+		m.status = "Starting work…"
+		return m, startWorkCmd(m.ctx, m.store)
+	}
 	if m.pendingDesign {
 		m.pendingDesign, m.approvingDesign = false, true
 		m.status = "Approving the design…"
@@ -873,7 +884,7 @@ func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.built, m.approving, m.approvingDesign, m.resolvingConflicts, m.moving != nil:
+	case m.built, m.approving, m.approvingDesign, m.resolvingConflicts, m.startingWork, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
 	case m.conflicting() && queued > 0:
@@ -881,6 +892,9 @@ func (m Model) askToApprove() Model {
 	case m.conflicting():
 		m.confirming, m.pendingConflicts = true, true
 		m.status = ui.TitleStyle.Render("Hand the plan back to the agent to rebase its PR onto its base? ") + confirmButtons
+	case planstate.IsUnprioritized(m.state) && slices.Contains(m.events, prioritize):
+		m.confirming, m.pendingStart = true, true
+		m.status = ui.TitleStyle.Render("Start work on the plan? ") + confirmButtons
 	case strings.TrimSpace(m.plan) == "":
 		m.status = warn("There is no plan to approve yet.")
 	case m.state != ReadyState && m.inReview():
@@ -1069,7 +1083,7 @@ func (m *Model) syncPlaceholder() {
 }
 
 // applyApproval is the end of approving the plan's design, or the plan, or
-// of sending resolve-conflicts.
+// of sending resolve-conflicts or prioritize.
 func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case designApprovedMsg:
@@ -1090,6 +1104,13 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 		m.moving = &transition{kind: movingConflicts, from: m.state, since: time.Now()}
 		m.status = ""
 		return m, tea.Batch(refreshCmd(m.ctx, m.store), m.spin.Tick)
+	case startedMsg:
+		m.startingWork = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not start work: " + msg.err.Error())
+			return m, nil
+		}
+		return m, refreshCmd(m.ctx, m.store)
 	case approvedMsg:
 		m.approving = false
 		if msg.err != nil {
@@ -1120,6 +1141,11 @@ func approveDesignCmd(ctx context.Context, s Store) tea.Cmd {
 // resolveConflictsCmd has factory rebase the plan's conflicting PR.
 func resolveConflictsCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg { return conflictsSentMsg{err: s.ResolveConflicts(ctx)} }
+}
+
+// startWorkCmd has factory start work on the Unprioritized plan.
+func startWorkCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg { return startedMsg{err: s.StartWork(ctx)} }
 }
 
 // approveCmd runs approve in the background, and reads what it reports: an

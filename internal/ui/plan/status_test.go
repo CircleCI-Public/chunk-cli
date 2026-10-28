@@ -97,11 +97,32 @@ func TestStatus(t *testing.T) {
 			step: "Building",
 			next: "robot: poke",
 		},
-		{name: "transition with nothing set", flow: Flow{State: "Building - Agent", Next: []Step{{Actor: "session"}}},
-			step: "Building", next: "chunk"},
-		{name: "blocked", flow: Flow{State: "Planning - Human"}, family: Family{Blockers: []Relative{{Title: "retry-config"}}},
-			stage: StageQuestions, step: "Planning", next: "Waiting on retry-config"},
-		{name: "stuck with no blockers", flow: Flow{State: "Building - Agent"}, step: "Building"},
+		{
+			name: "transition with nothing set",
+			flow: Flow{
+				State: "Building - Agent",
+				Next:  []Step{{Actor: "session"}},
+			},
+			step: "Building",
+			next: "chunk",
+		},
+		{
+			name: "start work",
+			flow: Flow{
+				State: "Unprioritized",
+				Next: []Step{
+					{Actor: "human", Event: "prioritize"},
+					{Actor: "human", Event: "abandon"},
+				},
+			},
+			step: "Not started",
+			next: "you start work · ctrl+s",
+		},
+		{
+			name: "stuck with no blockers",
+			flow: Flow{State: "Building - Agent"},
+			step: "Building",
+		},
 		{
 			name: "merged",
 			flow: Flow{

@@ -42,6 +42,9 @@ type fakeStore struct {
 	// ConflictsSent records the state the plan was in at each
 	// ResolveConflicts call, in order.
 	ConflictsSent []string
+	// Started records the state the plan was in at each StartWork call, in
+	// order.
+	Started []string
 	// Added records the AddComment calls, in order.
 	Added [][2]string // {quote, body}
 	// Edited, Resolved and Deleted record the ids EditComment,
@@ -151,6 +154,16 @@ func (f *fakeStore) ResolveConflicts(context.Context) error {
 		return f.AddressErr
 	}
 	f.ConflictsSent = append(f.ConflictsSent, f.StateV)
+	return nil
+}
+
+func (f *fakeStore) StartWork(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.AddressErr != nil {
+		return f.AddressErr
+	}
+	f.Started = append(f.Started, f.StateV)
 	return nil
 }
 

@@ -16,14 +16,10 @@ const done = "Done"
 // steps are the phases a flow goes through, in order, as the strip draws them.
 var steps = []string{"Planning", "Building", "Integrating", done}
 
-// status is the strip's text for flow: the step it is at, what is happening
-// now, and what comes next. stage is what ctrl+s approves in ReadyState, and
-// inReview whether factory's agent is reviewing the plan. Next is the way
-// forward as factory orders it: resolve-conflicts when offered, since a
-// conflicting PR cannot merge, and otherwise the first transition that is
-// not an escape hatch. A live flow with nothing in Next waits on its first
-// blocker that is not Done. Text from factory is stripped of escapes and
-// kept to one line.
+// status is the strip's text for flow and its family: the step it is at,
+// what is happening now, and what comes next. stage is what ctrl+s approves
+// in ReadyState, and inReview whether factory's agent is reviewing the plan.
+// Text from factory is stripped of escapes and kept to one line.
 func status(f Flow, fam Family, stage Stage, inReview bool) (step, now, next string) {
 	state := clean(f.State)
 	switch phase, _ := planstate.Parse(state); {
@@ -50,6 +46,8 @@ func status(f Flow, fam Family, stage Stage, inReview bool) (step, now, next str
 		now = "factory is reviewing the plan"
 	}
 
+	// A live flow with nothing in Next waits on its first blocker that is
+	// not Done.
 	blocker := -1
 	if !f.Ended && len(f.Next) == 0 {
 		blocker = slices.IndexFunc(fam.Blockers, func(b Relative) bool {
@@ -115,6 +113,8 @@ func stepText(s Step) string {
 		switch what {
 		case "resolve-conflicts":
 			what = "resolve conflicts · ctrl+s"
+		case "prioritize":
+			what = "start work · ctrl+s"
 		case "address-comments":
 			what = "send your comments"
 		case "merge-pr":

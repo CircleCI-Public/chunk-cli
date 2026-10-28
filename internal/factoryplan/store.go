@@ -385,6 +385,19 @@ func (s *Store) ResolveConflicts(ctx context.Context) error {
 	return nil
 }
 
+// StartWork sends the plan's flow factory's prioritize event, which moves an
+// Unprioritized plan on for factory to start work on it.
+func (s *Store) StartWork(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.CreateFlowEvent(ctx, id, circleci.Prioritize); err != nil {
+		return fmt.Errorf("send the prioritize event: %w", err)
+	}
+	return nil
+}
+
 // ApproveDesign sends the plan's flow factory's approve-for-units event,
 // which approves its design. A flow that does not list the event now is
 // refused without sending it: with ErrDesignApproved when it lists

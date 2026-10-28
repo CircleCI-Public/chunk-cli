@@ -73,7 +73,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg:
+	case eventMsg, sentMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -3748,4 +3748,64 @@ func TestFamilyErrorIsQuiet(t *testing.T) {
 	store.mu.Unlock()
 	m = refreshed(t, m)
 	assert.Check(t, !strings.Contains(row2(m), "could not read related plans"), row2(m))
+}
+
+// TestCtrlSStartsAnUnprioritizedPlan checks that ctrl+s, after a y, sends
+// prioritize for an Unprioritized plan whose flow offers it, and refuses one
+// whose flow does not.
+func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
+	unprioritized := func(t *testing.T, events ...string) (Model, *fakeStore) {
+		t.Helper()
+		store := newFakeStore()
+		store.Created = true
+		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+		store.StateV = "Unprioritized"
+		store.setEvents(events...)
+		m := New(context.Background(), turnReturning("ok"), nil, store, "")
+		m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+		return refreshed(t, m), store
+	}
+	started := func(store *fakeStore) []string {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return slices.Clone(store.Started)
+	}
+
+	t.Run("y starts work", func(t *testing.T) {
+		m, store := unprioritized(t, "prioritize", "abandon")
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		assert.Assert(t, m.confirming)
+		assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "Start work on the plan?"))
+		m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+		assert.Check(t, cmp.DeepEqual(started(store), []string{"Unprioritized"}))
+		assert.Check(t, !m.startingWork)
+		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Starting work…"))
+	})
+
+	t.Run("n sends nothing", func(t *testing.T) {
+		m, store := unprioritized(t, "prioritize", "abandon")
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		m = drive(t, m, press("n"))
+		assert.Check(t, !m.confirming)
+		assert.Check(t, !m.pendingStart)
+		m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+		assert.Check(t, cmp.Len(started(store), 0))
+	})
+
+	t.Run("not offered", func(t *testing.T) {
+		m, store := unprioritized(t, "abandon")
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		assert.Check(t, !m.confirming)
+		assert.Check(t, cmp.Len(started(store), 0))
+		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "cannot be approved while it is"))
+	})
+
+	t.Run("a failed send says so", func(t *testing.T) {
+		m, store := unprioritized(t, "prioritize", "abandon")
+		store.AddressErr = errors.New("factory is down")
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+		assert.Check(t, !m.startingWork)
+		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Could not start work: factory is down"))
+	})
 }

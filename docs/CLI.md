@@ -667,6 +667,13 @@ chunk
   hand it back: the comments must be saved first, and saving them hands the
   plan to the agent too, which rebases it.
 
+  A plan not yet started (Unprioritized) reads
+  `Next: you start work · ctrl+s` in the strip, and `ctrl+s` starts it, after
+  a `y`, by sending factory's `prioritize` event. The strip's Next follows
+  factory's order: `resolve-conflicts` comes first when offered, and the
+  `abandon` events factory offers in every live state are never Next. A plan
+  with nothing to do next waits on its first blocker that is not Done.
+
   Approving a plan with units has the chunk daemon build it, in a Claude Code
   session in the plan's worktree, through to a pull request. In `chunk watch`,
   the screen stays open after approval, on the Flow tab, to follow the build.

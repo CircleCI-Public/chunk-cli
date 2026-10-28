@@ -273,6 +273,23 @@ func TestStoreResolveConflictsSendsTheEvent(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"resolve-conflicts"}))
 }
 
+// TestStoreStartWorkSendsTheEvent checks that StartWork fails before Create,
+// and after it sends the plan's flow factory's prioritize event.
+func TestStoreStartWorkSendsTheEvent(t *testing.T) {
+	client, _ := testClient(t)
+	ctx := context.Background()
+	err := newStore(client, "").StartWork(ctx)
+	assert.Check(t, err != nil, "a plan not yet created took the event")
+
+	store, _, cci := createdStore(t)
+	cci.SetFactoryPlanState(store.ID(), "Unprioritized")
+	cci.SetFactoryApplicableEvents(store.ID(), "prioritize", "abandon")
+	err = store.StartWork(ctx)
+	assert.Check(t, err)
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"prioritize"}))
+}
+
 // TestStoreApproveDesignSendsTheEvent checks that ApproveDesign sends the
 // plan's flow factory's approve-for-units event.
 func TestStoreApproveDesignSendsTheEvent(t *testing.T) {
