@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,6 +84,77 @@ func TestPlans(t *testing.T) {
 		_, err = client.PlanText(ctx, id)
 		assertStatus(t, err, http.StatusNotFound)
 		assertStatus(t, client.SetPlanText(ctx, id, "x"), http.StatusNotFound)
+		err = client.DeletePlan(ctx, id)
+		assertStatus(t, err, http.StatusNotFound)
+	})
+
+	t.Run("deletes a plan, its comments and its flow", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		_, err = client.CreateComment(ctx, p.ID, "", "a comment")
+		assert.NilError(t, err)
+
+		err = client.DeletePlan(ctx, p.ID)
+		assert.NilError(t, err)
+
+		reqs := fake.Recorder.AllRequests()
+		last := reqs[len(reqs)-1]
+		assert.Check(t, cmp.Equal(last.Method, http.MethodDelete))
+		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/plans/"+p.ID))
+		_, err = client.GetPlan(ctx, p.ID)
+		assertStatus(t, err, http.StatusNotFound)
+		_, err = client.GetFlow(ctx, p.ID)
+		assertStatus(t, err, http.StatusNotFound)
+		_, err = client.ListComments(ctx, p.ID, false)
+		assertStatus(t, err, http.StatusNotFound)
+	})
+
+	t.Run("refuses to delete a plan with sub-plans or a claim", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			setup func(t *testing.T, fake *fakes.FakeCircleCI, client *Client, planID string)
+			want  string
+		}{
+			{
+				name: "sub-plans",
+				setup: func(t *testing.T, fake *fakes.FakeCircleCI, client *Client, planID string) {
+					child, err := client.CreatePlan(ctx, "a sub-plan", "")
+					assert.NilError(t, err)
+					fake.SetFactoryParent(child.ID, planID)
+				},
+				want: "sub-plans",
+			},
+			{
+				name: "a claim",
+				setup: func(_ *testing.T, fake *fakes.FakeCircleCI, _ *Client, planID string) {
+					fake.ClaimFactoryPlan(planID, "s-1")
+				},
+				want: "claimed",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				fake := fakes.NewFakeCircleCI()
+				srv := httptest.NewServer(fake)
+				t.Cleanup(srv.Close)
+				client := newTestClient(t, srv.URL)
+				p, err := client.CreatePlan(ctx, "a plan", "")
+				assert.NilError(t, err)
+				tc.setup(t, fake, client, p.ID)
+
+				err = client.DeletePlan(ctx, p.ID)
+				var se *StatusError
+				assert.Assert(t, errors.As(err, &se), "got %v", err)
+				assert.Check(t, cmp.Equal(se.StatusCode, http.StatusConflict))
+				assert.Check(t, cmp.Contains(se.ServerMessage, tc.want))
+
+				_, err = client.GetPlan(ctx, p.ID)
+				assert.NilError(t, err, "a refused delete keeps the plan")
+			})
+		}
 	})
 
 	t.Run("a plan id that is not a UUID is a 400", func(t *testing.T) {
@@ -357,6 +430,127 @@ func TestFlows(t *testing.T) {
 		}}))
 		got, _ := fake.FactoryPlan(p.ID)
 		assert.Check(t, cmp.DeepEqual(got.Events, []string{"address-comments"}))
+	})
+
+	t.Run("abandons a flow for each reason", func(t *testing.T) {
+		for _, tc := range []struct {
+			reason  AbandonReason
+			end     string
+			outcome string
+		}{
+			{
+				reason:  AbandonCanceled,
+				end:     "Canceled",
+				outcome: "canceled",
+			},
+			{
+				reason:  AbandonWontDo,
+				end:     "Won't Do",
+				outcome: "rejected",
+			},
+			{
+				reason:  AbandonDuplicate,
+				end:     "Duplicate",
+				outcome: "duplicated",
+			},
+		} {
+			t.Run(string(tc.reason), func(t *testing.T) {
+				fake := fakes.NewFakeCircleCI()
+				srv := httptest.NewServer(fake)
+				t.Cleanup(srv.Close)
+				client := newTestClient(t, srv.URL)
+				p, err := client.CreatePlan(ctx, "a plan", "")
+				assert.NilError(t, err)
+				fake.SetFactoryPlanState(p.ID, "Planning - Human")
+
+				err = client.AbandonFlow(ctx, p.ID, tc.reason)
+				assert.NilError(t, err)
+
+				reqs := fake.Recorder.AllRequests()
+				last := reqs[len(reqs)-1]
+				var body map[string]any
+				err = json.Unmarshal(last.Body, &body)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.DeepEqual(body, map[string]any{"data": map[string]any{
+					"attributes": map[string]any{"event": "abandon", "reason": string(tc.reason)},
+					"references": map[string]any{"factory_flow": map[string]any{"id": p.ID}},
+				}}))
+				got, _ := fake.FactoryPlan(p.ID)
+				assert.Assert(t, len(got.Events) > 0)
+				assert.Check(t, cmp.Equal(got.Events[len(got.Events)-1], "abandon"))
+				assert.Assert(t, cmp.Len(got.Reasons, len(got.Events)))
+				assert.Check(t, cmp.Equal(got.Reasons[len(got.Reasons)-1], string(tc.reason)))
+
+				fake.SetFactoryPlanState(p.ID, tc.end)
+				f, err := client.GetFlow(ctx, p.ID)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.Equal(f.Phase, PhaseEnded))
+				assert.Check(t, cmp.Equal(f.Outcome, tc.outcome))
+			})
+		}
+	})
+
+	t.Run("abandoning a plan with no flow is a 404", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.DropFactoryFlow(p.ID)
+
+		err = client.AbandonFlow(ctx, p.ID, AbandonCanceled)
+		var se *StatusError
+		assert.Assert(t, errors.As(err, &se), "got %v", err)
+		assert.Check(t, cmp.Equal(se.StatusCode, http.StatusNotFound))
+	})
+
+	t.Run("the fake refuses an abandon without a reason, and a reason on another event", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+
+		for _, tc := range []struct {
+			name  string
+			attrs string
+			want  string
+		}{
+			{
+				name:  "an abandon with no reason",
+				attrs: `{"event":"abandon"}`,
+				want:  "an abandon needs a reason",
+			},
+			{
+				name:  "an abandon with an unknown reason",
+				attrs: `{"event":"abandon","reason":"bored"}`,
+				want:  "an abandon needs a reason",
+			},
+			{
+				name:  "a reason on another event",
+				attrs: `{"event":"address-comments","reason":"canceled"}`,
+				want:  "only abandon takes a reason",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				body := `{"data":{"attributes":` + tc.attrs + `,"references":{"factory_flow":{"id":"` + p.ID + `"}}}}`
+				req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/api/v3/factory/events", strings.NewReader(body))
+				assert.NilError(t, err)
+				req.Header.Set("Circle-Token", "test-token")
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := http.DefaultClient.Do(req)
+				assert.NilError(t, err)
+				t.Cleanup(func() { _ = resp.Body.Close() })
+				msg, err := io.ReadAll(resp.Body)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.Equal(resp.StatusCode, http.StatusBadRequest))
+				assert.Check(t, cmp.Contains(string(msg), tc.want))
+			})
+		}
+		got, _ := fake.FactoryPlan(p.ID)
+		assert.Check(t, cmp.Len(got.Events, 0), "a refused event is not stored")
 	})
 
 	t.Run("an event for a plan with no flow is a 404", func(t *testing.T) {
