@@ -170,14 +170,15 @@ func TestFlows(t *testing.T) {
 		p, err := client.CreatePlan(ctx, "a plan", "")
 		assert.NilError(t, err)
 
-		_, err = client.GetFlow(ctx, p.ID)
-		assertStatus(t, err, http.StatusNotFound)
-
-		fake.ClaimFactoryPlan(p.ID, "session-1")
 		f, err := client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.Equal(f.ID, p.ID))
 		assert.Check(t, cmp.Equal(f.State, "Unprioritized"))
+		assert.Check(t, cmp.Equal(f.SessionID, ""))
+
+		fake.ClaimFactoryPlan(p.ID, "session-1")
+		f, err = client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
 		assert.Check(t, cmp.Equal(f.SessionID, "session-1"))
 
 		fake.ReleaseFactoryPlan(p.ID)
@@ -269,11 +270,53 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
+
+		assertStatus(t, client.CreateFlowEvent(ctx, uuid.NewString(), AddressComments), http.StatusNotFound)
+	})
+
+	t.Run("a plan whose flow was dropped has none", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
 		p, err := client.CreatePlan(ctx, "a plan", "")
 		assert.NilError(t, err)
+		fake.DropFactoryFlow(p.ID)
 
+		_, err = client.GetFlow(ctx, p.ID)
+		assertStatus(t, err, http.StatusNotFound)
 		assertStatus(t, client.CreateFlowEvent(ctx, p.ID, AddressComments), http.StatusNotFound)
-		assertStatus(t, client.CreateFlowEvent(ctx, uuid.NewString(), AddressComments), http.StatusNotFound)
+	})
+
+	t.Run("lists the caller's flows", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+
+		flows, err := client.ListFlows(ctx)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Len(flows, 0))
+
+		a, err := client.CreatePlan(ctx, "a", "")
+		assert.NilError(t, err)
+		b, err := client.CreatePlan(ctx, "b", "")
+		assert.NilError(t, err)
+		gone, err := client.CreatePlan(ctx, "gone", "")
+		assert.NilError(t, err)
+		fake.SetFactoryPlanState(b.ID, "Done")
+		fake.ClaimFactoryPlan(a.ID, "session-1")
+		fake.DropFactoryFlow(gone.ID)
+
+		flows, err = client.ListFlows(ctx)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(flows, []Flow{
+			{ID: a.ID, State: "Unprioritized", SessionID: "session-1", ApplicableEvents: []FlowEvent{}},
+			{ID: b.ID, State: "Done", ApplicableEvents: []FlowEvent{}},
+		}))
+		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
+		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/flows"))
+		assert.Check(t, cmp.Equal(last.URL.Query().Get("filter[user_id]"), "me"))
 	})
 }
 

@@ -16,13 +16,15 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-// planBuildPoll is how often a plan build reads its plan from factory, to
-// show where factory has it and to stop once it has ended.
+// planBuildPoll is how often a plan build reads its plan and flow from
+// factory, to show where factory has it and to stop once it has ended.
 var planBuildPoll = 30 * time.Second
 
-// PlanAPI is what a plan build reads of a factory plan: *circleci.Client.
+// PlanAPI is what a plan build reads of a factory plan and its flow:
+// *circleci.Client.
 type PlanAPI interface {
 	GetPlan(ctx context.Context, id string) (*circleci.Plan, error)
+	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
 	PlanText(ctx context.Context, id string) (string, error)
 }
 
@@ -67,8 +69,12 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s from factory: %v", req.PlanID, err)
 	}
-	if factory.PlanEnded(p.State) {
-		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s is %s; there is nothing to build", req.PlanID, p.State)
+	state, err := flowState(ctx, api, req.PlanID)
+	if err != nil {
+		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s's flow from factory: %v", req.PlanID, err)
+	}
+	if factory.PlanEnded(state) {
+		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s is %s; there is nothing to build", req.PlanID, state)
 	}
 	text, err := api.PlanText(ctx, req.PlanID)
 	if err != nil {
@@ -86,7 +92,7 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 			Prompt:     text,
 			SpecOrigin: "factory plan " + req.PlanID,
 			PlanID:     req.PlanID,
-			PlanState:  p.State,
+			PlanState:  state,
 			Branch:     p.Branch,
 		},
 	})
@@ -104,6 +110,19 @@ func (d *daemon) buildingPlan(planID string) string {
 		}
 	}
 	return ""
+}
+
+// flowState is plan id's flow state, "" when it has no flow (a 404).
+func flowState(ctx context.Context, api PlanAPI, id string) (string, error) {
+	f, err := api.GetFlow(ctx, id)
+	var se *circleci.StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return f.State, nil
 }
 
 // executePlanBuild runs a plan build and settles it, once its plan ends, its
@@ -185,19 +204,23 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 			if err != nil {
 				continue
 			}
+			state, err := flowState(ctx, api, req.PlanID)
+			if err != nil {
+				continue
+			}
 			entry.mu.Lock()
-			entry.s.Factory.PlanState = p.State
+			entry.s.Factory.PlanState = state
 			if p.Branch != "" {
 				entry.s.Factory.Branch, entry.s.Branch = p.Branch, p.Branch
 			}
 			entry.mu.Unlock()
-			if !factory.PlanEnded(p.State) {
+			if !factory.PlanEnded(state) {
 				continue
 			}
-			note(iostream.LevelDone, "Plan "+req.PlanID+" is "+p.State)
+			note(iostream.LevelDone, "Plan "+req.PlanID+" is "+state)
 			stopBuild(agent, ended, req.PlanID)
 			entry.mu.Lock()
-			entry.loopNote = "plan " + p.State
+			entry.loopNote = "plan " + state
 			entry.mu.Unlock()
 			d.settleSession(entry, nil)
 			return

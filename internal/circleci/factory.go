@@ -96,6 +96,17 @@ type flowAttrs struct {
 	ApplicableEvents []FlowEvent `json:"applicable_events"`
 }
 
+func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
+	f := &Flow{ID: id, State: a.State, ApplicableEvents: a.ApplicableEvents}
+	if refs.FactorySession != nil {
+		f.SessionID = refs.FactorySession.ID
+	}
+	if refs.FactoryTask != nil {
+		f.Task = &FlowTask{ID: refs.FactoryTask.ID, Category: refs.FactoryTask.Attributes.Category}
+	}
+	return f
+}
+
 type flowRefs struct {
 	FactorySession *v3Ref   `json:"factory_session"`
 	FactoryTask    *taskRef `json:"factory_task"`
@@ -270,8 +281,8 @@ func (c *Client) SetPlanText(ctx context.Context, id, text string) error {
 	return nil
 }
 
-// GetFlow returns factory plan planID's flow. A plan has no flow, a 404,
-// until a factory session first claims it.
+// GetFlow returns factory plan planID's flow. A plan made before conductor
+// gave every plan a flow has none, a 404.
 func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	var attrs flowAttrs
 	var refs flowRefs
@@ -283,14 +294,30 @@ func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	if err != nil {
 		return nil, mapErr("get flow", err)
 	}
-	f := &Flow{ID: env.Data.ID, State: attrs.State, ApplicableEvents: attrs.ApplicableEvents}
-	if refs.FactorySession != nil {
-		f.SessionID = refs.FactorySession.ID
+	return attrs.flow(env.Data.ID, refs), nil
+}
+
+// ListFlows returns the caller's flows, ended ones included.
+func (c *Client) ListFlows(ctx context.Context) ([]Flow, error) {
+	var page struct {
+		Data []struct {
+			ID         string    `json:"id"`
+			Attributes flowAttrs `json:"attributes"`
+			References flowRefs  `json:"references"`
+		} `json:"data"`
 	}
-	if refs.FactoryTask != nil {
-		f.Task = &FlowTask{ID: refs.FactoryTask.ID, Category: refs.FactoryTask.Attributes.Category}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/flows",
+		hc.QueryParam("filter[user_id]", "me"),
+		hc.JSONDecoder(&page),
+	))
+	if err != nil {
+		return nil, mapErr("list flows", err)
 	}
-	return f, nil
+	out := make([]Flow, 0, len(page.Data))
+	for _, item := range page.Data {
+		out = append(out, *item.Attributes.flow(item.ID, item.References))
+	}
+	return out, nil
 }
 
 // CreateFlowEvent sends event to factory plan planID's flow. Factory applies
