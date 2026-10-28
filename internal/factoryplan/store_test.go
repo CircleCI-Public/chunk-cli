@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +14,7 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
@@ -29,11 +32,30 @@ func testClient(t *testing.T) (*circleci.Client, *fakes.FakeCircleCI) {
 }
 
 // newStore is NewStore with a namer that gives no name, so Create titles
-// the plan with fallbackTitle and runs no claude.
+// the plan with fallbackTitle and runs no claude, and a location that fails,
+// so a test that looks a session up without saying where it works fails
+// loudly rather than asking a real factory daemon.
 func newStore(client *circleci.Client, id string) *Store {
 	s := NewStore(client, id)
 	s.name = namedAs("", errors.New("no claude in tests"))
+	s.location = locatedAt(nil, errors.New("no factory daemon in tests"))
 	return s
+}
+
+// locatedAt is a location that answers err when it is set, and otherwise
+// each session's worktree from dirs, or factory.ErrUnknownSession for a
+// session not in it.
+func locatedAt(dirs map[string]string, err error) func(context.Context, string) (string, error) {
+	return func(_ context.Context, session string) (string, error) {
+		if err != nil {
+			return "", err
+		}
+		dir, ok := dirs[session]
+		if !ok {
+			return "", factory.ErrUnknownSession
+		}
+		return dir, nil
+	}
 }
 
 // namedAs is a namer that gives name and err whatever the message.
@@ -313,14 +335,14 @@ func TestStoreApproveWaitsForTheReview(t *testing.T) {
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 
 	cci.SetFactoryPlanState(store.ID(), "Planning - Agent")
-	err = store.Approve(ctx, "s-1")
+	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.Len(p.Events, 0))
 	assert.Check(t, cmp.Equal(p.Session, "s-1"))
 
 	cci.DropFactoryFlow(store.ID())
-	err = store.Approve(ctx, "s-1")
+	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
 	p, _ = cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.Len(p.Events, 0))
@@ -339,7 +361,7 @@ func TestStoreApproveReleasesThePlanningSession(t *testing.T) {
 	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
 	cci.SetFactoryApplicableEvents(store.ID(), "approve-for-building")
 
-	err = store.Approve(ctx, "s-1")
+	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
@@ -357,22 +379,165 @@ func TestStoreApproveReleasesThePlanningSession(t *testing.T) {
 	}))
 }
 
-// TestStoreApproveKeepsAnotherSessionsClaim checks that approving a plan
-// another session claims leaves it that session's, to build.
-func TestStoreApproveKeepsAnotherSessionsClaim(t *testing.T) {
+// approvableStore is a created Store whose plan factory offers to approve for
+// building, claimed by holder unless that is "".
+func approvableStore(t *testing.T, holder string) (*Store, *fakes.FakeCircleCI) {
+	t.Helper()
 	store, client, cci := createdStore(t)
-	ctx := context.Background()
-	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
+	err := client.SetPlanText(context.Background(), store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	assert.NilError(t, err)
-	cci.ClaimFactoryPlan(store.ID(), "builder")
+	if holder != "" {
+		cci.ClaimFactoryPlan(store.ID(), holder)
+	}
 	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
 	cci.SetFactoryApplicableEvents(store.ID(), "approve-for-building")
+	return store, cci
+}
 
-	err = store.Approve(ctx, "s-1")
+// posts is the paths of every POST the fake has had.
+func posts(cci *fakes.FakeCircleCI) []string {
+	var paths []string
+	for _, r := range cci.Recorder.AllRequests() {
+		if r.Method == http.MethodPost {
+			paths = append(paths, r.URL.Path)
+		}
+	}
+	return paths
+}
+
+// TestStoreApproveWithAnotherSessionsClaim checks what approving does with a
+// claim another session holds, by where that session works.
+func TestStoreApproveWithAnotherSessionsClaim(t *testing.T) {
+	const holder = "parent"
+	for _, tc := range []struct {
+		name string
+		// dir is where the holder works; "PLAN" stands for the plan's worktree.
+		dir         string
+		unknown     bool
+		lookupErr   error
+		wantErr     error
+		wantErrText string
+		released    bool
+	}{
+		{
+			name:        "a builder in the plan's worktree",
+			dir:         "PLAN",
+			wantErr:     ErrBeingBuilt,
+			wantErrText: "already being built by session parent",
+		},
+		{
+			name:     "a parent planner in its own worktree",
+			dir:      "/data/plans/parent-1",
+			released: true,
+		},
+		{
+			name:        "an unknown holder",
+			unknown:     true,
+			wantErr:     ErrBeingBuilt,
+			wantErrText: "which factory's daemon does not know",
+		},
+		{
+			name:        "the lookup fails",
+			lookupErr:   factory.ErrNoFactoryDaemon,
+			wantErr:     factory.ErrNoFactoryDaemon,
+			wantErrText: "find where session parent works",
+		},
+		{
+			name:     "a missing holder dir other than the plan's",
+			dir:      "/no/such/dir/parent-1",
+			released: true,
+		},
+		{
+			name:    "a missing holder dir spelled as the plan's",
+			dir:     "PLAN/.",
+			wantErr: ErrBeingBuilt,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, cci := approvableStore(t, holder)
+			ctx := context.Background()
+			worktree := "/no/such/data/plans/" + store.ID()
+			dirs := map[string]string{}
+			if !tc.unknown {
+				dirs[holder] = strings.Replace(tc.dir, "PLAN", worktree, 1)
+			}
+			store.location = locatedAt(dirs, tc.lookupErr)
+
+			err := store.Approve(ctx, "s-1", worktree)
+			p, _ := cci.FactoryPlan(store.ID())
+			if tc.released {
+				assert.NilError(t, err)
+				assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+				assert.Check(t, cmp.Equal(p.Session, ""))
+				paths := posts(cci)
+				assert.Check(t, cmp.DeepEqual(paths[len(paths)-2:], []string{
+					"/api/v3/factory/sessions/parent/release",
+					"/api/v3/factory/events",
+				}))
+				return
+			}
+			assert.Check(t, cmp.ErrorIs(err, tc.wantErr))
+			if tc.wantErrText != "" {
+				assert.Check(t, cmp.ErrorContains(err, tc.wantErrText))
+			}
+			assert.Check(t, cmp.Len(p.Events, 0))
+			assert.Check(t, cmp.Equal(p.Session, holder))
+			for _, path := range posts(cci) {
+				assert.Check(t, !strings.HasPrefix(path, "/api/v3/factory/sessions/"), path)
+			}
+		})
+	}
+}
+
+// TestStoreApproveFollowsSymlinks checks that a holder whose worktree is a
+// symlink to the plan's is read as working in the plan's worktree.
+func TestStoreApproveFollowsSymlinks(t *testing.T) {
+	store, cci := approvableStore(t, "builder")
+	worktree := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	err := os.Symlink(worktree, link)
+	assert.NilError(t, err)
+	store.location = locatedAt(map[string]string{"builder": link}, nil)
+
+	err = store.Approve(context.Background(), "s-1", worktree)
+	assert.Check(t, cmp.ErrorIs(err, ErrBeingBuilt))
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.Len(p.Events, 0))
+	assert.Check(t, cmp.Equal(p.Session, "builder"))
+}
+
+// TestStoreApproveWithNoClaim checks that a plan no session claims is
+// approved with nothing released.
+func TestStoreApproveWithNoClaim(t *testing.T) {
+	store, cci := approvableStore(t, "")
+
+	err := store.Approve(context.Background(), "s-1", "/data/plans/"+store.ID())
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
-	assert.Check(t, cmp.Equal(p.Session, "builder"))
+	for _, path := range posts(cci) {
+		assert.Check(t, !strings.HasPrefix(path, "/api/v3/factory/sessions/"), path)
+	}
+}
+
+// TestStoreApproveStopsWhenTheReleaseFails checks that a claim released
+// between reading the holder and releasing it, so the release 404s, stops the
+// approval before the event is sent.
+func TestStoreApproveStopsWhenTheReleaseFails(t *testing.T) {
+	store, cci := approvableStore(t, "parent")
+	store.location = func(context.Context, string) (string, error) {
+		cci.ReleaseFactoryPlan(store.ID())
+		return "/data/plans/parent-1", nil
+	}
+
+	err := store.Approve(context.Background(), "s-1", "/data/plans/"+store.ID())
+	var se *circleci.StatusError
+	isStatus := errors.As(err, &se)
+	assert.Assert(t, isStatus)
+	assert.Check(t, cmp.Equal(se.StatusCode, http.StatusNotFound))
+	assert.Check(t, cmp.ErrorContains(err, "release session parent's claim"))
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.Len(p.Events, 0))
 }
 
 // TestStoreApproveSendsBuildingWhenFactoryOffersIt checks that a plan
@@ -387,7 +552,7 @@ func TestStoreApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
 	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
 	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "approve-for-building", "abandon")
 
-	err = store.Approve(ctx, "s-1")
+	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
 	assert.Check(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
@@ -405,7 +570,7 @@ func TestStoreApproveRefusesAPlanWithQuestionsOpen(t *testing.T) {
 	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
 	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "abandon")
 
-	err = store.Approve(ctx, "s-1")
+	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
 	assert.Check(t, cmp.ErrorIs(err, ErrQuestionsOpen))
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.Len(p.Events, 0))
@@ -444,7 +609,7 @@ func TestStoreApproveWaitsForUnits(t *testing.T) {
 			err := client.SetPlanText(ctx, store.ID(), tc.text)
 			assert.NilError(t, err)
 			cci.SetFactoryApplicableEvents(store.ID(), tc.events...)
-			err = store.Approve(ctx, "s-1")
+			err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
 			assert.Check(t, cmp.ErrorIs(err, ErrNoUnits))
 		})
 	}

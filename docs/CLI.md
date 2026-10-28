@@ -658,7 +658,10 @@ chunk
 
   Approving a plan with units has the chunk daemon build it, in a Claude Code
   session in the plan's worktree, through to a pull request, and closes the
-  screen. Builds outlive the screen and the terminal, and any number go at
+  screen. Approving frees the plan's claim from a session that is only
+  planning it, a parent plan's included; while a build holds the claim,
+  approving is refused and names its session. Builds outlive the screen and
+  the terminal, and any number go at
   once; `chunk watch` lists each, with the plan's state in factory and what
   the session last did, and `x` stops it. A build ends with its plan. A
   stopped one leaves the plan approved in factory, and `/f:resume <ID>` in

@@ -18,8 +18,9 @@ import (
 
 // fakeFactory puts a factory on PATH, so StartAgent's check that factory is
 // installed passes without a real factory daemon. `factory daemon claim list`
-// prints $FAKE_CLAIMS, or fails with $FAKE_CLAIMS_ERR when that is set. It
-// also fails unless told not to retry while the daemon isn't running, as a
+// prints $FAKE_CLAIMS, or fails with $FAKE_CLAIMS_ERR when that is set;
+// `factory daemon session show` prints $FAKE_SESSION, or fails with
+// $FAKE_SESSION_ERR when that is set. Each also fails unless told not to retry while the daemon isn't running, as a
 // real factory would for a minute.
 func fakeFactory(t *testing.T) {
 	t.Helper()
@@ -29,6 +30,11 @@ if [ "$1 $2 $3" = "daemon claim list" ]; then
   if [ "$FACTORY_DAEMON_NOT_RUNNING_RETRY" != "0s" ]; then echo "would retry for a minute" >&2; exit 1; fi
   if [ -n "$FAKE_CLAIMS_ERR" ]; then echo "$FAKE_CLAIMS_ERR" >&2; exit 1; fi
   printf '%s' "$FAKE_CLAIMS"
+fi
+if [ "$1 $2 $3" = "daemon session show" ]; then
+  if [ "$FACTORY_DAEMON_NOT_RUNNING_RETRY" != "0s" ]; then echo "would retry for a minute" >&2; exit 1; fi
+  if [ -n "$FAKE_SESSION_ERR" ]; then echo "$FAKE_SESSION_ERR" >&2; exit 1; fi
+  printf '%s' "$FAKE_SESSION"
 fi
 exit 0
 `
@@ -682,6 +688,67 @@ func TestCheckFactoryDaemonWithoutFactory(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	err := CheckFactoryDaemon(context.Background())
 	assert.Check(t, cmp.ErrorIs(err, ErrNoFactory))
+}
+
+func TestSessionWorktree(t *testing.T) {
+	for _, tc := range []struct {
+		name, session, sessionErr string
+		noFactory                 bool
+		want                      string
+		wantErr                   error
+		wantErrText               string
+	}{
+		{
+			name:    "known",
+			session: `{"id":"s-1","location":{"machine":"m","dir":"/data/plans/C"}}`,
+			want:    "/data/plans/C",
+		},
+		{
+			name:       "unknown",
+			sessionErr: "s-1 has no session",
+			wantErr:    ErrUnknownSession,
+		},
+		{
+			name:    "no dir",
+			session: `{"id":"s-1","location":{}}`,
+			wantErr: ErrUnknownSession,
+		},
+		{
+			name:        "not json",
+			session:     "garbage",
+			wantErrText: "read factory session s-1",
+		},
+		{
+			name:       "no daemon",
+			sessionErr: daemonNotRunning,
+			wantErr:    ErrNoFactoryDaemon,
+		},
+		{
+			name:      "no factory",
+			noFactory: true,
+			wantErr:   ErrNoFactory,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.noFactory {
+				t.Setenv("PATH", t.TempDir()) // no factory on PATH
+			} else {
+				fakeFactory(t)
+			}
+			t.Setenv("FAKE_SESSION", tc.session)
+			t.Setenv("FAKE_SESSION_ERR", tc.sessionErr)
+			got, err := SessionWorktree(context.Background(), "s-1")
+			switch {
+			case tc.wantErr != nil:
+				assert.Check(t, cmp.ErrorIs(err, tc.wantErr))
+			case tc.wantErrText != "":
+				assert.Check(t, cmp.ErrorContains(err, tc.wantErrText))
+			default:
+				assert.Check(t, err)
+			}
+			assert.Check(t, cmp.Equal(got, tc.want))
+		})
+	}
 }
 
 // A Send stuck writing to a claude that stopped reading its stdin must not hold

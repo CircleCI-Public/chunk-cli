@@ -159,7 +159,13 @@ func planSession(ctx context.Context, root, id, model string, api *circleci.Clie
 			return "", fmt.Errorf("start the chunk daemon: %w", err)
 		}
 		return approveAndBuild(step,
-			func() error { return store.Approve(ctx, agent.SessionID()) },
+			func() error {
+				wt, err := factory.PlanWorktreePath(root, store.ID())
+				if err != nil {
+					return err
+				}
+				return store.Approve(ctx, agent.SessionID(), wt)
+			},
 			agent.Stop,
 			func() (string, error) { return buildPlan(root, store.ID(), model) },
 		)
@@ -170,7 +176,8 @@ func planSession(ctx context.Context, root, id, model string, api *circleci.Clie
 // approveAndBuild approves a plan in factory, stops its planning session,
 // then has the plan built, returning the build's ID. The planning session is
 // stopped as soon as the approval is in, whether or not the build then
-// starts: approving released its claim, and a session still running would
+// starts: approving released the planning session's claim, or a parent
+// planner's, and a planning session still running would
 // claim the plan again at the developer's next message, when factory would
 // hand it the build tasks, which it cannot do. A plan whose approval failed
 // keeps its session, to plan on. step is called with each step as it
