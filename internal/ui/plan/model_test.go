@@ -697,6 +697,50 @@ func TestWaitingTitleNamesTheMove(t *testing.T) {
 	}
 }
 
+func TestFocusedPlanPaneTitleHasNoPercentage(t *testing.T) {
+	tests := []struct {
+		name   string
+		keys   []string
+		moving bool
+		want   string
+	}{
+		{
+			name: "plan tab",
+			keys: []string{"tab", "down", "down"},
+			want: "Flow  Plan",
+		},
+		{
+			name: "flow tab",
+			keys: []string{"tab", "f", "down", "down"},
+			want: "Flow  Plan",
+		},
+		{
+			name:   "moving a comment",
+			keys:   []string{"tab", "down"},
+			moving: true,
+			want:   "Flow  Plan · ",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := planModel(t)
+			m = refreshed(t, m)
+			for _, k := range tc.keys {
+				m = drive(t, m, press(k))
+			}
+			if tc.moving {
+				m.moving = &transition{kind: movingComments, from: m.state, since: time.Now()}
+			}
+			assert.Assert(t, cmp.Equal(m.focus, panePlan))
+
+			top := strings.Split(ansi.Strip(m.Content()), "\n")[headerRows+stripRows]
+			assert.Check(t, cmp.Contains(top, "Chat"))
+			assert.Check(t, cmp.Contains(top, tc.want))
+			assert.Check(t, !regexp.MustCompile(`\d+%`).MatchString(top), top)
+		})
+	}
+}
+
 func TestWaitingBarSaysHowLongOnceItIsSlow(t *testing.T) {
 	tests := []struct {
 		name string

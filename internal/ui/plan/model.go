@@ -1535,12 +1535,9 @@ func (m Model) Content() string {
 	if m.moving != nil {
 		planTitle += title(m.focus == panePlan, " · "+m.movingText())
 	}
-	view, body := m.planView, m.planView.View()+"\n"+m.planFooter()
+	body := m.planView.View() + "\n" + m.planFooter()
 	if m.tab == tabFlow {
-		view, body = m.flowView, m.flowView.View()
-	}
-	if m.focus == panePlan {
-		planTitle += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", view.ScrollPercent()*100))
+		body = m.flowView.View()
 	}
 	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, "Chat"),
 		m.chatView.View()+"\n"+m.inputBox())
