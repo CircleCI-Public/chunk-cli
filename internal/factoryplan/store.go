@@ -31,6 +31,10 @@ type Store struct {
 
 	mu     sync.Mutex
 	planID string
+	// parentID is the plan's parent's ID, once parentRead says Family has
+	// read it; "" for a top-level plan.
+	parentID   string
+	parentRead bool
 }
 
 // NewStore is the store for plan id in factory, or for a plan Create makes
@@ -113,14 +117,111 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 	if err != nil {
 		return plan.Flow{}, fmt.Errorf("get the plan's flow: %w", err)
 	}
-	out := plan.Flow{Events: make([]string, len(f.ApplicableEvents))}
+	out := plan.Flow{
+		State:      f.State,
+		Events:     make([]string, len(f.ApplicableEvents)),
+		PR:         f.PR,
+		Deviations: f.Deviations,
+		Ended:      f.Phase == circleci.PhaseEnded,
+		Outcome:    f.Outcome,
+	}
 	for i, e := range f.ApplicableEvents {
 		out.Events[i] = string(e)
 	}
 	if f.Task != nil {
-		out.Task = f.Task.Category
+		out.Task, out.Unit = f.Task.Category, f.Task.Unit
+	}
+	if len(f.Next) > 0 {
+		out.Next = make([]plan.Step, len(f.Next))
+		for i, t := range f.Next {
+			out.Next[i] = plan.Step{
+				Actor:      t.Actor,
+				Event:      string(t.Event),
+				Task:       t.TaskCategory,
+				Action:     t.Action,
+				Dispatched: t.IsDispatched,
+			}
+		}
 	}
 	return out, nil
+}
+
+// Family is the plan's parent, open sub-plans and blockers, each with its
+// flow's title and state. The parent is read once, as it never changes.
+func (s *Store) Family(ctx context.Context) (plan.Family, error) {
+	id := s.ID()
+	if id == "" {
+		return plan.Family{}, nil
+	}
+	parent, err := s.parent(ctx, id)
+	if err != nil {
+		return plan.Family{}, err
+	}
+	plans, err := s.api.ListPlans(ctx)
+	if err != nil {
+		return plan.Family{}, fmt.Errorf("list the plan's sub-plans: %w", err)
+	}
+	flows, err := s.api.ListFlows(ctx)
+	if err != nil {
+		return plan.Family{}, fmt.Errorf("list the plans' flows: %w", err)
+	}
+	blockers, err := s.api.ListFlowBlockers(ctx, id)
+	if err != nil {
+		return plan.Family{}, fmt.Errorf("list the plan's blockers: %w", err)
+	}
+
+	byID := make(map[string]circleci.Flow, len(flows))
+	for _, f := range flows {
+		byID[f.ID] = f
+	}
+	// relative is plan pid, titled title when it has no flow to title it.
+	relative := func(pid, title string) plan.Relative {
+		r := plan.Relative{ID: pid, Title: title}
+		if f, ok := byID[pid]; ok {
+			r.Title, r.State = cmp.Or(f.Title, title), f.State
+		}
+		return r
+	}
+
+	var out plan.Family
+	if parent != "" {
+		var title string
+		for _, p := range plans {
+			if p.ID == parent {
+				title = p.Title
+			}
+		}
+		r := relative(parent, title)
+		out.Parent = &r
+	}
+	for _, p := range plans {
+		if p.Parent == id {
+			out.Children = append(out.Children, relative(p.ID, p.Title))
+		}
+	}
+	for _, b := range blockers {
+		out.Blockers = append(out.Blockers, relative(b.ID, b.Title))
+	}
+	return out, nil
+}
+
+// parent is plan id's parent's ID, "" for a top-level plan, read from
+// factory the first time and kept after.
+func (s *Store) parent(ctx context.Context, id string) (string, error) {
+	s.mu.Lock()
+	if s.parentRead {
+		defer s.mu.Unlock()
+		return s.parentID, nil
+	}
+	s.mu.Unlock()
+	p, err := s.api.GetPlan(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("get the plan's parent: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parentID, s.parentRead = p.Parent, true
+	return s.parentID, nil
 }
 
 // Holder is the factory session holding the plan's claim, as its flow
@@ -253,21 +354,9 @@ var ErrQuestionsOpen = errors.New("the plan has open questions: answer 3. Open Q
 // to approve the plan but not its design: the design is approved already.
 var ErrDesignApproved = errors.New("the plan's design is approved already: approve the plan with ctrl+s")
 
-// unitCount is how many headings text has under its units section.
+// unitCount is how many units text has, as plan.Units finds them.
 func unitCount(text string) int {
-	n := 0
-	inUnits := false
-	for _, line := range strings.Split(text, "\n") {
-		switch {
-		case strings.HasPrefix(line, "## "):
-			inUnits = strings.Contains(strings.ToLower(line), "unit")
-		case strings.HasPrefix(line, "# "):
-			inUnits = false
-		case inUnits && strings.HasPrefix(line, "###"):
-			n++
-		}
-	}
-	return n
+	return len(plan.Units(text))
 }
 
 // AddressComments sends the plan's flow factory's address-comments event,

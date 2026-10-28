@@ -22,7 +22,12 @@ type fakeStore struct {
 	// TaskV is the category of the task the plan's flow has out, as setTask
 	// sets it; "" for none.
 	TaskV string
-	TextV string
+	// FlowV is the Flow that Flow returns, with its State, Task and Events
+	// filled from StateV, TaskV and EventsV.
+	FlowV Flow
+	// FamilyV is what Family returns.
+	FamilyV Family
+	TextV   string
 	// CommentsV is the comments, ordered as added.
 	CommentsV []Comment
 	nextID    int
@@ -48,9 +53,9 @@ type fakeStore struct {
 	// Set records the texts SetText was called with, in order.
 	Set []string
 
-	CreateErr, StateErr, AddressErr, TextErr, CommentsErr error
-	SetTextErr                                            error
-	AddErr, EditErr, ResolveErr, DeleteErr                error
+	CreateErr, FlowErr, FamilyErr, AddressErr, TextErr, CommentsErr error
+	SetTextErr                                                      error
+	AddErr, EditErr, ResolveErr, DeleteErr                          error
 	// FailAddAfter, when > 0, fails AddComment calls numbered after this
 	// many successes.
 	FailAddAfter int
@@ -80,24 +85,29 @@ func (f *fakeStore) Create(_ context.Context, message string) error {
 	return nil
 }
 
-func (f *fakeStore) State(context.Context) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.StateV, f.StateErr
-}
-
 func (f *fakeStore) Flow(context.Context) (Flow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.eventsSet {
-		return Flow{Events: f.EventsV, Task: f.TaskV}, nil
+	if f.FlowErr != nil {
+		return Flow{}, f.FlowErr
 	}
-	if strings.HasSuffix(f.StateV, " - Human") {
+	out := f.FlowV
+	out.State, out.Task = f.StateV, f.TaskV
+	switch {
+	case f.eventsSet:
+		out.Events = f.EventsV
+	case strings.HasSuffix(f.StateV, " - Human"):
 		// Both approvals, as a flow factory stored before it told them
 		// apart lists, so the plan's units decide which ctrl+s offers.
-		return Flow{Events: []string{"address-comments", "approve-for-units", "approve-for-building"}, Task: f.TaskV}, nil
+		out.Events = []string{"address-comments", "approve-for-units", "approve-for-building"}
 	}
-	return Flow{Task: f.TaskV}, nil
+	return out, nil
+}
+
+func (f *fakeStore) Family(context.Context) (Family, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.FamilyV, f.FamilyErr
 }
 
 // setTask has the plan's flow have a task of category out, or none for "".

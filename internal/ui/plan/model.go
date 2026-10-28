@@ -27,6 +27,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -90,6 +91,14 @@ const (
 	panePlan
 )
 
+// rightTab is what the right pane shows.
+type rightTab int
+
+const (
+	tabPlan rightTab = iota
+	tabFlow
+)
+
 // message is one entry in the chat.
 type message struct {
 	fromUser bool
@@ -135,10 +144,8 @@ type (
 	}
 	pollMsg      struct{}
 	refreshedMsg struct {
-		state, text string
-		events      []string
-		// task is the category of the task the flow has out, "" for none.
-		task     string
+		flow     Flow
+		text     string
 		comments []Comment
 		err      error
 	}
@@ -181,13 +188,9 @@ const pollEvery = 5 * time.Second
 
 func pollCmd() tea.Cmd { return tea.Tick(pollEvery, func(time.Time) tea.Msg { return pollMsg{} }) }
 
-// refreshCmd reads the plan's state, text and comments from the store.
+// refreshCmd reads the plan's flow, text and comments from the store.
 func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg {
-		state, err := s.State(ctx)
-		if err != nil {
-			return refreshedMsg{err: err}
-		}
 		flow, err := s.Flow(ctx)
 		if err != nil {
 			return refreshedMsg{err: err}
@@ -197,9 +200,28 @@ func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 			return refreshedMsg{err: err}
 		}
 		cs, err := s.Comments(ctx)
-		return refreshedMsg{state: state, events: flow.Events, task: flow.Task, text: text, comments: cs, err: err}
+		return refreshedMsg{flow: flow, text: text, comments: cs, err: err}
 	}
 }
+
+// familyCmd reads the plan's relatives from the store. It is a command of its
+// own, so a failure to read them never holds up the plan's refresh.
+func familyCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg {
+		fam, err := s.Family(ctx)
+		return familiedMsg{family: fam, err: err}
+	}
+}
+
+// familiedMsg is the end of reading the plan's relatives.
+type familiedMsg struct {
+	family Family
+	err    error
+}
+
+// OpenMsg is the screen asking its host to open plan ID, a relative of its
+// plan the developer chose.
+type OpenMsg struct{ ID, Title string }
 
 // ClosedMsg is the screen asking its host to close it: the plan was approved
 // and is being built as BuildID, or, when BuildID is "", the developer left.
@@ -222,8 +244,14 @@ type Model struct {
 	state string
 	// events are the events factory applies to the plan's flow now, as the
 	// last refresh read them.
-	events   []string
-	messages []message
+	events []string
+	// flow is the plan's flow as the last refresh read it.
+	flow Flow
+	// family is the plan's relatives as the last read of them found them,
+	// and familyErr why that read failed, or nil.
+	family    Family
+	familyErr error
+	messages  []message
 	// created is whether the plan has been made in factory with store.Create,
 	// and creating whether that is under way.
 	created, creating bool
@@ -275,13 +303,22 @@ type Model struct {
 	moving *transition
 
 	planView viewport.Model
+	// flowView is the Flow tab, which the right pane shows in place of the
+	// plan while tab is tabFlow.
+	flowView viewport.Model
 	chatView viewport.Model
 	input    textarea.Model
 	spin     spinner.Model
 
-	focus  pane
-	width  int
-	height int
+	focus pane
+	// tab is what the right pane shows; tabChosen is whether the first
+	// refresh, or the developer, has picked it yet.
+	tab       rightTab
+	tabChosen bool
+	// related is the Flow tab's cursor over its Related rows.
+	related int
+	width   int
+	height  int
 
 	// busy is whether the agent is working: from a send, or from the first
 	// thing it does on a factory task, until its reply.
@@ -386,6 +423,10 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 	// and u would scroll where d deletes a comment.
 	planView := viewport.New()
 	planView.KeyMap = viewport.KeyMap{}
+	// The Flow tab's keys are the screen's own too: its ↑/↓ move the Related
+	// cursor rather than scroll.
+	flowView := viewport.New()
+	flowView.KeyMap = viewport.KeyMap{}
 
 	return Model{
 		ctx:          ctx,
@@ -394,6 +435,7 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 		store:        store,
 		created:      store.ID() != "",
 		planView:     planView,
+		flowView:     flowView,
 		chatView:     viewport.New(),
 		input:        in,
 		commentInput: ci,
@@ -441,10 +483,12 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(textarea.Blink, m.Poll(), pollCmd(), waitEvent(m.ctx, m.agent))
 }
 
-// Poll reads the plan's state, text and comments from the store, as the
-// screen's own timer does every few seconds. A host can use it to refresh
-// the screen deterministically, without waiting for that timer.
-func (m Model) Poll() tea.Cmd { return refreshCmd(m.ctx, m.store) }
+// Poll reads the plan's state, text, comments and relatives from the store,
+// as the screen's own timer does every few seconds. A host can use it to
+// refresh the screen deterministically, without waiting for that timer.
+func (m Model) Poll() tea.Cmd {
+	return tea.Batch(refreshCmd(m.ctx, m.store), familyCmd(m.ctx, m.store))
+}
 
 // Next waits for the agent's next event, as the screen itself does from Init
 // on. A host can use it to deliver one deterministically.
@@ -495,10 +539,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case pollMsg:
-		return m, tea.Batch(refreshCmd(m.ctx, m.store), pollCmd())
+		return m, tea.Batch(m.Poll(), pollCmd())
 
 	case refreshedMsg:
 		return m.applyRefresh(msg), nil
+
+	case familiedMsg:
+		m.family, m.familyErr = msg.family, msg.err
+		if msg.err != nil {
+			m.family = Family{}
+		}
+		// The cursor stays on a row that is still there.
+		m.related = max(min(m.related, len(m.relatedRows())-1), 0)
+		m.renderFlow()
+		return m, nil
 
 	case createdMsg:
 		m.creating = false
@@ -614,16 +668,22 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		}
 	}
 
-	if msg.state != m.state && !m.awaitingStatus() {
+	if msg.flow.State != m.state && !m.awaitingStatus() {
 		// A note on what happened is out of date once factory moves the
 		// plan, and left up it would hide the bar's buttons.
 		m.status = ""
 	}
-	m.state, m.events, m.plan = msg.state, msg.events, msg.text
+	m.state, m.events, m.plan = msg.flow.State, msg.flow.Events, msg.text
+	m.flow = msg.flow
+	if !m.tabChosen {
+		// The first refresh of a visit opens the right pane on what the
+		// plan's phase is about; later moves leave the tab where it is.
+		m.tab, m.tabChosen = tabFor(m.state), true
+	}
 	if m.byTask && m.task == "" {
 		// The first task the flow names in a turn is the one the turn is on:
 		// by its end the agent may have submitted it and the flow moved on.
-		m.task = msg.task
+		m.task = msg.flow.Task
 	}
 	if m.moving != nil && m.state != m.moving.from {
 		m.moving = nil
@@ -641,7 +701,18 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 	}
 	m.syncPlaceholder()
 	m.renderChat()
+	m.renderFlow()
 	return m
+}
+
+// tabFor is the tab the right pane opens on for a plan in state: the plan
+// while it is being planned, or has not started, and its flow after.
+func tabFor(state string) rightTab {
+	phase, _ := planstate.Parse(state)
+	if strings.TrimSpace(state) == "" || planstate.IsUnprioritized(state) || strings.EqualFold(phase, "Planning") {
+		return tabPlan
+	}
+	return tabFlow
 }
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -666,14 +737,28 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(msg, k.Focus):
-		if m.focus == paneChat {
+		// A narrow screen shows one of chat, Flow and Plan at a time, so tab
+		// goes round all three.
+		switch {
+		case m.focus == paneChat && m.narrow():
+			return m.showTab(tabFlow)
+		case m.focus == paneChat:
 			return m.focusOn(panePlan)
+		case m.narrow() && m.tab == tabFlow:
+			return m.showTab(tabPlan)
 		}
 		return m.focusOn(paneChat)
 	case key.Matches(msg, k.SendPlan):
 		return m.askToApprove(), nil
+	case key.Matches(msg, k.FlowTab):
+		return m.showTab(tabFlow)
+	case key.Matches(msg, k.PlanTab):
+		return m.showTab(tabPlan)
 	}
 
+	if m.focus == panePlan && m.tab == tabFlow {
+		return m.updateFlowKey(msg)
+	}
 	if m.focus == panePlan {
 		return m.updatePlanKey(msg)
 	}
@@ -754,11 +839,19 @@ func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 		m.focus = panePlan
 		m.input.Blur()
 		m.drawPlan()
+		m.renderFlow()
 		return m, nil
 	}
 	m.focus = paneChat
 	m.drawPlan()
+	m.renderFlow()
 	return m, m.input.Focus()
+}
+
+// showTab gives the keyboard to the right pane, showing tab t there.
+func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
+	m.tab, m.tabChosen = t, true
+	return m.focusOn(panePlan)
 }
 
 // askToApprove starts approving the plan, or its design: it asks the
@@ -854,6 +947,10 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	var cmd tea.Cmd
+	if m.focus == panePlan && m.tab == tabFlow {
+		m.flowView, cmd = m.flowView.Update(msg)
+		return m, cmd
+	}
 	if m.focus == panePlan {
 		m.planView, cmd = m.planView.Update(msg)
 		return m, cmd
@@ -1074,15 +1171,17 @@ func (m *Model) chatWidth() int {
 // topRows is what sits above the panes.
 func (m *Model) topRows() int {
 	if m.narrow() {
-		return headerRows + tabRows
+		return headerRows + stripRows + tabRows
 	}
-	return headerRows
+	return headerRows + stripRows
 }
 
 func (m *Model) layout() {
 	inner := m.height - m.topRows() - footerRows - borderSize
 	m.planView.SetWidth(m.planWidth() - borderSize - 2*padX)
 	m.planView.SetHeight(inner - planFooterRows - padY)
+	m.flowView.SetWidth(m.planView.Width())
+	m.flowView.SetHeight(m.planView.Height())
 	// The editor is the text of a comment's card, which sits past the gutter
 	// on a rail, indented, with a cell either side.
 	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 6)
@@ -1091,6 +1190,7 @@ func (m *Model) layout() {
 	m.input.SetWidth(m.chatWidth() - 2*borderSize - 2*padX)
 	m.renderPlan()
 	m.renderChat()
+	m.renderFlow()
 }
 
 // newRenderer is a glamour renderer for the terminal's background that wraps
@@ -1344,6 +1444,7 @@ func (m *Model) restyle() {
 	}
 	m.renderPlan()
 	m.renderChat()
+	m.renderFlow()
 }
 
 var chunkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
@@ -1372,23 +1473,30 @@ func (m Model) Content() string {
 		return ui.HelperStyle.Faint(true).Render(name)
 	}
 
-	planName := "Plan"
-	if m.moving != nil {
-		planName = "Plan · " + m.movingText()
-	} else if m.state != "" {
-		planName = "Plan · " + m.stateText()
+	// The right pane's title is its tabs, the one showing drawn as a title.
+	tabWord := func(t rightTab, name string) string {
+		if m.tab == t {
+			return title(m.focus == panePlan, name)
+		}
+		return ui.HelperStyle.Faint(true).Render(name)
 	}
-	planTitle := title(m.focus == panePlan, planName)
+	planTitle := tabWord(tabFlow, "Flow") + "  " + tabWord(tabPlan, "Plan")
+	if m.moving != nil {
+		planTitle += title(m.focus == panePlan, " · "+m.movingText())
+	}
+	view, body := m.planView, m.planView.View()+"\n"+m.planFooter()
+	if m.tab == tabFlow {
+		view, body = m.flowView, m.flowView.View()
+	}
 	if m.focus == panePlan {
-		planTitle += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", m.planView.ScrollPercent()*100))
+		planTitle += ui.HelperStyle.Render(fmt.Sprintf("  %3.f%%", view.ScrollPercent()*100))
 	}
 	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, "Chat"),
 		m.chatView.View()+"\n"+m.inputBox())
-	plan := pane(m.focus == panePlan, m.planWidth(), planTitle,
-		m.planView.View()+"\n"+m.planFooter())
+	plan := pane(m.focus == panePlan, m.planWidth(), planTitle, body)
 
 	panes := lipgloss.JoinHorizontal(lipgloss.Top, chat, plan)
-	top := m.header()
+	top := m.header() + "\n" + m.strip()
 	if m.narrow() {
 		// One pane at a time, the other a tab away.
 		panes = chat

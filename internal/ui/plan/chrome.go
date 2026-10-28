@@ -3,9 +3,9 @@ package plan
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"time"
-	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -49,9 +49,9 @@ const narrowBelow = 100
 
 func (m Model) narrow() bool { return m.width < narrowBelow }
 
-// header is the row above the panes: where the developer is, what Claude is
-// doing, and whether the plan can go. The state is the one thing here that
-// changes what the developer does next, so it is the part in colour.
+// header is the row above the panes: where the developer is, and what is
+// under way that the developer is waiting on, in colour. Where the flow is
+// and what comes next is the strip's.
 func (m Model) header() string {
 	var state string
 	switch {
@@ -80,16 +80,6 @@ func (m Model) header() string {
 		state = m.pill(m.amber(), "#fff8c5", "#2a2210", text)
 	case m.conflicting():
 		state = m.pill(m.amber(), "#fff8c5", "#2a2210", "⚠ PR conflicts")
-	case m.state != ReadyState && m.inReview():
-		state = m.style(m.dim()).Render("In review")
-	case m.state != ReadyState:
-		state = m.style(m.dim()).Render(ansi.Truncate(m.stateText(), 24, "…"))
-	case StageOf(m.events, m.units) == StageQuestions:
-		state = m.style(m.dim()).Render("Questions open")
-	case StageOf(m.events, m.units) == StageDesign:
-		state = m.style(m.dim()).Render("Design ready")
-	default:
-		state = m.pill(m.green(), "#dafbe1", "#162226", ui.IconOK+" Plan ready")
 	}
 
 	left := " " + ui.TitleStyle.Render("chunk") + " " + m.style(m.dim()).Render("plan")
@@ -120,10 +110,60 @@ func (m Model) header() string {
 	return left + strings.Repeat(" ", gap) + state + right
 }
 
-// tabs is the row that stands in for the second pane on a screen too narrow
-// for both: which pane is showing, and what the other one has for it.
+// stripRows is the status strip's height in rows.
+const stripRows = 2
+
+// strip is the rows under the header: the steps of the flow with the one it
+// is at in bold, then what is happening now and what comes next.
+func (m Model) strip() string {
+	f := m.flow
+	f.State = m.state
+	step, now, next := status(f, m.family, StageOf(m.events, m.units), m.inReview())
+	if m.moving != nil {
+		// The developer has made the move the state asks for; factory has
+		// yet to apply it, and the header says so.
+		next = ""
+	}
+
+	var line1 string
+	if slices.Contains(steps, step) {
+		parts := make([]string, len(steps))
+		for i, s := range steps {
+			if s == step {
+				parts[i] = m.style(m.brand()).Bold(true).Render(s)
+			} else {
+				parts[i] = m.style(m.dim()).Render(s)
+			}
+		}
+		line1 = " " + strings.Join(parts, m.style(m.faint()).Render(" › "))
+	} else {
+		line1 = " " + m.style(m.dim()).Render(step)
+	}
+
+	var parts []string
+	if now != "" {
+		parts = append(parts, m.style(m.faint()).Render("Now:")+" "+now)
+	}
+	if next != "" {
+		parts = append(parts, m.style(m.faint()).Render("Next:")+" "+next)
+	}
+	line2 := " " + strings.Join(parts, "   ")
+	if m.familyErr != nil {
+		// Only Related and the sub-plans go without; the rest of the strip
+		// still holds.
+		note := "could not read related plans: " + clean(m.familyErr.Error())
+		if len(parts) > 0 {
+			note = " · " + note
+		}
+		line2 += m.style(m.faint()).Render(note)
+	}
+	return ansi.Truncate(line1, m.width, "…") + "\n" + ansi.Truncate(line2, m.width, "…")
+}
+
+// tabs is the row that stands in for the right pane on a screen too narrow
+// for both: which of chat, Flow and Plan is showing, and what the plan has.
 func (m Model) tabs() string {
-	chatText, planText := m.tabLabels()
+	labels := m.tabLabels()
 	tab := func(on bool, text string) string {
 		s := lipgloss.NewStyle().Padding(0, tabPad)
 		if on {
@@ -131,34 +171,74 @@ func (m Model) tabs() string {
 		}
 		return s.Foreground(m.dim()).Render(text)
 	}
-	return ansi.Truncate(" "+tab(m.focus == paneChat, chatText)+" "+tab(m.focus == panePlan, planText), m.width, "…")
+	on := m.narrowTab()
+	row := ""
+	for i, l := range labels {
+		row += " " + tab(i == on, l)
+	}
+	return ansi.Truncate(row, m.width, "…")
 }
 
 // tabPad is the cells either side of a tab's text.
 const tabPad = 2
 
-// tabSpans is the columns each of the narrow screen's tabs takes, from its
-// first column up to its end, as tabs draws them.
-func (m Model) tabSpans() (chatStart, chatEnd, planStart, planEnd int) {
-	chat, plan := m.tabLabels()
-	chatStart = 1
-	chatEnd = chatStart + lipgloss.Width(chat) + 2*tabPad
-	planStart = chatEnd + 1
-	planEnd = planStart + lipgloss.Width(plan) + 2*tabPad
-	return chatStart, chatEnd, planStart, planEnd
+// span is the columns something is drawn in, from start up to end.
+type span struct{ start, end int }
+
+func (s span) has(x int) bool { return x >= s.start && x < s.end }
+
+// The narrow screen's tabs, in the order tabs draws them.
+const (
+	narrowChat = iota
+	narrowFlow
+	narrowPlan
+)
+
+// narrowTab is the narrow screen's tab that is showing.
+func (m Model) narrowTab() int {
+	switch {
+	case m.focus == paneChat:
+		return narrowChat
+	case m.tab == tabFlow:
+		return narrowFlow
+	}
+	return narrowPlan
 }
 
-// tabLabels is the text of the narrow screen's two tabs.
-func (m Model) tabLabels() (chat, plan string) {
-	chat = "Chat"
+// tabSpans is the columns each of the narrow screen's tabs takes, as tabs
+// draws them.
+func (m Model) tabSpans() []span {
+	labels := m.tabLabels()
+	spans := make([]span, 0, len(labels))
+	x := 0
+	for _, l := range labels {
+		start := x + 1
+		x = start + lipgloss.Width(l) + 2*tabPad
+		spans = append(spans, span{start, x})
+	}
+	return spans
+}
+
+// tabLabels is the text of the narrow screen's three tabs.
+func (m Model) tabLabels() []string {
+	chat := "Chat"
 	if m.busy {
 		chat += " " + m.spin.View()
 	}
-	plan = "Plan"
+	plan := "Plan"
 	if m.units > 0 {
 		plan += fmt.Sprintf(" · %d %s", m.units, plural(m.units, "unit", "units"))
 	}
-	return chat, plan
+	return []string{chat, "Flow", plan}
+}
+
+// rightTabSpans is the columns the words Flow and Plan take in the right
+// pane's title, which titled sets after "╭─ ".
+func (m Model) rightTabSpans() (flow, plan span) {
+	start := m.planLeft() + 3
+	flow = span{start, start + len("Flow")}
+	plan = span{flow.end + 2, flow.end + 2 + len("Plan")}
+	return flow, plan
 }
 
 // actionBar is the box under the panes: the keys at hand on the left and, on
@@ -301,15 +381,7 @@ func (m Model) notReady() string {
 
 // stateText is the plan's state as factory names it, safe to draw on one
 // line.
-func (m Model) stateText() string {
-	s := strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, ansi.Strip(m.state))
-	return strings.Join(strings.Fields(s), " ")
-}
+func (m Model) stateText() string { return clean(m.state) }
 
 // movingText is the move factory has yet to make, for the plan's title.
 func (m Model) movingText() string {

@@ -604,6 +604,16 @@ func TestStoreApproveWaitsForUnits(t *testing.T) {
 			text:   "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n",
 			events: []string{"address-comments", "approve-for-units", "abandon"},
 		},
+		{
+			name:   "fenced headings are no units",
+			text:   "# A plan\n\n## 5. Units\n\n```md\n### Unit 1: example\n```\n",
+			events: []string{"approve-for-units", "approve-for-building"},
+		},
+		{
+			name:   "only done units still count",
+			text:   "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag (done)\n",
+			events: []string{"address-comments", "approve-for-units", "abandon"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := client.SetPlanText(ctx, store.ID(), tc.text)
@@ -615,6 +625,22 @@ func TestStoreApproveWaitsForUnits(t *testing.T) {
 	}
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.Len(p.Events, 0))
+}
+
+// TestStoreApproveCountsDoneUnits checks that a plan whose only unit is done
+// has units: with both approvals offered, Approve sends the plan rather than
+// refusing it with ErrNoUnits.
+func TestStoreApproveCountsDoneUnits(t *testing.T) {
+	store, client, cci := createdStore(t)
+	ctx := context.Background()
+	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag (done)\n")
+	assert.NilError(t, err)
+	cci.SetFactoryApplicableEvents(store.ID(), "approve-for-units", "approve-for-building")
+
+	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
+	assert.Check(t, !errors.Is(err, ErrNoUnits), "a done unit was not counted: %v", err)
+	assert.NilError(t, err)
 }
 
 // TestStoreWritesFailBeforeCreate checks that a write before Create has
@@ -713,11 +739,206 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(f.Task, ""))
 
+	cci.SetFactoryTask(store.ID(), "build-unit")
+	cci.SetFactoryFlowStatus(store.ID(), fakes.FactoryFlowStatus{
+		PR:         "https://github.com/o/r/pull/7",
+		Deviations: []string{"lint fails"},
+		Next: []fakes.FactoryTransition{
+			{
+				Actor:        "chunk",
+				TaskCategory: "build-unit",
+				IsDispatched: true,
+			},
+		},
+		TaskUnit: "Unit 2: parser",
+	})
+	cci.SetFactoryPlanState(store.ID(), "Building - Agent")
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	// Its events are the human events of its next, which has none.
+	assert.Check(t, cmp.DeepEqual(f, plan.Flow{
+		State:  "Building - Agent",
+		Events: []string{},
+		Task:   "build-unit",
+		Unit:   "Unit 2: parser",
+		Next: []plan.Step{
+			{
+				Actor:      "chunk",
+				Task:       "build-unit",
+				Dispatched: true,
+			},
+		},
+		PR:         "https://github.com/o/r/pull/7",
+		Deviations: []string{"lint fails"},
+	}))
+
+	cci.SetFactoryTask(store.ID(), "")
+	cci.SetFactoryFlowStatus(store.ID(), fakes.FactoryFlowStatus{
+		Outcome: "merged",
+		Next:    []fakes.FactoryTransition{},
+	})
+	cci.SetFactoryPlanState(store.ID(), "Done")
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(f, plan.Flow{
+		State:      "Done",
+		Events:     []string{},
+		Deviations: []string{},
+		Ended:      true,
+		Outcome:    "merged",
+	}))
+
 	cci.DropFactoryFlow(store.ID())
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Len(f.Events, 0))
 	assert.Check(t, cmp.Equal(f.Task, ""))
+}
+
+// TestStoreFamily checks that Family is the plan's parent, open sub-plans and
+// blockers, each titled and in the state its flow names, and empty before
+// Create.
+func TestStoreFamily(t *testing.T) {
+	client, cci := testClient(t)
+	store := newStore(client, "")
+	ctx := context.Background()
+
+	fam, err := store.Family(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(fam, plan.Family{}))
+
+	err = store.Create(ctx, "a plan")
+	assert.NilError(t, err)
+	id := store.ID()
+	newPlan := func(title, state string) string {
+		t.Helper()
+		p, err := client.CreatePlan(ctx, title, "# "+title+"\n")
+		assert.NilError(t, err)
+		cci.SetFactoryPlanState(p.ID, state)
+		return p.ID
+	}
+	parent := newPlan("parent", "Building - Agent")
+	c1 := newPlan("child one", "Planning - Human")
+	done := newPlan("child done", "Done")
+	c2 := newPlan("child two", "Building - Agent")
+	blocker := newPlan("blocker", "Integrating - Human")
+	cci.SetFactoryParent(id, parent)
+	for _, c := range []string{c1, done, c2} {
+		cci.SetFactoryParent(c, id)
+	}
+	cci.BlockFactoryPlan(id, blocker)
+
+	want := plan.Family{
+		Parent: &plan.Relative{
+			ID:    parent,
+			Title: "parent",
+			State: "Building - Agent",
+		},
+		Children: []plan.Relative{
+			{
+				ID:    c1,
+				Title: "child one",
+				State: "Planning - Human",
+			},
+			{
+				ID:    c2,
+				Title: "child two",
+				State: "Building - Agent",
+			},
+		},
+		Blockers: []plan.Relative{
+			{
+				ID:    blocker,
+				Title: "blocker",
+				State: "Integrating - Human",
+			},
+		},
+	}
+	fam, err = store.Family(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(fam, want))
+
+	// The parent is read once: a later change is not seen.
+	cci.SetFactoryParent(id, "")
+	fam, err = store.Family(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(fam, want))
+
+	// A child with no flow keeps its plan's title and has no state.
+	cci.DropFactoryFlow(c2)
+	fam, err = store.Family(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(fam.Children[1], plan.Relative{
+		ID:    c2,
+		Title: "child two",
+	}))
+}
+
+// TestStoreFamilyRereadsAFailedParent checks that a failed read of the
+// plan's parent is not kept: the next Family reads it again.
+func TestStoreFamilyRereadsAFailedParent(t *testing.T) {
+	store, client, cci := createdStore(t)
+	ctx := context.Background()
+	p, err := client.CreatePlan(ctx, "parent", "# parent\n")
+	assert.NilError(t, err)
+	cci.SetFactoryParent(store.ID(), p.ID)
+
+	cci.FactoryStatusCode = http.StatusInternalServerError
+	_, err = store.Family(ctx)
+	assert.Check(t, cmp.ErrorContains(err, "parent"))
+
+	cci.FactoryStatusCode = 0
+	fam, err := store.Family(ctx)
+	assert.NilError(t, err)
+	assert.Assert(t, fam.Parent != nil)
+	assert.Check(t, cmp.Equal(fam.Parent.ID, p.ID))
+}
+
+// TestStoreFamilyFails checks that Family fails, saying which read failed,
+// when factory fails any of the reads after the parent's.
+func TestStoreFamilyFails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail func(r *http.Request) bool
+		want string
+	}{
+		{
+			name: "plans",
+			fail: func(r *http.Request) bool { return r.URL.Path == "/api/v3/factory/plans" },
+			want: "sub-plans",
+		},
+		{
+			name: "flows",
+			fail: func(r *http.Request) bool { return r.URL.Path == "/api/v3/factory/flows" },
+			want: "flows",
+		},
+		{
+			name: "blockers",
+			fail: func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/blockers") },
+			want: "blockers",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cci := fakes.NewFakeCircleCI()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && tc.fail(r) {
+					http.Error(w, `{"error":{"title":"API error"}}`, http.StatusBadRequest)
+					return
+				}
+				cci.ServeHTTP(w, r)
+			}))
+			t.Cleanup(srv.Close)
+			client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: srv.URL})
+			assert.NilError(t, err)
+			store := newStore(client, "")
+			ctx := context.Background()
+			err = store.Create(ctx, "a plan")
+			assert.NilError(t, err)
+
+			_, err = store.Family(ctx)
+			assert.Check(t, cmp.ErrorContains(err, tc.want))
+		})
+	}
 }
 
 // TestStoreStateReadsTheFlow checks that State is the plan's flow state, ""
