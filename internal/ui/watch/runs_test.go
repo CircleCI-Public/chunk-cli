@@ -619,7 +619,8 @@ func TestEndedFactoryRunSaysWhereItsWorkIs(t *testing.T) {
 	r.s.Factory.Stat = "2 files changed, 10 insertions(+)"
 
 	m := sessModel(r)
-	m.selRun = "abc"
+	// Wide enough that the commit line fits on one line of the run pane.
+	m.width, m.selRun = 114, "abc"
 	out := m.render()
 	for _, want := range []string{"still failing", "checks still failed after 3 round(s)", "chunk/factory/abc", "committed · 2 files changed, 10 insertions(+)", "chunk factory build --continue abc"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)

@@ -365,9 +365,10 @@ For a bigger change, plan it with a factory planning session first (it needs
 the factory daemon running with `FACTORY_PLAN_STORE=circleci`). `chunk watch`
 opens on **Flows**, your open flows in factory grouped by who they wait on
 (Needs your review, With agent, Not started, Other) and then by phase
-(Planning, Building, ...), with a read-only preview of the selected one's plan;
-`tab` (or `2`) shows your runs and `p` or `tab` comes back. `Enter` opens a
-flow's plan and `n` starts a new one. Opening or
+(Planning, Building, ...), a flow whose PR factory could not rebase marked ⚠,
+with a read-only preview of the selected one's plan; `tab` (or `2`) shows your
+runs and `p` or `tab` comes back. `Enter` opens a flow's plan and `n` starts a
+new one. Opening or
 reading a plan never claims it or starts an agent; your first message does,
 in the project `chunk watch` was opened in. `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its chat, half-written message and session
@@ -379,7 +380,9 @@ parts to comment on together. Once factory's review of the design has
 passed, `ctrl+s` approves the design, and chunk writes the units; once those
 pass review too, `ctrl+s` approves the finished plan in factory, and the
 chunk daemon builds it through to a pull request. The header says which of
-the two factory is waiting for: Design ready or Plan ready. The build shows
+the two factory is waiting for: Design ready or Plan ready. A plan whose PR
+conflicts after factory's rebase reads PR conflicts, and `ctrl+s` hands it
+back to factory to rebase again. The build shows
 in your runs, and keeps going when you close chunk; plan as many as you like.
 `esc` goes back to your plans with the plan kept. Quitting with a message
 still unsent in any plan asks for a second `ctrl+c`.
