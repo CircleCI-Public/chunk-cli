@@ -1437,6 +1437,69 @@ func TestApprovingThePlanClosesTheScreenWithItsBuild(t *testing.T) {
 	}
 }
 
+// messagesOf runs cmd and every command a batch of it holds, and returns
+// what they answer, without the filtering run does.
+func messagesOf(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return []tea.Msg{msg}
+	}
+	var out []tea.Msg
+	for _, c := range batch {
+		out = append(out, messagesOf(c)...)
+	}
+	return out
+}
+
+// A host that keeps the screen keeps it after the approval, on the Flow tab,
+// with its chat closed: the planning session has stopped.
+func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	approvals := 0
+	approve := func(func(string)) (string, error) {
+		approvals++
+		return "build-1", nil
+	}
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, approve, store, "").WithBack()
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = refreshed(t, m)
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m, cmd := m.Update(press("y"))
+	batch, ok := cmd().(tea.BatchMsg)
+	assert.Assert(t, ok && len(batch) == 2, "y did not start the approval")
+	m, cmd = m.Update(batch[0]())
+	assert.Check(t, cmp.Equal(approvals, 1))
+
+	msgs := messagesOf(cmd)
+	assert.Check(t, slices.Contains(msgs, tea.Msg(BuildingMsg{BuildID: "build-1"})), "the screen said %#v", msgs)
+	for _, msg := range msgs {
+		_, isClosed := msg.(ClosedMsg)
+		assert.Check(t, !isClosed, "a kept screen closed on approval")
+	}
+	assert.Check(t, cmp.Equal(m.tab, tabFlow))
+	assert.Check(t, cmp.Equal(m.BuildID, "build-1"))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Approved · building as run build-1"))
+
+	for _, k := range []string{"m", "o", "r", "e"} {
+		m = drive(t, m, press(k))
+	}
+	m = drive(t, m, press("enter"))
+	assert.Check(t, cmp.Len(agent.Sent(), 0), "the closed chat sent to the agent")
+	assert.Check(t, cmp.Equal(m.input.Value(), "more"))
+	assert.Check(t, cmp.Contains(m.input.Placeholder, "chat is closed"))
+
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	assert.Check(t, !m.confirming, "ctrl+s asks to approve a plan already building")
+	m = drive(t, m, press("y"))
+	assert.Check(t, cmp.Equal(approvals, 1), "the plan was approved again")
+}
+
 // While the plan is approved and its build started, the screen says which
 // step it is on, and the header's spinner turns.
 func TestApprovingShowsEachStep(t *testing.T) {

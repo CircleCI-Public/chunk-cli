@@ -576,15 +576,24 @@ chunk
   so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the record
   instead.
 - **`factory plan` makes a plan with a factory planning session, then
-  approves it in factory and builds it.** It opens a two-pane screen: a chat on the left and the
-  plan on the right, rendered as markdown. The first message creates the plan
+  approves it in factory and builds it.** It opens a flow screen. A two-row
+  strip under the header shows the plan's step (`Planning › Building › Integrating › Done`), what is
+  happening now (the factory task and its unit) and what comes next
+  (`Next: you approve the plan · ctrl+s`, `Next: chunk: build-unit`,
+  `Waiting on <blocker>`). The chat is on the left. The right has two tabs:
+  **Plan**, the plan rendered as markdown, and **Flow**, which shows progress
+  (each unit ✓ done, ▸ being built, ○ to do, or for a plan with sub-plans its
+  open sub-plans), the pull request and its deviations, and related plans
+  (parent, sub-plans, blockers). With the right pane focused, `f` and `p`
+  switch tabs. The screen opens on Plan while the plan is being planned and on
+  Flow once it is building. The first message creates the plan
   in factory, named by Claude for what the message asks for, as a 2-3 word
   slug (`dry-run-flag`), or for a slug of its first line (`add-a-dry-run-flag`)
   when Claude cannot name it,
   and starts one long-lived Claude Code session with factory's f
   plugin, which claims the plan and plans it through the factory daemon's
   tasks. The screen refreshes the plan's text, state and comments every 5s;
-  the plan's state is in the pane's title. Messages go to the session at
+  the plan's state is in the status strip. Messages go to the session at
   once, even while it works. While it works on a factory task rather than on
   a message, the chat names the task, as the plan's flow in factory names it,
   in sentence case (`Early plan` for `early-plan`), and the reply is marked
@@ -638,15 +647,17 @@ chunk
   it, or are listed after the plan as for any part rewritten.
 
   `ctrl+s` approves the plan, after a `y`, once factory's review of it has
-  passed and moved it to Planning - Human; until then the header reads In
-  review. A plan waits there after its design is written too: while factory
-  waits for the design to be approved rather than the plan, the header reads
-  Design ready, and `ctrl+s` approves the design, so the session writes the
-  units, once its comments are sent and resolved; the action bar then waits
-  for factory, as it does after a hand-off. While factory waits for the
-  plan's 3. Open Questions to be answered, the header reads Questions open,
-  and `ctrl+s` offers no approval until they are answered in comments and
-  sent. Approving reads the plan as factory has it, not the screen's copy.
+  passed and moved it to Planning - Human, when the status strip under the
+  header reads `Next: you approve the plan · ctrl+s`; until then it reads
+  `Now: factory is reviewing the plan`. A plan waits there after its design
+  is written too: while factory waits for the design to be approved rather
+  than the plan, the strip reads `Next: you approve the design · ctrl+s`, and
+  `ctrl+s` approves the design, so the session writes the units, once its
+  comments are sent and resolved; the action bar then waits for factory, as
+  it does after a hand-off. While factory waits for the plan's 3. Open
+  Questions to be answered, the strip reads
+  `Next: you answer 3. Open Questions in comments`, and `ctrl+s` offers no
+  approval until they are answered in comments and sent. Approving reads the plan as factory has it, not the screen's copy.
 
   A plan in Integrating - Human whose PR still conflicts with its base, after
   factory's own rebase of that head, reads PR conflicts in the header.
@@ -657,9 +668,12 @@ chunk
   plan to the agent too, which rebases it.
 
   Approving a plan with units has the chunk daemon build it, in a Claude Code
-  session in the plan's worktree, through to a pull request, and closes the
-  screen. Approving frees the plan's claim from a session that is only
-  planning it, a parent plan's included; while a build holds the claim,
+  session in the plan's worktree, through to a pull request. In `chunk watch`,
+  the screen stays open after approval, on the Flow tab, to follow the build.
+  Its chat closes, because the planning session has stopped. `enter` on a
+  related plan in the Flow tab opens it. The standalone `chunk factory plan`
+  closes on approval. Approving frees the plan's claim from a session that
+  is only planning it, a parent plan's included; while a build holds the claim,
   approving is refused and names its session. A build whose plan another
   session holds says so in `chunk watch`, and picks the plan up once the claim
   is released. Builds outlive the screen and the terminal, and any number go at

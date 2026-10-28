@@ -374,17 +374,21 @@ reading a plan never claims it or starts an agent; your first message does,
 in the project `chunk watch` was opened in. `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its chat, half-written message and session
 while another is shown.
-The chat is on the left and the plan is on the right; `tab` moves to the plan,
+The chat is on the left and the plan is on the right, under a strip that says
+where the flow is and what comes next; `f` shows the Flow tab (progress, PR,
+related plans) and `p` the plan again. `tab` moves to the plan,
 where `c` writes a comment right under the highlighted part, saved to factory
 for chunk to address when you next press `enter`; `shift+↑/↓` selects several
 parts to comment on together. Once factory's review of the design has
 passed, `ctrl+s` approves the design, and chunk writes the units; once those
 pass review too, `ctrl+s` approves the finished plan in factory, and the
-chunk daemon builds it through to a pull request. The header says which of
-the two factory is waiting for: Design ready or Plan ready. A plan whose PR
+chunk daemon builds it through to a pull request. The strip says which of
+the two factory is waiting for: `Next: you approve the design · ctrl+s` or
+`Next: you approve the plan · ctrl+s`. A plan whose PR
 conflicts after factory's rebase reads PR conflicts, and `ctrl+s` hands it
 back to factory to rebase again. The build shows
 in your runs, and keeps going when you close chunk; plan as many as you like.
+Once approved, the screen stays open on the Flow tab and follows the build.
 `esc` goes back to your plans with the plan kept. Quitting with a message
 still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.

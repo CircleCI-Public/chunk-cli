@@ -185,13 +185,14 @@ func TestApprovingThePlanSelectsItsBuild(t *testing.T) {
 	// y starts the approval and the spinner; the spinner's ticks are left out.
 	batch, ok := cmd().(tea.BatchMsg)
 	assert.Assert(t, ok && len(batch) == 2, "y did not start the approval")
-	next, closeCmd := m.Update(batch[0]()) // the approval
-	m = deliver(t, next.(Model), closeCmd)
+	next, buildingCmd := m.Update(batch[0]()) // the approval
+	// The screen answers with BuildingMsg, and a refresh, as workspaceMsgs.
+	m = deliver(t, next.(Model), buildingCmd)
 	assert.Assert(t, f.sent, "the plan was not approved")
 
-	assert.Assert(t, !m.planOpen && !m.HasPlan(), "an approved plan is done with")
+	assert.Check(t, m.planOpen && m.HasPlan(), "an approved plan's screen stays open")
 	assert.Check(t, cmp.Equal(m.pendingRun, "build-1"))
-	assert.Check(t, cmp.Contains(view(m), "approved the plan; it is building in chunk-cli"))
+	assert.Check(t, !strings.Contains(m.draftNote, "approved the plan"), "the note: %q", m.draftNote)
 }
 
 func TestWindowSizeReachesTheKeptPlan(t *testing.T) {

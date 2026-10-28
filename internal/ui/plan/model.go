@@ -229,6 +229,13 @@ type ClosedMsg struct {
 	BuildID string
 }
 
+// BuildingMsg is the screen telling its host that the plan was approved and
+// is being built as BuildID, while the screen stays open to follow it. A
+// host that does not keep the screen gets ClosedMsg instead.
+type BuildingMsg struct {
+	BuildID string
+}
+
 func closed(buildID string) tea.Cmd {
 	return func() tea.Msg { return ClosedMsg{BuildID: buildID} }
 }
@@ -371,6 +378,10 @@ type Model struct {
 	units, questions int
 	// BuildID is the build of the plan, once it has been approved.
 	BuildID string
+	// built is whether the plan was approved and is being built while the
+	// screen stays open; its chat is closed, since a message would resume
+	// the stopped planning session.
+	built bool
 
 	pending string
 	// lastClick is the plan block last clicked, to tell a double click.
@@ -386,6 +397,9 @@ const (
 	// reviewPlaceholder is for a plan waiting on the developer's review, which
 	// the agent may not change until comments move it back to the agent.
 	reviewPlaceholder = "Ask chunk about the plan; comment on it to change it…"
+	// builtPlaceholder is the chat once the plan is approved and building:
+	// its planning session has stopped.
+	builtPlaceholder = "chunk is building this plan; chat is closed"
 )
 
 // New returns the planning screen. A non-empty first message is sent as soon
@@ -783,7 +797,7 @@ const heldStatus = "Comments not sent: factory is working on the plan. Send them
 // queued comments to factory and hands them to it, then sends text to the
 // agent, if there is any; from any other state the comments stay queued.
 func (m Model) deliver(text string) (Model, tea.Cmd) {
-	if m.savingComments {
+	if m.savingComments || m.built {
 		return m, nil
 	}
 	queued := queuedComments(m.comments)
@@ -859,7 +873,7 @@ func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.approving, m.approvingDesign, m.resolvingConflicts, m.moving != nil:
+	case m.built, m.approving, m.approvingDesign, m.resolvingConflicts, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
 	case m.conflicting() && queued > 0:
@@ -1041,6 +1055,8 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 // their review.
 func (m *Model) syncPlaceholder() {
 	switch {
+	case m.built:
+		m.input.Placeholder = builtPlaceholder
 	case len(queuedComments(m.comments)) > 0 && !m.takesComments():
 		m.input.Placeholder = heldPlaceholder
 	case len(queuedComments(m.comments)) > 0:
@@ -1081,7 +1097,16 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.BuildID = msg.buildID
-		return m, closed(msg.buildID)
+		if !m.back {
+			return m, closed(msg.buildID)
+		}
+		m.built, m.tab, m.tabChosen = true, tabFlow, true
+		m.status = "Approved · building as run " + msg.buildID + "; it is also in Runs"
+		m.syncPlaceholder()
+		return m, tea.Batch(
+			func() tea.Msg { return BuildingMsg{BuildID: msg.buildID} },
+			refreshCmd(m.ctx, m.store),
+		)
 	}
 	return m, nil
 }
