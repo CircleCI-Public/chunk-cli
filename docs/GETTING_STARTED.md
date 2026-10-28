@@ -375,9 +375,9 @@ in the project `chunk watch` was opened in. `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its chat, half-written message and session
 while another is shown.
 The chat is on the left and the plan is on the right, under a strip that says
-where the flow is and what comes next; `f` shows the Flow tab (progress, PR,
-related plans) and `p` the plan again. `tab` moves to the plan,
-where `c` writes a comment right under the highlighted part, saved to factory
+where the flow is and what comes next; with the plan focused, `←` shows the
+Flow tab (progress, PR, related plans) and `→` the plan again. `tab` moves to
+the plan, where `c` writes a comment right under the highlighted part, saved to factory
 for chunk to address when you next press `enter`; `shift+↑/↓` selects several
 parts to comment on together. Once factory's review of the design has
 passed, `ctrl+s` approves the design, and chunk writes the units; once those
