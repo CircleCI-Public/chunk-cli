@@ -1,10 +1,11 @@
-package planlist_test
+package flowlist_test
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,7 +19,7 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 )
 
 // driver runs the component's commands, timers included, and hands back the
@@ -26,18 +27,18 @@ import (
 // timer fires as soon as everything else is blocked.
 type driver struct {
 	t      *testing.T
-	m      planlist.Model
+	m      flowlist.Model
 	ctx    context.Context
 	cancel context.CancelFunc
 	events chan tea.Msg
 	wg     sync.WaitGroup
 }
 
-func newDriver(t *testing.T, list func(context.Context) ([]planlist.Plan, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) *driver {
+func newDriver(t *testing.T, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) *driver {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &driver{t: t, ctx: ctx, cancel: cancel, events: make(chan tea.Msg, 100)}
-	d.m = planlist.New(ctx, list, preview)
+	d.m = flowlist.New(ctx, list, preview)
 	t.Cleanup(func() { cancel(); d.wg.Wait() })
 	return d
 }
@@ -96,18 +97,40 @@ func press(code rune) tea.KeyPressMsg {
 	return msg
 }
 
-func fixed(plans ...planlist.Plan) func(context.Context) ([]planlist.Plan, error) {
-	return func(context.Context) ([]planlist.Plan, error) { return plans, nil }
+func fixed(flows ...circleci.Flow) func(context.Context) ([]circleci.Flow, error) {
+	return func(context.Context) ([]circleci.Flow, error) { return flows, nil }
 }
 
 func preview(_ context.Context, id string) (string, []circleci.PlanComment, error) {
 	return "# Preview " + id, nil, nil
 }
 
+// listRows is the list's rows at a size that shows every one, without the
+// pane's border and the rows' indent.
+func listRows(d *driver) []string {
+	d.t.Helper()
+	d.send(tea.WindowSizeMsg{Width: 50, Height: 60})
+	var rows []string
+	for _, line := range strings.Split(d.content(), "\n") {
+		rows = append(rows, strings.Trim(line, "│ "))
+	}
+	return rows
+}
+
+func count(rows []string, row string) int {
+	n := 0
+	for _, r := range rows {
+		if r == row {
+			n++
+		}
+	}
+	return n
+}
+
 func open(d *driver, id string) {
 	d.t.Helper()
 	d.send(press(tea.KeyEnter))
-	msg, ok := d.next().(planlist.OpenMsg)
+	msg, ok := d.next().(flowlist.OpenMsg)
 	assert.Assert(d.t, ok, "enter did not emit OpenMsg")
 	assert.Equal(d.t, msg.ID, id)
 }
@@ -115,8 +138,11 @@ func open(d *driver, id string) {
 func TestNavigation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		d := newDriver(t, fixed(
-			planlist.Plan{Plan: circleci.Plan{ID: "a1", Title: "Fix parser"}, FlowState: "Planning - Human"},
-			planlist.Plan{Plan: circleci.Plan{ID: "b2", Title: "Cache café\x1b[31m\x00"}, FlowState: "Review - Agent"},
+			circleci.Flow{ID: "a1", Title: "Fix parser", State: "Planning - Human"},
+			circleci.Flow{ID: "b2", Title: "Cache café\x1b[31m\x00", State: "Review - Agent"},
+			// Listed in reverse phase order: Planning shows before Building.
+			circleci.Flow{ID: "c3", Title: "Build it", State: "Building - Human"},
+			circleci.Flow{ID: "d4", Title: "Plan it", State: "Planning - Human"},
 		), preview)
 		d.load()
 		text := d.content()
@@ -128,13 +154,19 @@ func TestNavigation(t *testing.T) {
 		d.send(press('/'))
 		d.send(press('j'))
 		d.step()
+		open(d, "d4")
+		d.send(press('j'))
+		d.step()
+		open(d, "c3")
+		d.send(press('j'))
+		d.step()
 		open(d, "b2")
 		text = d.content()
 		assert.Check(t, cmp.Contains(text, "Fix parser"))
 		assert.Check(t, cmp.Contains(text, "▶ Cache café"))
 		d.send(press('k'))
 		d.step()
-		open(d, "a1")
+		open(d, "c3")
 		d.send(press(tea.KeyDown))
 		d.step()
 		open(d, "b2")
@@ -146,13 +178,13 @@ func TestHostMessages(t *testing.T) {
 		d := newDriver(t, fixed(), preview)
 		for _, key := range []tea.KeyPressMsg{press('2'), press(tea.KeyTab), press(tea.KeyEscape)} {
 			d.send(key)
-			assert.Check(t, cmp.DeepEqual(d.next(), planlist.BackMsg{}), "%s did not emit BackMsg", key.String())
+			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.BackMsg{}), "%s did not emit BackMsg", key.String())
 		}
 		d.send(press('n'))
-		assert.Check(t, cmp.DeepEqual(d.next(), planlist.NewMsg{}), "n did not emit NewMsg")
+		assert.Check(t, cmp.DeepEqual(d.next(), flowlist.NewMsg{}), "n did not emit NewMsg")
 		for _, key := range []tea.KeyPressMsg{press('q'), {Code: 'c', Mod: tea.ModCtrl}} {
 			d.send(key)
-			assert.Check(t, cmp.DeepEqual(d.next(), planlist.QuitMsg{}), "%s must ask the host to quit, not tea.Quit", key.String())
+			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.QuitMsg{}), "%s must ask the host to quit, not tea.Quit", key.String())
 		}
 	})
 }
@@ -160,14 +192,17 @@ func TestHostMessages(t *testing.T) {
 func TestStableRefreshAndSelect(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var call atomic.Int32
-		a := planlist.Plan{Plan: circleci.Plan{ID: "a", Title: "Alpha"}, FlowState: "Planning - Human"}
-		b := planlist.Plan{Plan: circleci.Plan{ID: "b", Title: "Beta"}, FlowState: "Planning - Human"}
-		c := planlist.Plan{Plan: circleci.Plan{ID: "c", Title: "Gamma"}, FlowState: "Planning - Human"}
-		d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
+		a := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+		b := circleci.Flow{ID: "b", Title: "Beta", State: "Planning - Human"}
+		c := circleci.Flow{ID: "c", Title: "Gamma", State: "Planning - Human"}
+		zeta := circleci.Flow{ID: "z", Title: "Zeta plan", State: "Zeta - Human"}
+		alphaPhase := circleci.Flow{ID: "al", Title: "Alpha plan", State: "Alpha - Human"}
+		zetaToo := circleci.Flow{ID: "z2", Title: "Zeta too", State: " zeta - Human"}
+		d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 			if call.Add(1) == 1 {
-				return []planlist.Plan{a, b}, nil
+				return []circleci.Flow{a, b, zeta, alphaPhase}, nil
 			}
-			return []planlist.Plan{c, b, a}, nil
+			return []circleci.Flow{c, b, a, alphaPhase, zeta, zetaToo}, nil
 		}, preview)
 		d.load()
 		d.send(press('j'))
@@ -178,6 +213,14 @@ func TestStableRefreshAndSelect(t *testing.T) {
 		assert.Check(t, cmp.Contains(text, "▶ Beta"))
 		alpha, beta, gamma := strings.Index(text, "Alpha"), strings.Index(text, "Beta"), strings.Index(text, "Gamma")
 		assert.Assert(t, alpha < beta && beta < gamma, "refresh reordered existing rows:\n%s", text)
+		// Unknown phases keep the order the list first saw them in, and a
+		// phase spelled differently joins its sub-group.
+		rows := listRows(d)
+		zetaRow, zetaTooRow, alphaRow := slices.Index(rows, "Zeta plan"), slices.Index(rows, "Zeta too"), slices.Index(rows, "Alpha plan")
+		assert.Check(t, zetaRow >= 0 && zetaTooRow == zetaRow+2 && alphaRow == zetaTooRow+3, "wrong phase order:\n%s", strings.Join(rows, "\n"))
+		assert.Check(t, cmp.Equal(count(rows, "Zeta"), 1), "want one Zeta sub-heading:\n%s", strings.Join(rows, "\n"))
+		assert.Check(t, cmp.Equal(rows[zetaRow-1], "Zeta"))
+		assert.Check(t, cmp.Equal(rows[alphaRow-1], "Alpha"))
 		open(d, "b")
 		d.m = d.m.Select("c")
 		d.send(nil)
@@ -198,7 +241,7 @@ func TestLatePreviewCannotOverwriteSelection(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		releaseA := make(chan struct{})
 		d := newDriver(t, fixed(
-			planlist.Plan{Plan: circleci.Plan{ID: "a", Title: "Alpha"}}, planlist.Plan{Plan: circleci.Plan{ID: "b", Title: "Beta"}},
+			circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"},
 		), func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
 			if id == "a" {
 				select {
@@ -219,7 +262,7 @@ func TestLatePreviewCannotOverwriteSelection(t *testing.T) {
 		d.step()
 		text := d.content()
 		assert.Check(t, cmp.Contains(text, "UNIQUE PREVIEW b"))
-		assert.Check(t, !strings.Contains(text, "UNIQUE PREVIEW a"), "a late preview replaced the selected plan's:\n%s", text)
+		assert.Check(t, !strings.Contains(text, "UNIQUE PREVIEW a"), "a late preview replaced the selected flow's:\n%s", text)
 	})
 }
 
@@ -229,7 +272,7 @@ func TestLatePreviewForSameIDCannotOverwriteNewRequest(t *testing.T) {
 		started := make(chan struct{})
 		var calls atomic.Int32
 		d := newDriver(t, fixed(
-			planlist.Plan{Plan: circleci.Plan{ID: "a", Title: "Alpha"}}, planlist.Plan{Plan: circleci.Plan{ID: "b", Title: "Beta"}},
+			circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"},
 		), func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
 			if id == "a" && calls.Add(1) == 1 {
 				close(started)
@@ -266,23 +309,29 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 			d.send(d.m.Init()())
 			d.step()
 			text := d.content()
-			assert.Check(t, cmp.Contains(text, "no open plans"))
+			assert.Check(t, cmp.Contains(text, "no open flows"))
 			assert.Check(t, cmp.Contains(text, "n starts one"))
+		})
+	})
+	t.Run("loading", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := newDriver(t, fixed(), preview)
+			assert.Check(t, cmp.Contains(d.content(), "loading flows…"))
 		})
 	})
 	t.Run("initial error recovers", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var calls atomic.Int32
-			d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
+			d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 				if calls.Add(1) == 1 {
 					return nil, errors.New("offline")
 				}
-				return []planlist.Plan{{Plan: circleci.Plan{ID: "a", Title: "Retained"}}}, nil
+				return []circleci.Flow{{ID: "a", Title: "Retained"}}, nil
 			}, preview)
 			d.send(d.m.Init()())
 			d.step()
 			text := d.content()
-			for _, want := range []string{"offline", "plans unavailable", "retrying"} {
+			for _, want := range []string{"offline", "flows unavailable", "retrying"} {
 				assert.Check(t, cmp.Contains(text, want))
 			}
 			d.refresh()
@@ -295,11 +344,11 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 	t.Run("list and preview retain success", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var lists, previews atomic.Int32
-			d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
+			d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 				if lists.Add(1) == 2 {
 					return nil, errors.New("list offline")
 				}
-				return []planlist.Plan{{Plan: circleci.Plan{ID: "a", Title: "Retained"}}}, nil
+				return []circleci.Flow{{ID: "a", Title: "Retained"}}, nil
 			}, func(context.Context, string) (string, []circleci.PlanComment, error) {
 				if previews.Add(1) > 1 {
 					return "", nil, errors.New("preview offline")
@@ -323,41 +372,119 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 	})
 }
 
-func TestGroupsCommentsAndDimensions(t *testing.T) {
+func TestPhase(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state string
+		want  string
+	}{
+		{
+			name:  "bare word",
+			state: "Planning",
+			want:  "",
+		},
+		{
+			name:  "any case",
+			state: "planning - human",
+			want:  "planning",
+		},
+		{
+			name:  "empty",
+			state: "",
+			want:  "",
+		},
+		{
+			name:  "unknown phase",
+			state: "Integrating - Agent",
+			want:  "Integrating",
+		},
+		{
+			name:  "unknown actor",
+			state: "Integrating - Bot",
+			want:  "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(flowlist.Phase(tc.state), tc.want))
+		})
+	}
+}
+
+func TestGroupsAndRows(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now()
-		plans := []planlist.Plan{
-			{Plan: circleci.Plan{ID: "other", Title: "Other plan"}, FlowState: "Custom exact state"},
-			{Plan: circleci.Plan{ID: "bot", Title: "Bot plan"}, FlowState: "Integrating - Bot"},
-			{Plan: circleci.Plan{ID: "new", Title: "New plan"}, FlowState: "Unprioritized"},
-			{Plan: circleci.Plan{ID: "agent", Title: "Agent plan"}, FlowState: "Planning - Agent"},
+		flows := []circleci.Flow{
+			{ID: "other", Title: "Other plan", State: "Custom exact state"},
+			{ID: "bot", Title: "Bot plan", State: "Integrating - Bot"},
+			{ID: "new", Title: "New plan", State: "Unprioritized"},
+			{ID: "agent", Title: "Agent plan", State: "Planning - Agent"},
+			{ID: "untitled", State: "Building - Agent"},
+			{ID: "built", Title: "Built", State: "Building - Human", Task: &circleci.FlowTask{ID: "t"}},
 			{
-				Plan:      circleci.Plan{ID: "human", Title: "Human plan", OpenComments: 2, UpdatedAt: now},
-				FlowState: "Review - Human",
+				ID: "human", Title: "Planned", State: "Planning - Human", UpdatedAt: now,
+				SessionID: "s1", Task: &circleci.FlowTask{ID: "t1", Category: "build-unit"},
 			},
-			{Plan: circleci.Plan{ID: "noflow", Title: "No flow plan"}},
+			{ID: "zeta", Title: "Zeta", State: "Zeta - Human"},
+			{ID: "alpha", Title: "Alpha", State: "Alpha - Human"},
+			{ID: "planned-too", Title: "Planned too", State: "planning - human"},
 		}
-		d := newDriver(t, fixed(plans...), func(context.Context, string) (string, []circleci.PlanComment, error) {
+		d := newDriver(t, fixed(flows...), func(context.Context, string) (string, []circleci.PlanComment, error) {
 			return "# Markdown heading\n\n**Plan prose**\n\n" + strings.Repeat("界", 150), []circleci.PlanComment{
 				{Body: "Please clarify", QuotedText: "Plan prose"},
 				{Body: "RESOLVED SECRET", ResolvedAt: &now},
 			}, nil
 		})
 		d.load()
-		text := d.content()
-		for _, want := range []string{"Needs your review", "With agent", "Not started", "Other", "custom exact state", "integrating - bot"} {
-			assert.Check(t, cmp.Contains(text, want))
+		rows := listRows(d)
+		all := strings.Join(rows, "\n")
+		for _, want := range []string{"flows", "Needs your review", "With agent", "Not started", "Other", "custom exact state", "integrating - bot", "Untitled plan"} {
+			assert.Check(t, cmp.Contains(all, want))
 		}
-		order := []string{"Human plan", "Agent plan", "New plan", "Other plan", "Bot plan", "No flow plan"}
+		index := func(row string) int {
+			t.Helper()
+			for i := len(rows) - 1; i >= 0; i-- {
+				// The last match, so a title is not taken for the
+				// sub-heading of the same name above it.
+				if strings.TrimPrefix(rows[i], "▶ ") == row {
+					return i
+				}
+			}
+			t.Fatalf("no row %q:\n%s", row, all)
+			return -1
+		}
+		order := []string{"Planned", "Built", "Zeta", "Alpha", "Agent plan", "New plan", "Other plan", "Bot plan"}
 		for i := 1; i < len(order); i++ {
-			assert.Assert(t, strings.Index(text, order[i-1]) < strings.Index(text, order[i]), "wrong group order:\n%s", text)
+			assert.Check(t, index(order[i-1]) < index(order[i]), "%q is not before %q:\n%s", order[i-1], order[i], all)
 		}
+		// A phase spelled differently shares its sub-heading.
+		planned := index("Planned")
+		assert.Check(t, cmp.Equal(rows[planned+2], "Planned too"), "rows:\n%s", all)
+		review := rows[index("Needs your review"):index("With agent")]
+		assert.Check(t, cmp.Equal(count(review, "Planning"), 1), "want one Planning sub-heading:\n%s", all)
+		assert.Check(t, cmp.Equal(count(review, "Building"), 1), "want one Building sub-heading:\n%s", all)
+		// Each sub-heading is directly above its first title.
+		for title, heading := range map[string]string{"Planned": "Planning", "Built": "Building", "Zeta": "Zeta", "Alpha": "Alpha"} {
+			assert.Check(t, cmp.Equal(rows[index(title)-1], heading), "rows:\n%s", all)
+		}
+		// Not started and Other have no sub-headings: only titles and chips.
+		other := index("Other")
+		assert.Check(t, cmp.DeepEqual(rows[other+1:other+5], []string{"Other plan", "custom exact state", "Bot plan", "integrating - bot"}), "rows:\n%s", all)
+		notStarted := index("Not started")
+		assert.Check(t, cmp.DeepEqual(rows[notStarted+1:notStarted+3], []string{"New plan", "unprioritized"}), "rows:\n%s", all)
+		// The row details: task category, claimed and updated-ago, each only
+		// when there is one.
+		assert.Check(t, cmp.Contains(rows[planned+1], "build-unit"))
+		assert.Check(t, cmp.Contains(rows[planned+1], "claimed"))
+		assert.Check(t, cmp.Contains(rows[planned+1], "just now"))
+		assert.Check(t, cmp.Equal(rows[index("Built")+1], "building"), "a blank category or no session shows a detail")
+		assert.Check(t, !strings.Contains(all, "ago"), "a zero UpdatedAt shows an age:\n%s", all)
+
 		for _, size := range []tea.WindowSizeMsg{{Width: 50, Height: 20}, {Width: 80, Height: 24}, {Width: 120, Height: 35}, {Width: 1, Height: 1}, {Width: 100, Height: 2}} {
 			for _, bg := range []color.Color{color.White, color.Black} {
 				d.send(size)
 				d.send(tea.BackgroundColorMsg{Color: bg})
 				d.m = d.m.WithNote("Unsent draft: " + strings.Repeat("界", 200) + "\nunsafe\x1b[2J")
-				text = d.content()
+				text := d.content()
 				lines := strings.Split(text, "\n")
 				assert.Assert(t, len(lines) <= size.Height, "height %d exceeds %d", len(lines), size.Height)
 				for _, line := range lines {
@@ -371,7 +498,7 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 					assert.Check(t, cmp.Contains(lines[len(lines)-2], "tab runs"))
 				}
 				if size.Width >= 80 && size.Height > 2 {
-					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose", "● 2", "just now"} {
+					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose"} {
 						assert.Check(t, cmp.Contains(text, want))
 					}
 					for _, not := range []string{"RESOLVED SECRET", "# Markdown", "**Plan prose**"} {
@@ -387,11 +514,11 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 
 func TestLongListKeepsSelectedRowVisible(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var plans []planlist.Plan
+		var flows []circleci.Flow
 		for i := range 80 {
-			plans = append(plans, planlist.Plan{Plan: circleci.Plan{ID: fmt.Sprintf("id-%d", i), Title: fmt.Sprintf("Title-%02d", i)}, FlowState: "Planning - Human"})
+			flows = append(flows, circleci.Flow{ID: fmt.Sprintf("id-%d", i), Title: fmt.Sprintf("Title-%02d", i), State: "Planning - Human"})
 		}
-		d := newDriver(t, fixed(plans...), preview)
+		d := newDriver(t, fixed(flows...), preview)
 		d.load()
 		d.m = d.m.Select("id-79")
 		d.send(nil)
@@ -410,7 +537,7 @@ func TestRefreshCoalescesAndCancellationStopsRequests(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls atomic.Int32
 		started := make(chan struct{})
-		d := newDriver(t, func(ctx context.Context) ([]planlist.Plan, error) {
+		d := newDriver(t, func(ctx context.Context) ([]circleci.Flow, error) {
 			calls.Add(1)
 			close(started)
 			<-ctx.Done()
@@ -432,7 +559,7 @@ func TestRefreshCoalescesAndCancellationStopsRequests(t *testing.T) {
 func TestPollRefreshesAfterFiveSecondsAndStopsOnCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls atomic.Int32
-		d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
+		d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 			calls.Add(1)
 			return nil, nil
 		}, preview)

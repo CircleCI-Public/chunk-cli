@@ -774,11 +774,11 @@ chunk
   `origin` remote, validation commands or review prompts, Claude Code being
   installed) is checked before Claude starts, and why there is no draft, or
   why it could not be sent, is shown in the footer. Closing the dashboard
-  stops a draft still being made. The dashboard opens on Plans: the open plans in
-  factory, grouped by who they wait on, with the selected plan's text and open
-  comments previewed beside it. `tab`, `2` or `esc` shows the runs, and `p`,
-  `tab` or `1` the plans again. `Enter` opens the `chunk factory plan` screen
-  on the selected plan, and `n` on a new one, to plan the change with Claude
+  stops a draft still being made. The dashboard opens on Flows: your open flows
+  in factory, grouped by who they wait on, then by phase, with the selected
+  flow's plan text and open comments previewed beside it. `tab`, `2` or `esc`
+  shows the runs, and `p`, `tab` or `1` the flows again. `Enter` opens the
+  `chunk factory plan` screen on the selected flow's plan, and `n` on a new one, to plan the change with Claude
   before the factory builds it. Opening a plan only reads it: no session
   claims it until a message is sent, and then in the project the dashboard
   was opened in, since factory does not record a plan's repository; a plan

@@ -1,9 +1,11 @@
-// Package planlist is the read-only plan inbox component. Its host forwards
+// Package flowlist is the read-only flow list component. Its host forwards
 // messages to it, renders Content, and handles the messages it emits.
-package planlist
+package flowlist
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -16,7 +18,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
-// OpenMsg asks the host to open an existing plan workspace.
+// OpenMsg asks the host to open a flow's plan workspace. ID is the flow's,
+// which is its plan's.
 type OpenMsg struct{ ID, Title string }
 
 // NewMsg asks the host to start a new plan workspace.
@@ -31,7 +34,7 @@ type QuitMsg struct{}
 type refreshMsg struct{}
 type pollMsg struct{ generation uint64 }
 type listedMsg struct {
-	plans []Plan
+	flows []circleci.Flow
 	err   error
 }
 type previewedMsg struct {
@@ -42,25 +45,22 @@ type previewedMsg struct {
 	err        error
 }
 
-// Plan is a row of the inbox: an open plan and its flow's state, "" when it
-// has no flow.
-type Plan struct {
-	circleci.Plan
-	FlowState string
-}
-
 // Model is a Bubble Tea component, not a standalone tea.Model.
 type Model struct {
 	ctx     context.Context
-	list    func(context.Context) ([]Plan, error)
+	list    func(context.Context) ([]circleci.Flow, error)
 	preview func(context.Context, string) (string, []circleci.PlanComment, error)
-	plans   []Plan
-	id      string
-	note    string
-	width   int
-	height  int
-	dark    bool
-	styles  theme.Styles
+	flows   []circleci.Flow
+	// phases are the phases outside phaseOrder, in the order the list
+	// first saw them. They are kept across refreshes, so a sub-group does
+	// not move when its first flow leaves and comes back.
+	phases []string
+	id     string
+	note   string
+	width  int
+	height int
+	dark   bool
+	styles theme.Styles
 
 	loaded, listing bool
 	listErr         error
@@ -75,9 +75,9 @@ type Model struct {
 	previewErr        error
 }
 
-// New creates an inbox of the plans list returns, each previewed with
+// New creates a list of the flows list returns, each previewed with
 // preview. Both callbacks must honor ctx cancellation.
-func New(ctx context.Context, list func(context.Context) ([]Plan, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) Model {
+func New(ctx context.Context, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) Model {
 	return Model{ctx: ctx, list: list, preview: preview, width: 80, height: 24, dark: true, styles: theme.New(true)}
 }
 
@@ -91,8 +91,8 @@ func (m Model) WithNote(note string) Model {
 	return m
 }
 
-// Len is how many open plans the inbox lists.
-func (m Model) Len() int { return len(m.plans) }
+// Len is how many open flows the list shows.
+func (m Model) Len() int { return len(m.flows) }
 
 // Refresh requests fresh list and preview data. Concurrent refresh requests
 // coalesce; only one list callback can be in flight at a time.
@@ -105,12 +105,12 @@ func (m Model) Refresh() tea.Cmd {
 	}
 }
 
-// Select selects an existing plan.
+// Select selects a flow.
 // The next Update starts its preview; hosts can issue Refresh after Select
 // to start that update immediately when returning from a workspace.
 func (m Model) Select(id string) Model {
-	for _, p := range m.plans {
-		if p.ID == id {
+	for _, f := range m.flows {
+		if f.ID == id {
 			m.id = id
 			return m
 		}
@@ -142,7 +142,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.listing = false
 		m.listErr = msg.err
 		if msg.err == nil {
-			m.plans = stablePlans(m.plans, msg.plans)
+			m.flows = stableFlows(m.flows, msg.flows)
+			m.phases = seenPhases(m.phases, m.flows)
 			m.loaded = true
 			m.keepSelection()
 			refreshPreview = true
@@ -182,8 +183,8 @@ func (m *Model) startList() tea.Cmd {
 		if ctx.Err() != nil {
 			return nil
 		}
-		plans, err := list(ctx)
-		return listedMsg{plans: plans, err: err}
+		flows, err := list(ctx)
+		return listedMsg{flows: flows, err: err}
 	}
 }
 
@@ -220,9 +221,9 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case "tab", "esc", "2":
 		return func() tea.Msg { return BackMsg{} }
 	case "enter":
-		for _, p := range m.visible() {
-			if p.ID == m.id {
-				return func() tea.Msg { return OpenMsg{ID: p.ID, Title: p.Title} }
+		for _, f := range m.visible() {
+			if f.ID == m.id {
+				return func() tea.Msg { return OpenMsg{ID: f.ID, Title: f.Title} }
 			}
 		}
 		return nil
@@ -239,30 +240,30 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) move(step int) {
-	plans := m.visible()
-	for i, p := range plans {
-		if p.ID == m.id {
-			m.id = plans[max(0, min(i+step, len(plans)-1))].ID
+	flows := m.visible()
+	for i, f := range flows {
+		if f.ID == m.id {
+			m.id = flows[max(0, min(i+step, len(flows)-1))].ID
 			return
 		}
 	}
 }
 
 func (m *Model) keepSelection() {
-	plans := m.visible()
-	for _, p := range plans {
-		if p.ID == m.id {
+	flows := m.visible()
+	for _, f := range flows {
+		if f.ID == m.id {
 			return
 		}
 	}
 	m.id = ""
-	if len(plans) > 0 {
-		m.id = plans[0].ID
+	if len(flows) > 0 {
+		m.id = flows[0].ID
 	}
 }
 
-// group is where a plan whose flow is in state goes in the inbox. A state
-// chunk does not know, and "" for no flow, goes in the last group.
+// group is where a flow in state goes in the list. A state chunk does not
+// know goes in the last group.
 func group(state string) int {
 	if planstate.IsUnprioritized(state) {
 		return 2
@@ -277,36 +278,82 @@ func group(state string) int {
 	return 3
 }
 
-func (m Model) visible() []Plan {
-	var out []Plan
-	for g := 0; g < 4; g++ {
-		for _, p := range m.plans {
-			if group(p.FlowState) == g {
-				out = append(out, p)
-			}
-		}
+// phaseOrder is how the phases chunk knows sort within an actor group;
+// others follow in the order they first appear.
+var phaseOrder = []string{"Planning", "Building"}
+
+// phase is the sub-group a flow in state goes in: the phase part of a
+// "Phase - Actor" state, or "" for a state with no actor.
+func phase(state string) string {
+	p, actor := planstate.Parse(state)
+	if actor != planstate.Human && actor != planstate.Agent {
+		return ""
 	}
+	return p
+}
+
+// samePhase is whether a and b are one sub-group.
+func samePhase(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+// seenPhases is known with the phases of flows that are in neither
+// phaseOrder nor known appended, in the order flows has them.
+func seenPhases(known []string, flows []circleci.Flow) []string {
+	for _, f := range flows {
+		p := phase(f.State)
+		match := func(o string) bool { return samePhase(o, p) }
+		if p == "" || slices.ContainsFunc(phaseOrder, match) || slices.ContainsFunc(known, match) {
+			continue
+		}
+		known = append(known, p)
+	}
+	return known
+}
+
+// phaseRank is where phase p sorts within an actor group.
+func (m Model) phaseRank(p string) int {
+	match := func(o string) bool { return samePhase(o, p) }
+	if i := slices.IndexFunc(phaseOrder, match); i >= 0 {
+		return i
+	}
+	if i := slices.IndexFunc(m.phases, match); i >= 0 {
+		return len(phaseOrder) + i
+	}
+	return len(phaseOrder) + len(m.phases)
+}
+
+// visible is the flows in the order the list shows them: by actor group,
+// then by phase, then in the order the list keeps them.
+func (m Model) visible() []circleci.Flow {
+	out := slices.Clone(m.flows)
+	slices.SortStableFunc(out, func(a, b circleci.Flow) int {
+		if c := cmp.Compare(group(a.State), group(b.State)); c != 0 {
+			return c
+		}
+		return cmp.Compare(m.phaseRank(phase(a.State)), m.phaseRank(phase(b.State)))
+	})
 	return out
 }
 
 // Keep surviving rows in their original order, updating their fields in place.
 // New rows append within their group; timestamps never move the cursor.
-func stablePlans(old, fresh []Plan) []Plan {
-	byID := make(map[string]Plan, len(fresh))
-	for _, p := range fresh {
-		byID[p.ID] = p
+func stableFlows(old, fresh []circleci.Flow) []circleci.Flow {
+	byID := make(map[string]circleci.Flow, len(fresh))
+	for _, f := range fresh {
+		byID[f.ID] = f
 	}
-	out := make([]Plan, 0, len(fresh))
-	for _, p := range old {
-		if next, ok := byID[p.ID]; ok {
+	out := make([]circleci.Flow, 0, len(fresh))
+	for _, f := range old {
+		if next, ok := byID[f.ID]; ok {
 			out = append(out, next)
-			delete(byID, p.ID)
+			delete(byID, f.ID)
 		}
 	}
-	for _, p := range fresh {
-		if next, ok := byID[p.ID]; ok {
+	for _, f := range fresh {
+		if next, ok := byID[f.ID]; ok {
 			out = append(out, next)
-			delete(byID, p.ID)
+			delete(byID, f.ID)
 		}
 	}
 	return out

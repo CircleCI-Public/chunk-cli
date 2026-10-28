@@ -363,10 +363,11 @@ the draft for later).
 
 For a bigger change, plan it with a factory planning session first (it needs
 the factory daemon running with `FACTORY_PLAN_STORE=circleci`). `chunk watch`
-opens on **Plans**, your open plans in factory grouped by who they wait on
-(Needs your review, With agent, Not started, Other), with a read-only preview
-of the selected one; `tab` (or `2`) shows your runs and `p` or `tab` comes
-back. `Enter` opens a plan and `n` starts a new one. Opening or
+opens on **Flows**, your open flows in factory grouped by who they wait on
+(Needs your review, With agent, Not started, Other) and then by phase
+(Planning, Building, ...), with a read-only preview of the selected one's plan;
+`tab` (or `2`) shows your runs and `p` or `tab` comes back. `Enter` opens a
+flow's plan and `n` starts a new one. Opening or
 reading a plan never claims it or starts an agent; your first message does,
 in the project `chunk watch` was opened in. `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its chat, half-written message and session

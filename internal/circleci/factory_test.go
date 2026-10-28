@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gotest.tools/v3/assert"
@@ -119,46 +120,6 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.Equal(got.OpenComments, 1))
 		assert.Check(t, got.UpdatedAt.After(p.CreatedAt))
 	})
-
-	t.Run("lists the caller's open plans, oldest first, every page", func(t *testing.T) {
-		fake := fakes.NewFakeCircleCI()
-		fake.FactoryPageSize = 2
-		srv := httptest.NewServer(fake)
-		defer srv.Close()
-		client := newTestClient(t, srv.URL)
-		var want []string
-		for _, title := range []string{"one", "two", "done", "three", "four", "five"} {
-			p, err := client.CreatePlan(ctx, title, "")
-			assert.NilError(t, err)
-			if title == "done" {
-				fake.SetFactoryPlanState(p.ID, "Done")
-				continue
-			}
-			want = append(want, p.ID)
-		}
-		_, err := client.CreateComment(ctx, want[1], "", "a comment")
-		assert.NilError(t, err)
-
-		plans, err := client.ListPlans(ctx)
-		assert.NilError(t, err)
-		ids := make([]string, 0, len(plans))
-		for _, p := range plans {
-			ids = append(ids, p.ID)
-		}
-		assert.Check(t, cmp.DeepEqual(ids, want))
-		assert.Check(t, cmp.Equal(plans[0].Title, "one"))
-		assert.Check(t, !plans[0].CreatedAt.IsZero())
-		assert.Check(t, cmp.Equal(plans[1].OpenComments, 1))
-
-		var queries []string
-		for _, r := range fake.Recorder.AllRequests() {
-			if r.Method == http.MethodGet && r.URL.Path == "/api/v3/factory/plans" {
-				queries = append(queries, r.URL.Query().Get("filter[user_id]")+" "+r.URL.Query().Get("page[cursor]"))
-			}
-		}
-		assert.Check(t, cmp.DeepEqual(queries, []string{"me ", "me 2", "me 4"}))
-	})
-
 }
 
 func TestFlows(t *testing.T) {
@@ -177,6 +138,19 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.Equal(f.ID, p.ID))
 		assert.Check(t, cmp.Equal(f.State, "Unprioritized"))
 		assert.Check(t, cmp.Equal(f.SessionID, ""))
+		assert.Check(t, cmp.Equal(f.Title, "a plan"))
+		assert.Check(t, !f.UpdatedAt.IsZero())
+		assert.Check(t, cmp.Equal(f.Phase, PhaseReceived))
+
+		fake.SetFactoryPlanState(p.ID, "Planning - Human")
+		f, err = client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.Phase, PhaseStarted))
+
+		fake.SetFactoryPlanState(p.ID, "Done")
+		f, err = client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.Phase, PhaseEnded))
 
 		fake.ClaimFactoryPlan(p.ID, "session-1")
 		f, err = client.GetFlow(ctx, p.ID)
@@ -312,13 +286,57 @@ func TestFlows(t *testing.T) {
 
 		flows, err = client.ListFlows(ctx)
 		assert.NilError(t, err)
+		for i := range flows {
+			assert.Check(t, !flows[i].UpdatedAt.IsZero())
+			flows[i].UpdatedAt = time.Time{}
+		}
 		assert.Check(t, cmp.DeepEqual(flows, []Flow{
-			{ID: a.ID, State: "Unprioritized", SessionID: "session-1", ApplicableEvents: []FlowEvent{}},
-			{ID: b.ID, State: "Done", ApplicableEvents: []FlowEvent{}},
+			{
+				ID: a.ID, Title: "a", State: "Unprioritized", Phase: PhaseReceived,
+				SessionID: "session-1", ApplicableEvents: []FlowEvent{},
+			},
+			{ID: b.ID, Title: "b", State: "Done", Phase: PhaseEnded, ApplicableEvents: []FlowEvent{}},
 		}))
 		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
 		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/flows"))
 		assert.Check(t, cmp.Equal(last.URL.Query().Get("filter[user_id]"), "me"))
+	})
+
+	t.Run("lists flows with their titles", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		_, err := client.CreatePlan(ctx, "one", "")
+		assert.NilError(t, err)
+		_, err = client.CreatePlan(ctx, "two", "")
+		assert.NilError(t, err)
+
+		flows, err := client.ListFlows(ctx)
+		assert.NilError(t, err)
+		var titles, phases []string
+		for _, f := range flows {
+			titles = append(titles, f.Title)
+			phases = append(phases, f.Phase)
+		}
+		assert.Check(t, cmp.DeepEqual(titles, []string{"one", "two"}))
+		assert.Check(t, cmp.DeepEqual(phases, []string{PhaseReceived, PhaseReceived}))
+	})
+
+	t.Run("reads a flow from a conductor that serves no title or phase", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"a","attributes":{"state":"Done"}}]}`))
+		}))
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+
+		flows, err := client.ListFlows(ctx)
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(flows, 1))
+		assert.Check(t, cmp.Equal(flows[0].Title, ""))
+		assert.Check(t, flows[0].UpdatedAt.IsZero())
+		assert.Check(t, cmp.Equal(flows[0].Phase, ""))
 	})
 }
 
@@ -527,7 +545,7 @@ func TestFactoryNotAuthorized(t *testing.T) {
 
 		_, err := client.CreatePlan(ctx, "a plan", "")
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
-		_, err = client.ListPlans(ctx)
+		_, err = client.ListFlows(ctx)
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		_, err = client.ListComments(ctx, uuid.NewString(), true)
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
@@ -559,10 +577,7 @@ func TestListsStopWhenTheServerNeverEndsThem(t *testing.T) {
 	defer srv.Close()
 	client := newTestClient(t, srv.URL)
 
-	_, err := client.ListPlans(ctx)
-	assert.ErrorContains(t, err, "does not advance")
-
-	_, err = client.ListComments(ctx, "plan-1", false)
+	_, err := client.ListComments(ctx, "plan-1", false)
 	assert.ErrorContains(t, err, "does not advance")
 }
 
