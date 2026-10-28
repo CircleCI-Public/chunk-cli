@@ -92,6 +92,13 @@ const buildMessage = "Plan %s is approved, and factory builds it in this session
 // factory plan planID.
 func BuildMessage(planID string) string { return fmt.Sprintf(buildMessage, planID) }
 
+const buildRetryMessage = "Plan %s's claim has been released. " +
+	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the tasks it hands out, through to the pull request, as your first message said."
+
+// BuildRetryMessage is what a build session that could not claim factory
+// plan planID is sent once the claim is released.
+func BuildRetryMessage(planID string) string { return fmt.Sprintf(buildRetryMessage, planID) }
+
 // AgentConfig starts a long-lived factory session.
 type AgentConfig struct {
 	// Dir is the repository claude plans in, or for Build the worktree it
@@ -402,6 +409,54 @@ func listClaims(ctx context.Context) ([]claim, error) {
 		return nil, fmt.Errorf("read factory claims: %w", err)
 	}
 	return all, nil
+}
+
+// ErrUnknownSession is returned by SessionWorktree for a session factory's
+// daemon does not hold, or holds with no worktree.
+var ErrUnknownSession = errors.New("factory's daemon does not know the session")
+
+// sessionUnknown is in what factory says for a session its daemon does not
+// hold.
+const sessionUnknown = "has no session"
+
+// SessionWorktree is the worktree root factory's daemon has session working
+// in, from `factory daemon session show SESSION`. It returns ErrNoFactory
+// when factory is not installed, ErrNoFactoryDaemon when its daemon is not
+// running, and ErrUnknownSession for a session it does not hold.
+func SessionWorktree(ctx context.Context, session string) (string, error) {
+	if _, err := exec.LookPath(factoryBinary); err != nil {
+		return "", ErrNoFactory
+	}
+	cmd := exec.CommandContext(ctx, factoryBinary, "daemon", "session", "show", session)
+	// As in listClaims: fail at once while the daemon isn't running.
+	cmd.Env = append(os.Environ(), "FACTORY_DAEMON_NOT_RUNNING_RETRY=0s")
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			stderr := strings.TrimSpace(string(exitErr.Stderr))
+			switch {
+			case strings.Contains(stderr, daemonNotRunning):
+				return "", ErrNoFactoryDaemon
+			case strings.Contains(stderr, sessionUnknown):
+				return "", ErrUnknownSession
+			}
+			return "", fmt.Errorf("show factory session %s: %s", session, stderr)
+		}
+		return "", fmt.Errorf("show factory session %s: %w", session, err)
+	}
+	var s struct {
+		Location struct {
+			Dir string `json:"dir"`
+		} `json:"location"`
+	}
+	if err := json.Unmarshal(out, &s); err != nil {
+		return "", fmt.Errorf("read factory session %s: %w", session, err)
+	}
+	if s.Location.Dir == "" {
+		return "", ErrUnknownSession
+	}
+	return s.Location.Dir, nil
 }
 
 // CheckFactoryDaemon reports ErrNoFactory when factory is not installed and

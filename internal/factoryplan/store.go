@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +25,9 @@ type Store struct {
 	api *circleci.Client
 	// name names a new plan for the developer's first message.
 	name func(ctx context.Context, message string) (string, error)
+	// location is the worktree root factory's daemon has a session working
+	// in, as factory.SessionWorktree reports it.
+	location func(ctx context.Context, session string) (string, error)
 
 	mu     sync.Mutex
 	planID string
@@ -32,7 +36,7 @@ type Store struct {
 // NewStore is the store for plan id in factory, or for a plan Create makes
 // when id is "".
 func NewStore(api *circleci.Client, id string) *Store {
-	return &Store{api: api, name: factory.NamePlan, planID: id}
+	return &Store{api: api, name: factory.NamePlan, location: factory.SessionWorktree, planID: id}
 }
 
 // ID is the plan's ID in factory, or "" before Create.
@@ -141,13 +145,19 @@ func (s *Store) Holder(ctx context.Context) (string, error) {
 // factory has not moved it to plan.ReadyState.
 var ErrNotReady = errors.New("the plan is not ready yet: wait for its review to pass")
 
+// ErrBeingBuilt is returned by Approve for a plan a session that may be building it holds.
+var ErrBeingBuilt = errors.New("the plan is already being built")
+
 // Approve approves the plan for factory to build, once its review has passed,
-// with the approve-for-building event. The planning session, session, may
-// not edit files, so its claim is released first, for a build session to
-// claim the plan instead. The state and text are read from factory, not the
-// screen's copy, so a plan that moved after the screen last polled is still
-// refused.
-func (s *Store) Approve(ctx context.Context, session string) error {
+// with the approve-for-building event. So that a build session can claim the
+// plan, it first releases a claim held by a session that is only planning
+// it: session, the screen's own, or one working outside the plan's
+// worktree, as a parent's planning session does. It refuses with
+// ErrBeingBuilt, sending nothing, while a session in worktree or one
+// factory's daemon does not know holds it, as either may be building it.
+// The state and text are read from factory, not the screen's copy, so a
+// plan that moved after the screen last polled is still refused.
+func (s *Store) Approve(ctx context.Context, session, worktree string) error {
 	state, err := s.State(ctx)
 	if err != nil {
 		return err
@@ -178,15 +188,55 @@ func (s *Store) Approve(ctx context.Context, session string) error {
 	if err != nil {
 		return err
 	}
-	if h != "" && h == session {
-		if err := s.api.ReleaseClaim(ctx, session, s.ID()); err != nil {
-			return fmt.Errorf("release the planning session's claim: %w", err)
+	if h != "" {
+		if err := s.releasePlanner(ctx, h, session, worktree); err != nil {
+			return err
 		}
 	}
 	if err := s.api.CreateFlowEvent(ctx, s.ID(), circleci.ApproveForBuilding); err != nil {
 		return fmt.Errorf("send the approve-for-building event: %w", err)
 	}
 	return nil
+}
+
+// releasePlanner releases holder's claim, or refuses, as Approve describes.
+func (s *Store) releasePlanner(ctx context.Context, holder, session, worktree string) error {
+	id := s.ID()
+	if holder == session {
+		if err := s.api.ReleaseClaim(ctx, session, id); err != nil {
+			return fmt.Errorf("release the planning session's claim: %w", err)
+		}
+		return nil
+	}
+	dir, err := s.location(ctx, holder)
+	if errors.Is(err, factory.ErrUnknownSession) {
+		return fmt.Errorf("%w: plan %s is held by session %s, which factory's daemon does not know; release it with factory daemon release %[2]s", ErrBeingBuilt, id, holder)
+	}
+	if err != nil {
+		return fmt.Errorf("find where session %s works: %w", holder, err)
+	}
+	if samePath(dir, worktree) {
+		return fmt.Errorf("%w: plan %s is already being built by session %s; stop it, or release it with factory daemon release %[2]s", ErrBeingBuilt, id, holder)
+	}
+	if err := s.api.ReleaseClaim(ctx, holder, id); err != nil {
+		return fmt.Errorf("release session %s's claim: %w", holder, err)
+	}
+	return nil
+}
+
+// samePath reports whether a and b name the same directory, compared with
+// symlinks resolved, as macOS temp dirs differ by /private. A path that
+// cannot be resolved, such as one not made yet, is compared as spelled.
+func samePath(a, b string) bool {
+	return resolved(a) == resolved(b)
+}
+
+func resolved(p string) string {
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return filepath.Clean(p)
+	}
+	return r
 }
 
 // ErrNoUnits is returned by Approve for a plan in plan.ReadyState whose

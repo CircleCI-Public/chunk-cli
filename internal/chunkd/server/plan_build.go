@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +32,7 @@ type PlanAPI interface {
 // BuildAgent is what a plan build needs of the build session:
 // *factory.Agent.
 type BuildAgent interface {
+	Send(message string) error
 	Events() <-chan factory.AgentEvent
 	Stop() error
 }
@@ -124,19 +126,33 @@ func planEnd(p *circleci.Plan) string {
 // flowState is plan id's flow state, "" when it has no flow (a 404), as once
 // the plan has ended.
 func flowState(ctx context.Context, api PlanAPI, id string) (string, error) {
-	f, err := api.GetFlow(ctx, id)
-	var se *circleci.StatusError
-	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
-		return "", nil
-	}
-	if err != nil {
+	f, err := planFlow(ctx, api, id)
+	if err != nil || f == nil {
 		return "", err
 	}
 	return f.State, nil
 }
 
+// planFlow is plan id's flow, nil when it has no flow (a 404), as once the
+// plan has ended.
+func planFlow(ctx context.Context, api PlanAPI, id string) (*circleci.Flow, error) {
+	f, err := api.GetFlow(ctx, id)
+	var se *circleci.StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
 // executePlanBuild runs a plan build and settles it, once its plan ends, its
 // session does, or it is cancelled.
+//
+// It tells the build session to claim the plan again only once a claim it saw
+// held by another session is released, so a claim that failed for some other
+// reason is not retried every tick.
 func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api PlanAPI, root string, req chunkd.PlanBuildRequest) {
 	defer close(entry.done)
 	defer entry.cancel()
@@ -176,13 +192,18 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 
 	// ended carries why the session ended, nil once it was stopped.
 	ended := make(chan error, 1)
+	// idle is whether the session's last event ended its turn, with nothing
+	// sent to it since: only an idle session is nudged.
+	var idle atomic.Bool
 	go func() {
 		var problem error
 		for ev := range agent.Events() {
 			switch {
 			case ev.Activity != nil:
+				idle.Store(false)
 				note(iostream.LevelInfo, ev.Activity.Line())
 			case ev.TurnEnded != nil:
+				idle.Store(true)
 				if line := firstLine(ev.TurnEnded.Reply); line != "" {
 					note(iostream.LevelStep, clip(line, maxSaidText))
 				}
@@ -193,6 +214,10 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 		ended <- problem
 	}()
 
+	// armed is whether a tick has seen another session hold the plan since the
+	// last nudge; noted is the holder the feed last named.
+	var armed bool
+	var noted string
 	tick := time.NewTicker(planBuildPoll)
 	defer tick.Stop()
 	for {
@@ -229,14 +254,32 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 				d.settleSession(entry, nil)
 				return
 			}
-			// The flow is only shown: a failed read keeps the last state.
-			state, err := flowState(ctx, api, req.PlanID)
-			if err != nil {
+			// A failed read, or no flow, changes nothing: the last state is
+			// kept, and an armed nudge stays armed.
+			f, err := planFlow(ctx, api, req.PlanID)
+			if err != nil || f == nil {
 				continue
 			}
 			entry.mu.Lock()
-			entry.s.Factory.PlanState = state
+			entry.s.Factory.PlanState = f.State
 			entry.mu.Unlock()
+			switch h := f.SessionID; {
+			case h == cfg.SessionID:
+				armed, noted = false, "" // it claimed the plan itself: a later release is its own
+			case h != "":
+				armed = true
+				if idle.Load() && h != noted {
+					noted = h
+					note(iostream.LevelWarn, fmt.Sprintf("Plan %s is claimed by session %s; release it with factory daemon release %[1]s and the build picks it up", req.PlanID, h))
+				}
+			case armed && idle.Load():
+				armed, noted = false, ""
+				idle.Store(false)
+				note(iostream.LevelStep, "Plan "+req.PlanID+"'s claim was released; telling the build session to claim it")
+				if err := agent.Send(factory.BuildRetryMessage(req.PlanID)); err != nil {
+					note(iostream.LevelWarn, "Could not tell the build session to claim the plan: "+err.Error())
+				}
+			}
 		}
 	}
 }
