@@ -12,7 +12,7 @@ import (
 )
 
 // factoryPlan is a plan the fake holds, with its comments in the order they
-// were made, as conductor keeps them.
+// were made, as conductor keeps them. Its state is its flow's.
 type factoryPlan struct {
 	id, title, state, branch, text string
 	createdAt, updatedAt           time.Time
@@ -210,7 +210,7 @@ func planListAttrs(p *factoryPlan) gin.H {
 		}
 	}
 	return gin.H{
-		"title": p.title, "state": p.state,
+		"title":      p.title,
 		"created_at": p.createdAt.Format(time.RFC3339Nano), "updated_at": p.updatedAt.Format(time.RFC3339Nano),
 		"open_comment_count": open,
 	}

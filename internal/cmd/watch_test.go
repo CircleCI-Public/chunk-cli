@@ -7,9 +7,12 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
 )
 
 // registerProject writes the project-root breadcrumb chunk drops for every
@@ -89,4 +92,16 @@ func TestWatchRootsAreCanonicalForTheDaemonFilter(t *testing.T) {
 	roots, err := sidecar.AllProjectRoots()
 	assert.NilError(t, err)
 	assert.DeepEqual(t, roots, []string{canonical})
+}
+
+func TestInboxPlansJoinsFlows(t *testing.T) {
+	plans := []circleci.Plan{{ID: "a"}, {ID: "b"}}
+	flows := []circleci.Flow{{ID: "a", State: "Planning - Human"}, {ID: "ended", State: "Done"}}
+
+	got := inboxPlans(plans, flows)
+
+	assert.Check(t, cmp.DeepEqual(got, []planlist.Plan{
+		{Plan: circleci.Plan{ID: "a"}, FlowState: "Planning - Human"},
+		{Plan: circleci.Plan{ID: "b"}},
+	}))
 }

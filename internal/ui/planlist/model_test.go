@@ -33,7 +33,7 @@ type driver struct {
 	wg     sync.WaitGroup
 }
 
-func newDriver(t *testing.T, list func(context.Context) ([]circleci.Plan, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) *driver {
+func newDriver(t *testing.T, list func(context.Context) ([]planlist.Plan, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) *driver {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &driver{t: t, ctx: ctx, cancel: cancel, events: make(chan tea.Msg, 100)}
@@ -96,8 +96,8 @@ func press(code rune) tea.KeyPressMsg {
 	return msg
 }
 
-func fixed(plans ...circleci.Plan) func(context.Context) ([]circleci.Plan, error) {
-	return func(context.Context) ([]circleci.Plan, error) { return plans, nil }
+func fixed(plans ...planlist.Plan) func(context.Context) ([]planlist.Plan, error) {
+	return func(context.Context) ([]planlist.Plan, error) { return plans, nil }
 }
 
 func preview(_ context.Context, id string) (string, []circleci.PlanComment, error) {
@@ -115,8 +115,8 @@ func open(d *driver, id string) {
 func TestNavigation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		d := newDriver(t, fixed(
-			circleci.Plan{ID: "a1", Title: "Fix parser", State: "Planning - Human"},
-			circleci.Plan{ID: "b2", Title: "Cache café\x1b[31m\x00", State: "Review - Agent"},
+			planlist.Plan{Plan: circleci.Plan{ID: "a1", Title: "Fix parser"}, FlowState: "Planning - Human"},
+			planlist.Plan{Plan: circleci.Plan{ID: "b2", Title: "Cache café\x1b[31m\x00"}, FlowState: "Review - Agent"},
 		), preview)
 		d.load()
 		text := d.content()
@@ -160,14 +160,14 @@ func TestHostMessages(t *testing.T) {
 func TestStableRefreshAndSelect(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var call atomic.Int32
-		a := circleci.Plan{ID: "a", Title: "Alpha", State: "Planning - Human"}
-		b := circleci.Plan{ID: "b", Title: "Beta", State: "Planning - Human"}
-		c := circleci.Plan{ID: "c", Title: "Gamma", State: "Planning - Human"}
-		d := newDriver(t, func(context.Context) ([]circleci.Plan, error) {
+		a := planlist.Plan{Plan: circleci.Plan{ID: "a", Title: "Alpha"}, FlowState: "Planning - Human"}
+		b := planlist.Plan{Plan: circleci.Plan{ID: "b", Title: "Beta"}, FlowState: "Planning - Human"}
+		c := planlist.Plan{Plan: circleci.Plan{ID: "c", Title: "Gamma"}, FlowState: "Planning - Human"}
+		d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
 			if call.Add(1) == 1 {
-				return []circleci.Plan{a, b}, nil
+				return []planlist.Plan{a, b}, nil
 			}
-			return []circleci.Plan{c, b, a}, nil
+			return []planlist.Plan{c, b, a}, nil
 		}, preview)
 		d.load()
 		d.send(press('j'))
@@ -198,7 +198,7 @@ func TestLatePreviewCannotOverwriteSelection(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		releaseA := make(chan struct{})
 		d := newDriver(t, fixed(
-			circleci.Plan{ID: "a", Title: "Alpha"}, circleci.Plan{ID: "b", Title: "Beta"},
+			planlist.Plan{Plan: circleci.Plan{ID: "a", Title: "Alpha"}}, planlist.Plan{Plan: circleci.Plan{ID: "b", Title: "Beta"}},
 		), func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
 			if id == "a" {
 				select {
@@ -229,7 +229,7 @@ func TestLatePreviewForSameIDCannotOverwriteNewRequest(t *testing.T) {
 		started := make(chan struct{})
 		var calls atomic.Int32
 		d := newDriver(t, fixed(
-			circleci.Plan{ID: "a", Title: "Alpha"}, circleci.Plan{ID: "b", Title: "Beta"},
+			planlist.Plan{Plan: circleci.Plan{ID: "a", Title: "Alpha"}}, planlist.Plan{Plan: circleci.Plan{ID: "b", Title: "Beta"}},
 		), func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
 			if id == "a" && calls.Add(1) == 1 {
 				close(started)
@@ -273,11 +273,11 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 	t.Run("initial error recovers", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var calls atomic.Int32
-			d := newDriver(t, func(context.Context) ([]circleci.Plan, error) {
+			d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
 				if calls.Add(1) == 1 {
 					return nil, errors.New("offline")
 				}
-				return []circleci.Plan{{ID: "a", Title: "Retained"}}, nil
+				return []planlist.Plan{{Plan: circleci.Plan{ID: "a", Title: "Retained"}}}, nil
 			}, preview)
 			d.send(d.m.Init()())
 			d.step()
@@ -295,11 +295,11 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 	t.Run("list and preview retain success", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var lists, previews atomic.Int32
-			d := newDriver(t, func(context.Context) ([]circleci.Plan, error) {
+			d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
 				if lists.Add(1) == 2 {
 					return nil, errors.New("list offline")
 				}
-				return []circleci.Plan{{ID: "a", Title: "Retained"}}, nil
+				return []planlist.Plan{{Plan: circleci.Plan{ID: "a", Title: "Retained"}}}, nil
 			}, func(context.Context, string) (string, []circleci.PlanComment, error) {
 				if previews.Add(1) > 1 {
 					return "", nil, errors.New("preview offline")
@@ -326,12 +326,16 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 func TestGroupsCommentsAndDimensions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now()
-		plans := []circleci.Plan{
-			{ID: "other", Title: "Other plan", State: "Custom exact state"},
-			{ID: "bot", Title: "Bot plan", State: "Integrating - Bot"},
-			{ID: "new", Title: "New plan", State: "Unprioritized"},
-			{ID: "agent", Title: "Agent plan", State: "Planning - Agent"},
-			{ID: "human", Title: "Human plan", State: "Review - Human", OpenComments: 2, UpdatedAt: now},
+		plans := []planlist.Plan{
+			{Plan: circleci.Plan{ID: "other", Title: "Other plan"}, FlowState: "Custom exact state"},
+			{Plan: circleci.Plan{ID: "bot", Title: "Bot plan"}, FlowState: "Integrating - Bot"},
+			{Plan: circleci.Plan{ID: "new", Title: "New plan"}, FlowState: "Unprioritized"},
+			{Plan: circleci.Plan{ID: "agent", Title: "Agent plan"}, FlowState: "Planning - Agent"},
+			{
+				Plan:      circleci.Plan{ID: "human", Title: "Human plan", OpenComments: 2, UpdatedAt: now},
+				FlowState: "Review - Human",
+			},
+			{Plan: circleci.Plan{ID: "noflow", Title: "No flow plan"}},
 		}
 		d := newDriver(t, fixed(plans...), func(context.Context, string) (string, []circleci.PlanComment, error) {
 			return "# Markdown heading\n\n**Plan prose**\n\n" + strings.Repeat("界", 150), []circleci.PlanComment{
@@ -344,7 +348,7 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 		for _, want := range []string{"Needs your review", "With agent", "Not started", "Other", "custom exact state", "integrating - bot"} {
 			assert.Check(t, cmp.Contains(text, want))
 		}
-		order := []string{"Human plan", "Agent plan", "New plan", "Other plan", "Bot plan"}
+		order := []string{"Human plan", "Agent plan", "New plan", "Other plan", "Bot plan", "No flow plan"}
 		for i := 1; i < len(order); i++ {
 			assert.Assert(t, strings.Index(text, order[i-1]) < strings.Index(text, order[i]), "wrong group order:\n%s", text)
 		}
@@ -383,9 +387,9 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 
 func TestLongListKeepsSelectedRowVisible(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var plans []circleci.Plan
+		var plans []planlist.Plan
 		for i := range 80 {
-			plans = append(plans, circleci.Plan{ID: fmt.Sprintf("id-%d", i), Title: fmt.Sprintf("Title-%02d", i), State: "Planning - Human"})
+			plans = append(plans, planlist.Plan{Plan: circleci.Plan{ID: fmt.Sprintf("id-%d", i), Title: fmt.Sprintf("Title-%02d", i)}, FlowState: "Planning - Human"})
 		}
 		d := newDriver(t, fixed(plans...), preview)
 		d.load()
@@ -406,7 +410,7 @@ func TestRefreshCoalescesAndCancellationStopsRequests(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls atomic.Int32
 		started := make(chan struct{})
-		d := newDriver(t, func(ctx context.Context) ([]circleci.Plan, error) {
+		d := newDriver(t, func(ctx context.Context) ([]planlist.Plan, error) {
 			calls.Add(1)
 			close(started)
 			<-ctx.Done()
@@ -428,7 +432,7 @@ func TestRefreshCoalescesAndCancellationStopsRequests(t *testing.T) {
 func TestPollRefreshesAfterFiveSecondsAndStopsOnCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls atomic.Int32
-		d := newDriver(t, func(context.Context) ([]circleci.Plan, error) {
+		d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
 			calls.Add(1)
 			return nil, nil
 		}, preview)

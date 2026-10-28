@@ -340,12 +340,35 @@ func watchPlanProject(ctx context.Context, root string) error {
 	return checkFactoryProject(ctx, root)
 }
 
-func listFactoryPlans(ctx context.Context) ([]circleci.Plan, error) {
+func listFactoryPlans(ctx context.Context) ([]planlist.Plan, error) {
 	api, err := factoryPlanClient()
 	if err != nil {
 		return nil, err
 	}
-	return api.ListPlans(ctx)
+	plans, err := api.ListPlans(ctx)
+	if err != nil {
+		return nil, err
+	}
+	flows, err := api.ListFlows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return inboxPlans(plans, flows), nil
+}
+
+// inboxPlans is each of plans with its flow's state from flows, "" for a plan
+// with none. A flow whose plan is not in plans, such as an ended one, adds no
+// row.
+func inboxPlans(plans []circleci.Plan, flows []circleci.Flow) []planlist.Plan {
+	state := make(map[string]string, len(flows))
+	for _, f := range flows {
+		state[f.ID] = f.State
+	}
+	out := make([]planlist.Plan, len(plans))
+	for i, p := range plans {
+		out[i] = planlist.Plan{Plan: p, FlowState: state[p.ID]}
+	}
+	return out
 }
 
 func previewFactoryPlan(ctx context.Context, id string) (string, []circleci.PlanComment, error) {

@@ -92,3 +92,16 @@ func TestStoreEndedForEachOfFactorysEnds(t *testing.T) {
 		})
 	}
 }
+
+func TestStoreEndedKeepsAPlanWithNoFlow(t *testing.T) {
+	client, cci := testClient(t)
+	ctx := context.Background()
+	store := NewStore(client, "")
+	err := store.Create(ctx, "a plan")
+	assert.NilError(t, err)
+	cci.DropFactoryFlow(store.ID())
+
+	got, err := store.ended(ctx, store.ID())
+	assert.NilError(t, err)
+	assert.Check(t, !got, "a plan with no flow is not over")
+}

@@ -15,7 +15,6 @@ import (
 type Plan struct {
 	ID    string
 	Title string
-	State string
 	// Branch is "" in ListPlans, whose rows leave it out.
 	Branch       string
 	CreatedAt    time.Time
@@ -77,7 +76,6 @@ type PlanComment struct {
 
 type planAttrs struct {
 	Title        string    `json:"title"`
-	State        string    `json:"state"`
 	Branch       string    `json:"branch"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -86,7 +84,7 @@ type planAttrs struct {
 
 func (a planAttrs) plan(id string) *Plan {
 	return &Plan{
-		ID: id, Title: a.Title, State: a.State, Branch: a.Branch,
+		ID: id, Title: a.Title, Branch: a.Branch,
 		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt, OpenComments: a.OpenComments,
 	}
 }

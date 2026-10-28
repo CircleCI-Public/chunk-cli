@@ -80,7 +80,7 @@ func (m Model) listLines(width, height int) []string {
 	selected, lastGroup := 0, -1
 	labels := []string{"Needs your review", "With agent", "Not started", "Other"}
 	for _, p := range m.visible() {
-		g := group(p.State)
+		g := group(p.FlowState)
 		if g != lastGroup {
 			if lastGroup != -1 {
 				rows = append(rows, "")
@@ -99,7 +99,7 @@ func (m Model) listLines(width, height int) []string {
 		} else {
 			rows = append(rows, "  "+title)
 		}
-		chip := stateChip(st, p.State, width-4)
+		chip := stateChip(st, p.FlowState, width-4)
 		var detail []string
 		if p.OpenComments > 0 {
 			detail = append(detail, st.Warning.Render(fmt.Sprintf("● %d", p.OpenComments)))
@@ -129,8 +129,8 @@ func (m Model) listLines(width, height int) []string {
 	return rows[start:]
 }
 
-// stateChip is the plan's state as a coloured block, as the run list shows a
-// run's: amber when it waits on you, the brand yellow while an agent has it.
+// stateChip is the plan's flow state as a coloured block, as the run list shows
+// a run's: amber when it waits on you, the brand yellow while an agent has it.
 // A state chunk does not know is shown whole, on grey.
 func stateChip(st theme.Styles, state string, width int) string {
 	phase, _ := planstate.Parse(oneLine(state))

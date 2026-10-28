@@ -28,8 +28,11 @@ func TestPlans(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Check(t, p.ID != "")
 		assert.Check(t, cmp.Equal(p.Title, "version-quiet-flag"))
-		assert.Check(t, cmp.Equal(p.State, "Unprioritized"))
 		assert.Check(t, p.Branch != "")
+
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.State, "Unprioritized"))
 
 		got, err := client.GetPlan(ctx, p.ID)
 		assert.NilError(t, err)
@@ -144,7 +147,6 @@ func TestPlans(t *testing.T) {
 		}
 		assert.Check(t, cmp.DeepEqual(ids, want))
 		assert.Check(t, cmp.Equal(plans[0].Title, "one"))
-		assert.Check(t, cmp.Equal(plans[0].State, "Unprioritized"))
 		assert.Check(t, !plans[0].CreatedAt.IsZero())
 		assert.Check(t, cmp.Equal(plans[1].OpenComments, 1))
 

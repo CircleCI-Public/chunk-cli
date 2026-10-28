@@ -31,7 +31,7 @@ type QuitMsg struct{}
 type refreshMsg struct{}
 type pollMsg struct{ generation uint64 }
 type listedMsg struct {
-	plans []circleci.Plan
+	plans []Plan
 	err   error
 }
 type previewedMsg struct {
@@ -42,12 +42,19 @@ type previewedMsg struct {
 	err        error
 }
 
+// Plan is a row of the inbox: an open plan and its flow's state, "" when it
+// has no flow.
+type Plan struct {
+	circleci.Plan
+	FlowState string
+}
+
 // Model is a Bubble Tea component, not a standalone tea.Model.
 type Model struct {
 	ctx     context.Context
-	list    func(context.Context) ([]circleci.Plan, error)
+	list    func(context.Context) ([]Plan, error)
 	preview func(context.Context, string) (string, []circleci.PlanComment, error)
-	plans   []circleci.Plan
+	plans   []Plan
 	id      string
 	note    string
 	width   int
@@ -70,7 +77,7 @@ type Model struct {
 
 // New creates an inbox of the plans list returns, each previewed with
 // preview. Both callbacks must honor ctx cancellation.
-func New(ctx context.Context, list func(context.Context) ([]circleci.Plan, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) Model {
+func New(ctx context.Context, list func(context.Context) ([]Plan, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) Model {
 	return Model{ctx: ctx, list: list, preview: preview, width: 80, height: 24, dark: true, styles: theme.New(true)}
 }
 
@@ -254,8 +261,8 @@ func (m *Model) keepSelection() {
 	}
 }
 
-// group is where a plan in state goes in the inbox. A state chunk does not
-// know goes in the last group.
+// group is where a plan whose flow is in state goes in the inbox. A state
+// chunk does not know, and "" for no flow, goes in the last group.
 func group(state string) int {
 	if planstate.IsUnprioritized(state) {
 		return 2
@@ -270,11 +277,11 @@ func group(state string) int {
 	return 3
 }
 
-func (m Model) visible() []circleci.Plan {
-	var out []circleci.Plan
+func (m Model) visible() []Plan {
+	var out []Plan
 	for g := 0; g < 4; g++ {
 		for _, p := range m.plans {
-			if group(p.State) == g {
+			if group(p.FlowState) == g {
 				out = append(out, p)
 			}
 		}
@@ -284,12 +291,12 @@ func (m Model) visible() []circleci.Plan {
 
 // Keep surviving rows in their original order, updating their fields in place.
 // New rows append within their group; timestamps never move the cursor.
-func stablePlans(old, fresh []circleci.Plan) []circleci.Plan {
-	byID := make(map[string]circleci.Plan, len(fresh))
+func stablePlans(old, fresh []Plan) []Plan {
+	byID := make(map[string]Plan, len(fresh))
 	for _, p := range fresh {
 		byID[p.ID] = p
 	}
-	out := make([]circleci.Plan, 0, len(fresh))
+	out := make([]Plan, 0, len(fresh))
 	for _, p := range old {
 		if next, ok := byID[p.ID]; ok {
 			out = append(out, next)
