@@ -372,12 +372,14 @@ runs and `p` or `tab` comes back. `Enter` opens a flow's plan and `n` starts a
 new one. Opening or
 reading a plan never claims it or starts an agent; your first message does,
 in the project `chunk watch` was opened in. `ctrl+p` goes back to the list to
-switch plans; each open plan keeps its chat, half-written message and session
-while another is shown.
-The chat is on the left and the plan is on the right, under a strip that says
-where the flow is and what comes next; with the plan focused, `←` shows the
-Flow tab (progress, PR, related plans) and `→` the plan again. `tab` moves to
-the plan, where `c` writes a comment right under the highlighted part, saved to factory
+switch plans; each open plan keeps its chat while it is being planned, its
+half-written message and its session while another is shown.
+The plan is on the right, under a strip that says where the flow is and what
+comes next. While the plan is being planned, the planning chat is on the left;
+once it leaves planning the chat is not shown and the plan takes the full
+width; with the plan focused, `←` shows the Flow tab (progress, PR, related
+plans) and `→` the plan again. `tab` moves to the plan,
+where `c` writes a comment right under the highlighted part, saved to factory
 for chunk to address when you next press `enter`; `shift+↑/↓` selects several
 parts to comment on together. Once factory's review of the design has
 passed, `ctrl+s` approves the design, and chunk writes the units; once those
