@@ -1,8 +1,8 @@
-package planlist
+package flowlist
 
 import "charm.land/bubbles/v2/key"
 
-// keyMap is the inbox's keys, as its help bar shows them.
+// keyMap is the flow list's keys, as its help bar shows them.
 type keyMap struct {
 	Select, Open, New, Runs, Quit key.Binding
 }

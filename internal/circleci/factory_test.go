@@ -120,46 +120,6 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.Equal(got.OpenComments, 1))
 		assert.Check(t, got.UpdatedAt.After(p.CreatedAt))
 	})
-
-	t.Run("lists the caller's open plans, oldest first, every page", func(t *testing.T) {
-		fake := fakes.NewFakeCircleCI()
-		fake.FactoryPageSize = 2
-		srv := httptest.NewServer(fake)
-		defer srv.Close()
-		client := newTestClient(t, srv.URL)
-		var want []string
-		for _, title := range []string{"one", "two", "done", "three", "four", "five"} {
-			p, err := client.CreatePlan(ctx, title, "")
-			assert.NilError(t, err)
-			if title == "done" {
-				fake.SetFactoryPlanState(p.ID, "Done")
-				continue
-			}
-			want = append(want, p.ID)
-		}
-		_, err := client.CreateComment(ctx, want[1], "", "a comment")
-		assert.NilError(t, err)
-
-		plans, err := client.ListPlans(ctx)
-		assert.NilError(t, err)
-		ids := make([]string, 0, len(plans))
-		for _, p := range plans {
-			ids = append(ids, p.ID)
-		}
-		assert.Check(t, cmp.DeepEqual(ids, want))
-		assert.Check(t, cmp.Equal(plans[0].Title, "one"))
-		assert.Check(t, !plans[0].CreatedAt.IsZero())
-		assert.Check(t, cmp.Equal(plans[1].OpenComments, 1))
-
-		var queries []string
-		for _, r := range fake.Recorder.AllRequests() {
-			if r.Method == http.MethodGet && r.URL.Path == "/api/v3/factory/plans" {
-				queries = append(queries, r.URL.Query().Get("filter[user_id]")+" "+r.URL.Query().Get("page[cursor]"))
-			}
-		}
-		assert.Check(t, cmp.DeepEqual(queries, []string{"me ", "me 2", "me 4"}))
-	})
-
 }
 
 func TestFlows(t *testing.T) {
@@ -585,7 +545,7 @@ func TestFactoryNotAuthorized(t *testing.T) {
 
 		_, err := client.CreatePlan(ctx, "a plan", "")
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
-		_, err = client.ListPlans(ctx)
+		_, err = client.ListFlows(ctx)
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		_, err = client.ListComments(ctx, uuid.NewString(), true)
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
@@ -617,10 +577,7 @@ func TestListsStopWhenTheServerNeverEndsThem(t *testing.T) {
 	defer srv.Close()
 	client := newTestClient(t, srv.URL)
 
-	_, err := client.ListPlans(ctx)
-	assert.ErrorContains(t, err, "does not advance")
-
-	_, err = client.ListComments(ctx, "plan-1", false)
+	_, err := client.ListComments(ctx, "plan-1", false)
 	assert.ErrorContains(t, err, "does not advance")
 }
 

@@ -13,9 +13,8 @@ import (
 // Plan is a factory plan, as /api/v3/factory/plans serves it. Its text is read
 // and replaced on its own, with PlanText and SetPlanText.
 type Plan struct {
-	ID    string
-	Title string
-	// Branch is "" in ListPlans, whose rows leave it out.
+	ID           string
+	Title        string
 	Branch       string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -223,44 +222,6 @@ func (c *Client) CreatePlan(ctx context.Context, title, text string) (*Plan, err
 		return nil, mapErr("create plan", err)
 	}
 	return attrs.plan(env.Data.ID), nil
-}
-
-// ListPlans returns the caller's open plans, oldest first, reading every
-// page. A plan is open until it is Done, Canceled, Won't Do or Duplicate.
-func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
-	var out []Plan
-	var cursor string
-	for pages := 1; ; pages++ {
-		var page struct {
-			Data []struct {
-				ID         string    `json:"id"`
-				Attributes planAttrs `json:"attributes"`
-			} `json:"data"`
-			Page v3Page `json:"page"`
-		}
-		opts := []func(*hc.Request){
-			hc.QueryParam("filter[user_id]", "me"),
-			hc.JSONDecoder(&page),
-		}
-		if cursor != "" {
-			opts = append(opts, hc.QueryParam("page[cursor]", cursor))
-		}
-		_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/plans", opts...))
-		if err != nil {
-			return nil, mapErr("list plans", err)
-		}
-		for _, item := range page.Data {
-			out = append(out, *item.Attributes.plan(item.ID))
-		}
-		next, err := nextCursor(cursor, page.Page, pages)
-		if err != nil {
-			return nil, err
-		}
-		if next == "" {
-			return out, nil
-		}
-		cursor = next
-	}
 }
 
 // GetPlan returns factory plan id.

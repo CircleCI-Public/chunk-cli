@@ -1,4 +1,4 @@
-package planlist_test
+package flowlist_test
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 )
 
 // driver runs the component's commands, timers included, and hands back the
@@ -26,18 +26,18 @@ import (
 // timer fires as soon as everything else is blocked.
 type driver struct {
 	t      *testing.T
-	m      planlist.Model
+	m      flowlist.Model
 	ctx    context.Context
 	cancel context.CancelFunc
 	events chan tea.Msg
 	wg     sync.WaitGroup
 }
 
-func newDriver(t *testing.T, list func(context.Context) ([]planlist.Plan, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) *driver {
+func newDriver(t *testing.T, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) *driver {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &driver{t: t, ctx: ctx, cancel: cancel, events: make(chan tea.Msg, 100)}
-	d.m = planlist.New(ctx, list, preview)
+	d.m = flowlist.New(ctx, list, preview)
 	t.Cleanup(func() { cancel(); d.wg.Wait() })
 	return d
 }
@@ -96,8 +96,8 @@ func press(code rune) tea.KeyPressMsg {
 	return msg
 }
 
-func fixed(plans ...planlist.Plan) func(context.Context) ([]planlist.Plan, error) {
-	return func(context.Context) ([]planlist.Plan, error) { return plans, nil }
+func fixed(flows ...circleci.Flow) func(context.Context) ([]circleci.Flow, error) {
+	return func(context.Context) ([]circleci.Flow, error) { return flows, nil }
 }
 
 func preview(_ context.Context, id string) (string, []circleci.PlanComment, error) {
@@ -107,7 +107,7 @@ func preview(_ context.Context, id string) (string, []circleci.PlanComment, erro
 func open(d *driver, id string) {
 	d.t.Helper()
 	d.send(press(tea.KeyEnter))
-	msg, ok := d.next().(planlist.OpenMsg)
+	msg, ok := d.next().(flowlist.OpenMsg)
 	assert.Assert(d.t, ok, "enter did not emit OpenMsg")
 	assert.Equal(d.t, msg.ID, id)
 }
@@ -115,8 +115,8 @@ func open(d *driver, id string) {
 func TestNavigation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		d := newDriver(t, fixed(
-			planlist.Plan{Plan: circleci.Plan{ID: "a1", Title: "Fix parser"}, FlowState: "Planning - Human"},
-			planlist.Plan{Plan: circleci.Plan{ID: "b2", Title: "Cache café\x1b[31m\x00"}, FlowState: "Review - Agent"},
+			circleci.Flow{ID: "a1", Title: "Fix parser", State: "Planning - Human"},
+			circleci.Flow{ID: "b2", Title: "Cache café\x1b[31m\x00", State: "Review - Agent"},
 		), preview)
 		d.load()
 		text := d.content()
@@ -146,13 +146,13 @@ func TestHostMessages(t *testing.T) {
 		d := newDriver(t, fixed(), preview)
 		for _, key := range []tea.KeyPressMsg{press('2'), press(tea.KeyTab), press(tea.KeyEscape)} {
 			d.send(key)
-			assert.Check(t, cmp.DeepEqual(d.next(), planlist.BackMsg{}), "%s did not emit BackMsg", key.String())
+			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.BackMsg{}), "%s did not emit BackMsg", key.String())
 		}
 		d.send(press('n'))
-		assert.Check(t, cmp.DeepEqual(d.next(), planlist.NewMsg{}), "n did not emit NewMsg")
+		assert.Check(t, cmp.DeepEqual(d.next(), flowlist.NewMsg{}), "n did not emit NewMsg")
 		for _, key := range []tea.KeyPressMsg{press('q'), {Code: 'c', Mod: tea.ModCtrl}} {
 			d.send(key)
-			assert.Check(t, cmp.DeepEqual(d.next(), planlist.QuitMsg{}), "%s must ask the host to quit, not tea.Quit", key.String())
+			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.QuitMsg{}), "%s must ask the host to quit, not tea.Quit", key.String())
 		}
 	})
 }
@@ -160,14 +160,14 @@ func TestHostMessages(t *testing.T) {
 func TestStableRefreshAndSelect(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var call atomic.Int32
-		a := planlist.Plan{Plan: circleci.Plan{ID: "a", Title: "Alpha"}, FlowState: "Planning - Human"}
-		b := planlist.Plan{Plan: circleci.Plan{ID: "b", Title: "Beta"}, FlowState: "Planning - Human"}
-		c := planlist.Plan{Plan: circleci.Plan{ID: "c", Title: "Gamma"}, FlowState: "Planning - Human"}
-		d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
+		a := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+		b := circleci.Flow{ID: "b", Title: "Beta", State: "Planning - Human"}
+		c := circleci.Flow{ID: "c", Title: "Gamma", State: "Planning - Human"}
+		d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 			if call.Add(1) == 1 {
-				return []planlist.Plan{a, b}, nil
+				return []circleci.Flow{a, b}, nil
 			}
-			return []planlist.Plan{c, b, a}, nil
+			return []circleci.Flow{c, b, a}, nil
 		}, preview)
 		d.load()
 		d.send(press('j'))
@@ -198,7 +198,7 @@ func TestLatePreviewCannotOverwriteSelection(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		releaseA := make(chan struct{})
 		d := newDriver(t, fixed(
-			planlist.Plan{Plan: circleci.Plan{ID: "a", Title: "Alpha"}}, planlist.Plan{Plan: circleci.Plan{ID: "b", Title: "Beta"}},
+			circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"},
 		), func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
 			if id == "a" {
 				select {
@@ -219,7 +219,7 @@ func TestLatePreviewCannotOverwriteSelection(t *testing.T) {
 		d.step()
 		text := d.content()
 		assert.Check(t, cmp.Contains(text, "UNIQUE PREVIEW b"))
-		assert.Check(t, !strings.Contains(text, "UNIQUE PREVIEW a"), "a late preview replaced the selected plan's:\n%s", text)
+		assert.Check(t, !strings.Contains(text, "UNIQUE PREVIEW a"), "a late preview replaced the selected flow's:\n%s", text)
 	})
 }
 
@@ -229,7 +229,7 @@ func TestLatePreviewForSameIDCannotOverwriteNewRequest(t *testing.T) {
 		started := make(chan struct{})
 		var calls atomic.Int32
 		d := newDriver(t, fixed(
-			planlist.Plan{Plan: circleci.Plan{ID: "a", Title: "Alpha"}}, planlist.Plan{Plan: circleci.Plan{ID: "b", Title: "Beta"}},
+			circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"},
 		), func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
 			if id == "a" && calls.Add(1) == 1 {
 				close(started)
@@ -266,23 +266,29 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 			d.send(d.m.Init()())
 			d.step()
 			text := d.content()
-			assert.Check(t, cmp.Contains(text, "no open plans"))
+			assert.Check(t, cmp.Contains(text, "no open flows"))
 			assert.Check(t, cmp.Contains(text, "n starts one"))
+		})
+	})
+	t.Run("loading", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := newDriver(t, fixed(), preview)
+			assert.Check(t, cmp.Contains(d.content(), "loading flows…"))
 		})
 	})
 	t.Run("initial error recovers", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var calls atomic.Int32
-			d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
+			d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 				if calls.Add(1) == 1 {
 					return nil, errors.New("offline")
 				}
-				return []planlist.Plan{{Plan: circleci.Plan{ID: "a", Title: "Retained"}}}, nil
+				return []circleci.Flow{{ID: "a", Title: "Retained"}}, nil
 			}, preview)
 			d.send(d.m.Init()())
 			d.step()
 			text := d.content()
-			for _, want := range []string{"offline", "plans unavailable", "retrying"} {
+			for _, want := range []string{"offline", "flows unavailable", "retrying"} {
 				assert.Check(t, cmp.Contains(text, want))
 			}
 			d.refresh()
@@ -295,11 +301,11 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 	t.Run("list and preview retain success", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var lists, previews atomic.Int32
-			d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
+			d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 				if lists.Add(1) == 2 {
 					return nil, errors.New("list offline")
 				}
-				return []planlist.Plan{{Plan: circleci.Plan{ID: "a", Title: "Retained"}}}, nil
+				return []circleci.Flow{{ID: "a", Title: "Retained"}}, nil
 			}, func(context.Context, string) (string, []circleci.PlanComment, error) {
 				if previews.Add(1) > 1 {
 					return "", nil, errors.New("preview offline")
@@ -326,18 +332,15 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 func TestGroupsCommentsAndDimensions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now()
-		plans := []planlist.Plan{
-			{Plan: circleci.Plan{ID: "other", Title: "Other plan"}, FlowState: "Custom exact state"},
-			{Plan: circleci.Plan{ID: "bot", Title: "Bot plan"}, FlowState: "Integrating - Bot"},
-			{Plan: circleci.Plan{ID: "new", Title: "New plan"}, FlowState: "Unprioritized"},
-			{Plan: circleci.Plan{ID: "agent", Title: "Agent plan"}, FlowState: "Planning - Agent"},
-			{
-				Plan:      circleci.Plan{ID: "human", Title: "Human plan", OpenComments: 2, UpdatedAt: now},
-				FlowState: "Review - Human",
-			},
-			{Plan: circleci.Plan{ID: "noflow", Title: "No flow plan"}},
+		flows := []circleci.Flow{
+			{ID: "other", Title: "Other plan", State: "Custom exact state"},
+			{ID: "bot", Title: "Bot plan", State: "Integrating - Bot"},
+			{ID: "new", Title: "New plan", State: "Unprioritized"},
+			{ID: "agent", Title: "Agent plan", State: "Planning - Agent"},
+			{ID: "untitled", State: "Building - Agent"},
+			{ID: "human", Title: "Human plan", State: "Review - Human", UpdatedAt: now},
 		}
-		d := newDriver(t, fixed(plans...), func(context.Context, string) (string, []circleci.PlanComment, error) {
+		d := newDriver(t, fixed(flows...), func(context.Context, string) (string, []circleci.PlanComment, error) {
 			return "# Markdown heading\n\n**Plan prose**\n\n" + strings.Repeat("界", 150), []circleci.PlanComment{
 				{Body: "Please clarify", QuotedText: "Plan prose"},
 				{Body: "RESOLVED SECRET", ResolvedAt: &now},
@@ -345,10 +348,10 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 		})
 		d.load()
 		text := d.content()
-		for _, want := range []string{"Needs your review", "With agent", "Not started", "Other", "custom exact state", "integrating - bot"} {
+		for _, want := range []string{"flows", "Needs your review", "With agent", "Not started", "Other", "custom exact state", "integrating - bot", "Untitled plan"} {
 			assert.Check(t, cmp.Contains(text, want))
 		}
-		order := []string{"Human plan", "Agent plan", "New plan", "Other plan", "Bot plan", "No flow plan"}
+		order := []string{"Human plan", "Agent plan", "New plan", "Other plan", "Bot plan"}
 		for i := 1; i < len(order); i++ {
 			assert.Assert(t, strings.Index(text, order[i-1]) < strings.Index(text, order[i]), "wrong group order:\n%s", text)
 		}
@@ -371,7 +374,7 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 					assert.Check(t, cmp.Contains(lines[len(lines)-2], "tab runs"))
 				}
 				if size.Width >= 80 && size.Height > 2 {
-					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose", "● 2", "just now"} {
+					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose", "just now"} {
 						assert.Check(t, cmp.Contains(text, want))
 					}
 					for _, not := range []string{"RESOLVED SECRET", "# Markdown", "**Plan prose**"} {
@@ -387,11 +390,11 @@ func TestGroupsCommentsAndDimensions(t *testing.T) {
 
 func TestLongListKeepsSelectedRowVisible(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var plans []planlist.Plan
+		var flows []circleci.Flow
 		for i := range 80 {
-			plans = append(plans, planlist.Plan{Plan: circleci.Plan{ID: fmt.Sprintf("id-%d", i), Title: fmt.Sprintf("Title-%02d", i)}, FlowState: "Planning - Human"})
+			flows = append(flows, circleci.Flow{ID: fmt.Sprintf("id-%d", i), Title: fmt.Sprintf("Title-%02d", i), State: "Planning - Human"})
 		}
-		d := newDriver(t, fixed(plans...), preview)
+		d := newDriver(t, fixed(flows...), preview)
 		d.load()
 		d.m = d.m.Select("id-79")
 		d.send(nil)
@@ -410,7 +413,7 @@ func TestRefreshCoalescesAndCancellationStopsRequests(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls atomic.Int32
 		started := make(chan struct{})
-		d := newDriver(t, func(ctx context.Context) ([]planlist.Plan, error) {
+		d := newDriver(t, func(ctx context.Context) ([]circleci.Flow, error) {
 			calls.Add(1)
 			close(started)
 			<-ctx.Done()
@@ -432,7 +435,7 @@ func TestRefreshCoalescesAndCancellationStopsRequests(t *testing.T) {
 func TestPollRefreshesAfterFiveSecondsAndStopsOnCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls atomic.Int32
-		d := newDriver(t, func(context.Context) ([]planlist.Plan, error) {
+		d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 			calls.Add(1)
 			return nil, nil
 		}, preview)

@@ -25,8 +25,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/planlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 )
 
@@ -118,7 +118,7 @@ func newWatchCmd() *cobra.Command {
 				WithDrafts(drafts.ctx, startDir, drafts.draft, sendDraft).
 				WithContinue(continueRun).
 				WithPlans(drafts.ctx, drafts.plan).
-				WithPlanInbox(planlist.New(drafts.ctx, listFactoryPlans, previewFactoryPlan))
+				WithFlowList(flowlist.New(drafts.ctx, listFactoryFlows, previewFactoryPlan))
 			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
 			if err != nil {
@@ -340,12 +340,9 @@ func watchPlanProject(ctx context.Context, root string) error {
 	return checkFactoryProject(ctx, root)
 }
 
-func listFactoryPlans(ctx context.Context) ([]planlist.Plan, error) {
+// listFactoryFlows is the caller's open flows, for the flow list.
+func listFactoryFlows(ctx context.Context) ([]circleci.Flow, error) {
 	api, err := factoryPlanClient()
-	if err != nil {
-		return nil, err
-	}
-	plans, err := api.ListPlans(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -353,20 +350,17 @@ func listFactoryPlans(ctx context.Context) ([]planlist.Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return inboxPlans(plans, flows), nil
+	return openFlows(flows), nil
 }
 
-// inboxPlans is each of plans with its flow's state from flows, "" for a plan
-// with none. A flow whose plan is not in plans, such as an ended one, adds no
-// row.
-func inboxPlans(plans []circleci.Plan, flows []circleci.Flow) []planlist.Plan {
-	state := make(map[string]string, len(flows))
+// openFlows is flows without the ended ones. A flow from a conductor that
+// serves no phase is kept.
+func openFlows(flows []circleci.Flow) []circleci.Flow {
+	out := make([]circleci.Flow, 0, len(flows))
 	for _, f := range flows {
-		state[f.ID] = f.State
-	}
-	out := make([]planlist.Plan, len(plans))
-	for i, p := range plans {
-		out[i] = planlist.Plan{Plan: p, FlowState: state[p.ID]}
+		if f.Phase != circleci.PhaseEnded {
+			out = append(out, f)
+		}
 	}
 	return out
 }
