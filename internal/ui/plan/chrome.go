@@ -174,7 +174,7 @@ func (m Model) tabs() string {
 	on := m.narrowTab()
 	row := ""
 	for i, l := range labels {
-		row += " " + tab(i == on, l)
+		row += " " + tab(i+m.tabOffset() == on, l)
 	}
 	return ansi.Truncate(row, m.width, "…")
 }
@@ -187,17 +187,27 @@ type span struct{ start, end int }
 
 func (s span) has(x int) bool { return x >= s.start && x < s.end }
 
-// The narrow screen's tabs, in the order tabs draws them.
+// The narrow screen's tabs, in the order tabs draws them. With the chat
+// hidden there is no Chat tab, and the others are drawn tabOffset earlier.
 const (
 	narrowChat = iota
 	narrowFlow
 	narrowPlan
 )
 
+// tabOffset is how many of the narrow screen's tabs come before the first one
+// drawn: one, the Chat tab, while the chat is hidden.
+func (m Model) tabOffset() int {
+	if m.chatShown() {
+		return 0
+	}
+	return 1
+}
+
 // narrowTab is the narrow screen's tab that is showing.
 func (m Model) narrowTab() int {
 	switch {
-	case m.focus == paneChat:
+	case m.focus == paneChat && m.chatShown():
 		return narrowChat
 	case m.tab == tabFlow:
 		return narrowFlow
@@ -219,7 +229,7 @@ func (m Model) tabSpans() []span {
 	return spans
 }
 
-// tabLabels is the text of the narrow screen's three tabs.
+// tabLabels is the text of the narrow screen's tabs that are drawn.
 func (m Model) tabLabels() []string {
 	chat := "Chat"
 	if m.busy {
@@ -229,7 +239,7 @@ func (m Model) tabLabels() []string {
 	if m.units > 0 {
 		plan += fmt.Sprintf(" · %d %s", m.units, plural(m.units, "unit", "units"))
 	}
-	return []string{chat, "Flow", plan}
+	return []string{chat, "Flow", plan}[m.tabOffset():]
 }
 
 // rightTabSpans is the columns the words Flow and Plan take in the right

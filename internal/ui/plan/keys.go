@@ -118,7 +118,7 @@ func (m Model) keys() keyMap {
 		k.Quit = key.NewBinding(key.WithKeys(keys...), key.WithHelp("esc", quit))
 	}
 
-	inChat := m.focus == paneChat && !m.commenting
+	inChat := m.focus == paneChat && !m.commenting && m.chatShown()
 	// The plan's keys act on the Plan tab only; the Flow tab has its own.
 	inPlan := m.focus == panePlan && !m.commenting && m.tab == tabPlan
 	inFlow := m.focus == panePlan && !m.commenting && m.tab == tabFlow
@@ -142,17 +142,21 @@ func (m Model) keys() keyMap {
 		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
-	k.Focus.SetEnabled(!m.commenting)
+	// With the chat hidden a wide screen has one pane, so tab has nowhere to go.
+	k.Focus.SetEnabled(!m.commenting && (m.chatShown() || m.narrow()))
 	k.Confirm.SetEnabled(m.confirming)
 	return k
 }
 
 // focusHelp is where tab goes: to the right pane, or on a narrow screen
-// round chat, Flow and Plan.
+// round chat, Flow and Plan. With the chat hidden it goes between Flow and
+// Plan on a narrow screen; a wide one has nowhere for it to go.
 func (m Model) focusHelp() string {
 	switch {
 	case m.focus == panePlan && m.narrow() && m.tab == tabFlow:
 		return "plan"
+	case !m.chatShown():
+		return "flow"
 	case m.focus == panePlan:
 		return "chat"
 	case m.narrow() || m.tab == tabFlow:
