@@ -138,6 +138,10 @@ type (
 	conflictsSentMsg struct{ err error }
 	// startedMsg is the end of sending prioritize.
 	startedMsg struct{ err error }
+	// abandonedMsg is the end of sending abandon.
+	abandonedMsg struct{ err error }
+	// planDeletedMsg is the end of deleting the plan.
+	planDeletedMsg struct{ err error }
 	// approveStepMsg is a step of the approval starting; next is where the
 	// approval's later messages come from.
 	approveStepMsg struct {
@@ -356,6 +360,13 @@ type Model struct {
 	// Unprioritized plan until factory has the event; pendingStart is
 	// whether the y being asked for starts it.
 	startingWork, pendingStart bool
+	// askingReason is whether the status bar asks why the plan is
+	// abandoned; abandoning is set from the developer's reason until factory
+	// has the abandon event.
+	askingReason, abandoning bool
+	// pendingDeletePlan is whether the y being asked for deletes the plan;
+	// deleting is set from that y until factory answers.
+	pendingDeletePlan, deleting bool
 	// approving is set from the developer's y until factory answers, so a
 	// second ctrl+s cannot approve the plan twice.
 	approving bool
@@ -611,7 +622,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, waitApproval(msg.next)
 
-	case designApprovedMsg, approvedMsg, conflictsSentMsg, startedMsg:
+	case designApprovedMsg, approvedMsg, conflictsSentMsg, startedMsg, abandonedMsg, planDeletedMsg:
 		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
@@ -665,7 +676,8 @@ func (m Model) spinning() bool {
 // or waiting on the developer: a question to answer, the quit prompt, or an
 // approval or save factory has not answered yet.
 func (m Model) awaitingStatus() bool {
-	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.resolvingConflicts || m.savingComments
+	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.resolvingConflicts || m.savingComments ||
+		m.askingReason || m.abandoning || m.deleting
 }
 
 // applyRefresh is a successful or failed poll of the plan's state, text and
@@ -737,6 +749,10 @@ func tabFor(state string) rightTab {
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := m.keys()
+	if m.askingReason {
+		// Before Quit, so esc keeps the plan rather than leaving.
+		return m.answerReason(msg, k)
+	}
 	if key.Matches(msg, k.Quit) {
 		return m.quit(msg.String())
 	}
@@ -747,6 +763,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
 			m.pendingDelete, m.pendingDesign, m.pendingConflicts, m.pendingStart = "", false, false, false
+			m.pendingDeletePlan = false
 			return m, nil
 		}
 		return m.answerYes()
@@ -770,6 +787,14 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.focusOn(paneChat)
 	case key.Matches(msg, k.SendPlan):
 		return m.askToApprove(), nil
+	case key.Matches(msg, k.Abandon):
+		m.askingReason = true
+		m.status = ui.TitleStyle.Render("Abandon plan as: ") + "c canceled · w won't do · d duplicate · esc keep it"
+		return m, nil
+	case key.Matches(msg, k.DeletePlan):
+		m.confirming, m.pendingDeletePlan = true, true
+		m.status = ui.TitleStyle.Render("Delete this plan, its comments and its flow? ") + confirmButtons
+		return m, nil
 	case key.Matches(msg, k.FlowTab):
 		return m.showTab(tabFlow)
 	case key.Matches(msg, k.PlanTab):
@@ -833,6 +858,11 @@ func (m Model) deliver(text string) (Model, tea.Cmd) {
 // answerYes does what the question in the status bar asked, now it has been
 // answered yes.
 func (m Model) answerYes() (Model, tea.Cmd) {
+	if m.pendingDeletePlan {
+		m.pendingDeletePlan, m.deleting = false, true
+		m.status = "Deleting the plan…"
+		return m, deletePlanCmd(m.ctx, m.store)
+	}
 	if m.pendingConflicts {
 		m.pendingConflicts, m.resolvingConflicts = false, true
 		m.status = "Sending resolve-conflicts…"
@@ -855,6 +885,26 @@ func (m Model) answerYes() (Model, tea.Cmd) {
 	m.approving = true
 	m.status = "Approving the plan…"
 	return m, tea.Batch(approveCmd(m.approve), m.spin.Tick)
+}
+
+// answerReason answers the abandon prompt: a reason key sends the abandon
+// for that reason, and any other key keeps the plan.
+func (m Model) answerReason(msg tea.KeyPressMsg, k keyMap) (Model, tea.Cmd) {
+	m.askingReason, m.status = false, ""
+	var reason string
+	switch {
+	case key.Matches(msg, k.AbandonCanceled):
+		reason = "canceled"
+	case key.Matches(msg, k.AbandonWontDo):
+		reason = "wont-do"
+	case key.Matches(msg, k.AbandonDuplicate):
+		reason = "duplicate"
+	default:
+		return m, nil
+	}
+	m.abandoning = true
+	m.status = "Abandoning: " + reasonText(reason) + "…"
+	return m, abandonCmd(m.ctx, m.store, reason)
 }
 
 // focusOn gives the keyboard to pane p, dropping any selection.
@@ -884,7 +934,7 @@ func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.built, m.approving, m.approvingDesign, m.resolvingConflicts, m.startingWork, m.moving != nil:
+	case m.built, m.approving, m.approvingDesign, m.resolvingConflicts, m.startingWork, m.abandoning, m.deleting, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
 	case m.conflicting() && queued > 0:
@@ -1082,8 +1132,8 @@ func (m *Model) syncPlaceholder() {
 	}
 }
 
-// applyApproval is the end of approving the plan's design, or the plan, or
-// of sending resolve-conflicts or prioritize.
+// applyApproval is the end of approving the plan's design, or the plan, of
+// sending resolve-conflicts, prioritize or abandon, or of deleting the plan.
 func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case designApprovedMsg:
@@ -1111,6 +1161,23 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, refreshCmd(m.ctx, m.store)
+	case abandonedMsg:
+		m.abandoning = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not abandon the plan: " + msg.err.Error())
+			return m, nil
+		}
+		// Factory has the event; the refresh shows the flow end once its
+		// next poll applies it.
+		m.status = ""
+		return m, refreshCmd(m.ctx, m.store)
+	case planDeletedMsg:
+		m.deleting = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not delete the plan: " + msg.err.Error())
+			return m, nil
+		}
+		return m, closed("")
 	case approvedMsg:
 		m.approving = false
 		if msg.err != nil {
@@ -1146,6 +1213,24 @@ func resolveConflictsCmd(ctx context.Context, s Store) tea.Cmd {
 // startWorkCmd has factory start work on the Unprioritized plan.
 func startWorkCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg { return startedMsg{err: s.StartWork(ctx)} }
+}
+
+// abandonCmd has factory end the plan without its PR merging, for reason.
+func abandonCmd(ctx context.Context, s Store, reason string) tea.Cmd {
+	return func() tea.Msg { return abandonedMsg{err: s.Abandon(ctx, reason)} }
+}
+
+// deletePlanCmd deletes the plan in factory.
+func deletePlanCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg { return planDeletedMsg{err: s.Delete(ctx)} }
+}
+
+// reasonText is how the screen names an abandon reason.
+func reasonText(reason string) string {
+	if reason == "wont-do" {
+		return "won't do"
+	}
+	return reason
 }
 
 // approveCmd runs approve in the background, and reads what it reports: an

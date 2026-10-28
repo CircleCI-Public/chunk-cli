@@ -32,6 +32,8 @@ type Flow struct {
 	// names it.
 	Ended   bool
 	Outcome string
+	// Claimed is whether a factory session claims the plan now.
+	Claimed bool
 }
 
 // Step is a way the flow can move on now, and who takes it, as factory
@@ -80,6 +82,11 @@ type Store interface {
 	// StartWork has factory start work on the Unprioritized plan. Factory
 	// moves it at its next poll, not before StartWork returns.
 	StartWork(ctx context.Context) error
+	// Abandon ends the plan without its PR merging, for reason: "canceled",
+	// "wont-do" or "duplicate".
+	Abandon(ctx context.Context, reason string) error
+	// Delete deletes the plan in factory.
+	Delete(ctx context.Context) error
 	// ApproveDesign approves the plan's design, moving it from Planning -
 	// Human for factory to write its units. Factory moves it at its next
 	// poll, not before ApproveDesign returns.

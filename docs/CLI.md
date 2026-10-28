@@ -674,6 +674,17 @@ chunk
   `abandon` events factory offers in every live state are never Next. A plan
   with nothing to do next waits on its first blocker that is not Done.
 
+  `x` abandons the plan, while factory offers `abandon` (in every live
+  state): the strip asks `Abandon plan as: c canceled · w won't do ·
+  d duplicate · esc keep it`, and the key picked sends factory's `abandon`
+  event with that reason. Factory ends the plan in Canceled, Won't Do or
+  Duplicate at its next poll. Any other key keeps the plan.
+
+  `X` deletes the plan, after a `y`, while no factory session claims it:
+  its text, comments and flow go, and the screen closes, back to where it
+  was opened from. Factory refuses to delete a plan with sub-plans, and
+  the strip says so.
+
   Approving a plan with units has the chunk daemon build it, in a Claude Code
   session in the plan's worktree, through to a pull request. In `chunk watch`,
   the screen stays open after approval, on the Flow tab, to follow the build.

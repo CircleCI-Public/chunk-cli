@@ -122,6 +122,7 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		Deviations: f.Deviations,
 		Ended:      f.Phase == circleci.PhaseEnded,
 		Outcome:    f.Outcome,
+		Claimed:    f.SessionID != "",
 	}
 	for i, e := range f.ApplicableEvents {
 		out.Events[i] = string(e)
@@ -392,6 +393,32 @@ func (s *Store) StartWork(ctx context.Context) error {
 	}
 	if err := s.api.CreateFlowEvent(ctx, id, circleci.Prioritize); err != nil {
 		return fmt.Errorf("send the prioritize event: %w", err)
+	}
+	return nil
+}
+
+// Abandon sends the plan's flow factory's abandon event, for reason, which
+// ends the plan without its PR merging at factory's next poll.
+func (s *Store) Abandon(ctx context.Context, reason string) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.AbandonFlow(ctx, id, circleci.AbandonReason(reason)); err != nil {
+		return fmt.Errorf("send the abandon event: %w", err)
+	}
+	return nil
+}
+
+// Delete deletes the plan in factory, with its comments and its flow. The
+// store keeps its ID.
+func (s *Store) Delete(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.DeletePlan(ctx, id); err != nil {
+		return fmt.Errorf("delete the plan: %w", err)
 	}
 	return nil
 }

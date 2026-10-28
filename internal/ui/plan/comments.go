@@ -59,6 +59,9 @@ func (m Model) takesComments() bool {
 // resolveConflicts is factory's event that has it rebase the plan's PR.
 const resolveConflicts = "resolve-conflicts"
 
+// abandon is factory's event that ends the plan without its PR merging.
+const abandon = "abandon"
+
 // conflicting is whether the plan's PR conflicts with its base.
 func (m Model) conflicting() bool { return slices.Contains(m.events, resolveConflicts) }
 

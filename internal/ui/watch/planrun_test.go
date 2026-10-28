@@ -41,6 +41,8 @@ func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return pl
 func (f *fakePlanStore) AddressComments(context.Context) error       { return nil }
 func (f *fakePlanStore) ResolveConflicts(context.Context) error      { return nil }
 func (f *fakePlanStore) StartWork(context.Context) error             { return nil }
+func (f *fakePlanStore) Abandon(context.Context, string) error       { return nil }
+func (f *fakePlanStore) Delete(context.Context) error                { return nil }
 func (f *fakePlanStore) ApproveDesign(context.Context) error         { return nil }
 func (f *fakePlanStore) Text(context.Context) (string, error)        { return f.text, nil }
 func (f *fakePlanStore) SetText(context.Context, string) error       { return nil }
