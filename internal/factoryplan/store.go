@@ -92,8 +92,7 @@ func (s *Store) State(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	f, err := s.api.GetFlow(ctx, id)
-	var se *circleci.StatusError
-	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+	if isNotFound(err) {
 		return "", nil
 	}
 	if err != nil {
@@ -110,8 +109,7 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		return plan.Flow{}, nil
 	}
 	f, err := s.api.GetFlow(ctx, id)
-	var se *circleci.StatusError
-	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+	if isNotFound(err) {
 		return plan.Flow{}, nil
 	}
 	if err != nil {

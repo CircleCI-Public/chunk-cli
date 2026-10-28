@@ -42,7 +42,7 @@ func (f *fakePlans) GetPlan(_ context.Context, id string) (*circleci.Plan, error
 	if id != f.id {
 		return nil, errors.New("plan not found")
 	}
-	return &circleci.Plan{ID: id, Branch: f.branch, Phase: f.phase, Outcome: f.outcome}, nil
+	return &circleci.Plan{ID: id, Branch: f.branch}, nil
 }
 
 func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error) {
@@ -54,7 +54,7 @@ func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error
 	if id != f.id || f.noFlow {
 		return nil, &circleci.StatusError{StatusCode: http.StatusNotFound}
 	}
-	return &circleci.Flow{ID: id, State: f.state, SessionID: f.holder}, nil
+	return &circleci.Flow{ID: id, State: f.state, Phase: f.phase, Outcome: f.outcome, SessionID: f.holder}, nil
 }
 
 // claim has holder claim the plan, as factory plan claim would; "" releases
@@ -78,12 +78,12 @@ func (f *fakePlans) set(state, branch string) {
 	f.state, f.branch = state, branch
 }
 
-// end ends the plan with outcome, as factory does: its phase is ended, and
-// its flow is gone.
+// end ends the plan with outcome, as factory does: its flow is in its end
+// state.
 func (f *fakePlans) end(outcome string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.phase, f.outcome, f.noFlow = circleci.PhaseEnded, outcome, true
+	f.phase, f.outcome = circleci.PhaseEnded, outcome
 }
 
 // fakeBuild is a build session whose events a test sends, recording what it
@@ -238,7 +238,7 @@ func TestPlanBuildFeedsWhatTheSessionDoes(t *testing.T) {
 }
 
 // The build follows factory's plan, its branch included, and ends once the
-// plan's phase has, though its flow is gone, stopping the session.
+// plan's flow has, stopping the session.
 func TestPlanBuildEndsWithThePlan(t *testing.T) {
 	for _, tc := range []struct {
 		outcome string
@@ -313,34 +313,16 @@ func TestPlanBuildFailsWithoutAWorktree(t *testing.T) {
 	assert.Check(t, cmp.Len(pb.cfgs, 0), "a build session started with no worktree")
 }
 
-// An ended plan is refused on its phase alone: its flow is not read.
+// An ended plan is refused on its flow's phase.
 func TestPlanBuildRefusesAnEndedPlan(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		flowErr error
-	}{
-		{
-			name: "no flow",
-		},
-		{
-			name:    "a failed flow read",
-			flowErr: errors.New("factory is down"),
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			pb := newPlanBuildDaemon(t)
-			pb.plans.end("rejected")
-			pb.plans.mu.Lock()
-			pb.plans.flowErr = tc.flowErr
-			pb.plans.mu.Unlock()
-			_, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
-			var ae *apiError
-			assert.Assert(t, errors.As(err, &ae), "err %v", err)
-			assert.Check(t, cmp.Equal(ae.status, http.StatusConflict))
-			assert.Check(t, cmp.Contains(ae.Error(), "rejected"))
-			assert.Check(t, cmp.Len(pb.sessions.forProject(pb.root), 0))
-		})
-	}
+	pb := newPlanBuildDaemon(t)
+	pb.plans.end("rejected")
+	_, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae), "err %v", err)
+	assert.Check(t, cmp.Equal(ae.status, http.StatusConflict))
+	assert.Check(t, cmp.Contains(ae.Error(), "rejected"))
+	assert.Check(t, cmp.Len(pb.sessions.forProject(pb.root), 0))
 }
 
 func TestPlanBuildRefusesWhenTheFlowReadFails(t *testing.T) {
@@ -355,8 +337,8 @@ func TestPlanBuildRefusesWhenTheFlowReadFails(t *testing.T) {
 	assert.Check(t, cmp.Len(pb.cfgs, 0), "a build started on a failed flow read")
 }
 
-// A plan with no flow has no flow state: its build starts, and runs until the
-// plan ends.
+// A plan with no flow has no flow state: its build starts, and runs until it
+// is cancelled, as there is no flow to end.
 func TestPlanBuildOfAPlanWithNoFlow(t *testing.T) {
 	pb := newPlanBuildDaemon(t)
 	pb.plans.noFlow = true
@@ -369,10 +351,8 @@ func TestPlanBuildOfAPlanWithNoFlow(t *testing.T) {
 	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
 	assert.Check(t, !pb.build.wasStopped(), "the build of a plan with no flow was stopped")
 
-	pb.plans.end("merged")
-	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
-	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionDone))
-	assert.Check(t, pb.build.wasStopped(), "the build session was left running")
+	detail := pb.stopBuild(t, sess.ID)
+	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionCancelled))
 }
 
 // A flow read that fails mid-build keeps the last flow state, and does not
@@ -392,6 +372,11 @@ func TestPlanBuildSkipsAFailedFlowRead(t *testing.T) {
 	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
 	assert.Check(t, cmp.Equal(f.PlanState, "Planning - Human"))
 
+	// The end is read from the flow, so the build sees it once a read
+	// succeeds again.
+	pb.plans.mu.Lock()
+	pb.plans.flowErr = nil
+	pb.plans.mu.Unlock()
 	pb.plans.end("merged")
 	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
 	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionDone))

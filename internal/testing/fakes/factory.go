@@ -1,6 +1,7 @@
 package fakes
 
 import (
+	"cmp"
 	"net/http"
 	"slices"
 	"strconv"
@@ -232,6 +233,14 @@ func (f *FakeCircleCI) DropFactoryFlow(id string) {
 	}
 }
 
+// DeleteFactoryPlan removes plan id, as conductor's plan delete would: GET
+// /plans/:id and GET /flows/:id answer 404 for it afterwards.
+func (f *FakeCircleCI) DeleteFactoryPlan(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.factoryPlans, id)
+}
+
 // factoryError writes a V3 error, as conductor does.
 func factoryError(c *gin.Context, status int, msg string) {
 	c.JSON(status, gin.H{"error": gin.H{"id": "trace-1", "title": msg}})
@@ -256,10 +265,6 @@ func (f *FakeCircleCI) factoryStart(c *gin.Context) bool {
 func planEntity(p *factoryPlan) gin.H {
 	attrs := planListAttrs(p)
 	attrs["branch"] = p.branch
-	attrs["phase"] = factoryPhase(p.state)
-	if o := factoryOutcome(p.state); o != "" {
-		attrs["outcome"] = o
-	}
 	ent := gin.H{"id": p.id, "attributes": attrs}
 	addPlanRefs(ent, p)
 	return ent
@@ -452,6 +457,10 @@ func (f *FakeCircleCI) handleGetPlan(c *gin.Context) {
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+	if f.FactoryPlanStatusCode != 0 {
+		factoryError(c, f.FactoryPlanStatusCode, "API error")
+		return
+	}
 	if p := f.plan(c); p != nil {
 		c.JSON(http.StatusOK, gin.H{"data": planEntity(p)})
 	}
@@ -562,8 +571,8 @@ func flowEntity(p *factoryPlan) gin.H {
 	if p.status.Deviations == nil {
 		attrs["deviations"] = []string{}
 	}
-	if p.status.Outcome != "" {
-		attrs["outcome"] = p.status.Outcome
+	if o := cmp.Or(p.status.Outcome, factoryOutcome(p.state)); o != "" {
+		attrs["outcome"] = o
 	}
 	return gin.H{"id": p.id, "attributes": attrs, "references": refs}
 }

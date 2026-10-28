@@ -49,30 +49,6 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.Equal(text, "# version-quiet-flag\n\n## 1. Outcome\n"))
 	})
 
-	t.Run("serves the plan's phase and outcome, after its flow is gone", func(t *testing.T) {
-		fake := fakes.NewFakeCircleCI()
-		srv := httptest.NewServer(fake)
-		t.Cleanup(srv.Close)
-		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
-		assert.NilError(t, err)
-		assert.Check(t, cmp.Equal(p.Phase, PhaseReceived))
-		assert.Check(t, cmp.Equal(p.Outcome, ""))
-
-		fake.SetFactoryPlanState(p.ID, "Building - Agent")
-		got, err := client.GetPlan(ctx, p.ID)
-		assert.NilError(t, err)
-		assert.Check(t, cmp.Equal(got.Phase, PhaseStarted))
-		assert.Check(t, cmp.Equal(got.Outcome, ""))
-
-		fake.SetFactoryPlanState(p.ID, "Done")
-		fake.DropFactoryFlow(p.ID)
-		got, err = client.GetPlan(ctx, p.ID)
-		assert.NilError(t, err)
-		assert.Check(t, cmp.Equal(got.Phase, PhaseEnded))
-		assert.Check(t, cmp.Equal(got.Outcome, "merged"))
-	})
-
 	t.Run("sends the plan as a V3 entity with the token", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
@@ -282,6 +258,21 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.Equal(f.SessionID, ""))
 	})
 
+	t.Run("an ended plan keeps its flow, with its outcome", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+
+		fake.SetFactoryPlanState(p.ID, "Won't Do")
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.Phase, PhaseEnded))
+		assert.Check(t, cmp.Equal(f.Outcome, "rejected"))
+	})
+
 	t.Run("reads the events the flow applies now", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
@@ -424,7 +415,7 @@ func TestFlows(t *testing.T) {
 				Deviations: []string{}, Next: []Transition{},
 			},
 			{
-				ID: b.ID, Title: "b", State: "Done", Phase: PhaseEnded, ApplicableEvents: []FlowEvent{},
+				ID: b.ID, Title: "b", State: "Done", Phase: PhaseEnded, Outcome: "merged", ApplicableEvents: []FlowEvent{},
 				Deviations: []string{}, Next: []Transition{},
 			},
 		}))

@@ -71,12 +71,16 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s from factory: %v", req.PlanID, err)
 	}
-	if p.Phase == circleci.PhaseEnded {
-		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s has ended (%s); there is nothing to build", req.PlanID, planEnd(p))
-	}
-	state, err := flowState(ctx, api, req.PlanID)
+	f, err := planFlow(ctx, api, req.PlanID)
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s's flow from factory: %v", req.PlanID, err)
+	}
+	if f != nil && f.Phase == circleci.PhaseEnded {
+		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s has ended (%s); there is nothing to build", req.PlanID, planEnd(f))
+	}
+	var state string
+	if f != nil {
+		state = f.State
 	}
 	text, err := api.PlanText(ctx, req.PlanID)
 	if err != nil {
@@ -114,27 +118,17 @@ func (d *daemon) buildingPlan(planID string) string {
 	return ""
 }
 
-// planEnd says how ended plan p ended, even from a factory that serves no
-// outcome.
-func planEnd(p *circleci.Plan) string {
-	if p.Outcome != "" {
-		return p.Outcome
+// planEnd says how the plan of ended flow f ended, even from a factory that
+// serves no outcome.
+func planEnd(f *circleci.Flow) string {
+	if f.Outcome != "" {
+		return f.Outcome
 	}
 	return "ended"
 }
 
-// flowState is plan id's flow state, "" when it has no flow (a 404), as once
-// the plan has ended.
-func flowState(ctx context.Context, api PlanAPI, id string) (string, error) {
-	f, err := planFlow(ctx, api, id)
-	if err != nil || f == nil {
-		return "", err
-	}
-	return f.State, nil
-}
-
-// planFlow is plan id's flow, nil when it has no flow (a 404), as once the
-// plan has ended.
+// planFlow is plan id's flow, nil when it has no flow (a 404), as a plan made
+// before plans had flows has none.
 func planFlow(ctx context.Context, api PlanAPI, id string) (*circleci.Flow, error) {
 	f, err := api.GetFlow(ctx, id)
 	var se *circleci.StatusError
@@ -244,8 +238,14 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 				entry.s.Factory.Branch, entry.s.Branch = p.Branch, p.Branch
 			}
 			entry.mu.Unlock()
-			if p.Phase == circleci.PhaseEnded {
-				end := planEnd(p)
+			// A failed read, or no flow, changes nothing: the last state is
+			// kept, and an armed nudge stays armed.
+			f, err := planFlow(ctx, api, req.PlanID)
+			if err != nil || f == nil {
+				continue
+			}
+			if f.Phase == circleci.PhaseEnded {
+				end := planEnd(f)
 				note(iostream.LevelDone, "Plan "+req.PlanID+" ended: "+end)
 				stopBuild(agent, ended, req.PlanID)
 				entry.mu.Lock()
@@ -253,12 +253,6 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 				entry.mu.Unlock()
 				d.settleSession(entry, nil)
 				return
-			}
-			// A failed read, or no flow, changes nothing: the last state is
-			// kept, and an armed nudge stays armed.
-			f, err := planFlow(ctx, api, req.PlanID)
-			if err != nil || f == nil {
-				continue
 			}
 			entry.mu.Lock()
 			entry.s.Factory.PlanState = f.State
