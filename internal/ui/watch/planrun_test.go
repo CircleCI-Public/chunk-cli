@@ -32,17 +32,18 @@ type fakePlans struct {
 // exercise polling or comments.
 type fakePlanStore struct{ text, id string }
 
-func (f *fakePlanStore) ID() string                            { return f.id }
-func (f *fakePlanStore) Create(context.Context, string) error  { return nil }
-func (f *fakePlanStore) State(context.Context) (string, error) { return plan.ReadyState, nil }
+func (f *fakePlanStore) ID() string                           { return f.id }
+func (f *fakePlanStore) Create(context.Context, string) error { return nil }
 func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
-	return plan.Flow{Events: []string{"address-comments", "approve-for-units", "approve-for-building"}}, nil
+	return plan.Flow{State: plan.ReadyState, Events: []string{"address-comments", "approve-for-units", "approve-for-building"}}, nil
 }
-func (f *fakePlanStore) AddressComments(context.Context) error  { return nil }
-func (f *fakePlanStore) ResolveConflicts(context.Context) error { return nil }
-func (f *fakePlanStore) ApproveDesign(context.Context) error    { return nil }
-func (f *fakePlanStore) Text(context.Context) (string, error)   { return f.text, nil }
-func (f *fakePlanStore) SetText(context.Context, string) error  { return nil }
+func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return plan.Family{}, nil }
+func (f *fakePlanStore) AddressComments(context.Context) error       { return nil }
+func (f *fakePlanStore) ResolveConflicts(context.Context) error      { return nil }
+func (f *fakePlanStore) StartWork(context.Context) error             { return nil }
+func (f *fakePlanStore) ApproveDesign(context.Context) error         { return nil }
+func (f *fakePlanStore) Text(context.Context) (string, error)        { return f.text, nil }
+func (f *fakePlanStore) SetText(context.Context, string) error       { return nil }
 
 func (f *fakePlanStore) Comments(context.Context) ([]plan.Comment, error) { return nil, nil }
 func (f *fakePlanStore) AddComment(context.Context, string, string) (plan.Comment, error) {
@@ -185,13 +186,14 @@ func TestApprovingThePlanSelectsItsBuild(t *testing.T) {
 	// y starts the approval and the spinner; the spinner's ticks are left out.
 	batch, ok := cmd().(tea.BatchMsg)
 	assert.Assert(t, ok && len(batch) == 2, "y did not start the approval")
-	next, closeCmd := m.Update(batch[0]()) // the approval
-	m = deliver(t, next.(Model), closeCmd)
+	next, buildingCmd := m.Update(batch[0]()) // the approval
+	// The screen answers with BuildingMsg, and a refresh, as workspaceMsgs.
+	m = deliver(t, next.(Model), buildingCmd)
 	assert.Assert(t, f.sent, "the plan was not approved")
 
-	assert.Assert(t, !m.planOpen && !m.HasPlan(), "an approved plan is done with")
+	assert.Check(t, m.planOpen && m.HasPlan(), "an approved plan's screen stays open")
 	assert.Check(t, cmp.Equal(m.pendingRun, "build-1"))
-	assert.Check(t, cmp.Contains(view(m), "approved the plan; it is building in chunk-cli"))
+	assert.Check(t, !strings.Contains(m.draftNote, "approved the plan"), "the note: %q", m.draftNote)
 }
 
 func TestWindowSizeReachesTheKeptPlan(t *testing.T) {
@@ -227,7 +229,7 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 	}
 	open("uploads")
 	keyA := m.planKey
-	latePoll := workspaceCmd(keyA, m.planScreen.Poll())()
+	latePoll := workspaceCmd(keyA, m.planScreen.Poll())
 	m = typeInto(m, "explain retries")
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = deliver(t, m, cmd)
@@ -240,9 +242,8 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 	m = typeInto(m, "unsent cache message")
 
 	// Neither a late poll nor a late agent reply for A may change B.
-	next, _ := m.Update(latePoll)
-	m = next.(Model)
-	next, _ = m.Update(lateReply)
+	m = deliver(t, m, latePoll)
+	next, _ := m.Update(lateReply)
 	m = next.(Model)
 	out := screen(m)
 	assert.Assert(t, strings.Contains(out, "Cache dependencies.") && strings.Contains(out, "unsent cache message"), out)
@@ -315,4 +316,35 @@ func TestFlowListSharesTheDashboardHeader(t *testing.T) {
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	m = deliver(t, m, cmd)
 	assert.Assert(t, strings.Contains(stripANSI(m.render()), "chunk watch  Flows  Runs  2 runs"))
+}
+
+// A relative the plan screen opens goes the way of a plan picked in the flow
+// list: to its workspace when one is open, or to a new one.
+func TestOpenMsgOpensOrReusesAWorkspace(t *testing.T) {
+	f := &fakePlans{plan: "# A plan"}
+	calls := 0
+	planner := func(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
+		calls++
+		return f.planner(ctx, root, id)
+	}
+	m := searchModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).WithPlans(t.Context(), planner)
+	next, cmd := m.Update(flowlist.OpenMsg{ID: "parent", Title: "Parent"})
+	m = deliver(t, next.(Model), cmd)
+	parentKey := m.planKey
+	assert.Assert(t, cmp.Equal(calls, 1))
+
+	// The parent's screen opens its sub-plan, which is not open yet.
+	next, cmd = m.Update(workspaceMsg{key: parentKey, msg: plan.OpenMsg{ID: "child", Title: "Child"}})
+	m = deliver(t, next.(Model), cmd)
+	assert.Check(t, cmp.Equal(calls, 2))
+	assert.Check(t, cmp.Len(m.planWorkspaces, 2))
+	assert.Check(t, m.planKey != parentKey)
+	assert.Check(t, cmp.Equal(m.planWorkspaces[m.planKey].store.ID(), "child"))
+
+	// The child's screen opens its parent, whose workspace is open.
+	next, _ = m.Update(workspaceMsg{key: m.planKey, msg: plan.OpenMsg{ID: "parent", Title: "Parent"}})
+	m = next.(Model)
+	assert.Check(t, cmp.Equal(calls, 2), "the planner was called again for an open workspace")
+	assert.Check(t, cmp.Equal(m.planKey, parentKey))
+	assert.Check(t, m.planOpen)
 }

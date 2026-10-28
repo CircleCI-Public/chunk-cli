@@ -34,6 +34,11 @@ type keyMap struct {
 	SendComments key.Binding
 	// While a comment is written.
 	SaveComment, CancelComment key.Binding
+	// FlowTab and PlanTab pick the right pane's tab; FlowTab carries the hint
+	// for both.
+	FlowTab, PlanTab key.Binding
+	// Open opens the Related row under the Flow tab's cursor.
+	Open key.Binding
 	// While approving the plan, or its design, is confirmed. Any other key,
 	// enter too, says no: approving moves the plan on in factory, so it
 	// takes a y.
@@ -53,10 +58,6 @@ func (m Model) keys() keyMap {
 	// message on shift+enter, so it is only offered where it works.
 	if m.disambiguates {
 		newline = "shift+enter"
-	}
-	focusHelp := "plan"
-	if m.focus == panePlan {
-		focusHelp = "chat"
 	}
 	k := keyMap{
 		Send:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send")),
@@ -85,8 +86,11 @@ func (m Model) keys() keyMap {
 		SendComments:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save comments")),
 		SaveComment:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save comment")),
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+		FlowTab:        key.NewBinding(key.WithKeys("f"), key.WithHelp("f/p", "flow/plan")),
+		PlanTab:        key.NewBinding(key.WithKeys("p")),
+		Open:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open plan")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
-		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", focusHelp)),
+		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", m.focusHelp())),
 		Switch:         key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
@@ -115,7 +119,9 @@ func (m Model) keys() keyMap {
 	}
 
 	inChat := m.focus == paneChat && !m.commenting
-	inPlan := m.focus == panePlan && !m.commenting
+	// The plan's keys act on the Plan tab only; the Flow tab has its own.
+	inPlan := m.focus == panePlan && !m.commenting && m.tab == tabPlan
+	inFlow := m.focus == panePlan && !m.commenting && m.tab == tabFlow
 	for _, b := range []*key.Binding{&k.Send, &k.ChatPageUp, &k.ChatPageDown} {
 		b.SetEnabled(inChat)
 	}
@@ -123,6 +129,7 @@ func (m Model) keys() keyMap {
 	for _, b := range []*key.Binding{&k.ExtendUp, &k.ExtendDown, &k.Up, &k.Down, &k.Top, &k.Bottom, &k.PageUp, &k.PageDown, &k.HalfUp, &k.HalfDown, &k.SectionBack, &k.SectionNext, &k.Comment} {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
+	m.flowKeys(&k, inFlow)
 	// Esc clears a selection before it leaves.
 	k.ClearSelection.SetEnabled(inPlan && m.selecting())
 	if m.selecting() {
@@ -138,6 +145,39 @@ func (m Model) keys() keyMap {
 	k.Focus.SetEnabled(!m.commenting)
 	k.Confirm.SetEnabled(m.confirming)
 	return k
+}
+
+// focusHelp is where tab goes: to the right pane, or on a narrow screen
+// round chat, Flow and Plan.
+func (m Model) focusHelp() string {
+	switch {
+	case m.focus == panePlan && m.narrow() && m.tab == tabFlow:
+		return "plan"
+	case m.focus == panePlan:
+		return "chat"
+	case m.narrow() || m.tab == tabFlow:
+		return "flow"
+	}
+	return "plan"
+}
+
+// flowKeys enables the keys of the right pane's tabs, inFlow being whether
+// the Flow tab has the keyboard.
+func (m Model) flowKeys(k *keyMap, inFlow bool) {
+	k.FlowTab.SetEnabled(m.focus == panePlan && !m.commenting)
+	k.PlanTab.SetEnabled(m.focus == panePlan && !m.commenting)
+	k.Open.SetEnabled(false)
+	if !inFlow {
+		return
+	}
+	// ↑/↓ move over the Related rows, which open only in a host that can
+	// open another plan; the page keys scroll the tab.
+	related := m.inbox && len(m.relatedRows()) > 0
+	k.Up.SetEnabled(related)
+	k.Down.SetEnabled(related)
+	k.PageUp.SetEnabled(true)
+	k.PageDown.SetEnabled(true)
+	k.Open.SetEnabled(related)
 }
 
 // commentKeys enables the keys that act on the plan's comments, inPlan being
@@ -176,8 +216,8 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.SaveComment, k.CancelComment,
 		k.Switch,
 		k.Send, k.Newline,
-		k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
-		k.Focus, k.SendPlan, k.Quit,
+		k.Open, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
+		k.Focus, k.SendPlan, k.Quit, k.FlowTab,
 		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }

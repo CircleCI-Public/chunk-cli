@@ -245,6 +245,14 @@ func (m Model) updateWorkspace(key uint64, msg tea.Msg) (Model, tea.Cmd) {
 		m.pendingRun, m.focusedPane = closed.BuildID, paneLeft
 		return m.setQuery(""), nil
 	}
+	if b, ok := msg.(plan.BuildingMsg); ok {
+		m.pendingRun = b.BuildID
+		return m, nil
+	}
+	if o, ok := msg.(plan.OpenMsg); ok {
+		next, cmd := m.openPlanID(o.ID, o.Title)
+		return next.(Model), cmd
+	}
 	var cmd tea.Cmd
 	ws.screen, cmd = ws.screen.Update(msg)
 	return m, workspaceCmd(key, cmd)

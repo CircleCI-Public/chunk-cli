@@ -62,6 +62,9 @@ const resolveConflicts = "resolve-conflicts"
 // conflicting is whether the plan's PR conflicts with its base.
 func (m Model) conflicting() bool { return slices.Contains(m.events, resolveConflicts) }
 
+// prioritize is factory's event that starts work on an Unprioritized plan.
+const prioritize = "prioritize"
+
 // last is the index of the last block c is on.
 func (c comment) last() int { return c.block + max(c.span, 1) - 1 }
 

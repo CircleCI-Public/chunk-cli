@@ -23,7 +23,9 @@ var (
 
 // planStats is what the walk over the plan's blocks learns on the way.
 type planStats struct {
-	section          string
+	section string
+	// inUnits is whether the current section is the plan's units.
+	inUnits          bool
 	units, questions int
 }
 
@@ -44,24 +46,28 @@ func (m Model) styled(b block, st *planStats, w int) ([]string, bool) {
 	case 2:
 		name := sectionNumRe.ReplaceAllString(text, "")
 		st.section = strings.ToLower(name)
+		st.inUnits = "## "+text == unitsHeading
 		c := m.dim()
 		if strings.Contains(st.section, "question") {
 			c = m.amber()
 		}
-		label := strings.ToUpper(name)
-		rule := max(w-ansi.StringWidth(label)-2, 0)
-		return []string{m.style(c).Bold(true).Render(label) + " " + m.style(m.faint()).Render(strings.Repeat("─", rule))}, true
+		return []string{m.sectionHeading(name, c, w)}, true
 	}
-	if !strings.Contains(st.section, "unit") {
+	if level != 3 || !st.inUnits {
 		return nil, false
 	}
 	st.units++
+	text, done := unitName(text)
 	name := unitNumRe.ReplaceAllString(text, "")
 	if name == "" {
 		name = text
 	}
+	marker := m.style(m.dim()).Render("○ ")
+	if done {
+		marker = m.style(m.green()).Render(ui.IconOK + " ")
+	}
 	num := m.style(m.faint()).Render(strconv.Itoa(st.units))
-	return []string{m.style(m.dim()).Render("○ ") + num + "  " + lipgloss.NewStyle().Bold(true).Render(name)}, true
+	return []string{marker + num + "  " + lipgloss.NewStyle().Bold(true).Render(name)}, true
 }
 
 // skeleton is the plan pane while Claude writes the first plan: the shape of

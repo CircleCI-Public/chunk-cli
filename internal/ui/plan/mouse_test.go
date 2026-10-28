@@ -40,9 +40,9 @@ func rowOf(t *testing.T, m Model, s string) int {
 func TestClickingAPaneGivesItTheKeyboard(t *testing.T) {
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	assert.Assert(t, cmp.Equal(m.focus, paneChat), "the chat should start with the keyboard")
-	m = drive(t, m, click(m.planLeft()+10, 10))
+	m = drive(t, m, click(m.planLeft()+10, 10+stripRows))
 	assert.Check(t, cmp.Equal(m.focus, panePlan), "clicking the plan did not focus it")
-	m = drive(t, m, click(5, 10))
+	m = drive(t, m, click(5, 10+stripRows))
 	assert.Check(t, cmp.Equal(m.focus, paneChat), "clicking the chat did not focus it")
 }
 
@@ -74,7 +74,7 @@ func TestDoubleClickOpensTheComment(t *testing.T) {
 	assert.Assert(t, m.commenting, "a double click did not open the editor")
 	assert.Check(t, cmp.Equal(m.cursor, 1))
 	// Clicks are ignored while the comment is written.
-	m = drive(t, m, click(5, 10))
+	m = drive(t, m, click(5, 10+stripRows))
 	assert.Check(t, m.commenting, "a click left the comment being written")
 	assert.Check(t, cmp.Equal(m.focus, panePlan))
 }
@@ -102,7 +102,7 @@ func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
 	m = drive(t, m, click(m.width-4, bar))
 	assert.Assert(t, m.confirming, "clicking Approve did not ask (right=%q)", ansi.Strip(right))
 	// A click elsewhere is a no.
-	n := drive(t, m, click(3, 5))
+	n := drive(t, m, click(3, 5+stripRows))
 	assert.Assert(t, !n.confirming && !approved, "a click elsewhere did not decline")
 	text := ansi.Strip(m.status)
 	at := strings.Index(text, confirmYes)
@@ -131,7 +131,31 @@ func TestClickingSaveCommentsSavesThem(t *testing.T) {
 func TestWheelScrollsThePaneUnderThePointer(t *testing.T) {
 	m, _ := planned(t, 140, 20, longPlan(), nil)
 	// The chat has the keyboard, but the pointer is over the plan.
-	m = drive(t, m, tea.MouseWheelMsg{X: m.planLeft() + 10, Y: 8, Button: tea.MouseWheelDown})
+	m = drive(t, m, tea.MouseWheelMsg{X: m.planLeft() + 10, Y: 8 + stripRows, Button: tea.MouseWheelDown})
 	assert.Check(t, m.planView.YOffset() != 0, "the wheel over the plan did not scroll it")
 	assert.Check(t, cmp.Equal(m.focus, paneChat), "scrolling took the keyboard")
+}
+
+func TestClickingATabWordSwitchesTheTab(t *testing.T) {
+	m, _ := planned(t, 140, 40, twoParts, nil)
+	flow, plan := m.rightTabSpans()
+	m = drive(t, m, click(flow.start+1, m.topRows()))
+	assert.Check(t, cmp.Equal(m.tab, tabFlow), "a click on Flow did not switch")
+	assert.Check(t, cmp.Equal(m.focus, panePlan))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "PROGRESS"))
+	m = drive(t, m, click(plan.start+1, m.topRows()))
+	assert.Check(t, cmp.Equal(m.tab, tabPlan), "a click on Plan did not switch back")
+
+	// A narrow screen's tab row picks any of the three.
+	m, _ = planned(t, 70, 30, twoParts, nil)
+	y := headerRows + stripRows
+	spans := m.tabSpans()
+	assert.Assert(t, cmp.Len(spans, 3))
+	m = drive(t, m, click(spans[narrowFlow].start+1, y))
+	assert.Check(t, cmp.Equal(m.focus, panePlan))
+	assert.Check(t, cmp.Equal(m.tab, tabFlow))
+	m = drive(t, m, click(m.tabSpans()[narrowPlan].start+1, y))
+	assert.Check(t, cmp.Equal(m.tab, tabPlan))
+	m = drive(t, m, click(m.tabSpans()[narrowChat].start+1, y))
+	assert.Check(t, cmp.Equal(m.focus, paneChat))
 }

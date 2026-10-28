@@ -69,6 +69,10 @@ func (m Model) wheel(msg tea.MouseWheelMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	var cmd tea.Cmd
+	if m.inPane(msg.X) == panePlan && m.tab == tabFlow {
+		m.flowView, cmd = m.flowView.Update(msg)
+		return m, cmd
+	}
 	if m.inPane(msg.X) == panePlan {
 		m.planView, cmd = m.planView.Update(msg)
 		return m, cmd
@@ -99,12 +103,24 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 	switch {
 	case mouse.Y == 0:
 		return m, nil
-	case m.narrow() && mouse.Y == headerRows:
+	case m.narrow() && mouse.Y == headerRows+stripRows:
 		return m.clickTab(mouse.X)
 	case mouse.Y >= m.height-footerRows:
 		return m.clickBar(mouse)
 	case mouse.Y < m.topRows():
 		return m, nil
+	}
+	if mouse.Y == m.topRows() && m.inPane(mouse.X) == panePlan {
+		// The right pane's title is its tabs.
+		switch flow, plan := m.rightTabSpans(); {
+		case flow.has(mouse.X):
+			return m.showTab(tabFlow)
+		case plan.has(mouse.X):
+			return m.showTab(tabPlan)
+		}
+	}
+	if m.inPane(mouse.X) == panePlan && m.tab == tabFlow {
+		return m.focusOn(panePlan)
 	}
 	if m.inPane(mouse.X) == panePlan {
 		return m.clickPlan(mouse)
@@ -115,14 +131,18 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// clickTab picks a pane from the tabs of a narrow screen.
+// clickTab picks chat, Flow or Plan from the tabs of a narrow screen.
 func (m Model) clickTab(x int) (Model, tea.Cmd) {
-	chatStart, chatEnd, planStart, planEnd := m.tabSpans()
-	switch {
-	case x >= chatStart && x < chatEnd && m.focus != paneChat:
-		return m.focusOn(paneChat)
-	case x >= planStart && x < planEnd && m.focus != panePlan:
-		return m.focusOn(panePlan)
+	for i, s := range m.tabSpans() {
+		switch {
+		case !s.has(x) || i == m.narrowTab():
+		case i == narrowChat:
+			return m.focusOn(paneChat)
+		case i == narrowFlow:
+			return m.showTab(tabFlow)
+		default:
+			return m.showTab(tabPlan)
+		}
 	}
 	return m, nil
 }

@@ -52,9 +52,6 @@ type Flow struct {
 	// Task is the task factory has handed out for the plan and not yet had
 	// back, or nil when none is out.
 	Task *FlowTask
-	// Control is who holds the flow, as factory names it; "" when no one
-	// does, or from a conductor that does not serve it.
-	Control string
 	// Outcome is how an ended flow ended, as factory names it; "" until then.
 	Outcome string
 	// PR is the flow's pull request's URL; "" while it has none.
@@ -126,6 +123,10 @@ const ApproveForBuilding FlowEvent = "approve-for-building"
 // Factory offers it only then.
 const ResolveConflicts FlowEvent = "resolve-conflicts"
 
+// Prioritize moves a flow from Unprioritized to Agent Ready, where factory
+// starts work on the plan. It applies at once when no task is out.
+const Prioritize FlowEvent = "prioritize"
+
 // PlanComment is a comment on a factory plan. QuotedText is the part of the
 // plan's text it is about, or "" for a comment on the plan as a whole.
 type PlanComment struct {
@@ -179,7 +180,6 @@ type flowAttrs struct {
 	UpdatedAt  *time.Time        `json:"updated_at"`
 	State      string            `json:"state"`
 	Phase      string            `json:"phase"`
-	Control    string            `json:"control"`
 	Outcome    string            `json:"outcome"`
 	PR         string            `json:"pr"`
 	Deviations []string          `json:"deviations"`
@@ -190,7 +190,7 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 	f := &Flow{
 		ID: id, Title: a.Title, State: a.State, Phase: a.Phase,
 		ApplicableEvents: humanEvents(a.Next),
-		Control:          a.Control, Outcome: a.Outcome, PR: a.PR, Deviations: a.Deviations,
+		Outcome:          a.Outcome, PR: a.PR, Deviations: a.Deviations,
 		Next: transitions(a.Next),
 	}
 	if a.UpdatedAt != nil {

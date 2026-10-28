@@ -512,7 +512,7 @@ func TestFlows(t *testing.T) {
 		fake.SetFactoryPlanState(p.ID, "Building - Agent")
 		fake.SetFactoryTask(p.ID, "build-unit")
 		fake.SetFactoryFlowStatus(p.ID, fakes.FactoryFlowStatus{
-			Control: "agent", PR: "https://github.com/o/r/pull/1", Deviations: []string{"lint"}, Outcome: "merged",
+			PR: "https://github.com/o/r/pull/1", Deviations: []string{"lint"}, Outcome: "merged",
 			Next: []fakes.FactoryTransition{
 				{Actor: "session", TaskCategory: "build-unit", IsDispatched: true},
 				{Actor: "human", Event: "resolve-conflicts"},
@@ -531,7 +531,7 @@ func TestFlows(t *testing.T) {
 			ID: p.ID, Title: "a plan", State: "Building - Agent", Phase: PhaseStarted,
 			ApplicableEvents: []FlowEvent{ResolveConflicts},
 			Task:             &FlowTask{ID: f.Task.ID, Category: "build-unit", Unit: "Unit 2: parser"},
-			Control:          "agent", Outcome: "merged", PR: "https://github.com/o/r/pull/1",
+			Outcome:          "merged", PR: "https://github.com/o/r/pull/1",
 			Deviations: []string{"lint"},
 			Next: []Transition{
 				{Actor: "session", TaskCategory: "build-unit", IsDispatched: true},
@@ -553,7 +553,6 @@ func TestFlows(t *testing.T) {
 
 		f, err := client.GetFlow(ctx, id)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.Equal(f.Control, ""))
 		assert.Check(t, cmp.Equal(f.PR, ""))
 		assert.Check(t, cmp.Nil(f.Deviations))
 		assert.Check(t, cmp.Nil(f.Next))
