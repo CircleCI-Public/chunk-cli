@@ -51,13 +51,15 @@ const (
 	factoryMCP = "plugin:f:factory"
 	// agentTools is what an Agent allows claude to use without asking: what
 	// a factory planning session uses, and nothing that writes outside the
-	// plan. It is enough to plan, not to build.
+	// plan. It is enough to plan, not to build. git switch --detach is for
+	// factory's sync-base task, which moves HEAD to the plan's new base.
 	agentTools = "Read,Grep,Glob,Agent,mcp__plugin_f_factory," +
 		"Bash(factory daemon wait),Bash(factory plan claim *),Bash(factory daemon release *)," +
 		"Bash(codegraph *)," +
 		"mcp__sg__code_finder,mcp__sg__commit_search,mcp__sg__diff_search,mcp__sg__keyword_search," +
 		"mcp__sg__list_files,mcp__sg__list_repos,mcp__sg__read_file," +
 		"Bash(git log *),Bash(git show *),Bash(git diff *),Bash(git merge-base *),Bash(git rev-parse *)," +
+		"Bash(git switch --detach *)," +
 		"Bash(gh pr view *)"
 	// agentDeniedTools is what an Agent never lets claude use, whatever the
 	// developer's own settings allow: planning edits plans through the plan
