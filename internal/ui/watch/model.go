@@ -14,6 +14,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/browser"
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
@@ -339,6 +340,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focusedPane = paneLeft
 	case key.Matches(msg, k.New):
 		m.draft, m.prompt = draftPrompting, ""
+		telemetry.Track(m.draftCtx, "draft_started", nil)
 	case key.Matches(msg, k.Plan):
 		return m.openPlan()
 	case key.Matches(msg, k.Quit, k.ForceQuit):

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
@@ -24,6 +25,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
@@ -50,7 +52,14 @@ func newWatchCmd() *cobra.Command {
 				return fmt.Errorf("watch requires a TTY")
 			}
 
-			if chunkd.CurrentConnection().Remote != "" {
+			// Every event from this sitting carries its ID, so a funnel can
+			// join opening watch to the plans and drafts started from it.
+			cmd.SetContext(telemetry.WithProperties(cmd.Context(), map[string]any{"watch_session_id": uuid.NewString()}))
+			// is_remote lets a funnel count remote and local dashboards apart.
+			remote := chunkd.CurrentConnection().Remote != ""
+			telemetry.Track(cmd.Context(), "watch_opened", map[string]any{"is_remote": remote})
+
+			if remote {
 				return runRemoteWatch(cmd, focus, args)
 			}
 

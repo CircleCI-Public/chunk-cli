@@ -10,6 +10,10 @@
 // authenticated) their CircleCI user UUID are ever collected. No flag values,
 // argument values, names, email addresses, or other PII.
 //
+// Besides command_invocation, events reported with Track carry only
+// identifiers, counts and fixed values: never the text of a prompt, plan,
+// message or comment.
+//
 // Events are therefore anonymous only until the user authenticates. From then
 // on they carry the CircleCI user UUID, and an identify call joins the
 // anonymous IDs the install was reporting under to that user, so the journey
@@ -32,6 +36,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/segmentio/analytics-go/v3"
 )
+
+// appName names chunk-cli on every event, both in Context.App.Name and as the
+// top-level app_name property. Amplitude drops nested values such as
+// Context.App, so the property is the only copy that reaches it.
+const appName = "chunk-cli"
 
 // Sender tracks command-usage events. A nil *Sender is valid and
 // silently drops events, so callers never need to nil-check it.
@@ -134,7 +143,7 @@ func (m *Meta) toContext() *analytics.Context {
 		traits[k] = v
 	}
 	return &analytics.Context{
-		App: analytics.AppInfo{Name: "chunk-cli", Version: m.Version},
+		App: analytics.AppInfo{Name: appName, Version: m.Version},
 		OS:  analytics.OSInfo{Name: m.OSName, Version: m.OSVersion},
 		Device: analytics.DeviceInfo{
 			Id:    m.InstanceID.String(),
@@ -196,6 +205,7 @@ func (s *Sender) Track(eventName string, props map[string]any) error {
 	for key, val := range props {
 		p.Set(key, val)
 	}
+	p.Set("app_name", appName)
 
 	s.mu.RLock()
 	meta := s.meta

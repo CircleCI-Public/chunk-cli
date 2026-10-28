@@ -65,6 +65,7 @@ func TestSender_Track(t *testing.T) {
 	assert.Equal(t, tr.UserId, "")
 	assert.Equal(t, tr.Properties["command"], "chunk config show")
 	assert.Equal(t, tr.Properties["flags"], "json")
+	assert.Equal(t, tr.Properties["app_name"], "chunk-cli")
 	assert.Equal(t, tr.Context.App.Name, "chunk-cli")
 	assert.Equal(t, tr.Context.App.Version, "1.2.3")
 	assert.Equal(t, tr.Context.Device.Id, instanceID.String())

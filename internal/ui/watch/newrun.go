@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -290,6 +291,7 @@ func (m Model) withRunStarted(msg runStartedMsg) Model {
 		m.draftNote = "could not send the draft to the factory: " + msg.err.Error() + " · press enter to try again, or later with chunk factory build --continue " + m.draftResult.RunID
 		return m
 	}
+	telemetry.Track(m.draftCtx, "draft_sent", map[string]any{"run_id": msg.id})
 	m.draftNote = "sent the draft and your prompt to the factory in " + msg.label + "; its run appears in the list in a moment"
 	m.pendingRun = msg.id
 	m.focusedPane = paneLeft

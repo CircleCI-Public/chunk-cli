@@ -28,6 +28,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -646,6 +647,8 @@ func (m Model) applyCreated(msg createdMsg) (Model, tea.Cmd) {
 	if m.title != "" && msg.title != "" {
 		m.title = msg.title
 	}
+	// Counted now rather than as it was sent, so it has the plan's ID.
+	m.trackFeedback(feedbackMessage, 0)
 	return m, sendCmd(m.ctx, m.agent, msg.text)
 }
 
@@ -658,6 +661,7 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 	m.renderPlan()
 	m.syncPlaceholder()
 	m.pendingHandOff = msg.handOff && !msg.handedOff
+	m.trackFeedback(feedbackComments, msg.saved)
 	var tick tea.Cmd
 	if msg.handedOff {
 		m.moving = &transition{kind: movingComments, from: m.state, since: time.Now()}
@@ -1079,7 +1083,42 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 		m.creating = true
 		return m, tea.Batch(createCmd(m.ctx, m.store, text), tick)
 	}
+	m.trackFeedback(feedbackMessage, 0)
 	return m, tea.Batch(sendCmd(m.ctx, m.agent, text), tick)
+}
+
+// track reports eventName from the screen, with the plan's ID once factory
+// has given it one, so a funnel can join the plan's events.
+func (m Model) track(eventName string, props map[string]any) {
+	if props == nil {
+		props = map[string]any{}
+	}
+	if m.store != nil && m.store.ID() != "" {
+		props["plan_id"] = m.store.ID()
+	}
+	telemetry.Track(m.ctx, eventName, props)
+}
+
+// The kinds of feedback a developer gives a plan: a message in the chat, or
+// comments on the plan saved together.
+const (
+	feedbackMessage  = "message"
+	feedbackComments = "comments"
+)
+
+// trackFeedback reports a round of feedback on the plan. Messages and
+// comments are both a round, so a funnel can count the rounds before a plan
+// is approved. comments is how many were saved; a save that saved none is
+// not a round.
+func (m Model) trackFeedback(kind string, comments int) {
+	props := map[string]any{"feedback_type": kind}
+	if kind == feedbackComments {
+		if comments == 0 {
+			return
+		}
+		props["comment_count"] = comments
+	}
+	m.track("plan_feedback_sent", props)
 }
 
 // createCmd creates the plan in factory for text, the developer's first
@@ -1199,6 +1238,8 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.BuildID = msg.buildID
+		// Counted once factory has the plan, with the run it started.
+		m.track("plan_approved", map[string]any{"run_id": msg.buildID})
 		if !m.back {
 			return m, closed(msg.buildID)
 		}
