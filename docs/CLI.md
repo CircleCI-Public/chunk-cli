@@ -580,7 +580,12 @@ chunk
   strip under the header shows the plan's step (`Planning › Building › Integrating › Done`), what is
   happening now (the factory task and its unit) and what comes next
   (`Next: you approve the plan · ctrl+s`, `Next: chunk: build-unit`,
-  `Waiting on <blocker>`). The chat is on the left. The right has two tabs:
+  `Waiting on <blocker>`). While the plan is being planned, the planning
+  chat is on the left, titled with what its session is doing (`not started`,
+  `working`, `working · Early plan`, `idle`). Once the plan leaves planning,
+  the chat is not shown and the right pane takes the screen: the planning
+  session can no longer act on the plan, and its conversation does not
+  survive closing chunk. The right has two tabs:
   **Plan**, the plan rendered as markdown, and **Flow**, which shows progress
   (each unit ✓ done, ▸ being built, ○ to do, or for a plan with sub-plans its
   open sub-plans), the pull request and its deviations, and related plans
@@ -623,7 +628,8 @@ chunk
   `esc` clears a selection. Sending (`enter` in the chat, or `s` in the plan,
   which leaves a half-written message in the chat) saves the queued comments
   to factory and hands them to the session to address; they never go in a
-  chat message. Comments are sent only when factory is ready to take them:
+  chat message. With the chat hidden, `s` is the way to send them. Comments
+  are sent only when factory is ready to take them:
   while factory works on the plan they stay queued, a message sent with them
   goes on alone, and `s` is not offered. Once comments are handed off, the
   action bar turns purple and says the screen is waiting for factory, until a
@@ -677,7 +683,7 @@ chunk
   Approving a plan with units has the chunk daemon build it, in a Claude Code
   session in the plan's worktree, through to a pull request. In `chunk watch`,
   the screen stays open after approval, on the Flow tab, to follow the build.
-  Its chat closes, because the planning session has stopped. `enter` on a
+  Its chat is no longer shown, because the planning session has stopped. `enter` on a
   related plan in the Flow tab opens it. The standalone `chunk factory plan`
   closes on approval. Approving frees the plan's claim from a session that
   is only planning it, a parent plan's included; while a build holds the claim,
@@ -822,8 +828,8 @@ chunk
   was opened in, since factory does not record a plan's repository; a plan
   another session holds is refused rather than taken over. `esc` or `ctrl+c`
   goes back to the plans with the plan and its session kept; `ctrl+p` does
-  too, to switch to another plan. Each opened plan keeps its own chat, unsent
-  message and session. An approved plan's build is selected once a poll lists
+  too, to switch to another plan. Each opened plan keeps its own chat while it
+  is being planned, its unsent message and its session. An approved plan's build is selected once a poll lists
   it. Quitting with a message unsent in any plan asks for a second `ctrl+c`;
   plans and saved comments stay in factory, and each plan's session keeps its
   conversation for the next time the plan is opened, but the chat shown and
