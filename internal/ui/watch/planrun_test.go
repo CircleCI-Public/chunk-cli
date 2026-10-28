@@ -38,10 +38,11 @@ func (f *fakePlanStore) State(context.Context) (string, error) { return plan.Rea
 func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 	return plan.Flow{Events: []string{"address-comments", "approve-for-units", "approve-for-building"}}, nil
 }
-func (f *fakePlanStore) AddressComments(context.Context) error { return nil }
-func (f *fakePlanStore) ApproveDesign(context.Context) error   { return nil }
-func (f *fakePlanStore) Text(context.Context) (string, error)  { return f.text, nil }
-func (f *fakePlanStore) SetText(context.Context, string) error { return nil }
+func (f *fakePlanStore) AddressComments(context.Context) error  { return nil }
+func (f *fakePlanStore) ResolveConflicts(context.Context) error { return nil }
+func (f *fakePlanStore) ApproveDesign(context.Context) error    { return nil }
+func (f *fakePlanStore) Text(context.Context) (string, error)   { return f.text, nil }
+func (f *fakePlanStore) SetText(context.Context, string) error  { return nil }
 
 func (f *fakePlanStore) Comments(context.Context) ([]plan.Comment, error) { return nil, nil }
 func (f *fakePlanStore) AddComment(context.Context, string, string) (plan.Comment, error) {

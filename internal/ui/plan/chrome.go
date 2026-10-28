@@ -59,6 +59,8 @@ func (m Model) header() string {
 		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Approving")
 	case m.approvingDesign:
 		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Approving design")
+	case m.resolvingConflicts:
+		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Sending")
 	case m.busy:
 		text := "✦ chunk is drafting"
 		if m.narrow() {
@@ -76,6 +78,8 @@ func (m Model) header() string {
 			text = fmt.Sprintf("● %d %s", n, plural(n, "comment", "comments"))
 		}
 		state = m.pill(m.amber(), "#fff8c5", "#2a2210", text)
+	case m.conflicting():
+		state = m.pill(m.amber(), "#fff8c5", "#2a2210", "⚠ PR conflicts")
 	case m.state != ReadyState && m.inReview():
 		state = m.style(m.dim()).Render("In review")
 	case m.state != ReadyState:
@@ -191,9 +195,14 @@ func (m Model) actionBar() string {
 // the developer sent: what was sent and what happens next, and how long it
 // has taken once that is long enough to matter.
 func (m Model) waitingLine(w int) string {
-	text := "Comments sent · waiting for factory to hand them to chunk…"
-	if m.moving.kind == movingDesign {
+	var text string
+	switch m.moving.kind {
+	case movingComments:
+		text = "Comments sent · waiting for factory to hand them to chunk…"
+	case movingDesign:
 		text = "Design approved · waiting for factory to start the units…"
+	case movingConflicts:
+		text = "Conflicts sent · waiting for factory to hand the rebase to the agent…"
 	}
 	if m.narrow() {
 		text = "Waiting for factory…"
@@ -243,7 +252,7 @@ func (m Model) actions() (main, side string) {
 	switch {
 	// While a comment is written enter saves it and ctrl+s does nothing, so
 	// neither button is on offer: the hints name the keys that work.
-	case m.approving, m.approvingDesign, m.commenting, m.moving != nil:
+	case m.approving, m.approvingDesign, m.resolvingConflicts, m.commenting, m.moving != nil:
 		return "", ""
 	case m.busy:
 		return outline(m.purple(), "chunk is working"), m.style(m.faint()).Render(approve)
@@ -258,6 +267,8 @@ func (m Model) actions() (main, side string) {
 			save = "s " + strings.TrimPrefix(save, "enter ")
 		}
 		return button(m.brand(), save), m.style(m.faint()).Render(approve + " · resolve comments first")
+	case m.conflicting():
+		return button(m.amber(), "ctrl+s Resolve conflicts"), ""
 	case open > 0:
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
 	case m.state != ReadyState:

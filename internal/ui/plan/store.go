@@ -35,6 +35,10 @@ type Store interface {
 	// from a Human state to its phase's Agent state. Factory moves it at
 	// its next poll, not before AddressComments returns.
 	AddressComments(ctx context.Context) error
+	// ResolveConflicts has factory rebase the plan's conflicting PR, moving
+	// it from Integrating - Human to Integrating - Agent. Factory moves it at
+	// its next poll, not before ResolveConflicts returns.
+	ResolveConflicts(ctx context.Context) error
 	// ApproveDesign approves the plan's design, moving it from Planning -
 	// Human for factory to write its units. Factory moves it at its next
 	// poll, not before ApproveDesign returns.

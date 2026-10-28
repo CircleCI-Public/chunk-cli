@@ -76,6 +76,11 @@ const ApproveForUnits FlowEvent = "approve-for-units"
 // where factory hands the session claiming the plan its build tasks.
 const ApproveForBuilding FlowEvent = "approve-for-building"
 
+// ResolveConflicts moves a flow from Integrating - Human to Integrating -
+// Agent while its PR conflicts with its base, for factory to rebase it.
+// Factory lists it in applicable_events only then.
+const ResolveConflicts FlowEvent = "resolve-conflicts"
+
 // PlanComment is a comment on a factory plan. QuotedText is the part of the
 // plan's text it is about, or "" for a comment on the plan as a whole.
 type PlanComment struct {
