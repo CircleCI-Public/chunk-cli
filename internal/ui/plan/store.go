@@ -24,7 +24,9 @@ type Flow struct {
 // reads are empty and writes fail. An existing plan starts with its ID set.
 type Store interface {
 	ID() string
-	Create(ctx context.Context, title string) error
+	// Create makes the plan in factory for message, the developer's first
+	// message, naming it for what the message asks for.
+	Create(ctx context.Context, message string) error
 	State(ctx context.Context) (string, error)
 	// Flow is the plan's flow as factory has it now; empty before the plan
 	// is created or has a flow.

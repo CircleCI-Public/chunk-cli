@@ -873,10 +873,10 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 	return m, tea.Batch(sendCmd(m.ctx, m.agent, text), tick)
 }
 
-// createCmd creates the plan in factory, titled for text, the developer's
-// first message.
+// createCmd creates the plan in factory for text, the developer's first
+// message, which the store names it for.
 func createCmd(ctx context.Context, s Store, text string) tea.Cmd {
-	return func() tea.Msg { return createdMsg{text: text, err: s.Create(ctx, titleOf(text))} }
+	return func() tea.Msg { return createdMsg{text: text, err: s.Create(ctx, text)} }
 }
 
 // applyEvent shows one thing the agent reported, then waits for the next.
@@ -914,30 +914,6 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 	m.renderPlan()
 	m.renderChat()
 	return m, tea.Batch(next, refreshCmd(m.ctx, m.store))
-}
-
-// maxTitleLen keeps a plan's title short enough to read in the plan list.
-const maxTitleLen = 40
-
-// titleOf is the plan's title from the developer's message: a slug of its
-// first line, cut at a whole word.
-func titleOf(text string) string {
-	line, _, _ := strings.Cut(text, "\n")
-	words := strings.FieldsFunc(strings.ToLower(line), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-	if len(words) == 0 {
-		return "plan"
-	}
-	first := []rune(words[0])
-	slug := string(first[:min(len(first), maxTitleLen)])
-	for _, w := range words[1:] {
-		if utf8.RuneCountInString(slug)+1+utf8.RuneCountInString(w) > maxTitleLen {
-			break
-		}
-		slug += "-" + w
-	}
-	return slug
 }
 
 // syncPlaceholder tells the developer that enter saves their comments when

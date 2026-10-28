@@ -4,6 +4,7 @@
 package factoryplan
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
@@ -20,6 +22,8 @@ import (
 // addressed by the plan's ID, which Create sets.
 type Store struct {
 	api *circleci.Client
+	// name names a new plan for the developer's first message.
+	name func(ctx context.Context, message string) (string, error)
 
 	mu     sync.Mutex
 	planID string
@@ -28,7 +32,7 @@ type Store struct {
 // NewStore is the store for plan id in factory, or for a plan Create makes
 // when id is "".
 func NewStore(api *circleci.Client, id string) *Store {
-	return &Store{api: api, planID: id}
+	return &Store{api: api, name: factory.NamePlan, planID: id}
 }
 
 // ID is the plan's ID in factory, or "" before Create.
@@ -45,7 +49,8 @@ func skeleton(title string) string {
 	return "# " + title + "\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"
 }
 
-func (s *Store) Create(ctx context.Context, title string) error {
+func (s *Store) Create(ctx context.Context, message string) error {
+	title := s.title(ctx, message)
 	p, err := s.api.CreatePlan(ctx, title, skeleton(title))
 	if err != nil {
 		return fmt.Errorf("create the plan in factory: %w", err)
@@ -54,6 +59,17 @@ func (s *Store) Create(ctx context.Context, title string) error {
 	s.planID = p.ID
 	s.mu.Unlock()
 	return nil
+}
+
+// title is the plan's title for message, as Claude names it or, when Claude
+// gives no usable name, as fallbackTitle.
+func (s *Store) title(ctx context.Context, message string) string {
+	name, err := s.name(ctx, message)
+	if err != nil {
+		// A plan Claude cannot name is still made; the developer is not told.
+		return fallbackTitle(message)
+	}
+	return cmp.Or(slug(name, maxNameWords), fallbackTitle(message))
 }
 
 // errNotCreated is returned by a write before Create has set an ID to

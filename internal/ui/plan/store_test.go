@@ -12,7 +12,7 @@ type fakeStore struct {
 	mu sync.Mutex
 
 	Created bool
-	Title   string
+	Message string
 	StateV  string
 	// EventsV, once setEvents sets it, is the events the plan's flow
 	// applies now; until then they follow StateV, as factory's would for
@@ -67,13 +67,13 @@ func (f *fakeStore) ID() string {
 	return ""
 }
 
-func (f *fakeStore) Create(_ context.Context, title string) error {
+func (f *fakeStore) Create(_ context.Context, message string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.CreateErr != nil {
 		return f.CreateErr
 	}
-	f.Created, f.Title = true, title
+	f.Created, f.Message = true, message
 	return nil
 }
 
