@@ -76,7 +76,7 @@ func (m *Model) renderFlow() {
 	if w <= 0 {
 		return
 	}
-	m.flowView.SetContent(m.flowContent(w))
+	m.setContent(textFlow, m.flowContent(w))
 }
 
 // flowContent is the Flow tab, w cells wide.

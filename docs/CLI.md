@@ -636,6 +636,18 @@ chunk
   listed last. A comment on a part since rewritten is listed after the plan,
   naming the part it was on.
 
+  Dragging the mouse over the text of the chat, the plan or the Flow tab
+  selects it and puts it on the clipboard when the button is let go, which
+  the status bar says. The screen takes the mouse from the terminal, so the
+  terminal's own selection does not work on it; this one does the same, a
+  line at a time, and keeps to the text: the plan's cursor and comment bars
+  and the frame of a message are not copied. Dragging past the top or bottom
+  of the pane scrolls it, so more than is in view can be selected, and the
+  wheel scrolls while the selection stays on its text. A key press or a click
+  clears it, as does a change to the text it is on. It copies with the
+  terminal's clipboard escape sequence, so it needs a terminal that allows
+  it (in tmux, `set -g set-clipboard on`).
+
   `e` edits the highlighted part, or the run of parts `shift+↑/↓` selected,
   in `$VISUAL` or `$EDITOR` (`vi` when neither is set), for a change that is
   quicker to make than to ask for. It works only while factory waits on the

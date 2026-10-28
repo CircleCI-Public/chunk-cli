@@ -392,6 +392,8 @@ type Model struct {
 	pending string
 	// lastClick is the plan block last clicked, to tell a double click.
 	lastClick *lastClick
+	// text is the text selected with the mouse, to copy.
+	text textDrag
 }
 
 const (
@@ -736,6 +738,7 @@ func tabFor(state string) rightTab {
 }
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	m.clearText()
 	k := m.keys()
 	if key.Matches(msg, k.Quit) {
 		return m.quit(msg.String())
@@ -1297,10 +1300,10 @@ func (m *Model) renderPlan() {
 		m.blocks = nil
 		m.units, m.questions = 0, 0
 		if m.busy {
-			m.planView.SetContent(lipgloss.NewStyle().Padding(1, 2).Render(m.skeleton(m.planView.Width() - 4)))
+			m.setContent(textPlan, lipgloss.NewStyle().Padding(1, 2).Render(m.skeleton(m.planView.Width()-4)))
 			return
 		}
-		m.planView.SetContent(ui.HelperStyle.Padding(1, 2).Width(m.planView.Width()).
+		m.setContent(textPlan, ui.HelperStyle.Padding(1, 2).Width(m.planView.Width()).
 			Render("No plan yet. Tell chunk what you want to change, and the plan it writes appears here."))
 		return
 	}
@@ -1314,7 +1317,7 @@ func (m *Model) renderPlan() {
 	}
 	r, err := newRenderer(m.dark, w-1)
 	if err != nil {
-		m.planView.SetContent(m.plan)
+		m.setContent(textPlan, m.plan)
 		return
 	}
 	var cursorSource string
@@ -1444,7 +1447,7 @@ func (m *Model) renderChat() {
 	// The chat follows what is added to it unless the developer has
 	// scrolled up to read, when it stays where they are.
 	follow := m.chatView.AtBottom()
-	m.chatView.SetContent(lipgloss.NewStyle().PaddingLeft(chatGutter).Render(b.String()))
+	m.setContent(textChat, lipgloss.NewStyle().PaddingLeft(chatGutter).Render(b.String()))
 	if follow {
 		m.chatView.GotoBottom()
 	}
@@ -1535,12 +1538,12 @@ func (m Model) Content() string {
 	if m.moving != nil {
 		planTitle += title(m.focus == panePlan, " · "+m.movingText())
 	}
-	body := m.planView.View() + "\n" + m.planFooter()
+	body := m.shown(textPlan) + "\n" + m.planFooter()
 	if m.tab == tabFlow {
-		body = m.flowView.View()
+		body = m.shown(textFlow)
 	}
 	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, "Chat"),
-		m.chatView.View()+"\n"+m.inputBox())
+		m.shown(textChat)+"\n"+m.inputBox())
 	plan := pane(m.focus == panePlan, m.planWidth(), planTitle, body)
 
 	panes := lipgloss.JoinHorizontal(lipgloss.Top, chat, plan)
