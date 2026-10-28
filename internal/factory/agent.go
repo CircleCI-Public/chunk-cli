@@ -73,9 +73,16 @@ const (
 )
 
 // buildMessage is a build session's first message: the plan is approved, so
-// the session claims it and does the build tasks factory hands it.
+// the session claims it and does the build tasks factory hands it. It names
+// the sidecar because buildTools leaves the project's commands out, and asks
+// the session to pass that on because a builder never sees this message.
 const buildMessage = "Plan %s is approved, and factory builds it in this session. " +
 	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the tasks it hands out, through to the pull request. " +
+	"Check the project with `chunk validate`: it runs the project's checks on the plan's sidecar, or one of them with `chunk validate NAME`. " +
+	"For a fallback or a one-off command, run it on the sidecar too: `chunk sidecar sync`, then `chunk sidecar exec` in the workspace sync prints, /home/user/ and the repository's name written out, " +
+	"such as `chunk sidecar exec --command sh -- -c \"cd /home/user/REPO && go test ./internal/factory/...\"`. " +
+	"Local go, task, gofmt and the like are denied in this session, not asked about. " +
+	"Tell every builder you send this. " +
 	"Nobody reads your replies while you build, so keep them short, and do not ask the developer anything: " +
 	"what needs their decision goes in the plan, as factory's tasks say."
 
