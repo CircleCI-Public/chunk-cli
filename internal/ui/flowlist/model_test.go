@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -34,11 +35,14 @@ type driver struct {
 	wg     sync.WaitGroup
 }
 
-func newDriver(t *testing.T, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) *driver {
+func newDriver(t *testing.T, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (string, []circleci.PlanComment, error), opts ...func(flowlist.Model) flowlist.Model) *driver {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &driver{t: t, ctx: ctx, cancel: cancel, events: make(chan tea.Msg, 100)}
 	d.m = flowlist.New(ctx, list, preview)
+	for _, o := range opts {
+		d.m = o(d.m)
+	}
 	t.Cleanup(func() { cancel(); d.wg.Wait() })
 	return d
 }
@@ -101,8 +105,49 @@ func fixed(flows ...circleci.Flow) func(context.Context) ([]circleci.Flow, error
 	return func(context.Context) ([]circleci.Flow, error) { return flows, nil }
 }
 
+func parents(m map[string]string) func(flowlist.Model) flowlist.Model {
+	return func(fm flowlist.Model) flowlist.Model {
+		return fm.WithParents(func(context.Context) (map[string]string, error) { return m, nil })
+	}
+}
+
+// subPlans are flows with sub-plans in one sub-group and across two, and
+// subPlanParents their parents.
+var (
+	subPlans = []circleci.Flow{
+		{ID: "docs", Title: "retry-docs", State: "Planning - Human"},
+		{ID: "other", Title: "other", State: "Planning - Human"},
+		{ID: "p1", Title: "retry-policy", State: "Building - Agent"},
+		{ID: "cfg", Title: "retry-config", State: "Building - Agent"},
+		{ID: "cfg2", Title: "retry-backoff", State: "Building - Agent"},
+		{ID: "deep", Title: "retry-jitter", State: "Building - Agent"},
+		{ID: "orphan", Title: "orphan", State: "Building - Agent"},
+		{ID: "skip", Title: "retry-docs-site", State: "Building - Agent"},
+	}
+	subPlanParents = map[string]string{"docs": "p1", "cfg": "p1", "cfg2": "p1", "deep": "cfg", "orphan": "gone", "skip": "docs"}
+)
+
 func preview(_ context.Context, id string) (string, []circleci.PlanComment, error) {
 	return "# Preview " + id, nil, nil
+}
+
+// titleRows is the list's rows as listRows has them, but with only the
+// pane's border and the selection marker cut, so a title keeps its indent.
+func titleRows(d *driver) []string {
+	d.t.Helper()
+	d.send(tea.WindowSizeMsg{Width: 50, Height: 60})
+	var rows []string
+	for _, line := range strings.Split(d.content(), "\n") {
+		line = strings.TrimRight(strings.TrimPrefix(line, "│"), "│ ")
+		switch {
+		case strings.HasPrefix(line, "▶ "):
+			line = strings.TrimPrefix(line, "▶ ")
+		case strings.HasPrefix(line, "  "):
+			line = line[2:]
+		}
+		rows = append(rows, line)
+	}
+	return rows
 }
 
 // listRows is the list's rows at a size that shows every one, without the
@@ -170,6 +215,39 @@ func TestNavigation(t *testing.T) {
 		d.send(press(tea.KeyDown))
 		d.step()
 		open(d, "b2")
+	})
+	t.Run("sub-plans", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var calls atomic.Int32
+			// The second read drops retry-config and its sub-plan's parents.
+			later := map[string]string{"docs": "p1", "cfg2": "p1", "orphan": "gone", "skip": "docs"}
+			d := newDriver(t, fixed(subPlans...), preview, func(m flowlist.Model) flowlist.Model {
+				return m.WithParents(func(context.Context) (map[string]string, error) {
+					if calls.Add(1) == 1 {
+						return subPlanParents, nil
+					}
+					return later, nil
+				})
+			})
+			d.load()
+			d.m = d.m.Select("p1")
+			d.send(nil)
+			d.step()
+			d.send(press('j'))
+			d.step()
+			open(d, "cfg")
+			d.send(press('j'))
+			d.step()
+			d.send(press(tea.KeyEnter))
+			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.OpenMsg{ID: "deep", Title: "retry-jitter"}))
+			assert.Check(t, cmp.Contains(titleRows(d), "    retry-jitter"))
+			d.refresh()
+			d.step()
+			open(d, "deep")
+			rows := titleRows(d)
+			assert.Check(t, cmp.Contains(rows, "retry-jitter"), "rows:\n%s", strings.Join(rows, "\n"))
+			assert.Check(t, cmp.Contains(d.content(), "▶ retry-jitter"))
+		})
 	})
 }
 
@@ -341,6 +419,48 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 			assert.Check(t, !strings.Contains(text, "offline"), "the error outlived a successful list:\n%s", text)
 		})
 	})
+	t.Run("parents error recovers", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var calls atomic.Int32
+			d := newDriver(t, fixed(subPlans...), preview, func(m flowlist.Model) flowlist.Model {
+				return m.WithParents(func(context.Context) (map[string]string, error) {
+					if calls.Add(1) == 1 {
+						return nil, errors.New("plans\noffline")
+					}
+					return subPlanParents, nil
+				})
+			})
+			d.load()
+			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
+			lines := strings.Split(d.content(), "\n")
+			assert.Check(t, cmp.Contains(lines[len(lines)-1], "sub-plans unavailable: plans offline"))
+			assert.Check(t, !strings.Contains(d.content(), "↳"), "a hint shows without parents:\n%s", d.content())
+			d.refresh()
+			d.step()
+			text := d.content()
+			assert.Check(t, !strings.Contains(text, "sub-plans unavailable"), "the error outlived a successful read:\n%s", text)
+			assert.Check(t, cmp.Contains(text, "↳ retry-policy"))
+		})
+	})
+	t.Run("list error skips parents", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var calls atomic.Int32
+			d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
+				return nil, errors.New("offline")
+			}, preview, func(m flowlist.Model) flowlist.Model {
+				return m.WithParents(func(context.Context) (map[string]string, error) {
+					calls.Add(1)
+					return subPlanParents, nil
+				})
+			})
+			d.send(d.m.Init()())
+			d.step()
+			assert.Check(t, cmp.Equal(calls.Load(), int32(0)))
+			text := d.content()
+			assert.Check(t, cmp.Contains(text, "flows unavailable"))
+			assert.Check(t, !strings.Contains(text, "sub-plans unavailable"), "footer:\n%s", text)
+		})
+	})
 	t.Run("list and preview retain success", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var lists, previews atomic.Int32
@@ -508,6 +628,61 @@ func TestGroupsAndRows(t *testing.T) {
 					}
 					assert.Check(t, cmp.Contains(lines[len(lines)-2], "q quit"))
 					assert.Check(t, cmp.Contains(lines[len(lines)-1], "Unsent draft"))
+				}
+			}
+		}
+	})
+}
+
+func TestSubPlanRows(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newDriver(t, fixed(subPlans...), preview, parents(subPlanParents))
+		d.load()
+		rows, titles := listRows(d), titleRows(d)
+		all := strings.Join(rows, "\n")
+		agent := slices.Index(rows, "With agent")
+		assert.Assert(t, agent >= 0 && rows[agent+1] == "Building", "rows:\n%s", all)
+		var building []string
+		for i := agent + 2; i < len(titles) && titles[i] != ""; i += 2 {
+			building = append(building, titles[i])
+		}
+		// Siblings stay in order, a grandchild is indented twice, and a
+		// parent in another sub-group or not listed means no indent.
+		assert.Check(t, cmp.DeepEqual(building, []string{"retry-policy", "  retry-config", "    retry-jitter", "  retry-backoff", "orphan", "retry-docs-site"}), "rows:\n%s", strings.Join(titles, "\n"))
+		detail := func(title string) string {
+			t.Helper()
+			i := slices.IndexFunc(rows, func(r string) bool { return strings.TrimPrefix(r, "▶ ") == title })
+			assert.Assert(t, i >= 0, "no row %q:\n%s", title, all)
+			return rows[i+1]
+		}
+		assert.Check(t, cmp.Contains(detail("retry-docs-site"), "↳ retry-docs"))
+		assert.Check(t, cmp.Contains(detail("retry-docs"), "↳ retry-policy"))
+		assert.Check(t, strings.HasPrefix(detail("retry-config"), "building  ↳ retry-policy"), "rows:\n%s", all)
+		assert.Check(t, !strings.Contains(detail("orphan"), "↳"), "rows:\n%s", all)
+		// A sub-plan stays in its own group, unindented, in stable order.
+		planning := slices.Index(rows, "Planning")
+		assert.Check(t, cmp.DeepEqual([]string{titles[planning+1], titles[planning+3]}, []string{"retry-docs", "other"}), "rows:\n%s", all)
+
+		plain := newDriver(t, fixed(subPlans...), preview)
+		plain.load()
+		without := newDriver(t, fixed(subPlans...), preview, parents(nil))
+		without.load()
+		assert.Check(t, cmp.DeepEqual(listRows(without), listRows(plain)))
+
+		// Indented rows and long hints fit every size.
+		long := append(slices.Clone(subPlans), circleci.Flow{ID: "long", Title: strings.Repeat("界", 80), State: "Building - Agent"})
+		withLong := maps.Clone(subPlanParents)
+		withLong["long"] = "deep"
+		d = newDriver(t, fixed(long...), preview, parents(withLong))
+		d.load()
+		for _, size := range []tea.WindowSizeMsg{{Width: 50, Height: 20}, {Width: 80, Height: 24}, {Width: 120, Height: 35}, {Width: 1, Height: 1}, {Width: 100, Height: 2}} {
+			for _, bg := range []color.Color{color.White, color.Black} {
+				d.send(size)
+				d.send(tea.BackgroundColorMsg{Color: bg})
+				lines := strings.Split(d.content(), "\n")
+				assert.Assert(t, len(lines) <= size.Height, "height %d exceeds %d", len(lines), size.Height)
+				for _, line := range lines {
+					assert.Assert(t, ansi.StringWidth(line) <= size.Width, "width %d exceeds %d: %q", ansi.StringWidth(line), size.Width, line)
 				}
 			}
 		}

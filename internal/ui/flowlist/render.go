@@ -73,6 +73,9 @@ func (m Model) footerLines() []string {
 		}
 		rows = append(rows, "  "+m.styles.Error.Render(note+": "+oneLine(m.listErr.Error())))
 	}
+	if m.parentsErr != nil {
+		rows = append(rows, "  "+m.styles.Warning.Render("sub-plans unavailable: "+oneLine(m.parentsErr.Error())))
+	}
 	return rows
 }
 
@@ -81,7 +84,8 @@ func (m Model) listLines(width, height int) []string {
 	var rows []string
 	selected, lastGroup, lastPhase := 0, -1, ""
 	labels := []string{"Needs your review", "With agent", "Not started", "Other"}
-	for _, f := range m.visible() {
+	flows, depth := m.visible()
+	for _, f := range flows {
 		g := group(f.State)
 		if g != lastGroup {
 			if lastGroup != -1 {
@@ -99,15 +103,19 @@ func (m Model) listLines(width, height int) []string {
 		if title == "" {
 			title = "Untitled plan"
 		}
-		title = ansi.Truncate(title, max(width-2, 1), "…")
+		indent := strings.Repeat("  ", depth[f.ID])
+		title = ansi.Truncate(title, max(width-2-len(indent), 1), "…")
 		if f.ID == m.id {
 			selected = len(rows)
-			rows = append(rows, st.Success.Render("▶ ")+st.Emphasis.Render(title))
+			rows = append(rows, st.Success.Render("▶ ")+indent+st.Emphasis.Render(title))
 		} else {
-			rows = append(rows, "  "+title)
+			rows = append(rows, "  "+indent+title)
 		}
-		chip := stateChip(st, f.State, width-4)
+		chip := stateChip(st, f.State, width-4-len(indent))
 		var detail []string
+		if p := m.parentTitle(f.ID); p != "" {
+			detail = append(detail, st.VDim.Render("↳ "+p))
+		}
 		if slices.Contains(f.ApplicableEvents, circleci.ResolveConflicts) {
 			detail = append(detail, st.Warning.Render("⚠"))
 		}
@@ -120,7 +128,7 @@ func (m Model) listLines(width, height int) []string {
 		if !f.UpdatedAt.IsZero() {
 			detail = append(detail, st.VDim.Render(ago(f.UpdatedAt)))
 		}
-		line := "  " + chip
+		line := "  " + indent + chip
 		if len(detail) > 0 {
 			line += " " + strings.Join(detail, st.VDim.Render(" · "))
 		}

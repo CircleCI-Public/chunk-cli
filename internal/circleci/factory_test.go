@@ -144,6 +144,101 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.Equal(got.OpenComments, 1))
 		assert.Check(t, got.UpdatedAt.After(p.CreatedAt))
 	})
+
+	t.Run("reads a plan's parent on get and list", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		parent, err := client.CreatePlan(ctx, "retry-policy", "")
+		assert.NilError(t, err)
+		child, err := client.CreatePlan(ctx, "retry-config", "")
+		assert.NilError(t, err)
+		fake.SetFactoryParent(child.ID, parent.ID)
+
+		got, err := client.GetPlan(ctx, child.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(got.Parent, parent.ID))
+		got, err = client.GetPlan(ctx, parent.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(got.Parent, ""), "a top-level plan has no parent")
+
+		plans, err := client.ListPlans(ctx)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(parentsOf(plans), map[string]string{parent.ID: "", child.ID: parent.ID}))
+	})
+
+	t.Run("lists open plans across pages", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		fake.FactoryPageSize = 2
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		for _, title := range []string{"a", "b", "c", "d", "e"} {
+			p, err := client.CreatePlan(ctx, title, "")
+			assert.NilError(t, err)
+			if title == "c" {
+				fake.SetFactoryPlanState(p.ID, "Done")
+			}
+		}
+
+		plans, err := client.ListPlans(ctx)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(titles(plans), []string{"a", "b", "d", "e"}), "oldest first, Done left out")
+		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
+		assert.Check(t, cmp.Equal(last.URL.Query().Get("filter[user_id]"), "me"))
+	})
+
+	t.Run("reads references as conductor may serve them", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, refs string
+			want       string
+		}{
+			{
+				name: "no references",
+			},
+			{
+				name: "empty references",
+				refs: `,"references":{}`,
+			},
+			{
+				name: "no plans",
+				refs: `,"references":{"factory_plans":[]}`,
+			},
+			{
+				name: "a plan it blocks",
+				refs: `,"references":{"factory_plans":[{"id":"x","rel":"blocks"}]}`,
+			},
+			{
+				name: "a parent",
+				refs: `,"references":{"factory_plans":[{"id":"p1","rel":"parent"}]}`,
+				want: "p1",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				id := uuid.NewString()
+				item := `{"id":"` + id + `","attributes":{"title":"a plan"}` + tc.refs + `}`
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					if r.URL.Path == "/api/v3/factory/plans" {
+						_, _ = w.Write([]byte(`{"data":[` + item + `]}`))
+						return
+					}
+					_, _ = w.Write([]byte(`{"data":` + item + `}`))
+				}))
+				t.Cleanup(srv.Close)
+				client := newTestClient(t, srv.URL)
+
+				got, err := client.GetPlan(ctx, id)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.Equal(got.Parent, tc.want))
+				plans, err := client.ListPlans(ctx)
+				assert.NilError(t, err)
+				assert.Assert(t, cmp.Len(plans, 1))
+				assert.Check(t, cmp.Equal(plans[0].Parent, tc.want))
+			})
+		}
+	})
 }
 
 func TestFlows(t *testing.T) {
@@ -326,8 +421,12 @@ func TestFlows(t *testing.T) {
 			{
 				ID: a.ID, Title: "a", State: "Unprioritized", Phase: PhaseReceived,
 				SessionID: "session-1", ApplicableEvents: []FlowEvent{},
+				Deviations: []string{}, Next: []Transition{},
 			},
-			{ID: b.ID, Title: "b", State: "Done", Phase: PhaseEnded, ApplicableEvents: []FlowEvent{}},
+			{
+				ID: b.ID, Title: "b", State: "Done", Phase: PhaseEnded, ApplicableEvents: []FlowEvent{},
+				Deviations: []string{}, Next: []Transition{},
+			},
 		}))
 		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
 		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/flows"))
@@ -401,6 +500,120 @@ func TestFlows(t *testing.T) {
 				assert.Check(t, cmp.DeepEqual(f.ApplicableEvents, tc.want))
 			})
 		}
+	})
+
+	t.Run("reads the flow's status and next", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.SetFactoryPlanState(p.ID, "Building - Agent")
+		fake.SetFactoryTask(p.ID, "build-unit")
+		fake.SetFactoryFlowStatus(p.ID, fakes.FactoryFlowStatus{
+			Control: "agent", PR: "https://github.com/o/r/pull/1", Deviations: []string{"lint"}, Outcome: "merged",
+			Next: []fakes.FactoryTransition{
+				{Actor: "session", TaskCategory: "build-unit", IsDispatched: true},
+				{Actor: "human", Event: "resolve-conflicts"},
+				{Actor: "human", Action: "merge-pr"},
+				{Actor: "robot"},
+			},
+			TaskUnit: "Unit 2: parser",
+		})
+
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Assert(t, f.Task != nil)
+		assert.Check(t, f.Task.ID != "")
+		f.UpdatedAt = time.Time{}
+		assert.Check(t, cmp.DeepEqual(f, &Flow{
+			ID: p.ID, Title: "a plan", State: "Building - Agent", Phase: PhaseStarted,
+			ApplicableEvents: []FlowEvent{ResolveConflicts},
+			Task:             &FlowTask{ID: f.Task.ID, Category: "build-unit", Unit: "Unit 2: parser"},
+			Control:          "agent", Outcome: "merged", PR: "https://github.com/o/r/pull/1",
+			Deviations: []string{"lint"},
+			Next: []Transition{
+				{Actor: "session", TaskCategory: "build-unit", IsDispatched: true},
+				{Actor: "human", Event: ResolveConflicts},
+				{Actor: "human", Action: "merge-pr"},
+				{Actor: "robot"},
+			},
+		}))
+	})
+
+	t.Run("an older conductor serves no status", func(t *testing.T) {
+		id := uuid.NewString()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"id":"` + id + `","attributes":{"state":"Planning - Human","applicable_events":["abandon"]}}}`))
+		}))
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+
+		f, err := client.GetFlow(ctx, id)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.Control, ""))
+		assert.Check(t, cmp.Equal(f.PR, ""))
+		assert.Check(t, cmp.Nil(f.Deviations))
+		assert.Check(t, cmp.Nil(f.Next))
+
+		fake := fakes.NewFakeCircleCI()
+		fsrv := httptest.NewServer(fake)
+		t.Cleanup(fsrv.Close)
+		fclient := newTestClient(t, fsrv.URL)
+		p, err := fclient.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		f, err = fclient.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Len(f.Deviations, 0))
+		assert.Check(t, cmp.Len(f.Next, 0))
+
+		fake.SetFactoryTaskIDOnly(p.ID)
+		f, err = fclient.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Assert(t, f.Task != nil)
+		assert.Check(t, cmp.Equal(f.Task.Unit, ""))
+	})
+
+	t.Run("lists a flow's blockers", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		c1, err := client.CreatePlan(ctx, "retry-config", "")
+		assert.NilError(t, err)
+		c2, err := client.CreatePlan(ctx, "retry-wiring", "")
+		assert.NilError(t, err)
+		o1, err := client.CreatePlan(ctx, "other", "")
+		assert.NilError(t, err)
+		fake.SetFactoryPlanState(c1.ID, "Building - Agent")
+
+		got, err := client.ListFlowBlockers(ctx, c2.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Blocker{}))
+		assert.Check(t, cmp.Len(got, 0))
+
+		fake.BlockFactoryPlan(c2.ID, c1.ID, o1.ID)
+		got, err = client.ListFlowBlockers(ctx, c2.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Blocker{
+			{ID: c1.ID, Title: "retry-config", State: "Building - Agent"},
+			{ID: o1.ID, Title: "other", State: "Unprioritized"},
+		}), "in the order blocked")
+		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
+		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/flows/"+c2.ID+"/blockers"))
+
+		fake.DropFactoryFlow(o1.ID)
+		got, err = client.ListFlowBlockers(ctx, c2.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Blocker{
+			{ID: c1.ID, Title: "retry-config", State: "Building - Agent"},
+			{ID: o1.ID, Title: "other", State: ""},
+		}), "a blocker with no flow has no state")
+
+		_, err = client.ListFlowBlockers(ctx, uuid.NewString())
+		assertStatus(t, err, http.StatusNotFound)
 	})
 }
 
@@ -613,6 +826,10 @@ func TestFactoryNotAuthorized(t *testing.T) {
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		_, err = client.ListComments(ctx, uuid.NewString(), true)
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
+		_, err = client.ListPlans(ctx)
+		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
+		_, err = client.ListFlowBlockers(ctx, uuid.NewString())
+		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		srv.Close()
 	}
 }
@@ -623,6 +840,23 @@ func commentIDs(cs []PlanComment) []string {
 		ids = append(ids, c.ID)
 	}
 	return ids
+}
+
+func titles(ps []Plan) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.Title)
+	}
+	return out
+}
+
+// parentsOf maps each plan's ID to its parent's.
+func parentsOf(ps []Plan) map[string]string {
+	out := map[string]string{}
+	for _, p := range ps {
+		out[p.ID] = p.Parent
+	}
+	return out
 }
 
 func assertStatus(t *testing.T, err error, code int) {
@@ -642,6 +876,8 @@ func TestListsStopWhenTheServerNeverEndsThem(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 
 	_, err := client.ListComments(ctx, "plan-1", false)
+	assert.ErrorContains(t, err, "does not advance")
+	_, err = client.ListPlans(ctx)
 	assert.ErrorContains(t, err, "does not advance")
 }
 

@@ -34,8 +34,10 @@ type QuitMsg struct{}
 type refreshMsg struct{}
 type pollMsg struct{ generation uint64 }
 type listedMsg struct {
-	flows []circleci.Flow
-	err   error
+	flows      []circleci.Flow
+	err        error
+	parents    map[string]string
+	parentsErr error
 }
 type previewedMsg struct {
 	id         string
@@ -50,7 +52,11 @@ type Model struct {
 	ctx     context.Context
 	list    func(context.Context) ([]circleci.Flow, error)
 	preview func(context.Context, string) (string, []circleci.PlanComment, error)
+	parents func(context.Context) (map[string]string, error)
 	flows   []circleci.Flow
+	// parentOf is each sub-plan's parent plan ID, from the last list.
+	parentOf   map[string]string
+	parentsErr error
 	// phases are the phases outside phaseOrder, in the order the list
 	// first saw them. They are kept across refreshes, so a sub-group does
 	// not move when its first flow leaves and comes back.
@@ -79,6 +85,14 @@ type Model struct {
 // preview. Both callbacks must honor ctx cancellation.
 func New(ctx context.Context, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) Model {
 	return Model{ctx: ctx, list: list, preview: preview, width: 80, height: 24, dark: true, styles: theme.New(true)}
+}
+
+// WithParents has the list read each flow's parent plan with parents, a
+// map from plan ID to its parent's ID, after each successful list. A flow
+// whose parent is listed is drawn as its sub-plan.
+func (m Model) WithParents(parents func(context.Context) (map[string]string, error)) Model {
+	m.parents = parents
+	return m
 }
 
 // Init requests the first list. Polling starts when that request finishes.
@@ -144,6 +158,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if msg.err == nil {
 			m.flows = stableFlows(m.flows, msg.flows)
 			m.phases = seenPhases(m.phases, m.flows)
+			m.parentOf, m.parentsErr = msg.parents, msg.parentsErr
+			if msg.parentsErr != nil {
+				m.parentOf = nil
+			}
 			m.loaded = true
 			m.keepSelection()
 			refreshPreview = true
@@ -178,13 +196,17 @@ func (m *Model) startList() tea.Cmd {
 	}
 	m.listing = true
 	m.pollGeneration++ // Invalidates an earlier timer after a host refresh.
-	ctx, list := m.ctx, m.list
+	ctx, list, parents := m.ctx, m.list, m.parents
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			return nil
 		}
 		flows, err := list(ctx)
-		return listedMsg{flows: flows, err: err}
+		msg := listedMsg{flows: flows, err: err}
+		if err == nil && parents != nil {
+			msg.parents, msg.parentsErr = parents(ctx)
+		}
+		return msg
 	}
 }
 
@@ -221,7 +243,8 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case "tab", "esc", "2":
 		return func() tea.Msg { return BackMsg{} }
 	case "enter":
-		for _, f := range m.visible() {
+		flows, _ := m.visible()
+		for _, f := range flows {
 			if f.ID == m.id {
 				return func() tea.Msg { return OpenMsg{ID: f.ID, Title: f.Title} }
 			}
@@ -240,7 +263,7 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) move(step int) {
-	flows := m.visible()
+	flows, _ := m.visible()
 	for i, f := range flows {
 		if f.ID == m.id {
 			m.id = flows[max(0, min(i+step, len(flows)-1))].ID
@@ -250,7 +273,7 @@ func (m *Model) move(step int) {
 }
 
 func (m *Model) keepSelection() {
-	flows := m.visible()
+	flows, _ := m.visible()
 	for _, f := range flows {
 		if f.ID == m.id {
 			return
@@ -323,17 +346,94 @@ func (m Model) phaseRank(p string) int {
 	return len(phaseOrder) + len(m.phases)
 }
 
-// visible is the flows in the order the list shows them: by actor group,
-// then by phase, then in the order the list keeps them.
-func (m Model) visible() []circleci.Flow {
-	out := slices.Clone(m.flows)
-	slices.SortStableFunc(out, func(a, b circleci.Flow) int {
+// visible is the flows in the order the list shows them, and how deep each
+// is drawn under its parent: by actor group, then by phase, then with each
+// sub-plan after a parent in its sub-group, then in the order the list
+// keeps them.
+func (m Model) visible() ([]circleci.Flow, map[string]int) {
+	sorted := slices.Clone(m.flows)
+	slices.SortStableFunc(sorted, func(a, b circleci.Flow) int {
 		if c := cmp.Compare(group(a.State), group(b.State)); c != 0 {
 			return c
 		}
 		return cmp.Compare(m.phaseRank(phase(a.State)), m.phaseRank(phase(b.State)))
 	})
+	out := make([]circleci.Flow, 0, len(sorted))
+	depth := make(map[string]int)
+	for len(sorted) > 0 {
+		n := 1
+		for n < len(sorted) && m.sameSubGroup(sorted[0], sorted[n]) {
+			n++
+		}
+		out = m.nest(out, sorted[:n], depth)
+		sorted = sorted[n:]
+	}
+	return out, depth
+}
+
+// sameSubGroup is whether a and b are listed under one heading.
+func (m Model) sameSubGroup(a, b circleci.Flow) bool {
+	return group(a.State) == group(b.State) && m.phaseRank(phase(a.State)) == m.phaseRank(phase(b.State))
+}
+
+// nest appends run, the flows of one sub-group, to out depth-first: each
+// flow whose parent is not in run, in order, then its sub-plans in run,
+// recursively. It records the depth of each one below the first level.
+func (m Model) nest(out, run []circleci.Flow, depth map[string]int) []circleci.Flow {
+	in := make(map[string]bool, len(run))
+	for _, f := range run {
+		in[f.ID] = true
+	}
+	children := make(map[string][]circleci.Flow)
+	var roots []circleci.Flow
+	for _, f := range run {
+		if p := m.parentOf[f.ID]; p != f.ID && in[p] {
+			children[p] = append(children[p], f)
+			continue
+		}
+		roots = append(roots, f)
+	}
+	visited := make(map[string]bool, len(run))
+	var walk func(f circleci.Flow, d int)
+	walk = func(f circleci.Flow, d int) {
+		if visited[f.ID] {
+			return
+		}
+		visited[f.ID] = true
+		out = append(out, f)
+		if d > 0 {
+			depth[f.ID] = d
+		}
+		for _, c := range children[f.ID] {
+			walk(c, d+1)
+		}
+	}
+	for _, f := range roots {
+		walk(f, 0)
+	}
+	// Flows whose parents form a cycle have no root; they follow in order.
+	for _, f := range run {
+		walk(f, 0)
+	}
 	return out
+}
+
+// parentTitle is the title of id's parent when the parent is listed, else "".
+func (m Model) parentTitle(id string) string {
+	p, ok := m.parentOf[id]
+	if !ok || p == id {
+		return ""
+	}
+	for _, f := range m.flows {
+		if f.ID != p {
+			continue
+		}
+		if t := oneLine(f.Title); t != "" {
+			return t
+		}
+		return "Untitled plan"
+	}
+	return ""
 }
 
 // Keep surviving rows in their original order, updating their fields in place.
