@@ -60,16 +60,22 @@ func (s *Store) Create(ctx context.Context, title string) error {
 // address it with.
 var errNotCreated = errors.New("the plan has not been created in factory yet")
 
+// State is the plan's flow state; "" before the plan is created, or when it
+// has no flow.
 func (s *Store) State(ctx context.Context) (string, error) {
 	id := s.ID()
 	if id == "" {
 		return "", nil
 	}
-	p, err := s.api.GetPlan(ctx, id)
+	f, err := s.api.GetFlow(ctx, id)
+	var se *circleci.StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("get the plan's state: %w", err)
 	}
-	return p.State, nil
+	return f.State, nil
 }
 
 // Flow is the plan's flow as factory has it now; empty before the plan is
@@ -98,8 +104,7 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 }
 
 // Holder is the factory session holding the plan's claim, as its flow
-// references it, or "" when none does or the plan has not been created. A
-// plan has no flow until a session first claims it.
+// references it, or "" when none does or the plan has not been created.
 func (s *Store) Holder(ctx context.Context) (string, error) {
 	id := s.ID()
 	if id == "" {

@@ -12,14 +12,14 @@ import (
 )
 
 // factoryPlan is a plan the fake holds, with its comments in the order they
-// were made, as conductor keeps them.
+// were made, as conductor keeps them. Its state is its flow's.
 type factoryPlan struct {
 	id, title, state, branch, text string
 	createdAt, updatedAt           time.Time
-	// flowed is whether a session has claimed the plan, which gives it the
-	// flow conductor keeps from then on; session is the one claiming it now,
-	// "" when none does.
-	flowed  bool
+	// noFlow is whether DropFactoryFlow took the plan's flow away, as a plan
+	// made before conductor gave every plan one has none; session is the one
+	// claiming the plan now, "" when none does.
+	noFlow  bool
 	session string
 	events  []string
 	// applicable are the events the flow lists as applicable_events, as a
@@ -54,6 +54,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.PUT("/api/v3/factory/comments/:id/body", f.handlePutCommentBody)
 	r.POST("/api/v3/factory/comments/:id/resolve", f.handleResolveComment)
 	r.DELETE("/api/v3/factory/comments/:id", f.handleDeleteComment)
+	r.GET("/api/v3/factory/flows", f.handleListFlows)
 	r.GET("/api/v3/factory/flows/:id", f.handleGetFlow)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
 	r.POST("/api/v3/factory/sessions/:id/release", f.handleReleaseClaim)
@@ -142,12 +143,12 @@ func (f *FakeCircleCI) SetFactoryTaskIDOnly(id string) {
 }
 
 // ClaimFactoryPlan has factory session sessionID claim plan id, as factory's
-// daemon would, giving the plan its flow.
+// daemon would.
 func (f *FakeCircleCI) ClaimFactoryPlan(id, sessionID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
-		p.flowed, p.session = true, sessionID
+		p.session = sessionID
 	}
 }
 
@@ -158,6 +159,17 @@ func (f *FakeCircleCI) ReleaseFactoryPlan(id string) {
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.session = ""
+	}
+}
+
+// DropFactoryFlow takes plan id's flow away, as a plan made before conductor
+// gave every plan a flow has none: GET /flows/:id answers 404 and GET /flows
+// leaves it out.
+func (f *FakeCircleCI) DropFactoryFlow(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.noFlow = true
 	}
 }
 
@@ -198,7 +210,7 @@ func planListAttrs(p *factoryPlan) gin.H {
 		}
 	}
 	return gin.H{
-		"title": p.title, "state": p.state,
+		"title":      p.title,
 		"created_at": p.createdAt.Format(time.RFC3339Nano), "updated_at": p.updatedAt.Format(time.RFC3339Nano),
 		"open_comment_count": open,
 	}
@@ -382,8 +394,8 @@ func (f *FakeCircleCI) handlePutPlanText(c *gin.Context) {
 	}
 }
 
-// handleGetFlow serves a plan's flow, which it has once a session has
-// claimed it, as conductor does; the flow's ID is the plan's.
+// handleGetFlow serves a plan's flow, which conductor makes with the plan; the
+// flow's ID is the plan's.
 func (f *FakeCircleCI) handleGetFlow(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
@@ -395,10 +407,45 @@ func (f *FakeCircleCI) handleGetFlow(c *gin.Context) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	p := f.factoryPlans[id]
-	if p == nil || !p.flowed {
+	if p == nil || p.noFlow {
 		factoryError(c, http.StatusNotFound, "flow not found")
 		return
 	}
+	c.JSON(http.StatusOK, gin.H{"data": flowEntity(p)})
+}
+
+// handleListFlows serves every plan's flow, ended ones included, oldest plan
+// first and unpaged, as conductor does. The fake has one user, so
+// filter[user_id]=me or none lists every flow and any other user's UUID none.
+func (f *FakeCircleCI) handleListFlows(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	user := c.Query("filter[user_id]")
+	if user != "" && user != "me" && uuid.Validate(user) != nil {
+		factoryError(c, http.StatusBadRequest, "filter[user_id] is not a uuid or me")
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	var plans []*factoryPlan
+	if user == "" || user == "me" {
+		for _, p := range f.factoryPlans {
+			if !p.noFlow {
+				plans = append(plans, p)
+			}
+		}
+	}
+	slices.SortFunc(plans, func(a, b *factoryPlan) int { return a.seq - b.seq })
+	items := []gin.H{}
+	for _, p := range plans {
+		items = append(items, flowEntity(p))
+	}
+	c.JSON(http.StatusOK, gin.H{"data": items})
+}
+
+// flowEntity is plan p's flow as both flow routes serve it.
+func flowEntity(p *factoryPlan) gin.H {
 	refs := gin.H{"factory_plan": gin.H{"id": p.id}}
 	if p.session != "" {
 		refs["factory_session"] = gin.H{"id": p.session}
@@ -415,9 +462,9 @@ func (f *FakeCircleCI) handleGetFlow(c *gin.Context) {
 	if applicable == nil {
 		applicable = []string{}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+	return gin.H{
 		"id": p.id, "attributes": gin.H{"state": p.state, "applicable_events": applicable}, "references": refs,
-	}})
+	}
 }
 
 // handleReleaseClaim drops session :id's claim on the plan flow_id names, as
@@ -437,7 +484,7 @@ func (f *FakeCircleCI) handleReleaseClaim(c *gin.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	p := f.factoryPlans[body.FlowID]
-	if p == nil || !p.flowed || p.session != c.Param("id") {
+	if p == nil || p.noFlow || p.session != c.Param("id") {
 		factoryError(c, http.StatusNotFound, "claim not found")
 		return
 	}
@@ -476,7 +523,7 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	p := f.factoryPlans[flowID]
-	if p == nil || !p.flowed {
+	if p == nil || p.noFlow {
 		factoryError(c, http.StatusNotFound, "flow not found")
 		return
 	}

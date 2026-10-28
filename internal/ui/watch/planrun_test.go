@@ -212,7 +212,7 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 		}
 		return b.planner(ctx, root, id)
 	}
-	inbox := planlist.New(t.Context(), func(context.Context) ([]circleci.Plan, error) { return nil, nil },
+	inbox := planlist.New(t.Context(), func(context.Context) ([]planlist.Plan, error) { return nil, nil },
 		func(context.Context, string) (string, []circleci.PlanComment, error) { return "", nil, nil })
 	m := searchModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).
 		WithPlans(t.Context(), planner).WithPlanInbox(inbox)
@@ -295,8 +295,8 @@ func deliverThen(t *testing.T, m Model, cmd tea.Cmd, n int) Model {
 // The inbox is drawn under the dashboard's own header, with tabs naming the
 // one showing, and the two together fit the terminal.
 func TestInboxSharesTheDashboardHeader(t *testing.T) {
-	plans := []circleci.Plan{{ID: "p1", Title: "Retry uploads", State: "Review - Human"}}
-	inbox := planlist.New(t.Context(), func(context.Context) ([]circleci.Plan, error) { return plans, nil },
+	plans := []planlist.Plan{{Plan: circleci.Plan{ID: "p1", Title: "Retry uploads"}, FlowState: "Review - Human"}}
+	inbox := planlist.New(t.Context(), func(context.Context) ([]planlist.Plan, error) { return plans, nil },
 		func(context.Context, string) (string, []circleci.PlanComment, error) {
 			return "# Retry uploads", nil, nil
 		})

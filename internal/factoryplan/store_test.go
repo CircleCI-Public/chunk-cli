@@ -114,15 +114,17 @@ func TestStoreCommentsRoundTrip(t *testing.T) {
 }
 
 // TestStoreAddressCommentsSendsTheEvent checks that AddressComments sends
-// the plan's flow factory's address-comments event, and fails for a plan no
-// session has claimed, which has no flow to send it.
+// the plan's flow factory's address-comments event, and fails for a plan with
+// no flow to send it.
 func TestStoreAddressCommentsSendsTheEvent(t *testing.T) {
 	store, _, cci := createdStore(t)
 	ctx := context.Background()
+	cci.DropFactoryFlow(store.ID())
 
 	err := store.AddressComments(ctx)
 	assert.Check(t, err != nil, "a plan with no flow took the event")
 
+	store, _, cci = createdStore(t)
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
 	err = store.AddressComments(ctx)
@@ -198,6 +200,12 @@ func TestStoreApproveWaitsForTheReview(t *testing.T) {
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.Len(p.Events, 0))
 	assert.Check(t, cmp.Equal(p.Session, "s-1"))
+
+	cci.DropFactoryFlow(store.ID())
+	err = store.Approve(ctx, "s-1")
+	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
+	p, _ = cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.Len(p.Events, 0))
 }
 
 // TestStoreApproveReleasesThePlanningSession checks that approving releases
@@ -355,7 +363,7 @@ func TestStoreWritesFailBeforeCreate(t *testing.T) {
 
 // TestStoreHolderReadsTheClaimFromFactory checks that holder is the session
 // the plan's flow says holds its claim, and "" before the plan exists, before
-// it has a flow, and once its claim is released.
+// a session claims it, and once its claim is released.
 func TestStoreHolderReadsTheClaimFromFactory(t *testing.T) {
 	client, cci := testClient(t)
 	store := NewStore(client, "")
@@ -399,7 +407,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.NilError(t, err)
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Len(f.Events, 0), "a plan with no flow takes no events")
+	assert.Check(t, cmp.Len(f.Events, 0))
 	assert.Check(t, cmp.Equal(f.Task, ""))
 
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
@@ -419,6 +427,34 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(f.Task, ""))
+
+	cci.DropFactoryFlow(store.ID())
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Len(f.Events, 0))
+	assert.Check(t, cmp.Equal(f.Task, ""))
+}
+
+// TestStoreStateReadsTheFlow checks that State is the plan's flow state, ""
+// before the plan exists or once it has no flow, and an error when factory
+// fails.
+func TestStoreStateReadsTheFlow(t *testing.T) {
+	store, client, cci := createdStore(t)
+	ctx := context.Background()
+
+	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
+	st, err := store.State(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(st, "Planning - Human"))
+
+	cci.DropFactoryFlow(store.ID())
+	st, err = store.State(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(st, ""))
+
+	// The fake answers 400 for an ID that is no UUID: an error that is not a 404.
+	_, err = NewStore(client, "not-a-uuid").State(ctx)
+	assert.Check(t, err != nil, "a failed flow read is not read as no state")
 }
 
 func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {

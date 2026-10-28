@@ -2,8 +2,11 @@ package factoryplan
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 )
 
@@ -29,11 +32,16 @@ func planWorktree(ctx context.Context, root string, store *Store) (string, error
 	return dir, nil
 }
 
-// ended is whether factory plan planID is over, so its worktree can go.
+// ended is whether factory plan planID is over, so its worktree can go. A plan
+// with no flow is not.
 func (s *Store) ended(ctx context.Context, planID string) (bool, error) {
-	p, err := s.api.GetPlan(ctx, planID)
+	f, err := s.api.GetFlow(ctx, planID)
+	var se *circleci.StatusError
+	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("get the state of plan %s: %w", planID, err)
 	}
-	return factory.PlanEnded(p.State), nil
+	return factory.PlanEnded(f.State), nil
 }
