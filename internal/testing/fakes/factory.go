@@ -197,8 +197,31 @@ func (f *FakeCircleCI) factoryStart(c *gin.Context) bool {
 func planEntity(p *factoryPlan) gin.H {
 	attrs := planListAttrs(p)
 	attrs["branch"] = p.branch
+	attrs["phase"] = factoryPhase(p.state)
+	if o := factoryOutcome(p.state); o != "" {
+		attrs["outcome"] = o
+	}
 	return gin.H{"id": p.id, "attributes": attrs}
 }
+
+// factoryPhase is the phase factory serves for a plan or flow in state.
+func factoryPhase(state string) string {
+	switch {
+	case strings.EqualFold(state, "Unprioritized"):
+		return "received"
+	case slices.ContainsFunc(factoryEnds, func(s string) bool { return strings.EqualFold(s, state) }):
+		return "ended"
+	}
+	return "started"
+}
+
+// factoryOutcomes are how a plan in each end state ended, as factory names it.
+var factoryOutcomes = map[string]string{
+	"Done": "merged", "Canceled": "canceled", "Won't Do": "rejected", "Duplicate": "duplicated",
+}
+
+// factoryOutcome is how a plan in state ended, "" before it ends.
+func factoryOutcome(state string) string { return factoryOutcomes[state] }
 
 // planListAttrs are a plan's attributes as the plan list serves them, which
 // leaves out its branch.
@@ -462,18 +485,11 @@ func flowEntity(p *factoryPlan) gin.H {
 	if applicable == nil {
 		applicable = []string{}
 	}
-	phase := "started"
-	switch {
-	case strings.EqualFold(p.state, "Unprioritized"):
-		phase = "received"
-	case slices.ContainsFunc(factoryEnds, func(s string) bool { return strings.EqualFold(s, p.state) }):
-		phase = "ended"
-	}
 	return gin.H{
 		"id": p.id,
 		"attributes": gin.H{
 			"title": p.title, "updated_at": p.updatedAt.Format(time.RFC3339Nano),
-			"state": p.state, "phase": phase, "applicable_events": applicable,
+			"state": p.state, "phase": factoryPhase(p.state), "applicable_events": applicable,
 		},
 		"references": refs,
 	}

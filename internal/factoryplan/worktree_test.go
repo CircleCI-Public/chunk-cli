@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/uuid"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -37,6 +38,7 @@ func TestPlanWorktreeRemovesThoseOfEndedPlans(t *testing.T) {
 	mergedDir, err := planWorktree(ctx, root, merged)
 	assert.NilError(t, err)
 	cci.SetFactoryPlanState(merged.ID(), "Done")
+	cci.DropFactoryFlow(merged.ID())
 
 	store := newStore(client, "")
 	err = store.Create(ctx, "a plan")
@@ -93,15 +95,39 @@ func TestStoreEndedForEachOfFactorysEnds(t *testing.T) {
 	}
 }
 
-func TestStoreEndedKeepsAPlanWithNoFlow(t *testing.T) {
+func TestStoreEndedReadsThePlanNotItsFlow(t *testing.T) {
 	client, cci := testClient(t)
 	ctx := context.Background()
-	store := newStore(client, "")
-	err := store.Create(ctx, "a plan")
-	assert.NilError(t, err)
-	cci.DropFactoryFlow(store.ID())
+	for _, tc := range []struct {
+		state string
+		want  bool
+	}{
+		{
+			state: "Planning - Human",
+			want:  false,
+		},
+		{
+			state: "Done",
+			want:  true,
+		},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			store := newStore(client, "")
+			err := store.Create(ctx, "a plan")
+			assert.NilError(t, err)
+			cci.SetFactoryPlanState(store.ID(), tc.state)
+			cci.DropFactoryFlow(store.ID())
 
-	got, err := store.ended(ctx, store.ID())
-	assert.NilError(t, err)
-	assert.Check(t, !got, "a plan with no flow is not over")
+			got, err := store.ended(ctx, store.ID())
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(got, tc.want))
+		})
+	}
+}
+
+func TestStoreEndedErrsOnAMissingPlan(t *testing.T) {
+	client, _ := testClient(t)
+	store := newStore(client, "")
+	_, err := store.ended(context.Background(), uuid.NewString())
+	assert.Check(t, err != nil, "a plan factory does not have read as ended or not")
 }

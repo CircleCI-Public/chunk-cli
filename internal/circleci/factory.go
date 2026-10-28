@@ -13,9 +13,15 @@ import (
 // Plan is a factory plan, as /api/v3/factory/plans serves it. Its text is read
 // and replaced on its own, with PlanText and SetPlanText.
 type Plan struct {
-	ID           string
-	Title        string
-	Branch       string
+	ID     string
+	Title  string
+	Branch string
+	// Phase is PhaseReceived, PhaseStarted or PhaseEnded. Unlike the flow's,
+	// it is served once the plan has ended and its flow is gone.
+	Phase string
+	// Outcome is how an ended plan ended, as factory names it; "" before it
+	// ends.
+	Outcome      string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	OpenComments int
@@ -53,7 +59,7 @@ type FlowTask struct {
 	Category string
 }
 
-// The phases a flow is in, as factory serves them.
+// The phases a plan or its flow is in, as factory serves them.
 const (
 	PhaseReceived = "received"
 	PhaseStarted  = "started"
@@ -96,6 +102,8 @@ type PlanComment struct {
 type planAttrs struct {
 	Title        string    `json:"title"`
 	Branch       string    `json:"branch"`
+	Phase        string    `json:"phase"`
+	Outcome      string    `json:"outcome"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	OpenComments int       `json:"open_comment_count"`
@@ -103,7 +111,7 @@ type planAttrs struct {
 
 func (a planAttrs) plan(id string) *Plan {
 	return &Plan{
-		ID: id, Title: a.Title, Branch: a.Branch,
+		ID: id, Title: a.Title, Branch: a.Branch, Phase: a.Phase, Outcome: a.Outcome,
 		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt, OpenComments: a.OpenComments,
 	}
 }
