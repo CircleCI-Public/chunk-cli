@@ -13,6 +13,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	planui "github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
@@ -585,6 +586,20 @@ func (m Model) openText(name, text string) Model {
 	m.output = &outputPane{name: name, text: text}
 	m.output.wrap(m.width - 1)
 	m.outputSeq++
+	return m
+}
+
+// viewPlan opens the output pane over the plan run was started from, drawn as
+// the planning screen draws it. The plan is the text the run was given when it
+// began, so it reads as it was approved even if the plan has changed since.
+func (m Model) viewPlan(run *sessionInfo) Model {
+	if run == nil || !hasPlan(run.s) {
+		return m
+	}
+	plan, dark := run.s.Factory.Prompt, m.hasDarkBG
+	m = m.openText("plan", plan)
+	m.output.styled = func(width int) []string { return planui.Render(plan, dark, width) }
+	m.output.wrap(m.width - 1)
 	return m
 }
 

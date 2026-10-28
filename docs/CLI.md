@@ -887,7 +887,10 @@ chunk
   that has committed work short of passing, as `chunk factory build --continue
   <run id>` with no prompt does: the work is checked first and the implementer
   is sent what failed. It is one press, since the new run can be cancelled
-  with `x`.
+  with `x`. `v` reads back the plan a run was started from, in full, from
+  either pane, as it was when the run began (a later edit to the plan in
+  factory does not change it); it is offered only for a run started from a
+  plan, whether a factory plan or a plan file.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It polls the daemon every 5 seconds. Use `j`/`k` or `↑`/`↓` to select a run, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

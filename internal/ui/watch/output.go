@@ -66,6 +66,9 @@ type outputPane struct {
 	// output is not wrapped: it grows while it is shown, and a log reads best
 	// one line per line.
 	text string
+	// styled, when set, draws text itself at a width, as the plan is drawn on
+	// the planning screen, in place of word-wrapping it.
+	styled func(width int) []string
 }
 
 // wrap fills lines with the pane's text wrapped to width, keeping the view
@@ -74,7 +77,11 @@ func (p *outputPane) wrap(width int) {
 	if p.text == "" || width < 1 {
 		return
 	}
-	p.lines = strings.Split(lipgloss.Wrap(p.text, width, ""), "\n")
+	if p.styled != nil {
+		p.lines = p.styled(width)
+	} else {
+		p.lines = strings.Split(lipgloss.Wrap(p.text, width, ""), "\n")
+	}
 	p.scroll, p.pinned = 0, false
 }
 

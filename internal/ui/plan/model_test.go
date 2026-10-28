@@ -3891,3 +3891,24 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Could not start work: factory is down"))
 	})
 }
+
+// A plan drawn for reading looks as it does on the planning screen: sections
+// under a rule in capitals, units as numbered steps.
+func TestRenderDrawsSectionsAndUnits(t *testing.T) {
+	md := "## 1. Outcome\n\nA change.\n\n" + unitsHeading + "\n\n### Unit 1: Add the key\n\nDo it in `keys.go`."
+	lines := Render(md, true, 60)
+	out := ansi.Strip(strings.Join(lines, "\n"))
+	for _, want := range []string{"OUTCOME ─", "UNITS ─", "○ 1  Add the key", " keys.go "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	for _, l := range lines {
+		if lipgloss.Width(l) > 60 {
+			t.Errorf("line wider than 60: %q", l)
+		}
+	}
+	if got := Render("  \n", true, 60); len(got) != 0 {
+		t.Errorf("blank plan drew %q", got)
+	}
+}
