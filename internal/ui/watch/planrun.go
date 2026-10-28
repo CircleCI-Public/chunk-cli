@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
@@ -19,11 +20,12 @@ import (
 type PlanOpener func(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error)
 
 type planReadyMsg struct {
-	root, title string
-	agent       plan.Agent
-	approve     plan.Approver
-	store       plan.Store
-	err         error
+	// id is the plan's, or "" for a new plan.
+	id, root, title string
+	agent           plan.Agent
+	approve         plan.Approver
+	store           plan.Store
+	err             error
 }
 
 type planWorkspace struct {
@@ -92,7 +94,7 @@ func (m Model) openPlanID(id, title string) (tea.Model, tea.Cmd) {
 	m.planOpening, m.note = true, "opening the plan…"
 	return m, func() tea.Msg {
 		agent, approve, store, err := planner(ctx, root, id)
-		return planReadyMsg{root: root, title: title, agent: agent, approve: approve, store: store, err: err}
+		return planReadyMsg{id: id, root: root, title: title, agent: agent, approve: approve, store: store, err: err}
 	}
 }
 
@@ -102,6 +104,11 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 		m.note = "could not open the plan: " + msg.err.Error()
 		return m, nil
 	}
+	props := map[string]any{"is_new": msg.id == ""}
+	if msg.id != "" {
+		props["plan_id"] = msg.id
+	}
+	telemetry.Track(m.planCtx, "plan_opened", props)
 	m.note = ""
 	branch, _ := gitutil.CurrentBranchIn(msg.root)
 	screen := plan.New(m.planCtx, msg.agent, msg.approve, msg.store, "").

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
@@ -19,6 +20,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
@@ -52,6 +54,11 @@ func newWatchCmd() *cobra.Command {
 			if err := ui.RequireStdoutTTY(); err != nil {
 				return fmt.Errorf("watch requires a TTY")
 			}
+
+			// Every event from this sitting carries its ID, so a funnel can
+			// join opening watch to the plans started from it.
+			cmd.SetContext(telemetry.WithProperties(cmd.Context(), map[string]any{"watch_session_id": uuid.NewString()}))
+			telemetry.Track(cmd.Context(), "watch_opened", nil)
 
 			if err := chunkd.EnsureRunning(); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
