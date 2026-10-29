@@ -150,7 +150,7 @@ func (m Model) endText() (Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Copied %d characters", utf8.RuneCountInString(text))
 		m.text.copied = true
 	}
-	return m, tea.SetClipboard(text)
+	return m, m.copyText(text)
 }
 
 // clearText drops the selection, and the note of having copied it.

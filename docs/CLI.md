@@ -645,8 +645,11 @@ chunk
   of the pane scrolls it, so more than is in view can be selected, and the
   wheel scrolls while the selection stays on its text. A key press or a click
   clears it, as does a change to the text it is on. It copies with the
-  terminal's clipboard escape sequence, so it needs a terminal that allows
-  it (in tmux, `set -g set-clipboard on`).
+  terminal's clipboard escape sequence, which many terminals block, and also
+  with the machine's clipboard tool (`pbcopy`, `wl-copy`, `xclip`, `xsel` or
+  `clip.exe`) when it has one and the session is not over ssh; over ssh it
+  needs a terminal that allows the sequence (in tmux,
+  `set -g set-clipboard on`).
 
   `e` edits the highlighted part, or the run of parts `shift+↑/↓` selected,
   in `$VISUAL` or `$EDITOR` (`vi` when neither is set), for a change that is

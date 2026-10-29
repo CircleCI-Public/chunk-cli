@@ -29,6 +29,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/clipboard"
 )
 
 // Approver approves the plan in factory and starts its build, returning the
@@ -394,6 +395,8 @@ type Model struct {
 	lastClick *lastClick
 	// text is the text selected with the mouse, to copy.
 	text textDrag
+	// copyText puts text on the clipboard.
+	copyText func(string) tea.Cmd
 }
 
 const (
@@ -456,6 +459,7 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 		approve:      approve,
 		store:        store,
 		created:      store.ID() != "",
+		copyText:     clipboard.Copy,
 		planView:     planView,
 		flowView:     flowView,
 		chatView:     viewport.New(),
