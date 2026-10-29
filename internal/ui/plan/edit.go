@@ -22,16 +22,19 @@ type editedMsg struct {
 	// start and end where the part being edited sits in it.
 	before     string
 	start, end int
-	heading    string
-	text       string
-	err        error
+	// block is the first block edited.
+	block int
+	text  string
+	err   error
 }
 
-// editSavedMsg is the end of saving an edit to factory.
+// editSavedMsg is the end of saving an edit to factory: text was saved in
+// place of the part at block, or err says why not.
 type editSavedMsg struct {
-	path    string
-	heading string
-	err     error
+	path  string
+	block int
+	text  string
+	err   error
 }
 
 var (
@@ -92,9 +95,8 @@ func (m Model) startEdit() (Model, tea.Cmd) {
 	}
 
 	m.editing, m.status, m.anchor = true, "", -1
-	heading := m.headingAbove(lo)
 	return m, tea.ExecProcess(editorCommand(path), func(err error) tea.Msg {
-		msg := editedMsg{path: path, before: before, start: start, end: end, heading: heading}
+		msg := editedMsg{path: path, before: before, start: start, end: end, block: lo}
 		if err != nil {
 			msg.err = fmt.Errorf("the editor failed: %w", err)
 			return msg
@@ -107,16 +109,6 @@ func (m Model) startEdit() (Model, tea.Cmd) {
 		msg.text = string(b)
 		return msg
 	})
-}
-
-// headingAbove is the text of the heading that block i is under, or "".
-func (m Model) headingAbove(i int) string {
-	for ; i >= 0; i-- {
-		if m.blocks[i].kind == kindHeading {
-			return strings.TrimSpace(strings.TrimLeft(m.blocks[i].source, "# "))
-		}
-	}
-	return ""
 }
 
 // applyEdited handles the editor closing: an edit that changed something is
@@ -171,13 +163,17 @@ func saveEditCmd(ctx context.Context, s Store, msg editedMsg, text string) tea.C
 			}
 			return s.SetText(ctx, msg.before[:msg.start]+text+msg.before[msg.end:])
 		}
-		return editSavedMsg{path: msg.path, heading: msg.heading, err: save()}
+		return editSavedMsg{path: msg.path, block: msg.block, text: text, err: save()}
 	}
 }
 
-// applyEditSaved handles the end of saving an edit. A saved edit is told to
-// the planning session, which would otherwise go on from the plan it last
-// read.
+// rereadNote is the comment a saved edit queues on the part it changed, so
+// the planning session reads the part again before it next writes near it.
+const rereadNote = "I edited this part myself; re-read it before changing anything near it."
+
+// applyEditSaved handles the end of saving an edit. A saved edit queues a
+// comment asking the planning session to re-read the part, which would
+// otherwise go on from the plan it last read.
 func (m Model) applyEditSaved(msg editSavedMsg) (Model, tea.Cmd) {
 	m.editing = false
 	if msg.err != nil {
@@ -185,13 +181,26 @@ func (m Model) applyEditSaved(msg editSavedMsg) (Model, tea.Cmd) {
 		return m, refreshCmd(m.ctx, m.store)
 	}
 	_ = os.Remove(msg.path)
+	m.queueRereadNote(msg.block, msg.text)
+	m.status = "Saved your edit. A note asking the planner to re-read it is queued; press s to send it."
+	return m, refreshCmd(m.ctx, m.store)
+}
 
-	note := "I edited the plan myself"
-	if msg.heading != "" {
-		note += fmt.Sprintf(", under %q", msg.heading)
+// queueRereadNote queues rereadNote on the first part of text, the edit
+// just saved at block. A queued re-read note on that block already is moved
+// to the new text rather than doubled.
+func (m *Model) queueRereadNote(block int, text string) {
+	parts := splitBlocks(text)
+	if len(parts) == 0 {
+		return
 	}
-	note += ". Read it again before you change anything else; there is no need to reply at length."
-	next, cmd := m.send(note)
-	next.status = "Saved your edit."
-	return next, tea.Batch(cmd, refreshCmd(next.ctx, next.store))
+	quote := parts[0].source
+	for i, c := range m.comments {
+		if c.id == "" && c.text == rereadNote && c.block == block {
+			m.comments[i].quote = quote
+			return
+		}
+	}
+	m.comments = append(m.comments, comment{block: block, span: 1, quote: quote, text: rereadNote})
+	m.renderChat()
 }

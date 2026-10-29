@@ -409,9 +409,7 @@ func (m Model) updatePlanKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, resolveCmd(m.ctx, m.store, m.comments[i].id)
 		}
 	case key.Matches(msg, k.SendComments):
-		// What is typed in the chat stays there: it is out of sight from
-		// the plan, so it is not sent unseen.
-		return m.deliver("")
+		return m.deliver()
 	case key.Matches(msg, k.Delete):
 		m.deleteAtCursor()
 	default:
@@ -462,7 +460,7 @@ func (m *Model) deleteAtCursor() {
 	if m.comments[i].id == "" {
 		m.comments = append(m.comments[:i], m.comments[i+1:]...)
 		m.moveCursor(m.cursor)
-		m.syncPlaceholder()
+		m.renderChat()
 		return
 	}
 	m.confirming, m.pendingDelete = true, m.comments[i].id
@@ -547,7 +545,7 @@ func (m Model) updateCommentKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.commenting, m.anchor = false, -1
 		m.commentInput.Blur()
 		m.moveCursor(m.cursor)
-		m.syncPlaceholder()
+		m.renderChat()
 		return m, nil
 	}
 	var cmd tea.Cmd

@@ -32,9 +32,11 @@ func newFactoryPlanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plan [prompt]",
 		Short: "Plan a change with Claude, then approve it and build it on the daemon",
-		Long: `Plan a change in a chat with a factory planning session of Claude Code on
-this machine. The plan is kept in factory and shown beside the chat as it
-changes; comment on it until it is right, then press ctrl+s to approve it in
+		Long: `Plan a change with a factory planning session of Claude Code on this
+machine. The request (the prompt, or what you type when there is none)
+creates the plan; after that the session works through factory's tasks, and
+its activity is shown beside the plan. The plan is kept in factory; comment
+on it until it is right, then press ctrl+s to approve it in
 factory, and the chunk daemon builds it, in a build session of Claude Code
 in the plan's own worktree, through to a pull request. Follow the build in
 chunk watch.
@@ -243,9 +245,9 @@ func planSession(ctx context.Context, root, id, model string, api *circleci.Clie
 // then has the plan built, returning the build's ID. The planning session is
 // stopped as soon as the approval is in, whether or not the build then
 // starts: approving released the planning session's claim, or a parent
-// planner's, and a planning session still running would
-// claim the plan again at the developer's next message, when factory would
-// hand it the build tasks, which it cannot do. A plan whose approval failed
+// planner's, and a planning session still running could
+// claim the plan again, when factory would hand it the build tasks, which it
+// cannot do. A plan whose approval failed
 // keeps its session, to plan on. step is called with each step as it
 // starts.
 func approveAndBuild(step func(string), approve, stopPlanning func() error, build func() (string, error)) (string, error) {

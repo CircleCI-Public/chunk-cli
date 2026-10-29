@@ -226,10 +226,8 @@ func (m Model) clickBar(mouse tea.Mouse) (Model, tea.Cmd) {
 	case m.busy:
 		// The button only says chunk is working.
 		return m, nil
-	case len(queuedComments(m.comments)) > 0 && m.focus == panePlan:
-		return m.deliver("")
 	case len(queuedComments(m.comments)) > 0:
-		return m.deliver(strings.TrimSpace(m.input.Value()))
+		return m.deliver()
 	}
 	return m.askToApprove(), nil
 }

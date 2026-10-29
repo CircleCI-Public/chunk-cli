@@ -59,14 +59,16 @@ func (f *fakePlanStore) EditComment(context.Context, string, string) error { ret
 func (f *fakePlanStore) ResolveComment(context.Context, string) error      { return nil }
 func (f *fakePlanStore) DeleteComment(context.Context, string) error       { return nil }
 
-// fakePlanAgent is a plan.Agent that answers every message with its
+// fakePlanAgent is a plan.Agent that answers the request with its
 // fakePlans' reply.
 type fakePlanAgent struct {
 	f      *fakePlans
 	events chan plan.Event
 }
 
-func (a *fakePlanAgent) Send(ctx context.Context, _ string) error {
+func (a *fakePlanAgent) Resume(context.Context) error { return nil }
+
+func (a *fakePlanAgent) Request(ctx context.Context, _ string) error {
 	go func() {
 		if a.f.release != nil {
 			select {
@@ -190,7 +192,7 @@ func TestNOpensANewPlanInTheProject(t *testing.T) {
 	assert.Equal(t, f.root, "/src/chunk-cli")
 	assert.Assert(t, m.planOpen)
 	out := screen(m)
-	assert.Assert(t, strings.Contains(out, "Chat") && strings.Contains(out, "No plan yet"), "the planning screen is shown:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "Activity") && strings.Contains(out, "No plan yet"), "the planning screen is shown:\n%s", out)
 	assert.Check(t, cmp.Contains(out, "back to plans"), "the way back is in the footer")
 	assert.Check(t, !strings.Contains(out, "runs"), "the footer names runs:\n%s", out)
 	assert.Assert(t, m.View().MouseMode == tea.MouseModeCellMotion, "the plan and chat scroll with the mouse")
@@ -338,7 +340,7 @@ func TestWindowSizeReachesTheKeptPlan(t *testing.T) {
 }
 
 func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
-	a := &fakePlans{plan: "# Upload retries\n\nRetry transient failures.", reply: "Reply only for uploads."}
+	a := &fakePlans{plan: "# Upload retries\n\nRetry transient failures."}
 	b := &fakePlans{plan: "# Cache installs\n\nCache dependencies."}
 	opened := map[string]int{}
 	planner := func(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
@@ -358,42 +360,45 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 			m = deliver(t, m, cmd)
 		}
 	}
+	// comment queues a comment on the open plan's first part, which an
+	// existing plan opens on.
+	comment := func(text string) {
+		t.Helper()
+		m, _ = pressKey(m, tea.KeyPressMsg{Code: 'c', Text: "c"})
+		m = typeInto(m, text)
+		m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	}
 	open("uploads")
 	keyA := m.planKey
 	latePoll := workspaceCmd(keyA, m.planScreen.Poll())
-	m = typeInto(m, "explain retries")
-	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = deliver(t, m, cmd)
-	lateReply := workspaceCmd(keyA, m.planScreen.Next())()
-	m = typeInto(m, "unsent upload message")
+	m = deliver(t, m, workspaceCmd(keyA, m.planScreen.Poll()))
+	comment("unsent upload note")
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	assert.Assert(t, m.flowsOpen && !m.planOpen)
 	open("cache")
 	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
-	m = typeInto(m, "unsent cache message")
+	comment("unsent cache note")
 
-	// Neither a late poll nor a late agent reply for A may change B.
+	// A late poll for A may not change B.
 	m = deliver(t, m, latePoll)
-	next, _ := m.Update(lateReply)
-	m = next.(Model)
 	out := screen(m)
-	assert.Assert(t, strings.Contains(out, "Cache dependencies.") && strings.Contains(out, "unsent cache message"), out)
-	assert.Assert(t, !strings.Contains(out, "Reply only for uploads.") && !strings.Contains(out, "Retry transient failures."), out)
+	assert.Assert(t, strings.Contains(out, "Cache dependencies.") && strings.Contains(out, "unsent cache note"), out)
+	assert.Assert(t, !strings.Contains(out, "Retry transient failures.") && !strings.Contains(out, "unsent upload note"), out)
 
 	open("uploads")
 	out = screen(m)
-	for _, want := range []string{"Retry transient failures.", "Reply only for uploads.", "unsent upload message"} {
+	for _, want := range []string{"Retry transient failures.", "unsent upload note"} {
 		assert.Assert(t, strings.Contains(out, want), "%q missing:\n%s", want, out)
 	}
 	assert.Equal(t, opened["uploads"], 1, "switching must reuse the session")
 	open("cache")
-	assert.Assert(t, strings.Contains(screen(m), "unsent cache message"), screen(m))
+	assert.Assert(t, strings.Contains(screen(m), "unsent cache note"), screen(m))
 	assert.Equal(t, opened["cache"], 1)
 
 	// Hidden workspaces' drafts also participate in the quit warning.
-	m, cmd = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = deliver(t, m, cmd)
-	next, cmd = m.Update(flowlist.QuitMsg{})
+	next, cmd := m.Update(flowlist.QuitMsg{})
 	m = next.(Model)
 	assert.Assert(t, cmd == nil)
 	assert.Assert(t, strings.Contains(screen(m), "2 plan workspace(s) have unsent input"), screen(m))

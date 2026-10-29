@@ -333,16 +333,18 @@ the same heading), a flow whose PR factory could not rebase marked ⚠, with a
 read-only preview of the selected one's plan. Flows are yours wherever
 `chunk watch` is run. `Enter` opens a flow's plan, `n` starts a new one, and
 `q` or `esc` quits. Opening or
-reading a plan never claims it or starts an agent; your first message does,
-in the project `chunk watch` was opened in. `ctrl+p` goes back to the list to
-switch plans; each open plan keeps its chat, half-written message and session
+reading a plan never claims it; the request you type for a new plan does, and
+the screen resumes a planner factory is waiting on, in the project
+`chunk watch` was opened in. `ctrl+p` goes back to the list to
+switch plans; each open plan keeps its activity and session
 while another is shown.
-The chat is on the left and the plan is on the right, under a strip that says
+The planner's activity is on the left and the plan is on the right, under a strip that says
 where the flow is and what comes next; with the plan focused, `←` shows the
 Flow tab (progress, PR, related plans) and `→` the plan again. `tab` moves to
 the plan, where `c` writes a comment right under the highlighted part, saved to factory
-for chunk to address when you next press `enter`; `shift+↑/↓` selects several
-parts to comment on together. Once factory's review of the design has
+for chunk to address when you press `s`; `shift+↑/↓` selects several
+parts to comment on together. There is no chat with the planner: comments
+are how you change the plan, and questions go in comments too. Once factory's review of the design has
 passed, `ctrl+s` approves the design, and chunk writes the units; once those
 pass review too, `ctrl+s` approves the finished plan in factory, and the
 chunk daemon builds it through to a pull request. The strip says which of
@@ -354,8 +356,8 @@ keeps going when you close chunk; plan as many as you like.
 Once approved, the screen stays open on the Flow tab, which follows the
 build: each unit done, being built or to do, and the pull request. `x`
 abandons a plan, and stops its build with it.
-`esc` goes back to your plans with the plan kept. Quitting with a message
-still unsent in any plan asks for a second `ctrl+c`.
+`esc` goes back to your plans with the plan kept. Quitting with a request or
+comments still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.
 
 `watch` requires a TTY — it will not run in a non-interactive shell (CI,

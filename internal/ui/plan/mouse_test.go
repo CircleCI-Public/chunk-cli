@@ -81,10 +81,10 @@ func TestDoubleClickOpensTheComment(t *testing.T) {
 
 func TestClickingTheTabsSwitchesPanes(t *testing.T) {
 	m, _ := planned(t, 70, 30, twoParts, nil)
-	y := rowOf(t, m, "Chat")
+	y := rowOf(t, m, "Activity")
 	m = drive(t, m, click(5, y))
-	assert.Assert(t, cmp.Equal(m.focus, paneChat), "clicking the chat tab left the chat")
-	m = drive(t, m, click(14, y))
+	assert.Assert(t, cmp.Equal(m.focus, paneChat), "clicking the activity tab left the activity")
+	m = drive(t, m, click(18, y))
 	assert.Assert(t, cmp.Equal(m.focus, panePlan), "clicking the plan tab did not open the plan")
 	m = drive(t, m, click(3, y))
 	assert.Check(t, cmp.Equal(m.focus, paneChat), "clicking the chat tab did not bring the chat back")

@@ -221,7 +221,7 @@ func (m Model) tabSpans() []span {
 
 // tabLabels is the text of the narrow screen's three tabs.
 func (m Model) tabLabels() []string {
-	chat := "Chat"
+	chat := activityTitle
 	if m.busy {
 		chat += " " + m.spin.View()
 	}
