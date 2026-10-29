@@ -57,16 +57,16 @@ func skeleton(title string) string {
 	return "# " + title + "\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"
 }
 
-func (s *Store) Create(ctx context.Context, message string) error {
+func (s *Store) Create(ctx context.Context, message string) (string, error) {
 	title := s.title(ctx, message)
 	p, err := s.api.CreatePlan(ctx, title, skeleton(title))
 	if err != nil {
-		return fmt.Errorf("create the plan in factory: %w", err)
+		return "", fmt.Errorf("create the plan in factory: %w", err)
 	}
 	s.mu.Lock()
 	s.planID = p.ID
 	s.mu.Unlock()
-	return nil
+	return title, nil
 }
 
 // title is the plan's title for message, as Claude names it or, when Claude

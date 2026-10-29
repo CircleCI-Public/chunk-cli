@@ -63,8 +63,9 @@ type Family struct {
 type Store interface {
 	ID() string
 	// Create makes the plan in factory for message, the developer's first
-	// message, naming it for what the message asks for.
-	Create(ctx context.Context, message string) error
+	// message, naming it for what the message asks for, and returns that
+	// name: the plan's title in factory.
+	Create(ctx context.Context, message string) (string, error)
 	// Flow is the plan's flow as factory has it now; empty before the plan
 	// is created or has a flow.
 	Flow(ctx context.Context) (Flow, error)
