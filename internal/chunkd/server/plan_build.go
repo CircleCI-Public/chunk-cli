@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -90,7 +91,7 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s is already being built, in session %s", req.PlanID, id)
 	}
 
-	entry, sctx, _ := d.sessions.add(chunkd.Session{
+	entry, sctx := d.sessions.add(chunkd.Session{
 		ProjectRoot: ps.root,
 		Branch:      p.Branch,
 		HeadSHA:     headRef(ps.root),
@@ -276,6 +277,28 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 			}
 		}
 	}
+}
+
+// maxSaidText caps what the feed holds of one of the build session's replies:
+// a reply can be a paragraph.
+const maxSaidText = 160
+
+// firstLine is the first line of s that is not blank.
+func firstLine(s string) string {
+	for l := range strings.Lines(s) {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// clip shortens s to n runes, marking where it was cut.
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 // stopBuild stops a plan's build session and waits for its events to end,

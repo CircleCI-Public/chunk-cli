@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +19,9 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 // fakePlans is factory's plan API with one plan in it and its flow, whose
@@ -147,9 +151,56 @@ type planBuildDaemon struct {
 	openErr error
 }
 
+// newSessionDaemon builds a daemon that tracks one real git repo holding two
+// review prompts. It returns the daemon and the project's canonical root.
+func newSessionDaemon(t *testing.T) (*daemon, string) {
+	t.Helper()
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	t.Setenv("CHUNK_DAEMON_DIR", socketDir(t))
+
+	dir := initRepo(t)
+	prompts := filepath.Join(dir, ".chunk", "reviews")
+	assert.NilError(t, os.MkdirAll(prompts, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(prompts, "bugs.md"), []byte("find bugs"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(prompts, "style.md"), []byte("check style"), 0o644))
+
+	dataDir, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, dir))
+	root, err := filepath.EvalSymlinks(dir)
+	assert.NilError(t, err)
+
+	d := newTestDaemon()
+	d.poll()
+	t.Cleanup(d.sessions.stopAll)
+	return d, root
+}
+
+func waitUntil(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// waitForSessionEnd waits for a session to finish and settle.
+func waitForSessionEnd(t *testing.T, d *daemon, id string) chunkd.Session {
+	t.Helper()
+	entry := d.sessions.get(id)
+	assert.Assert(t, entry != nil, "no session %s", id)
+	waitUntil(t, "session to end", func() bool { return entry.snapshot().State.Finished() })
+	<-entry.done
+	return entry.snapshot()
+}
+
 func newPlanBuildDaemon(t *testing.T) *planBuildDaemon {
 	t.Helper()
-	d, root := newSessionDaemon(t, &fakeBackend{})
+	d, root := newSessionDaemon(t)
 	old := planBuildPoll
 	planBuildPoll = 10 * time.Millisecond
 	t.Cleanup(func() { planBuildPoll = old })
@@ -185,7 +236,6 @@ func TestPlanBuildStartsABuildSessionInThePlansWorktree(t *testing.T) {
 	assert.Check(t, cmp.Equal(f.PlanID, "plan-1"))
 	assert.Check(t, cmp.Equal(f.SpecOrigin, "factory plan plan-1"))
 	assert.Check(t, cmp.Equal(f.Prompt, pb.plans.text))
-	assert.Check(t, cmp.Len(sess.Rounds, 0))
 
 	entry := pb.sessions.get(sess.ID)
 	waitUntil(t, "the build session to start", func() bool {
@@ -209,7 +259,7 @@ func TestPlanBuildStartsABuildSessionInThePlansWorktree(t *testing.T) {
 }
 
 // stopBuild cancels a build a test is done with, and waits for it to settle.
-func (pb *planBuildDaemon) stopBuild(t *testing.T, id string) chunkd.SessionDetail {
+func (pb *planBuildDaemon) stopBuild(t *testing.T, id string) chunkd.Session {
 	t.Helper()
 	pb.sessions.cancelSession(id)
 	return waitForSessionEnd(t, pb.daemon, id)
@@ -421,7 +471,7 @@ func TestPlanBuildRefusesAPlanAlreadyBuilding(t *testing.T) {
 }
 
 func TestPlanBuildNeedsCircleCI(t *testing.T) {
-	d, root := newSessionDaemon(t, &fakeBackend{})
+	d, root := newSessionDaemon(t)
 	d.client = nil
 	_, err := d.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: root, PlanID: "plan-1"})
 	var ae *apiError

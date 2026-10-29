@@ -1,6 +1,9 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,8 +13,9 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 func writeSidecarJSON(t *testing.T, dir, filename, content string) {
@@ -93,12 +97,10 @@ func TestLoadSidecars_readsPoolState(t *testing.T) {
 	assert.NilError(t, os.Mkdir(poolsDir, 0o755))
 	writeSidecarJSON(t, poolsDir, "validate.json", `{"sidecar_ids":["id1","id2"]}`)
 
-	result, pools := loadSidecarsAndPools(dataDir, "", root, "")
+	result := loadSidecars(dataDir, root, "")
 	assert.Equal(t, len(result), 2)
 	assert.Equal(t, result[0].Name, "validate-1")
 	assert.Equal(t, result[1].Name, "validate-2")
-	assert.Equal(t, pools["id1"], "validate")
-	assert.Equal(t, pools["id2"], "validate")
 }
 
 func TestLoadSidecars_readsLegacyPoolState(t *testing.T) {
@@ -112,27 +114,50 @@ func TestLoadSidecars_readsLegacyPoolState(t *testing.T) {
 	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["stale"]}`)
 	writeSidecarJSON(t, poolsDir, "validate.json", `{"sidecar_ids":["id2"]}`)
 
-	result, pools := loadSidecarsAndPools(dataDir, "", root, "")
+	result := loadSidecars(dataDir, root, "")
 	assert.Equal(t, len(result), 2)
-	assert.Equal(t, pools["id1"], "mutate")
-	assert.Equal(t, pools["id2"], "validate")
-	_, hasStale := pools["stale"]
+	byID := make(map[string]chunkd.SidecarState, len(result))
+	for _, state := range result {
+		byID[state.ID] = state
+	}
+	assert.Equal(t, byID["id1"].Name, "mutate")
+	assert.Equal(t, byID["id2"].Name, "validate")
+	_, hasStale := byID["stale"]
 	assert.Assert(t, !hasStale, "legacy file is skipped when the data dir has the same pool")
 }
 
-func TestLoadSidecars_readsFactoryRunPoolState(t *testing.T) {
-	dataDir := t.TempDir()
-	repoDataDir := t.TempDir()
-	runsDir := filepath.Join(repoDataDir, "factory")
-	assert.NilError(t, os.Mkdir(runsDir, 0o755))
-	// Written where factory.Run writes it, so the two can't drift apart.
-	statePath := factory.PoolStatePath(repoDataDir, "20261009-010000")
-	writeSidecarJSON(t, filepath.Dir(statePath), filepath.Base(statePath), `{"sidecar_ids":["id1"]}`)
-	writeSidecarJSON(t, runsDir, "20261009-010000.json", `{"run_id":"20261009-010000"}`)
+// A daemon from before factory runs were removed left each run's pool and
+// record in a factory directory beside the project's data. A newer daemon still
+// loads the project and serves it, and ignores both files: there is no run to
+// attribute their sidecars to.
+func TestLoadIgnoresLeftoverFactoryRunFiles(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	dir := initRepo(t)
+	dataDir, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, dir))
+	repoDataDir, err := config.RepoDataDir(dir)
+	assert.NilError(t, err)
+	for _, base := range []string{dataDir, repoDataDir} {
+		runs := filepath.Join(base, "factory")
+		assert.NilError(t, os.MkdirAll(runs, 0o755))
+		writeSidecarJSON(t, runs, "20261009-010000.pool.json", `{"sidecar_ids":["leftover"]}`)
+		writeSidecarJSON(t, runs, "20261009-010000.json", `{"run_id":"20261009-010000"}`)
+	}
 
-	result, pools := loadSidecarsAndPools(dataDir, repoDataDir, t.TempDir(), "")
-	assert.Equal(t, len(result), 1)
-	assert.Equal(t, pools["id1"], factory.PoolName("20261009-010000"))
+	d := newTestDaemon()
+	d.poll()
+
+	rec := httptest.NewRecorder()
+	newServer(d).Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/snapshot", nil))
+	assert.Equal(t, rec.Code, http.StatusOK)
+	var snap chunkd.Snapshot
+	assert.NilError(t, json.NewDecoder(rec.Body).Decode(&snap))
+	assert.Equal(t, len(snap.Projects), 1)
+	p := snap.Projects[0]
+	assert.Equal(t, canonicalRoot(p.Root), canonicalRoot(dir))
+	assert.Equal(t, len(p.Sidecars), 0, "a leftover run's pool was loaded: %+v", p.Sidecars)
+	assert.Equal(t, len(p.Sessions), 0)
 }
 
 func TestLoadSidecars_readsPoolOrg(t *testing.T) {
@@ -158,7 +183,7 @@ func TestLoadSidecars_deduplicatesActiveAndPoolState(t *testing.T) {
 	newer := time.Now().Add(time.Hour)
 	assert.NilError(t, os.Chtimes(filepath.Join(poolsDir, "validate.json"), newer, newer))
 
-	result, pools := loadSidecarsAndPools(dataDir, "", root, "")
+	result := loadSidecars(dataDir, root, "")
 	assert.Equal(t, len(result), 3)
 	byID := make(map[string]chunkd.SidecarState, len(result))
 	for _, state := range result {
@@ -167,7 +192,6 @@ func TestLoadSidecars_deduplicatesActiveAndPoolState(t *testing.T) {
 	assert.Equal(t, byID["id2"].Name, "active-2")
 	assert.Equal(t, byID["id2"].SessionID, "session-1")
 	assert.Equal(t, byID["id2"].Workspace, "/active/workspace")
-	assert.Equal(t, pools["id2"], "validate")
 	assert.Equal(t, byID["id3"].Name, "validate-2")
 	assert.Equal(t, byID["id3"].Workspace, "/pool/workspace")
 }
