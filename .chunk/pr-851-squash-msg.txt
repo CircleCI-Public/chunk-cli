@@ -1,0 +1,13 @@
+Track the chunk watch funnel from opening to a factory run
+
+Add Amplitude events for the path from opening chunk watch to a factory
+run (FACT-674): watch_opened, draft_started, draft_sent, plan_opened,
+plan_feedback_sent and plan_approved. Every event from one sitting of
+chunk watch carries the same watch_session_id, plan events carry plan_id,
+and the events that start a run carry run_id.
+
+telemetry.Track reports from a context, and WithProperties attaches
+properties every later event carries. Every event now gets a top-level
+app_name, since Amplitude drops the nested Context.App copy.
+
+Events carry only IDs, counts and fixed values, never what the user typed.

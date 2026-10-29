@@ -1,0 +1,1119 @@
+diff --git a/acceptance/factory_test.go b/acceptance/factory_test.go
+new file mode 100644
+index 00000000..af7e386f
+--- /dev/null
++++ b/acceptance/factory_test.go
+@@ -0,0 +1,100 @@
++package acceptance
++
++import (
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"gotest.tools/v3/assert"
++
++	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
++	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
++	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
++)
++
++// TestFactoryRequiresOnePrompt covers the argument validator: the prompt is
++// one argument, so an unquoted sentence has to be rejected rather than
++// implemented as its first word.
++func TestFactoryRequiresOnePrompt(t *testing.T) {
++	env := testenv.NewTestEnv(t)
++	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
++
++	for _, args := range [][]string{
++		{"factory"},
++		{"factory", "   "},
++		{"factory", "add", "a --verbose flag"},
++	} {
++		result := binary.RunCLI(t, args, env, workDir)
++
++		assert.Equal(t, result.ExitCode, 2, "args %v, stderr: %s", args, result.Stderr)
++		assert.Assert(t, strings.Contains(result.Stderr, "Pass the prompt as one argument."), "stderr: %s", result.Stderr)
++	}
++}
++
++// TestFactoryNeedsAConfiguredProject covers the run started somewhere chunk
++// knows nothing about: it must name 'chunk init' rather than fail later.
++func TestFactoryNeedsAConfiguredProject(t *testing.T) {
++	env := testenv.NewTestEnv(t)
++	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
++
++	result := binary.RunCLI(t, []string{"factory", "add a --verbose flag"}, env, workDir)
++
++	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
++	assert.Assert(t, strings.Contains(result.Stderr, "No validate commands configured."), "stderr: %s", result.Stderr)
++	assert.Assert(t, strings.Contains(result.Stderr, "chunk init"), "stderr: %s", result.Stderr)
++}
++
++// TestFactoryRefusesToRunWithNothingToCheck guards the loop's one safeguard:
++// with no reviews and no validation commands every round would pass whatever
++// the implementer wrote. It must stop before paying for a sidecar.
++func TestFactoryRefusesToRunWithNothingToCheck(t *testing.T) {
++	env := testenv.NewTestEnv(t)
++	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
++	// Configured, but with nothing the loop can run remotely and no reviews.
++	writeChunkConfig(t, workDir, map[string]interface{}{
++		"commands": []map[string]interface{}{
++			{"name": "format", "run": "gofmt -w .", "role": "autofix"},
++		},
++	})
++
++	result := binary.RunCLI(t, []string{"factory", "add a --verbose flag"}, env, workDir)
++
++	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
++	assert.Assert(t, strings.Contains(result.Stderr, "Nothing to check the implementer's work with."), "stderr: %s", result.Stderr)
++}
++
++// TestFactoryRejectsAMissingReviewsDirectory covers the flag whose typo would
++// otherwise be silent: reviewing nothing still reports that all checks passed.
++func TestFactoryRejectsAMissingReviewsDirectory(t *testing.T) {
++	env := testenv.NewTestEnv(t)
++	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
++	writeChunkConfig(t, workDir, nil)
++	writePrompts(t, filepath.Join(workDir, ".chunk", "reviews"), "correctness")
++
++	result := binary.RunCLI(t, []string{"factory", "--reviews", ".chunk/review", "add a --verbose flag"}, env, workDir)
++
++	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
++	assert.Assert(t, strings.Contains(result.Stderr, "No review prompts directory at"), "stderr: %s", result.Stderr)
++}
++
++// TestFactoryHelpPinsItsFlags keeps the command's surface where the docs say
++// it is, and keeps it hidden while the workshop build settles.
++func TestFactoryHelpPinsItsFlags(t *testing.T) {
++	env := testenv.NewTestEnv(t)
++	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
++
++	result := binary.RunCLI(t, []string{"factory", "--help"}, env, workDir)
++	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
++
++	for _, flag := range []string{
++		"--attempts int", "--reviewers int", "--reviews string", "--no-validate",
++		"--keep-sidecars", "--org-id string", "--image string", "--model string",
++		"--implement-timeout duration", "--review-timeout duration",
++	} {
++		assert.Assert(t, strings.Contains(result.Stdout, flag), "flag %s missing from: %s", flag, result.Stdout)
++	}
++	assert.Assert(t, strings.Contains(result.Stdout, "(default 3)"), "stdout: %s", result.Stdout)
++
++	root := binary.RunCLI(t, []string{"--help"}, env, workDir)
++	assert.Assert(t, !strings.Contains(root.Stdout, "factory"), "factory is still hidden: %s", root.Stdout)
++}
+diff --git a/internal/cmd/factory.go b/internal/cmd/factory.go
+index 969133b5..9fd2c3cc 100644
+--- a/internal/cmd/factory.go
++++ b/internal/cmd/factory.go
+@@ -155,8 +155,11 @@ applied with git apply to the tree the run started from.`,
+ 				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, loopErr)
+ 			}
+ 			// Whatever the implementer got to is kept, even when the loop
+-			// failed partway, so the work is not lost with the sidecars.
+-			if !outcome.Change.Empty() {
++			// failed partway, so the work is not lost with the sidecars. The
++			// test is the result, not the change: a turn that failed or timed
++			// out never produced one, and its edits are on the sidecar all the
++			// same. Only ResultNoChange means there is provably nothing there.
++			if outcome.Result != factory.ResultNoChange {
+ 				saveFactoryPatch(ctx, steps, workDir, outcome.Change, status, streams)
+ 			}
+ 			if loopErr != nil {
+@@ -183,11 +186,24 @@ applied with git apply to the tree the run started from.`,
+ // prompts and, unless noValidate, the validation commands. Having neither is an
+ // error, since the loop would then pass whatever the implementer wrote.
+ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noValidate bool) ([]review.Prompt, []config.Command, error) {
+-	if reviewsDir == "" {
++	// A directory the user named must be there: silently reviewing nothing
++	// because --reviews was mistyped would pass the run on validation alone.
++	// The default one is allowed to be missing, since a project need not have
++	// review prompts at all.
++	named := reviewsDir != ""
++	if !named {
+ 		reviewsDir = filepath.Join(workDir, review.DefaultDir)
+ 	}
+ 	prompts, err := review.LoadPrompts(reviewsDir)
+-	if err != nil && !errors.Is(err, review.ErrNoPrompts) && !errors.Is(err, os.ErrNotExist) {
++	switch {
++	case errors.Is(err, os.ErrNotExist) && named:
++		return nil, nil, &userError{
++			msg:        fmt.Sprintf("No review prompts directory at %s.", reviewsDir),
++			suggestion: fmt.Sprintf("Pass a directory with one .md or .txt file per review, or omit --reviews to use %s.", review.DefaultDir),
++			hideDetail: true,
++			err:        err,
++		}
++	case err != nil && !errors.Is(err, review.ErrNoPrompts) && !errors.Is(err, os.ErrNotExist):
+ 		return nil, nil, &userError{msg: fmt.Sprintf("Could not read review prompts from %s.", reviewsDir), err: err}
+ 	}
+ 	var commands []config.Command
+@@ -212,10 +228,19 @@ func saveFactoryPatch(ctx context.Context, steps *factory.Sidecars, workDir stri
+ 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+ 	defer cancel()
+ 	if err := steps.WritePatch(ctx, path); err != nil {
++		if errors.Is(err, factory.ErrNoWork) {
++			return
++		}
+ 		status(iostream.LevelWarn, fmt.Sprintf("could not save the implementer's work: %v", err))
+ 		return
+ 	}
+-	status(iostream.LevelDone, fmt.Sprintf("Saved %s to %s", change.Stat, path))
++	// A turn that failed partway is collected without ever being described,
++	// so there may be no stat to name the work by.
++	what := change.Stat
++	if what == "" {
++		what = "the implementer's work"
++	}
++	status(iostream.LevelDone, fmt.Sprintf("Saved %s to %s", what, path))
+ 	streams.ErrPrintf("  Apply it with: git apply %s\n", path)
+ }
+ 
+diff --git a/internal/cmd/factory_test.go b/internal/cmd/factory_test.go
+new file mode 100644
+index 00000000..a43fab91
+--- /dev/null
++++ b/internal/cmd/factory_test.go
+@@ -0,0 +1,188 @@
++package cmd
++
++import (
++	"errors"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"gotest.tools/v3/assert"
++
++	"github.com/CircleCI-Public/chunk-cli/internal/config"
++	"github.com/CircleCI-Public/chunk-cli/internal/factory"
++	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
++	"github.com/CircleCI-Public/chunk-cli/internal/review"
++)
++
++// writeReviewPrompts puts one prompt file per name in dir and returns dir.
++func writeReviewPrompts(t *testing.T, dir string, names ...string) string {
++	t.Helper()
++	assert.NilError(t, os.MkdirAll(dir, 0o755))
++	for _, n := range names {
++		assert.NilError(t, os.WriteFile(filepath.Join(dir, n+".md"), []byte("review for "+n), 0o644))
++	}
++	return dir
++}
++
++// promptNames is what factoryChecks loaded, for comparison.
++func promptNames(prompts []review.Prompt) []string {
++	var names []string
++	for _, p := range prompts {
++		names = append(names, p.Name)
++	}
++	return names
++}
++
++// loadedCommandNames is what factoryChecks kept of the project's commands.
++func loadedCommandNames(cmds []config.Command) []string {
++	var names []string
++	for _, c := range cmds {
++		names = append(names, c.Name)
++	}
++	return names
++}
++
++// TestFactoryChecksDecidesWhatTheWorkIsCheckedWith covers the guard rail: with
++// neither reviews nor validation the loop would pass whatever the implementer
++// wrote, so the run has to stop before it creates a sidecar.
++func TestFactoryChecksDecidesWhatTheWorkIsCheckedWith(t *testing.T) {
++	gate := []config.Command{{Name: "test", Run: "go test ./..."}}
++
++	t.Run("nothing to check with", func(t *testing.T) {
++		_, _, err := factoryChecks(t.TempDir(), "", &config.ProjectConfig{}, false)
++		assertUserError(t, err, "Nothing to check the implementer's work with.")
++	})
++
++	t.Run("no reviews directory but commands configured", func(t *testing.T) {
++		prompts, cmds, err := factoryChecks(t.TempDir(), "", &config.ProjectConfig{Commands: gate}, false)
++		assert.NilError(t, err)
++		assert.Equal(t, len(prompts), 0)
++		assert.DeepEqual(t, loadedCommandNames(cmds), []string{"test"})
++	})
++
++	t.Run("no-validate leaves the reviews", func(t *testing.T) {
++		workDir := t.TempDir()
++		writeReviewPrompts(t, filepath.Join(workDir, review.DefaultDir), "correctness", "tests")
++
++		prompts, cmds, err := factoryChecks(workDir, "", &config.ProjectConfig{Commands: gate}, true)
++		assert.NilError(t, err)
++		assert.DeepEqual(t, promptNames(prompts), []string{"correctness", "tests"})
++		assert.Equal(t, len(cmds), 0)
++	})
++
++	// Every configured command is one the loop cannot run remotely, so the run
++	// is checked by nothing even though the project has commands.
++	t.Run("no command survives filtering", func(t *testing.T) {
++		cfg := &config.ProjectConfig{Commands: []config.Command{
++			{Name: "format", Run: "gofmt -w .", Role: "autofix"},
++			{Name: "local-only", Run: "make thing", Local: true},
++			{Name: "test-changed", Run: "go test {{CHANGED_PACKAGES}}"},
++		}}
++		_, _, err := factoryChecks(t.TempDir(), "", cfg, false)
++		assertUserError(t, err, "Nothing to check the implementer's work with.")
++	})
++
++	// A directory the user named is a claim that reviews exist there. Reading
++	// a path that is not there as "no reviews" would run on validation alone
++	// and still report that all checks passed.
++	t.Run("named reviews directory is missing", func(t *testing.T) {
++		workDir := t.TempDir()
++		writeReviewPrompts(t, filepath.Join(workDir, ".chunk", "reviews"), "correctness")
++		missing := filepath.Join(workDir, ".chunk", "review")
++
++		_, _, err := factoryChecks(workDir, missing, &config.ProjectConfig{Commands: gate}, false)
++		assertUserError(t, err, "No review prompts directory at "+missing+".")
++	})
++
++	t.Run("named reviews directory is used", func(t *testing.T) {
++		workDir := t.TempDir()
++		dir := writeReviewPrompts(t, filepath.Join(workDir, "prompts"), "security")
++
++		prompts, _, err := factoryChecks(workDir, dir, &config.ProjectConfig{Commands: gate}, false)
++		assert.NilError(t, err)
++		assert.DeepEqual(t, promptNames(prompts), []string{"security"})
++	})
++
++	// A directory that is there but cannot be read is a broken project, not a
++	// project without reviews: it must be reported rather than skipped.
++	t.Run("reviews directory cannot be read", func(t *testing.T) {
++		if os.Geteuid() == 0 {
++			t.Skip("root ignores directory permissions, so the denial cannot be staged")
++		}
++		workDir := t.TempDir()
++		dir := writeReviewPrompts(t, filepath.Join(workDir, review.DefaultDir), "correctness")
++		assert.NilError(t, os.Chmod(dir, 0o000))
++		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
++
++		_, _, err := factoryChecks(workDir, "", &config.ProjectConfig{Commands: gate}, false)
++		assertUserError(t, err, "Could not read review prompts from "+dir+".")
++	})
++}
++
++func assertUserError(t *testing.T, err error, msg string) {
++	t.Helper()
++	var uerr *userError
++	assert.Assert(t, errors.As(err, &uerr), "want a userError, got %v", err)
++	assert.Equal(t, uerr.msg, msg)
++}
++
++// TestReportOutcomeExitsNonZeroUnlessEverythingPassed pins what a factory run
++// tells a script that called it. Only a passing run may exit 0: a CI job that
++// read an exhausted run as a success would merge code the checks still fail.
++func TestReportOutcomeExitsNonZeroUnlessEverythingPassed(t *testing.T) {
++	cases := []struct {
++		result factory.Result
++		errMsg string
++	}{
++		{factory.ResultPassed, ""},
++		{factory.ResultNoChange, "no changes"},
++		{factory.ResultStuck, "stuck"},
++		{factory.ResultExhausted, "attempts exhausted"},
++	}
++	for _, tc := range cases {
++		t.Run(string(tc.result), func(t *testing.T) {
++			err := reportOutcome(func(iostream.Level, string) {}, factory.Outcome{Result: tc.result, Rounds: 3})
++			if tc.errMsg == "" {
++				assert.NilError(t, err)
++				return
++			}
++			var uerr *userError
++			assert.Assert(t, errors.As(err, &uerr), "want a userError, got %v", err)
++			assert.Equal(t, uerr.errMsg, tc.errMsg)
++		})
++	}
++}
++
++// TestReportOutcomePrintsEveryFinding covers the only place a review's
++// findings are shown: the loop keeps them as data, so a run that ends with
++// findings would otherwise say a review failed without saying why.
++func TestReportOutcomePrintsEveryFinding(t *testing.T) {
++	var lines []string
++	status := func(_ iostream.Level, msg string) { lines = append(lines, msg) }
++	outcome := factory.Outcome{
++		Result: factory.ResultExhausted,
++		Rounds: 2,
++		Checks: []factory.Check{
++			{Name: "correctness", Kind: factory.KindReview, Status: factory.StatusFailed, Findings: []review.Finding{
++				{File: "a.go", Line: 3, Severity: review.SeverityHigh, Body: "nil deref on\nempty input"},
++				{File: "b.go", Severity: review.SeverityMedium, Body: "error dropped"},
++			}},
++			{Name: "tests", Kind: factory.KindReview, Status: factory.StatusPassed},
++			{Name: "style", Kind: factory.KindReview, Status: factory.StatusErrored, Error: "timed out after 15m0s"},
++			// Validation reported as it ran, so it is not repeated here.
++			{Name: "test", Kind: factory.KindValidate, Status: factory.StatusFailed, Feedback: "Exited 1."},
++		},
++	}
++
++	err := reportOutcome(status, outcome)
++
++	assert.ErrorContains(t, err, "attempts exhausted")
++	out := strings.Join(lines, "\n")
++	assert.Assert(t, strings.Contains(out, "review correctness: 2 finding(s)"), out)
++	assert.Assert(t, strings.Contains(out, "[high] a.go:3 nil deref on empty input"), out)
++	assert.Assert(t, strings.Contains(out, "[medium] b.go:0 error dropped"), out)
++	assert.Assert(t, strings.Contains(out, "review tests: no findings"), out)
++	assert.Assert(t, strings.Contains(out, "review style could not run: timed out after 15m0s"), out)
++	assert.Assert(t, !strings.Contains(out, "Exited 1."), out)
++}
+diff --git a/internal/factory/implementer_test.go b/internal/factory/implementer_test.go
+index 79306fe5..e66bc423 100644
+--- a/internal/factory/implementer_test.go
++++ b/internal/factory/implementer_test.go
+@@ -197,3 +197,40 @@ func TestStreamParserDropsOversizedLines(t *testing.T) {
+ 	assert.Assert(t, p.sawResult)
+ 	assert.Assert(t, len(p.buf) < maxLineBytes)
+ }
++
++// TestImplementerResumesAfterAFailedFirstTurn covers the retry claude has
++// already created a session for: the turn failed, but the session exists, so
++// the next turn must resume it. Passing --session-id again would be rejected
++// as a duplicate, and every retry after a failed first turn would die.
++func TestImplementerResumesAfterAFailedFirstTurn(t *testing.T) {
++	firstTurnFails := `if [ "$(grep -c -- '--end--' "$HOME/args")" -eq 1 ]; then
++ printf '%s\n' '{"type":"system","subtype":"init","session_id":"s"}'
++ exit 1
++fi
++` + streamOK
++	im, home, _ := newImplementer(t, firstTurnFails)
++
++	_, err := im.Run(context.Background(), "first")
++	assert.ErrorContains(t, err, "implementer exited 1")
++	_, err = im.Run(context.Background(), "try again")
++	assert.NilError(t, err)
++
++	args, err := os.ReadFile(filepath.Join(home, "args"))
++	assert.NilError(t, err)
++	lines := strings.Split(strings.TrimSuffix(string(args), "--end--\n"), "--end--\n")
++	assert.Equal(t, len(lines), 2)
++	assert.Assert(t, strings.Contains(lines[0], "--session-id "+im.sessionID), lines[0])
++	assert.Assert(t, strings.Contains(lines[1], "--resume "+im.sessionID), lines[1])
++}
++
++// TestImplementerTimesOut covers the turn that runs past its deadline: the
++// work it did is on the sidecar, and the error has to say why it stopped
++// rather than report the kill as an exec failure.
++func TestImplementerTimesOut(t *testing.T) {
++	im, _, _ := newImplementer(t, "sleep 30")
++	im.Timeout = 50 * time.Millisecond
++
++	_, err := im.Run(context.Background(), "take your time")
++
++	assert.ErrorContains(t, err, "implementer timed out after 50ms")
++}
+diff --git a/internal/factory/loop_test.go b/internal/factory/loop_test.go
+index 6201d553..f75c8362 100644
+--- a/internal/factory/loop_test.go
++++ b/internal/factory/loop_test.go
+@@ -110,9 +110,15 @@ func TestLoopRechecksWithoutImplementingAfterOnlyErrors(t *testing.T) {
+ func TestLoopReturnsStepErrorsWithOutcomeSoFar(t *testing.T) {
+ 	boom := errors.New("sidecar gone")
+ 	steps := &fakeSteps{implErr: boom}
+-	_, err := Loop{Attempts: 3}.Run(context.Background(), steps, "p")
++	out, err := Loop{Attempts: 3}.Run(context.Background(), steps, "p")
+ 	assert.Assert(t, errors.Is(err, boom))
+ 	assert.ErrorContains(t, err, "round 1: implement")
++	// A turn that failed never produced a change, so an empty Change here does
++	// not mean the implementer wrote nothing — its edits are still on the
++	// sidecar. Only the Result tells the two apart, which is what the caller
++	// deciding whether to save the work has to key off.
++	assert.Assert(t, out.Change.Empty())
++	assert.Equal(t, out.Result, Result(""))
+ }
+ 
+ func TestLoopRejectsBadInput(t *testing.T) {
+diff --git a/internal/factory/relay_test.go b/internal/factory/relay_test.go
+index fd2eedc4..e6a6051d 100644
+--- a/internal/factory/relay_test.go
++++ b/internal/factory/relay_test.go
+@@ -179,16 +179,24 @@ func TestRelayPullHonoursGitIgnoreRules(t *testing.T) {
+ 	writeFile(t, impl, ".gitignore", "*.log\n!keep.log\n/build/\n/what\\[1\\].txt\n")
+ 	writeFile(t, impl, "what[1].txt", "ignored")
+ 	writeFile(t, impl, "what1.txt", "kept")
++	// git quotes a non-ASCII path in its default output, with octal escapes
++	// inside double quotes. An exclude built from that spelling matches
++	// nothing, so the ignored tree would be pulled and then pushed to every
++	// reviewer.
++	writeFile(t, impl, ".gitignore", "*.log\n!keep.log\n/build/\n/what\\[1\\].txt\n/caf\u00e9/\n")
++	writeFile(t, impl, "caf\u00e9/bundle.js", "built")
++	writeFile(t, impl, "r\u00e9sum\u00e9.md", "kept")
+ 
+ 	assert.NilError(t, r.Pull(ctx, "impl", impl))
+ 
+-	for _, gone := range []string{"debug.log", "scratch", "build", "what[1].txt"} {
++	for _, gone := range []string{"debug.log", "scratch", "build", "what[1].txt", "caf\u00e9"} {
+ 		_, err := os.Stat(filepath.Join(r.Dir(), gone))
+ 		assert.Assert(t, os.IsNotExist(err), "ignored %s was pulled", gone)
+ 	}
+ 	assert.Equal(t, readFile(t, r.Dir(), "keep.log"), "wanted")
+ 	assert.Equal(t, readFile(t, r.Dir(), "cmd/build/main.go"), "package main\n")
+ 	assert.Equal(t, readFile(t, r.Dir(), "what1.txt"), "kept")
++	assert.Equal(t, readFile(t, r.Dir(), "r\u00e9sum\u00e9.md"), "kept")
+ }
+ 
+ func TestRelayPullRequiresGitWorkspace(t *testing.T) {
+diff --git a/internal/factory/sidecars.go b/internal/factory/sidecars.go
+index 2825fbe5..3037eaef 100644
+--- a/internal/factory/sidecars.go
++++ b/internal/factory/sidecars.go
+@@ -164,8 +164,14 @@ func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
+ 	return append(checks, validation...), nil
+ }
+ 
++// ErrNoWork reports that the implementer's tree matches the baseline, so there
++// is no patch to write. Callers save the work on the way out without knowing
++// whether there is any, and an empty file on disk would read as work lost.
++var ErrNoWork = errors.New("the implementer changed nothing")
++
+ // WritePatch writes the implementer's work, relative to the baseline, to path
+-// as a patch the developer can git apply to the tree they started from.
++// as a patch the developer can git apply to the tree they started from. It
++// returns ErrNoWork, writing nothing, when the tree matches the baseline.
+ func (s *Sidecars) WritePatch(ctx context.Context, path string) error {
+ 	if err := s.Relay.Pull(ctx, s.Implementer.Entry.ID, s.Implementer.Entry.RepoPath); err != nil {
+ 		return err
+@@ -175,6 +181,9 @@ func (s *Sidecars) WritePatch(ctx context.Context, path string) error {
+ 	if err != nil {
+ 		return fmt.Errorf("diff implementer's work: %w", err)
+ 	}
++	if len(patch) == 0 {
++		return ErrNoWork
++	}
+ 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+ 		return fmt.Errorf("create patch directory: %w", err)
+ 	}
+diff --git a/internal/factory/sidecars_test.go b/internal/factory/sidecars_test.go
+new file mode 100644
+index 00000000..f2493082
+--- /dev/null
++++ b/internal/factory/sidecars_test.go
+@@ -0,0 +1,428 @@
++package factory
++
++import (
++	"context"
++	"errors"
++	"io/fs"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"slices"
++	"strings"
++	"sync"
++	"testing"
++
++	"gotest.tools/v3/assert"
++
++	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
++	"github.com/CircleCI-Public/chunk-cli/internal/config"
++	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
++	"github.com/CircleCI-Public/chunk-cli/internal/review"
++	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
++	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
++	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
++)
++
++// execLog records every script a sidecar was asked to run, so a test can see
++// what ran where, and in what order.
++type execLog struct {
++	mu   sync.Mutex
++	runs []execRun
++}
++
++type execRun struct {
++	sidecarID string
++	script    string
++}
++
++func (l *execLog) add(sidecarID, script string) {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	l.runs = append(l.runs, execRun{sidecarID: sidecarID, script: script})
++}
++
++// on returns the IDs of the sidecars that ran a script containing substr, in
++// the order the scripts started.
++func (l *execLog) on(substr string) []string {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	var ids []string
++	for _, r := range l.runs {
++		if strings.Contains(r.script, substr) {
++			ids = append(ids, r.sidecarID)
++		}
++	}
++	return ids
++}
++
++// fakeExec stands in for running a script on a sidecar: it records the script
++// and answers with whatever reply gives for it.
++func fakeExec(log *execLog, reply func(e *sidecar.PoolEntry, script string) (string, int)) review.Execer {
++	return func(_ context.Context, e *sidecar.PoolEntry, script string, _ map[string]string, onOutput circleci.OutputFn, _ func(string)) (int, error) {
++		out, code := reply(e, script)
++		// Recorded after reply runs, so a reply can observe the state of the
++		// world as of the moment the script started.
++		log.add(e.ID, script)
++		if out != "" {
++			onOutput(circleci.StreamStdout, []byte(out))
++		}
++		return code, nil
++	}
++}
++
++// reviewNoFindings is what claude's structured result looks like for a review
++// that found nothing.
++const reviewNoFindings = `{"is_error":false,"structured_output":{"review":"Nothing found.","findings":[]}}`
++
++// isReviewScript reports whether a script is a review rather than validation
++// or the stray-review sweep.
++func isReviewScript(script string) bool {
++	return strings.Contains(script, "claude") && !strings.Contains(script, "pkill")
++}
++
++// newCheckSidecars wires a Sidecars whose sidecars are directories on this
++// machine: the relay runs real rsync over the fake tunnel, while the scripts
++// go to reply instead of claude.
++func newCheckSidecars(t *testing.T, prompts []review.Prompt, cmds []config.Command, reviewers int,
++	reply func(e *sidecar.PoolEntry, script string) (string, int),
++) (s *Sidecars, log *execLog, implDir string) {
++	t.Helper()
++	r := newRelay(t)
++
++	implDir = gitrepo.SetupGitRepo(t, "my-org", "my-repo")
++	writeFile(t, implDir, "main.go", "package main\n")
++
++	revs := make([]*sidecar.PoolEntry, reviewers)
++	for i := range revs {
++		revs[i] = &sidecar.PoolEntry{
++			ID:       "rev-" + string(rune('1'+i)),
++			RepoPath: filepath.Join(t.TempDir(), "my-repo"),
++		}
++	}
++
++	log = &execLog{}
++	ex := fakeExec(log, reply)
++	return &Sidecars{
++		Exec:        ex,
++		Implementer: &Implementer{Exec: ex, Entry: &sidecar.PoolEntry{ID: "impl", RepoPath: implDir}},
++		Reviewers:   revs,
++		Relay:       r,
++		Prompts:     prompts,
++		Review:      review.Options{Credential: review.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"}, StructuredFindings: true},
++		Commands:    cmds,
++	}, log, implDir
++}
++
++// checkNames returns the names of the checks of one kind, in order.
++func checkNames(checks []Check, kind Kind) []string {
++	var names []string
++	for _, c := range checks {
++		if c.Kind == kind {
++			names = append(names, c.Name)
++		}
++	}
++	return names
++}
++
++func TestCheckRunsReviewsAndValidationTogether(t *testing.T) {
++	prompts := []review.Prompt{{Name: "correctness", Body: "look for bugs"}, {Name: "tests", Body: "look at the tests"}}
++	cmds := []config.Command{{Name: "test", Run: "go test ./..."}, {Name: "lint", Run: "golangci-lint run"}}
++	var done []Check
++	s, log, _ := newCheckSidecars(t, prompts, cmds, 2, func(_ *sidecar.PoolEntry, script string) (string, int) {
++		if isReviewScript(script) {
++			return reviewNoFindings, 0
++		}
++		return "ok\n", 0
++	})
++	s.OnCheck = func(c Check) { done = append(done, c) }
++
++	checks, err := s.Check(context.Background(), 1)
++	assert.NilError(t, err)
++
++	assert.DeepEqual(t, checkNames(checks, KindReview), []string{"correctness", "tests"})
++	assert.DeepEqual(t, checkNames(checks, KindValidate), []string{"test", "lint"})
++	assert.Assert(t, Passed(checks))
++	// OnCheck reports validation only; reviews report through Review.ProgressFn.
++	assert.DeepEqual(t, checkNames(done, KindValidate), []string{"test", "lint"})
++	assert.Equal(t, len(checkNames(done, KindReview)), 0)
++
++	// Every reviewer must hold the implementer's tree, and validation must have
++	// run on the implementer rather than on a reviewer.
++	for _, rev := range s.Reviewers {
++		assert.Equal(t, readFile(t, rev.RepoPath, "main.go"), "package main\n")
++	}
++	assert.DeepEqual(t, log.on("go test ./..."), []string{"impl"})
++}
++
++// TestCheckSkipsRelayPushWhenNoPrompts covers the guard that keeps a run with
++// no review prompts from paying for a push to reviewers nothing will read.
++func TestCheckSkipsRelayPushWhenNoPrompts(t *testing.T) {
++	cmds := []config.Command{{Name: "test", Run: "go test ./..."}}
++	s, log, _ := newCheckSidecars(t, nil, cmds, 2, func(_ *sidecar.PoolEntry, _ string) (string, int) {
++		return "ok\n", 0
++	})
++
++	checks, err := s.Check(context.Background(), 1)
++	assert.NilError(t, err)
++
++	assert.DeepEqual(t, checkNames(checks, KindValidate), []string{"test"})
++	assert.Equal(t, len(checkNames(checks, KindReview)), 0)
++	assert.Equal(t, len(log.on("pkill")), 0, "stray reviews were swept with no reviews to run")
++	for _, rev := range s.Reviewers {
++		_, err := os.Stat(rev.RepoPath)
++		assert.Assert(t, os.IsNotExist(err), "%s was pushed to with no prompts to review", rev.ID)
++	}
++}
++
++// TestCheckWrapsReviewErrors covers a review pass that could not run at all:
++// the round has no reviews to report, so no half-checked result may be
++// returned as though the work had been checked.
++func TestCheckWrapsReviewErrors(t *testing.T) {
++	prompts := []review.Prompt{{Name: "correctness", Body: "look for bugs"}}
++	cmds := []config.Command{{Name: "test", Run: "go test ./..."}}
++	s, _, _ := newCheckSidecars(t, prompts, cmds, 1, func(_ *sidecar.PoolEntry, script string) (string, int) {
++		if isReviewScript(script) {
++			return "", review.ExitClaudeMissing
++		}
++		return "ok\n", 0
++	})
++
++	checks, err := s.Check(context.Background(), 1)
++	assert.Assert(t, checks == nil, "validation results were returned without the reviews")
++	assert.ErrorContains(t, err, "reviews: ")
++	assert.Assert(t, errors.Is(err, review.ErrClaudeMissing), "got %v", err)
++}
++
++// TestCheckStopsStrayReviewsBeforePushing guards the ordering: a review left
++// running by an earlier round would read the tree as rsync replaces it, so
++// every reviewer must be swept before anything is pushed to it.
++func TestCheckStopsStrayReviewsBeforePushing(t *testing.T) {
++	prompts := []review.Prompt{{Name: "correctness", Body: "look for bugs"}, {Name: "tests", Body: "look at the tests"}}
++	sweptBeforePush := map[string]bool{}
++	var mu sync.Mutex
++	s, log, _ := newCheckSidecars(t, prompts, nil, 2, func(e *sidecar.PoolEntry, script string) (string, int) {
++		if strings.Contains(script, "pkill") {
++			_, err := os.Stat(filepath.Join(e.RepoPath, "main.go"))
++			mu.Lock()
++			sweptBeforePush[e.ID] = os.IsNotExist(err)
++			mu.Unlock()
++			return "", 0
++		}
++		return reviewNoFindings, 0
++	})
++
++	_, err := s.Check(context.Background(), 1)
++	assert.NilError(t, err)
++
++	var swept []string
++	for _, rev := range s.Reviewers {
++		swept = append(swept, rev.ID)
++		assert.Assert(t, sweptBeforePush[rev.ID], "%s was pushed to before its stray reviews were stopped", rev.ID)
++	}
++	assert.DeepEqual(t, sorted(log.on("pkill")), sorted(swept))
++}
++
++// sorted copies ids in order, so an assertion does not depend on which
++// goroutine got there first.
++func sorted(ids []string) []string {
++	out := append([]string(nil), ids...)
++	slices.Sort(out)
++	return out
++}
++
++// TestScopedPromptsTellsReviewersWhatIsUnderReview covers the only thing
++// pointing a reviewer at the implementer's uncommitted work rather than at the
++// branch's commits: without it reviews still run, and report on the wrong code.
++func TestScopedPromptsTellsReviewersWhatIsUnderReview(t *testing.T) {
++	s := &Sidecars{Prompts: []review.Prompt{{Name: "correctness", Body: "look for bugs"}}}
++
++	got := s.scopedPrompts()
++
++	assert.Equal(t, len(got), 1)
++	assert.Equal(t, got[0].Name, "correctness")
++	assert.Equal(t, got[0].Body, reviewScope+"look for bugs")
++	// The same prompts are scoped again every round, so they must not be
++	// rewritten in place.
++	assert.Equal(t, s.Prompts[0].Body, "look for bugs")
++}
++
++// TestWritePatchProducesAnApplyablePatch covers the run's only durable output.
++// A patch that does not apply loses everything the implementer did, and
++// nothing else in the run would notice.
++func TestWritePatchProducesAnApplyablePatch(t *testing.T) {
++	r := newRelay(t)
++	ctx := context.Background()
++
++	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
++	writeFile(t, impl, ".gitignore", "build/\n")
++	writeFile(t, impl, "main.go", "package main\n")
++	writeFile(t, impl, "doomed.go", "package main\n")
++	gitrepo.AddFile(t, impl, ".")
++	gitOutput(t, impl, "commit", "-m", "baseline")
++
++	// What the implementer leaves behind: an edit, a new text file, a new
++	// binary file, a deletion, and build output no patch should carry.
++	writeFile(t, impl, "main.go", "package main\n\nfunc main() {}\n")
++	writeFile(t, impl, "pkg/new.go", "package pkg\n")
++	assert.NilError(t, os.WriteFile(filepath.Join(impl, "logo.png"), []byte{0x89, 'P', 'N', 'G', 0x00, 0x1a}, 0o644))
++	assert.NilError(t, os.Remove(filepath.Join(impl, "doomed.go")))
++	writeFile(t, impl, "build/app", "binary")
++	// collect marks new files intent-to-add so git diff HEAD shows them.
++	gitOutput(t, impl, "add", "-A", "-N")
++
++	s := &Sidecars{Relay: r, Implementer: &Implementer{Entry: &sidecar.PoolEntry{ID: "impl", RepoPath: impl}}}
++	path := filepath.Join(t.TempDir(), "chunk", "factory", "20240101-000000.patch")
++	assert.NilError(t, s.WritePatch(ctx, path))
++
++	// The developer's tree is the baseline the run started from.
++	dev := filepath.Join(t.TempDir(), "my-repo")
++	gitOutput(t, impl, "clone", "--quiet", impl, dev)
++	gitOutput(t, dev, "apply", path)
++
++	assert.Equal(t, readFile(t, dev, "main.go"), "package main\n\nfunc main() {}\n")
++	assert.Equal(t, readFile(t, dev, "pkg/new.go"), "package pkg\n")
++	assert.Equal(t, readFile(t, dev, "logo.png"), string([]byte{0x89, 'P', 'N', 'G', 0x00, 0x1a}))
++	_, err := os.Stat(filepath.Join(dev, "doomed.go"))
++	assert.Assert(t, os.IsNotExist(err), "the deletion did not survive the patch")
++	_, err = os.Stat(filepath.Join(dev, "build"))
++	assert.Assert(t, os.IsNotExist(err), "ignored build output was carried into the patch")
++
++	// The ignored build output stays on the sidecar, so it is not part of the
++	// tree the patch has to reproduce.
++	want := treeOf(t, impl)
++	delete(want, filepath.Join("build", "app"))
++	assert.DeepEqual(t, treeOf(t, dev), want)
++}
++
++// TestWritePatchReportsNoWork covers the implementer that changed nothing: an
++// empty patch file on disk reads as work lost.
++func TestWritePatchReportsNoWork(t *testing.T) {
++	r := newRelay(t)
++
++	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
++	writeFile(t, impl, "main.go", "package main\n")
++	gitrepo.AddFile(t, impl, ".")
++	gitOutput(t, impl, "commit", "-m", "baseline")
++
++	s := &Sidecars{Relay: r, Implementer: &Implementer{Entry: &sidecar.PoolEntry{ID: "impl", RepoPath: impl}}}
++	path := filepath.Join(t.TempDir(), "work.patch")
++	err := s.WritePatch(context.Background(), path)
++
++	assert.Assert(t, errors.Is(err, ErrNoWork), "got %v", err)
++	_, statErr := os.Stat(path)
++	assert.Assert(t, os.IsNotExist(statErr), "an empty patch was written")
++}
++
++// treeOf reads every file in dir outside .git, so two checkouts can be
++// compared file for file.
++func treeOf(t *testing.T, dir string) map[string]string {
++	t.Helper()
++	out := map[string]string{}
++	assert.NilError(t, filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
++		if err != nil {
++			return err
++		}
++		rel, err := filepath.Rel(dir, path)
++		if err != nil {
++			return err
++		}
++		if d.IsDir() {
++			if rel == ".git" {
++				return fs.SkipDir
++			}
++			return nil
++		}
++		b, err := os.ReadFile(path)
++		if err != nil {
++			return err
++		}
++		out[rel] = string(b)
++		return nil
++	}))
++	return out
++}
++
++// newProvisionClient returns a client for a fake CircleCI, with HOME pointed at
++// a temp directory so key generation stays out of the developer's ~/.ssh.
++func newProvisionClient(t *testing.T) (*circleci.Client, *fakes.FakeCircleCI) {
++	t.Helper()
++	t.Setenv(config.EnvHome, t.TempDir())
++
++	cci := fakes.NewFakeCircleCI()
++	api := httptest.NewServer(cci)
++	t.Cleanup(api.Close)
++
++	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
++	assert.NilError(t, err)
++	return client, cci
++}
++
++func noStatus(iostream.Level, string) {}
++
++// TestProvisionDeletesSidecarsItCreatedWhenOneFails guards the error path:
++// sidecars are billed for, so a run that cannot provision its whole set must
++// leave none of them behind.
++func TestProvisionDeletesSidecarsItCreatedWhenOneFails(t *testing.T) {
++	client, cci := newProvisionClient(t)
++	cci.CreateErrorAfter = 2
++
++	impl, revs, err := Provision(context.Background(), client, "org-1", "ubuntu:22.04", "/home/user/my-repo", 3, noStatus)
++
++	assert.Assert(t, err != nil, "provision should fail when a sidecar cannot be created")
++	assert.ErrorContains(t, err, "create factory-")
++	assert.Assert(t, impl == nil)
++	assert.Assert(t, revs == nil)
++	assert.Equal(t, len(cci.Sidecars), 0, "sidecars were left running after a failed provision")
++	assert.Equal(t, countDeletes(cci), 2, "every sidecar created should be deleted")
++}
++
++// TestProvisionWaitsOutAddKeyNotFound covers the lag between a sidecar being
++// created and the provisioner accepting a key for it: a 404 there is transient
++// and must not fail the run.
++func TestProvisionWaitsOutAddKeyNotFound(t *testing.T) {
++	client, cci := newProvisionClient(t)
++	// Only the implementer is created, so its ID is known up front.
++	cci.NotFoundBeforeAddKey = map[string]int{"sidecar-new-1": 1}
++
++	impl, revs, err := Provision(context.Background(), client, "org-1", "ubuntu:22.04", "/home/user/my-repo", 0, noStatus)
++
++	assert.NilError(t, err)
++	assert.Equal(t, impl.ID, "sidecar-new-1")
++	assert.Equal(t, len(revs), 0)
++	assert.Equal(t, countDeletes(cci), 0)
++}
++
++// TestProvisionNamesSidecarsForTheirRole pins the split between the
++// implementer and the reviewers, which is positional and otherwise silent.
++func TestProvisionNamesSidecarsForTheirRole(t *testing.T) {
++	client, cci := newProvisionClient(t)
++
++	impl, revs, err := Provision(context.Background(), client, "org-1", "ubuntu:22.04", "/home/user/my-repo", 2, noStatus)
++	assert.NilError(t, err)
++
++	byID := map[string]string{}
++	for _, sc := range cci.Sidecars {
++		byID[sc.ID] = sc.Name
++		assert.Equal(t, sc.OrgID, "org-1")
++		assert.Equal(t, sc.Image, "ubuntu:22.04")
++	}
++	assert.Equal(t, byID[impl.ID], "factory-implementer")
++	assert.Equal(t, impl.RepoPath, "/home/user/my-repo")
++
++	var names []string
++	for _, r := range revs {
++		names = append(names, byID[r.ID])
++		assert.Equal(t, r.RepoPath, "/home/user/my-repo")
++	}
++	assert.DeepEqual(t, sorted(names), []string{"factory-reviewer-1", "factory-reviewer-2"})
++}
++
++func countDeletes(cci *fakes.FakeCircleCI) int {
++	n := 0
++	for _, r := range cci.Recorder.AllRequests() {
++		if r.Method == "DELETE" {
++			n++
++		}
++	}
++	return n
++}
+diff --git a/internal/sidecar/rsync.go b/internal/sidecar/rsync.go
+index fc8e68be..dffcf6dd 100644
+--- a/internal/sidecar/rsync.go
++++ b/internal/sidecar/rsync.go
+@@ -180,7 +180,13 @@ func RsyncPull(ctx context.Context,
+ // approximates git's rules, missing .git/info/exclude and the global excludes
+ // file, and the sidecar's rsync would have to parse it as the sender.
+ func ignoredPaths(ctx context.Context, sess *Session, repoPath string) ([]string, error) {
+-	cmd := "git -C " + ShellEscape(repoPath) + " ls-files --others --ignored --exclude-standard --directory"
++	// -z writes each path verbatim and NUL-separated. Without it git quotes any
++	// path holding a non-ASCII or control byte, wrapping it in double quotes
++	// with octal escapes, and the exclude built from that spelling matches
++	// nothing — so the ignored tree is pulled and then pushed to every
++	// reviewer. NUL separation also keeps a newline in a filename from
++	// splitting into two patterns.
++	cmd := "git -C " + ShellEscape(repoPath) + " ls-files -z --others --ignored --exclude-standard --directory"
+ 	result, err := ExecOverSSH(ctx, sess, cmd, nil, nil)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("rsync pull: list ignored files: %w", err)
+@@ -189,7 +195,8 @@ func ignoredPaths(ctx context.Context, sess *Session, repoPath string) ([]string
+ 		return nil, fmt.Errorf("rsync pull: list ignored files: exit %d: %s", result.ExitCode, result.Stderr)
+ 	}
+ 	var paths []string
+-	for _, p := range strings.Split(result.Stdout, "\n") {
++	// The trailing NUL after the last path yields an empty final element.
++	for _, p := range strings.Split(result.Stdout, "\x00") {
+ 		if p != "" {
+ 			paths = append(paths, "/"+escapeRsyncPattern(p))
+ 		}
+diff --git a/internal/sidecar/session.go b/internal/sidecar/session.go
+index 234c7ebb..1cb0de42 100644
+--- a/internal/sidecar/session.go
++++ b/internal/sidecar/session.go
+@@ -21,6 +21,10 @@ import (
+ )
+ 
+ const (
++	// opensshKeyType is the PEM block type ssh.MarshalPrivateKey writes, and
++	// the only private key format chunk treats as its own.
++	opensshKeyType = "OPENSSH PRIVATE KEY"
++
+ 	defaultKeyName = "chunk_ai"
+ 	defaultSSHUser = "user"
+ 	knownHostsFile = "chunk_ai_known_hosts"
+@@ -159,14 +163,24 @@ func EnsureKeyPair(path string) (generated bool, err error) {
+ 	return true, nil
+ }
+ 
+-// keyExists reports whether the private key at path is present.
++// keyExists reports whether a key chunk can use is already at path. A key an
++// older chunk wrote is PKCS8, which the LibreSSL-built ssh on macOS cannot
++// load, so rsync — which shells out to the system ssh — fails on it with
++// "invalid format" while everything going through the Go SSH client keeps
++// working. Reporting such a key missing has EnsureKeyPair replace the pair
++// with one in OpenSSH format, so an existing install is repaired rather than
++// left half-broken. A key the user put at chunk's own key path is replaced
++// too, which is the cost of repairing the ones chunk wrote itself.
+ func keyExists(path string) (bool, error) {
+-	if _, err := os.Stat(path); err == nil {
+-		return true, nil
+-	} else if !os.IsNotExist(err) {
+-		return false, fmt.Errorf("stat SSH key: %w", err)
++	data, err := os.ReadFile(path)
++	if os.IsNotExist(err) {
++		return false, nil
++	}
++	if err != nil {
++		return false, fmt.Errorf("read SSH key: %w", err)
+ 	}
+-	return false, nil
++	block, _ := pem.Decode(data)
++	return block != nil && block.Type == opensshKeyType, nil
+ }
+ 
+ // acquireKeyGenLock creates lockPath exclusively, making exactly one process the
+diff --git a/internal/sidecar/ssh_test.go b/internal/sidecar/ssh_test.go
+index 86d4197a..39f9fd7e 100644
+--- a/internal/sidecar/ssh_test.go
++++ b/internal/sidecar/ssh_test.go
+@@ -3,6 +3,10 @@ package sidecar
+ import (
+ 	"bytes"
+ 	"context"
++	"crypto/ed25519"
++	crand "crypto/rand"
++	"crypto/x509"
++	"encoding/pem"
+ 	"errors"
+ 	"fmt"
+ 	"io"
+@@ -227,6 +231,14 @@ func assertKeyPairMatches(t *testing.T, keyPath string) {
+ 	signer, err := ssh.ParsePrivateKey(privData)
+ 	assert.NilError(t, err)
+ 
++	// ssh.ParsePrivateKey accepts PKCS8 too, so the format has to be pinned on
++	// its own: rsync shells out to the system ssh, and the LibreSSL-built one
++	// on macOS cannot load a PKCS8 ed25519 key. Spelled out rather than taken
++	// from the constant the writer uses, so the two cannot drift together.
++	block, _ := pem.Decode(privData)
++	assert.Assert(t, block != nil, "private key on disk is not PEM")
++	assert.Equal(t, block.Type, "OPENSSH PRIVATE KEY")
++
+ 	pubData, err := os.ReadFile(keyPath + ".pub")
+ 	assert.NilError(t, err)
+ 
+@@ -260,6 +272,42 @@ func TestGenerateKeyPairWritesMatchingPair(t *testing.T) {
+ 	assert.Equal(t, info.Mode().Perm(), os.FileMode(0o600), "private key must stay owner-only")
+ }
+ 
++// writeLegacyPKCS8Key writes the keypair an older chunk would have left at
++// path: the same ed25519 key, marshalled as PKCS8.
++func writeLegacyPKCS8Key(t *testing.T, path string) {
++	t.Helper()
++	pub, priv, err := ed25519.GenerateKey(crand.Reader)
++	assert.NilError(t, err)
++	der, err := x509.MarshalPKCS8PrivateKey(priv)
++	assert.NilError(t, err)
++	assert.NilError(t, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600))
++	sshPub, err := ssh.NewPublicKey(pub)
++	assert.NilError(t, err)
++	assert.NilError(t, os.WriteFile(path+".pub", ssh.MarshalAuthorizedKey(sshPub), 0o644))
++}
++
++// TestEnsureKeyPairReplacesALegacyPKCS8Key covers the upgrade path. A key an
++// older chunk wrote is still parsed by the Go SSH client, so exec keeps
++// working while every rsync fails on it — the split that makes it hard to
++// diagnose. Leaving it in place would mean only brand-new installs were fixed.
++func TestEnsureKeyPairReplacesALegacyPKCS8Key(t *testing.T) {
++	keyPath := filepath.Join(t.TempDir(), ".ssh", "chunk_ai")
++	assert.NilError(t, os.MkdirAll(filepath.Dir(keyPath), 0o700))
++	writeLegacyPKCS8Key(t, keyPath)
++	oldPub, err := os.ReadFile(keyPath + ".pub")
++	assert.NilError(t, err)
++
++	generated, err := EnsureKeyPair(keyPath)
++	assert.NilError(t, err)
++
++	assert.Assert(t, generated, "a key chunk cannot sync with should be replaced")
++	assertKeyPairMatches(t, keyPath)
++	assertNoStrayFiles(t, keyPath)
++	newPub, err := os.ReadFile(keyPath + ".pub")
++	assert.NilError(t, err)
++	assert.Assert(t, !bytes.Equal(oldPub, newPub), "the public half was left behind")
++}
++
+ // TestEnsureKeyPairBreaksStaleLock covers a process killed mid-generation: its
+ // lock file outlives it, and without recovery every later run would wait out the
+ // timeout and then fail rather than generating.
+diff --git a/internal/testing/fakes/ssh.go b/internal/testing/fakes/ssh.go
+index 54ed20ad..d207ef8b 100644
+--- a/internal/testing/fakes/ssh.go
++++ b/internal/testing/fakes/ssh.go
+@@ -5,7 +5,6 @@ import (
+ 	"context"
+ 	"crypto/ed25519"
+ 	"crypto/rand"
+-	"crypto/x509"
+ 	"encoding/binary"
+ 	"encoding/pem"
+ 	"errors"
+@@ -59,11 +58,13 @@ func GenerateSSHKeypair(t *testing.T) (keyFile string, pubKey ssh.PublicKey) {
+ 		t.Fatal(err)
+ 	}
+ 
+-	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
++	// OpenSSH's own format, the one chunk writes and the one the system ssh
++	// accepts everywhere.
++	privBlock, err := ssh.MarshalPrivateKey(priv, "")
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
++	privPEM := pem.EncodeToMemory(privBlock)
+ 
+ 	dir := t.TempDir()
+ 	keyPath := filepath.Join(dir, "id_ed25519")
+@@ -98,11 +99,14 @@ func GenerateSSHKeypairAt(t *testing.T, path string) ssh.PublicKey {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
++	// The same format chunk writes: it replaces a key it finds in any other
++	// one, so a PKCS8 key seeded here would be regenerated and the public key
++	// this returns would no longer be the one chunk authenticates with.
++	privBlock, err := ssh.MarshalPrivateKey(priv, "")
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
++	privPEM := pem.EncodeToMemory(privBlock)
+ 	if err := os.WriteFile(path, privPEM, 0o600); err != nil {
+ 		t.Fatal(err)
+ 	}
