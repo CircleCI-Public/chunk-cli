@@ -49,7 +49,7 @@ chunk-cli/
     ├── upgrade/               # CLI self-upgrade
     ├── validate/              # Validation command logic
     └── chunkd/                # The daemon's API: wire types, client, paths, lifecycle
-        └── server/            # The daemon itself: poll loop, stores, handlers, factory runs
+        └── server/            # The daemon itself: poll loop, stores, handlers, plan builds
 ```
 
 ## Layering Rules
@@ -300,9 +300,9 @@ The daemon is split in two. `internal/chunkd` is its API: the types that go over
 the wire, the HTTP client, the socket and pid paths, and starting the process.
 Its internal dependencies are `config`, `eventlog`, `iostream` and `version`.
 `internal/chunkd/server` is the daemon itself and imports `chunkd` for the types
-it serves. Clients — `chunk watch`, `chunk factory build`, hooks, `chunk validate` —
-import `chunkd` only, so they depend on the daemon's API and never on the factory
-loop, the review runner or the sidecar pool behind it. Only `cmd/daemon.go`,
+it serves. Clients — `chunk watch`, `chunk factory plan`, hooks, `chunk validate` —
+import `chunkd` only, so they depend on the daemon's API and never on the plan
+builds or the sidecar pool behind it. Only `cmd/daemon.go`,
 which runs the daemon, imports `server` (and tests that start a real one).
 
 Starting the daemon belongs to `chunkd` too. It is this binary re-executed as
@@ -325,12 +325,9 @@ The split is in the imports, not yet everywhere at runtime:
 - **The snapshot carries more than the dashboard draws.** It holds each
   project's sidecars, raw `eventlog.Event`s and buffered commands as well as its
   sessions.
-- **`chunk factory build` reads the daemon's files to check a request.** With
-  `--continue`, `checkFactoryContinue` loads the earlier run's record from the
-  repository's data directory before asking the daemon, which loads it again.
-  This only works while the two share a filesystem.
 
-The daemon backs `chunk watch` and runs `chunk factory build`. It polls every
+The daemon backs `chunk watch` and builds the plans `chunk factory plan`
+approves. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte
 offset, and serves snapshots as JSON over a Unix socket at
 `$XDG_STATE_HOME/chunk/daemon/daemon.sock`, default
@@ -417,121 +414,51 @@ Design constraints worth preserving:
   Resolution is deferred to first use because it can read the OS keychain, and the
   daemon starts on every `chunk watch` whether or not anything needs a token.
 
-### Pre-PR sessions
+### Plan builds
 
-A session is the daemon's record of one factory run for a project: an
-implementer works in a worktree of its own, and reviews and validation commands
-check the work until it passes.
-The daemon is the **local** one (Unix socket); a run works from files on this
-machine. `chunk factory build` starts and follows one, and `chunk watch` shows it
-live.
+The daemon's only factory sessions are plan builds. A session is the daemon's
+record of building one approved factory plan for a project: a Claude Code
+session in the plan's worktree, with factory's f plugin, that works through
+factory's tasks for the plan through to a pull request. The daemon is the
+**local** one (Unix socket); a build works from files on this machine.
+Approving a plan in `chunk factory plan` (or in `chunk watch`) starts one; the
+plan screen's Flow tab follows the build's progress from factory, not from the
+daemon.
 
 ```
-POST /factory              {project_root, prompt, reviews_dir?, no_validate?, attempts?, reviewers?,
-                            model?, implementer_instructions?, implement_timeout_seconds?,
-                            review_timeout_seconds?, keep_sidecars?, org_id?, image?, log?, verbose?,
-                            open_pr?, draft?}
-                           → 202 {id}   (409 the run it continues is in use, 404 unknown project,
-                                         400 bad request or nothing to check, 503 no credential
-                                         or, with pull_request=required, no GitHub token)
-GET  /factory[?root=<path>] → {sessions: [Session...]}, newest first
-GET  /factory/{id}         → SessionDetail: the session plus each round's review findings
-POST /factory/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
-DELETE /factory/{id}       → 204: forget a finished session; 409 while it is still running
 POST /factory/plans        {project_root, plan_id, model?} → 202 {id}: build an approved
-                             factory plan in a build session of Claude Code in the plan's
-                             worktree, through factory's tasks; a run with no rounds, whose
-                             factory.plan_id is set (409 plan over or already building,
-                             503 not authenticated to CircleCI)
-POST /factory/warm         {project_root, run_id} → 202: make the sidecars a run
-                             continuing run_id would use, from its baseline, before
-                             that run starts (503 no credential or not authenticated,
-                             404 unknown project or run)
-POST /factory/warm/{run}/cancel → 202: delete those sidecars (idempotent)
+                             factory plan (409 plan over or already building, 404 unknown
+                             project, 502 factory unreachable, 503 not authenticated to
+                             CircleCI)
+POST /factory/{id}/cancel  → 202 (idempotent): stop a build without ending its plan
+DELETE /factory/{id}       → 204: forget a finished session; 409 while it is still running
 GET  /snapshot             → each project carries `sessions` (state only), and the
-                             top level a `review_auth_error`
+                             top level a `review_auth_error` when plan builds cannot run
 ```
 
-**Warm sidecars.** A factory run's sidecars take the better part of a minute
-to start (a seed, a snapshot, then a clone per reviewer). A run continuing a
-started run syncs its sidecars from that run's baseline, which is fixed when
-the run is started, and lays the work on the implementer's afterwards. So
-`chunk watch` asks for them with `POST /factory/warm` as soon as Claude starts a
-draft, and the daemon makes them (`factory.NewWarmPool`) from a detached
-checkout of the baseline beside the run's record while the draft is written
-and read. The next `POST /factory` continuing that run takes them, waiting for
-any still being made, and uses them in place of making its own when they suit
-it (same reviewers, org and image); the pool is then the run's, re-pointed at
-its worktree for any sidecar it replaces, and the checkout goes. Sidecars no
-run takes within 15 minutes, a draft with no changes, a failed draft and the
-daemon shutting down all delete them. New sidecars also start cold: build and
-lint caches empty, dependencies uninstalled. So once they are made, the daemon
-checks out the member the run's implementer will hold and runs the project's
-validation commands on it once (`WarmPool.WarmUp`: the first alone, since
-commands commonly start by installing dependencies, then the rest at once),
-keeping none of their results; the run is handed that member as its implementer, where its checks
-run. The implementer's first turn starts at once, beside any warm-up still
-running, and only the checks wait for the warm-up, so they never overlap it.
+`startPlanBuild` reads the plan and its flow from factory and refuses a plan
+that has ended or is already being built here, then records a
+`chunkd.Session` whose `factory` field (`FactoryRun`) names the `plan_id`, its
+branch and, once opened, its worktree (`factory.OpenPlanWorktree`).
+`executePlanBuild` starts the build session (`factory.StartAgent` with
+`Build: true`) and feeds its activity and replies into the session's
+`progress`. Every 30 s (`planBuildPoll`) it reads the plan and its flow from
+factory: it records the plan's branch and state, stops the build once the
+plan's flow has ended (so abandoning a plan stops its build), and, when
+another session holds the plan's claim and then releases it, tells the build
+session to claim the plan again.
 
-**Factory runs.** The daemon runs `factory.Run` in a goroutine. Each factory
-round is a `Round` with an `implement` turn (state, duration, cost, the
-implementer's summary, the diff stat so far), its `reviews` and its validation
-`checks`, and the session's `factory` field names the run's worktree and branch
-and why the loop stopped (`result`: `passed`, `exhausted`, `stuck` or
-`no_change`). A run that ends with its checks still failing is a `done` session
-with a `failed` stage. Once the loop passes, the daemon pushes the run's branch
-and opens a pull request through its GitHub client (`daemon.gh`, the one
-`cmd/daemon.go` builds from the GitHub token at start); it records the outcome
-as `factory.pull_request` (`state`, `url`, `number`, `base`, `message`) and
-leaves the loop's result alone. The token and an `origin` on GitHub are checked
-when the request is accepted: `pull_request=required` refuses a request that has
-neither, and the default records a `skipped` pull request and runs anyway.
-`pull_request=none` pushes nothing. A branch GitHub already has a pull request
-for — a continued run's — is recorded as `opened` with the one it found, since
-the push has just updated it. Only the reviews' commands are
-registered with the output store. The implementer's raw stream-json and the
-validation commands are not yet.
-
-**The record.** `Session` holds `stages` and `rounds`. The only stage is
-`factory_loop`, whose state is `running | done | failed` and whose note says
-why the loop stopped. A `Round` carries its implementer turn (`implement`, in
-state `running | applied | empty | failed`, with `progress`: the latest thing
-the implementer did and said, its tool count and when it last acted, each kept
-to its latest so a snapshot stays small), its reviews (the same
-`ReviewPrompt` rows `chunk review` draws), finding counts, and a note on how it
-went.
-
-- **State in snapshots, text on demand.** Snapshots hold state only; review
-  findings are in `GET /factory/{id}`, as command output is in `/output`.
-- **Credentials.** `cmd/daemon.go` resolves the Claude credential once at
-  start (`daemonReviewConfig`) and passes it in with `server.WithReview`. It is
-  put only in the environment of a Claude command; it is not logged and not in
-  any snapshot or session detail. A missing one is reported as
-  `Snapshot.ReviewAuthError` and refuses `POST /factory` with 503.
-- **Structured findings.** Factory reviews set
-  `review.Options.StructuredFindings`, which runs each review with
-  `--output-format json --json-schema review.FindingsSchema`:
-  `{review, findings:[{file,line,severity,body,patch?}]}`, severity one of
-  high/medium/low/info. Claude Code validates the answer against the schema
-  itself; `review.ParseFindings` reads `structured_output` from the result, and
-  a result without one (an error, or retries exhausted) fails that review. The
-  content is still untrusted: entries with no file or body, or a path that is
-  absolute or climbs out of the repo, are dropped and counted; at most 50 are
-  kept. A round counts *distinct* findings (`DedupeFindings`) and, of those, the
-  ones **worth changing**: severity high or medium. In-process `chunk review`
-  does not ask for findings, so its prompts and output are unchanged.
-- **Sessions in a project run side by side.** Each has its own worktree,
-  branch, sidecars and record. The one thing they cannot share is a chain of
-  continuations' worktree, which every run of the chain works in: a continuation
-  is refused (409) while any live session of the project is on that branch.
-- **Prompts come from the project** (`.chunk/reviews`): `reviews_dir` must be
-  relative and may not leave the project.
-- **Detach is not cancel.** A viewer disconnecting changes nothing; the session
-  belongs to the daemon. `chunk factory build` cancels its run on Ctrl-C; the
-  dashboard cancels on a confirmed `x x`.
+- **Test seams.** `server.WithPlans` passes a `PlanConfig` whose fields
+  (`PlanAPI`, `OpenPlanWorktree`, `StartBuild`) replace factory, the worktree
+  and the build session in tests; left nil, the daemon uses the real ones and
+  its CircleCI client. `cmd/daemon.go` passes none.
+- **Detach is not cancel.** A viewer disconnecting changes nothing; the build
+  belongs to the daemon and outlives the screen that approved it. Nothing in
+  the TUI calls `POST /factory/{id}/cancel` today; a build ends with its plan.
 - **In memory only.** Like async validate tasks, a daemon restart loses the
-  session record (the last 10 per project are kept while it runs). A factory
-  run's work is not lost with it: it is committed on the run's branch.
+  session record (the last 10 per project are kept while it runs). The build's
+  work is not lost with it: it is on the plan's branch, and `/f:resume <ID>` in
+  Claude Code carries the plan on.
 
 ### Resource sampling
 
@@ -669,10 +596,9 @@ GET  /validate/collect?root=<path>                 → {tasks}
 ## Sidecar Sync Strategy (`internal/sidecar/`)
 
 **Everything syncs with rsync.** `RsyncSync` / `RsyncSyncEphemeral` back
-`chunk sidecar sync`, variants and the `chunk factory build` relay from implementer to
-reviewers; `rsyncPoolSidecar` backs the sidecar pool (seed, fan-out, stale
-replacement, dead-sidecar replacement), and so pooled `chunk validate`,
-`chunk review` and the `chunk factory build` initial sync. All of them funnel into
+`chunk sidecar sync` and variants; `rsyncPoolSidecar` backs the sidecar pool
+(seed, fan-out, stale replacement, dead-sidecar replacement), and so pooled
+`chunk validate`, `chunk review` and `chunk mutate`. All of them funnel into
 `rsyncTo`.
 
 The git-bundle strategy and the checkout/patch strategy are gone. #539 removed

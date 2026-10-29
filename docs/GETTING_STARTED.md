@@ -60,7 +60,7 @@ chunk auth signup          # new CircleCI account
 chunk auth set circleci
 
 chunk auth set anthropic   # required for init (command detection); review and factory accept it too
-chunk auth set github      # optional: lets factory open pull requests
+chunk auth set github      # optional: for the chunk daemon to follow your branches' pull requests
 ```
 
 Check status at any time:
@@ -75,7 +75,7 @@ Credentials are stored in your system keychain by default. Pass `--insecure-stor
 |---|---|
 | `ANTHROPIC_API_KEY` | `init`, `review`, `factory` |
 | `CLAUDE_CODE_OAUTH_TOKEN` | `review`, `factory` (when no API key is set) |
-| `GITHUB_TOKEN` | `factory` (optional, to open pull requests) |
+| `GITHUB_TOKEN` | the chunk daemon (optional, to follow your branches' pull requests) |
 | `CIRCLE_TOKEN` | `sidecar`, `task` |
 | `CIRCLECI_ORG_ID` | `sidecar` (optional; overrides `orgID` in `.chunk/config.json`) |
 
@@ -482,7 +482,7 @@ See [docs/HOOKS.md](HOOKS.md) for configuration details and [Result Caching](HOO
 
 ## Review prompts
 
-An additional tool, independent of the sidecar workflow above. Review prompts are one `.md` or `.txt` file per area in `.chunk/reviews/`, such as `testing.md`, written by your team. `chunk review` and `chunk factory build` review changes with them. Commit them with the config so the whole team shares them.
+An additional tool, independent of the sidecar workflow above. Review prompts are one `.md` or `.txt` file per area in `.chunk/reviews/`, such as `testing.md`, written by your team. `chunk review` and `chunk factory plan` review changes with them. Commit them with the config so the whole team shares them.
 
 `chunk factory bootstrap` sets a project up for `chunk factory` in one command. It writes `.chunk/config.json` if there is none, sets up a sidecar with your project's environment, and records a snapshot of it as `validation.sidecarImage` (`--skip-sidecar` leaves this out). It prints what it will do first and leaves out any part already done, so running it again finishes a setup that stopped partway.
 
@@ -502,17 +502,7 @@ review PR #123
 
 The agent runs one reviewer per prompt over the diff and returns the combined findings (High and Medium issues, capped at 10).
 
-`chunk factory build "<prompt>"` runs the same checks yourself: an implementer agent makes the change on a sidecar, then reviewers and your validation commands check it, feeding back until it passes or attempts run out. Add `--remote` to run it on a sidecar of its own instead of the local daemon, so you can close your laptop or lose your connection without stopping it:
-
-```bash
-chunk factory build --remote "add a --verbose flag"
-
-# Later, or after Ctrl-C detached from it:
-chunk factory pull                 # bring the most recently started remote run's work back
-chunk factory pull <run id>        # or a specific one
-```
-
-`chunk factory pull` waits out the run if it is still going, then pulls the implementer's worktree from the host into a worktree on this machine and stages the files it added, so `git diff HEAD` there shows the whole change. It only deletes the host's sidecar once the work is safely local, so it is always safe to run again if anything goes wrong first.
+`chunk factory plan "<prompt>"` has factory make the change instead: you plan it with Claude, approve the plan, and it is built, checking the work with the same prompts and your validation commands, through to a pull request. `n` on Flows in `chunk watch` does the same ([above](#planning-and-following-flows-with-chunk-watch)).
 
 ---
 
