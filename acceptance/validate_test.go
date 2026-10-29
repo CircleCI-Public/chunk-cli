@@ -12,10 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -157,6 +160,82 @@ func TestValidateRunDryRun(t *testing.T) {
 		"expected install command in dry-run output, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "echo test"),
 		"expected test command in dry-run output, got: %s", combined)
+}
+
+// silentSocket is a socket stdin whose other end stays open and sends nothing,
+// as an agent's background Bash command gets from Claude Code.
+func silentSocket(t *testing.T) *os.File {
+	t.Helper()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	assert.NilError(t, err)
+	stdin, send := os.NewFile(uintptr(fds[0]), "stdin"), os.NewFile(uintptr(fds[1]), "send")
+	t.Cleanup(func() { _ = stdin.Close(); _ = send.Close() })
+	return stdin
+}
+
+// An agent's background `chunk validate` has a socket stdin that stays open
+// and silent. It must not wait on it: it runs as a run that is not a hook.
+func TestValidateDoesNotWaitOnASilentSocket(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeProjectConfig(t, workDir, "echo install", "echo test")
+	env := testenv.NewTestEnv(t)
+
+	start := time.Now()
+	result := binary.RunCLIWithStdinFile(t, []string{"validate", "--dry-run"}, env, workDir, silentSocket(t))
+	elapsed := time.Since(start)
+
+	assert.Check(t, cmp.Equal(result.ExitCode, 0), "stderr: %s", result.Stderr)
+	assert.Check(t, elapsed < 10*time.Second, "took %s", elapsed)
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Contains(combined, "echo install"))
+	assert.Check(t, cmp.Contains(combined, "echo test"))
+}
+
+// A signal while validate waits for a hook payload stops it promptly.
+func TestValidateStopsOnASignalWhileWaiting(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		signal os.Signal
+	}{
+		{
+			name:   "SIGINT",
+			signal: os.Interrupt,
+		},
+		{
+			name:   "SIGTERM",
+			signal: syscall.SIGTERM,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+			writeProjectConfig(t, workDir, "echo install", "echo test")
+			env := testenv.NewTestEnv(t)
+
+			cmd := exec.Command(binary.Path(), "--insecure-storage", "validate", "--dry-run")
+			cmd.Dir = workDir
+			cmd.Env = env.Environ()
+			cmd.Stdin = silentSocket(t)
+			var stdout, stderr strings.Builder
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			err := cmd.Start()
+			assert.NilError(t, err)
+			t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+			time.Sleep(200 * time.Millisecond)
+			err = cmd.Process.Signal(tc.signal)
+			assert.NilError(t, err)
+
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case waitErr := <-done:
+				assert.Check(t, waitErr != nil, "expected a non-zero exit; stdout: %s; stderr: %s", stdout.String(), stderr.String())
+			case <-time.After(2 * time.Second):
+				t.Fatalf("still running 2s after %s", tc.signal)
+			}
+		})
+	}
 }
 
 func TestValidateRunDryRunTestOnly(t *testing.T) {

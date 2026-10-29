@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,22 @@ func RunCLI(t *testing.T, args []string, e *env.TestEnv, workDir string) CLIResu
 // and optional stdin data.
 func RunCLIWithStdin(t *testing.T, args []string, e *env.TestEnv, workDir string, stdin []byte) CLIResult {
 	t.Helper()
+	var in io.Reader
+	if stdin != nil {
+		in = bytes.NewReader(stdin)
+	}
+	return runCLI(t, args, e, workDir, in)
+}
+
+// RunCLIWithStdinFile is RunCLIWithStdin with stdin given as a file, which the
+// child gets as it is: a socket stays a socket, and one left open stays open.
+func RunCLIWithStdinFile(t *testing.T, args []string, e *env.TestEnv, workDir string, stdin *os.File) CLIResult {
+	t.Helper()
+	return runCLI(t, args, e, workDir, stdin)
+}
+
+func runCLI(t *testing.T, args []string, e *env.TestEnv, workDir string, stdin io.Reader) CLIResult {
+	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -83,10 +100,7 @@ func RunCLIWithStdin(t *testing.T, args []string, e *env.TestEnv, workDir string
 	cmd := exec.CommandContext(ctx, binaryPath, allArgs...)
 	cmd.Dir = workDir
 	cmd.Env = e.Environ()
-
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
-	}
+	cmd.Stdin = stdin
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -1641,6 +1642,107 @@ func TestDetectHookReadsToolCommand(t *testing.T) {
 
 	hook = detectHook(strings.NewReader(`{"session_id":"s","hook_event_name":"Stop"}`))
 	assert.Equal(t, hook.toolCommand, "")
+}
+
+// The root's pre-run and RunE both need the hook payload; stdin is read once
+// between them, whether the commit gate skips in the pre-run or validation
+// runs.
+func TestValidateReadsStdinOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "validation runs",
+			payload: hookPayload,
+		},
+		{
+			name:    "commit gate skips",
+			payload: `{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"ls"}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateConfig(t)
+			in := &countingReader{r: strings.NewReader(tc.payload)}
+			root := newTestRootCmd()
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			root.SetIn(in)
+			root.SetArgs([]string{"validate", "--project", t.TempDir()})
+			err := root.Execute()
+			assert.NilError(t, err)
+
+			assert.Check(t, cmp.Equal(in.bytes, len(tc.payload)))
+			assert.Check(t, cmp.Equal(in.reads, 1), "stdin was read more than once")
+		})
+	}
+}
+
+// dryRunProject is a project whose validate --dry-run lists two commands.
+func dryRunProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	err := config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{
+			{Name: "install", Run: "echo install"},
+			{Name: "test", Run: "echo test"},
+		},
+	})
+	assert.NilError(t, err)
+	return dir
+}
+
+// A signal while the pre-run waits for a hook payload ends the run there, with
+// the real wait: it does not sit out the second, and RunE never runs.
+func TestValidatePreRunCancelEndsTheRun(t *testing.T) {
+	isolateConfig(t)
+	dir := dryRunProject(t)
+	stdin, _ := silentSocket(t)
+
+	var outBuf, errBuf bytes.Buffer
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetIn(stdin)
+	root.SetArgs([]string{"validate", "--dry-run", "--project", dir})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	time.AfterFunc(20*time.Millisecond, cancel)
+
+	start := time.Now()
+	err := root.ExecuteContext(ctx)
+	elapsed := time.Since(start)
+
+	assert.Check(t, cmp.ErrorIs(err, context.Canceled))
+	assert.Check(t, elapsed <= 500*time.Millisecond, "returned after %s", elapsed)
+	combined := outBuf.String() + errBuf.String()
+	assert.Check(t, !strings.Contains(combined, "echo install"), "RunE ran: %s", combined)
+}
+
+// An agent's background run has a socket stdin that stays open and silent. It
+// waits hookPayloadWait at most, then runs as a run that is not a hook.
+func TestValidateDoesNotWaitOnASilentStdin(t *testing.T) {
+	isolateConfig(t)
+	shortWaits(t)
+	dir := dryRunProject(t)
+	stdin, _ := silentSocket(t)
+
+	var outBuf, errBuf bytes.Buffer
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetIn(stdin)
+	root.SetArgs([]string{"validate", "--dry-run", "--project", dir})
+
+	start := time.Now()
+	err := root.ExecuteContext(t.Context())
+	elapsed := time.Since(start)
+
+	assert.NilError(t, err, "stderr: %s", errBuf.String())
+	assert.Check(t, elapsed <= 500*time.Millisecond, "returned after %s", elapsed)
+	combined := outBuf.String() + errBuf.String()
+	assert.Check(t, cmp.Contains(combined, "echo install"))
+	assert.Check(t, cmp.Contains(combined, "echo test"))
 }
 
 func TestSkipsCommitGate(t *testing.T) {

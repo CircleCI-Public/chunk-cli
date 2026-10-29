@@ -41,7 +41,11 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			if isSkippedCommitGate(cmd) {
+			skip, err := isSkippedCommitGate(cmd)
+			if err != nil {
+				return err
+			}
+			if skip {
 				return nil // RunE sees the same payload and returns straight away
 			}
 			if id := session.IDFromEnv(); id != "" && session.IDFromCtx(cmd.Context()) == "" {

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -161,12 +160,10 @@ func writeHookOutcome(w io.Writer, hook *hookContext, message string) error {
 	return writeStopHookMessage(w, message)
 }
 
-// detectHook reads the Claude Code hook JSON payload from r when r is not a
-// terminal. Returns nil if not running as a hook.
+// detectHook decodes the Claude Code hook JSON value from r. Returns nil if not
+// running as a hook. readHookPayload decides whether stdin is worth reading at
+// all.
 func detectHook(r io.Reader) *hookContext {
-	if f, ok := r.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		return nil
-	}
 	var p struct {
 		SessionID      string `json:"session_id"`
 		StopHookActive bool   `json:"stop_hook_active"`
@@ -189,30 +186,18 @@ func detectHook(r io.Reader) *hookContext {
 	}
 }
 
-// peekHookPayload decodes the hook payload on cmd's stdin without consuming
-// it: what it read is put back in front of the rest, so detectHook reads the
-// same payload again in RunE.
-func peekHookPayload(cmd *cobra.Command) *hookContext {
-	in := cmd.InOrStdin()
-	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		return nil
-	}
-	var buf bytes.Buffer
-	hook := detectHook(io.TeeReader(in, &buf))
-	cmd.SetIn(io.MultiReader(&buf, in))
-	return hook
-}
-
 // isSkippedCommitGate reports whether cmd is a commit gate run for a command
 // that is not a git commit (see skipsCommitGate). The root command asks before
 // its setup (telemetry, the update check, the daemon launch) since under
 // Codex this is every Bash call the agent makes, and none of that is wanted
-// for a run that ends straight away.
-func isSkippedCommitGate(cmd *cobra.Command) bool {
+// for a run that ends straight away. The error is the run's context ending
+// while it waited for the payload.
+func isSkippedCommitGate(cmd *cobra.Command) (bool, error) {
 	if cmd.Name() != "validate" || cmd.Parent() == nil || cmd.Parent().Parent() != nil {
-		return false
+		return false, nil
 	}
-	return peekHookPayload(cmd).skipsCommitGate()
+	hook, err := runHook(cmd)
+	return hook.skipsCommitGate(), err
 }
 
 // mayRunInBackground reports whether this run may be handed to the daemon and
@@ -557,6 +542,18 @@ func maybeReturnCachedHookResult(
 	return true, finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, skipped, nil, statusFn, streams, nil)
 }
 
+// validateHook is the run's hook payload (see runHook). done is set when the
+// run ends here: the wait for the payload was interrupted (err), or this is a
+// commit gate for a command that is not a commit, which ends with stdout empty
+// so the tool call goes ahead.
+func validateHook(cmd *cobra.Command) (hook *hookContext, done bool, err error) {
+	hook, err = runHook(cmd)
+	if err != nil {
+		return nil, true, err
+	}
+	return hook, hook.skipsCommitGate(), nil
+}
+
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
 	streams := iostream.FromCmd(cmd)
 
@@ -576,9 +573,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	hook := detectHook(cmd.InOrStdin())
-	if hook.skipsCommitGate() {
-		return nil // not a commit; stdout stays empty so the tool call goes ahead
+	hook, ends, err := validateHook(cmd)
+	if ends {
+		return err
 	}
 	hook, workDir = resolveHookRun(hook, opts, workDir)
 	ctx := cmd.Context()

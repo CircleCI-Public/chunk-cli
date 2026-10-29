@@ -491,6 +491,10 @@ Codex handles hooks differently in two ways that shape this file:
   for anything that is not a `git commit`. The entry still carries the `if`
   because that is how `chunk init` recognises its own entries when merging.
 
+A run whose stdin is not a terminal waits briefly for a hook payload to start
+and, if none does, runs as a normal validate. So an agent can run
+`chunk validate` in the background without it waiting on stdin.
+
 Codex also runs hooks in the session's working directory, which may be a
 subdirectory of the project. As a hook, `chunk validate` looks upward from
 there to the nearest `.chunk/config.json`, stopping at the git root.
