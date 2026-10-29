@@ -3,7 +3,6 @@ package factoryplan
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -212,7 +211,7 @@ func TestAgentStartsOnTheFirstMessageWithTheClaim(t *testing.T) {
 
 	assert.Assert(t, cmp.Len(tp.sessions, 1), "one session for the conversation")
 	s := tp.session(0)
-	assert.Check(t, cmp.Equal(s.first, fmt.Sprintf(claimMessage, "plan-1", "add a flag")))
+	assert.Check(t, cmp.Equal(s.first, factory.PlanMessage("plan-1", "add a flag")))
 	assert.Check(t, cmp.Contains(s.first, "never in a reply"))
 	assert.Check(t, cmp.Len(s.sent, 0))
 	assert.Check(t, !tp.configs[0].Resume)
@@ -232,7 +231,7 @@ func TestAgentStartsOnlyOnceItsCheckPasses(t *testing.T) {
 	tp.CheckStart(func(context.Context) error { return nil })
 	err = tp.Request(t.Context(), "add a flag")
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(tp.session(0).first, fmt.Sprintf(claimMessage, "plan-1", "add a flag")))
+	assert.Check(t, cmp.Equal(tp.session(0).first, factory.PlanMessage("plan-1", "add a flag")))
 }
 
 func TestAgentPassesEventsOn(t *testing.T) {
@@ -321,7 +320,7 @@ func TestAgentClaimsAgainOnceTheClaimIsLost(t *testing.T) {
 	tp.setHolder("", nil)
 	err = tp.Resume(t.Context())
 	assert.NilError(t, err)
-	assert.Check(t, cmp.DeepEqual(s.sent, []string{fmt.Sprintf(claimRetryMessage, "plan-1")}))
+	assert.Check(t, cmp.DeepEqual(s.sent, []string{factory.PlanRetryMessage("plan-1")}))
 
 	// The claim it was just told to make is checked once it replies.
 	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Claimed it again."}}
@@ -352,7 +351,7 @@ func TestResumeStartsAPlanWithNoSessionOnTheClaimAlone(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, cmp.Len(tp.sessions, 1))
 	first := tp.session(0).first
-	assert.Check(t, cmp.Equal(first, fmt.Sprintf(claimRetryMessage, "plan-1")))
+	assert.Check(t, cmp.Equal(first, factory.PlanRetryMessage("plan-1")))
 	assert.Check(t, cmp.Contains(first, "never in a reply"))
 	assert.Check(t, !strings.Contains(first, "request"))
 }
@@ -394,7 +393,7 @@ func TestAgentResumesASessionThatEnded(t *testing.T) {
 	assert.Check(t, cmp.Equal(tp.configs[1].SessionID, "s-1"))
 	// The ended session's claim was freed with it, so the resumed one claims
 	// the plan again.
-	assert.Check(t, cmp.Equal(tp.session(1).first, fmt.Sprintf(claimRetryMessage, "plan-1")))
+	assert.Check(t, cmp.Equal(tp.session(1).first, factory.PlanRetryMessage("plan-1")))
 }
 
 // Each session, the resumed one too, starts in the plan's worktree rather
@@ -439,7 +438,7 @@ func TestAgentStartFailureIsASentence(t *testing.T) {
 	tp.startErr = nil
 	err = tp.Request(t.Context(), "add a flag")
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(tp.session(0).first, fmt.Sprintf(claimMessage, "plan-1", "add a flag")))
+	assert.Check(t, cmp.Equal(tp.session(0).first, factory.PlanMessage("plan-1", "add a flag")))
 }
 
 func TestAgentStopsItsSessionAndRefusesMore(t *testing.T) {
@@ -548,7 +547,7 @@ func TestAgentDrainsEventsOnceStopped(t *testing.T) {
 func TestWithClaimOnlyPrependsOnce(t *testing.T) {
 	msg, claimed := withClaim(false, "plan-1", "hello")
 	assert.Check(t, claimed)
-	assert.Check(t, cmp.Equal(msg, fmt.Sprintf(claimMessage, "plan-1", "hello")))
+	assert.Check(t, cmp.Equal(msg, factory.PlanMessage("plan-1", "hello")))
 
 	msg, claimed = withClaim(claimed, "plan-1", "a later message")
 	assert.Check(t, claimed)
@@ -556,7 +555,7 @@ func TestWithClaimOnlyPrependsOnce(t *testing.T) {
 
 	msg, claimed = withClaim(false, "plan-1", "")
 	assert.Check(t, claimed)
-	assert.Check(t, cmp.Equal(msg, fmt.Sprintf(claimRetryMessage, "plan-1")))
+	assert.Check(t, cmp.Equal(msg, factory.PlanRetryMessage("plan-1")))
 
 	msg, claimed = withClaim(true, "plan-1", "")
 	assert.Check(t, claimed)
@@ -591,7 +590,7 @@ func TestAgentResumesTheSessionRecordedForThePlan(t *testing.T) {
 	assert.Check(t, cmp.Equal(tp.configs[0].SessionID, "s-0"))
 	assert.Check(t, cmp.Equal(tp.SessionID(), "s-0"))
 	assert.Check(t, cmp.Equal(checked, "s-0"), "the start check saw the screen's own session")
-	assert.Check(t, cmp.Equal(tp.session(0).first, fmt.Sprintf(claimRetryMessage, "plan-1")))
+	assert.Check(t, cmp.Equal(tp.session(0).first, factory.PlanRetryMessage("plan-1")))
 }
 
 func TestAgentRecordsTheSessionItStarts(t *testing.T) {

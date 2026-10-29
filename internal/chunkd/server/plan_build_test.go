@@ -222,7 +222,7 @@ func newPlanBuildDaemon(t *testing.T) *planBuildDaemon {
 		pb.opened = append(pb.opened, planID)
 		return "/data/plans/" + planID, pb.openErr
 	}
-	d.rcfg.StartBuild = func(_ context.Context, cfg factory.AgentConfig, message string) (BuildAgent, error) {
+	d.rcfg.StartBuild = func(_ context.Context, cfg factory.AgentConfig, message string) (AgentSession, error) {
 		pb.mu.Lock()
 		defer pb.mu.Unlock()
 		pb.cfgs = append(pb.cfgs, cfg)

@@ -32,6 +32,11 @@ func sessionCall(method, path string, in, out any) error {
 	if err != nil {
 		return err
 	}
+	return sessionCallWith(client, method, path, in, out)
+}
+
+// sessionCallWith is sessionCall over client.
+func sessionCallWith(client *http.Client, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		raw, err := json.Marshal(in)
@@ -100,6 +105,42 @@ func FetchPlanBuild(planID string, after int) (activity PlanBuildActivity, found
 		return PlanBuildActivity{}, false, err
 	}
 	return activity, true, nil
+}
+
+// RequestPlanner starts factory plan planID's planner in the daemon on the
+// plan's request.
+func RequestPlanner(planID string, req PlannerRequest) (SessionLog, error) {
+	return plannerCall(planID, "/request", req)
+}
+
+// ResumePlanner has plan planID's planner claim the plan again when it
+// holds no claim, starting or resuming it.
+func ResumePlanner(planID string, req PlannerResume) (SessionLog, error) {
+	return plannerCall(planID, "/resume", req)
+}
+
+// plannerCall posts to one of plan planID's planner routes. It uses the
+// long client: starting a session can outlast the short client's timeout.
+func plannerCall(planID, route string, in any) (SessionLog, error) {
+	client, err := longDaemonClient()
+	if err != nil {
+		return SessionLog{}, err
+	}
+	var log SessionLog
+	err = sessionCallWith(client, http.MethodPost, "/factory/plans/"+neturl.PathEscape(planID)+"/planner"+route, in, &log)
+	return log, err
+}
+
+// FetchPlanner reads plan planID's planner's log after cursor after; a
+// negative after reads none, only where it ends.
+func FetchPlanner(planID string, after int) (SessionLog, error) {
+	path := "/factory/plans/" + neturl.PathEscape(planID) + "/planner"
+	if after >= 0 {
+		path += "?after=" + strconv.Itoa(after)
+	}
+	var log SessionLog
+	err := sessionCall(http.MethodGet, path, nil, &log)
+	return log, err
 }
 
 // CancelSession stops a session. It is the only thing that does: a viewer that

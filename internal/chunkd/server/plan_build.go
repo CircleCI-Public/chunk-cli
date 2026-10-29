@@ -30,14 +30,6 @@ type PlanAPI interface {
 	PlanText(ctx context.Context, id string) (string, error)
 }
 
-// BuildAgent is what a plan build needs of the build session:
-// *factory.Agent.
-type BuildAgent interface {
-	Send(message string) error
-	Events() <-chan factory.AgentEvent
-	Stop() error
-}
-
 // planAPI is the factory API plan builds read plans through, or nil when
 // the daemon has no CircleCI client.
 func (d *daemon) planAPI() PlanAPI {
@@ -58,12 +50,9 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 	if api == nil {
 		return chunkd.Session{}, apiErr(http.StatusServiceUnavailable, "not authenticated to CircleCI — plan builds unavailable (run: chunk auth login)")
 	}
-	ps := d.lookupProject(req.ProjectRoot)
-	if ps == nil {
-		ps = d.adoptProject(req.ProjectRoot)
-	}
-	if ps == nil {
-		return chunkd.Session{}, apiErr(http.StatusNotFound, "the chunk daemon is not tracking %q, and it is not the top of a git repository", req.ProjectRoot)
+	ps, err := d.planProject(req.ProjectRoot)
+	if err != nil {
+		return chunkd.Session{}, err
 	}
 	// Bounded: the request waits on it, and the build has not started.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -105,6 +94,19 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 	})
 	go d.executePlanBuild(sctx, entry, api, ps.root, req)
 	return entry.snapshot(), nil
+}
+
+// planProject is the project at root that a plan's session works in, adopted
+// when the daemon does not track it yet.
+func (d *daemon) planProject(root string) (*projectState, error) {
+	ps := d.lookupProject(root)
+	if ps == nil {
+		ps = d.adoptProject(root)
+	}
+	if ps == nil {
+		return nil, apiErr(http.StatusNotFound, "the chunk daemon is not tracking %q, and it is not the top of a git repository", root)
+	}
+	return ps, nil
 }
 
 // buildingPlan is the live session building factory plan planID, or "" when
@@ -209,14 +211,14 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 
 	start := d.rcfg.StartBuild
 	if start == nil {
-		start = func(ctx context.Context, cfg factory.AgentConfig, message string) (BuildAgent, error) {
+		start = func(ctx context.Context, cfg factory.AgentConfig, message string) (AgentSession, error) {
 			return factory.StartAgent(ctx, cfg, message)
 		}
 	}
 	cfg := factory.AgentConfig{Dir: dir, Model: req.Model, SessionID: uuid.NewString(), Build: true}
 	agent, err := start(ctx, cfg, factory.BuildMessage(req.PlanID))
 	if err != nil {
-		d.settleSession(entry, buildStartProblem(err))
+		d.settleSession(entry, sessionStartProblem(err, "build"))
 		return
 	}
 	note(iostream.LevelStep, "Building plan "+req.PlanID+" in "+dir)
@@ -340,27 +342,11 @@ func clip(s string, n int) string {
 // stopBuild stops a plan's build session and waits for its events to end,
 // logging what it reported on the way out: the build is being stopped, so
 // there is no one else to tell.
-func stopBuild(agent BuildAgent, ended <-chan error, planID string) {
+func stopBuild(agent AgentSession, ended <-chan error, planID string) {
 	if err := agent.Stop(); err != nil {
 		log.Printf("chunkd: plan build %s: stop the build session: %v", planID, err)
 	}
 	if err := <-ended; err != nil {
 		log.Printf("chunkd: plan build %s: %v", planID, err)
 	}
-}
-
-// buildStartProblem is a failure to start the build session, saying how to
-// fix it.
-func buildStartProblem(err error) error {
-	switch {
-	case errors.Is(err, factory.ErrNoClaude):
-		return errors.New("the chunk daemon found no Claude Code to build with; install it from https://claude.com/claude-code")
-	case errors.Is(err, factory.ErrNoFactory):
-		return errors.New("the chunk daemon found no factory; install it and put it on PATH, then restart the daemon")
-	case errors.Is(err, factory.ErrNoFactoryPlugin):
-		return errors.New("factory's f plugin is not loaded in Claude Code; install it")
-	case errors.Is(err, factory.ErrFactoryMCP):
-		return errors.New("factory's MCP server is not connected; make sure factory is on PATH")
-	}
-	return fmt.Errorf("start the build session: %w", err)
 }

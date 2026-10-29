@@ -58,8 +58,22 @@ func OpenPlanSession(root, planID string) (*PlanSession, error) {
 }
 
 // ID is the session last recorded, "" when none has been.
-func (s *PlanSession) ID() (string, error) {
-	b, err := os.ReadFile(s.path)
+func (s *PlanSession) ID() (string, error) { return readSessionFile(s.path) }
+
+// RecordedPlanSession is the session last recorded as planning plan planID
+// in the repository at root, "" when none is, read without opening the
+// record, so it can be read while another process holds it open.
+func RecordedPlanSession(root, planID string) (string, error) {
+	path, err := planSessionPath(root, planID)
+	if err != nil {
+		return "", err
+	}
+	return readSessionFile(path)
+}
+
+// readSessionFile is the session recorded at path, "" when none is.
+func readSessionFile(path string) (string, error) {
+	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}

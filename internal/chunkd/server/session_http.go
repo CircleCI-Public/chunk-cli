@@ -17,13 +17,19 @@ const maxRequestBytes = 64 * 1024
 // transport's normal auth: the Unix socket is user-local, and the TCP listener
 // demands the bearer token.
 //
-//	POST /factory/plans        build an approved factory plan
-//	GET /factory/plans/{plan}/build[?after=N]  a plan's build session and its feed
-//	POST /factory/{id}/cancel  stop a session
-//	DELETE /factory/{id}       forget a finished session (409 while it is running)
+//	POST /factory/plans                         build an approved factory plan
+//	GET  /factory/plans/{plan}/build            a plan's build session and its feed (?after=N)
+//	POST /factory/plans/{plan}/planner/request  start a new plan's planner on its request
+//	POST /factory/plans/{plan}/planner/resume   have a plan's planner claim it again
+//	GET  /factory/plans/{plan}/planner          read a plan's planner's log (?after=N)
+//	POST /factory/{id}/cancel                   stop a session
+//	DELETE /factory/{id}                        forget a finished session (409 while it is running)
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /factory/plans", d.handlePlanBuild)
 	mux.HandleFunc("GET /factory/plans/{plan}/build", d.handlePlanBuildActivity)
+	mux.HandleFunc("POST /factory/plans/{plan}/planner/request", d.handlePlannerRequest)
+	mux.HandleFunc("POST /factory/plans/{plan}/planner/resume", d.handlePlannerResume)
+	mux.HandleFunc("GET /factory/plans/{plan}/planner", d.handlePlannerLog)
 	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
 	mux.HandleFunc("DELETE /factory/{id}", d.handleSessionDelete)
 }
@@ -73,6 +79,55 @@ func (d *daemon) handlePlanBuildActivity(w http.ResponseWriter, r *http.Request)
 	}
 	after, _ := strconv.Atoi(r.URL.Query().Get("after"))
 	writeJSON(w, http.StatusOK, planBuildActivity(entry.snapshot(), after))
+}
+
+func (d *daemon) handlePlannerRequest(w http.ResponseWriter, r *http.Request) {
+	var req chunkd.PlannerRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ProjectRoot == "" || req.Text == "" {
+		http.Error(w, "project_root and text required", http.StatusBadRequest)
+		return
+	}
+	log, err := d.requestPlanner(r.PathValue("plan"), req)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, log)
+}
+
+func (d *daemon) handlePlannerResume(w http.ResponseWriter, r *http.Request) {
+	var req chunkd.PlannerResume
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ProjectRoot == "" {
+		http.Error(w, "project_root required", http.StatusBadRequest)
+		return
+	}
+	log, err := d.resumePlanner(r.PathValue("plan"), req)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, log)
+}
+
+func (d *daemon) handlePlannerLog(w http.ResponseWriter, r *http.Request) {
+	after := -1
+	if s := r.URL.Query().Get("after"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			http.Error(w, "after must be an integer", http.StatusBadRequest)
+			return
+		}
+		after = n
+	}
+	writeJSON(w, http.StatusOK, d.plannerLog(r.PathValue("plan"), after))
 }
 
 func (d *daemon) handleSessionCancel(w http.ResponseWriter, r *http.Request) {

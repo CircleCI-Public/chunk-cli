@@ -99,6 +99,34 @@ const buildRetryMessage = "Plan %s's claim has been released. " +
 // plan planID is sent once the claim is released.
 func BuildRetryMessage(planID string) string { return fmt.Sprintf(buildRetryMessage, planID) }
 
+// planMessage is what a new plan's planning session is first sent: the
+// claim instructions, then the developer's request.
+const planMessage = "This conversation plans a change through factory, as plan %s. " +
+	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the planning tasks it hands out. " +
+	"The plan is written with the plan tools, never in your replies; keep replies short. " +
+	noChatQuestions +
+	"The developer's request:\n\n%s"
+
+// planRetryMessage is what a planning session that holds no claim on its
+// plan is sent: the claim instructions alone, since nothing the developer
+// writes reaches it.
+const planRetryMessage = "Your claim on plan %s has been released. " +
+	"Claim it again by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the planning tasks it hands out. " +
+	noChatQuestions
+
+// noChatQuestions keeps the planner's questions out of its replies, which
+// nobody answers.
+const noChatQuestions = "Nobody can answer you in chat: put every question for the developer in 3. Open Questions, never in a reply. "
+
+// PlanMessage is a new plan's planning session's first message: claim plan
+// planID, plan it through the daemon's tasks, and here is the request.
+func PlanMessage(planID, request string) string { return fmt.Sprintf(planMessage, planID, request) }
+
+// PlanRetryMessage is what a planning session that holds no claim on plan
+// planID is sent: the claim instructions alone, since nothing the developer
+// writes reaches it.
+func PlanRetryMessage(planID string) string { return fmt.Sprintf(planRetryMessage, planID) }
+
 // AgentConfig starts a long-lived factory session.
 type AgentConfig struct {
 	// Dir is the repository claude plans in, or for Build the worktree it

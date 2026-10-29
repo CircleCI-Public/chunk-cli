@@ -141,7 +141,7 @@ func (p *Agent) Request(ctx context.Context, text string) error {
 
 // Resume has the session claim the plan again when it holds no claim:
 // starting the session, or resuming the one recorded for the plan or one
-// that ended, with claimRetryMessage. A resume sends nothing while the
+// that ended, with factory.PlanRetryMessage. A resume sends nothing while the
 // session holds the claim, or while the holder can't be read.
 func (p *Agent) Resume(ctx context.Context) error { return p.send(ctx, "") }
 
@@ -410,25 +410,6 @@ func startProblem(err error) error {
 	return fmt.Errorf("start the planning session: %w", err)
 }
 
-// claimMessage is what a new plan's planning session is first sent: the
-// claim instructions, then the developer's request.
-const claimMessage = "This conversation plans a change through factory, as plan %s. " +
-	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the planning tasks it hands out. " +
-	"The plan is written with the plan tools, never in your replies; keep replies short. " +
-	noChatQuestions +
-	"The developer's request:\n\n%s"
-
-// claimRetryMessage is what a planning session that holds no claim on its
-// plan is sent: the claim instructions alone, since nothing the developer
-// writes reaches it.
-const claimRetryMessage = "Your claim on plan %s has been released. " +
-	"Claim it again by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the planning tasks it hands out. " +
-	noChatQuestions
-
-// noChatQuestions keeps the planner's questions out of its replies, which
-// nobody answers.
-const noChatQuestions = "Nobody can answer you in chat: put every question for the developer in 3. Open Questions, never in a reply. "
-
 // withClaim is the message the session is next sent, or "" when nothing is
 // owed. claimed is carried by the caller across calls.
 func withClaim(claimed bool, planID, request string) (string, bool) {
@@ -436,7 +417,7 @@ func withClaim(claimed bool, planID, request string) (string, bool) {
 	case claimed || planID == "":
 		return request, claimed
 	case request == "":
-		return fmt.Sprintf(claimRetryMessage, planID), true
+		return factory.PlanRetryMessage(planID), true
 	}
-	return fmt.Sprintf(claimMessage, planID, request), true
+	return factory.PlanMessage(planID, request), true
 }
