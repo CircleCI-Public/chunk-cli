@@ -3,10 +3,12 @@ package chunkd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	neturl "net/url"
+	"strconv"
 	"strings"
 )
 
@@ -74,19 +76,9 @@ func sessionCall(method, path string, in, out any) error {
 	return nil
 }
 
-// StartFactory asks the daemon to start a factory session and returns its ID
-// without waiting for it. It is followed and cancelled like any other session.
-func StartFactory(req FactoryRequest) (string, error) {
-	var resp SessionStartResponse
-	if err := sessionCall(http.MethodPost, "/factory", req, &resp); err != nil {
-		return "", err
-	}
-	return resp.ID, nil
-}
-
 // StartPlanBuild asks the daemon to build an approved factory plan, and
-// returns the build's session ID without waiting for it. It is followed and
-// cancelled like any other session.
+// returns the build's session ID without waiting for it. It is cancelled like
+// any other session.
 func StartPlanBuild(req PlanBuildRequest) (string, error) {
 	var resp SessionStartResponse
 	if err := sessionCall(http.MethodPost, "/factory/plans", req, &resp); err != nil {
@@ -95,27 +87,19 @@ func StartPlanBuild(req PlanBuildRequest) (string, error) {
 	return resp.ID, nil
 }
 
-// FetchSession returns one session with the text of its reviews.
-func FetchSession(id string) (SessionDetail, error) {
-	var detail SessionDetail
-	if err := sessionCall(http.MethodGet, "/factory/"+neturl.PathEscape(id), nil, &detail); err != nil {
-		return SessionDetail{}, err
+// FetchPlanBuild returns plan planID's build session and its feed lines past
+// the first after. found is false when the daemon has no build of the plan.
+func FetchPlanBuild(planID string, after int) (activity PlanBuildActivity, found bool, err error) {
+	path := "/factory/plans/" + neturl.PathEscape(planID) + "/build?after=" + strconv.Itoa(after)
+	err = sessionCall(http.MethodGet, path, nil, &activity)
+	var refused *SessionRefused
+	if errors.As(err, &refused) && refused.Status == http.StatusNotFound {
+		return PlanBuildActivity{}, false, nil
 	}
-	return detail, nil
-}
-
-// ListSessions returns the daemon's sessions, newest first per project. An empty
-// root lists every project's.
-func ListSessions(root string) ([]Session, error) {
-	path := "/factory"
-	if root != "" {
-		path += "?root=" + neturl.QueryEscape(root)
+	if err != nil {
+		return PlanBuildActivity{}, false, err
 	}
-	var list SessionList
-	if err := sessionCall(http.MethodGet, path, nil, &list); err != nil {
-		return nil, err
-	}
-	return list.Sessions, nil
+	return activity, true, nil
 }
 
 // CancelSession stops a session. It is the only thing that does: a viewer that
@@ -128,17 +112,4 @@ func CancelSession(id string) error {
 // it has to be cancelled first.
 func DeleteSession(id string) error {
 	return sessionCall(http.MethodDelete, "/factory/"+neturl.PathEscape(id), nil, nil)
-}
-
-// WarmFactory asks the daemon to make the sidecars a factory run continuing
-// req.RunID would use, without waiting for them. The run started next for it
-// uses them; if none is started soon, the daemon deletes them.
-func WarmFactory(req WarmRequest) error {
-	return sessionCall(http.MethodPost, "/factory/warm", req, nil)
-}
-
-// CancelWarm deletes the sidecars made ahead of a run continuing runID, for
-// work that will not be handed to the factory after all.
-func CancelWarm(runID string) error {
-	return sessionCall(http.MethodPost, "/factory/warm/"+neturl.PathEscape(runID)+"/cancel", nil, nil)
 }

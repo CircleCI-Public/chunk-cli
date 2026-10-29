@@ -2,8 +2,8 @@ package flowlist
 
 import (
 	"fmt"
-	"image/color"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,15 +34,14 @@ func (m Model) Content() string {
 	}
 	h := contentHeight + 2
 	listWidth := m.width - 2
-	if m.width-theme.ListWidth-4 >= minPreview {
+	rightWidth := m.previewWidth()
+	if rightWidth > 0 {
 		listWidth = theme.ListWidth
 	}
 	left := m.styles.Pane(true, listWidth+2, h, m.styles.Emphasis.Render("flows"),
 		strings.Join(fit(m.listLines(listWidth, contentHeight), listWidth, contentHeight), "\n"))
 	body := left
-	if listWidth == theme.ListWidth {
-		// The right box's border, then one leading space.
-		rightWidth := m.width - listWidth - 5
+	if rightWidth > 0 {
 		lines := fit(m.previewLines(rightWidth), rightWidth, contentHeight)
 		for i, l := range lines {
 			lines[i] = " " + l
@@ -83,15 +82,18 @@ func (m Model) listLines(width, height int) []string {
 	st := m.styles
 	var rows []string
 	selected, lastGroup, lastPhase := 0, -1, ""
-	labels := []string{"Needs your review", "With agent", "Not started", "Other"}
 	flows, depth := m.visible()
+	counts := make([]int, 4)
+	for _, f := range flows {
+		counts[group(f.State)]++
+	}
 	for _, f := range flows {
 		g := group(f.State)
 		if g != lastGroup {
 			if lastGroup != -1 {
 				rows = append(rows, "")
 			}
-			rows = append(rows, st.Dim.Render(labels[g]))
+			rows = append(rows, sectionHeading(st, g, counts[g]))
 			lastGroup, lastPhase = g, ""
 		}
 		// A sub-heading is spelled as the first flow in it spells its phase.
@@ -111,8 +113,11 @@ func (m Model) listLines(width, height int) []string {
 		} else {
 			rows = append(rows, "  "+indent+title)
 		}
-		chip := stateChip(st, f.State, width-4-len(indent))
 		var detail []string
+		// Only Other's heading does not say the state.
+		if g == 3 {
+			detail = append(detail, st.VDim.Render(stateText(f.State)))
+		}
 		if p := m.parentTitle(f.ID); p != "" {
 			detail = append(detail, st.VDim.Render("↳ "+p))
 		}
@@ -128,11 +133,9 @@ func (m Model) listLines(width, height int) []string {
 		if !f.UpdatedAt.IsZero() {
 			detail = append(detail, st.VDim.Render(ago(f.UpdatedAt)))
 		}
-		line := "  " + indent + chip
-		if len(detail) > 0 {
-			line += " " + strings.Join(detail, st.VDim.Render(" · "))
-		}
-		rows = append(rows, line)
+		// A flow with no details keeps its blank second row, so the scroll
+		// below can count on two rows a flow.
+		rows = append(rows, "  "+indent+strings.Join(detail, st.VDim.Render(" · ")))
 	}
 	if len(rows) == 0 {
 		message := []string{"  " + st.Dim.Render("no open flows"), "  " + st.Dim.Render("n starts one")}
@@ -151,27 +154,28 @@ func (m Model) listLines(width, height int) []string {
 	return rows[start:]
 }
 
-// stateChip is the flow's state as a coloured block, as the run list shows
-// a run's: amber when it waits on you, the brand yellow while an agent has it.
-// A state chunk does not know is shown whole, on grey.
-func stateChip(st theme.Styles, state string, width int) string {
-	phase, _ := planstate.Parse(oneLine(state))
-	text := strings.ToLower(phase)
-	if text == "" {
-		text = "unknown"
-	}
-	var bg color.Color
-	switch group(state) {
+// sectionHeading is section g's label, coloured by who its flows wait on,
+// and how many flows it holds.
+func sectionHeading(st theme.Styles, g, n int) string {
+	labels := []string{"Needs your review", "With agent", "Not started", "Other"}
+	style := st.Emphasis
+	switch g {
 	case 0:
-		bg = lipgloss.Color("3")
+		style = st.Warning.Bold(true)
 	case 1:
-		bg = theme.Yellow
-	case 2:
-		bg = lipgloss.Color("250")
-	default:
-		bg = lipgloss.Color("244")
+		style = st.Brand.Bold(true)
 	}
-	return st.Chip.Background(bg).Render(" " + ansi.Truncate(text, max(width-2, 1), "…") + " ")
+	return style.Render(labels[g]) + "  " + st.VDim.Render(strconv.Itoa(n))
+}
+
+// stateText is the state of a flow no heading names, for the Other section:
+// its whole state lowercased, or "unknown".
+func stateText(state string) string {
+	phase, _ := planstate.Parse(oneLine(state))
+	if phase == "" {
+		return "unknown"
+	}
+	return strings.ToLower(phase)
 }
 
 // ago is how long since t, as the run list says it.
@@ -207,8 +211,9 @@ func (m Model) previewLines(width int) []string {
 		note += ": " + oneLine(m.previewErr.Error())
 		rows = append(rows, m.styles.Warning.Render(note))
 	}
+	entry := m.cache[m.id]
 	commentsHeading := false
-	for _, c := range m.comments {
+	for _, c := range entry.comments {
 		if c.ResolvedAt != nil {
 			continue
 		}
@@ -225,21 +230,35 @@ func (m Model) previewLines(width int) []string {
 		rows = append(rows, "")
 	}
 	rows = append(rows, m.styles.Emphasis.Render("Plan"))
-	if m.previewLoaded && strings.TrimSpace(m.text) == "" {
+	if m.previewLoaded && strings.TrimSpace(entry.text) == "" {
 		return append(rows, m.styles.Dim.Render("No plan text yet."))
 	}
+	return append(rows, entry.lines...)
+}
+
+// previewWidth is the preview pane's width inside its border and leading
+// space, as Content draws it, or 0 when the pane is not drawn.
+func (m Model) previewWidth() int {
+	if m.width-theme.ListWidth-4 < minPreview {
+		return 0
+	}
+	return m.width - theme.ListWidth - 5
+}
+
+// glamourLines is text rendered as markdown wrapped at width, in the dark or
+// light style, as lines; text as it is when glamour fails.
+func glamourLines(text string, width int, dark bool) []string {
 	style := "light"
-	if m.dark {
+	if dark {
 		style = "dark"
 	}
-	text := clean(m.text)
-	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(max(width-4, 1)))
-	if err == nil {
-		if rendered, renderErr := renderer.Render(text); renderErr == nil {
+	text = clean(text)
+	if r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(max(width, 1))); err == nil {
+		if rendered, err := r.Render(text); err == nil {
 			text = strings.TrimSpace(rendered)
 		}
 	}
-	return append(rows, strings.Split(text, "\n")...)
+	return strings.Split(text, "\n")
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(clean(s)), " ") }

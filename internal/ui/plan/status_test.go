@@ -156,6 +156,31 @@ func TestStatus(t *testing.T) {
 			next: "you send your comments",
 		},
 		{
+			name: "building waits on open questions",
+			flow: Flow{
+				State: "Building - Human",
+				Next: []Step{
+					{Actor: "human", Event: "answer-open-questions"},
+					{Actor: "human", Event: "abandon"},
+				},
+			},
+			step: "Building",
+			next: "you answer 3. Open Questions in comments",
+		},
+		{
+			name: "integrating waits on open questions",
+			flow: Flow{
+				State: "Integrating - Human",
+				Next: []Step{
+					{Actor: "human", Event: "answer-open-questions"},
+					{Actor: "human", Event: "abandon-integrate"},
+					{Actor: "human", Event: "abandon"},
+				},
+			},
+			step: "Integrating",
+			next: "you answer 3. Open Questions in comments",
+		},
+		{
 			name: "blockers wait only while next is empty",
 			flow: Flow{
 				State: "Planning - Human",

@@ -7,8 +7,8 @@ CLI for [Chunk](https://chunk.ai/) — inner loop validation for software teams 
 On top of sidecars, chunk provides:
 
 - **`chunk validate`** to run your test, lint and format checks locally, on a sidecar, or in the background.
-- **`chunk factory`** to have an implementer agent make a change on a sidecar while reviewers check it against the prompts in `.chunk/reviews/`, until the checks pass.
-- **`chunk watch`** to follow and manage your factory runs live.
+- **`chunk factory plan`** to plan a change with Claude, then have it built and checked against the prompts in `.chunk/reviews/` and your validation commands, through to a pull request.
+- **`chunk watch`** to plan and follow your factory flows.
 - **`chunk mutate`** to find test coverage gaps with mutation testing.
 
 ## Why chunk?
@@ -39,9 +39,9 @@ Download the latest `chunk-cli_Windows_x86_64.zip` or `chunk-cli_Windows_arm64.z
 
 ```bash
 chunk init                                     # set up this project: config, sandbox, review prompts
-chunk factory start "add a --verbose flag"     # optional: hand chunk a diff you already started
-chunk factory build "add a --verbose flag"     # build a change from a prompt, review it, open the PR
-chunk watch                                    # follow and manage your factory runs — keep it open
+chunk factory bootstrap                        # set the project up for factory: config and sidecar image
+chunk factory plan "add a --verbose flag"      # plan a change, approve it, and it is built through to a PR
+chunk watch                                    # plan and follow your factory flows — keep it open
 ```
 
 ### Project Setup
@@ -141,27 +141,22 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 
 ## Factory
 
-`chunk factory` has an implementer agent change your code on a sidecar, then reviews the result with each prompt in `.chunk/reviews/` and runs your validation commands, feeding failures back until every check passes or attempts run out. When they all pass, it pushes the run's branch and opens a pull request on GitHub, ready for review (`--no-open-pr` leaves the branch alone). It works in a git worktree of its own, so your checkout is never touched, and you can follow a run in `chunk watch`.
+`chunk factory plan` plans a change with Claude in factory. Once you approve the plan, the chunk daemon builds it unit by unit, checking the work with each prompt in `.chunk/reviews/` and your validation commands, through to a pull request on GitHub. It works in a git worktree of its own, so your checkout is never touched, and you can follow the build in `chunk watch`, where `n` starts a new plan too.
 
 ```bash
 # Set the project up: .chunk/config.json and a sidecar image with its environment
 chunk factory bootstrap
 
-# Implement a prompt, then review and validate it until it passes
-chunk factory build "add a --verbose flag"
-
-# Or make a first pass yourself in the run's worktree, then have the factory refine it
-cd "$(chunk factory start "add a --verbose flag")"
-# ...work on it...
-chunk factory build --continue <run-id>
+# Plan a change, approve it, and it is built
+chunk factory plan "add a --verbose flag"
 ```
 
-Add your own review prompts to `.chunk/reviews/`, one `.md` file per area, for `factory build` to review with.
+Planning needs the factory daemon running with `FACTORY_PLAN_STORE=circleci`. Add your own review prompts to `.chunk/reviews/`, one `.md` file per area, for `factory plan` builds to review with.
 
 ## Other Tools
 
 ```bash
-chunk watch                  # follow and manage your factory runs live (--focus: this directory only)
+chunk watch                  # plan and follow your factory flows
 chunk mutate ./internal --parallel 4   # find coverage gaps; see docs/MUTATE.md
 chunk conflicts              # does this branch still merge cleanly? (advisory, always exits 0)
 chunk validate --async       # run in the background, then `chunk validate results`
@@ -184,8 +179,8 @@ chunk init                                 Initialize project configuration
 chunk config set|show                      Manage configuration
 chunk validate [name]                      Run quality checks
 chunk validate results|variants            Background run results; validate code variants
-chunk factory bootstrap|build|start        Implement and review changes on sidecars
-chunk watch                                Follow and manage your factory runs live
+chunk factory plan|bootstrap               Plan changes and build them in factory
+chunk watch                                Plan and follow your factory flows
 chunk mutate [path]                        Find test coverage gaps via mutation testing
 chunk conflicts                            Report whether this branch merges cleanly
 chunk hook disable|enable|status           Manage hook execution
@@ -217,7 +212,7 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API key (optional for `init`; for `factory`, or use `CLAUDE_CODE_OAUTH_TOKEN`) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription token from `claude setup-token` (for `factory`, when no API key is set) |
-| `GITHUB_TOKEN` | GitHub PAT with `repo` scope (optional, for `factory build` to open pull requests) |
+| `GITHUB_TOKEN` | GitHub PAT with `repo` scope (optional, for the chunk daemon to follow your branches' pull requests) |
 | `CIRCLECI_TOKEN` | CircleCI personal API token (for `sidecar` and `task`); `CIRCLE_TOKEN` also works |
 | `CIRCLECI_ORG_ID` | CircleCI organization ID, used instead of `--org-id` |
 | `CODE_REVIEW_CLI_MODEL` | Claude model override |

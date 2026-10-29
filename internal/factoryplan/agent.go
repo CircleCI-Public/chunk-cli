@@ -10,9 +10,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
-// Agent is a plan.Agent over a long-lived factory.Agent. The session
-// starts on the first Send, since claude needs a message to start on, and
-// is resumed by the next Send if it ends without being stopped.
+// Agent is a plan.Agent over a long-lived factory.Agent. The session starts
+// on Request, for a new plan, or on Resume, for one whose planner is not
+// running, since claude needs a message to start on. Resume also resumes it
+// if it ends without being stopped.
 type Agent struct {
 	ctx    context.Context // the session's lifetime
 	cfg    factory.AgentConfig
@@ -36,7 +37,7 @@ type Agent struct {
 	// plan; factory.OpenPlanSession but in tests.
 	openRecord func() (sessionRecord, error)
 
-	// sendMu keeps Sends in order. It is not mu: a Send can block writing to
+	// sendMu keeps sends in order. It is not mu: a send can block writing to
 	// a claude that stopped reading, and Stop must not wait on it.
 	sendMu sync.Mutex
 
@@ -51,10 +52,12 @@ type Agent struct {
 	// checkClaim is set until the reply to that message, when the daemon
 	// should hold the plan's claim for this session.
 	checkClaim bool
-	// record is the plan's session record, held open from the first Send
+	// record is the plan's session record, held open from the first send
 	// that opens it until Stop, whether or not a session then starts; nil
 	// before then.
 	record sessionRecord
+	// requested is whether a session has started on Request.
+	requested bool
 }
 
 // sessionRecord is what Agent needs of a factory.PlanSession.
@@ -64,8 +67,11 @@ type sessionRecord interface {
 	Close() error
 }
 
-// ErrStopped is returned by a Send after Stop.
+// ErrStopped is returned by a Request or Resume after Stop.
 var ErrStopped = errors.New("the planning session has been stopped")
+
+// ErrRequested is returned by a second Request.
+var ErrRequested = errors.New("the plan's request has already been sent to its planning session")
 
 // session is what Agent needs of a factory.Agent.
 type session interface {
@@ -99,7 +105,7 @@ func NewAgent(ctx context.Context, cfg factory.AgentConfig, store *Store) *Agent
 func (p *Agent) Events() <-chan plan.Event { return p.events }
 
 // SessionID is the factory session the agent claims its plan as: the one
-// recorded as planning the plan on this machine, once a Send has opened the
+// recorded as planning the plan on this machine, once a send has opened the
 // record, so a plan reopened in a new screen is planned by the same session.
 func (p *Agent) SessionID() string {
 	p.mu.Lock()
@@ -109,15 +115,43 @@ func (p *Agent) SessionID() string {
 
 // CheckStart has check run before the session starts or resumes, refusing to
 // start it when check fails, so a plan can be opened and read before what
-// planning needs is in place. It must be called before the first Send.
+// planning needs is in place. It must be called before the first Request or
+// Resume.
 func (p *Agent) CheckStart(check func(context.Context) error) { p.check = check }
 
-// Send delivers message to the session, starting it on the first message and
-// resuming it if it has ended. A message tells the agent to claim the plan
-// when it is the first since the plan was created, or the agent has since
-// lost its claim: factory frees the claims of a session that ends, and an
-// agent can release its plan, after which the daemon hands it no tasks.
-func (p *Agent) Send(ctx context.Context, message string) error {
+// Request starts the planning session on the developer's request for a new
+// plan, telling it to claim the plan. Once a session has started on it, a
+// second Request is refused; one that failed to start may be retried, since
+// the request is in no plan yet.
+func (p *Agent) Request(ctx context.Context, text string) error {
+	p.mu.Lock()
+	requested := p.requested
+	p.mu.Unlock()
+	if requested {
+		return ErrRequested
+	}
+	if err := p.send(ctx, text); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.requested = true
+	p.mu.Unlock()
+	return nil
+}
+
+// Resume has the session claim the plan again when it holds no claim:
+// starting the session, or resuming the one recorded for the plan or one
+// that ended, with claimRetryMessage. A resume sends nothing while the
+// session holds the claim, or while the holder can't be read.
+func (p *Agent) Resume(ctx context.Context) error { return p.send(ctx, "") }
+
+// send delivers request to the session, starting it on the first message and
+// resuming it if it has ended; a request of "" is a resume. What is sent
+// tells the agent to claim the plan when it is the first since the plan was
+// created, or the agent has since lost its claim: factory frees the claims
+// of a session that ends, and an agent can release its plan, after which the
+// daemon hands it no tasks.
+func (p *Agent) send(ctx context.Context, request string) error {
 	p.sendMu.Lock()
 	defer p.sendMu.Unlock()
 
@@ -143,8 +177,11 @@ func (p *Agent) Send(ctx context.Context, message string) error {
 	}
 
 	p.mu.Lock()
-	message, claimed := withClaim(p.claimed, p.store.ID(), message)
+	message, claimed := withClaim(p.claimed, p.store.ID(), request)
 	p.mu.Unlock()
+	if message == "" {
+		return nil
+	}
 
 	if live {
 		if err := a.Send(message); err != nil {
@@ -273,7 +310,7 @@ func (p *Agent) hasEnded() bool {
 }
 
 // Stop ends the session, if one started, and waits for it. A session still
-// starting is stopped by the Send starting it, once it has started.
+// starting is stopped by the send starting it, once it has started.
 func (p *Agent) Stop() error {
 	p.stopOnce.Do(func() { close(p.done) })
 	p.mu.Lock()
@@ -373,22 +410,33 @@ func startProblem(err error) error {
 	return fmt.Errorf("start the planning session: %w", err)
 }
 
-// claimMessage is what the first message after the plan is created starts
-// with. Claiming alone leaves the agent waiting for a change to be asked for,
-// so it is told the conversation is planning, and how the plan gets written:
-// by the daemon's tasks, not in the chat.
+// claimMessage is what a new plan's planning session is first sent: the
+// claim instructions, then the developer's request.
 const claimMessage = "This conversation plans a change through factory, as plan %s. " +
 	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the planning tasks it hands out. " +
 	"The plan is written with the plan tools, never in your replies; keep replies short. " +
+	noChatQuestions +
 	"The developer's request:\n\n%s"
 
-// withClaim prepends claimMessage to message when it is the first message
-// sent since planID was created, so the agent claims the plan and starts
-// planning it; a later message, or one sent before the plan exists, passes
-// through unchanged. claimed is carried by the caller across calls.
-func withClaim(claimed bool, planID, message string) (string, bool) {
-	if claimed || planID == "" {
-		return message, claimed
+// claimRetryMessage is what a planning session that holds no claim on its
+// plan is sent: the claim instructions alone, since nothing the developer
+// writes reaches it.
+const claimRetryMessage = "Your claim on plan %s has been released. " +
+	"Claim it again by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the planning tasks it hands out. " +
+	noChatQuestions
+
+// noChatQuestions keeps the planner's questions out of its replies, which
+// nobody answers.
+const noChatQuestions = "Nobody can answer you in chat: put every question for the developer in 3. Open Questions, never in a reply. "
+
+// withClaim is the message the session is next sent, or "" when nothing is
+// owed. claimed is carried by the caller across calls.
+func withClaim(claimed bool, planID, request string) (string, bool) {
+	switch {
+	case claimed || planID == "":
+		return request, claimed
+	case request == "":
+		return fmt.Sprintf(claimRetryMessage, planID), true
 	}
-	return fmt.Sprintf(claimMessage, planID, message), true
+	return fmt.Sprintf(claimMessage, planID, request), true
 }

@@ -68,7 +68,7 @@ func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) 
 	t.Helper()
 	client, cci := testClient(t)
 	store := newStore(client, "")
-	err := store.Create(context.Background(), "a plan")
+	_, err := store.Create(context.Background(), "a plan")
 	assert.NilError(t, err)
 	return store, client, cci
 }
@@ -85,7 +85,7 @@ func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(text, ""))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	err = client.SetPlanText(ctx, store.ID(), "# A plan\n")
 	assert.NilError(t, err)
@@ -166,12 +166,13 @@ func TestStoreCreateNamesThePlan(t *testing.T) {
 			store := NewStore(client, "")
 			store.name = namedAs(tc.reply, tc.err)
 
-			err := store.Create(context.Background(), tc.message)
+			title, err := store.Create(context.Background(), tc.message)
 			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(title, tc.want))
 
 			p, ok := cci.FactoryPlan(store.ID())
 			assert.Assert(t, ok)
-			assert.Check(t, cmp.Equal(p.Title, tc.want))
+			assert.Check(t, cmp.Equal(p.Title, title))
 			assert.Check(t, cmp.Equal(p.Text, skeleton(tc.want)))
 			assert.Check(t, cmp.Equal(p.State, "Unprioritized"))
 		})
@@ -185,12 +186,25 @@ func TestStoreCreateWithoutClaude(t *testing.T) {
 	client, cci := testClient(t)
 	store := NewStore(client, "")
 
-	err := store.Create(context.Background(), "add a --dry-run flag")
+	title, err := store.Create(context.Background(), "add a --dry-run flag")
 	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(title, "add-a-dry-run-flag"))
 
 	p, ok := cci.FactoryPlan(store.ID())
 	assert.Assert(t, ok)
 	assert.Check(t, cmp.Equal(p.Title, "add-a-dry-run-flag"))
+}
+
+// A plan factory will not create has no title and no ID.
+func TestStoreCreateFailsWithoutATitle(t *testing.T) {
+	client, cci := testClient(t)
+	cci.FactoryStatusCode = http.StatusInternalServerError
+	store := newStore(client, "")
+
+	title, err := store.Create(context.Background(), "add a --dry-run flag")
+	assert.Check(t, cmp.ErrorContains(err, "create the plan in factory"))
+	assert.Check(t, cmp.Equal(title, ""))
+	assert.Check(t, cmp.Equal(store.ID(), ""))
 }
 
 func TestStoreCommentsRoundTrip(t *testing.T) {
@@ -273,21 +287,97 @@ func TestStoreResolveConflictsSendsTheEvent(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"resolve-conflicts"}))
 }
 
-// TestStoreStartWorkSendsTheEvent checks that StartWork fails before Create,
-// and after it sends the plan's flow factory's prioritize event.
-func TestStoreStartWorkSendsTheEvent(t *testing.T) {
-	client, _ := testClient(t)
-	ctx := context.Background()
-	err := newStore(client, "").StartWork(ctx)
-	assert.Check(t, err != nil, "a plan not yet created took the event")
-
+// TestStoreAnswerOpenQuestionsSendsTheEvent checks that AnswerOpenQuestions
+// sends the plan's flow factory's answer-open-questions event, and fails for a
+// plan with no flow to send it.
+func TestStoreAnswerOpenQuestionsSendsTheEvent(t *testing.T) {
 	store, _, cci := createdStore(t)
-	cci.SetFactoryPlanState(store.ID(), "Unprioritized")
-	cci.SetFactoryApplicableEvents(store.ID(), "prioritize", "abandon")
-	err = store.StartWork(ctx)
-	assert.Check(t, err)
+	ctx := context.Background()
+	cci.DropFactoryFlow(store.ID())
+
+	err := store.AnswerOpenQuestions(ctx)
+	assert.Check(t, cmp.ErrorContains(err, "send the answer-open-questions event"))
+
+	store, _, cci = createdStore(t)
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	cci.SetFactoryPlanState(store.ID(), "Building - Human")
+	cci.SetFactoryApplicableEvents(store.ID(), "answer-open-questions", "abandon")
+	err = store.AnswerOpenQuestions(ctx)
+	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
-	assert.Check(t, cmp.DeepEqual(p.Events, []string{"prioritize"}))
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"answer-open-questions"}))
+}
+
+// TestStoreSendsTheHumansActions checks that StartWork, Abandon and Delete
+// each fail before Create, and after it do what they say to the store's plan
+// in factory.
+func TestStoreSendsTheHumansActions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state string
+		call  func(context.Context, *Store) error
+		check func(t *testing.T, cci *fakes.FakeCircleCI, id string)
+	}{
+		{
+			name:  "StartWork sends prioritize",
+			state: "Unprioritized",
+			call:  func(ctx context.Context, s *Store) error { return s.StartWork(ctx) },
+			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
+				p, _ := cci.FactoryPlan(id)
+				assert.Check(t, cmp.DeepEqual(p.Events, []string{"prioritize"}))
+			},
+		},
+		{
+			name:  "Abandon sends abandon with its reason",
+			state: "Planning - Human",
+			call:  func(ctx context.Context, s *Store) error { return s.Abandon(ctx, "wont-do") },
+			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
+				p, _ := cci.FactoryPlan(id)
+				assert.Check(t, cmp.DeepEqual(p.Events, []string{"abandon"}))
+				assert.Check(t, cmp.DeepEqual(p.Reasons, []string{"wont-do"}))
+			},
+		},
+		{
+			name:  "Delete deletes the plan",
+			state: "Done",
+			call:  func(ctx context.Context, s *Store) error { return s.Delete(ctx) },
+			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
+				_, ok := cci.FactoryPlan(id)
+				assert.Check(t, !ok, "the plan is still there")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, _ := testClient(t)
+			ctx := context.Background()
+			err := tc.call(ctx, newStore(client, ""))
+			assert.Check(t, cmp.ErrorIs(err, errNotCreated))
+
+			store, _, cci := createdStore(t)
+			cci.SetFactoryPlanState(store.ID(), tc.state)
+			cci.SetFactoryApplicableEvents(store.ID(), "prioritize", "abandon")
+			err = tc.call(ctx, store)
+			assert.Check(t, err)
+			tc.check(t, cci, store.ID())
+		})
+	}
+}
+
+// TestStoreFlowClaimed checks that Flow says whether a factory session claims
+// the plan.
+func TestStoreFlowClaimed(t *testing.T) {
+	store, _, cci := createdStore(t)
+	ctx := context.Background()
+
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	f, err := store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, f.Claimed, "a claimed plan's flow is not claimed")
+
+	cci.ReleaseFactoryPlan(store.ID())
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, !f.Claimed, "a released plan's flow is still claimed")
 }
 
 // TestStoreApproveDesignSendsTheEvent checks that ApproveDesign sends the
@@ -701,7 +791,7 @@ func TestStoreHolderReadsTheClaimFromFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(h, ""))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	h, err = store.Holder(ctx)
 	assert.NilError(t, err)
@@ -731,7 +821,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.Check(t, cmp.Len(f.Events, 0))
 	assert.Check(t, cmp.Equal(f.Task, ""))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
@@ -787,6 +877,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		},
 		PR:         "https://github.com/o/r/pull/7",
 		Deviations: []string{"lint fails"},
+		Claimed:    true,
 	}))
 
 	cci.SetFactoryTask(store.ID(), "")
@@ -803,6 +894,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Deviations: []string{},
 		Ended:      true,
 		Outcome:    "merged",
+		Claimed:    true,
 	}))
 
 	cci.DropFactoryFlow(store.ID())
@@ -824,7 +916,7 @@ func TestStoreFamily(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(fam, plan.Family{}))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	id := store.ID()
 	newPlan := func(title, state string) string {
@@ -949,7 +1041,7 @@ func TestStoreFamilyFails(t *testing.T) {
 			assert.NilError(t, err)
 			store := newStore(client, "")
 			ctx := context.Background()
-			err = store.Create(ctx, "a plan")
+			_, err = store.Create(ctx, "a plan")
 			assert.NilError(t, err)
 
 			_, err = store.Family(ctx)
@@ -988,7 +1080,7 @@ func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
 	err := store.SetText(ctx, "# A plan\n")
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	err = store.SetText(ctx, "# A plan\n\n## 1. Outcome\n\nEdited by hand.\n")
 	assert.NilError(t, err)

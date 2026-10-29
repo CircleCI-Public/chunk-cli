@@ -404,8 +404,8 @@ func TestFetchSnapshotRelaunching_neverRelaunchesARemoteDaemon(t *testing.T) {
 	assert.Equal(t, launches, 0)
 }
 
-// serveSessionDaemon is fakeDaemon for a daemon with a session API: /ping
-// answers build and GET /factory lists sessions.
+// serveSessionDaemon is fakeDaemon for a daemon with sessions: /ping answers
+// build and /snapshot lists the sessions in one project.
 func serveSessionDaemon(t *testing.T, build string, sessions ...Session) (sockPath string, launches *int) {
 	t.Helper()
 	dir := socketDir(t)
@@ -416,8 +416,8 @@ func serveSessionDaemon(t *testing.T, build string, sessions ...Session) (sockPa
 	assert.NilError(t, err)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, build) })
-	mux.HandleFunc("GET /factory", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(SessionList{Sessions: sessions})
+	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(Snapshot{Projects: []ProjectSnapshot{{Root: "/p"}, {Root: "/q", Sessions: sessions}}})
 	})
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
 	go func() { _ = srv.Serve(ln) }()
@@ -425,8 +425,8 @@ func serveSessionDaemon(t *testing.T, build string, sessions ...Session) (sockPa
 	return sockPath, stubLaunch(t)
 }
 
-// A newer binary must not replace a daemon that is in the middle of a factory
-// run: the run dies with it and its caller reports "no such session".
+// A newer binary must not replace a daemon that is in the middle of a plan
+// build: the build dies with it.
 func TestEnsureRunning_keepsAStaleDaemonWithARunGoing(t *testing.T) {
 	_, launches := serveSessionDaemon(t, "some-other-build",
 		Session{ID: "done", State: SessionDone},
@@ -448,12 +448,70 @@ func TestHasRunningSessions(t *testing.T) {
 		sock, _ := serveSessionDaemon(t, "b", Session{ID: "a", State: SessionRunning})
 		assert.Check(t, hasRunningSessions(sock))
 	})
-	t.Run("a daemon without the session API", func(t *testing.T) {
+	t.Run("a daemon that lists no sessions", func(t *testing.T) {
 		dir := socketDir(t)
 		serveFakeDaemon(t, dir, "b")
 		assert.Check(t, !hasRunningSessions(filepath.Join(dir, "daemon.sock")))
 	})
 	t.Run("nothing listening", func(t *testing.T) {
 		assert.Check(t, !hasRunningSessions(filepath.Join(socketDir(t), "daemon.sock")))
+	})
+}
+
+// fakeSessionDaemon serves h on the daemon socket for the test.
+func fakeSessionDaemon(t *testing.T, h http.Handler) {
+	t.Helper()
+	dir := socketDir(t)
+	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
+	assert.NilError(t, err)
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+}
+
+func TestFetchPlanBuild(t *testing.T) {
+	t.Run("a build", func(t *testing.T) {
+		uris := make(chan string, 1)
+		fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			uris <- r.URL.RequestURI()
+			_, _ = io.WriteString(w, `{"id":"s1","state":"running","first":2,"total":3,"lines":[{"level":"warn","text":"stuck"}]}`)
+		}))
+		got, found, err := FetchPlanBuild("a/b", 2)
+		assert.NilError(t, err)
+		assert.Check(t, found)
+		assert.Check(t, cmp.DeepEqual(got, PlanBuildActivity{
+			ID: "s1", State: SessionRunning, First: 2, Total: 3,
+			Lines: []FeedLine{{Level: FeedWarn, Text: "stuck"}},
+		}))
+		uri := <-uris
+		assert.Check(t, cmp.Equal(uri, "/factory/plans/a%2Fb/build?after=2"))
+	})
+
+	t.Run("no build of the plan", func(t *testing.T) {
+		fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "no build of plan x", http.StatusNotFound)
+		}))
+		_, found, err := FetchPlanBuild("x", 0)
+		assert.NilError(t, err)
+		assert.Check(t, !found)
+	})
+
+	t.Run("a daemon without the route", func(t *testing.T) {
+		fakeSessionDaemon(t, http.NotFoundHandler())
+		_, found, err := FetchPlanBuild("x", 0)
+		assert.Check(t, cmp.ErrorIs(err, ErrDaemonUnavailable))
+		assert.Check(t, !found)
+	})
+
+	t.Run("a daemon error", func(t *testing.T) {
+		fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "broken", http.StatusInternalServerError)
+		}))
+		_, found, err := FetchPlanBuild("x", 0)
+		var refused *SessionRefused
+		assert.Assert(t, errors.As(err, &refused), "got %v", err)
+		assert.Check(t, cmp.Equal(refused.Status, http.StatusInternalServerError))
+		assert.Check(t, !found)
 	})
 }

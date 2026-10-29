@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -71,12 +72,16 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s from factory: %v", req.PlanID, err)
 	}
-	if p.Phase == circleci.PhaseEnded {
-		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s has ended (%s); there is nothing to build", req.PlanID, planEnd(p))
-	}
-	state, err := flowState(ctx, api, req.PlanID)
+	f, err := planFlow(ctx, api, req.PlanID)
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s's flow from factory: %v", req.PlanID, err)
+	}
+	if f != nil && f.Phase == circleci.PhaseEnded {
+		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s has ended (%s); there is nothing to build", req.PlanID, planEnd(f))
+	}
+	var state string
+	if f != nil {
+		state = f.State
 	}
 	text, err := api.PlanText(ctx, req.PlanID)
 	if err != nil {
@@ -86,7 +91,7 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s is already being built, in session %s", req.PlanID, id)
 	}
 
-	entry, sctx, _ := d.sessions.add(chunkd.Session{
+	entry, sctx := d.sessions.add(chunkd.Session{
 		ProjectRoot: ps.root,
 		Branch:      p.Branch,
 		HeadSHA:     headRef(ps.root),
@@ -114,27 +119,53 @@ func (d *daemon) buildingPlan(planID string) string {
 	return ""
 }
 
-// planEnd says how ended plan p ended, even from a factory that serves no
-// outcome.
-func planEnd(p *circleci.Plan) string {
-	if p.Outcome != "" {
-		return p.Outcome
+// latestPlanBuild is plan planID's build session: the running one, else the
+// one started last; nil when the plan has none.
+func (d *daemon) latestPlanBuild(planID string) *sessionEntry {
+	var best *sessionEntry
+	var bestS chunkd.Session
+	for _, e := range d.sessions.entries() {
+		s := e.snapshot()
+		if s.Factory == nil || s.Factory.PlanID != planID {
+			continue
+		}
+		running := s.State == chunkd.SessionRunning
+		bestRunning := bestS.State == chunkd.SessionRunning
+		if best == nil || running && !bestRunning ||
+			running == bestRunning && s.StartedAt.After(bestS.StartedAt) {
+			best, bestS = e, s
+		}
+	}
+	return best
+}
+
+// planBuildActivity is s's feed lines after the first after, numbered as the
+// session wrote them. An after the session never reached (one an earlier
+// session's client saw) or below 0 reads from the start.
+func planBuildActivity(s chunkd.Session, after int) chunkd.PlanBuildActivity {
+	feed := s.Factory.Progress
+	kept := feed.Total - len(feed.Lines)
+	if after < 0 || after > feed.Total {
+		after = 0
+	}
+	from := max(after, kept)
+	return chunkd.PlanBuildActivity{
+		ID: s.ID, State: s.State, Error: s.Error,
+		First: from, Lines: feed.Lines[from-kept:], Total: feed.Total,
+	}
+}
+
+// planEnd says how the plan of ended flow f ended, even from a factory that
+// serves no outcome.
+func planEnd(f *circleci.Flow) string {
+	if f.Outcome != "" {
+		return f.Outcome
 	}
 	return "ended"
 }
 
-// flowState is plan id's flow state, "" when it has no flow (a 404), as once
-// the plan has ended.
-func flowState(ctx context.Context, api PlanAPI, id string) (string, error) {
-	f, err := planFlow(ctx, api, id)
-	if err != nil || f == nil {
-		return "", err
-	}
-	return f.State, nil
-}
-
-// planFlow is plan id's flow, nil when it has no flow (a 404), as once the
-// plan has ended.
+// planFlow is plan id's flow, nil when it has no flow (a 404), as a plan made
+// before plans had flows has none.
 func planFlow(ctx context.Context, api PlanAPI, id string) (*circleci.Flow, error) {
 	f, err := api.GetFlow(ctx, id)
 	var se *circleci.StatusError
@@ -244,8 +275,14 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 				entry.s.Factory.Branch, entry.s.Branch = p.Branch, p.Branch
 			}
 			entry.mu.Unlock()
-			if p.Phase == circleci.PhaseEnded {
-				end := planEnd(p)
+			// A failed read, or no flow, changes nothing: the last state is
+			// kept, and an armed nudge stays armed.
+			f, err := planFlow(ctx, api, req.PlanID)
+			if err != nil || f == nil {
+				continue
+			}
+			if f.Phase == circleci.PhaseEnded {
+				end := planEnd(f)
 				note(iostream.LevelDone, "Plan "+req.PlanID+" ended: "+end)
 				stopBuild(agent, ended, req.PlanID)
 				entry.mu.Lock()
@@ -253,12 +290,6 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 				entry.mu.Unlock()
 				d.settleSession(entry, nil)
 				return
-			}
-			// A failed read, or no flow, changes nothing: the last state is
-			// kept, and an armed nudge stays armed.
-			f, err := planFlow(ctx, api, req.PlanID)
-			if err != nil || f == nil {
-				continue
 			}
 			entry.mu.Lock()
 			entry.s.Factory.PlanState = f.State
@@ -282,6 +313,28 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 			}
 		}
 	}
+}
+
+// maxSaidText caps what the feed holds of one of the build session's replies:
+// a reply can be a paragraph.
+const maxSaidText = 160
+
+// firstLine is the first line of s that is not blank.
+func firstLine(s string) string {
+	for l := range strings.Lines(s) {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// clip shortens s to n runes, marking where it was cut.
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 // stopBuild stops a plan's build session and waits for its events to end,

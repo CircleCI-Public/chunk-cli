@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -17,8 +18,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/factoryplan"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
@@ -29,9 +32,11 @@ func newFactoryPlanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plan [prompt]",
 		Short: "Plan a change with Claude, then approve it and build it on the daemon",
-		Long: `Plan a change in a chat with a factory planning session of Claude Code on
-this machine. The plan is kept in factory and shown beside the chat as it
-changes; comment on it until it is right, then press ctrl+s to approve it in
+		Long: `Plan a change with a factory planning session of Claude Code on this
+machine. The request (the prompt, or what you type when there is none)
+creates the plan; after that the session works through factory's tasks, and
+its activity is shown beside the plan. The plan is kept in factory; comment
+on it until it is right, then press ctrl+s to approve it in
 factory, and the chunk daemon builds it, in a build session of Claude Code
 in the plan's own worktree, through to a pull request. Follow the build in
 chunk watch.
@@ -62,7 +67,7 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 			if err != nil {
 				return err
 			}
-			if err := checkFactoryProject(ctx, root); err != nil {
+			if err := checkPlanProject(ctx, root); err != nil {
 				return err
 			}
 			api, err := factoryPlanClient()
@@ -103,6 +108,69 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 
 	cmd.Flags().StringVar(&model, "model", "", "model Claude plans and builds with (default: your Claude Code default)")
 	return cmd
+}
+
+// requireLocalDaemon refuses to run when the environment points at a remote
+// daemon. A plan works from files on this machine, so it belongs to the local
+// daemon; a remote daemon would be working on a different checkout.
+func requireLocalDaemon() error {
+	if chunkd.CurrentConnection().Remote == "" {
+		return nil
+	}
+	return newUserError("chunk factory plan works from this machine's files, on the local chunk daemon.").
+		withCode("command.invalid_args").
+		withSuggestion("Unset CHUNK_DAEMON_REMOTE_ADDR to use this command.").
+		withExitCode(ExitBadArgs).
+		withoutDetail()
+}
+
+// sessionProjectRoot names the project to work on: the git repository
+// containing the working directory.
+func sessionProjectRoot(ctx context.Context) (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("determine working directory: %w", err)
+	}
+	top := gitutil.TopLevelCtx(ctx, dir)
+	if top == "" {
+		return "", newUserError(fmt.Sprintf("%s is not inside a git repository.", dir)).
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	// A build needs an origin to clone and push; refuse before anything starts.
+	if _, err := gitremote.URL(ctx, top, "origin"); err != nil {
+		return "", newUserError("This project has no git remote named origin.").
+			withSuggestion("Add one with: git remote add origin <url>").
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			wrap(err)
+	}
+	return config.CanonicalProjectRoot(top), nil
+}
+
+// checkPlanProject reports why a plan's build cannot start in root, as one
+// sentence for the dashboard, or nil when it can.
+func checkPlanProject(ctx context.Context, root string) error {
+	if _, err := gitremote.URL(ctx, root, "origin"); err != nil {
+		return errors.New("this project has no git remote named origin; add one with git remote add origin <url>")
+	}
+	cfg, err := config.LoadProjectConfig(root)
+	if err != nil {
+		return errors.New(dashboardMessage(&userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err}))
+	}
+	dir := filepath.Join(root, review.DefaultDir)
+	_, _, err = factory.LoadChecks(dir, true, cfg, false)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, factory.ErrNothingToCheck):
+		return errors.New(dashboardMessage(&userError{
+			msg:        "Nothing for factory to check a plan's build with.",
+			suggestion: fmt.Sprintf("Add one .md or .txt file per review to %s, or add validation commands with 'chunk init'.", review.DefaultDir),
+		}))
+	}
+	return errors.New(dashboardMessage(&userError{msg: fmt.Sprintf("Could not read review prompts from %s.", dir), err: err}))
 }
 
 // factoryPlanClient resolves the CircleCI client the planning screen's store
@@ -177,9 +245,9 @@ func planSession(ctx context.Context, root, id, model string, api *circleci.Clie
 // then has the plan built, returning the build's ID. The planning session is
 // stopped as soon as the approval is in, whether or not the build then
 // starts: approving released the planning session's claim, or a parent
-// planner's, and a planning session still running would
-// claim the plan again at the developer's next message, when factory would
-// hand it the build tasks, which it cannot do. A plan whose approval failed
+// planner's, and a planning session still running could
+// claim the plan again, when factory would hand it the build tasks, which it
+// cannot do. A plan whose approval failed
 // keeps its session, to plan on. step is called with each step as it
 // starts.
 func approveAndBuild(step func(string), approve, stopPlanning func() error, build func() (string, error)) (string, error) {

@@ -17,7 +17,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -31,16 +30,10 @@ type projectState struct {
 	// outside the lock, because resolving it touches the filesystem.
 	canonRoot string
 	dataDir   string
-	// repoDataDir is the data directory of root's git repository, where
-	// factory runs are kept, or "" outside git.
-	repoDataDir string
-	log         *eventlog.Log
-	offset      int64
-	events      []eventlog.Event
-	snap        chunkd.ProjectSnapshot
-	// sidecarPools maps sidecar ID to the persisted pool that owns it. It stays
-	// server-side; snapshots attach the IDs directly to their factory run.
-	sidecarPools map[string]string
+	log       *eventlog.Log
+	offset    int64
+	events    []eventlog.Event
+	snap      chunkd.ProjectSnapshot
 
 	// conflict and lastFetch are written by the conflict loop and read by the
 	// poll loop when it builds snap, so unlike the fields above — which only
@@ -85,27 +78,19 @@ type daemon struct {
 	// prm monitors open PRs for each project's current branch. Nil when no
 	// GitHub credentials are available.
 	prm *prMonitor
-	// prp follows the pull requests runs opened. Nil-safe like prm.
-	prp *prProgress
 	// prov creates and tracks sidecars owned by this daemon instance. Nil when
 	// the daemon has no client (unauthenticated), in which case POST /sidecar
 	// returns 503.
 	prov *provisioner
-	// warm keeps the sidecars made ahead of factory runs while their work is
-	// drafted. Nil in daemons built without one, which then make none.
-	warm *warmStore
 	// claims tracks which sessions are actively validating which paths, for
 	// advisory cross-agent coordination.
 	claims *claimStore
 	// live drops sidecars the API no longer lists, so the dashboard shows only
 	// the ones that exist.
 	live *livenessChecker
-	// sessions holds pre-PR sessions, and rcfg what the daemon needs to run one.
+	// sessions holds plan builds, and rcfg what the daemon builds them with.
 	sessions *sessionStore
-	rcfg     ReviewConfig
-	// gh is the GitHub client, nil when the daemon has no token. Factory runs
-	// asked to open a pull request need it.
-	gh *github.Client
+	rcfg     PlanConfig
 	// polled is closed once the first poll has finished, so /snapshot can wait
 	// for data while /ping answers straight away. Nil in daemons built without
 	// one, which have nothing to wait for.
@@ -240,14 +225,11 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		risk:      newRiskMemory(),
 		hist:      newRiskHistory(),
 		prm:       newPRMonitor(ghClient),
-		prp:       newPRProgress(ghClient),
 		prov:      prov,
 		claims:    newClaimStore(),
 		live:      newLivenessChecker(listFor(client)),
 		sessions:  newSessionStore(ctx),
-		warm:      newWarmStore(ctx),
-		rcfg:      dopts.review,
-		gh:        ghClient,
+		rcfg:      dopts.plans,
 		polled:    make(chan struct{}),
 	}
 	// A background run is the one run with nobody to report a failure to, so what
@@ -260,8 +242,6 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	defer d.res.stopAll()
 	defer d.tasks.stopAll()
 	defer d.sessions.stopAll()
-	// Before the sessions stop: a run waiting for warm sidecars is let go.
-	defer d.warm.stopAll()
 	if prov != nil {
 		defer prov.stopAll(context.Background())
 	}
@@ -327,7 +307,6 @@ func (d *daemon) pollLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			d.poll()
-			d.prp.refresh(ctx, d.sessions)
 			d.claims.expireAll()
 		case <-ctx.Done():
 			return
@@ -407,8 +386,7 @@ func (d *daemon) initProject(root string) *projectState {
 		log.Printf("chunkd: event log for %s: %v", root, err)
 		return nil
 	}
-	repoDataDir, _ := config.RepoDataDir(root)
-	ps := &projectState{root: root, canonRoot: canonicalRoot(root), dataDir: dataDir, repoDataDir: repoDataDir, log: el}
+	ps := &projectState{root: root, canonRoot: canonicalRoot(root), dataDir: dataDir, log: el}
 	// Resolve org/repo once for PR monitoring. Failure is silently ignored:
 	// the project may not be on GitHub, or the remote may not be reachable.
 	if org, repo, err := gitremote.DetectOrgAndRepo(root); err == nil {
@@ -466,7 +444,7 @@ func (d *daemon) updateProject(ps *projectState) {
 		ps.offset = newOff
 	}
 
-	sidecars, sidecarPools := loadSidecarsAndPools(ps.dataDir, ps.repoDataDir, ps.root, snapName)
+	sidecars := loadSidecars(ps.dataDir, ps.root, snapName)
 	inferredOrg := fillMissingOrg(sidecars, ps.root)
 	// Same background context as the PR fetch below: the list must survive this
 	// poll returning.
@@ -497,7 +475,6 @@ func (d *daemon) updateProject(ps *projectState) {
 	// writes it from another goroutine on its own schedule.
 	snap.Conflict = ps.conflict
 	ps.snap = snap
-	ps.sidecarPools = sidecarPools
 	d.mu.Unlock()
 }
 
@@ -525,7 +502,7 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 	if len(roots) == 0 {
 		projects := make([]chunkd.ProjectSnapshot, 0, len(d.projects))
 		for _, ps := range d.projects {
-			projects = append(projects, d.withSessions(ps.root, ps.snap, ps.sidecarPools))
+			projects = append(projects, d.withSessions(ps.root, ps.snap))
 		}
 		// Map iteration is random; sort by root so project rows stay stable
 		// between polls when watchAll mode requests all projects.
@@ -541,7 +518,7 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 				continue
 			}
 			seen[ps.root] = true
-			ordered = append(ordered, d.withSessions(ps.root, ps.snap, ps.sidecarPools))
+			ordered = append(ordered, d.withSessions(ps.root, ps.snap))
 			break
 		}
 	}
@@ -554,44 +531,20 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 //
 // root is passed in because a project adopted a moment ago has no snapshot yet,
 // and so no Root of its own to look sessions up by.
-func (d *daemon) withSessions(root string, p chunkd.ProjectSnapshot, sidecarPools map[string]string) chunkd.ProjectSnapshot {
+func (d *daemon) withSessions(root string, p chunkd.ProjectSnapshot) chunkd.ProjectSnapshot {
 	if p.Root == "" {
 		p.Root = root
 	}
 	p.Sessions = d.sessions.forProject(root)
-	byPool := make(map[string]int, len(p.Sessions))
-	for i := range p.Sessions {
-		f := p.Sessions[i].Factory
-		if f == nil || f.RunID == "" {
-			continue
-		}
-		// Sessions are newest first. If two very short runs started in the same
-		// second and therefore share a run ID, the remaining pool belongs to the
-		// newest one.
-		name := factory.PoolName(f.RunID)
-		if _, exists := byPool[name]; !exists {
-			byPool[name] = i
-		}
-	}
-	// A run continuing another can take over the sidecars made ahead of it
-	// under the continued run's ID, so a pool no run of that name owns belongs
-	// to the newest run continuing it.
-	for i := range p.Sessions {
-		f := p.Sessions[i].Factory
-		if f == nil || f.ContinuesRunID == "" {
-			continue
-		}
-		name := factory.PoolName(f.ContinuesRunID)
-		if _, exists := byPool[name]; !exists {
-			byPool[name] = i
-		}
-	}
-	for _, sc := range p.Sidecars {
-		if i, ok := byPool[sidecarPools[sc.ID]]; ok {
-			p.Sessions[i].Factory.SidecarIDs = append(p.Sessions[i].Factory.SidecarIDs, sc.ID)
-		}
-	}
 	return p
+}
+
+// factoryAuthError explains why plan builds cannot run, or "" when they can.
+func (d *daemon) factoryAuthError() string {
+	if d.planAPI() == nil {
+		return "not authenticated to CircleCI — plan builds unavailable (run: chunk auth login)"
+	}
+	return ""
 }
 
 // fillMissingOrg gives sidecars whose state recorded no org the project's org,

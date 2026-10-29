@@ -28,6 +28,8 @@ type fakeStore struct {
 	// FamilyV is what Family returns.
 	FamilyV Family
 	TextV   string
+	// TitleV is the title Create returns.
+	TitleV string
 	// CommentsV is the comments, ordered as added.
 	CommentsV []Comment
 	nextID    int
@@ -39,12 +41,19 @@ type fakeStore struct {
 	// call, in order. Like factory, which moves the plan at its next poll,
 	// AddressComments leaves StateV as it is.
 	HandedOff []string
+	// Answered records the state the plan was in at each AnswerOpenQuestions
+	// call, in order. Like AddressComments, it leaves StateV as it is.
+	Answered []string
 	// ConflictsSent records the state the plan was in at each
 	// ResolveConflicts call, in order.
 	ConflictsSent []string
 	// Started records the state the plan was in at each StartWork call, in
 	// order.
 	Started []string
+	// Abandoned records the reasons Abandon was called with, in order.
+	Abandoned []string
+	// PlanDeleted is whether Delete deleted the plan.
+	PlanDeleted bool
 	// Added records the AddComment calls, in order.
 	Added [][2]string // {quote, body}
 	// Edited, Resolved and Deleted record the ids EditComment,
@@ -59,6 +68,7 @@ type fakeStore struct {
 	CreateErr, FlowErr, FamilyErr, AddressErr, TextErr, CommentsErr error
 	SetTextErr                                                      error
 	AddErr, EditErr, ResolveErr, DeleteErr                          error
+	AbandonErr, DeletePlanErr                                       error
 	// FailAddAfter, when > 0, fails AddComment calls numbered after this
 	// many successes.
 	FailAddAfter int
@@ -78,14 +88,14 @@ func (f *fakeStore) ID() string {
 	return ""
 }
 
-func (f *fakeStore) Create(_ context.Context, message string) error {
+func (f *fakeStore) Create(_ context.Context, message string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.CreateErr != nil {
-		return f.CreateErr
+		return "", f.CreateErr
 	}
 	f.Created, f.Message = true, message
-	return nil
+	return f.TitleV, nil
 }
 
 func (f *fakeStore) Flow(context.Context) (Flow, error) {
@@ -137,6 +147,16 @@ func (f *fakeStore) AddressComments(context.Context) error {
 	return nil
 }
 
+func (f *fakeStore) AnswerOpenQuestions(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.AddressErr != nil {
+		return f.AddressErr
+	}
+	f.Answered = append(f.Answered, f.StateV)
+	return nil
+}
+
 func (f *fakeStore) ApproveDesign(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -164,6 +184,26 @@ func (f *fakeStore) StartWork(context.Context) error {
 		return f.AddressErr
 	}
 	f.Started = append(f.Started, f.StateV)
+	return nil
+}
+
+func (f *fakeStore) Abandon(_ context.Context, reason string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.AbandonErr != nil {
+		return f.AbandonErr
+	}
+	f.Abandoned = append(f.Abandoned, reason)
+	return nil
+}
+
+func (f *fakeStore) Delete(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.DeletePlanErr != nil {
+		return f.DeletePlanErr
+	}
+	f.PlanDeleted = true
 	return nil
 }
 

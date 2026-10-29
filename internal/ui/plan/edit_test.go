@@ -40,7 +40,7 @@ func editedFrom(t *testing.T, m Model, lo, hi int, text string) editedMsg {
 	path := filepath.Join(t.TempDir(), "edit.md")
 	err := os.WriteFile(path, []byte(text), 0o600)
 	assert.NilError(t, err)
-	return editedMsg{path: path, before: m.renderedFrom, start: start, end: end, heading: m.headingAbove(lo), text: text}
+	return editedMsg{path: path, before: m.renderedFrom, start: start, end: end, block: lo, text: text}
 }
 
 func TestEOpensTheHighlightedPartInTheEditor(t *testing.T) {
@@ -85,7 +85,7 @@ func TestEExplainsWhyItCannotEditWhileFactoryWorks(t *testing.T) {
 	assert.Check(t, cmp.Len(files, 0))
 }
 
-func TestEditedPartIsSavedInPlaceAndTheAgentToldOfIt(t *testing.T) {
+func TestEditedPartIsSavedInPlaceWithAReReadNoteQueued(t *testing.T) {
 	m, store, agent := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
@@ -95,13 +95,77 @@ func TestEditedPartIsSavedInPlaceAndTheAgentToldOfIt(t *testing.T) {
 	assert.Check(t, cmp.Equal(store.Set[0],
 		"## 1. Outcome\n\nThe flag exists and is documented.\n\n## 2. Spec\n\n* [AGENT] parse it in main.go"))
 	assert.Check(t, !m.editing)
-	assert.Check(t, cmp.Equal(ansi.Strip(m.status), "Saved your edit."))
-	sent := agent.Sent()
-	assert.Assert(t, cmp.Len(sent, 1))
-	assert.Check(t, cmp.Contains(sent[0], "I edited the plan myself"))
-	assert.Check(t, cmp.Contains(sent[0], `"1. Outcome"`))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Saved your edit."))
+	assert.Check(t, cmp.Len(agent.Sent(), 0), "nothing goes to the session")
+	queued := queuedComments(m.comments)
+	assert.Assert(t, cmp.Len(queued, 1))
+	assert.Check(t, cmp.Equal(queued[0].text, rereadNote))
+	assert.Check(t, cmp.Equal(queued[0].quote, "The flag exists and is documented."))
+	assert.Check(t, cmp.Equal(queued[0].block, 1))
 	_, err := os.Stat(msg.path)
 	assert.Check(t, os.IsNotExist(err), "the editor's file was left behind")
+}
+
+// saveEdit drives an edit of block i of m's plan to text, as the editor
+// closing on it would.
+func saveEdit(t *testing.T, m Model, i int, text string) Model {
+	t.Helper()
+	m.editing = true
+	return drive(t, m, editedFrom(t, m, i, i, text))
+}
+
+func TestEditsQueueOneReReadNotePerPart(t *testing.T) {
+	m, store, _ := planInPlan(t)
+	m = saveEdit(t, m, 1, "The flag exists and is documented.\n")
+	m = saveEdit(t, m, 3, "* [AGENT] parse it in main.go and cmd.go\n")
+	assert.Assert(t, cmp.Len(store.Set, 2))
+	assert.Assert(t, cmp.Len(queuedComments(m.comments), 2))
+
+	// The same first part, with a part added after it.
+	m = saveEdit(t, m, 1, "The flag exists and is documented.\n\nIt is in the README.\n")
+	assert.Assert(t, cmp.Len(store.Set, 3))
+	assert.Assert(t, cmp.Len(queuedComments(m.comments), 2))
+
+	m = saveEdit(t, m, 1, "The flag is documented.\n\nIt is in the README.\n")
+	assert.Assert(t, cmp.Len(store.Set, 4))
+	queued := queuedComments(m.comments)
+	assert.Assert(t, cmp.Len(queued, 2))
+	var quotes []string
+	for _, c := range queued {
+		assert.Check(t, cmp.Equal(c.text, rereadNote))
+		quotes = append(quotes, c.quote)
+		if c.block == 1 {
+			assert.Check(t, cmp.Equal(c.quote, "The flag is documented."))
+		}
+	}
+	assert.Check(t, cmp.Contains(quotes, "The flag is documented."))
+	assert.Check(t, cmp.Contains(quotes, "* [AGENT] parse it in main.go and cmd.go"))
+}
+
+func TestReReadNoteGoesWithTheQueuedCommentsOnS(t *testing.T) {
+	t.Run("sent", func(t *testing.T) {
+		m, store, agent := planInPlan(t)
+		m = saveEdit(t, m, 1, "The flag exists and is documented.\n")
+		m = drive(t, m, press("s"))
+
+		assert.Check(t, cmp.DeepEqual(store.Added, [][2]string{{"The flag exists and is documented.", rereadNote}}))
+		assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Human"}))
+		assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
+		assert.Check(t, cmp.Len(agent.Sent(), 0), "nothing goes to the session")
+	})
+	t.Run("dropped", func(t *testing.T) {
+		m, store, agent := planInPlan(t)
+		m = saveEdit(t, m, 1, "The flag exists and is documented.\n")
+		m.moveCursor(1)
+		assert.Assert(t, m.commentAt(m.cursor) >= 0, "the cursor is not on the note")
+		m = drive(t, m, press("d"))
+		assert.Assert(t, cmp.Len(queuedComments(m.comments), 0))
+		m = drive(t, m, press("s"))
+
+		assert.Check(t, cmp.Len(store.Added, 0))
+		assert.Check(t, cmp.Len(store.HandedOff, 0))
+		assert.Check(t, cmp.Len(agent.Sent(), 0))
+	})
 }
 
 func TestEditedPartIsNotSavedWhenNothingChanged(t *testing.T) {
@@ -112,6 +176,7 @@ func TestEditedPartIsNotSavedWhenNothingChanged(t *testing.T) {
 
 	assert.Check(t, cmp.Len(store.Set, 0))
 	assert.Check(t, cmp.Len(agent.Sent(), 0))
+	assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
 	assert.Check(t, !m.editing)
 	assert.Check(t, cmp.Equal(ansi.Strip(m.status), "No changes."))
 }
@@ -122,6 +187,7 @@ func TestEditedPartLeftEmptyIsNotSaved(t *testing.T) {
 	m = drive(t, m, editedFrom(t, m, 1, 1, "\n\n"))
 
 	assert.Check(t, cmp.Len(store.Set, 0))
+	assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
 	assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Nothing was left of that part"))
 }
 
@@ -152,6 +218,18 @@ func TestEditIsRefusedOnceFactoryStopsWaiting(t *testing.T) {
 
 	assert.Check(t, cmp.Len(store.Set, 0))
 	assert.Check(t, cmp.Contains(ansi.Strip(m.status), "factory is no longer waiting on you"))
+}
+
+func TestEditIsSavedWhileFactoryWaitsOnOpenQuestions(t *testing.T) {
+	m, store, _ := planInPlan(t)
+	store.setEvents("answer-open-questions", "abandon")
+	m = refreshed(t, m)
+	m.editing = true
+	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
+	m = drive(t, m, msg)
+
+	assert.Check(t, cmp.Len(store.Set, 1))
+	assert.Check(t, strings.HasPrefix(ansi.Strip(m.status), "Saved your edit."), "status: %q", m.status)
 }
 
 func TestFailedEditorSavesNothing(t *testing.T) {

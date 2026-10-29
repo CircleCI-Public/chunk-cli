@@ -3,8 +3,8 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
@@ -17,23 +17,15 @@ const maxRequestBytes = 64 * 1024
 // transport's normal auth: the Unix socket is user-local, and the TCP listener
 // demands the bearer token.
 //
-//	POST /factory              start a factory session
-//	GET  /factory[?root=<path>] list sessions (newest first), optionally one project's
-//	GET  /factory/{id}         one session with its review findings
+//	POST /factory/plans        build an approved factory plan
+//	GET /factory/plans/{plan}/build[?after=N]  a plan's build session and its feed
 //	POST /factory/{id}/cancel  stop a session
 //	DELETE /factory/{id}       forget a finished session (409 while it is running)
-//	POST /factory/plans        build an approved factory plan
-//	POST /factory/warm         make the sidecars a run continuing run_id would use
-//	POST /factory/warm/{run}/cancel  delete those sidecars
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
-	mux.HandleFunc("POST /factory", d.handleFactoryStart)
-	mux.HandleFunc("GET /factory", d.handleSessionList)
-	mux.HandleFunc("GET /factory/{id}", d.handleSessionGet)
+	mux.HandleFunc("POST /factory/plans", d.handlePlanBuild)
+	mux.HandleFunc("GET /factory/plans/{plan}/build", d.handlePlanBuildActivity)
 	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
 	mux.HandleFunc("DELETE /factory/{id}", d.handleSessionDelete)
-	mux.HandleFunc("POST /factory/plans", d.handlePlanBuild)
-	mux.HandleFunc("POST /factory/warm", d.handleFactoryWarm)
-	mux.HandleFunc("POST /factory/warm/{run}/cancel", d.handleFactoryWarmCancel)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -50,24 +42,6 @@ func writeAPIError(w http.ResponseWriter, err error) {
 		return
 	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
-}
-
-func (d *daemon) handleFactoryStart(w http.ResponseWriter, r *http.Request) {
-	var req chunkd.FactoryRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
-		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if req.ProjectRoot == "" {
-		http.Error(w, "project_root required", http.StatusBadRequest)
-		return
-	}
-	sess, err := d.startFactory(req)
-	if err != nil {
-		writeAPIError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, chunkd.SessionStartResponse{ID: sess.ID})
 }
 
 func (d *daemon) handlePlanBuild(w http.ResponseWriter, r *http.Request) {
@@ -88,36 +62,21 @@ func (d *daemon) handlePlanBuild(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, chunkd.SessionStartResponse{ID: sess.ID})
 }
 
-func (d *daemon) handleSessionList(w http.ResponseWriter, r *http.Request) {
-	root := r.URL.Query().Get("root")
-	if root == "" {
-		var all []chunkd.Session
-		for _, p := range d.snapshot(nil).Projects {
-			all = append(all, p.Sessions...)
-		}
-		writeJSON(w, http.StatusOK, chunkd.SessionList{Sessions: all})
-		return
-	}
-	ps := d.lookupProject(root)
-	if ps == nil {
-		http.Error(w, fmt.Sprintf("the chunk daemon is not tracking %q", root), http.StatusNotFound)
-		return
-	}
-	writeJSON(w, http.StatusOK, chunkd.SessionList{Sessions: d.sessions.forProject(ps.root)})
-}
-
-func (d *daemon) handleSessionGet(w http.ResponseWriter, r *http.Request) {
-	entry := d.sessions.get(r.PathValue("id"))
+// handlePlanBuildActivity answers a plan's build session and its feed lines
+// past ?after=N. A missing or unreadable after is 0.
+func (d *daemon) handlePlanBuildActivity(w http.ResponseWriter, r *http.Request) {
+	planID := r.PathValue("plan")
+	entry := d.latestPlanBuild(planID)
 	if entry == nil {
-		http.Error(w, "no such session", http.StatusNotFound)
+		http.Error(w, "no build of plan "+planID, http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, entry.detail())
+	after, _ := strconv.Atoi(r.URL.Query().Get("after"))
+	writeJSON(w, http.StatusOK, planBuildActivity(entry.snapshot(), after))
 }
 
 func (d *daemon) handleSessionCancel(w http.ResponseWriter, r *http.Request) {
-	found, _ := d.sessions.cancelSession(r.PathValue("id"))
-	if !found {
+	if !d.sessions.cancelSession(r.PathValue("id")) {
 		http.Error(w, "no such session", http.StatusNotFound)
 		return
 	}

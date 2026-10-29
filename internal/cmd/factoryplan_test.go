@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -60,4 +61,13 @@ func TestApproveAndBuildKeepsThePlanningSessionWhenApprovalFails(t *testing.T) {
 	assert.Check(t, cmp.ErrorContains(err, "not ready"))
 	assert.Check(t, cmp.DeepEqual(a.steps, []string{"approve"}))
 	assert.Check(t, cmp.DeepEqual(a.shown, []string{"Approving the plan in factory…"}))
+}
+
+// A plan works from this machine's files, so a remote daemon is refused, and
+// the refusal names chunk factory plan.
+func TestFactoryPlanRefusesARemoteDaemon(t *testing.T) {
+	t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", "127.0.0.1:9999")
+	err := requireLocalDaemon()
+	assert.Assert(t, cmp.ErrorContains(err, "chunk factory plan"))
+	assert.Check(t, !strings.Contains(err.Error(), "factory build"))
 }

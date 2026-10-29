@@ -1,8 +1,8 @@
-// Package plan is the planning screen: a chat with Claude beside the plan
-// factory is writing, rendered as markdown. The developer can comment
-// on any part of the plan; comments are queued locally and saved to factory
-// when the developer sends. When the developer approves the plan, chunk
-// builds it through factory.
+// Package plan is the planning screen: a new plan's request, then its
+// planning session's activity, beside the plan factory is writing, rendered
+// as markdown. The developer can comment on any part of the plan; comments
+// are queued locally and saved to factory when the developer sends. When the
+// developer approves the plan, chunk builds it through factory.
 //
 // The screen is a component: its host passes it messages and draws what
 // Content returns, and it reports that it is done with a ClosedMsg. Screen
@@ -28,6 +28,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/clipboard"
 )
@@ -105,9 +106,6 @@ type message struct {
 	fromUser bool
 	text     string
 	failed   bool
-	// toBusy is a message of the developer's that reached the agent while it
-	// was working, so it reads the message once it is done with that.
-	toBusy bool
 	// byTask is a reply to a factory task rather than to the developer.
 	byTask bool
 	// task is the category of the factory task the reply is to, when byTask
@@ -139,6 +137,10 @@ type (
 	conflictsSentMsg struct{ err error }
 	// startedMsg is the end of sending prioritize.
 	startedMsg struct{ err error }
+	// abandonedMsg is the end of sending abandon.
+	abandonedMsg struct{ err error }
+	// planDeletedMsg is the end of deleting the plan.
+	planDeletedMsg struct{ err error }
 	// approveStepMsg is a step of the approval starting; next is where the
 	// approval's later messages come from.
 	approveStepMsg struct {
@@ -154,10 +156,10 @@ type (
 	}
 	commentSavedMsg struct{ err error }
 	// createdMsg is the end of creating the plan in factory, for the
-	// developer's first message, text.
+	// developer's first message, text; title is the name factory gave it.
 	createdMsg struct {
-		text string
-		err  error
+		text, title string
+		err         error
 	}
 	queueSavedMsg struct {
 		saved int
@@ -265,6 +267,14 @@ type Model struct {
 	// created is whether the plan has been made in factory with store.Create,
 	// and creating whether that is under way.
 	created, creating bool
+	// request is the new plan's request until a session has started on it.
+	request string
+	// resuming is whether a Request or Resume is under way.
+	resuming bool
+	// resumedIn is the flow state the screen last called Resume in, so a
+	// planner that cannot be started is tried once per state rather than on
+	// every poll; "" once a session claims the plan or the state moves.
+	resumedIn string
 
 	// blocks is renderedFrom, the plan as last rendered, split for
 	// commenting and rendered at renderedWidth.
@@ -299,9 +309,6 @@ type Model struct {
 	// editing is set from the developer's e until an edit made in $EDITOR
 	// has been saved to factory, or has failed to be.
 	editing bool
-	// pendingText is the message waiting to go to the agent once the queued
-	// comments this send carried have been saved.
-	pendingText string
 	// pendingDelete is the saved comment a confirming y would delete.
 	pendingDelete string
 	// pendingHandOff is whether factory is still owed the address-comments
@@ -357,6 +364,13 @@ type Model struct {
 	// Unprioritized plan until factory has the event; pendingStart is
 	// whether the y being asked for starts it.
 	startingWork, pendingStart bool
+	// askingReason is whether the status bar asks why the plan is
+	// abandoned; abandoning is set from the developer's reason until factory
+	// has the abandon event.
+	askingReason, abandoning bool
+	// pendingDeletePlan is whether the y being asked for deletes the plan;
+	// deleting is set from that y until factory answers.
+	pendingDeletePlan, deleting bool
 	// approving is set from the developer's y until factory answers, so a
 	// second ctrl+s cannot approve the plan twice.
 	approving bool
@@ -386,9 +400,18 @@ type Model struct {
 	// BuildID is the build of the plan, once it has been approved.
 	BuildID string
 	// built is whether the plan was approved and is being built while the
-	// screen stays open; its chat is closed, since a message would resume
-	// the stopped planning session.
+	// screen stays open; its comments are no longer sent.
 	built bool
+
+	// build reads the plan's build from the daemon; nil when the host has none.
+	build Build
+	// builds is each build session read, oldest first; reading is whether a
+	// read is out or its tick is set, so only one loop runs.
+	builds  []buildRun
+	reading bool
+	// buildMissing is that the last read found no build; buildErr that it failed.
+	buildMissing bool
+	buildErr     string
 
 	pending string
 	// lastClick is the plan block last clicked, to tell a double click.
@@ -399,22 +422,12 @@ type Model struct {
 	copyText func(string) tea.Cmd
 }
 
-const (
-	chatPlaceholder     = "Describe the change, or give feedback on the plan…"
-	commentsPlaceholder = "Press enter to save your comments, or add a message…"
-	// heldPlaceholder is the placeholder while comments are queued but the
-	// plan is not waiting on the developer, so they cannot be sent yet.
-	heldPlaceholder = "Your comments send once factory is waiting on you; add a message…"
-	// reviewPlaceholder is for a plan waiting on the developer's review, which
-	// the agent may not change until comments move it back to the agent.
-	reviewPlaceholder = "Ask chunk about the plan; comment on it to change it…"
-	// builtPlaceholder is the chat once the plan is approved and building:
-	// its planning session has stopped.
-	builtPlaceholder = "chunk is building this plan; chat is closed"
-)
+// chatPlaceholder is the request input's, the only input the left pane has.
+const chatPlaceholder = "Describe the change you want planned…"
 
-// New returns the planning screen. A non-empty first message is sent as soon
-// as the screen opens.
+// New returns the planning screen. A non-empty first request is sent as soon
+// as the screen opens. Once the plan exists the left pane takes no typing, so
+// a plan that exists opens on the plan pane.
 func New(ctx context.Context, agent Agent, approve Approver, store Store, first string) Model {
 	in := textarea.New()
 	in.Placeholder = chatPlaceholder
@@ -453,12 +466,19 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 	flowView := viewport.New()
 	flowView.KeyMap = viewport.KeyMap{}
 
+	created := store.ID() != ""
+	focus := paneChat
+	if created {
+		focus = panePlan
+		in.Blur()
+	}
 	return Model{
 		ctx:          ctx,
 		agent:        agent,
 		approve:      approve,
 		store:        store,
-		created:      store.ID() != "",
+		created:      created,
+		focus:        focus,
 		copyText:     clipboard.Copy,
 		planView:     planView,
 		flowView:     flowView,
@@ -496,7 +516,9 @@ func (m Model) WithBack() Model {
 }
 
 // WithInbox names the plan and local project and returns to the host's inbox.
-// No agent starts until a message is sent. Chat history belongs to this visit.
+// No agent starts until a new plan's request is sent, or, with a project,
+// factory waits on a planner that is not there. Activity belongs to this
+// visit.
 func (m Model) WithInbox(title, project string) Model {
 	m.back, m.inbox, m.title, m.project = true, true, title, project
 	return m
@@ -555,20 +577,21 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m.applyEvent(msg.Event)
 
-	case sentMsg:
-		if msg.agent == m.agent && msg.err != nil {
-			m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-			m.messages = append(m.messages, message{text: "Could not reach chunk: " + msg.err.Error(), failed: true})
-			m.renderPlan()
-			m.renderChat()
-		}
-		return m, nil
+	case sentMsg, resumedMsg:
+		return m.applySent(msg), nil
 
 	case pollMsg:
 		return m, tea.Batch(m.Poll(), pollCmd())
 
 	case refreshedMsg:
-		return m.applyRefresh(msg), nil
+		m = m.applyRefresh(msg)
+		var resume, follow tea.Cmd
+		m, resume = m.resumeIfOwed()
+		m, follow = m.followBuild()
+		return m, tea.Batch(resume, follow)
+
+	case buildTickMsg, buildReadMsg:
+		return m.updateBuild(msg)
 
 	case familiedMsg:
 		m.family, m.familyErr = msg.family, msg.err
@@ -581,16 +604,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case createdMsg:
-		m.creating = false
-		if msg.err != nil {
-			m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-			m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
-			m.renderPlan()
-			m.renderChat()
-			return m, nil
-		}
-		m.created = true
-		return m, sendCmd(m.ctx, m.agent, msg.text)
+		return m.applyCreated(msg)
 
 	case commentSavedMsg:
 		m.savingEdit = false
@@ -617,7 +631,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, waitApproval(msg.next)
 
-	case designApprovedMsg, approvedMsg, conflictsSentMsg, startedMsg:
+	case designApprovedMsg, approvedMsg, conflictsSentMsg, startedMsg, abandonedMsg, planDeletedMsg:
 		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
@@ -633,6 +647,62 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m.forward(msg)
 }
 
+// applyCreated handles the end of creating the plan in factory: on success
+// it starts the planning session on the request, and on failure it says so
+// in the Activity pane.
+func (m Model) applyCreated(msg createdMsg) (Model, tea.Cmd) {
+	m.creating = false
+	if msg.err != nil {
+		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
+		m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
+		m.renderPlan()
+		m.renderChat()
+		return m, nil
+	}
+	// The input is gone for good, and the activity takes its rows.
+	m.created, m.request, m.resuming = true, msg.text, true
+	// A title the host gave the screen becomes the plan's own once it is
+	// created; a screen with no title keeps showing the branch.
+	if m.title != "" && msg.title != "" {
+		m.title = msg.title
+	}
+	m.input.Blur()
+	m.layout()
+	return m, requestCmd(m.ctx, m.agent, msg.text)
+}
+
+// applySent handles the end of a Request (sentMsg) or a Resume (resumedMsg)
+// of the screen's agent.
+func (m Model) applySent(msg tea.Msg) Model {
+	switch msg := msg.(type) {
+	case sentMsg:
+		if msg.agent != m.agent {
+			return m
+		}
+		m.resuming = false
+		if msg.err == nil {
+			m.request = ""
+			return m
+		}
+		// The request is kept, and sent again once factory next waits on the
+		// planner: it is in no plan yet.
+		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
+		m.messages = append(m.messages, message{text: "Could not start the planning session: " + msg.err.Error(), failed: true})
+		m.renderPlan()
+		m.renderChat()
+	case resumedMsg:
+		if msg.agent != m.agent {
+			return m
+		}
+		m.resuming = false
+		if msg.err != nil {
+			m.messages = append(m.messages, message{text: "Could not resume the planning session: " + msg.err.Error(), failed: true})
+			m.renderChat()
+		}
+	}
+	return m
+}
+
 // applyQueueSaved handles the end of saving the queued comments.
 func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 	m.savingComments = false
@@ -640,8 +710,8 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 	// the rest is still queued.
 	m.comments = dropQueued(m.comments, msg.saved)
 	m.renderPlan()
-	m.syncPlaceholder()
 	m.pendingHandOff = msg.handOff && !msg.handedOff
+	m.trackFeedback(msg.saved)
 	var tick tea.Cmd
 	if msg.handedOff {
 		m.moving = &transition{kind: movingComments, from: m.state, since: time.Now()}
@@ -650,13 +720,6 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 	}
 	if msg.err != nil {
 		m.status = ui.ErrorStyle.Render(msg.err.Error())
-		return m, tea.Batch(refreshCmd(m.ctx, m.store), tick)
-	}
-	text := m.pendingText
-	m.pendingText = ""
-	if text != "" {
-		next, cmd := m.send(text)
-		return next, tea.Batch(cmd, refreshCmd(next.ctx, next.store), tick)
 	}
 	return m, tea.Batch(refreshCmd(m.ctx, m.store), tick)
 }
@@ -664,14 +727,15 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 // spinning is whether something the spinner shows is under way: the agent's
 // turn, an approval or event not yet answered, or the wait for factory.
 func (m Model) spinning() bool {
-	return m.busy || m.approving || m.approvingDesign || m.resolvingConflicts || m.moving != nil
+	return m.busy || m.approving || m.approvingDesign || m.resolvingConflicts || m.moving != nil || m.buildRunning()
 }
 
 // awaitingStatus is whether the status bar holds something still under way
 // or waiting on the developer: a question to answer, the quit prompt, or an
 // approval or save factory has not answered yet.
 func (m Model) awaitingStatus() bool {
-	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.resolvingConflicts || m.savingComments
+	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.resolvingConflicts || m.savingComments ||
+		m.askingReason || m.abandoning || m.deleting
 }
 
 // applyRefresh is a successful or failed poll of the plan's state, text and
@@ -701,6 +765,11 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 	}
 	m.state, m.events, m.plan = msg.flow.State, msg.flow.Events, msg.text
 	m.flow = msg.flow
+	if m.flow.Claimed || m.state != m.resumedIn {
+		// A flow that leaves the state it was resumed in, or that a session
+		// claims, is resumed again once it is next owed one.
+		m.resumedIn = ""
+	}
 	if !m.tabChosen {
 		// The first refresh of a visit opens the right pane on what the
 		// plan's phase is about; later moves leave the tab where it is.
@@ -725,10 +794,36 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 			}
 		}
 	}
-	m.syncPlaceholder()
 	m.renderChat()
 	m.renderFlow()
 	return m
+}
+
+// resumeOwed is whether f is waiting on a planner that is not there, so the
+// screen should have its planner claim the plan again. Factory starts a new
+// plan's flow in Unprioritized with a task for a session, so that counts as
+// planning; a plan deferred there waits on the developer instead.
+func resumeOwed(f Flow) bool {
+	phase, _ := planstate.Parse(f.State)
+	planning := strings.EqualFold(phase, "Planning") || planstate.IsUnprioritized(f.State)
+	return !f.Ended && !f.Claimed && planning &&
+		slices.ContainsFunc(f.Next, func(s Step) bool { return s.Actor == "session" })
+}
+
+// resumeIfOwed has the planner claim the plan again when factory waits on a
+// planner that is not there, once per flow state. A request that has not
+// started a session yet goes in place of the resume, so the planner never
+// claims a new plan without it.
+func (m Model) resumeIfOwed() (Model, tea.Cmd) {
+	if !m.created || m.resuming || !resumeOwed(m.flow) || m.resumedIn == m.state ||
+		(m.inbox && m.project == "") {
+		return m, nil
+	}
+	m.resuming, m.resumedIn = true, m.state
+	if m.request != "" {
+		return m, requestCmd(m.ctx, m.agent, m.request)
+	}
+	return m, resumeCmd(m.ctx, m.agent)
 }
 
 // tabFor is the tab the right pane opens on for a plan in state: the plan
@@ -744,6 +839,10 @@ func tabFor(state string) rightTab {
 func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	m.clearText()
 	k := m.keys()
+	if m.askingReason {
+		// Before Quit, so esc keeps the plan rather than leaving.
+		return m.answerReason(msg, k)
+	}
 	if key.Matches(msg, k.Quit) {
 		return m.quit(msg.String())
 	}
@@ -754,6 +853,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
 			m.pendingDelete, m.pendingDesign, m.pendingConflicts, m.pendingStart = "", false, false, false
+			m.pendingDeletePlan = false
 			return m, nil
 		}
 		return m.answerYes()
@@ -777,6 +877,14 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.focusOn(paneChat)
 	case key.Matches(msg, k.SendPlan):
 		return m.askToApprove(), nil
+	case key.Matches(msg, k.Abandon):
+		m.askingReason = true
+		m.status = ui.TitleStyle.Render("Abandon plan as: ") + "c canceled · w won't do · d duplicate · esc keep it"
+		return m, nil
+	case key.Matches(msg, k.DeletePlan):
+		m.confirming, m.pendingDeletePlan = true, true
+		m.status = ui.TitleStyle.Render("Delete this plan, its comments and its flow? ") + confirmButtons
+		return m, nil
 	case key.Matches(msg, k.FlowTab):
 		return m.showTab(tabFlow)
 	case key.Matches(msg, k.PlanTab):
@@ -798,7 +906,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if key.Matches(msg, k.Send) {
-		return m.deliver(strings.TrimSpace(m.input.Value()))
+		if !m.created {
+			return m.send(m.input.Value())
+		}
+		return m.deliver()
 	}
 	return m.forward(msg)
 }
@@ -806,40 +917,37 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 // heldStatus says why a send left the queued comments unsent.
 const heldStatus = "Comments not sent: factory is working on the plan. Send them once it is waiting on you."
 
-// deliver is a send from the developer: from a Human state it saves the
-// queued comments to factory and hands them to it, then sends text to the
-// agent, if there is any; from any other state the comments stay queued.
-func (m Model) deliver(text string) (Model, tea.Cmd) {
+// deliver is a send of the queued comments from the developer: from a Human
+// state it saves them to factory and hands them to it; from any other state
+// they stay queued. Nothing goes to the planning session.
+func (m Model) deliver() (Model, tea.Cmd) {
 	if m.savingComments || m.built {
 		return m, nil
 	}
 	queued := queuedComments(m.comments)
-	if text == "" && len(queued) == 0 && !m.pendingHandOff {
-		return m, nil
-	}
 	// A hand-off owed by an earlier send is retried even with nothing queued.
 	if len(queued) == 0 && !m.pendingHandOff {
-		return m.send(text)
+		return m, nil
 	}
 	if !m.takesComments() {
-		next, cmd := m, tea.Cmd(nil)
-		if text != "" {
-			next, cmd = m.send(text)
+		if m.moving == nil {
+			m.status = heldStatus
 		}
-		if next.moving == nil {
-			next.status = heldStatus
-		}
-		return next, cmd
+		return m, nil
 	}
 	m.savingComments = true
-	m.pendingText = text
 	m.status = ""
-	return m, saveQueued(m.ctx, m.store, queued, m.takesComments())
+	return m, saveQueued(m.ctx, m.store, queued, m.handOffEvent())
 }
 
 // answerYes does what the question in the status bar asked, now it has been
 // answered yes.
 func (m Model) answerYes() (Model, tea.Cmd) {
+	if m.pendingDeletePlan {
+		m.pendingDeletePlan, m.deleting = false, true
+		m.status = "Deleting the plan…"
+		return m, deletePlanCmd(m.ctx, m.store)
+	}
 	if m.pendingConflicts {
 		m.pendingConflicts, m.resolvingConflicts = false, true
 		m.status = "Sending resolve-conflicts…"
@@ -864,6 +972,26 @@ func (m Model) answerYes() (Model, tea.Cmd) {
 	return m, tea.Batch(approveCmd(m.approve), m.spin.Tick)
 }
 
+// answerReason answers the abandon prompt: a reason key sends the abandon
+// for that reason, and any other key keeps the plan.
+func (m Model) answerReason(msg tea.KeyPressMsg, k keyMap) (Model, tea.Cmd) {
+	m.askingReason, m.status = false, ""
+	var reason string
+	switch {
+	case key.Matches(msg, k.AbandonCanceled):
+		reason = "canceled"
+	case key.Matches(msg, k.AbandonWontDo):
+		reason = "wont-do"
+	case key.Matches(msg, k.AbandonDuplicate):
+		reason = "duplicate"
+	default:
+		return m, nil
+	}
+	m.abandoning = true
+	m.status = "Abandoning: " + reasonText(reason) + "…"
+	return m, abandonCmd(m.ctx, m.store, reason)
+}
+
 // focusOn gives the keyboard to pane p, dropping any selection.
 func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 	m.anchor = -1
@@ -877,6 +1005,9 @@ func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 	m.focus = paneChat
 	m.drawPlan()
 	m.renderFlow()
+	if m.created {
+		return m, nil
+	}
 	return m, m.input.Focus()
 }
 
@@ -891,7 +1022,7 @@ func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.built, m.approving, m.approvingDesign, m.resolvingConflicts, m.startingWork, m.moving != nil:
+	case m.built, m.approving, m.approvingDesign, m.resolvingConflicts, m.startingWork, m.abandoning, m.deleting, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
 	case m.conflicting() && queued > 0:
@@ -962,8 +1093,8 @@ func (m Model) unsent() string {
 	if n > 0 {
 		parts = append(parts, fmt.Sprintf("%d unsent %s", n, plural(n, "comment", "comments")))
 	}
-	if strings.TrimSpace(m.input.Value()) != "" {
-		parts = append(parts, "unsent message")
+	if !m.created && strings.TrimSpace(m.input.Value()) != "" {
+		parts = append(parts, "unsent request")
 	}
 	return strings.Join(parts, " and ")
 }
@@ -991,8 +1122,10 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	var cmds []tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	cmds = append(cmds, cmd)
+	if !m.created {
+		m.input, cmd = m.input.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 	// The chat scrolls with the mouse wheel while typing.
 	if _, ok := msg.(tea.KeyPressMsg); !ok {
 		m.chatView, cmd = m.chatView.Update(msg)
@@ -1001,37 +1134,58 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// send creates the plan in factory on the first message, then sends text to
-// the agent as the developer's message. The agent may be working already, on
-// an earlier message or a factory task; it reads text once it is done. While
-// the plan is being created a message waits in the input.
+// send is a new plan's request: it creates the plan in factory, then starts
+// the planning session on text once it is made. Once the plan exists, or
+// while it is being created, it does nothing, as it does for an empty text.
 func (m Model) send(text string) (Model, tea.Cmd) {
-	if m.creating {
+	text = strings.TrimSpace(text)
+	if m.created || m.creating || text == "" {
 		return m, nil
 	}
 	m.input.Reset()
-	m.messages = append(m.messages, message{fromUser: true, text: text, toBusy: m.busy})
+	m.messages = append(m.messages, message{fromUser: true, text: text})
 	m.status = ""
 	var tick tea.Cmd
 	if !m.busy {
 		m.busy, m.byTask, m.task, m.log = true, false, "", nil
 		tick = m.spin.Tick
 	}
-	m.syncPlaceholder()
 	m.renderPlan()
 	m.renderChat()
 	m.chatView.GotoBottom()
-	if !m.created {
-		m.creating = true
-		return m, tea.Batch(createCmd(m.ctx, m.store, text), tick)
-	}
-	return m, tea.Batch(sendCmd(m.ctx, m.agent, text), tick)
+	m.creating = true
+	return m, tea.Batch(createCmd(m.ctx, m.store, text), tick)
 }
 
-// createCmd creates the plan in factory for text, the developer's first
-// message, which the store names it for.
+// track reports eventName from the screen, with the plan's ID once factory
+// has given it one, so a funnel can join the plan's events.
+func (m Model) track(eventName string, props map[string]any) {
+	if props == nil {
+		props = map[string]any{}
+	}
+	if m.store != nil && m.store.ID() != "" {
+		props["plan_id"] = m.store.ID()
+	}
+	telemetry.Track(m.ctx, eventName, props)
+}
+
+// trackFeedback reports a round of feedback on the plan: comments saved
+// together, so a funnel can count the rounds before a plan is approved.
+// comments is how many were saved; a save that saved none is not a round.
+func (m Model) trackFeedback(comments int) {
+	if comments == 0 {
+		return
+	}
+	m.track("plan_feedback_sent", map[string]any{"feedback_type": "comments", "comment_count": comments})
+}
+
+// createCmd creates the plan in factory for text, the developer's request,
+// which the store names it for.
 func createCmd(ctx context.Context, s Store, text string) tea.Cmd {
-	return func() tea.Msg { return createdMsg{text: text, err: s.Create(ctx, text)} }
+	return func() tea.Msg {
+		title, err := s.Create(ctx, text)
+		return createdMsg{text: text, title: title, err: err}
+	}
 }
 
 // applyEvent shows one thing the agent reported, then waits for the next.
@@ -1071,26 +1225,8 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 	return m, tea.Batch(next, refreshCmd(m.ctx, m.store))
 }
 
-// syncPlaceholder tells the developer that enter saves their comments when
-// there are some queued, and that only comments change a plan waiting on
-// their review.
-func (m *Model) syncPlaceholder() {
-	switch {
-	case m.built:
-		m.input.Placeholder = builtPlaceholder
-	case len(queuedComments(m.comments)) > 0 && !m.takesComments():
-		m.input.Placeholder = heldPlaceholder
-	case len(queuedComments(m.comments)) > 0:
-		m.input.Placeholder = commentsPlaceholder
-	case m.takesComments():
-		m.input.Placeholder = reviewPlaceholder
-	default:
-		m.input.Placeholder = chatPlaceholder
-	}
-}
-
-// applyApproval is the end of approving the plan's design, or the plan, or
-// of sending resolve-conflicts or prioritize.
+// applyApproval is the end of approving the plan's design, or the plan, of
+// sending resolve-conflicts, prioritize or abandon, or of deleting the plan.
 func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case designApprovedMsg:
@@ -1118,6 +1254,23 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, refreshCmd(m.ctx, m.store)
+	case abandonedMsg:
+		m.abandoning = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not abandon the plan: " + msg.err.Error())
+			return m, nil
+		}
+		// Factory has the event; the refresh shows the flow end once its
+		// next poll applies it.
+		m.status = ""
+		return m, refreshCmd(m.ctx, m.store)
+	case planDeletedMsg:
+		m.deleting = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not delete the plan: " + msg.err.Error())
+			return m, nil
+		}
+		return m, closed("")
 	case approvedMsg:
 		m.approving = false
 		if msg.err != nil {
@@ -1125,15 +1278,19 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.BuildID = msg.buildID
+		// Counted once factory has the plan, with the run it started.
+		m.track("plan_approved", map[string]any{"run_id": msg.buildID})
 		if !m.back {
 			return m, closed(msg.buildID)
 		}
 		m.built, m.tab, m.tabChosen = true, tabFlow, true
-		m.status = "Approved · building as run " + msg.buildID + "; it is also in Runs"
-		m.syncPlaceholder()
+		m.status = "Approved · building as run " + msg.buildID
+		var follow tea.Cmd
+		m, follow = m.followBuild()
 		return m, tea.Batch(
 			func() tea.Msg { return BuildingMsg{BuildID: msg.buildID} },
 			refreshCmd(m.ctx, m.store),
+			follow,
 		)
 	}
 	return m, nil
@@ -1153,6 +1310,24 @@ func resolveConflictsCmd(ctx context.Context, s Store) tea.Cmd {
 // startWorkCmd has factory start work on the Unprioritized plan.
 func startWorkCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg { return startedMsg{err: s.StartWork(ctx)} }
+}
+
+// abandonCmd has factory end the plan without its PR merging, for reason.
+func abandonCmd(ctx context.Context, s Store, reason string) tea.Cmd {
+	return func() tea.Msg { return abandonedMsg{err: s.Abandon(ctx, reason)} }
+}
+
+// deletePlanCmd deletes the plan in factory.
+func deletePlanCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg { return planDeletedMsg{err: s.Delete(ctx)} }
+}
+
+// reasonText is how the screen names an abandon reason.
+func reasonText(reason string) string {
+	if reason == "wont-do" {
+		return "won't do"
+	}
+	return reason
 }
 
 // approveCmd runs approve in the background, and reads what it reports: an
@@ -1244,7 +1419,11 @@ func (m *Model) layout() {
 	// on a rail, indented, with a cell either side.
 	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 6)
 	m.chatView.SetWidth(m.chatWidth() - borderSize - 2*padX)
-	m.chatView.SetHeight(inner - inputBoxRows - padY)
+	if m.created {
+		m.chatView.SetHeight(inner - padY)
+	} else {
+		m.chatView.SetHeight(inner - inputBoxRows - padY)
+	}
 	m.input.SetWidth(m.chatWidth() - 2*borderSize - 2*padX)
 	m.renderPlan()
 	m.renderChat()
@@ -1402,9 +1581,9 @@ func (m *Model) renderChat() {
 	if m.inbox {
 		note := "Reading this plan does not start an agent."
 		if m.project == "" {
-			note += " Open chunk watch in its repository to chat or build."
+			note += " Open chunk watch in its repository to plan it."
 		} else {
-			note += " Sending a message starts or resumes it in " + m.project + "."
+			note += " Its planning session resumes here in " + m.project + " when factory is waiting on it."
 		}
 		b.WriteString(m.style(m.dim()).Width(w).Render(note) + "\n\n")
 	}
@@ -1413,10 +1592,6 @@ func (m *Model) renderChat() {
 		switch {
 		case msg.fromUser:
 			b.WriteString(m.userBubble(msg.text, w))
-			if msg.toBusy {
-				b.WriteString("\n" + lipgloss.PlaceHorizontal(w, lipgloss.Right,
-					m.style(m.faint()).Render("sent while chunk was working; it reads this next")))
-			}
 		case msg.failed:
 			b.WriteString(chunkStyle.Render("chunk") + "\n")
 			b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text))
@@ -1440,13 +1615,16 @@ func (m *Model) renderChat() {
 	if q := queuedComments(m.comments); len(q) > 0 && !m.savingComments {
 		// The comments wait in a bubble like the message they will go in.
 		b.WriteString(m.queuedBubble(q, w) + "\n")
-		b.WriteString(m.style(m.faint()).Render("queued · press enter to save") + "\n\n")
+		b.WriteString(m.style(m.faint()).Render("queued · press enter or s to send") + "\n\n")
 	}
 	if m.savingComments {
 		b.WriteString(m.style(m.purple()).Render(m.spin.View()+"Saving your comments…") + "\n\n")
 	}
 	if m.busy {
 		b.WriteString(m.activityLog(w))
+	}
+	if m.showsBuild() {
+		b.WriteString(m.buildSection(w))
 	}
 	// The chat follows what is added to it unless the developer has
 	// scrolled up to read, when it stays where they are.
@@ -1546,8 +1724,11 @@ func (m Model) Content() string {
 	if m.tab == tabFlow {
 		body = m.shown(textFlow)
 	}
-	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, "Chat"),
-		m.shown(textChat)+"\n"+m.inputBox())
+	chatBody := m.shown(textChat) + "\n" + m.inputBox()
+	if m.created {
+		chatBody = m.shown(textChat)
+	}
+	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, activityTitle), chatBody)
 	plan := pane(m.focus == panePlan, m.planWidth(), planTitle, body)
 
 	panes := lipgloss.JoinHorizontal(lipgloss.Top, chat, plan)
@@ -1563,7 +1744,11 @@ func (m Model) Content() string {
 	return lipgloss.JoinVertical(lipgloss.Left, top, panes, m.actionBar())
 }
 
-// inputBox is the message being written, in a box of its own under the chat.
+// activityTitle is the left pane's title, before the plan exists, when the
+// pane holds the request input, as after.
+const activityTitle = "Activity"
+
+// inputBox is the request being written, in a box of its own under the chat.
 // Its border stays a step below the pane's accent, so the accent shows once
 // per pane.
 func (m Model) inputBox() string {

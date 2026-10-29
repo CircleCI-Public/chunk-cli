@@ -57,16 +57,16 @@ func skeleton(title string) string {
 	return "# " + title + "\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"
 }
 
-func (s *Store) Create(ctx context.Context, message string) error {
+func (s *Store) Create(ctx context.Context, message string) (string, error) {
 	title := s.title(ctx, message)
 	p, err := s.api.CreatePlan(ctx, title, skeleton(title))
 	if err != nil {
-		return fmt.Errorf("create the plan in factory: %w", err)
+		return "", fmt.Errorf("create the plan in factory: %w", err)
 	}
 	s.mu.Lock()
 	s.planID = p.ID
 	s.mu.Unlock()
-	return nil
+	return title, nil
 }
 
 // title is the plan's title for message, as Claude names it or, when Claude
@@ -92,8 +92,7 @@ func (s *Store) State(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	f, err := s.api.GetFlow(ctx, id)
-	var se *circleci.StatusError
-	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+	if isNotFound(err) {
 		return "", nil
 	}
 	if err != nil {
@@ -110,8 +109,7 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		return plan.Flow{}, nil
 	}
 	f, err := s.api.GetFlow(ctx, id)
-	var se *circleci.StatusError
-	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
+	if isNotFound(err) {
 		return plan.Flow{}, nil
 	}
 	if err != nil {
@@ -124,6 +122,7 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		Deviations: f.Deviations,
 		Ended:      f.Phase == circleci.PhaseEnded,
 		Outcome:    f.Outcome,
+		Claimed:    f.SessionID != "",
 	}
 	for i, e := range f.ApplicableEvents {
 		out.Events[i] = string(e)
@@ -372,6 +371,20 @@ func (s *Store) AddressComments(ctx context.Context) error {
 	return nil
 }
 
+// AnswerOpenQuestions sends the plan's flow factory's answer-open-questions
+// event, which factory offers in place of address-comments for a plan with
+// open questions, and which moves it out of a Human state at its next poll.
+func (s *Store) AnswerOpenQuestions(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.CreateFlowEvent(ctx, id, circleci.AnswerOpenQuestions); err != nil {
+		return fmt.Errorf("send the answer-open-questions event: %w", err)
+	}
+	return nil
+}
+
 // ResolveConflicts sends the plan's flow factory's resolve-conflicts event,
 // which hands a plan whose PR conflicts back to the agent to rebase.
 func (s *Store) ResolveConflicts(ctx context.Context) error {
@@ -394,6 +407,32 @@ func (s *Store) StartWork(ctx context.Context) error {
 	}
 	if err := s.api.CreateFlowEvent(ctx, id, circleci.Prioritize); err != nil {
 		return fmt.Errorf("send the prioritize event: %w", err)
+	}
+	return nil
+}
+
+// Abandon sends the plan's flow factory's abandon event, for reason, which
+// ends the plan without its PR merging at factory's next poll.
+func (s *Store) Abandon(ctx context.Context, reason string) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.AbandonFlow(ctx, id, circleci.AbandonReason(reason)); err != nil {
+		return fmt.Errorf("send the abandon event: %w", err)
+	}
+	return nil
+}
+
+// Delete deletes the plan in factory, with its comments and its flow. The
+// store keeps its ID.
+func (s *Store) Delete(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.DeletePlan(ctx, id); err != nil {
+		return fmt.Errorf("delete the plan: %w", err)
 	}
 	return nil
 }

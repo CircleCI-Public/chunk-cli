@@ -32,6 +32,8 @@ type Flow struct {
 	// names it.
 	Ended   bool
 	Outcome string
+	// Claimed is whether a factory session claims the plan now.
+	Claimed bool
 }
 
 // Step is a way the flow can move on now, and who takes it, as factory
@@ -61,8 +63,9 @@ type Family struct {
 type Store interface {
 	ID() string
 	// Create makes the plan in factory for message, the developer's first
-	// message, naming it for what the message asks for.
-	Create(ctx context.Context, message string) error
+	// message, naming it for what the message asks for, and returns that
+	// name: the plan's title in factory.
+	Create(ctx context.Context, message string) (string, error)
 	// Flow is the plan's flow as factory has it now; empty before the plan
 	// is created or has a flow.
 	Flow(ctx context.Context) (Flow, error)
@@ -73,6 +76,11 @@ type Store interface {
 	// from a Human state to its phase's Agent state. Factory moves it at
 	// its next poll, not before AddressComments returns.
 	AddressComments(ctx context.Context) error
+	// AnswerOpenQuestions has factory take up the plan's comments, as
+	// AddressComments does, for a plan whose flow lists answer-open-questions
+	// in its place. Factory moves it at its next poll, not before
+	// AnswerOpenQuestions returns.
+	AnswerOpenQuestions(ctx context.Context) error
 	// ResolveConflicts has factory rebase the plan's conflicting PR, moving
 	// it from Integrating - Human to Integrating - Agent. Factory moves it at
 	// its next poll, not before ResolveConflicts returns.
@@ -80,6 +88,11 @@ type Store interface {
 	// StartWork has factory start work on the Unprioritized plan. Factory
 	// moves it at its next poll, not before StartWork returns.
 	StartWork(ctx context.Context) error
+	// Abandon ends the plan without its PR merging, for reason: "canceled",
+	// "wont-do" or "duplicate".
+	Abandon(ctx context.Context, reason string) error
+	// Delete deletes the plan in factory.
+	Delete(ctx context.Context) error
 	// ApproveDesign approves the plan's design, moving it from Planning -
 	// Human for factory to write its units. Factory moves it at its next
 	// poll, not before ApproveDesign returns.

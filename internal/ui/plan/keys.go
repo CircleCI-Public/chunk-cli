@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"slices"
+
 	"charm.land/bubbles/v2/key"
 )
 
@@ -30,7 +32,7 @@ type keyMap struct {
 	// prevUnlisted is set when Next's hint already names Prev.
 	prevUnlisted bool
 	// SendComments saves the queued comments to factory from the plan,
-	// without a trip to the chat; enter does it there.
+	// without a trip to the Activity pane; enter does it there.
 	SendComments key.Binding
 	// While a comment is written.
 	SaveComment, CancelComment key.Binding
@@ -43,6 +45,11 @@ type keyMap struct {
 	// enter too, says no: approving moves the plan on in factory, so it
 	// takes a y.
 	Confirm key.Binding
+	// Abandon asks for a reason, then ends the plan without its PR merging;
+	// DeletePlan asks for a y, then deletes it. At the reason prompt the
+	// Abandon* keys pick the reason.
+	Abandon, DeletePlan                              key.Binding
+	AbandonCanceled, AbandonWontDo, AbandonDuplicate key.Binding
 
 	Focus    key.Binding
 	Switch   key.Binding
@@ -62,7 +69,7 @@ func (m Model) keys() keyMap {
 	k := keyMap{
 		Send:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send")),
 		Newline:        key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"), key.WithHelp(newline, "new line")),
-		ChatPageUp:     key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup/pgdn", "scroll chat")),
+		ChatPageUp:     key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup/pgdn", "scroll activity")),
 		ChatPageDown:   key.NewBinding(key.WithKeys("pgdown")),
 		Up:             key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/↓", "move")),
 		Down:           key.NewBinding(key.WithKeys("down", "j")),
@@ -90,42 +97,44 @@ func (m Model) keys() keyMap {
 		PlanTab:        key.NewBinding(key.WithKeys("right")),
 		Open:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open plan")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
+		Abandon:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "abandon plan")),
+		DeletePlan:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
 		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", m.focusHelp())),
 		Switch:         key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
+	// The reason prompt says what these do, so they carry no hint.
+	k.AbandonCanceled = key.NewBinding(key.WithKeys("c"))
+	k.AbandonWontDo = key.NewBinding(key.WithKeys("w"))
+	k.AbandonDuplicate = key.NewBinding(key.WithKeys("d"))
 
 	// Esc leaves, unless it has a comment to cancel, a selection to clear or a
-	// question to answer no to. q leaves from the plan, where no text is being
-	// typed. A screen with a host goes back to it, and leaving stops nothing:
-	// the host keeps the screen, and chunk works on. One without closes, asking
-	// first when that would drop comments or a message.
+	// question to answer no to. q leaves wherever no text is being typed. A
+	// screen with a host goes back to it, and leaving stops nothing: the host
+	// keeps the screen, and chunk works on. One without closes, asking first
+	// when that would drop comments or a message.
 	quit := "quit"
 	if m.back {
-		quit = "back to runs"
+		quit = "back"
 	}
 	if m.inbox {
 		quit = "back to plans"
 	}
 	k.Switch.SetEnabled(m.inbox)
 	k.Quit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", quit))
-	if !m.commenting && !m.confirming && !m.selecting() {
+	if !m.commenting && !m.confirming && !m.askingReason && !m.selecting() {
 		keys := []string{"esc", "ctrl+c"}
-		if m.focus == panePlan {
+		if m.focus == panePlan || m.created {
 			keys = append(keys, "q")
 		}
 		k.Quit = key.NewBinding(key.WithKeys(keys...), key.WithHelp("esc", quit))
 	}
 
-	inChat := m.focus == paneChat && !m.commenting
 	// The plan's keys act on the Plan tab only; the Flow tab has its own.
 	inPlan := m.focus == panePlan && !m.commenting && m.tab == tabPlan
 	inFlow := m.focus == panePlan && !m.commenting && m.tab == tabFlow
-	for _, b := range []*key.Binding{&k.Send, &k.ChatPageUp, &k.ChatPageDown} {
-		b.SetEnabled(inChat)
-	}
-	k.Newline.SetEnabled(inChat || m.commenting)
+	m.chatKeys(&k)
 	for _, b := range []*key.Binding{&k.ExtendUp, &k.ExtendDown, &k.Up, &k.Down, &k.Top, &k.Bottom, &k.PageUp, &k.PageDown, &k.HalfUp, &k.HalfDown, &k.SectionBack, &k.SectionNext, &k.Comment} {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
@@ -144,17 +153,46 @@ func (m Model) keys() keyMap {
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)
 	k.Confirm.SetEnabled(m.confirming)
+	m.endKeys(&k)
 	return k
 }
 
+// chatKeys enables the left pane's keys: the request input's until the plan
+// exists, and the Activity pane's after, where enter sends the queued
+// comments and there is no input to type a new line in.
+func (m Model) chatKeys(k *keyMap) {
+	inChat := m.focus == paneChat && !m.commenting
+	for _, b := range []*key.Binding{&k.Send, &k.ChatPageUp, &k.ChatPageDown} {
+		b.SetEnabled(inChat)
+	}
+	k.Newline.SetEnabled((inChat && !m.created) || m.commenting)
+	if !m.created {
+		return
+	}
+	k.Send.SetHelp("enter", "send comments")
+	k.Send.SetEnabled(inChat && !m.built && !m.savingComments &&
+		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
+}
+
+// endKeys enables the keys that end the plan: abandon, its reasons, and
+// delete.
+func (m Model) endKeys(k *keyMap) {
+	idle := m.focus == panePlan && !m.commenting && !m.confirming && !m.askingReason && !m.abandoning && !m.deleting
+	k.Abandon.SetEnabled(idle && m.created && slices.Contains(m.events, abandon))
+	k.DeletePlan.SetEnabled(idle && m.created && !m.flow.Claimed)
+	for _, b := range []*key.Binding{&k.AbandonCanceled, &k.AbandonWontDo, &k.AbandonDuplicate} {
+		b.SetEnabled(m.askingReason)
+	}
+}
+
 // focusHelp is where tab goes: to the right pane, or on a narrow screen
-// round chat, Flow and Plan.
+// round Activity, Flow and Plan.
 func (m Model) focusHelp() string {
 	switch {
 	case m.focus == panePlan && m.narrow() && m.tab == tabFlow:
 		return "plan"
 	case m.focus == panePlan:
-		return "chat"
+		return "activity"
 	case m.narrow() || m.tab == tabFlow:
 		return "flow"
 	}
@@ -217,7 +255,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.Switch,
 		k.Send, k.Newline,
 		k.Open, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
-		k.Focus, k.SendPlan, k.Quit, k.FlowTab,
+		k.Focus, k.SendPlan, k.Quit, k.Abandon, k.DeletePlan, k.FlowTab,
 		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
@@ -73,7 +74,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg:
+	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -109,11 +110,30 @@ func TestFirstMessageRendersPlanAndReply(t *testing.T) {
 		t.Fatalf("agent got %q", got)
 	}
 	view := ansi.Strip(m.Content())
-	for _, want := range []string{"Add a flag", "The flag exists.", "Wrote a first plan.", "add a --dry-run flag"} {
+	for _, want := range []string{"Add a flag", "The flag exists.", "Wrote a first plan.", "add a --dry-run flag", "Activity"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
 	}
+	assert.Check(t, !strings.Contains(view, chatPlaceholder), "the request input is still shown:\n%s", view)
+
+	fresh := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+	fresh = drive(t, fresh, tea.WindowSizeMsg{Width: 120, Height: 40})
+	assert.Check(t, cmp.Contains(ansi.Strip(fresh.Content()), "Activity"))
+	assert.Check(t, cmp.Contains(ansi.Strip(fresh.Content()), chatPlaceholder))
+}
+
+// Enter on an empty or blank request makes no plan and starts no session.
+func TestEmptyRequestCreatesNothing(t *testing.T) {
+	store := newFakeStore()
+	agent := newFakeAgent()
+	m := New(context.Background(), agent, nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = drive(t, m, press("enter"))
+	m = typeText(t, m, "   ")
+	drive(t, m, press("enter"))
+	assert.Check(t, cmp.Equal(store.Created, false))
+	assert.Check(t, cmp.Len(agent.Sent(), 0))
 }
 
 func TestFirstSendCreatesPlan(t *testing.T) {
@@ -141,6 +161,7 @@ func TestFirstSendCreatesPlan(t *testing.T) {
 func TestExistingPlanOpensWithoutStartingOrRecreatingIt(t *testing.T) {
 	store := newFakeStore()
 	store.Created, store.TextV = true, "# Existing plan\n\nKeep this outcome."
+	store.FlowV.Next = []Step{{Actor: "human", Event: "address-comments"}}
 	store.CreateErr = errors.New("an existing plan must not be recreated")
 	agent := turnReturning("Keeping the existing plan.")
 	m := New(t.Context(), agent, nil, store, "")
@@ -149,14 +170,13 @@ func TestExistingPlanOpensWithoutStartingOrRecreatingIt(t *testing.T) {
 	if len(agent.Sent()) != 0 || !strings.Contains(ansi.Strip(m.Content()), "Keep this outcome.") {
 		t.Fatal("opening should read the plan without sending an agent message")
 	}
+	assert.Check(t, cmp.Equal(m.focus, panePlan), "an existing plan opens on the plan pane")
+	m, _ = m.focusOn(paneChat)
 	m = typeText(t, m, "explain the outcome")
 	m = drive(t, m, press("enter"))
-	if got := agent.Sent(); len(got) != 1 || got[0] != "explain the outcome" {
-		t.Fatalf("message should continue the existing plan, got %v", got)
-	}
-	if !strings.Contains(ansi.Strip(m.Content()), "Keeping the existing plan.") {
-		t.Fatal("the agent's reply is missing")
-	}
+	assert.Check(t, cmp.Len(agent.Sent(), 0))
+	assert.Check(t, cmp.Equal(agent.Resumes(), 0), "a plan waiting on the developer was resumed")
+	assert.Check(t, cmp.Equal(m.input.Value(), ""))
 }
 
 func TestApprovingApprovesThePlanInFactory(t *testing.T) {
@@ -625,14 +645,17 @@ func TestWaitingBarYieldsToStatuses(t *testing.T) {
 	assert.Assert(t, m.moving != nil, "no wait for factory after the hand-off")
 
 	// The quit prompt shows over the waiting line, on the purple border.
-	m = drive(t, m, press("tab"))
-	m = typeText(t, m, "draft")
+	m = drive(t, m, press("down"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "more")
 	m = drive(t, m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	bar := ansi.Strip(m.actionBar())
 	assert.Check(t, cmp.Contains(bar, "will be lost"))
 	assert.Check(t, !strings.Contains(bar, "waiting for factory"), bar)
 	assert.Check(t, strings.Contains(m.actionBar(), fgSeq(m.purple())), "the bar's border is not purple under the quit prompt")
 	m = drive(t, m, press("x"))
+	m = drive(t, m, press("esc"))
+	assert.Assert(t, !m.commenting)
 	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "waiting for factory"))
 
 	// An error shows over it too.
@@ -734,7 +757,7 @@ func TestFocusedPlanPaneTitleHasNoPercentage(t *testing.T) {
 			assert.Assert(t, cmp.Equal(m.focus, panePlan))
 
 			top := strings.Split(ansi.Strip(m.Content()), "\n")[headerRows+stripRows]
-			assert.Check(t, cmp.Contains(top, "Chat"))
+			assert.Check(t, cmp.Contains(top, "Activity"))
 			assert.Check(t, cmp.Contains(top, tc.want))
 			assert.Check(t, !regexp.MustCompile(`\d+%`).MatchString(top), top)
 		})
@@ -880,8 +903,8 @@ func TestCtrlSResolvesConflicts(t *testing.T) {
 func TestConflictsWithComments(t *testing.T) {
 	t.Run("queued", func(t *testing.T) {
 		m, store := conflictingModel(t)
-		m = drive(t, m, press("tab"))
-		// An Integrating plan opens on the Flow tab; comments are the Plan's.
+		// An existing plan opens on the right pane, and an Integrating plan on
+		// its Flow tab; comments are the Plan's.
 		m = drive(t, m, press("right"))
 		m = drive(t, m, press("c"))
 		m = typeText(t, m, "too vague")
@@ -915,7 +938,7 @@ func TestSSavesCommentsFromThePlan(t *testing.T) {
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	agent.reset()
 
-	// A message started in the chat, then a comment in the plan.
+	// Keys in the Activity pane, then a comment in the plan.
 	m = typeText(t, m, "draft")
 	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("c"))
@@ -933,9 +956,9 @@ func TestSSavesCommentsFromThePlan(t *testing.T) {
 		t.Errorf("handed off: %+v", store.HandedOff)
 	}
 	if got := agent.Sent(); len(got) != 0 {
-		t.Errorf("the chat's draft, out of sight, was sent: %q", got)
+		t.Errorf("the keys in the Activity pane were sent: %q", got)
 	}
-	if m.focus != panePlan || len(queuedComments(m.comments)) != 0 || m.input.Value() != "draft" {
+	if m.focus != panePlan || len(queuedComments(m.comments)) != 0 || m.input.Value() != "" {
 		t.Errorf("focus %v, comments %+v, draft %q", m.focus, m.comments, m.input.Value())
 	}
 	assert.Assert(t, m.moving != nil, "no wait for factory after the hand-off")
@@ -1504,9 +1527,10 @@ func messagesOf(cmd tea.Cmd) []tea.Msg {
 }
 
 // A host that keeps the screen keeps it after the approval, on the Flow tab,
-// with its chat closed: the planning session has stopped.
+// with nothing sent from its Activity pane: the planning session has stopped.
 func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 	store := newFakeStore()
+	store.Created = true
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	approvals := 0
 	approve := func(func(string)) (string, error) {
@@ -1534,13 +1558,13 @@ func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 	assert.Check(t, cmp.Equal(m.BuildID, "build-1"))
 	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Approved · building as run build-1"))
 
+	m, _ = m.focusOn(paneChat)
 	for _, k := range []string{"m", "o", "r", "e"} {
 		m = drive(t, m, press(k))
 	}
 	m = drive(t, m, press("enter"))
-	assert.Check(t, cmp.Len(agent.Sent(), 0), "the closed chat sent to the agent")
-	assert.Check(t, cmp.Equal(m.input.Value(), "more"))
-	assert.Check(t, cmp.Contains(m.input.Placeholder, "chat is closed"))
+	assert.Check(t, cmp.Len(agent.Sent(), 0), "the Activity pane sent to the agent")
+	assert.Check(t, cmp.Equal(m.input.Value(), ""))
 
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	assert.Check(t, !m.confirming, "ctrl+s asks to approve a plan already building")
@@ -1621,9 +1645,8 @@ func TestBackClosesAtOnceAndKeepsWhatIsUnsent(t *testing.T) {
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "too vague")
 	m = drive(t, m, press("enter"))
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "esc back to runs") {
-		t.Errorf("the footer does not say esc goes back:\n%s", view)
-	}
+	h := m.keys().Quit.Help()
+	assert.Check(t, cmp.Equal(h.Key+" "+h.Desc, "esc back"))
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if got, ok := closedBy(cmd); !ok || got.BuildID != "" {
@@ -1703,8 +1726,8 @@ func TestPageKeysScrollTheChat(t *testing.T) {
 	agent := turnReturning(strings.Repeat("A long reply.\n\n", 30))
 	m := New(context.Background(), agent, nil, newFakeStore(), "first")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "pgup/pgdn scroll chat") {
-		t.Errorf("chat scrolling is not in the footer:\n%s", view)
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "pgup/pgdn scroll activity") {
+		t.Errorf("activity scrolling is not in the footer:\n%s", view)
 	}
 	bottom := m.chatView.YOffset()
 	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
@@ -2105,22 +2128,19 @@ func TestEventsFromAnotherAgentAreIgnored(t *testing.T) {
 	}
 }
 
-func TestMessageWhileChunkWorksGoesToItAtOnce(t *testing.T) {
+// Once the plan exists the left pane is its activity: what is typed there
+// goes nowhere, so nothing reaches a working planner.
+func TestTypingAfterThePlanExistsSendsNothing(t *testing.T) {
 	agent := newFakeAgent()
 	m := New(context.Background(), agent, nil, newFakeStore(), "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
-	if !m.busy {
-		t.Fatal("not busy after the first send")
-	}
+	assert.Assert(t, m.busy, "not busy after the request")
+	assert.Check(t, cmp.Equal(m.focus, paneChat))
 
 	m = typeText(t, m, "and keep it small")
 	m = drive(t, m, press("enter"))
-	if got := agent.Sent(); len(got) != 2 || got[1] != "and keep it small" {
-		t.Fatalf("agent got %q", got)
-	}
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "sent while chunk was working") {
-		t.Errorf("the message does not say it went to a busy chunk:\n%s", view)
-	}
+	assert.Check(t, cmp.Equal(m.input.Value(), ""))
+	assert.Check(t, cmp.DeepEqual(agent.Sent(), []string{"plan it"}))
 }
 
 func TestFailedSendShowsInTheChat(t *testing.T) {
@@ -2131,9 +2151,203 @@ func TestFailedSendShowsInTheChat(t *testing.T) {
 	if m.busy {
 		t.Error("still busy after the send failed")
 	}
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "no f plugin") {
-		t.Errorf("the failure is not in the chat:\n%s", view)
+	assert.Check(t, cmp.Contains(chatText(m), "Could not start the planning session: no f plugin"))
+}
+
+// chatText is the Activity pane's text, unwrapped.
+func chatText(m Model) string {
+	return strings.Join(strings.Fields(ansi.Strip(m.chatView.GetContent())), " ")
+}
+
+func TestResumeOwed(t *testing.T) {
+	session := []Step{{Actor: "session", Task: "write-units", Dispatched: true}}
+	for _, tc := range []struct {
+		name string
+		flow Flow
+		want bool
+	}{
+		{
+			name: "waiting on a planner",
+			flow: Flow{State: "Planning - Agent", Next: session},
+			want: true,
+		},
+		{
+			name: "ended",
+			flow: Flow{State: "Planning - Agent", Next: session, Ended: true},
+		},
+		{
+			name: "claimed",
+			flow: Flow{State: "Planning - Agent", Next: session, Claimed: true},
+		},
+		{
+			name: "building",
+			flow: Flow{State: "Building - Agent", Next: session},
+		},
+		{
+			name: "waiting on the developer",
+			flow: Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
+		},
+		{
+			name: "new plan",
+			flow: Flow{State: "Unprioritized", Next: []Step{{Actor: "session", Task: "record-context"}}},
+			want: true,
+		},
+		{
+			name: "deferred",
+			flow: Flow{State: "Unprioritized", Next: []Step{{Actor: "human", Event: "prioritize"}}},
+		},
+		{
+			name: "no flow",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(resumeOwed(tc.flow), tc.want))
+		})
 	}
+}
+
+// sessionStep is a flow step waiting on a planning session.
+var sessionStep = []Step{{Actor: "session", Task: "write-units", Dispatched: true}}
+
+// resumeModel is a screen on an existing plan whose flow is in state, with
+// next as its next steps.
+func resumeModel(t *testing.T, agent *fakeAgent, state string, next []Step) (Model, *fakeStore) {
+	t.Helper()
+	store := newFakeStore()
+	store.Created, store.TextV, store.StateV = true, twoParts, state
+	store.FlowV.Next = next
+	m := New(context.Background(), agent, nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	return m, store
+}
+
+// setFlow moves store's flow to state, with next as its next steps.
+func setFlow(store *fakeStore, state string, next []Step, claimed bool) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.StateV, store.FlowV.Next, store.FlowV.Claimed = state, next, claimed
+}
+
+func TestRefreshResumesAPlannerThatIsNotThere(t *testing.T) {
+	agent := newFakeAgent()
+	m, store := resumeModel(t, agent, "Planning - Agent", sessionStep)
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Equal(agent.Resumes(), 1))
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Equal(agent.Resumes(), 1), "resumed twice in one state")
+
+	setFlow(store, "Planning - Agent", sessionStep, true)
+	m = refreshed(t, m)
+	setFlow(store, "Planning - Agent", sessionStep, false)
+	refreshed(t, m)
+	assert.Check(t, cmp.Equal(agent.Resumes(), 2), "not resumed after a session held the claim and lost it")
+	assert.Check(t, cmp.Len(agent.Sent(), 0))
+}
+
+func TestAFailedResumeIsShownOnceAndRetriedOnANewState(t *testing.T) {
+	agent := newFakeAgent()
+	agent.resumeErr = errors.New("no Claude Code")
+	m, store := resumeModel(t, agent, "Planning - Agent", sessionStep)
+	for range 3 {
+		m = refreshed(t, m)
+	}
+	assert.Check(t, cmp.Equal(agent.Resumes(), 1))
+	failures := 0
+	for _, msg := range m.messages {
+		if strings.Contains(msg.text, "Could not resume the planning session") {
+			failures++
+		}
+	}
+	assert.Check(t, cmp.Equal(failures, 1))
+	assert.Check(t, cmp.Contains(chatText(m), "Could not resume the planning session: no Claude Code"))
+
+	setFlow(store, "Planning - Human", []Step{{Actor: "human", Event: "address-comments"}}, false)
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Equal(agent.Resumes(), 1), "resumed while factory waits on the developer")
+
+	setFlow(store, "Planning - Agent", sessionStep, false)
+	refreshed(t, m)
+	assert.Check(t, cmp.Equal(agent.Resumes(), 2), "not retried once the state changed")
+}
+
+func TestAPlanBeingBuiltIsNeverResumed(t *testing.T) {
+	agent := newFakeAgent()
+	m, _ := resumeModel(t, agent, "Building - Agent", sessionStep)
+	for range 3 {
+		m = refreshed(t, m)
+	}
+	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
+
+	m, _ = m.focusOn(paneChat)
+	m = typeText(t, m, "keep going")
+	drive(t, m, press("enter"))
+	assert.Check(t, cmp.Len(agent.Sent(), 0))
+	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
+}
+
+func TestNoProjectNoResume(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		project string
+		want    int
+	}{
+		{
+			name: "no project",
+		},
+		{
+			name:    "a project",
+			project: "chunk-cli",
+			want:    1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := newFakeAgent()
+			m, _ := resumeModel(t, agent, "Planning - Agent", sessionStep)
+			m = m.WithInbox("plan", tc.project)
+			refreshed(t, m)
+			assert.Check(t, cmp.Equal(agent.Resumes(), tc.want))
+		})
+	}
+}
+
+// A request whose session failed to start is kept, and sent again in place
+// of a resume, so the planner never claims a new plan without it.
+func TestAFailedRequestIsSentAgainNotResumed(t *testing.T) {
+	store := newFakeStore()
+	agent := newFakeAgent()
+	agent.err = errors.New("no Claude Code")
+	m := New(context.Background(), agent, nil, store, "add a flag")
+	m, cmd := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+	var request tea.Cmd
+	for _, msg := range run(cmd) {
+		if created, ok := msg.(createdMsg); ok {
+			m, request = m.Update(created)
+		}
+	}
+	assert.Assert(t, m.created && request != nil, "the plan was not created")
+
+	// Factory has the new plan, with a task for its planner; the request is
+	// still in flight, so a refresh starts nothing more.
+	setFlow(store, "Unprioritized", []Step{{Actor: "session", Task: "record-context"}}, false)
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Len(agent.Sent(), 0))
+	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
+
+	for _, msg := range run(request) {
+		m = drive(t, m, msg)
+	}
+	assert.Check(t, cmp.Contains(chatText(m), "Could not start the planning session: no Claude Code"))
+
+	agent.mu.Lock()
+	agent.err = nil
+	agent.mu.Unlock()
+	m = refreshed(t, m)
+	assert.Check(t, cmp.DeepEqual(agent.Sent(), []string{"add a flag", "add a flag"}))
+	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
+
+	refreshed(t, m)
+	assert.Check(t, cmp.Len(agent.Sent(), 2), "the request was sent again once it started")
+	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
 }
 
 func TestProblemEndsTheTurn(t *testing.T) {
@@ -2145,25 +2359,6 @@ func TestProblemEndsTheTurn(t *testing.T) {
 	}
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "claude exited") {
 		t.Errorf("the problem is not in the chat:\n%s", view)
-	}
-}
-
-func TestPlanInReviewSaysOnlyCommentsChangeIt(t *testing.T) {
-	store := newFakeStore()
-	store.TextV = twoParts
-	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	if store.StateV != "Planning - Human" {
-		t.Fatalf("test assumes the fake store starts in Planning - Human, got %q", store.StateV)
-	}
-	if m.input.Placeholder != reviewPlaceholder {
-		t.Errorf("placeholder in review is %q", m.input.Placeholder)
-	}
-
-	store.StateV = "Planning - Agent"
-	m = refreshed(t, m)
-	if m.input.Placeholder != chatPlaceholder {
-		t.Errorf("placeholder while chunk plans is %q", m.input.Placeholder)
 	}
 }
 
@@ -2301,7 +2496,7 @@ func TestNarrowScreenTakesTurnsWithTabs(t *testing.T) {
 	m := New(context.Background(), turnReturning("Wrote it."), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 70, Height: 30})
 	view := ansi.Strip(m.Content())
-	if !regexp.MustCompile(`Chat +Flow +Plan · 2 units`).MatchString(view) {
+	if !regexp.MustCompile(`Activity +Flow +Plan · 2 units`).MatchString(view) {
 		t.Errorf("no tab strip:\n%s", view)
 	}
 	if strings.Contains(view, "Retry on 429") {
@@ -2753,7 +2948,6 @@ func TestQueuedCommentsSavedOnSend(t *testing.T) {
 	}
 
 	m = drive(t, m, press("tab"))
-	m = typeText(t, m, "please address these")
 	m = drive(t, m, press("enter"))
 
 	if len(store.Added) != 2 || store.Added[0] != [2]string{"The flag exists.", "first"} ||
@@ -2763,9 +2957,7 @@ func TestQueuedCommentsSavedOnSend(t *testing.T) {
 	if len(store.HandedOff) != 1 || store.HandedOff[0] != "Planning - Human" {
 		t.Fatalf("handed off: %+v", store.HandedOff)
 	}
-	if got := agent.Sent(); len(got) != 2 || got[1] != "please address these" {
-		t.Fatalf("agent got %q, want only the typed message after the first", got)
-	}
+	assert.Check(t, cmp.DeepEqual(agent.Sent(), []string{"plan it"}))
 	if len(queuedComments(m.comments)) != 0 {
 		t.Errorf("comments still queued: %+v", m.comments)
 	}
@@ -2795,8 +2987,8 @@ func TestSendWithOnlyCommentsStartsNoTurn(t *testing.T) {
 	m = typeText(t, m, "first")
 	m = drive(t, m, press("enter"))
 	m = drive(t, m, press("tab"))
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Press enter to save your comments") {
-		t.Errorf("placeholder does not say comments are saved:\n%s", view)
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "queued · press enter or s to send") {
+		t.Errorf("the Activity pane does not say how comments are sent:\n%s", view)
 	}
 	m = drive(t, m, press("enter"))
 
@@ -2812,8 +3004,7 @@ func TestSendWithOnlyCommentsStartsNoTurn(t *testing.T) {
 }
 
 // TestCommentsHeldOutsideHumanStates checks that a send outside a Human
-// state leaves the queued comments queued, unsaved and not handed off, and
-// sends the message with them on alone.
+// state leaves the queued comments queued, unsaved and not handed off.
 func TestCommentsHeldOutsideHumanStates(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = twoParts
@@ -2835,14 +3026,12 @@ func TestCommentsHeldOutsideHumanStates(t *testing.T) {
 	main, _ := m.barRight()
 	assert.Check(t, cmp.Equal(main, ""), "the bar has a button for held comments")
 	m = drive(t, m, press("tab"))
-	assert.Check(t, cmp.Equal(m.input.Placeholder, heldPlaceholder))
-	m = typeText(t, m, "keep going")
 	m = drive(t, m, press("enter"))
 
 	assert.Check(t, cmp.Len(store.Added, 0))
 	assert.Check(t, cmp.Len(store.HandedOff, 0))
 	assert.Check(t, cmp.Len(queuedComments(m.comments), 1))
-	assert.Check(t, cmp.DeepEqual(agent.Sent(), []string{"keep going"}))
+	assert.Check(t, cmp.Len(agent.Sent(), 0))
 	view := ansi.Strip(m.Content())
 	assert.Check(t, cmp.Contains(view, "Comments not sent: factory is working on the plan"))
 }
@@ -2935,85 +3124,82 @@ func TestCommentsFollowTheFlowsEventsNotItsState(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Agent"}))
 }
 
-// TestHandOffRetriedOnNextSendWithNothingQueued checks that an
-// address-comments event failing after every comment was saved is retried on
-// the next send, even with nothing queued, rather than leaving the plan stuck
-// in its Human state.
+// TestHandOffRetriedOnNextSendWithNothingQueued checks that a hand-off event
+// failing after every comment was saved is retried on the next send, even
+// with nothing queued, rather than leaving the plan stuck in its Human state,
+// and that the retry sends the event the flow lists then.
 func TestHandOffRetriedOnNextSendWithNothingQueued(t *testing.T) {
-	store := newFakeStore()
-	store.TextV = twoParts
-	store.AddressErr = errors.New("transient")
-	agent := turnReturning("ok")
-	m := New(context.Background(), agent, nil, store, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	agent.reset()
+	for _, tc := range []struct {
+		name      string
+		first     []string
+		retry     []string
+		handedOff []string
+		answered  []string
+	}{
+		{
+			name:      "address-comments",
+			first:     []string{"address-comments"},
+			retry:     []string{"address-comments"},
+			handedOff: []string{"Planning - Human"},
+		},
+		{
+			name:     "to answer-open-questions",
+			first:    []string{"address-comments"},
+			retry:    []string{"answer-open-questions"},
+			answered: []string{"Planning - Human"},
+		},
+		{
+			name:      "to address-comments",
+			first:     []string{"answer-open-questions"},
+			retry:     []string{"address-comments"},
+			handedOff: []string{"Planning - Human"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.TextV = twoParts
+			store.setEvents(tc.first...)
+			store.AddressErr = errors.New("transient")
+			agent := turnReturning("ok")
+			m := New(context.Background(), agent, nil, store, "plan it")
+			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+			agent.reset()
 
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("down"))
-	m = drive(t, m, press("c"))
-	m = typeText(t, m, "first")
-	m = drive(t, m, press("enter"))
-	m = drive(t, m, press("tab"))
-	m = typeText(t, m, "go")
-	m = drive(t, m, press("enter"))
+			m = drive(t, m, press("tab"))
+			m = drive(t, m, press("down"))
+			m = drive(t, m, press("c"))
+			m = typeText(t, m, "first")
+			m = drive(t, m, press("enter"))
+			m = drive(t, m, press("tab"))
+			m = drive(t, m, press("enter"))
 
-	if len(store.Added) != 1 {
-		t.Fatalf("comment not saved: %+v", store.Added)
-	}
-	if len(store.HandedOff) != 0 {
-		t.Fatalf("hand-off should have failed: %+v", store.HandedOff)
-	}
-	if len(agent.Sent()) != 0 {
-		t.Fatalf("a turn started despite the hand-off failing")
-	}
-	if strings.TrimSpace(m.input.Value()) != "go" {
-		t.Errorf("message not kept in the input: %q", m.input.Value())
-	}
-	if len(queuedComments(m.comments)) != 0 {
-		t.Fatalf("the saved comment should not stay queued: %+v", m.comments)
-	}
-	assert.Check(t, m.moving == nil, "a failed event started the wait")
+			if len(store.Added) != 1 {
+				t.Fatalf("comment not saved: %+v", store.Added)
+			}
+			assert.Check(t, cmp.Len(store.HandedOff, 0))
+			assert.Check(t, cmp.Len(store.Answered, 0))
+			if len(agent.Sent()) != 0 {
+				t.Fatalf("a turn started despite the hand-off failing")
+			}
+			if len(queuedComments(m.comments)) != 0 {
+				t.Fatalf("the saved comment should not stay queued: %+v", m.comments)
+			}
+			assert.Check(t, m.moving == nil, "a failed event started the wait")
 
-	store.AddressErr = nil
-	m = drive(t, m, press("enter"))
+			store.AddressErr = nil
+			store.setEvents(tc.retry...)
+			// The retry reads m.events: poll so it sees tc.retry.
+			m = drive(t, m, pollMsg{})
+			m = drive(t, m, press("enter"))
 
-	if len(store.HandedOff) != 1 || store.HandedOff[0] != "Planning - Human" {
-		t.Fatalf("hand-off not retried: %+v", store.HandedOff)
-	}
-	if len(store.Added) != 1 {
-		t.Fatalf("the already-saved comment was saved again: %+v", store.Added)
-	}
-	if len(agent.Sent()) != 1 {
-		t.Fatalf("turn calls = %d, want 1", len(agent.Sent()))
-	}
-	assert.Check(t, m.moving != nil)
-}
-
-// TestPlainMessageInHumanStateDoesNotHandOff checks that sending an ordinary
-// chat message while the plan sits in a Human state, with no comment ever
-// queued or saved, sends factory no address-comments event.
-func TestPlainMessageInHumanStateDoesNotHandOff(t *testing.T) {
-	store := newFakeStore()
-	store.TextV = twoParts
-	agent := turnReturning("ok")
-	m := New(context.Background(), agent, nil, store, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	agent.reset()
-
-	if store.StateV != "Planning - Human" {
-		t.Fatalf("test assumes the fake store starts in Planning - Human, got %q", store.StateV)
-	}
-	m = typeText(t, m, "also handle edge case X")
-	drive(t, m, press("enter"))
-
-	if len(store.HandedOff) != 0 {
-		t.Fatalf("handed off on a plain message with no comments ever saved: %+v", store.HandedOff)
-	}
-	if len(store.Added) != 0 {
-		t.Fatalf("comments saved on a plain message: %+v", store.Added)
-	}
-	if len(agent.Sent()) != 1 {
-		t.Fatalf("turn calls = %d, want 1", len(agent.Sent()))
+			assert.Check(t, cmp.DeepEqual(store.HandedOff, tc.handedOff))
+			assert.Check(t, cmp.DeepEqual(store.Answered, tc.answered))
+			if len(store.Added) != 1 {
+				t.Fatalf("the already-saved comment was saved again: %+v", store.Added)
+			}
+			assert.Check(t, cmp.Len(agent.Sent(), 0), "the retried hand-off sent to the agent")
+			assert.Check(t, m.moving != nil)
+		})
 	}
 }
 
@@ -3041,7 +3227,6 @@ func TestSaveFailureKeepsRestQueued(t *testing.T) {
 	}
 
 	m = drive(t, m, press("tab"))
-	m = typeText(t, m, "go")
 	m = drive(t, m, press("enter"))
 
 	if len(store.Added) != 1 {
@@ -3059,9 +3244,6 @@ func TestSaveFailureKeepsRestQueued(t *testing.T) {
 	}
 	if len(agent.Sent()) != 0 {
 		t.Errorf("a turn started despite the failure")
-	}
-	if strings.TrimSpace(m.input.Value()) != "go" {
-		t.Errorf("message not kept in the input: %q", m.input.Value())
 	}
 }
 
@@ -3187,8 +3369,7 @@ func TestSelectionOverSavedCommentDeletesItAfterPost(t *testing.T) {
 		t.Fatalf("the saved comment was deleted before sending: %+v", store.Deleted)
 	}
 
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("s"))
 
 	if len(store.Deleted) != 1 || store.Deleted[0] != c.ID {
 		t.Fatalf("deleted: %+v, want [%s]", store.Deleted, c.ID)
@@ -3235,8 +3416,7 @@ func TestMergeAccumulatesReplacesAcrossQueuedComments(t *testing.T) {
 
 	// Sending must delete the originally saved comment, not just the one
 	// absorbed directly into this queued comment.
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("s"))
 
 	if len(store.Deleted) != 1 || store.Deleted[0] != saved.ID {
 		t.Fatalf("deleted: %+v, want [%s]", store.Deleted, saved.ID)
@@ -3283,36 +3463,58 @@ func TestDeleteSavedCommentAsksFirst(t *testing.T) {
 	}
 }
 
-// TestSendHandsOffFromEveryHumanState checks that sending comments hands
-// them to factory from each Human state, as factory's address-comments event
-// moves any of them to its phase's Agent state, not just from the Planning
-// state every other hand-off test exercises.
-func TestSendHandsOffFromEveryHumanState(t *testing.T) {
+// TestSendHandsOffWithTheEventTheFlowLists checks that sending comments hands
+// them to factory from each Human state past Planning, with the event the
+// flow lists: answer-open-questions for a plan with open questions, over
+// address-comments when both are listed, and address-comments otherwise.
+func TestSendHandsOffWithTheEventTheFlowLists(t *testing.T) {
 	for _, state := range []string{"Building - Human", "Integrating - Human"} {
-		t.Run(state, func(t *testing.T) {
-			store := newFakeStore()
-			store.TextV = twoParts
-			store.StateV = state
-			m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
-			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+		for _, tc := range []struct {
+			name      string
+			events    []string
+			handedOff []string
+			answered  []string
+		}{
+			{
+				name:      "address-comments",
+				events:    []string{"address-comments", "abandon"},
+				handedOff: []string{state},
+			},
+			{
+				name:     "answer-open-questions",
+				events:   []string{"answer-open-questions", "abandon"},
+				answered: []string{state},
+			},
+			{
+				name:     "both",
+				events:   []string{"answer-open-questions", "address-comments", "abandon"},
+				answered: []string{state},
+			},
+		} {
+			t.Run(state+"/"+tc.name, func(t *testing.T) {
+				store := newFakeStore()
+				store.TextV = twoParts
+				store.StateV = state
+				store.setEvents(tc.events...)
+				m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+				m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 
-			m = drive(t, m, press("tab"))
-			// A plan past Planning opens on the Flow tab.
-			m = drive(t, m, press("right"))
-			m = drive(t, m, press("down"))
-			m = drive(t, m, press("c"))
-			m = typeText(t, m, "first")
-			m = drive(t, m, press("enter"))
-			m = drive(t, m, press("tab"))
-			drive(t, m, press("enter"))
+				m = drive(t, m, press("tab"))
+				// A plan past Planning opens on the Flow tab.
+				m = drive(t, m, press("right"))
+				m = drive(t, m, press("down"))
+				m = drive(t, m, press("c"))
+				m = typeText(t, m, "first")
+				m = drive(t, m, press("enter"))
+				m = drive(t, m, press("tab"))
+				assert.Check(t, m.keys().Send.Enabled(), "enter in the Activity pane does not send the comments")
+				drive(t, m, press("enter"))
 
-			if len(store.Added) != 1 {
-				t.Fatalf("comment not saved: %+v", store.Added)
-			}
-			if len(store.HandedOff) != 1 || store.HandedOff[0] != state {
-				t.Fatalf("handed off: %+v, want [%s]", store.HandedOff, state)
-			}
-		})
+				assert.Check(t, cmp.Len(store.Added, 1))
+				assert.Check(t, cmp.DeepEqual(store.HandedOff, tc.handedOff))
+				assert.Check(t, cmp.DeepEqual(store.Answered, tc.answered))
+			})
+		}
 	}
 }
 
@@ -3349,8 +3551,9 @@ func TestSecondSendWhileSavingCommentsDoesNothing(t *testing.T) {
 func TestFailedCreateShowsInTheChatAndIsTriedAgain(t *testing.T) {
 	store := newFakeStore()
 	store.CreateErr = errors.New("factory said no")
+	store.TitleV = "add-a-flag"
 	agent := newFakeAgent()
-	m := New(context.Background(), agent, nil, store, "add a --dry-run flag")
+	m := New(context.Background(), agent, nil, store, "add a --dry-run flag").WithInbox("New plan", "chunk")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	if got := agent.Sent(); len(got) != 0 {
@@ -3362,19 +3565,92 @@ func TestFailedCreateShowsInTheChatAndIsTriedAgain(t *testing.T) {
 	if m.busy {
 		t.Error("still busy after the create failed")
 	}
+	assert.Check(t, cmp.Contains(ansi.Strip(m.header()), "New plan"))
 
 	store.mu.Lock()
 	store.CreateErr = nil
 	store.mu.Unlock()
 	m = typeText(t, m, "add a flag")
-	drive(t, m, press("enter"))
+	m = drive(t, m, press("enter"))
 	if got := agent.Sent(); len(got) != 1 || got[0] != "add a flag" {
 		t.Errorf("agent got %q", got)
 	}
+	assert.Check(t, cmp.Contains(ansi.Strip(m.header()), "chunk plan / add-a-flag"))
 }
 
-// The plan is created off the screen's loop; a message sent meanwhile waits
-// in the input rather than racing the create.
+// Once factory has created the plan, the title the host gave the screen is
+// replaced with the plan's own; a screen with no title keeps the branch.
+func TestTheHeaderNamesThePlanOnceCreated(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		host      func(Model) Model
+		width     int
+		title     string
+		createErr error
+		want      string
+		notWant   string
+	}{
+		{
+			name:    "the plan's title replaces New plan",
+			host:    func(m Model) Model { return m.WithInbox("New plan", "chunk") },
+			width:   120,
+			title:   "replace-header-plan",
+			want:    "chunk plan / replace-header-plan",
+			notWant: "New plan",
+		},
+		{
+			name:  "a long title is cut down",
+			host:  func(m Model) Model { return m.WithInbox("New plan", "chunk") },
+			width: 60, // narrow enough that the header cuts the title down
+			title: "a-very-long-plan-title-indeed",
+			want:  "chunk plan / a-very-long-p…",
+		},
+		{
+			name:      "a failed create keeps New plan",
+			host:      func(m Model) Model { return m.WithInbox("New plan", "chunk") },
+			width:     120,
+			title:     "replace-header-plan",
+			createErr: errors.New("factory said no"),
+			want:      "chunk plan / New plan",
+			notWant:   "replace-header-plan",
+		},
+		{
+			name:  "no title keeps New plan",
+			host:  func(m Model) Model { return m.WithInbox("New plan", "chunk") },
+			width: 120,
+			want:  "chunk plan / New plan",
+		},
+		{
+			name:    "the standalone screen keeps its branch",
+			host:    func(m Model) Model { return m.WithBranch("main") },
+			width:   120,
+			title:   "replace-header-plan",
+			want:    "chunk plan / main",
+			notWant: "replace-header-plan",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.TitleV, store.CreateErr = tc.title, tc.createErr
+			m := tc.host(New(context.Background(), newFakeAgent(), nil, store, ""))
+			m = drive(t, m, tea.WindowSizeMsg{Width: tc.width, Height: 40})
+			m = typeText(t, m, "replace the header")
+			m, create := m.Update(press("enter"))
+			for _, msg := range run(create) {
+				m = drive(t, m, msg)
+			}
+
+			header := ansi.Strip(m.header())
+			assert.Check(t, cmp.Contains(header, tc.want))
+			if tc.notWant != "" {
+				assert.Check(t, !strings.Contains(header, tc.notWant), "header: %q", header)
+			}
+		})
+	}
+}
+
+// The plan is created off the screen's loop; a second enter meanwhile does
+// not race the create.
 func TestMessageWhileThePlanIsCreatedWaitsInTheInput(t *testing.T) {
 	store := newFakeStore()
 	agent := newFakeAgent()
@@ -3386,11 +3662,8 @@ func TestMessageWhileThePlanIsCreatedWaitsInTheInput(t *testing.T) {
 		t.Fatal("the plan is not being created")
 	}
 
-	m = typeText(t, m, "second")
-	m, _ = m.Update(press("enter"))
-	if m.input.Value() != "second" {
-		t.Errorf("input is %q, want the waiting message", m.input.Value())
-	}
+	m, cmd := m.Update(press("enter"))
+	assert.Check(t, cmd == nil, "a second enter while the plan is created did something")
 
 	for _, msg := range run(create) {
 		m = drive(t, m, msg)
@@ -3467,19 +3740,28 @@ func TestEscQuitsAScreenWithNoHost(t *testing.T) {
 	}
 }
 
-// q leaves from the plan, where nothing is being typed, and is only a letter
-// in the chat.
+// q leaves from the plan and the Activity pane, where nothing is being
+// typed, and is only a letter in a new plan's request.
 func TestQQuitsFromThePlanOnly(t *testing.T) {
-	// The chat's text box is shared by copies of the model, so each half
+	// The request's text box is shared by copies of the model, so each part
 	// starts from a screen of its own.
-	chat := idlePlan(t)
-	chat, cmd := chat.Update(press("q"))
+	request := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+	request = drive(t, request, tea.WindowSizeMsg{Width: 140, Height: 40})
+	request, cmd := request.Update(press("q"))
 	if _, ok := closedBy(cmd); ok {
-		t.Error("q in the chat quit")
+		t.Error("q in the request quit")
 	}
-	if got := chat.input.Value(); got != "q" {
-		t.Errorf("q in the chat typed %q, want q", got)
+	if got := request.input.Value(); got != "q" {
+		t.Errorf("q in the request typed %q, want q", got)
 	}
+
+	activity := idlePlan(t)
+	assert.Assert(t, cmp.Equal(activity.focus, paneChat))
+	activity, cmd = activity.Update(press("q"))
+	if _, ok := closedBy(cmd); !ok {
+		t.Error("q in the Activity pane did not quit")
+	}
+	assert.Check(t, cmp.Equal(activity.input.Value(), ""))
 
 	plan := idlePlan(t)
 	plan = drive(t, plan, press("tab"))
@@ -3576,16 +3858,31 @@ func TestRightPaneOpensOnTheTabForItsPhase(t *testing.T) {
 }
 
 func TestTabKeysSwitchTheRightPane(t *testing.T) {
-	m, store := planModel(t)
-	m = typeText(t, m, "fp")
-	m = drive(t, m, press("left"))
-	m = drive(t, m, press("left"))
-	m = drive(t, m, press("right"))
-	m = typeText(t, m, "x")
-	assert.Check(t, cmp.Equal(m.input.Value(), "fxp"), "← and → in the chat move the cursor")
-	assert.Check(t, cmp.Equal(m.tab, tabPlan))
-	m.input.Reset()
+	t.Run("in the request", func(t *testing.T) {
+		m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+		m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+		m = refreshed(t, m)
+		m = typeText(t, m, "fp")
+		m = drive(t, m, press("left"))
+		m = drive(t, m, press("left"))
+		m = drive(t, m, press("right"))
+		m = typeText(t, m, "x")
+		assert.Check(t, cmp.Equal(m.input.Value(), "fxp"), "← and → in the request move the cursor")
+		assert.Check(t, cmp.Equal(m.tab, tabPlan))
+	})
 
+	t.Run("in the Activity pane", func(t *testing.T) {
+		m, _ := planModel(t)
+		m = refreshed(t, m)
+		assert.Assert(t, cmp.Equal(m.focus, paneChat))
+		for _, k := range []string{"f", "p", "left", "right"} {
+			m = drive(t, m, press(k))
+		}
+		assert.Check(t, cmp.Equal(m.tab, tabPlan))
+		assert.Check(t, cmp.Equal(m.input.Value(), ""))
+	})
+
+	m, store := planModel(t)
 	m = drive(t, m, press("tab"))
 	// A queued comment on the plan, for the Flow tab's keys to leave alone.
 	m = drive(t, m, press("c"))
@@ -3751,8 +4048,8 @@ func TestRelatedOpensARelative(t *testing.T) {
 		store.StateV, store.TextV, store.FamilyV = "Building - Agent", threeUnits, fam
 		m := New(context.Background(), newFakeAgent(), nil, store, "").WithInbox("Plan", "/src/p")
 		m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-		m = refreshed(t, m)
-		return drive(t, m, press("tab")), store
+		// An existing plan opens on the right pane.
+		return refreshed(t, m), store
 	}
 
 	t.Run("enter opens the row under the cursor", func(t *testing.T) {
@@ -3890,4 +4187,344 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 		assert.Check(t, !m.startingWork)
 		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Could not start work: factory is down"))
 	})
+}
+
+// endScreen is a 140×40 screen on store's plan, created and in state, whose
+// flow applies events now, refreshed once and with the plan pane focused.
+func endScreen(t *testing.T, store *fakeStore, state string, events ...string) Model {
+	t.Helper()
+	store.Created = true
+	store.TextV = twoParts
+	store.StateV = state
+	store.setEvents(events...)
+	m := New(context.Background(), turnReturning("ok"), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	// An existing plan opens on the right pane.
+	return refreshed(t, m)
+}
+
+// pressAll drives each of keys through m in turn.
+func pressAll(t *testing.T, m Model, keys ...string) Model {
+	t.Helper()
+	for _, k := range keys {
+		m = drive(t, m, press(k))
+	}
+	return m
+}
+
+// TestAbandonThePlan checks that x, while factory offers abandon, asks for a
+// reason and sends abandon with the one picked, and that any other key keeps
+// the plan.
+func TestAbandonThePlan(t *testing.T) {
+	abandoned := func(store *fakeStore) []string {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return slices.Clone(store.Abandoned)
+	}
+	live := []string{"address-comments", "abandon"}
+	for _, tc := range []struct {
+		name   string
+		state  string
+		events []string
+		ended  bool
+		err    error
+		check  func(t *testing.T, m Model, store *fakeStore)
+	}{
+		{
+			name:   "not offered without abandon",
+			state:  "Planning - Human",
+			events: []string{"address-comments"},
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "abandon plan"))
+				m = pressAll(t, m, "x")
+				assert.Check(t, !m.askingReason)
+				assert.Check(t, cmp.Len(abandoned(store), 0))
+			},
+		},
+		{
+			name:   "c abandons as canceled",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "x abandon plan"))
+				m = pressAll(t, m, "x")
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as: c canceled · w won't do · d duplicate · esc keep it"))
+				m = pressAll(t, m, "c")
+				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"canceled"}))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: canceled"))
+			},
+		},
+		{
+			name:   "w abandons as won't do",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x", "w")
+				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"wont-do"}))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: won't do"))
+			},
+		},
+		{
+			name:   "d abandons as duplicate",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x", "d")
+				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"duplicate"}))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: duplicate"))
+			},
+		},
+		{
+			name:   "esc keeps the plan",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x")
+				m, cmd := m.Update(press("esc"))
+				_, gone := closedBy(cmd)
+				assert.Check(t, !gone, "esc at the reason prompt left the screen")
+				assert.Check(t, !m.askingReason)
+				assert.Check(t, cmp.Equal(m.status, ""))
+				assert.Check(t, cmp.Len(abandoned(store), 0))
+			},
+		},
+		{
+			name:   "q keeps the plan",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x")
+				m, cmd := m.Update(press("q"))
+				_, gone := closedBy(cmd)
+				assert.Check(t, !gone, "q at the reason prompt left the screen")
+				assert.Check(t, !m.askingReason)
+				assert.Check(t, cmp.Equal(m.status, ""))
+				assert.Check(t, cmp.Len(abandoned(store), 0))
+			},
+		},
+		{
+			name:   "a failed abandon says so",
+			state:  "Planning - Human",
+			events: live,
+			err:    errors.New("factory is down"),
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x")
+				m, cmd := m.Update(press("w"))
+				assert.Assert(t, cmd != nil)
+				m, _ = m.Update(cmd())
+				assert.Check(t, !m.abandoning)
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not abandon the plan: factory is down"))
+			},
+		},
+		{
+			name:  "not offered once the flow has ended",
+			state: "Done",
+			ended: true,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "abandon plan"))
+				m = pressAll(t, m, "x")
+				assert.Check(t, !m.askingReason)
+			},
+		},
+		{
+			name:   "a refresh keeps the prompt",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x")
+				store.mu.Lock()
+				store.StateV = "Planning - Agent"
+				store.mu.Unlock()
+				m = refreshed(t, m)
+				assert.Check(t, m.askingReason)
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as:"))
+				m = pressAll(t, m, "w")
+				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"wont-do"}))
+			},
+		},
+		{
+			name:   "x while abandoning asks nothing",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x", "w")
+				assert.Assert(t, m.abandoning)
+				m = pressAll(t, m, "x")
+				assert.Check(t, !m.askingReason)
+				assert.Check(t, cmp.Len(abandoned(store), 1))
+			},
+		},
+		{
+			name:   "an abandon sent refreshes the plan",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x", "w")
+				m, cmd := m.Update(abandonedMsg{})
+				assert.Check(t, !m.abandoning)
+				assert.Check(t, !strings.Contains(ansi.Strip(m.status), "Abandoning"))
+				assert.Check(t, cmd != nil, "no refresh after the abandon")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.FlowV.Ended = tc.ended
+			store.AbandonErr = tc.err
+			m := endScreen(t, store, tc.state, tc.events...)
+			tc.check(t, m, store)
+		})
+	}
+}
+
+// TestDeleteThePlan checks that X, while no session claims the plan, deletes
+// it after a y and closes the screen, and that a refusal keeps it.
+func TestDeleteThePlan(t *testing.T) {
+	deleted := func(store *fakeStore) bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.PlanDeleted
+	}
+	// deletes presses X and y, and delivers what the delete answers.
+	deletes := func(t *testing.T, m Model) (Model, tea.Cmd) {
+		t.Helper()
+		m = pressAll(t, m, "X")
+		assert.Assert(t, m.confirming)
+		m, cmd := m.Update(press("y"))
+		assert.Assert(t, cmd != nil)
+		return m.Update(cmd())
+	}
+	for _, tc := range []struct {
+		name    string
+		state   string
+		claimed bool
+		host    func(Model) Model
+		err     error
+		check   func(t *testing.T, m Model, store *fakeStore)
+	}{
+		{
+			name:    "not offered while claimed",
+			state:   "Planning - Human",
+			claimed: true,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "delete plan"))
+				m = pressAll(t, m, "X")
+				assert.Check(t, !m.confirming)
+				assert.Check(t, !m.pendingDeletePlan)
+			},
+		},
+		{
+			name: "offered on a plan with no flow",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "X delete plan"))
+			},
+		},
+		{
+			name:  "n keeps the plan",
+			state: "Done",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "X")
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Delete this plan, its comments and its flow?"))
+				m = pressAll(t, m, "n")
+				assert.Check(t, !m.pendingDeletePlan)
+				assert.Check(t, !deleted(store))
+			},
+		},
+		{
+			name:  "a refresh keeps the question",
+			state: "Done",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "X")
+				store.mu.Lock()
+				store.StateV = "Canceled"
+				store.mu.Unlock()
+				m = refreshed(t, m)
+				assert.Check(t, m.pendingDeletePlan)
+				_ = pressAll(t, m, "y")
+				assert.Check(t, deleted(store))
+			},
+		},
+		{
+			name:  "X while deleting asks nothing",
+			state: "Done",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "X", "y")
+				assert.Assert(t, m.deleting)
+				m = pressAll(t, m, "X")
+				assert.Check(t, !m.confirming)
+			},
+		},
+		{
+			name:  "y deletes and closes a screen with no host",
+			state: "Done",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m, cmd := deletes(t, m)
+				assert.Check(t, deleted(store))
+				assert.Check(t, !m.deleting)
+				_, gone := closedBy(cmd)
+				assert.Check(t, gone, "the screen stayed after the delete")
+			},
+		},
+		{
+			name:  "y deletes and goes back",
+			state: "Done",
+			host:  Model.WithBack,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				_, cmd := deletes(t, m)
+				assert.Check(t, deleted(store))
+				_, gone := closedBy(cmd)
+				assert.Check(t, gone, "the screen stayed after the delete")
+			},
+		},
+		{
+			name:  "y deletes and goes back to plans",
+			state: "Done",
+			host:  func(m Model) Model { return m.WithInbox("A plan", "chunk") },
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				_, cmd := deletes(t, m)
+				assert.Check(t, deleted(store))
+				_, gone := closedBy(cmd)
+				assert.Check(t, gone, "the screen stayed after the delete")
+			},
+		},
+		{
+			name:  "a conflict says so and stays",
+			state: "Done",
+			err: &circleci.StatusError{
+				Op:            "delete plan",
+				StatusCode:    409,
+				ServerMessage: "plan has sub-plans",
+			},
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m, cmd := deletes(t, m)
+				assert.Check(t, !deleted(store))
+				_, gone := closedBy(cmd)
+				assert.Check(t, !gone, "the screen closed on a refused delete")
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not delete the plan: "))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "plan has sub-plans"))
+			},
+		},
+		{
+			name:  "a refusal says so and stays",
+			state: "Done",
+			err:   errors.New("plan has sub-plans"),
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m, cmd := deletes(t, m)
+				_, gone := closedBy(cmd)
+				assert.Check(t, !gone, "the screen closed on a refused delete")
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not delete the plan: plan has sub-plans"))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.FlowV.Claimed = tc.claimed
+			store.DeletePlanErr = tc.err
+			m := endScreen(t, store, tc.state)
+			if tc.host != nil {
+				m = tc.host(m)
+			}
+			tc.check(t, m, store)
+		})
+	}
 }

@@ -1,6 +1,7 @@
 package fakes
 
 import (
+	"cmp"
 	"net/http"
 	"slices"
 	"strconv"
@@ -22,6 +23,9 @@ type factoryPlan struct {
 	noFlow  bool
 	session string
 	events  []string
+	// reasons are the reasons sent with events, parallel to them: an
+	// abandon's reason, "" for any other event.
+	reasons []string
 	// applicable are the human events the flow serves in next, as a test
 	// sets them with SetFactoryApplicableEvents.
 	applicable []string
@@ -55,6 +59,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.POST("/api/v3/factory/plans", f.handleCreatePlan)
 	r.GET("/api/v3/factory/plans", f.handleListPlans)
 	r.GET("/api/v3/factory/plans/:id", f.handleGetPlan)
+	r.DELETE("/api/v3/factory/plans/:id", f.handleDeletePlan)
 	r.GET("/api/v3/factory/plans/:id/text", f.handleGetPlanText)
 	r.PUT("/api/v3/factory/plans/:id/text", f.handlePutPlanText)
 	r.POST("/api/v3/factory/comments", f.handleCreateComment)
@@ -71,7 +76,11 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 
 // factoryEvents are the events a human may send a flow (flow.EventName in
 // circleci/factory).
-var factoryEvents = []string{"prioritize", "address-comments", "resolve-conflicts", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
+var factoryEvents = []string{"prioritize", "address-comments", "answer-open-questions", "resolve-conflicts", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
+
+// abandonReasons are the reasons an abandon takes, and only an abandon
+// (api/conductorapi/events.go in circleci/factory).
+var abandonReasons = []string{"canceled", "wont-do", "duplicate"}
 
 // factoryEnds are the states a plan ends in, which the plan list leaves out
 // (conductor.Ends in circleci/factory).
@@ -88,6 +97,9 @@ type FactoryPlan struct {
 	// plan's next poll, which a test stands in for with
 	// SetFactoryPlanState.
 	Events []string
+	// Reasons are the reasons sent with Events, parallel to them: an
+	// abandon's reason, "" for any other event.
+	Reasons []string
 }
 
 // FactoryPlan returns plan id as the fake holds it, and false when there is
@@ -101,7 +113,7 @@ func (f *FakeCircleCI) FactoryPlan(id string) (FactoryPlan, bool) {
 	}
 	return FactoryPlan{
 		ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments),
-		Session: p.session, Events: slices.Clone(p.events),
+		Session: p.session, Events: slices.Clone(p.events), Reasons: slices.Clone(p.reasons),
 	}, true
 }
 
@@ -232,6 +244,14 @@ func (f *FakeCircleCI) DropFactoryFlow(id string) {
 	}
 }
 
+// DeleteFactoryPlan removes plan id, as conductor's plan delete would: GET
+// /plans/:id and GET /flows/:id answer 404 for it afterwards.
+func (f *FakeCircleCI) DeleteFactoryPlan(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.factoryPlans, id)
+}
+
 // factoryError writes a V3 error, as conductor does.
 func factoryError(c *gin.Context, status int, msg string) {
 	c.JSON(status, gin.H{"error": gin.H{"id": "trace-1", "title": msg}})
@@ -256,10 +276,6 @@ func (f *FakeCircleCI) factoryStart(c *gin.Context) bool {
 func planEntity(p *factoryPlan) gin.H {
 	attrs := planListAttrs(p)
 	attrs["branch"] = p.branch
-	attrs["phase"] = factoryPhase(p.state)
-	if o := factoryOutcome(p.state); o != "" {
-		attrs["outcome"] = o
-	}
 	ent := gin.H{"id": p.id, "attributes": attrs}
 	addPlanRefs(ent, p)
 	return ent
@@ -452,9 +468,39 @@ func (f *FakeCircleCI) handleGetPlan(c *gin.Context) {
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+	if f.FactoryPlanStatusCode != 0 {
+		factoryError(c, f.FactoryPlanStatusCode, "API error")
+		return
+	}
 	if p := f.plan(c); p != nil {
 		c.JSON(http.StatusOK, gin.H{"data": planEntity(p)})
 	}
+}
+
+// handleDeletePlan deletes plan :id, with its comments and its flow, as
+// conductor does. A plan a session claims, or one with sub-plans, is a 409.
+func (f *FakeCircleCI) handleDeletePlan(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.plan(c)
+	if p == nil {
+		return
+	}
+	if p.session != "" {
+		factoryError(c, http.StatusConflict, "plan is claimed by a session")
+		return
+	}
+	for _, o := range f.factoryPlans {
+		if o.parent == p.id {
+			factoryError(c, http.StatusConflict, "plan has sub-plans")
+			return
+		}
+	}
+	delete(f.factoryPlans, p.id)
+	c.Status(http.StatusNoContent)
 }
 
 func (f *FakeCircleCI) handleGetPlanText(c *gin.Context) {
@@ -562,8 +608,8 @@ func flowEntity(p *factoryPlan) gin.H {
 	if p.status.Deviations == nil {
 		attrs["deviations"] = []string{}
 	}
-	if p.status.Outcome != "" {
-		attrs["outcome"] = p.status.Outcome
+	if o := cmp.Or(p.status.Outcome, factoryOutcome(p.state)); o != "" {
+		attrs["outcome"] = o
 	}
 	return gin.H{"id": p.id, "attributes": attrs, "references": refs}
 }
@@ -669,7 +715,9 @@ func (f *FakeCircleCI) handleReleaseClaim(c *gin.Context) {
 
 // handleCreateEvent stores an event for a flow, as conductor does, answering
 // 400 for an event conductor does not know or one with no factory_flow
-// reference, and 404 for a plan with no flow.
+// reference, and 404 for a plan with no flow. As conductor does, it answers
+// 400 for an abandon whose reason is not one of abandonReasons, and for any
+// other event that has a reason: only abandon takes one.
 func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
@@ -677,7 +725,8 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 	var body struct {
 		Data struct {
 			Attributes struct {
-				Event string `json:"event"`
+				Event  string `json:"event"`
+				Reason string `json:"reason"`
 			} `json:"attributes"`
 			References struct {
 				FactoryFlow *struct {
@@ -688,6 +737,15 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || !slices.Contains(factoryEvents, body.Data.Attributes.Event) {
 		factoryError(c, http.StatusBadRequest, "event is not one of "+strings.Join(factoryEvents, ", "))
+		return
+	}
+	event, reason := body.Data.Attributes.Event, body.Data.Attributes.Reason
+	if event == "abandon" && !slices.Contains(abandonReasons, reason) {
+		factoryError(c, http.StatusBadRequest, "an abandon needs a reason: canceled, wont-do or duplicate")
+		return
+	}
+	if event != "abandon" && reason != "" {
+		factoryError(c, http.StatusBadRequest, "only abandon takes a reason")
 		return
 	}
 	if body.Data.References.FactoryFlow == nil {
@@ -702,10 +760,15 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 		factoryError(c, http.StatusNotFound, "flow not found")
 		return
 	}
-	p.events = append(p.events, body.Data.Attributes.Event)
+	p.events = append(p.events, event)
+	p.reasons = append(p.reasons, reason)
+	attrs := gin.H{"event": event, "created_at": time.Now().UTC()}
+	if reason != "" {
+		attrs["reason"] = reason
+	}
 	c.JSON(http.StatusCreated, gin.H{"data": gin.H{
 		"id":         uuid.NewString(),
-		"attributes": gin.H{"event": body.Data.Attributes.Event, "created_at": time.Now().UTC()},
+		"attributes": attrs,
 		"references": gin.H{"factory_flow": gin.H{"id": p.id}, "user": gin.H{"id": "user-1"}},
 	}})
 }

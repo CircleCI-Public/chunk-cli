@@ -39,7 +39,7 @@ func TestRootHelp_StartHereThenOtherCommands(t *testing.T) {
 	assert.Assert(t, otherCommands > startHere, "Other commands should come after Start here:\n%s", help)
 
 	startHereSection := help[startHere:otherCommands]
-	wantOrder := []string{"chunk init", "chunk factory start", "chunk factory build", "chunk watch"}
+	wantOrder := []string{"chunk init", "chunk factory plan", "chunk watch"}
 	lastIdx := -1
 	for _, want := range wantOrder {
 		idx := strings.Index(startHereSection, want)

@@ -2,9 +2,13 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +21,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 // fakePlans is factory's plan API with one plan in it and its flow, whose
@@ -42,7 +49,7 @@ func (f *fakePlans) GetPlan(_ context.Context, id string) (*circleci.Plan, error
 	if id != f.id {
 		return nil, errors.New("plan not found")
 	}
-	return &circleci.Plan{ID: id, Branch: f.branch, Phase: f.phase, Outcome: f.outcome}, nil
+	return &circleci.Plan{ID: id, Branch: f.branch}, nil
 }
 
 func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error) {
@@ -54,7 +61,7 @@ func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error
 	if id != f.id || f.noFlow {
 		return nil, &circleci.StatusError{StatusCode: http.StatusNotFound}
 	}
-	return &circleci.Flow{ID: id, State: f.state, SessionID: f.holder}, nil
+	return &circleci.Flow{ID: id, State: f.state, Phase: f.phase, Outcome: f.outcome, SessionID: f.holder}, nil
 }
 
 // claim has holder claim the plan, as factory plan claim would; "" releases
@@ -78,12 +85,12 @@ func (f *fakePlans) set(state, branch string) {
 	f.state, f.branch = state, branch
 }
 
-// end ends the plan with outcome, as factory does: its phase is ended, and
-// its flow is gone.
+// end ends the plan with outcome, as factory does: its flow is in its end
+// state.
 func (f *fakePlans) end(outcome string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.phase, f.outcome, f.noFlow = circleci.PhaseEnded, outcome, true
+	f.phase, f.outcome = circleci.PhaseEnded, outcome
 }
 
 // fakeBuild is a build session whose events a test sends, recording what it
@@ -147,9 +154,60 @@ type planBuildDaemon struct {
 	openErr error
 }
 
+// newSessionDaemon builds a daemon that tracks one real git repo holding two
+// review prompts. It returns the daemon and the project's canonical root.
+func newSessionDaemon(t *testing.T) (*daemon, string) {
+	t.Helper()
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	t.Setenv("CHUNK_DAEMON_DIR", socketDir(t))
+
+	dir := initRepo(t)
+	prompts := filepath.Join(dir, ".chunk", "reviews")
+	err := os.MkdirAll(prompts, 0o755)
+	assert.NilError(t, err)
+	err = os.WriteFile(filepath.Join(prompts, "bugs.md"), []byte("find bugs"), 0o644)
+	assert.NilError(t, err)
+	err = os.WriteFile(filepath.Join(prompts, "style.md"), []byte("check style"), 0o644)
+	assert.NilError(t, err)
+
+	dataDir, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	err = sidecar.RegisterProjectRoot(dataDir, dir)
+	assert.NilError(t, err)
+	root, err := filepath.EvalSymlinks(dir)
+	assert.NilError(t, err)
+
+	d := newTestDaemon()
+	d.poll()
+	t.Cleanup(d.sessions.stopAll)
+	return d, root
+}
+
+func waitUntil(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// waitForSessionEnd waits for a session to finish and settle.
+func waitForSessionEnd(t *testing.T, d *daemon, id string) chunkd.Session {
+	t.Helper()
+	entry := d.sessions.get(id)
+	assert.Assert(t, entry != nil, "no session %s", id)
+	waitUntil(t, "session to end", func() bool { return entry.snapshot().State.Finished() })
+	<-entry.done
+	return entry.snapshot()
+}
+
 func newPlanBuildDaemon(t *testing.T) *planBuildDaemon {
 	t.Helper()
-	d, root := newSessionDaemon(t, &fakeBackend{})
+	d, root := newSessionDaemon(t)
 	old := planBuildPoll
 	planBuildPoll = 10 * time.Millisecond
 	t.Cleanup(func() { planBuildPoll = old })
@@ -185,7 +243,6 @@ func TestPlanBuildStartsABuildSessionInThePlansWorktree(t *testing.T) {
 	assert.Check(t, cmp.Equal(f.PlanID, "plan-1"))
 	assert.Check(t, cmp.Equal(f.SpecOrigin, "factory plan plan-1"))
 	assert.Check(t, cmp.Equal(f.Prompt, pb.plans.text))
-	assert.Check(t, cmp.Len(sess.Rounds, 0))
 
 	entry := pb.sessions.get(sess.ID)
 	waitUntil(t, "the build session to start", func() bool {
@@ -209,7 +266,7 @@ func TestPlanBuildStartsABuildSessionInThePlansWorktree(t *testing.T) {
 }
 
 // stopBuild cancels a build a test is done with, and waits for it to settle.
-func (pb *planBuildDaemon) stopBuild(t *testing.T, id string) chunkd.SessionDetail {
+func (pb *planBuildDaemon) stopBuild(t *testing.T, id string) chunkd.Session {
 	t.Helper()
 	pb.sessions.cancelSession(id)
 	return waitForSessionEnd(t, pb.daemon, id)
@@ -238,7 +295,7 @@ func TestPlanBuildFeedsWhatTheSessionDoes(t *testing.T) {
 }
 
 // The build follows factory's plan, its branch included, and ends once the
-// plan's phase has, though its flow is gone, stopping the session.
+// plan's flow has, stopping the session.
 func TestPlanBuildEndsWithThePlan(t *testing.T) {
 	for _, tc := range []struct {
 		outcome string
@@ -313,34 +370,16 @@ func TestPlanBuildFailsWithoutAWorktree(t *testing.T) {
 	assert.Check(t, cmp.Len(pb.cfgs, 0), "a build session started with no worktree")
 }
 
-// An ended plan is refused on its phase alone: its flow is not read.
+// An ended plan is refused on its flow's phase.
 func TestPlanBuildRefusesAnEndedPlan(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		flowErr error
-	}{
-		{
-			name: "no flow",
-		},
-		{
-			name:    "a failed flow read",
-			flowErr: errors.New("factory is down"),
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			pb := newPlanBuildDaemon(t)
-			pb.plans.end("rejected")
-			pb.plans.mu.Lock()
-			pb.plans.flowErr = tc.flowErr
-			pb.plans.mu.Unlock()
-			_, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
-			var ae *apiError
-			assert.Assert(t, errors.As(err, &ae), "err %v", err)
-			assert.Check(t, cmp.Equal(ae.status, http.StatusConflict))
-			assert.Check(t, cmp.Contains(ae.Error(), "rejected"))
-			assert.Check(t, cmp.Len(pb.sessions.forProject(pb.root), 0))
-		})
-	}
+	pb := newPlanBuildDaemon(t)
+	pb.plans.end("rejected")
+	_, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae), "err %v", err)
+	assert.Check(t, cmp.Equal(ae.status, http.StatusConflict))
+	assert.Check(t, cmp.Contains(ae.Error(), "rejected"))
+	assert.Check(t, cmp.Len(pb.sessions.forProject(pb.root), 0))
 }
 
 func TestPlanBuildRefusesWhenTheFlowReadFails(t *testing.T) {
@@ -355,8 +394,8 @@ func TestPlanBuildRefusesWhenTheFlowReadFails(t *testing.T) {
 	assert.Check(t, cmp.Len(pb.cfgs, 0), "a build started on a failed flow read")
 }
 
-// A plan with no flow has no flow state: its build starts, and runs until the
-// plan ends.
+// A plan with no flow has no flow state: its build starts, and runs until it
+// is cancelled, as there is no flow to end.
 func TestPlanBuildOfAPlanWithNoFlow(t *testing.T) {
 	pb := newPlanBuildDaemon(t)
 	pb.plans.noFlow = true
@@ -369,10 +408,8 @@ func TestPlanBuildOfAPlanWithNoFlow(t *testing.T) {
 	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
 	assert.Check(t, !pb.build.wasStopped(), "the build of a plan with no flow was stopped")
 
-	pb.plans.end("merged")
-	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
-	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionDone))
-	assert.Check(t, pb.build.wasStopped(), "the build session was left running")
+	detail := pb.stopBuild(t, sess.ID)
+	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionCancelled))
 }
 
 // A flow read that fails mid-build keeps the last flow state, and does not
@@ -392,6 +429,11 @@ func TestPlanBuildSkipsAFailedFlowRead(t *testing.T) {
 	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
 	assert.Check(t, cmp.Equal(f.PlanState, "Planning - Human"))
 
+	// The end is read from the flow, so the build sees it once a read
+	// succeeds again.
+	pb.plans.mu.Lock()
+	pb.plans.flowErr = nil
+	pb.plans.mu.Unlock()
 	pb.plans.end("merged")
 	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
 	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionDone))
@@ -436,7 +478,7 @@ func TestPlanBuildRefusesAPlanAlreadyBuilding(t *testing.T) {
 }
 
 func TestPlanBuildNeedsCircleCI(t *testing.T) {
-	d, root := newSessionDaemon(t, &fakeBackend{})
+	d, root := newSessionDaemon(t)
 	d.client = nil
 	_, err := d.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: root, PlanID: "plan-1"})
 	var ae *apiError
@@ -673,4 +715,151 @@ func TestPlanBuildNudgesOnceTheClaimIsReleased(t *testing.T) {
 			})
 		})
 	}
+}
+
+// seedPlanBuild records a build session of planID that has written n feed
+// lines, "line 0" to "line n-1", started at started and in state.
+func seedPlanBuild(t *testing.T, d *daemon, planID string, n int, started time.Time, state chunkd.SessionState, errText string) string {
+	t.Helper()
+	entry, _ := d.sessions.add(chunkd.Session{Factory: &chunkd.FactoryRun{PlanID: planID}})
+	// No build goroutine runs to settle the session, so stopAll would wait on
+	// it forever.
+	close(entry.done)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	for i := range n {
+		addFeedLine(&entry.s.Factory.Progress, iostream.LevelInfo, fmt.Sprintf("line %d", i))
+	}
+	entry.s.StartedAt, entry.s.State, entry.s.Error = started, state, errText
+	return entry.s.ID
+}
+
+func getPlanBuild(t *testing.T, d *daemon, path string) (int, chunkd.PlanBuildActivity, string) {
+	t.Helper()
+	rec := serve(d, httptest.NewRequest(http.MethodGet, path, nil))
+	body := strings.TrimSpace(rec.Body.String())
+	var got chunkd.PlanBuildActivity
+	if rec.Code == http.StatusOK {
+		err := json.Unmarshal([]byte(body), &got)
+		assert.NilError(t, err)
+	}
+	return rec.Code, got, body
+}
+
+func TestPlanBuildActivityReadsTheFeedAfter(t *testing.T) {
+	d := newTestDaemon()
+	t.Cleanup(d.sessions.stopAll)
+	id := seedPlanBuild(t, d, "plan-1", 130, time.Now(), chunkd.SessionRunning, "")
+
+	tests := []struct {
+		query     string
+		first     int
+		n         int
+		firstLine string
+	}{
+		{
+			query:     "",
+			first:     30,
+			n:         100,
+			firstLine: "line 30",
+		},
+		{
+			query:     "?after=abc",
+			first:     30,
+			n:         100,
+			firstLine: "line 30",
+		},
+		{
+			query:     "?after=-1",
+			first:     30,
+			n:         100,
+			firstLine: "line 30",
+		},
+		{
+			query:     "?after=10",
+			first:     30,
+			n:         100,
+			firstLine: "line 30",
+		},
+		{
+			query:     "?after=125",
+			first:     125,
+			n:         5,
+			firstLine: "line 125",
+		},
+		{
+			query: "?after=130",
+			first: 130,
+			n:     0,
+		},
+		{
+			query:     "?after=500",
+			first:     30,
+			n:         100,
+			firstLine: "line 30",
+		},
+	}
+	for _, tt := range tests {
+		t.Run("query "+tt.query, func(t *testing.T) {
+			code, got, body := getPlanBuild(t, d, "/factory/plans/plan-1/build"+tt.query)
+			assert.Equal(t, code, http.StatusOK, body)
+			assert.Check(t, cmp.Equal(got.ID, id))
+			assert.Check(t, cmp.Equal(got.State, chunkd.SessionRunning))
+			assert.Check(t, cmp.Equal(got.First, tt.first))
+			assert.Check(t, cmp.Equal(got.Total, 130))
+			assert.Assert(t, cmp.Len(got.Lines, tt.n))
+			if tt.n > 0 {
+				assert.Check(t, cmp.Equal(got.Lines[0].Text, tt.firstLine))
+				assert.Check(t, cmp.Equal(got.Lines[len(got.Lines)-1].Text, "line 129"))
+			}
+		})
+	}
+}
+
+func TestPlanBuildActivityOfAPlanWithNoBuild(t *testing.T) {
+	d := newTestDaemon()
+	t.Cleanup(d.sessions.stopAll)
+	seedPlanBuild(t, d, "plan-2", 3, time.Now(), chunkd.SessionRunning, "")
+
+	code, _, body := getPlanBuild(t, d, "/factory/plans/plan-1/build")
+	assert.Check(t, cmp.Equal(code, http.StatusNotFound))
+	assert.Check(t, cmp.Equal(body, "no build of plan plan-1"))
+}
+
+func TestPlanBuildActivityPrefersTheRunningSession(t *testing.T) {
+	now := time.Now()
+
+	t.Run("running over a later ended one", func(t *testing.T) {
+		d := newTestDaemon()
+		t.Cleanup(d.sessions.stopAll)
+		seedPlanBuild(t, d, "plan-1", 1, now, chunkd.SessionDone, "")
+		running := seedPlanBuild(t, d, "plan-1", 1, now.Add(-time.Hour), chunkd.SessionRunning, "")
+		for range 10 {
+			code, got, body := getPlanBuild(t, d, "/factory/plans/plan-1/build")
+			assert.Equal(t, code, http.StatusOK, body)
+			assert.Check(t, cmp.Equal(got.ID, running))
+		}
+	})
+
+	t.Run("the latest of ended ones", func(t *testing.T) {
+		d := newTestDaemon()
+		t.Cleanup(d.sessions.stopAll)
+		seedPlanBuild(t, d, "plan-1", 1, now.Add(-time.Hour), chunkd.SessionFailed, "boom")
+		latest := seedPlanBuild(t, d, "plan-1", 1, now, chunkd.SessionDone, "")
+		for range 10 {
+			code, got, body := getPlanBuild(t, d, "/factory/plans/plan-1/build")
+			assert.Equal(t, code, http.StatusOK, body)
+			assert.Check(t, cmp.Equal(got.ID, latest))
+		}
+	})
+
+	t.Run("a failed session says why", func(t *testing.T) {
+		d := newTestDaemon()
+		t.Cleanup(d.sessions.stopAll)
+		seedPlanBuild(t, d, "plan-1", 1, now, chunkd.SessionFailed, "boom")
+		code, got, body := getPlanBuild(t, d, "/factory/plans/plan-1/build")
+		assert.Equal(t, code, http.StatusOK, body)
+		assert.Check(t, cmp.Equal(got.State, chunkd.SessionFailed))
+		assert.Check(t, cmp.Equal(got.Error, "boom"))
+	})
 }

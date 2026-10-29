@@ -6,13 +6,19 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Agent is the planning agent: one long-lived factory session the screen
-// sends the developer's messages to and reads what it does from. It plans
-// through factory's tasks as well as the developer's messages, so it can be
-// working with nothing sent, and a message can reach it mid-turn.
+// Agent is the planning session of one plan. The screen gives it a new
+// plan's request, once, and has it claim the plan again when factory waits
+// on a planner that is not there; everything else it gets from factory's
+// tasks.
 type Agent interface {
-	// Send delivers message to the agent, starting it on the first.
-	Send(ctx context.Context, message string) error
+	// Request sends a new plan's request, starting the planning session on
+	// it. A request that failed to start the session is sent again, rather
+	// than the session resumed.
+	Request(ctx context.Context, text string) error
+	// Resume has the planning session claim the plan again when it holds no
+	// claim, starting or resuming the session; it does nothing while the
+	// session holds the claim.
+	Resume(ctx context.Context) error
 	// Events is everything the agent reports, in order.
 	Events() <-chan Event
 }
@@ -43,7 +49,13 @@ type (
 		agent Agent
 		Event
 	}
+	// sentMsg is the end of a Request.
 	sentMsg struct {
+		agent Agent
+		err   error
+	}
+	// resumedMsg is the end of a Resume.
+	resumedMsg struct {
 		agent Agent
 		err   error
 	}
@@ -66,6 +78,10 @@ func waitEvent(ctx context.Context, a Agent) tea.Cmd {
 	}
 }
 
-func sendCmd(ctx context.Context, a Agent, text string) tea.Cmd {
-	return func() tea.Msg { return sentMsg{agent: a, err: a.Send(ctx, text)} }
+func requestCmd(ctx context.Context, a Agent, text string) tea.Cmd {
+	return func() tea.Msg { return sentMsg{agent: a, err: a.Request(ctx, text)} }
+}
+
+func resumeCmd(ctx context.Context, a Agent) tea.Cmd {
+	return func() tea.Msg { return resumedMsg{agent: a, err: a.Resume(ctx)} }
 }

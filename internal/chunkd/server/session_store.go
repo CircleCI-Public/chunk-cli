@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -18,55 +17,24 @@ const MaxSessionsPerProject = 10
 
 // sessionEntry is one session and the machinery that owns it.
 type sessionEntry struct {
-	mu      sync.Mutex
-	s       chunkd.Session
-	details []chunkd.RoundDetail // parallel to s.Rounds
-	cancel  context.CancelFunc
+	mu     sync.Mutex
+	s      chunkd.Session
+	cancel context.CancelFunc
 	// cancelled records that cancellation was asked for, so a session stopped by
 	// it is reported as cancelled rather than as whatever error the stop made.
 	cancelled bool
 	done      chan struct{}
-	// branch is the existing branch a session that continues a run works on,
-	// known before its run starts and records it. Set by addOn, then not
-	// changed.
-	branch string
-	// loopNote is why the loop ended, and loopFailed that it ran to its end
-	// without its work passing. Both are internal: the record shows their
-	// consequences.
-	loopNote   string
-	loopFailed bool
-	// pr is what a factory session was asked to do with its branch once its
-	// checks passed, nil when it was asked for nothing. Set before the run
-	// starts and not changed.
-	pr *pullRequestPlan
+	// loopNote is why the session ended, when it ended by itself. It is
+	// internal: the record shows it as its stage's note.
+	loopNote string
 }
 
 func cloneSession(s chunkd.Session) chunkd.Session {
 	out := s
 	out.Stages = slices.Clone(s.Stages)
-	out.Rounds = make([]chunkd.Round, len(s.Rounds))
-	for i, r := range s.Rounds {
-		out.Rounds[i] = r
-		out.Rounds[i].Reviews = slices.Clone(r.Reviews)
-		if r.EndedAt != nil {
-			ended := *r.EndedAt
-			out.Rounds[i].EndedAt = &ended
-		}
-		out.Rounds[i].Checks = slices.Clone(r.Checks)
-		if r.Implement != nil {
-			impl := *r.Implement
-			out.Rounds[i].Implement = &impl
-		}
-	}
 	if s.Factory != nil {
 		f := *s.Factory
-		f.SidecarIDs = slices.Clone(s.Factory.SidecarIDs)
-		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
 		f.Progress = cloneFeed(s.Factory.Progress)
-		if s.Factory.PullRequest != nil {
-			pr := *s.Factory.PullRequest
-			f.PullRequest = &pr
-		}
 		out.Factory = &f
 	}
 	if s.EndedAt != nil {
@@ -82,26 +50,6 @@ func (e *sessionEntry) snapshot() chunkd.Session {
 	return cloneSession(e.s)
 }
 
-func (e *sessionEntry) detail() chunkd.SessionDetail {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	d := chunkd.SessionDetail{Session: cloneSession(e.s), Details: make([]chunkd.RoundDetail, len(e.details))}
-	for i, rd := range e.details {
-		d.Details[i] = chunkd.RoundDetail{Number: rd.Number, Results: slices.Clone(rd.Results)}
-	}
-	return d
-}
-
-// reviewIndexLocked finds a review of a round by name, or -1.
-func (e *sessionEntry) reviewIndexLocked(round int, name string) int {
-	for i := range e.s.Rounds[round].Reviews {
-		if e.s.Rounds[round].Reviews[i].Name == name {
-			return i
-		}
-	}
-	return -1
-}
-
 // stageLocked returns the stage with the given ID.
 func (e *sessionEntry) stageLocked(id chunkd.StageID) *chunkd.Stage {
 	for i := range e.s.Stages {
@@ -113,8 +61,8 @@ func (e *sessionEntry) stageLocked(id chunkd.StageID) *chunkd.Stage {
 }
 
 // sessionStore holds every session. Like the task store it lives in memory only:
-// a daemon restart forgets sessions. A factory run's work is not forgotten with
-// it: it is committed on the run's branch.
+// a daemon restart forgets sessions. A plan build's work is not forgotten with
+// it: it is in factory, and committed on the plan's branch.
 type sessionStore struct {
 	parent context.Context
 
@@ -134,23 +82,11 @@ func newSessionStore(parent context.Context) *sessionStore {
 	}
 }
 
-// add creates a running entry for s, on a worktree of its own. A project can
-// have any number of sessions going at once.
-func (s *sessionStore) add(sess chunkd.Session) (*sessionEntry, context.Context, string) {
-	return s.addOn(sess, "")
-}
-
-// addOn creates a running entry for s, as add does, for a session that works
-// on the existing branch, and the worktree on it, rather than on its own: a
-// run that continues another. Every run of a chain of continuations works on
-// the branch of the first, so one is refused while any live session of the
-// project is on that branch. It then creates nothing and says why.
-func (s *sessionStore) addOn(sess chunkd.Session, branch string) (*sessionEntry, context.Context, string) {
+// add creates a running entry for s. A project can have any number of
+// sessions going at once.
+func (s *sessionStore) add(sess chunkd.Session) (*sessionEntry, context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if busy := s.onBranchLocked(sess.ProjectRoot, branch); busy != "" {
-		return nil, nil, busy
-	}
 	sess.ID = uuid.NewString()
 	sess.State = chunkd.SessionRunning
 	sess.Stages = newStages()
@@ -158,42 +94,13 @@ func (s *sessionStore) addOn(sess chunkd.Session, branch string) (*sessionEntry,
 	ctx, cancel := context.WithCancel(s.parent)
 	entry := &sessionEntry{
 		s:      sess,
-		branch: branch,
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}
 	s.sessions[sess.ID] = entry
 	s.byProject[sess.ProjectRoot] = append(s.byProject[sess.ProjectRoot], sess.ID)
 	s.evictLocked(sess.ProjectRoot)
-	return entry, ctx, ""
-}
-
-// onBranchLocked says why a session cannot start on branch because a live
-// session of the project at root is working on it, or "" when none is.
-func (s *sessionStore) onBranchLocked(root, branch string) string {
-	if branch == "" {
-		return ""
-	}
-	for _, id := range s.byProject[root] {
-		other := s.sessions[id]
-		if other == nil {
-			continue
-		}
-		snap := other.snapshot()
-		if snap.State.Finished() || snap.Factory == nil {
-			continue
-		}
-		// A continuation is on its branch from the start; a new run only once
-		// its worktree is made, before which nothing can name it to continue.
-		if other.branch != branch && snap.Factory.Branch != branch {
-			continue
-		}
-		if snap.Factory.RunID != "" {
-			return fmt.Sprintf("factory run %s is still working on %s (session %s)", snap.Factory.RunID, branch, id)
-		}
-		return fmt.Sprintf("a factory run continuing %s is already starting on %s (session %s)", snap.Factory.ContinuesRunID, branch, id)
-	}
-	return ""
+	return entry, ctx
 }
 
 // evictLocked drops the oldest finished sessions until the project is within
@@ -260,12 +167,12 @@ func (s *sessionStore) entries() []*sessionEntry {
 	return out
 }
 
-// cancelSession asks a session to stop. It reports whether the session exists and was
-// still going; cancelling an ended session is not an error worth a status code.
-func (s *sessionStore) cancelSession(id string) (found, wasActive bool) {
+// cancelSession asks a session to stop. It reports whether the session exists;
+// cancelling an ended session is not an error worth a status code.
+func (s *sessionStore) cancelSession(id string) (found bool) {
 	e := s.get(id)
 	if e == nil {
-		return false, false
+		return false
 	}
 	e.mu.Lock()
 	active := !e.s.State.Finished()
@@ -276,7 +183,7 @@ func (s *sessionStore) cancelSession(id string) (found, wasActive bool) {
 	if active {
 		e.cancel()
 	}
-	return true, active
+	return true
 }
 
 // deleteSession forgets a finished session. It reports whether the session

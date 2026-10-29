@@ -1,96 +1,114 @@
 package cmd
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
-// registerProject writes the project-root breadcrumb chunk drops for every
-// project it has seen, so AllProjectRoots discovers root. It returns the root as
-// AllProjectRoots reports it — canonical, symlinks resolved — which is not the
-// string passed in when the path runs through one (every darwin temp dir does).
-func registerProject(t *testing.T, root string) string {
-	t.Helper()
-	dataDir, err := config.ProjectDataDir(root)
+// watchProject is the git top level chunk watch was opened under, canonical
+// and registered for the daemon to find, and nothing outside a repository.
+func TestWatchProject(t *testing.T) {
+	repo := gitRepo(t, "")
+	sub := filepath.Join(repo, "sub")
+	err := os.MkdirAll(sub, 0o755)
 	assert.NilError(t, err)
-	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, root))
-	canonical, err := filepath.EvalSymlinks(root)
+	// Reached through a symlink, as every darwin temp dir is.
+	link := filepath.Join(t.TempDir(), "link")
+	err = os.Symlink(repo, link)
 	assert.NilError(t, err)
-	return canonical
+	canonical := config.CanonicalProjectRoot(repo)
+
+	tests := []struct {
+		name     string
+		cwd      string
+		wantRoot string
+		wantOK   bool
+	}{
+		{
+			name:     "repo root",
+			cwd:      repo,
+			wantRoot: canonical,
+			wantOK:   true,
+		},
+		{
+			name:     "repo subdirectory",
+			cwd:      sub,
+			wantRoot: canonical,
+			wantOK:   true,
+		},
+		{
+			name:     "repo through a symlink",
+			cwd:      link,
+			wantRoot: canonical,
+			wantOK:   true,
+		},
+		{
+			name: "not a repo",
+			cwd:  t.TempDir(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateConfig(t)
+			t.Setenv(config.EnvXDGDataHome, t.TempDir())
+
+			root, ok := watchProject(t.Context(), tt.cwd)
+			assert.Check(t, cmp.Equal(ok, tt.wantOK))
+			assert.Check(t, cmp.Equal(root, tt.wantRoot))
+
+			known, err := sidecar.AllProjectRoots()
+			assert.NilError(t, err)
+			if !tt.wantOK {
+				assert.Check(t, cmp.Len(known, 0), "registered %v outside a repository", known)
+				return
+			}
+			dataDir, err := config.ProjectDataDir(root)
+			assert.NilError(t, err)
+			crumb, err := os.ReadFile(sidecar.ProjectRootPath(dataDir))
+			assert.NilError(t, err, "no project-root breadcrumb")
+			assert.Check(t, cmp.Equal(string(crumb), canonical))
+			assert.Check(t, cmp.DeepEqual(known, []string{canonical}))
+		})
+	}
 }
 
-func TestWatchRootsDefaultsToAllKnownProjects(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-
-	cwd, other := t.TempDir(), t.TempDir()
-	knownRoot := registerProject(t, other)
-
-	roots, err := watchRoots(cwd, false, nil)
-	assert.NilError(t, err)
-	assert.Assert(t, slices.Contains(roots, cwd), "cwd should always be watched: %v", roots)
-	assert.Assert(t, slices.Contains(roots, knownRoot), "known project should be watched by default: %v", roots)
-}
-
-func TestWatchRootsFocusLimitsToCwdAndArgs(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-
-	cwd, other, explicit := t.TempDir(), t.TempDir(), t.TempDir()
-	_ = registerProject(t, other)
-
-	roots, err := watchRoots(cwd, true, []string{explicit})
-	assert.NilError(t, err)
-	assert.DeepEqual(t, roots, []string{cwd, explicit})
-}
-
-func TestWatchAllFlagIsDeprecatedButAccepted(t *testing.T) {
+func TestWatchFlagsAreDeprecatedButAccepted(t *testing.T) {
 	cmd := newWatchCmd()
 
 	focus := cmd.Flags().Lookup("focus")
-	assert.Assert(t, focus != nil, "--focus should be registered")
+	assert.Assert(t, focus != nil, "--focus should still parse for existing invocations")
 	assert.Equal(t, focus.DefValue, "false")
+	assert.Assert(t, focus.Deprecated != "", "--focus should be marked deprecated")
 
 	all := cmd.Flags().Lookup("all")
 	assert.Assert(t, all != nil, "--all should still parse for existing invocations")
 	assert.Assert(t, all.Deprecated != "", "--all should be marked deprecated")
 }
 
-// --focus sends these roots to the daemon as a filter, and the daemon keys
-// projects by the canonical spelling, so a root that reaches it unresolved
-// matches nothing and the dashboard comes back empty. Git answers with a
-// resolved path on darwin, which would hide this on the platform it was
-// developed on.
-func TestWatchRootsAreCanonicalForTheDaemonFilter(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-
-	base := t.TempDir()
-	target := filepath.Join(base, "project")
-	assert.NilError(t, os.MkdirAll(target, 0o755))
-	link := filepath.Join(base, "link")
-	assert.NilError(t, os.Symlink(target, link))
-
-	canonical := config.CanonicalProjectRoot(target)
-	assert.Equal(t, config.CanonicalProjectRoot(link), canonical,
-		"both spellings must canonicalise to one root")
-
-	// What registration writes, and so what the daemon reports, for either.
-	dataDir, err := config.ProjectDataDir(link)
+func TestWatchTakesNoArgs(t *testing.T) {
+	cmd := newWatchCmd()
+	err := cmd.Args(cmd, nil)
 	assert.NilError(t, err)
-	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, link))
-	roots, err := sidecar.AllProjectRoots()
-	assert.NilError(t, err)
-	assert.DeepEqual(t, roots, []string{canonical})
+
+	err = cmd.Args(cmd, []string{"x"})
+	ue, ok := errors.AsType[*userError](err)
+	assert.Assert(t, ok, "not a user error: %v", err)
+	assert.Check(t, cmp.Equal(ue.UserExitCode(), ExitBadArgs))
 }
 
 func TestOpenFlows(t *testing.T) {
@@ -106,10 +124,171 @@ func TestOpenFlows(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(got, []circleci.Flow{flows[0], flows[1], flows[3]}))
 }
 
+// previewPlan sends both requests at once, and fails when either does.
+func TestPreviewPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		textStatus   int
+		commentsCode int
+		wantErr      string
+	}{
+		{
+			name:         "both in parallel",
+			textStatus:   http.StatusOK,
+			commentsCode: http.StatusOK,
+		},
+		{
+			name:         "text fails",
+			textStatus:   http.StatusNotFound,
+			commentsCode: http.StatusOK,
+			wantErr:      "plan text",
+		},
+		{
+			name:         "comments fail",
+			textStatus:   http.StatusOK,
+			commentsCode: http.StatusNotFound,
+			wantErr:      "list comments",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Each handler waits for the other to start, so sequential calls
+			// time out instead of passing.
+			var started sync.WaitGroup
+			started.Add(2)
+			wait := func() {
+				started.Done()
+				done := make(chan struct{})
+				go func() { started.Wait(); close(done) }()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("the other request never started: calls are sequential")
+				}
+			}
+			reply := func(w http.ResponseWriter, status int, body string) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				if status == http.StatusOK {
+					_, _ = w.Write([]byte(body))
+					return
+				}
+				_, _ = w.Write([]byte(`{"message":"not found"}`))
+			}
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /api/v3/factory/plans/{id}/text", func(w http.ResponseWriter, _ *http.Request) {
+				wait()
+				reply(w, tc.textStatus, `{"data":{"attributes":{"text":"# plan"}}}`)
+			})
+			mux.HandleFunc("GET /api/v3/factory/comments", func(w http.ResponseWriter, _ *http.Request) {
+				wait()
+				reply(w, tc.commentsCode, `{"data":[{"id":"c1","attributes":{"quoted_text":"","body":"look","created_at":"2026-01-01T00:00:00Z","resolved_at":null},"references":{"factory_plan":{"id":"p1"}}}],"page":{"next":null}}`)
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+			assert.NilError(t, err)
+
+			text, comments, err := previewPlan(t.Context(), client, "p1")
+			if tc.wantErr != "" {
+				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
+				return
+			}
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(text, "# plan"))
+			assert.Check(t, cmp.Len(comments, 1))
+		})
+	}
+}
+
 func TestPlanParents(t *testing.T) {
 	plans := []circleci.Plan{{ID: "p1"}, {ID: "c1", Parent: "p1"}, {ID: "c2", Parent: "p1"}}
 
 	got := planParents(plans)
 
 	assert.Check(t, cmp.DeepEqual(got, map[string]string{"c1": "p1", "c2": "p1"}))
+}
+
+func TestPlanBuildLevel(t *testing.T) {
+	for _, tc := range []struct {
+		in   chunkd.FeedLevel
+		want plan.BuildLevel
+	}{
+		{
+			in:   chunkd.FeedInfo,
+			want: plan.BuildInfo,
+		},
+		{
+			in:   chunkd.FeedStep,
+			want: plan.BuildStep,
+		},
+		{
+			in:   chunkd.FeedDone,
+			want: plan.BuildStep,
+		},
+		{
+			in:   chunkd.FeedWarn,
+			want: plan.BuildWarn,
+		},
+		{
+			in:   chunkd.FeedError,
+			want: plan.BuildError,
+		},
+		{
+			in:   chunkd.FeedLevel("shout"),
+			want: plan.BuildInfo,
+		},
+	} {
+		assert.Check(t, cmp.Equal(planBuildLevel(tc.in), tc.want), string(tc.in))
+	}
+}
+
+func TestPlanBuildActivity(t *testing.T) {
+	lines := []chunkd.FeedLine{
+		{Level: chunkd.FeedStep, Text: "Building plan p in /src"},
+		{Level: chunkd.FeedInfo, Text: "Read main.go"},
+	}
+	want := []plan.BuildLine{
+		{Level: plan.BuildStep, Text: "Building plan p in /src"},
+		{Level: plan.BuildInfo, Text: "Read main.go"},
+	}
+	for _, tc := range []struct {
+		name  string
+		in    chunkd.PlanBuildActivity
+		found bool
+		want  plan.BuildActivity
+	}{
+		{
+			name:  "running",
+			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionRunning, First: 3, Lines: lines, Total: 5},
+			found: true,
+			want:  plan.BuildActivity{Found: true, ID: "s1", Running: true, First: 3, Lines: want, Total: 5},
+		},
+		{
+			name:  "failed",
+			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionFailed, Error: "boom", Total: 2},
+			found: true,
+			want:  plan.BuildActivity{Found: true, ID: "s1", Failed: "boom", Total: 2},
+		},
+		{
+			name:  "done",
+			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionDone, Lines: lines, Total: 2},
+			found: true,
+			want:  plan.BuildActivity{Found: true, ID: "s1", Lines: want, Total: 2},
+		},
+		{
+			name:  "cancelled",
+			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionCancelled, Error: "stopped", Total: 2},
+			found: true,
+			want:  plan.BuildActivity{Found: true, ID: "s1", Total: 2},
+		},
+		{
+			name: "not found",
+			in:   chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionRunning, Lines: lines, Total: 2},
+			want: plan.BuildActivity{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.DeepEqual(planBuildFrom(tc.in, tc.found), tc.want))
+		})
+	}
 }

@@ -573,9 +573,9 @@ func EnsureRunning() error {
 			}
 			// A daemon from another build is replaced rather than reused: see
 			// BuildID for why reusing it degrades silently. Unless it is running
-			// a factory run: stopping it would kill the run, which is far worse
+			// a plan build: stopping it would kill the build, which is far worse
 			// than a dashboard showing slightly stale fields. It is replaced on
-			// the first call after its runs end.
+			// the first call after its builds end.
 			if hasRunningSessions(sockPath) {
 				return nil
 			}
@@ -587,11 +587,13 @@ func EnsureRunning() error {
 	return launch()
 }
 
-// hasRunningSessions reports whether the daemon on sockPath has a factory run
-// still going. A daemon that cannot say (one from a build without the session
-// API, or one that fails to answer) counts as idle, so it is replaced as before.
+// hasRunningSessions reports whether the daemon on sockPath has a session (a
+// plan build, or an older daemon's factory run) still going. It reads them off
+// /snapshot, which daemons old and new serve. A daemon that cannot say (one that
+// lists no sessions, or fails to answer) counts as idle, so it is replaced as
+// before.
 func hasRunningSessions(sockPath string) bool {
-	resp, err := unixClient(sockPath).Get("http://chunkd/factory")
+	resp, err := unixClient(sockPath).Post("http://chunkd/snapshot", "application/json", nil)
 	if err != nil {
 		return false
 	}
@@ -599,13 +601,15 @@ func hasRunningSessions(sockPath string) bool {
 	if resp.StatusCode != http.StatusOK {
 		return false
 	}
-	var list SessionList
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+	var snap Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		return false
 	}
-	for _, s := range list.Sessions {
-		if !s.State.Finished() {
-			return true
+	for _, p := range snap.Projects {
+		for _, s := range p.Sessions {
+			if !s.State.Finished() {
+				return true
+			}
 		}
 	}
 	return false
