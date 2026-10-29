@@ -548,6 +548,8 @@ func TestGroupsAndRows(t *testing.T) {
 			{ID: "zeta", Title: "Zeta", State: "Zeta - Human"},
 			{ID: "alpha", Title: "Alpha", State: "Alpha - Human"},
 			{ID: "planned-too", Title: "Planned too", State: "planning - human"},
+			{ID: "long-state", Title: "Long state", State: "Custom " + strings.Repeat("state ", 20)},
+			{ID: "blank-state", Title: "Blank state", State: ""},
 		}
 		d := newDriver(t, fixed(flows...), func(context.Context, string) (string, []circleci.PlanComment, error) {
 			return "# Markdown heading\n\n**Plan prose**\n\n" + strings.Repeat("界", 150), []circleci.PlanComment{
@@ -558,7 +560,7 @@ func TestGroupsAndRows(t *testing.T) {
 		d.load()
 		rows := listRows(d)
 		all := strings.Join(rows, "\n")
-		for _, want := range []string{"flows", "Needs your review", "With agent", "Not started", "Other", "custom exact state", "integrating - bot", "Untitled plan"} {
+		for _, want := range []string{"flows", "Needs your review  5", "With agent  2", "Not started  1", "Other  4", "custom exact state", "integrating - bot", "Untitled plan"} {
 			assert.Check(t, cmp.Contains(all, want))
 		}
 		index := func(row string) int {
@@ -580,25 +582,31 @@ func TestGroupsAndRows(t *testing.T) {
 		// A phase spelled differently shares its sub-heading.
 		planned := index("Planned")
 		assert.Check(t, cmp.Equal(rows[planned+2], "Planned too"), "rows:\n%s", all)
-		review := rows[index("Needs your review"):index("With agent")]
+		review := rows[index("Needs your review  5"):index("With agent  2")]
 		assert.Check(t, cmp.Equal(count(review, "Planning"), 1), "want one Planning sub-heading:\n%s", all)
 		assert.Check(t, cmp.Equal(count(review, "Building"), 1), "want one Building sub-heading:\n%s", all)
 		// Each sub-heading is directly above its first title.
 		for title, heading := range map[string]string{"Planned": "Planning", "Built": "Building", "Zeta": "Zeta", "Alpha": "Alpha"} {
 			assert.Check(t, cmp.Equal(rows[index(title)-1], heading), "rows:\n%s", all)
 		}
-		// Not started and Other have no sub-headings: only titles and chips.
-		other := index("Other")
+		// Not started and Other have no sub-headings: only titles and details.
+		// Only Other names the state, since no heading does; an empty one is unknown.
+		other := index("Other  4")
 		assert.Check(t, cmp.DeepEqual(rows[other+1:other+5], []string{"Other plan", "custom exact state", "Bot plan", "integrating - bot"}), "rows:\n%s", all)
-		notStarted := index("Not started")
-		assert.Check(t, cmp.DeepEqual(rows[notStarted+1:notStarted+3], []string{"New plan", "unprioritized"}), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(rows[index("Blank state")+1], "unknown"), "rows:\n%s", all)
+		longState := rows[index("Long state")+1]
+		assert.Check(t, strings.HasPrefix(longState, "custom state state"), "rows:\n%s", all)
+		assert.Check(t, strings.HasSuffix(longState, "…"), "a long state is not truncated:\n%s", all)
+		notStarted := index("Not started  1")
+		assert.Check(t, cmp.DeepEqual(rows[notStarted+1:notStarted+3], []string{"New plan", ""}), "rows:\n%s", all)
 		// The row details: a conflict marker first, then task category,
 		// claimed and updated-ago, each only when there is one.
-		assert.Check(t, strings.HasPrefix(rows[planned+1], "planning  ⚠ · build-unit"), "rows:\n%s", all)
+		// The details start the row; only the sub-heading above says the phase.
+		assert.Check(t, strings.HasPrefix(rows[planned+1], "⚠ · build-unit"), "rows:\n%s", all)
 		assert.Check(t, cmp.Contains(rows[planned+1], "build-unit"))
 		assert.Check(t, cmp.Contains(rows[planned+1], "claimed"))
 		assert.Check(t, cmp.Contains(rows[planned+1], "just now"))
-		assert.Check(t, cmp.Equal(rows[index("Built")+1], "building"), "a blank category or no session shows a detail")
+		assert.Check(t, cmp.Equal(rows[index("Built")+1], ""), "a flow with no details keeps a blank second row:\n%s", all)
 		assert.Check(t, !strings.Contains(all, "ago"), "a zero UpdatedAt shows an age:\n%s", all)
 
 		for _, size := range []tea.WindowSizeMsg{{Width: 50, Height: 20}, {Width: 80, Height: 24}, {Width: 120, Height: 35}, {Width: 1, Height: 1}, {Width: 100, Height: 2}} {
@@ -640,8 +648,10 @@ func TestSubPlanRows(t *testing.T) {
 		d.load()
 		rows, titles := listRows(d), titleRows(d)
 		all := strings.Join(rows, "\n")
-		agent := slices.Index(rows, "With agent")
+		agent := slices.Index(rows, "With agent  6")
 		assert.Assert(t, agent >= 0 && rows[agent+1] == "Building", "rows:\n%s", all)
+		// A sub-plan counts once, in its own section, whether or not its parent is there.
+		assert.Check(t, cmp.Equal(count(rows, "Needs your review  2"), 1), "rows:\n%s", all)
 		var building []string
 		for i := agent + 2; i < len(titles) && titles[i] != ""; i += 2 {
 			building = append(building, titles[i])
@@ -657,7 +667,7 @@ func TestSubPlanRows(t *testing.T) {
 		}
 		assert.Check(t, cmp.Contains(detail("retry-docs-site"), "↳ retry-docs"))
 		assert.Check(t, cmp.Contains(detail("retry-docs"), "↳ retry-policy"))
-		assert.Check(t, strings.HasPrefix(detail("retry-config"), "building  ↳ retry-policy"), "rows:\n%s", all)
+		assert.Check(t, strings.HasPrefix(detail("retry-config"), "↳ retry-policy"), "rows:\n%s", all)
 		assert.Check(t, !strings.Contains(detail("orphan"), "↳"), "rows:\n%s", all)
 		// A sub-plan stays in its own group, unindented, in stable order.
 		planning := slices.Index(rows, "Planning")
@@ -707,6 +717,14 @@ func TestLongListKeepsSelectedRowVisible(t *testing.T) {
 			assert.Check(t, !strings.Contains(text, "Title-00"), "the list did not scroll to the selected row:\n%s", text)
 			open(d, "id-79")
 		}
+		// The selected flow's blank detail row stays in view, directly above the
+		// pane's bottom border.
+		d.send(tea.WindowSizeMsg{Width: 50, Height: 24})
+		lines := strings.Split(d.content(), "\n")
+		i := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, "▶ Title-79") })
+		assert.Assert(t, i >= 0 && i+2 < len(lines), "lines:\n%s", strings.Join(lines, "\n"))
+		assert.Check(t, cmp.Equal(strings.Trim(lines[i+1], "│ "), ""), "lines:\n%s", strings.Join(lines, "\n"))
+		assert.Check(t, strings.HasPrefix(lines[i+2], "╰"), "the detail row scrolled off:\n%s", strings.Join(lines, "\n"))
 	})
 }
 

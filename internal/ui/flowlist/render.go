@@ -2,8 +2,8 @@ package flowlist
 
 import (
 	"fmt"
-	"image/color"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,15 +83,18 @@ func (m Model) listLines(width, height int) []string {
 	st := m.styles
 	var rows []string
 	selected, lastGroup, lastPhase := 0, -1, ""
-	labels := []string{"Needs your review", "With agent", "Not started", "Other"}
 	flows, depth := m.visible()
+	counts := make([]int, 4)
+	for _, f := range flows {
+		counts[group(f.State)]++
+	}
 	for _, f := range flows {
 		g := group(f.State)
 		if g != lastGroup {
 			if lastGroup != -1 {
 				rows = append(rows, "")
 			}
-			rows = append(rows, st.Dim.Render(labels[g]))
+			rows = append(rows, sectionHeading(st, g, counts[g]))
 			lastGroup, lastPhase = g, ""
 		}
 		// A sub-heading is spelled as the first flow in it spells its phase.
@@ -111,8 +114,11 @@ func (m Model) listLines(width, height int) []string {
 		} else {
 			rows = append(rows, "  "+indent+title)
 		}
-		chip := stateChip(st, f.State, width-4-len(indent))
 		var detail []string
+		// Only Other's heading does not say the state.
+		if g == 3 {
+			detail = append(detail, st.VDim.Render(stateText(f.State)))
+		}
 		if p := m.parentTitle(f.ID); p != "" {
 			detail = append(detail, st.VDim.Render("↳ "+p))
 		}
@@ -128,11 +134,9 @@ func (m Model) listLines(width, height int) []string {
 		if !f.UpdatedAt.IsZero() {
 			detail = append(detail, st.VDim.Render(ago(f.UpdatedAt)))
 		}
-		line := "  " + indent + chip
-		if len(detail) > 0 {
-			line += " " + strings.Join(detail, st.VDim.Render(" · "))
-		}
-		rows = append(rows, line)
+		// A flow with no details keeps its blank second row, so the scroll
+		// below can count on two rows a flow.
+		rows = append(rows, "  "+indent+strings.Join(detail, st.VDim.Render(" · ")))
 	}
 	if len(rows) == 0 {
 		message := []string{"  " + st.Dim.Render("no open flows"), "  " + st.Dim.Render("n starts one")}
@@ -151,27 +155,28 @@ func (m Model) listLines(width, height int) []string {
 	return rows[start:]
 }
 
-// stateChip is the flow's state as a coloured block, as the run list shows
-// a run's: amber when it waits on you, the brand yellow while an agent has it.
-// A state chunk does not know is shown whole, on grey.
-func stateChip(st theme.Styles, state string, width int) string {
-	phase, _ := planstate.Parse(oneLine(state))
-	text := strings.ToLower(phase)
-	if text == "" {
-		text = "unknown"
-	}
-	var bg color.Color
-	switch group(state) {
+// sectionHeading is section g's label, coloured by who its flows wait on,
+// and how many flows it holds.
+func sectionHeading(st theme.Styles, g, n int) string {
+	labels := []string{"Needs your review", "With agent", "Not started", "Other"}
+	style := st.Emphasis
+	switch g {
 	case 0:
-		bg = lipgloss.Color("3")
+		style = st.Warning.Bold(true)
 	case 1:
-		bg = theme.Yellow
-	case 2:
-		bg = lipgloss.Color("250")
-	default:
-		bg = lipgloss.Color("244")
+		style = st.Brand.Bold(true)
 	}
-	return st.Chip.Background(bg).Render(" " + ansi.Truncate(text, max(width-2, 1), "…") + " ")
+	return style.Render(labels[g]) + "  " + st.VDim.Render(strconv.Itoa(n))
+}
+
+// stateText is the state of a flow no heading names, for the Other section:
+// its whole state lowercased, or "unknown".
+func stateText(state string) string {
+	phase, _ := planstate.Parse(oneLine(state))
+	if phase == "" {
+		return "unknown"
+	}
+	return strings.ToLower(phase)
 }
 
 // ago is how long since t, as the run list says it.
