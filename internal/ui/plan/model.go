@@ -28,6 +28,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -704,6 +705,7 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 	m.comments = dropQueued(m.comments, msg.saved)
 	m.renderPlan()
 	m.pendingHandOff = msg.handOff && !msg.handedOff
+	m.trackFeedback(msg.saved)
 	var tick tea.Cmd
 	if msg.handedOff {
 		m.moving = &transition{kind: movingComments, from: m.state, since: time.Now()}
@@ -1148,6 +1150,28 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 	return m, tea.Batch(createCmd(m.ctx, m.store, text), tick)
 }
 
+// track reports eventName from the screen, with the plan's ID once factory
+// has given it one, so a funnel can join the plan's events.
+func (m Model) track(eventName string, props map[string]any) {
+	if props == nil {
+		props = map[string]any{}
+	}
+	if m.store != nil && m.store.ID() != "" {
+		props["plan_id"] = m.store.ID()
+	}
+	telemetry.Track(m.ctx, eventName, props)
+}
+
+// trackFeedback reports a round of feedback on the plan: comments saved
+// together, so a funnel can count the rounds before a plan is approved.
+// comments is how many were saved; a save that saved none is not a round.
+func (m Model) trackFeedback(comments int) {
+	if comments == 0 {
+		return
+	}
+	m.track("plan_feedback_sent", map[string]any{"feedback_type": "comments", "comment_count": comments})
+}
+
 // createCmd creates the plan in factory for text, the developer's request,
 // which the store names it for.
 func createCmd(ctx context.Context, s Store, text string) tea.Cmd {
@@ -1247,6 +1271,8 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.BuildID = msg.buildID
+		// Counted once factory has the plan, with the run it started.
+		m.track("plan_approved", map[string]any{"run_id": msg.buildID})
 		if !m.back {
 			return m, closed(msg.buildID)
 		}
