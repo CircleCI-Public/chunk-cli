@@ -13,7 +13,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -36,19 +35,9 @@ const (
 // display metadata; pool state supplements it with managed members that are
 // not present there.
 func loadSidecars(dataDir, root, snapshotName string) []chunkd.SidecarState {
-	states, _ := loadSidecarsAndPools(dataDir, "", root, snapshotName)
-	return states
-}
-
-// loadSidecarsAndPools also returns each sidecar's persisted pool name. Pool
-// ownership is server bookkeeping: callers receive the run's concrete sidecar
-// IDs in the snapshot, not the naming convention used to discover them.
-// repoDataDir holds the factory runs' pools; "" for none.
-func loadSidecarsAndPools(dataDir, repoDataDir, root, snapshotName string) ([]chunkd.SidecarState, map[string]string) {
 	projectName := filepath.Base(root)
 	repoName := projectRepoName(root)
 	idx := map[string]int{}
-	pools := map[string]string{}
 	var result []chunkd.SidecarState
 	appendState := func(id, name, sessionID, workspace, orgID string, mtime time.Time) {
 		if id == "" {
@@ -106,12 +95,6 @@ func loadSidecarsAndPools(dataDir, repoDataDir, root, snapshotName string) ([]ch
 	for _, path := range current {
 		poolFiles[strings.TrimSuffix(filepath.Base(path), ".json")] = path
 	}
-	if repoDataDir != "" {
-		runs, _ := filepath.Glob(filepath.Join(repoDataDir, "factory", "*.pool.json"))
-		for _, path := range runs {
-			poolFiles[factory.PoolName(strings.TrimSuffix(filepath.Base(path), ".pool.json"))] = path
-		}
-	}
 	for _, name := range slices.Sorted(maps.Keys(poolFiles)) {
 		path := poolFiles[name]
 		data, err := os.ReadFile(path)
@@ -131,7 +114,6 @@ func loadSidecarsAndPools(dataDir, repoDataDir, root, snapshotName string) ([]ch
 			mtime = fi.ModTime()
 		}
 		for i, id := range pool.SidecarIDs {
-			pools[id] = name
 			if at, exists := idx[id]; exists {
 				if result[at].Workspace == "" {
 					result[at].Workspace = pool.RepoPath
@@ -141,7 +123,7 @@ func loadSidecarsAndPools(dataDir, repoDataDir, root, snapshotName string) ([]ch
 			appendState(id, sidecarName(name, i, len(pool.SidecarIDs)), "", pool.RepoPath, pool.OrgID, mtime)
 		}
 	}
-	return result, pools
+	return result
 }
 
 func sidecarName(name string, index, total int) string {

@@ -53,26 +53,9 @@ func newDaemonCmd() *cobra.Command {
 				})
 			}
 
-			return server.RunDaemon(cmd.Context(), client, authMessage(err), makeValidateRunner(), ghClient,
-				server.WithReview(daemonReviewConfig(fullRC, rcErr)))
+			return server.RunDaemon(cmd.Context(), client, authMessage(err), makeValidateRunner(), ghClient)
 		},
 	}
-}
-
-// daemonReviewConfig resolves the Claude credential factory runs use, once, at
-// daemon start. The daemon has no terminal, so a missing credential is reported
-// through the snapshot rather than prompted for, and the credential itself goes
-// no further than the environment of a Claude command: it is never logged and
-// never part of any response.
-func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) server.ReviewConfig {
-	if rcErr != nil {
-		return server.ReviewConfig{AuthError: "could not read configuration — factory runs unavailable: " + rcErr.Error()}
-	}
-	cred, _, credErr := reviewCredential(rc)
-	if credErr != nil {
-		return server.ReviewConfig{AuthError: "no Claude credential — factory runs unavailable (run: chunk auth set anthropic-oauth, then restart the daemon)"}
-	}
-	return server.ReviewConfig{Credential: cred, BaseURL: rc.AnthropicBaseURL}
 }
 
 // authMessage renders a credential-resolution failure for the dashboard. An
