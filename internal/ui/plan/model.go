@@ -157,10 +157,10 @@ type (
 	}
 	commentSavedMsg struct{ err error }
 	// createdMsg is the end of creating the plan in factory, for the
-	// developer's first message, text.
+	// developer's first message, text; title is the name factory gave it.
 	createdMsg struct {
-		text string
-		err  error
+		text, title string
+		err         error
 	}
 	queueSavedMsg struct {
 		saved int
@@ -586,16 +586,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case createdMsg:
-		m.creating = false
-		if msg.err != nil {
-			m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-			m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
-			m.renderPlan()
-			m.renderChat()
-			return m, nil
-		}
-		m.created = true
-		return m, sendCmd(m.ctx, m.agent, msg.text)
+		return m.applyCreated(msg)
 
 	case commentSavedMsg:
 		m.savingEdit = false
@@ -636,6 +627,26 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 
 	return m.forward(msg)
+}
+
+// applyCreated handles the end of creating the plan in factory: on success
+// it sends the first message, and on failure it says so in the chat.
+func (m Model) applyCreated(msg createdMsg) (Model, tea.Cmd) {
+	m.creating = false
+	if msg.err != nil {
+		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
+		m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
+		m.renderPlan()
+		m.renderChat()
+		return m, nil
+	}
+	m.created = true
+	// A title the host gave the screen becomes the plan's own once it is
+	// created; a screen with no title keeps showing the branch.
+	if m.title != "" && msg.title != "" {
+		m.title = msg.title
+	}
+	return m, sendCmd(m.ctx, m.agent, msg.text)
 }
 
 // applyQueueSaved handles the end of saving the queued comments.
@@ -1074,7 +1085,10 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 // createCmd creates the plan in factory for text, the developer's first
 // message, which the store names it for.
 func createCmd(ctx context.Context, s Store, text string) tea.Cmd {
-	return func() tea.Msg { return createdMsg{text: text, err: s.Create(ctx, text)} }
+	return func() tea.Msg {
+		title, err := s.Create(ctx, text)
+		return createdMsg{text: text, title: title, err: err}
+	}
 }
 
 // applyEvent shows one thing the agent reported, then waits for the next.

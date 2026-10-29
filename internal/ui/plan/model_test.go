@@ -3350,8 +3350,9 @@ func TestSecondSendWhileSavingCommentsDoesNothing(t *testing.T) {
 func TestFailedCreateShowsInTheChatAndIsTriedAgain(t *testing.T) {
 	store := newFakeStore()
 	store.CreateErr = errors.New("factory said no")
+	store.TitleV = "add-a-flag"
 	agent := newFakeAgent()
-	m := New(context.Background(), agent, nil, store, "add a --dry-run flag")
+	m := New(context.Background(), agent, nil, store, "add a --dry-run flag").WithInbox("New plan", "chunk")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	if got := agent.Sent(); len(got) != 0 {
@@ -3363,14 +3364,87 @@ func TestFailedCreateShowsInTheChatAndIsTriedAgain(t *testing.T) {
 	if m.busy {
 		t.Error("still busy after the create failed")
 	}
+	assert.Check(t, cmp.Contains(ansi.Strip(m.header()), "New plan"))
 
 	store.mu.Lock()
 	store.CreateErr = nil
 	store.mu.Unlock()
 	m = typeText(t, m, "add a flag")
-	drive(t, m, press("enter"))
+	m = drive(t, m, press("enter"))
 	if got := agent.Sent(); len(got) != 1 || got[0] != "add a flag" {
 		t.Errorf("agent got %q", got)
+	}
+	assert.Check(t, cmp.Contains(ansi.Strip(m.header()), "chunk plan / add-a-flag"))
+}
+
+// Once factory has created the plan, the title the host gave the screen is
+// replaced with the plan's own; a screen with no title keeps the branch.
+func TestTheHeaderNamesThePlanOnceCreated(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		host      func(Model) Model
+		width     int
+		title     string
+		createErr error
+		want      string
+		notWant   string
+	}{
+		{
+			name:    "the plan's title replaces New plan",
+			host:    func(m Model) Model { return m.WithInbox("New plan", "chunk") },
+			width:   120,
+			title:   "replace-header-plan",
+			want:    "chunk plan / replace-header-plan",
+			notWant: "New plan",
+		},
+		{
+			name:  "a long title is cut down",
+			host:  func(m Model) Model { return m.WithInbox("New plan", "chunk") },
+			width: 60, // narrow enough that the header cuts the title down
+			title: "a-very-long-plan-title-indeed",
+			want:  "chunk plan / a-very-long-p…",
+		},
+		{
+			name:      "a failed create keeps New plan",
+			host:      func(m Model) Model { return m.WithInbox("New plan", "chunk") },
+			width:     120,
+			title:     "replace-header-plan",
+			createErr: errors.New("factory said no"),
+			want:      "chunk plan / New plan",
+			notWant:   "replace-header-plan",
+		},
+		{
+			name:  "no title keeps New plan",
+			host:  func(m Model) Model { return m.WithInbox("New plan", "chunk") },
+			width: 120,
+			want:  "chunk plan / New plan",
+		},
+		{
+			name:    "the standalone screen keeps its branch",
+			host:    func(m Model) Model { return m.WithBranch("main") },
+			width:   120,
+			title:   "replace-header-plan",
+			want:    "chunk plan / main",
+			notWant: "replace-header-plan",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.TitleV, store.CreateErr = tc.title, tc.createErr
+			m := tc.host(New(context.Background(), newFakeAgent(), nil, store, ""))
+			m = drive(t, m, tea.WindowSizeMsg{Width: tc.width, Height: 40})
+			m = typeText(t, m, "replace the header")
+			m, create := m.Update(press("enter"))
+			for _, msg := range run(create) {
+				m = drive(t, m, msg)
+			}
+
+			header := ansi.Strip(m.header())
+			assert.Check(t, cmp.Contains(header, tc.want))
+			if tc.notWant != "" {
+				assert.Check(t, !strings.Contains(header, tc.notWant), "header: %q", header)
+			}
+		})
 	}
 }
 

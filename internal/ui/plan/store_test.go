@@ -28,6 +28,8 @@ type fakeStore struct {
 	// FamilyV is what Family returns.
 	FamilyV Family
 	TextV   string
+	// TitleV is the title Create returns.
+	TitleV string
 	// CommentsV is the comments, ordered as added.
 	CommentsV []Comment
 	nextID    int
@@ -83,14 +85,14 @@ func (f *fakeStore) ID() string {
 	return ""
 }
 
-func (f *fakeStore) Create(_ context.Context, message string) error {
+func (f *fakeStore) Create(_ context.Context, message string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.CreateErr != nil {
-		return f.CreateErr
+		return "", f.CreateErr
 	}
 	f.Created, f.Message = true, message
-	return nil
+	return f.TitleV, nil
 }
 
 func (f *fakeStore) Flow(context.Context) (Flow, error) {

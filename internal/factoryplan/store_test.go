@@ -68,7 +68,7 @@ func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) 
 	t.Helper()
 	client, cci := testClient(t)
 	store := newStore(client, "")
-	err := store.Create(context.Background(), "a plan")
+	_, err := store.Create(context.Background(), "a plan")
 	assert.NilError(t, err)
 	return store, client, cci
 }
@@ -85,7 +85,7 @@ func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(text, ""))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	err = client.SetPlanText(ctx, store.ID(), "# A plan\n")
 	assert.NilError(t, err)
@@ -166,12 +166,13 @@ func TestStoreCreateNamesThePlan(t *testing.T) {
 			store := NewStore(client, "")
 			store.name = namedAs(tc.reply, tc.err)
 
-			err := store.Create(context.Background(), tc.message)
+			title, err := store.Create(context.Background(), tc.message)
 			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(title, tc.want))
 
 			p, ok := cci.FactoryPlan(store.ID())
 			assert.Assert(t, ok)
-			assert.Check(t, cmp.Equal(p.Title, tc.want))
+			assert.Check(t, cmp.Equal(p.Title, title))
 			assert.Check(t, cmp.Equal(p.Text, skeleton(tc.want)))
 			assert.Check(t, cmp.Equal(p.State, "Unprioritized"))
 		})
@@ -185,12 +186,25 @@ func TestStoreCreateWithoutClaude(t *testing.T) {
 	client, cci := testClient(t)
 	store := NewStore(client, "")
 
-	err := store.Create(context.Background(), "add a --dry-run flag")
+	title, err := store.Create(context.Background(), "add a --dry-run flag")
 	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(title, "add-a-dry-run-flag"))
 
 	p, ok := cci.FactoryPlan(store.ID())
 	assert.Assert(t, ok)
 	assert.Check(t, cmp.Equal(p.Title, "add-a-dry-run-flag"))
+}
+
+// A plan factory will not create has no title and no ID.
+func TestStoreCreateFailsWithoutATitle(t *testing.T) {
+	client, cci := testClient(t)
+	cci.FactoryStatusCode = http.StatusInternalServerError
+	store := newStore(client, "")
+
+	title, err := store.Create(context.Background(), "add a --dry-run flag")
+	assert.Check(t, cmp.ErrorContains(err, "create the plan in factory"))
+	assert.Check(t, cmp.Equal(title, ""))
+	assert.Check(t, cmp.Equal(store.ID(), ""))
 }
 
 func TestStoreCommentsRoundTrip(t *testing.T) {
@@ -756,7 +770,7 @@ func TestStoreHolderReadsTheClaimFromFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(h, ""))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	h, err = store.Holder(ctx)
 	assert.NilError(t, err)
@@ -786,7 +800,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.Check(t, cmp.Len(f.Events, 0))
 	assert.Check(t, cmp.Equal(f.Task, ""))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
@@ -881,7 +895,7 @@ func TestStoreFamily(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(fam, plan.Family{}))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	id := store.ID()
 	newPlan := func(title, state string) string {
@@ -1006,7 +1020,7 @@ func TestStoreFamilyFails(t *testing.T) {
 			assert.NilError(t, err)
 			store := newStore(client, "")
 			ctx := context.Background()
-			err = store.Create(ctx, "a plan")
+			_, err = store.Create(ctx, "a plan")
 			assert.NilError(t, err)
 
 			_, err = store.Family(ctx)
@@ -1045,7 +1059,7 @@ func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
 	err := store.SetText(ctx, "# A plan\n")
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	err = store.SetText(ctx, "# A plan\n\n## 1. Outcome\n\nEdited by hand.\n")
 	assert.NilError(t, err)

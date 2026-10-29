@@ -24,16 +24,17 @@ type fakePlans struct {
 	err     error
 	reply   string
 	plan    string
+	title   string
 	release chan struct{}
 	sent    bool
 }
 
 // fakePlanStore is a plan.Store whose text never changes; these tests do not
 // exercise polling or comments.
-type fakePlanStore struct{ text, id string }
+type fakePlanStore struct{ text, id, title string }
 
-func (f *fakePlanStore) ID() string                           { return f.id }
-func (f *fakePlanStore) Create(context.Context, string) error { return nil }
+func (f *fakePlanStore) ID() string                                     { return f.id }
+func (f *fakePlanStore) Create(context.Context, string) (string, error) { return f.title, nil }
 func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 	return plan.Flow{State: plan.ReadyState, Events: []string{"address-comments", "approve-for-units", "approve-for-building"}}, nil
 }
@@ -87,7 +88,7 @@ func (f *fakePlans) planner(_ context.Context, root, id string) (plan.Agent, pla
 		f.sent = true
 		return "build-1", nil
 	}
-	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id}, nil
+	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id, title: f.title}, nil
 }
 
 func planModel(t *testing.T, f *fakePlans) Model {
@@ -287,6 +288,47 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	_, quits := cmd().(tea.QuitMsg)
 	assert.Assert(t, quits)
+}
+
+// A new plan's header says New plan until factory names it, and the name
+// goes to the workspace that created it, not the one showing.
+func TestANewPlansHeaderTakesItsName(t *testing.T) {
+	fresh := &fakePlans{title: "retry-uploads"}
+	other := &fakePlans{plan: "# Cache installs"}
+	planner := func(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
+		if id == "" {
+			return fresh.planner(ctx, root, id)
+		}
+		return other.planner(ctx, root, id)
+	}
+	flows := flowlist.New(t.Context(), func(context.Context) ([]circleci.Flow, error) { return nil, nil },
+		func(context.Context, string) (string, []circleci.PlanComment, error) { return "", nil, nil })
+	m := searchModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).
+		WithPlans(t.Context(), planner).WithFlowList(flows)
+	// Wide enough that the header does not cut the titles down.
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = next.(Model)
+
+	next, cmd := m.Update(flowlist.NewMsg{})
+	m = deliver(t, next.(Model), cmd)
+	newKey := m.planKey
+	assert.Check(t, cmp.Contains(screen(m), "chunk plan / New plan"))
+
+	m = typeInto(m, "retry uploads")
+	m, create := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	// Switch to another plan before factory answers.
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	next, cmd = m.Update(flowlist.OpenMsg{ID: "cache", Title: "cache-installs"})
+	m = deliver(t, next.(Model), cmd)
+	m = deliverThen(t, m, create, 0) // the create lands, for the new plan
+	assert.Check(t, cmp.Contains(screen(m), "chunk plan / cache-installs"))
+	assert.Check(t, !strings.Contains(screen(m), "retry-uploads"), screen(m))
+
+	next, _ = m.Update(flowlist.OpenMsg{ID: "", Title: "New plan"})
+	m = next.(Model)
+	assert.Check(t, cmp.Equal(m.planKey, newKey))
+	assert.Check(t, cmp.Contains(screen(m), "chunk plan / retry-uploads"))
 }
 
 // deliverThen is deliver, also delivering what the commands each message

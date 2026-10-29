@@ -34,21 +34,21 @@ func TestPlanWorktreeRemovesThoseOfEndedPlans(t *testing.T) {
 	ctx := context.Background()
 
 	merged := newStore(client, "")
-	err := merged.Create(ctx, "a merged plan")
+	_, err := merged.Create(ctx, "a merged plan")
 	assert.NilError(t, err)
 	mergedDir, err := planWorktree(ctx, root, merged)
 	assert.NilError(t, err)
 	cci.SetFactoryPlanState(merged.ID(), "Done")
 
 	preFlow := newStore(client, "")
-	err = preFlow.Create(ctx, "a plan made before flows")
+	_, err = preFlow.Create(ctx, "a plan made before flows")
 	assert.NilError(t, err)
 	preFlowDir, err := planWorktree(ctx, root, preFlow)
 	assert.NilError(t, err)
 	cci.DropFactoryFlow(preFlow.ID())
 
 	deleted := newStore(client, "")
-	err = deleted.Create(ctx, "a deleted plan")
+	_, err = deleted.Create(ctx, "a deleted plan")
 	assert.NilError(t, err)
 	deletedDir, err := planWorktree(ctx, root, deleted)
 	assert.NilError(t, err)
@@ -56,7 +56,7 @@ func TestPlanWorktreeRemovesThoseOfEndedPlans(t *testing.T) {
 	cci.DeleteFactoryPlan(deleted.ID())
 
 	store := newStore(client, "")
-	err = store.Create(ctx, "a plan")
+	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	dir, err := planWorktree(ctx, root, store)
 	assert.NilError(t, err)
@@ -103,7 +103,7 @@ func TestStoreEndedForEachOfFactorysEnds(t *testing.T) {
 	} {
 		t.Run(tc.state, func(t *testing.T) {
 			store := newStore(client, "")
-			err := store.Create(ctx, "a plan")
+			_, err := store.Create(ctx, "a plan")
 			assert.NilError(t, err)
 			cci.SetFactoryPlanState(store.ID(), tc.state)
 
@@ -134,7 +134,7 @@ func TestStoreEndedForAPlanWithNoFlow(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newStore(client, "")
-			err := store.Create(ctx, "a plan")
+			_, err := store.Create(ctx, "a plan")
 			assert.NilError(t, err)
 			cci.DropFactoryFlow(store.ID())
 			if tc.delete {
@@ -175,7 +175,7 @@ func TestStoreEndedErrsOnAFailedRead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client, cci := testClient(t)
 			store := newStore(client, "")
-			err := store.Create(ctx, "a plan")
+			_, err := store.Create(ctx, "a plan")
 			assert.NilError(t, err)
 			tc.fail(cci, store.ID())
 
