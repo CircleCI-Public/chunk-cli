@@ -5,6 +5,7 @@ package flowlist
 import (
 	"cmp"
 	"context"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -42,6 +43,16 @@ type previewedMsg struct {
 	text       string
 	comments   []circleci.PlanComment
 	err        error
+	// lines is text rendered for key, when the fetch rendered it.
+	lines []string
+	key   renderKey
+}
+
+// renderedMsg is a flow's cached text rendered for key, off the UI goroutine.
+type renderedMsg struct {
+	id    string
+	key   renderKey
+	lines []string
 }
 
 // Model is a Bubble Tea component, not a standalone tea.Model.
@@ -73,15 +84,39 @@ type Model struct {
 	previewGeneration uint64
 	previewing        bool
 	previewLoaded     bool
-	text              string
-	comments          []circleci.PlanComment
 	previewErr        error
+	// cache is each flow's last preview and its render, by flow ID, so
+	// selecting a flow again shows it while a fresh one loads. Only Update
+	// writes it, on the Bubble Tea goroutine.
+	cache map[string]cached
+	// render is glamour unless a test replaces it.
+	render func(text string, width int, dark bool) []string
+}
+
+// cached is a flow's last preview, and its text as rendered for key.
+type cached struct {
+	text     string
+	comments []circleci.PlanComment
+	lines    []string
+	key      renderKey
+	// pending is the key of a render in flight, so one is not started twice.
+	pending renderKey
+}
+
+// renderKey is what a rendered preview depends on.
+type renderKey struct {
+	text  string
+	width int
+	dark  bool
 }
 
 // New creates a list of the flows list returns, each previewed with
 // preview. Both callbacks must honor ctx cancellation.
 func New(ctx context.Context, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) Model {
-	return Model{ctx: ctx, list: list, preview: preview, width: 80, height: 24, dark: true, styles: theme.New(true)}
+	return Model{
+		ctx: ctx, list: list, preview: preview, width: 80, height: 24, dark: true, styles: theme.New(true),
+		cache: map[string]cached{}, render: glamourLines,
+	}
 }
 
 // WithParents has the list read each flow's parent plan with parents, a
@@ -160,6 +195,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.parentOf = nil
 			}
 			m.loaded = true
+			maps.DeleteFunc(m.cache, func(id string, _ cached) bool {
+				return !slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == id })
+			})
 			m.keepSelection()
 			refreshPreview = true
 		}
@@ -169,8 +207,27 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.previewing = false
 			m.previewErr = msg.err
 			if msg.err == nil {
-				m.text, m.comments, m.previewLoaded = msg.text, msg.comments, true
+				// Lines and key stay unless the fetch rendered the text for
+				// the pane as it is now, so equal text does not render again
+				// and a render for an old size or style is dropped.
+				entry := m.cache[msg.id]
+				entry.text, entry.comments = msg.text, msg.comments
+				if msg.lines != nil && msg.key == m.renderKey(msg.text) {
+					entry.lines, entry.key = msg.lines, msg.key
+				}
+				m.cache[msg.id] = entry
+				m.previewLoaded = true
 			}
+		}
+	case renderedMsg:
+		if entry, ok := m.cache[msg.id]; ok {
+			if entry.pending == msg.key {
+				entry.pending = renderKey{}
+			}
+			if msg.key == m.renderKey(entry.text) {
+				entry.lines, entry.key = msg.lines, msg.key
+			}
+			m.cache[msg.id] = entry
 		}
 	case tea.KeyPressMsg:
 		cmds = append(cmds, m.key(msg))
@@ -178,13 +235,51 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if m.previewID != m.id {
 		m.previewID = m.id
 		m.previewGeneration++
-		m.previewing, m.previewLoaded = false, false
-		m.text, m.comments, m.previewErr = "", nil, nil
+		m.previewing, m.previewErr = false, nil
+		// A flow previewed before shows that preview while a fresh one loads.
+		_, m.previewLoaded = m.cache[m.id]
+		refreshPreview = true
 	}
+	// Before startPreview, so the fetch knows a render is already in flight.
+	cmds = append(cmds, m.renderPreview())
 	if m.id != "" && !m.previewing && (refreshPreview || !m.previewLoaded && m.previewErr == nil) {
 		cmds = append(cmds, m.startPreview())
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// renderKey is the key text rendered for the preview pane as it is now
+// would have: the zero key when the pane is not drawn or text is blank.
+func (m Model) renderKey(text string) renderKey {
+	w := m.previewWidth()
+	if w == 0 || strings.TrimSpace(text) == "" {
+		return renderKey{}
+	}
+	return renderKey{text: text, width: w - 4, dark: m.dark}
+}
+
+// renderPreview starts a render of the selected flow's cached plan text,
+// unless it was rendered, or is being rendered, for the same text, width and
+// style. One render of a large plan takes longer than a frame, so it runs
+// off the UI goroutine; the cached lines show until it returns.
+func (m *Model) renderPreview() tea.Cmd {
+	entry, ok := m.cache[m.id]
+	if m.id == "" || !ok {
+		return nil
+	}
+	key := m.renderKey(entry.text)
+	if key == (renderKey{}) || entry.key == key || entry.pending == key {
+		return nil
+	}
+	entry.pending = key
+	m.cache[m.id] = entry
+	ctx, render, id := m.ctx, m.render, m.id
+	return func() tea.Msg {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return renderedMsg{id: id, key: key, lines: render(key.text, key.width, key.dark)}
+	}
 }
 
 func (m *Model) startList() tea.Cmd {
@@ -223,13 +318,26 @@ func (m Model) poll() tea.Cmd {
 func (m *Model) startPreview() tea.Cmd {
 	m.previewing = true
 	m.previewGeneration++
-	ctx, preview, id, generation := m.ctx, m.preview, m.id, m.previewGeneration
+	ctx, preview, render, id, generation := m.ctx, m.preview, m.render, m.id, m.previewGeneration
+	// The fetch renders its text for the pane as it is now, off the UI
+	// goroutine, unless that render is cached or in flight already.
+	entry := m.cache[id]
+	have := entry.key
+	if entry.pending != (renderKey{}) {
+		have = entry.pending
+	}
+	width, dark, drawn := m.previewWidth()-4, m.dark, m.previewWidth() > 0
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			return nil
 		}
 		text, comments, err := preview(ctx, id)
-		return previewedMsg{id: id, generation: generation, text: text, comments: comments, err: err}
+		msg := previewedMsg{id: id, generation: generation, text: text, comments: comments, err: err}
+		key := renderKey{text: text, width: width, dark: dark}
+		if err == nil && drawn && strings.TrimSpace(text) != "" && key != have {
+			msg.lines, msg.key = render(text, width, dark), key
+		}
+		return msg
 	}
 }
 
