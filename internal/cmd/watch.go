@@ -75,6 +75,7 @@ func newWatchCmd() *cobra.Command {
 			defer plans.stop()
 			m := watch.New().WithRelaunch().WithBottomMargin(editorRowMargin()).
 				WithPlans(plans.ctx, root, plans.plan).
+				WithPlanBuilds(daemonPlanBuild{}).
 				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).WithParents(listFactoryParents))
 			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
@@ -214,6 +215,61 @@ func (d *watchPlans) plan(ctx context.Context, root, id string) (plan.Agent, pla
 	}
 	d.planAgents = append(d.planAgents, agent)
 	return agent, approve, store, nil
+}
+
+// daemonPlanBuild reads plan builds from the local chunk daemon for the flow
+// screen.
+type daemonPlanBuild struct{}
+
+// Activity reads plan planID's build.
+func (daemonPlanBuild) Activity(_ context.Context, planID string, after int) (plan.BuildActivity, error) {
+	a, found, err := chunkd.FetchPlanBuild(planID, after)
+	if errors.Is(err, chunkd.ErrDaemonUnavailable) {
+		return plan.BuildActivity{}, fmt.Errorf("the chunk daemon is not reachable, or is too old to show builds: %w", err)
+	}
+	if err != nil {
+		return plan.BuildActivity{}, fmt.Errorf("read the build of plan %s: %w", planID, err)
+	}
+	return planBuildFrom(a, found), nil
+}
+
+// planBuildFrom is the daemon's answer as the flow screen reads it.
+func planBuildFrom(a chunkd.PlanBuildActivity, found bool) plan.BuildActivity {
+	if !found {
+		return plan.BuildActivity{}
+	}
+	out := plan.BuildActivity{
+		Found:   true,
+		ID:      a.ID,
+		Running: a.State == chunkd.SessionRunning,
+		First:   a.First,
+		Total:   a.Total,
+	}
+	if a.State == chunkd.SessionFailed {
+		out.Failed = a.Error
+	}
+	if len(a.Lines) > 0 {
+		out.Lines = make([]plan.BuildLine, len(a.Lines))
+		for i, l := range a.Lines {
+			out.Lines[i] = plan.BuildLine{Level: planBuildLevel(l.Level), Text: l.Text}
+		}
+	}
+	return out
+}
+
+// planBuildLevel is a feed line's level as the flow screen styles it. An
+// unknown level, from a newer daemon, reads as info.
+func planBuildLevel(l chunkd.FeedLevel) plan.BuildLevel {
+	switch l {
+	case chunkd.FeedStep, chunkd.FeedDone:
+		return plan.BuildStep
+	case chunkd.FeedWarn:
+		return plan.BuildWarn
+	case chunkd.FeedError:
+		return plan.BuildError
+	case chunkd.FeedInfo:
+	}
+	return plan.BuildInfo
 }
 
 func watchPlanProject(ctx context.Context, root string) error {
