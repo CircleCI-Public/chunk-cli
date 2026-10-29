@@ -76,7 +76,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 
 // factoryEvents are the events a human may send a flow (flow.EventName in
 // circleci/factory).
-var factoryEvents = []string{"prioritize", "address-comments", "resolve-conflicts", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
+var factoryEvents = []string{"prioritize", "address-comments", "answer-open-questions", "resolve-conflicts", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
 
 // abandonReasons are the reasons an abandon takes, and only an abandon
 // (api/conductorapi/events.go in circleci/factory).

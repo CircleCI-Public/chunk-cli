@@ -371,6 +371,20 @@ func (s *Store) AddressComments(ctx context.Context) error {
 	return nil
 }
 
+// AnswerOpenQuestions sends the plan's flow factory's answer-open-questions
+// event, which factory offers in place of address-comments for a plan with
+// open questions, and which moves it out of a Human state at its next poll.
+func (s *Store) AnswerOpenQuestions(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.CreateFlowEvent(ctx, id, circleci.AnswerOpenQuestions); err != nil {
+		return fmt.Errorf("send the answer-open-questions event: %w", err)
+	}
+	return nil
+}
+
 // ResolveConflicts sends the plan's flow factory's resolve-conflicts event,
 // which hands a plan whose PR conflicts back to the agent to rebase.
 func (s *Store) ResolveConflicts(ctx context.Context) error {

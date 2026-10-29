@@ -287,6 +287,27 @@ func TestStoreResolveConflictsSendsTheEvent(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"resolve-conflicts"}))
 }
 
+// TestStoreAnswerOpenQuestionsSendsTheEvent checks that AnswerOpenQuestions
+// sends the plan's flow factory's answer-open-questions event, and fails for a
+// plan with no flow to send it.
+func TestStoreAnswerOpenQuestionsSendsTheEvent(t *testing.T) {
+	store, _, cci := createdStore(t)
+	ctx := context.Background()
+	cci.DropFactoryFlow(store.ID())
+
+	err := store.AnswerOpenQuestions(ctx)
+	assert.Check(t, cmp.ErrorContains(err, "send the answer-open-questions event"))
+
+	store, _, cci = createdStore(t)
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	cci.SetFactoryPlanState(store.ID(), "Building - Human")
+	cci.SetFactoryApplicableEvents(store.ID(), "answer-open-questions", "abandon")
+	err = store.AnswerOpenQuestions(ctx)
+	assert.NilError(t, err)
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"answer-open-questions"}))
+}
+
 // TestStoreSendsTheHumansActions checks that StartWork, Abandon and Delete
 // each fail before Create, and after it do what they say to the store's plan
 // in factory.
