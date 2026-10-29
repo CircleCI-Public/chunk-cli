@@ -1203,7 +1203,7 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, closed(msg.buildID)
 		}
 		m.built, m.tab, m.tabChosen = true, tabFlow, true
-		m.status = "Approved · building as run " + msg.buildID + "; it is also in Runs"
+		m.status = "Approved · building as run " + msg.buildID
 		m.syncPlaceholder()
 		return m, tea.Batch(
 			func() tea.Msg { return BuildingMsg{BuildID: msg.buildID} },

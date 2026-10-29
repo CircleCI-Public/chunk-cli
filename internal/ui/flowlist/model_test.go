@@ -254,13 +254,14 @@ func TestNavigation(t *testing.T) {
 func TestHostMessages(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		d := newDriver(t, fixed(), preview)
-		for _, key := range []tea.KeyPressMsg{press('2'), press(tea.KeyTab), press(tea.KeyEscape)} {
-			d.send(key)
-			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.BackMsg{}), "%s did not emit BackMsg", key.String())
+		// There is no other screen to switch to.
+		for _, key := range []tea.KeyPressMsg{press('2'), press(tea.KeyTab)} {
+			_, cmd := d.m.Update(key)
+			assert.Check(t, cmd == nil, "%s did something", key.String())
 		}
 		d.send(press('n'))
 		assert.Check(t, cmp.DeepEqual(d.next(), flowlist.NewMsg{}), "n did not emit NewMsg")
-		for _, key := range []tea.KeyPressMsg{press('q'), {Code: 'c', Mod: tea.ModCtrl}} {
+		for _, key := range []tea.KeyPressMsg{press('q'), press(tea.KeyEscape), {Code: 'c', Mod: tea.ModCtrl}} {
 			d.send(key)
 			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.QuitMsg{}), "%s must ask the host to quit, not tea.Quit", key.String())
 		}
@@ -617,7 +618,8 @@ func TestGroupsAndRows(t *testing.T) {
 					for _, not := range []string{"preview", "Markdown heading", "Please clarify"} {
 						assert.Check(t, !strings.Contains(text, not), "%q shows at width 50:\n%s", not, text)
 					}
-					assert.Check(t, cmp.Contains(lines[len(lines)-2], "tab runs"))
+					assert.Check(t, cmp.Contains(lines[len(lines)-2], "n new plan"))
+					assert.Check(t, !strings.Contains(text, "runs"), "the help names runs:\n%s", text)
 				}
 				if size.Width >= 80 && size.Height > 2 {
 					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose", "⚠"} {

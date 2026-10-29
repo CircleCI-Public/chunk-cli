@@ -116,7 +116,7 @@ func (m Model) keys() keyMap {
 	// first when that would drop comments or a message.
 	quit := "quit"
 	if m.back {
-		quit = "back to runs"
+		quit = "back"
 	}
 	if m.inbox {
 		quit = "back to plans"
