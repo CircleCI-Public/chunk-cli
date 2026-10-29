@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
@@ -17,10 +18,12 @@ const maxRequestBytes = 64 * 1024
 // demands the bearer token.
 //
 //	POST /factory/plans        build an approved factory plan
+//	GET /factory/plans/{plan}/build[?after=N]  a plan's build session and its feed
 //	POST /factory/{id}/cancel  stop a session
 //	DELETE /factory/{id}       forget a finished session (409 while it is running)
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /factory/plans", d.handlePlanBuild)
+	mux.HandleFunc("GET /factory/plans/{plan}/build", d.handlePlanBuildActivity)
 	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
 	mux.HandleFunc("DELETE /factory/{id}", d.handleSessionDelete)
 }
@@ -57,6 +60,19 @@ func (d *daemon) handlePlanBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, chunkd.SessionStartResponse{ID: sess.ID})
+}
+
+// handlePlanBuildActivity answers a plan's build session and its feed lines
+// past ?after=N. A missing or unreadable after is 0.
+func (d *daemon) handlePlanBuildActivity(w http.ResponseWriter, r *http.Request) {
+	planID := r.PathValue("plan")
+	entry := d.latestPlanBuild(planID)
+	if entry == nil {
+		http.Error(w, "no build of plan "+planID, http.StatusNotFound)
+		return
+	}
+	after, _ := strconv.Atoi(r.URL.Query().Get("after"))
+	writeJSON(w, http.StatusOK, planBuildActivity(entry.snapshot(), after))
 }
 
 func (d *daemon) handleSessionCancel(w http.ResponseWriter, r *http.Request) {

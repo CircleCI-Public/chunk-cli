@@ -101,6 +101,24 @@ func (f Feed) Since(seen int) []FeedLine {
 	return f.Lines[len(f.Lines)-n:]
 }
 
+// PlanBuildActivity is a plan's build session and the lines of its feed past
+// those a client has seen, as GET /factory/plans/{plan}/build returns them.
+type PlanBuildActivity struct {
+	// ID is the build session's; a different ID from the last read is a new
+	// session, whose lines are numbered from 0 again.
+	ID    string       `json:"id"`
+	State SessionState `json:"state"`
+	Error string       `json:"error,omitempty"`
+	// First is the number of Lines[0] among every line the session has
+	// written; more than the after asked for when the lines between were
+	// dropped.
+	First int        `json:"first"`
+	Lines []FeedLine `json:"lines,omitempty"`
+	// Total is how many lines the session has written: the after of the
+	// next read.
+	Total int `json:"total"`
+}
+
 // FactoryRun is the factory plan a plan build builds, and where its work is.
 type FactoryRun struct {
 	// PlanID is the factory plan being built, through factory's own tasks, in

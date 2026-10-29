@@ -427,6 +427,10 @@ POST /factory/plans        {project_root, plan_id, model?} → 202 {id}: build a
                              factory plan (409 plan over or already building, 404 unknown
                              project, 502 factory unreachable, 503 not authenticated to
                              CircleCI)
+GET  /factory/plans/{plan}/build[?after=N] → PlanBuildActivity: the plan's build
+                             session (the running one, else the latest) and its feed
+                             lines after the first N, numbered from first; total is the
+                             next after (404 no build of the plan)
 POST /factory/{id}/cancel  → 202 (idempotent): stop a build without ending its plan
 DELETE /factory/{id}       → 204: forget a finished session; 409 while it is still running
 GET  /snapshot             → each project carries `sessions` (state only), and the

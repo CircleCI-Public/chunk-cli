@@ -119,6 +119,42 @@ func (d *daemon) buildingPlan(planID string) string {
 	return ""
 }
 
+// latestPlanBuild is plan planID's build session: the running one, else the
+// one started last; nil when the plan has none.
+func (d *daemon) latestPlanBuild(planID string) *sessionEntry {
+	var best *sessionEntry
+	var bestS chunkd.Session
+	for _, e := range d.sessions.entries() {
+		s := e.snapshot()
+		if s.Factory == nil || s.Factory.PlanID != planID {
+			continue
+		}
+		running := s.State == chunkd.SessionRunning
+		bestRunning := bestS.State == chunkd.SessionRunning
+		if best == nil || running && !bestRunning ||
+			running == bestRunning && s.StartedAt.After(bestS.StartedAt) {
+			best, bestS = e, s
+		}
+	}
+	return best
+}
+
+// planBuildActivity is s's feed lines after the first after, numbered as the
+// session wrote them. An after the session never reached (one an earlier
+// session's client saw) or below 0 reads from the start.
+func planBuildActivity(s chunkd.Session, after int) chunkd.PlanBuildActivity {
+	feed := s.Factory.Progress
+	kept := feed.Total - len(feed.Lines)
+	if after < 0 || after > feed.Total {
+		after = 0
+	}
+	from := max(after, kept)
+	return chunkd.PlanBuildActivity{
+		ID: s.ID, State: s.State, Error: s.Error,
+		First: from, Lines: feed.Lines[from-kept:], Total: feed.Total,
+	}
+}
+
 // planEnd says how the plan of ended flow f ended, even from a factory that
 // serves no outcome.
 func planEnd(f *circleci.Flow) string {

@@ -3,10 +3,12 @@ package chunkd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	neturl "net/url"
+	"strconv"
 	"strings"
 )
 
@@ -83,6 +85,21 @@ func StartPlanBuild(req PlanBuildRequest) (string, error) {
 		return "", err
 	}
 	return resp.ID, nil
+}
+
+// FetchPlanBuild returns plan planID's build session and its feed lines past
+// the first after. found is false when the daemon has no build of the plan.
+func FetchPlanBuild(planID string, after int) (activity PlanBuildActivity, found bool, err error) {
+	path := "/factory/plans/" + neturl.PathEscape(planID) + "/build?after=" + strconv.Itoa(after)
+	err = sessionCall(http.MethodGet, path, nil, &activity)
+	var refused *SessionRefused
+	if errors.As(err, &refused) && refused.Status == http.StatusNotFound {
+		return PlanBuildActivity{}, false, nil
+	}
+	if err != nil {
+		return PlanBuildActivity{}, false, err
+	}
+	return activity, true, nil
 }
 
 // CancelSession stops a session. It is the only thing that does: a viewer that

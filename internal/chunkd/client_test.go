@@ -457,3 +457,61 @@ func TestHasRunningSessions(t *testing.T) {
 		assert.Check(t, !hasRunningSessions(filepath.Join(socketDir(t), "daemon.sock")))
 	})
 }
+
+// fakeSessionDaemon serves h on the daemon socket for the test.
+func fakeSessionDaemon(t *testing.T, h http.Handler) {
+	t.Helper()
+	dir := socketDir(t)
+	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
+	assert.NilError(t, err)
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+}
+
+func TestFetchPlanBuild(t *testing.T) {
+	t.Run("a build", func(t *testing.T) {
+		uris := make(chan string, 1)
+		fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			uris <- r.URL.RequestURI()
+			_, _ = io.WriteString(w, `{"id":"s1","state":"running","first":2,"total":3,"lines":[{"level":"warn","text":"stuck"}]}`)
+		}))
+		got, found, err := FetchPlanBuild("a/b", 2)
+		assert.NilError(t, err)
+		assert.Check(t, found)
+		assert.Check(t, cmp.DeepEqual(got, PlanBuildActivity{
+			ID: "s1", State: SessionRunning, First: 2, Total: 3,
+			Lines: []FeedLine{{Level: FeedWarn, Text: "stuck"}},
+		}))
+		uri := <-uris
+		assert.Check(t, cmp.Equal(uri, "/factory/plans/a%2Fb/build?after=2"))
+	})
+
+	t.Run("no build of the plan", func(t *testing.T) {
+		fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "no build of plan x", http.StatusNotFound)
+		}))
+		_, found, err := FetchPlanBuild("x", 0)
+		assert.NilError(t, err)
+		assert.Check(t, !found)
+	})
+
+	t.Run("a daemon without the route", func(t *testing.T) {
+		fakeSessionDaemon(t, http.NotFoundHandler())
+		_, found, err := FetchPlanBuild("x", 0)
+		assert.Check(t, cmp.ErrorIs(err, ErrDaemonUnavailable))
+		assert.Check(t, !found)
+	})
+
+	t.Run("a daemon error", func(t *testing.T) {
+		fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "broken", http.StatusInternalServerError)
+		}))
+		_, found, err := FetchPlanBuild("x", 0)
+		var refused *SessionRefused
+		assert.Assert(t, errors.As(err, &refused), "got %v", err)
+		assert.Check(t, cmp.Equal(refused.Status, http.StatusInternalServerError))
+		assert.Check(t, !found)
+	})
+}
