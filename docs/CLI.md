@@ -193,8 +193,7 @@ chunk
 │       --grader-timeout <duration> # Max time for grading each case (default: 20m)
 │       --json                      # Output as JSON
 │
-├── watch [dir...]                  # Follow and manage your factory runs live
-│   --focus                         # Watch only the current directory instead of all known projects
+├── watch                           # Plan and follow your factory flows
 │
 ├── conflicts                       # Report whether this branch still merges cleanly into its merge target
 │   --project <path>                # Override project directory
@@ -275,8 +274,7 @@ chunk
   leaves from the top; where leaving would drop unsent
   comments or a message it asks first. `q` quits wherever no text is being
   typed and `ctrl+c` always quits. A lowercase key is the common action and its
-  capital the bigger one (`d` deletes a comment, `D` a run; `n` and `N` go to
-  the next and previous comment). Plain letters are never actions while a text
+  capital the bigger one (`n` and `N` go to the next and previous comment). Plain letters are never actions while a text
   box has focus. Footer hints read `key action`, in lowercase.
 - Telemetry is opt-out. Events are anonymous until you authenticate with
   CircleCI; after that they include your CircleCI user ID, and earlier
@@ -324,15 +322,16 @@ chunk
   history only** — uncommitted work in the tree is invisible to it. A detached
   HEAD, a repo with no recorded default branch, and a branch that is itself the
   merge target all produce "no answer" rather than a clean bill of health.
-- **`watch` can show a remote daemon.** With `CHUNK_DAEMON_REMOTE_ADDR` and
-  `CHUNK_DAEMON_TCP_TOKEN` set, `watch` reads the daemon at that TCP address instead
-  of the local socket, and never starts a local daemon. The header names the
-  daemon (`local` or `remote host:port`) and turns red with `unreachable` when the
-  last poll failed; a rejected token says so and names `CHUNK_DAEMON_TCP_TOKEN`.
-  The local machine's working directory and project registry describe different
-  repos than the daemon's, so they are not used: the default is every project the
-  daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
-  host**, sent as typed. `--focus` with no path is an error in this mode.
+- **`watch` works with this machine's daemon only.** Flows and plans are
+  planned and built from this machine, so with `CHUNK_DAEMON_REMOTE_ADDR` set
+  `watch` refuses to start (`watch.remote_unsupported`), before it checks for a
+  terminal, and says to unset the variable; the variable keeps its meaning for
+  the other daemon clients. The header turns red with `unreachable` when the
+  daemon stops answering, and the daemon is started again.
+- **`watch` takes no directories.** Flows are the signed-in user's wherever it
+  is run, and new plans are made in the project it was opened in, which it
+  registers. An argument exits 2. `--focus` and `--all` still parse, deprecated,
+  and do nothing.
 - **A lone prompt argument with no spaces that names an existing file is read as the
   prompt, wherever the file is.** `chunk factory build ../notes/spec.md` (and
   `chunk factory start`, the same way) reads that file on this machine and
@@ -695,12 +694,11 @@ chunk
   approving is refused and names its session. A build whose plan another
   session holds says so in `chunk watch`, and picks the plan up once the claim
   is released. Builds outlive the screen and the terminal, and any number go at
-  once; `chunk watch` lists each, with the plan's state in factory and what
-  the session last did, and `x` stops it. A build ends with its plan. A
+  once; the plan's Flow tab follows each, from factory. A build ends with its
+  plan, so abandoning the plan (`x`) stops it at its next poll. A
   stopped one leaves the plan approved in factory, and `/f:resume <ID>` in
   Claude Code carries it on. A plan not approved stays in factory, and its ID
-  is printed. The screen checks what `factory build` checks before it opens,
-  and opens from `chunk watch` with `p` too.
+  is printed. The screen checks what `factory build` checks before it opens.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans
   two parts, prints the plan, and leaves out each part already done, so a
   rerun finishes a setup that stopped partway; with nothing left to do it fails
@@ -783,150 +781,42 @@ chunk
   that ran. The command exits non-zero when no case could be scored; a run in
   which only some cases errored still succeeds, and `summary.errored` counts
   them.
-- **`watch` is only about runs.** The left pane lists factory runs, live ones
-  first, then up to twenty that ended in the last day, and `↑/↓` moves through
-  them. The first poll selects the newest run. Sidecars have no rows: the
-  dashboard is for watching the work, not the infrastructure it borrows, so a
-  sidecar's sync, validate and resource activity is not shown at all. With no run
-  to list, the pane says where runs come from rather than sitting empty. `/`
-  searches the run list: type to narrow it
-  to the runs whose title, project, branch or status contain every word typed
-  (`Enter` keeps the filter, `Esc` drops it, and `Esc` again quits). `n` starts
-  a change without leaving the dashboard: it opens a prompt in the footer,
-  naming the project it is for, and `Enter` has Claude Code draft it on this
-  machine, in a factory run's worktree, as `chunk factory start` does with a
-  draft made in it (`claude -p --model sonnet` with the developer's own
-  login, edits accepted, anything else left to their own Claude Code permissions, chunk's
-  hooks off). The right pane logs what Claude does as it drafts, and `Esc`
-  stops it, keeping what it did. The draft is then shown in the right pane at
-  once, with no key to press: what Claude said it did, the per-file summary and
-  the whole diff, coloured, scrolled with `↑/↓`; `Enter`
-  sends the diff and the prompt to the factory, as `chunk factory build
-  --continue <run> --model sonnet "Finish the draft…"` would: the guidance
-  starts the implementer on the draft at once instead of after a round of
-  checks on it, and Sonnet is quicker than Claude Code's default for the
-  implementer and reviewers, with the factory's checks still deciding when it
-  is done. The factory's sidecars are started while Claude drafts, from the
-  files the draft started from, so the run starts on them at once rather than
-  waiting about a minute for its own, and the project's checks are run once on
-  the implementer's sidecar meanwhile, so the run's own checks start with warm
-  caches; sidecars never used are deleted. The
-  factory run is selected once the next poll lists it; `Esc` keeps the draft
-  for later and says how to send it. A draft with no changes can only be
-  closed. The draft is in the project the dashboard was opened in, or the
-  selected run's when it was opened outside one. What build checks first (an
-  `origin` remote, validation commands or review prompts, Claude Code being
-  installed) is checked before Claude starts, and why there is no draft, or
-  why it could not be sent, is shown in the footer. Closing the dashboard
-  stops a draft still being made. The dashboard opens on Flows: your open flows
-  in factory, grouped by who they wait on, then by phase, with the selected
-  flow's plan text and open comments previewed beside it. A sub-plan stays
-  in its own group and is marked `↳` with its parent's title; one listed
-  under the same heading as its parent (same group, same phase) is indented
-  under it. Sub-plans that have
-  ended are not shown. When chunk cannot read the plans' parents the list
-  is shown flat, with `sub-plans unavailable` under it. `tab`, `2` or `esc`
-  shows the runs, and `p`, `tab` or `1` the flows again. `Enter` opens the
-  `chunk factory plan` screen on the selected flow's plan, and `n` on a new one, to plan the change with Claude
-  before the factory builds it. Opening a plan only reads it: no session
-  claims it until a message is sent, and then in the project the dashboard
-  was opened in, since factory does not record a plan's repository; a plan
-  another session holds is refused rather than taken over. `esc` or `ctrl+c`
-  goes back to the plans with the plan and its session kept; `ctrl+p` does
-  too, to switch to another plan. Each opened plan keeps its own chat, unsent
-  message and session. An approved plan's build is selected once a poll lists
-  it. Quitting with a message unsent in any plan asks for a second `ctrl+c`;
-  plans and saved comments stay in factory, and each plan's session keeps its
-  conversation for the next time the plan is opened, but the chat shown and
-  unsent messages are not kept. Closing the dashboard stops every planning session, not a build.
-  `n` and `p` are not offered
-  against a remote daemon, since a factory run works from files on this
-  machine. A selected
-  run's pane reads top to bottom: the prompt, a status line that says what the run is doing
-  ("Round 2 of up to 3 · implementing", or "Round 1 of 1" with
-  `--max-attempts 1`) or, once it
-  ended, how it ended, what blocked it and what it cost, then each round, then
-  where the work is (branch, whether it was committed), the committed change
-  itself under that (read from the run's branch on this machine and coloured, as
-  much as fits, then `git diff <baseline> <branch>` for the rest) and, for a run that
-  stopped with committed work still failing, the `--continue` command that picks
-  it up. The title, status and outcome stay in place while the rounds scroll.
-  One round starts open: the latest, or on a run that ended failing, the one
-  that failed. The others are a line each (how they came out, findings,
-  duration). `Space` expands or collapses whatever has the cursor — the task, a
-  round, details, or a row inside a round — and the footer names what it will
-  do there, or names nothing on a row with nothing to fold; a collapsed
-  block's header sums up what it holds, and `Enter` does the same on a row
-  with nothing else to open. During a run's first round, a few lines under the status say
-  what a round is, what the cap means and how to change it with
-  `--max-attempts`; after that, `?` shows or hides them. An open round shows the implementer's turn (duration, cost, diff
-  stat), then its validation commands
-  and reviews under `validate`. Where the run put its work and what it said while
-  setting up (worktree, setup log, setup progress) are behind a `details` row
-  under the rounds, which `Space` or `Enter` opens; whether it is open is kept
-  per run, like the task and the rounds. A factory review is a check: it passes unless it
-  found something worth changing (high or medium severity), so its row shows ✓ with any lesser
-  issues noted ("2 issues, none worth changing"), or ✗ with how many of its issues are
-  worth changing ("3 issues, 1 worth changing"). A line under the rounds says what
-  is happening and whether there is anything to do ("Now: the implementer is making the
-  change. Nothing to do yet.", or, once the run ended, whether the checks passed). `→` moves into
-  the pane and `↑/↓` picks a row. A row inside a round that has something behind
-  it carries a `▸`, and `Space` folds that open under the row, up to 15 lines:
-  the implementer's summary and diff stat, a failed check's kept output (its
-  end), or a finished review's findings, fetched the first time it is opened.
-  `Enter` opens the same in a full-screen view to read all of it, and is the
-  way to follow a review that is still running (on a round, it opens or closes
-  the round). Once the run has ended, its `Branch:` row takes the cursor,
-  and so does its `Pull request:` row once the pull request is open (a pull
-  request that is still being pushed, failed or was skipped has no link to act
-  on, so it cannot be selected). `c` copies what has the cursor, the branch
-  name or the full URL, and says `copied` under the row for a few seconds. `b`
-  and `u` copy the branch name and the pull request's URL from any row of the
-  run, with no need to move the cursor first. On
-  the pull request row `Enter` or `o` opens it in the default browser
-  (`o` works from any row of the run), and so does `Cmd+Enter` in terminals
-  that report it (kitty keyboard protocol: kitty, Ghostty, WezTerm, iTerm2 when
-  enabled), which the footer advertises only then. The row says `opened in your
-  browser`, or `could not open a browser, URL copied` when there is none (over
-  SSH, say) and the URL is copied instead. The URL is an OSC 8 hyperlink, so
-  Cmd+click works in terminals that support it. The summary and a
-  check's output are word-wrapped to the screen; a log keeps one line per line
-  of output. The footer only lists keys that do something for what is
-  selected, so `x` is gone once a run has ended. **`q` only detaches**: the run
-  belongs to the daemon and carries on. The one key that stops it is `x`, and it
-  needs a second `x` on the same run to confirm. `r` continues a finished run
-  that has committed work short of passing, as `chunk factory build --continue
-  <run id>` with no prompt does: the work is checked first and the implementer
-  is sent what failed. It is one press, since the new run can be cancelled
-  with `x`.
-- `watch` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It polls the daemon every 5 seconds. Use `j`/`k` or `↑`/`↓` to select a run, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
+- **`watch` is Flows and the plans opened from it.** The dashboard opens on
+  Flows: your open flows in factory, grouped by who they wait on, then by
+  phase, with the selected flow's plan text and open comments previewed beside
+  it. A sub-plan stays in its own group and is marked `↳` with its parent's
+  title; one listed under the same heading as its parent (same group, same
+  phase) is indented under it. Sub-plans that have ended are not shown. When
+  chunk cannot read the plans' parents the list is shown flat, with `sub-plans
+  unavailable` under it. `Enter` opens the `chunk factory plan` screen on the
+  selected flow's plan, and `n` on a new one, to plan the change with Claude
+  before the factory builds it. `q` or `esc` quits. Opening a plan only reads it: no session claims it
+  until a message is sent, and then in the project the dashboard was opened
+  in, since factory does not record a plan's repository; a plan another
+  session holds is refused rather than taken over. `esc` or `ctrl+c` goes back
+  to the plans with the plan and its session kept; `ctrl+p` does too, to
+  switch to another plan. Each opened plan keeps its own chat, unsent message
+  and session. An approved plan's screen stays open on its Flow tab, which
+  follows the build from factory. Quitting with a message unsent in any plan
+  asks for a second `ctrl+c`; plans and saved comments stay in factory, and
+  each plan's session keeps its conversation for the next time the plan is
+  opened, but the chat shown and unsent messages are not kept. Closing the
+  dashboard stops every planning session, not a build.
+- `watch` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It checks the daemon answers every 5 seconds. Running `watch` in a project also registers that project so the daemon finds it.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a
   `project-root` breadcrumb in the same data directory) whether or not a daemon
   is running. The daemon discovers projects from those breadcrumbs and replays
-  each log from the start. `watch` no longer draws those events — it lists runs
-  — but the daemon still reads them, and `chunk sidecar logs` still reaches the
-  output. (Remote command *output* is registered with
-  the daemon live and buffered in memory, keyed by the same project root, so it
-  is only listed for a project that has been registered.)
-- **`watch` can show a command's output.** `Enter` on a review or check row in
-  the run pane opens a scrollback view of the output the daemon holds for it. A command that is still running tails live — the pane polls every 200 ms
-  while it is open, and drops back to the 5 s snapshot tick when closed, so a tail
-  never speeds up everything else. `↑`/`↓` and `PgUp`/`PgDn` scroll, `g` jumps to
-  the top, `G` re-follows the end, and `Esc` closes the pane rather than quitting
-  the dashboard. Scrolling up detaches from the bottom so arriving output does not
-  yank the view away from what you are reading; scrolling back to the end
-  re-follows automatically.
-  - Output is capped at 256 KiB per command, keeping the **tail** — the end of a
-    failed run is the part worth reading. When earlier output has been dropped the
-    pane says `(earlier output dropped)` rather than presenting a partial run as if
-    it were whole.
-  - The daemon holds at most 20 commands per project, evicting the oldest
-    *finished* one first. A running command is never evicted.
-  - Buffers are in memory only, so restarting the daemon loses them. `Enter` on a
-    row whose output the daemon no longer knows about says so.
-  - Output streaming needs a CircleCI token. Without one the dashboard still works
-    and shows a one-line hint in the footer; the daemon never prompts.
+  each log from the start, and `chunk sidecar logs` reaches the output. (Remote
+  command *output* is registered with the daemon live and buffered in memory,
+  keyed by the same project root, so it is only listed for a project that has
+  been registered.)
+- **The daemon keeps a command's output.** Output is capped at 256 KiB per
+  command, keeping the **tail** — the end of a failed run is the part worth
+  reading. The daemon holds at most 20 commands per project, evicting the
+  oldest *finished* one first; a running command is never evicted. Buffers are
+  in memory only, so restarting the daemon loses them. Output streaming needs
+  a CircleCI token; the daemon never prompts.
 - **`chunk sidecar logs <command-id>`** is the non-TUI door onto the same output,
   for scripts and for agents with no terminal. Command IDs are the ones the chunk
   daemon records for the commands it is buffering, and the ones a factory run
@@ -1068,13 +958,13 @@ chunk
   `CHUNK_NO_UPDATE_CHECK`, under `go test`, and for `completion`,
   `receive-telemetry`, `upgrade`, and shell-completion requests, which either run
   on every keypress or report versions themselves. `watch` runs its own check and
-  renders the notice in the TUI footer instead.
+  renders the notice in the TUI header instead.
 - The notice suggests `brew upgrade chunk` when the running binary resolves into
   a Homebrew prefix, and `chunk upgrade` otherwise. `chunk upgrade` refuses to
   replace a Homebrew-managed binary in place.
 - The notice names both versions (`v0.7.180 → v0.7.186`) and links the new
   release's GitHub page, so the reason to upgrade is one click away. The `watch`
-  footer keeps its one-line form: it has no room for a URL.
+  header keeps a one-line form: it has no room for a URL.
 
 ## Config keys
 

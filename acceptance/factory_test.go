@@ -585,6 +585,29 @@ func TestFactoryBootstrapSaysTheProjectIsAlreadySetUp(t *testing.T) {
 	}
 }
 
+// Flows and plans work from this machine, so chunk watch refuses a remote
+// daemon, and says so before it needs a terminal.
+func TestWatchRefusesARemoteDaemon(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.Extra["CHUNK_DAEMON_REMOTE_ADDR"] = "127.0.0.1:1"
+	env.Extra["CHUNK_DAEMON_TCP_TOKEN"] = "tok"
+
+	result := binary.RunCLI(t, []string{"watch"}, env, env.HomeDir)
+
+	assert.Check(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Check(t, cmp.Contains(result.Stderr, "Unset CHUNK_DAEMON_REMOTE_ADDR"))
+}
+
+// chunk watch refuses arguments as bad arguments.
+func TestWatchTakesNoDirectories(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{"watch", "some/dir"}, env, env.HomeDir)
+
+	assert.Check(t, cmp.Equal(result.ExitCode, 2), "stderr: %s", result.Stderr)
+	assert.Check(t, cmp.Contains(result.Stderr, "chunk watch takes no arguments"))
+}
+
 // A suite that cannot run here is refused before any sidecar starts: no
 // CircleCI is configured, so getting further would fail differently.
 func TestFactoryEvalRefusesCasesThatCannotRun(t *testing.T) {

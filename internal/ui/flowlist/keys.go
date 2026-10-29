@@ -4,7 +4,7 @@ import "charm.land/bubbles/v2/key"
 
 // keyMap is the flow list's keys, as its help bar shows them.
 type keyMap struct {
-	Select, Open, New, Runs, Quit key.Binding
+	Select, Open, New, Quit key.Binding
 }
 
 func (m Model) keys() keyMap {
@@ -12,8 +12,7 @@ func (m Model) keys() keyMap {
 		Select: key.NewBinding(key.WithKeys("up", "down", "k", "j"), key.WithHelp("↑/↓", "select")),
 		Open:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
 		New:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new plan")),
-		Runs:   key.NewBinding(key.WithKeys("tab", "2", "esc"), key.WithHelp("tab", "runs")),
-		Quit:   key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
+		Quit:   key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("q", "quit")),
 	}
 	listed := len(m.flows) > 0
 	k.Select.SetEnabled(listed)
@@ -21,10 +20,10 @@ func (m Model) keys() keyMap {
 	return k
 }
 
-// ShortHelp puts what starts something and the way to the runs first, so
-// they are the last to go on a narrow terminal.
+// ShortHelp puts what starts something first, so it is the last to go on a
+// narrow terminal.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.New, k.Runs, k.Select, k.Open, k.Quit}
+	return []key.Binding{k.New, k.Select, k.Open, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }

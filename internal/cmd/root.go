@@ -75,7 +75,7 @@ Start here
   chunk init                 Set up this project (config, sandbox, review prompts)
   chunk factory start        Optional: hand chunk a diff you already started
   chunk factory build        Build a change from a prompt, review it, open the PR
-  chunk watch                Follow and manage your factory runs. Keep it open.
+  chunk watch                Plan and follow your factory flows. Keep it open.
 
 Other commands
 {{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}  {{rpad .Name .NamePadding}} {{.Short}}

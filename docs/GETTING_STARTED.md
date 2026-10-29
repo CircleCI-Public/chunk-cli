@@ -315,62 +315,24 @@ git commit -m "Regenerate lock file on Linux"
 
 ---
 
-## Watching factory runs with chunk watch
+## Planning and following flows with chunk watch
 
-`chunk watch` is the recommended way to interact with chunk and stay on top of
-everything it is doing. Keep it open in another terminal while you work.
-`chunk factory build` prints a plain log of one run; `chunk watch` shows every
-run in this project and others, each review finding with its severity and
-location, the output of failed checks, the implementer's live activity and the
-pull request, with keys to copy, expand and cancel. That is why a build's
-output points there ("details in chunk watch") when something needs a look.
-
-`chunk watch` opens a live TUI dashboard of the `chunk factory build` runs the
-daemon is driving. It is about the runs themselves, not the infrastructure under
-them: sidecars, their sync and validate activity and their resource usage have no
-rows here. Run it in any project directory:
+`chunk watch` is the recommended way to interact with chunk. Keep it open in
+another terminal while you work. Planning needs the factory daemon running
+with `FACTORY_PLAN_STORE=circleci`. Run it in the project you want to plan in:
 
 ```bash
 chunk watch
 ```
 
-The dashboard refreshes every 5 seconds. The left pane lists every run the daemon
-is tracking — the live ones first, then recent finished ones — each with a state
-chip and how far it has got. Selecting one shows it in the right pane: each
-round's implementer turn, validation commands and reviews, the run's progress,
-and once it ends, the branch and worktree its work is on, with the change
-itself shown under them.
-
-Press `→` to move into the run, `Space` to open or close whatever has the cursor —
-the task, a round, the `details` row for the run's worktree and setup log, or a
-row inside a round, which folds open what is behind it (the implementer's
-summary, a failed check's output, a review's findings) — `Enter` to read a row's
-output in full screen, `c` to copy
-a failure report (what failed, its error and the end of its output) to paste into
-an agent, and `x` twice to cancel the run. The run list shows only live runs; `e` shows or hides finished ones (a run you have selected stays listed when it ends), `D` twice deletes a finished run's record, and `r` continues a finished run whose committed work has not passed, as `chunk factory build --continue` does. While the implementer works, its row shows what it last did and how many tools it has used, with what it last said under it. A failed check shows the last few lines
-of its output under its row. `c` copies through the terminal (OSC 52), so a
-terminal that doesn't support it won't receive the copy. `q` only closes the
-dashboard; the run carries on.
-
-Once a run has ended, its `Branch:` row takes the cursor, and so does its `Pull request:` row once the pull request is open. `c` copies what has the cursor (the branch name or the pull request's URL), and `b` and `u` copy them from any row of the run. On the pull request row `Enter` or `o` opens it in your browser (`o` works from any row), as does `Cmd+Enter` in terminals that can send it (kitty, Ghostty, WezTerm, iTerm2 with the kitty protocol enabled; the footer shows it only then). With no browser to open it in, such as over SSH, the URL is copied instead.
-
-Press `n` to start a run from the dashboard, in three steps the footer walks you
-through: type the change you want and press `Enter`; Claude Code drafts it on
-your machine, in a copy of the project, while the factory's sidecars start;
-then the draft's diff is shown in the right pane (`↑/↓` scrolls it), and
-`Enter` sends the draft and your prompt to the factory to finish (`Esc` keeps
-the draft for later).
-
-For a bigger change, plan it with a factory planning session first (it needs
-the factory daemon running with `FACTORY_PLAN_STORE=circleci`). `chunk watch`
-opens on **Flows**, your open flows in factory grouped by who they wait on
-(Needs your review, With agent, Not started, Other; each heading shows how
-many flows it holds) and then by phase
-(Planning, Building, ...), a sub-plan marked `↳` with its parent (and indented
-under it when both are under the same heading), a flow whose PR factory could not rebase marked ⚠,
-with a read-only preview of the selected one's plan; `tab` (or `2`) shows your
-runs and `p` or `tab` comes back. `Enter` opens a flow's plan and `n` starts a
-new one. Opening or
+`chunk watch` opens on **Flows**, your open flows in factory grouped by who
+they wait on (Needs your review, With agent, Not started, Other; each heading
+shows how many flows it holds) and then by phase (Planning, Building, ...), a
+sub-plan marked `↳` with its parent (and indented under it when both are under
+the same heading), a flow whose PR factory could not rebase marked ⚠, with a
+read-only preview of the selected one's plan. Flows are yours wherever
+`chunk watch` is run. `Enter` opens a flow's plan, `n` starts a new one, and
+`q` or `esc` quits. Opening or
 reading a plan never claims it or starts an agent; your first message does,
 in the project `chunk watch` was opened in. `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its chat, half-written message and session
@@ -387,80 +349,34 @@ chunk daemon builds it through to a pull request. The strip says which of
 the two factory is waiting for: `Next: you approve the design · ctrl+s` or
 `Next: you approve the plan · ctrl+s`. A plan whose PR
 conflicts after factory's rebase reads PR conflicts, and `ctrl+s` hands it
-back to factory to rebase again. The build shows
-in your runs, and keeps going when you close chunk; plan as many as you like.
-Once approved, the screen stays open on the Flow tab and follows the build.
+back to factory to rebase again. The build
+keeps going when you close chunk; plan as many as you like.
+Once approved, the screen stays open on the Flow tab, which follows the
+build: each unit done, being built or to do, and the pull request. `x`
+abandons a plan, and stops its build with it.
 `esc` goes back to your plans with the plan kept. Quitting with a message
 still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.
 
-```
-chunk watch  2 runs  main@a3f9e12
-──────────────────────────────────────────────────────────────────
- runs                  │ run  chunk-cli · chunk/factory/abc · 0123456
- ⌕ search runs      /  │   ⠋ Round 2 of up to 3 · implementing  1m0s · $0.41
-▶ ⠋ Add a --verbose fl │   # Add a --verbose flag to chunk validate
-    running  round 2/3 │
-  ✓ Fix the flaky test │   ▸ Round 1  ✗  1 of 3 checks passed  ·  1m0s
-    passed  10m ago    │
-                       │   ▾ Round 2  implementing
-                       │     ⠋  implement
-──────────────────────────────────────────────────────────────────
-  ↑/↓ select · → run · Enter output · / search runs · q quit
-```
-
-Press `/` to search the runs: the list narrows as you type, matching a run's
-prompt, project, branch or state. `Enter` keeps the filter, `Esc` drops it.
-
-`watch` shows every project you've watched or run in before, not just the current
-one:
-
-```bash
-chunk watch                   # all projects chunk has seen
-chunk watch --focus           # current directory only
-chunk watch /path/to/other    # add another project
-```
-
-You don't have to have the dashboard open while a run goes: the daemon owns the
-run, so one started before you opened the dashboard is listed in full, and
-closing the dashboard leaves it running.
-
-`watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).
+`watch` requires a TTY — it will not run in a non-interactive shell (CI,
+pipes). It works with the chunk daemon on this machine, and refuses to start
+with `CHUNK_DAEMON_REMOTE_ADDR` set. It takes no directories; `--focus` and
+`--all` are deprecated and do nothing.
 
 ### Reading a command's output
 
-Press `Enter` on a review or check row in the run pane to open a scrollback view
-of its output: a command that is still running tails live, and one that has
-already finished is replayed from the buffer. This is the answer to "the reviewer
-failed and the output is gone" — the daemon keeps a copy even though the process
-that ran the command has exited.
-
-```
-output  go test ./...  ✗ exit 1
-──────────────────────────────────────────────────────────────────
- --- FAIL: TestSyncSkipsIgnoredFiles (0.03s)
-     sync_test.go:112: expected 3 files, got 4
- FAIL
-──────────────────────────────────────────────────────────────────
- esc back  ↑/↓ scroll  g/G top/follow  ctrl-c quit
-```
-
-Scrolling up detaches from the bottom so arriving output does not yank the view
-away from what you are reading; scroll back to the end (or press `G`) to follow
-again. `Esc` closes the pane and returns to the dashboard.
-
-Output is capped at 256 KiB per command and 20 commands per project, keeping the
-most recent of each — the pane says `(earlier output dropped)` rather than
-presenting a partial run as if it were whole. Buffers live in memory, so
-restarting the daemon clears them.
-
-For scripts and for agents with no terminal, the same output is available without
-the TUI:
+The daemon keeps a copy of each command's output it was told about, even
+after the process that ran it has exited. For scripts and for agents with no
+terminal:
 
 ```bash
-chunk sidecar logs <command-id>        # command IDs appear in the dashboard
+chunk sidecar logs <command-id>        # print a command's buffered output
 chunk sidecar logs <command-id> -f     # keep printing until the command exits
 ```
+
+Output is capped at 256 KiB per command and 20 commands per project, keeping the
+most recent of each. Buffers live in memory, so restarting the daemon clears
+them.
 
 Output goes to stdout so it can be piped; a non-zero remote status is reported on
 stderr as `exit status N`. `logs` itself fails only when *reading* failed.
@@ -609,7 +525,7 @@ Make changes
 Validate on a sidecar
     └─ chunk sidecar sync + chunk validate --remote   (or locally: chunk validate)
     └─ or hand it to the agent: "validate on the sidecar"
-    └─ chunk watch   (recommended: keep it open to follow every factory run)
+    └─ chunk watch   (recommended: keep it open to plan and follow your factory flows)
 
 Before committing
     └─ Hook runs chunk validate automatically

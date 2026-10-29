@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
@@ -92,16 +94,33 @@ func (f *fakePlans) planner(_ context.Context, root, id string) (plan.Agent, pla
 	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id, title: f.title}, nil
 }
 
-func planModel(t *testing.T, f *fakePlans) Model {
+// flowList is a flow list of flows, each previewed as its title.
+func flowList(t *testing.T, flows ...circleci.Flow) flowlist.Model {
 	t.Helper()
-	return searchModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).WithPlans(t.Context(), f.planner)
+	return flowlist.New(t.Context(), func(context.Context) ([]circleci.Flow, error) { return flows, nil },
+		func(_ context.Context, id string) (string, []circleci.PlanComment, error) { return "# " + id, nil, nil })
 }
 
-// openPlanScreen presses p and delivers the planner's answer.
+// sized is m after a terminal of 110x40 reports its size.
+func sized(m Model) Model {
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 110, Height: 40})
+	return next.(Model)
+}
+
+// planModel is a dashboard opened in /src/chunk-cli, on an empty flow list.
+func planModel(t *testing.T, f *fakePlans) Model {
+	t.Helper()
+	m := New().WithConnection(chunkd.Connection{}).
+		WithPlans(t.Context(), "/src/chunk-cli", f.planner).WithFlowList(flowList(t))
+	return sized(m)
+}
+
+// openPlanScreen presses n on the flow list and delivers the planner's
+// answer.
 func openPlanScreen(t *testing.T, m Model) Model {
 	t.Helper()
-	m, cmd := press(m, 'p')
-	return deliver(t, m, cmd)
+	m, cmd := pressKey(m, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	return deliverThen(t, m, cmd, 1)
 }
 
 // pressKey sends a key to the model, and returns the command it gave back.
@@ -110,7 +129,7 @@ func pressKey(m Model, msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return next.(Model), cmd
 }
 
-func screen(m Model) string { return stripANSI(m.View().Content) }
+func screen(m Model) string { return ansi.Strip(m.View().Content) }
 
 // typeInto types s as text, a key at a time, as a terminal sends it.
 func typeInto(m Model, s string) Model {
@@ -120,30 +139,105 @@ func typeInto(m Model, s string) Model {
 	return m
 }
 
-func TestPOpensThePlanningScreenInTheProject(t *testing.T) {
+// deliver runs cmd and hands what it returns to the model, as the program
+// would. A batch delivers each of its messages.
+func deliver(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	assert.Assert(t, cmd != nil, "a command was returned")
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c != nil {
+				m = deliver(t, m, c)
+			}
+		}
+		return m
+	}
+	next, _ := m.Update(msg)
+	return next.(Model)
+}
+
+// deliverThen is deliver, also delivering what the commands each message
+// brings back return, n deep, as the program would: the planning screen's
+// first message creates the plan in factory before it is sent.
+func deliverThen(t *testing.T, m Model, cmd tea.Cmd, n int) Model {
+	t.Helper()
+	assert.Assert(t, cmd != nil, "a command was returned")
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c != nil {
+				m = deliverThen(t, m, c, n)
+			}
+		}
+		return m
+	}
+	next, follow := m.Update(msg)
+	m = next.(Model)
+	if n > 0 && follow != nil {
+		m = deliverThen(t, m, follow, n-1)
+	}
+	return m
+}
+
+func TestNOpensANewPlanInTheProject(t *testing.T) {
 	f := &fakePlans{}
 	m := planModel(t, f)
-	assert.Assert(t, strings.Contains(view(m), "p plan a run"), "planning is discoverable:\n%s", view(m))
+	assert.Assert(t, m.flowsOpen, "the dashboard opens on Flows")
+	assert.Check(t, cmp.Contains(screen(m), "n new plan"), "planning is discoverable")
 
 	m = openPlanScreen(t, m)
 	assert.Equal(t, f.root, "/src/chunk-cli")
 	assert.Assert(t, m.planOpen)
 	out := screen(m)
 	assert.Assert(t, strings.Contains(out, "Chat") && strings.Contains(out, "No plan yet"), "the planning screen is shown:\n%s", out)
-	assert.Assert(t, strings.Contains(out, "esc back to runs"), "the way back is in the footer:\n%s", out)
+	assert.Check(t, cmp.Contains(out, "back to plans"), "the way back is in the footer")
+	assert.Check(t, !strings.Contains(out, "runs"), "the footer names runs:\n%s", out)
 	assert.Assert(t, m.View().MouseMode == tea.MouseModeCellMotion, "the plan and chat scroll with the mouse")
 }
 
-func TestPlannerErrorIsNotedOnTheDashboard(t *testing.T) {
-	f := &fakePlans{err: errors.New("this project has no git remote named origin")}
-	m := openPlanScreen(t, planModel(t, f))
-	assert.Assert(t, !m.HasPlan() && !m.planOpen)
-	assert.Assert(t, strings.Contains(view(m), "could not open the plan: this project has no git remote named origin"), view(m))
+// A flow opened from the list is in the project the dashboard was opened
+// in, as a new plan is.
+func TestAFlowOpensInTheDashboardsProject(t *testing.T) {
+	f := &fakePlans{}
+	m := planModel(t, f)
+	next, cmd := m.Update(flowlist.OpenMsg{ID: "p1", Title: "Retry uploads"})
+	m = deliverThen(t, next.(Model), cmd, 0)
+	assert.Check(t, cmp.Equal(f.root, "/src/chunk-cli"))
+	assert.Check(t, m.planOpen)
 }
 
-// Esc goes back to the runs with the plan kept: chunk carries on while the
-// dashboard is shown, and p opens the screen again as it was.
-func TestThePlanIsKeptBehindTheDashboard(t *testing.T) {
+func TestPlannerErrorIsNotedOnFlows(t *testing.T) {
+	f := &fakePlans{err: errors.New("this project has no git remote named origin")}
+	m := openPlanScreen(t, planModel(t, f))
+	assert.Assert(t, !m.HasPlan() && !m.planOpen && m.flowsOpen)
+	assert.Assert(t, strings.Contains(screen(m), "could not open the plan: this project has no git remote named origin"), screen(m))
+}
+
+// Flows is the only screen besides the plans: tab, 1 and 2 switch to
+// nothing, and esc quits as q does.
+func TestFlowsKeys(t *testing.T) {
+	m := planModel(t, &fakePlans{})
+	before := screen(m)
+	for _, k := range []tea.KeyPressMsg{{Code: tea.KeyTab}, {Code: '1', Text: "1"}, {Code: '2', Text: "2"}} {
+		next, cmd := pressKey(m, k)
+		assert.Check(t, cmd == nil, "%s did something", k.String())
+		assert.Check(t, next.flowsOpen && !next.planOpen, "%s left Flows", k.String())
+		assert.Check(t, cmp.Equal(screen(next), before), "%s changed the screen", k.String())
+	}
+	for _, k := range []tea.KeyPressMsg{{Code: tea.KeyEscape}, {Code: 'q', Text: "q"}} {
+		_, ask := pressKey(m, k)
+		assert.Assert(t, ask != nil, "%s did nothing", k.String())
+		_, quit := m.Update(ask())
+		assert.Assert(t, quit != nil, "%s did not quit", k.String())
+		_, quits := quit().(tea.QuitMsg)
+		assert.Check(t, quits, "%s did not quit", k.String())
+	}
+}
+
+// Esc goes back to Flows with the plan kept: chunk carries on while the
+// list is shown, and opening the plan again shows it as it was.
+func TestThePlanIsKeptBehindFlows(t *testing.T) {
 	f := &fakePlans{reply: "Wrote a plan.", plan: "## 1. Outcome\n\nThe flag exists.", release: make(chan struct{})}
 	m := openPlanScreen(t, planModel(t, f))
 	m = typeInto(m, "add a flag")
@@ -154,30 +248,26 @@ func TestThePlanIsKeptBehindTheDashboard(t *testing.T) {
 	// Esc goes back while chunk works, which carries on.
 	m, back := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = deliver(t, m, back)
-	assert.Assert(t, !m.planOpen && m.HasPlan())
-	assert.Assert(t, strings.Contains(view(m), "p back to plan"), view(m))
+	assert.Assert(t, !m.planOpen && m.flowsOpen && m.HasPlan())
+	key := m.planKey
 
-	// Keys are the dashboard's again.
-	m, _ = press(m, 'j')
-	assert.Equal(t, m.selRun, "bbb")
-
-	// chunk answers while the dashboard is shown.
+	// chunk answers while Flows is shown.
 	close(f.release)
-	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Next()))
+	m = deliver(t, m, workspaceCmd(key, m.planScreen.Next()))
 	// The plan pane picks up the store's text on its next poll; this drives
 	// one deterministically rather than waiting on the real timer.
-	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
+	m = deliver(t, m, workspaceCmd(key, m.planScreen.Poll()))
 
-	m, _ = press(m, 'p')
+	next, _ := m.Update(flowlist.OpenMsg{ID: m.planWorkspaces[key].store.ID()})
+	m = next.(Model)
 	assert.Assert(t, m.planOpen)
 	out := screen(m)
 	assert.Assert(t, strings.Contains(out, "Wrote a plan.") && strings.Contains(out, "The flag exists."), "the reply that came while away is shown:\n%s", out)
 }
 
-// The open flow screen gets the arrows, not watch's own Left/Right.
+// The open flow screen gets the arrows.
 func TestArrowsReachTheOpenFlowScreen(t *testing.T) {
 	m := openPlanScreen(t, planModel(t, &fakePlans{}))
-	sel := m.selRun
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyLeft})
 	assert.Assert(t, m.planOpen, "← left the flow screen")
@@ -187,18 +277,17 @@ func TestArrowsReachTheOpenFlowScreen(t *testing.T) {
 	assert.Assert(t, m.planOpen)
 	s = screen(m)
 	assert.Check(t, !strings.Contains(s, "PROGRESS"), "→ did not show the Plan tab:\n%s", s)
-	assert.Check(t, cmp.Equal(m.selRun, sel))
 }
 
-func TestApprovingThePlanSelectsItsBuild(t *testing.T) {
+// Approving keeps the plan screen open on its Flow tab, which follows the
+// build.
+func TestApprovingThePlanKeepsItsScreen(t *testing.T) {
 	f := &fakePlans{reply: "ok", plan: "# The plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
 	m := openPlanScreen(t, planModel(t, f))
 	m = typeInto(m, "add a flag")
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = deliverThen(t, m, cmd, 1)                                   // the plan is created, then the message sent
 	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Next())) // chunk's reply
-	// The plan pane picks up the store's text on its next poll; this drives
-	// one deterministically rather than waiting on the real timer.
 	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
 
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
@@ -212,8 +301,32 @@ func TestApprovingThePlanSelectsItsBuild(t *testing.T) {
 	assert.Assert(t, f.sent, "the plan was not approved")
 
 	assert.Check(t, m.planOpen && m.HasPlan(), "an approved plan's screen stays open")
-	assert.Check(t, cmp.Equal(m.pendingRun, "build-1"))
-	assert.Check(t, !strings.Contains(m.draftNote, "approved the plan"), "the note: %q", m.draftNote)
+	out := screen(m)
+	assert.Check(t, cmp.Contains(out, "Approved · building as run build-1"))
+	assert.Check(t, !strings.Contains(out, "Runs"), "the screen names Runs:\n%s", out)
+}
+
+// A ClosedMsg for an approved plan goes back to Flows, as one for a plan
+// left does, with the plan selected.
+func TestApprovedPlanStaysOnFlows(t *testing.T) {
+	f := &fakePlans{plan: "# Retry uploads"}
+	m := New().WithConnection(chunkd.Connection{}).WithPlans(t.Context(), "/src/chunk-cli", f.planner).
+		WithFlowList(flowList(t, circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b1", Title: "Retry uploads"}))
+	m = sized(m)
+	m = deliverThen(t, m, m.flows.Init(), 1)
+	next, cmd := m.Update(flowlist.OpenMsg{ID: "b1", Title: "Retry uploads"})
+	m = deliverThen(t, next.(Model), cmd, 0)
+	assert.Assert(t, m.planOpen)
+
+	next, _ = m.Update(workspaceMsg{key: m.planKey, msg: plan.ClosedMsg{BuildID: "b1"}})
+	m = next.(Model)
+	next, _ = m.Update(workspaceMsg{key: m.planKey, msg: plan.BuildingMsg{BuildID: "b1"}})
+	m = next.(Model)
+	view := screen(m)
+	assert.Check(t, m.flowsOpen && !m.planOpen)
+	assert.Check(t, cmp.Contains(view, "▶ Retry uploads"))
+	assert.Check(t, !strings.Contains(view, "Runs"), view)
+	assert.Check(t, !strings.Contains(view, "appears in the list"), view)
 }
 
 func TestWindowSizeReachesTheKeptPlan(t *testing.T) {
@@ -235,10 +348,8 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 		}
 		return b.planner(ctx, root, id)
 	}
-	flows := flowlist.New(t.Context(), func(context.Context) ([]circleci.Flow, error) { return nil, nil },
-		func(context.Context, string) (string, []circleci.PlanComment, error) { return "", nil, nil })
-	m := searchModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).
-		WithPlans(t.Context(), planner).WithFlowList(flows)
+	m := sized(New().WithConnection(chunkd.Connection{}).
+		WithPlans(t.Context(), "/src/chunk-cli", planner).WithFlowList(flowList(t)))
 	open := func(id string) {
 		t.Helper()
 		next, cmd := m.Update(flowlist.OpenMsg{ID: id, Title: id})
@@ -302,10 +413,8 @@ func TestANewPlansHeaderTakesItsName(t *testing.T) {
 		}
 		return other.planner(ctx, root, id)
 	}
-	flows := flowlist.New(t.Context(), func(context.Context) ([]circleci.Flow, error) { return nil, nil },
-		func(context.Context, string) (string, []circleci.PlanComment, error) { return "", nil, nil })
-	m := searchModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).
-		WithPlans(t.Context(), planner).WithFlowList(flows)
+	m := New().WithConnection(chunkd.Connection{}).
+		WithPlans(t.Context(), "/src/chunk-cli", planner).WithFlowList(flowList(t))
 	// Wide enough that the header does not cut the titles down.
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = next.(Model)
@@ -332,51 +441,21 @@ func TestANewPlansHeaderTakesItsName(t *testing.T) {
 	assert.Check(t, cmp.Contains(screen(m), "chunk plan / retry-uploads"))
 }
 
-// deliverThen is deliver, also delivering what the commands each message
-// brings back return, n deep, as the program would: the planning screen's
-// first message creates the plan in factory before it is sent.
-func deliverThen(t *testing.T, m Model, cmd tea.Cmd, n int) Model {
-	t.Helper()
-	assert.Assert(t, cmd != nil, "a command was returned")
-	msg := cmd()
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		for _, c := range batch {
-			if c != nil {
-				m = deliverThen(t, m, c, n)
-			}
-		}
-		return m
-	}
-	next, follow := m.Update(msg)
-	m = next.(Model)
-	if n > 0 && follow != nil {
-		m = deliverThen(t, m, follow, n-1)
-	}
-	return m
-}
-
-// The flow list is drawn under the dashboard's own header, with tabs naming
-// the one showing, and the two together fit the terminal.
+// The flow list is drawn under the dashboard's own header, and the two
+// together fit the terminal.
 func TestFlowListSharesTheDashboardHeader(t *testing.T) {
-	list := []circleci.Flow{{ID: "p1", Title: "Retry uploads", State: "Review - Human"}}
-	flows := flowlist.New(t.Context(), func(context.Context) ([]circleci.Flow, error) { return list, nil },
-		func(context.Context, string) (string, []circleci.PlanComment, error) {
-			return "# Retry uploads", nil, nil
-		})
-	m := searchModel().WithPlans(t.Context(), (&fakePlans{}).planner).WithFlowList(flows)
+	flows := flowList(t, circleci.Flow{ID: "p1", Title: "Retry uploads", State: "Review - Human"})
+	m := New().WithConnection(chunkd.Connection{}).WithPlans(t.Context(), "", (&fakePlans{}).planner).WithFlowList(flows)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
 	m = next.(Model)
 	// Up to the list; deeper waits out the flow list's poll.
 	m = deliverThen(t, m, m.flows.Init(), 1)
 
-	lines := strings.Split(stripANSI(m.View().Content), "\n")
-	assert.Assert(t, strings.Contains(lines[0], "chunk watch  Flows  Runs  1 flow"), lines[0])
+	lines := strings.Split(screen(m), "\n")
+	assert.Check(t, cmp.Contains(lines[0], "chunk watch  1 flow"))
+	assert.Check(t, !strings.Contains(lines[0], "Runs"), lines[0])
 	assert.Assert(t, strings.HasPrefix(lines[1], "╭─ flows"), lines[1])
 	assert.Equal(t, len(lines), 20)
-
-	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
-	m = deliver(t, m, cmd)
-	assert.Assert(t, strings.Contains(stripANSI(m.render()), "chunk watch  Flows  Runs  2 runs"))
 }
 
 // A relative the plan screen opens goes the way of a plan picked in the flow
@@ -388,7 +467,7 @@ func TestOpenMsgOpensOrReusesAWorkspace(t *testing.T) {
 		calls++
 		return f.planner(ctx, root, id)
 	}
-	m := searchModel().WithDrafts(t.Context(), "/src/chunk-cli", nil, nil).WithPlans(t.Context(), planner)
+	m := sized(New().WithPlans(t.Context(), "/src/chunk-cli", planner).WithFlowList(flowList(t)))
 	next, cmd := m.Update(flowlist.OpenMsg{ID: "parent", Title: "Parent"})
 	m = deliver(t, next.(Model), cmd)
 	parentKey := m.planKey

@@ -1622,7 +1622,7 @@ func TestBackClosesAtOnceAndKeepsWhatIsUnsent(t *testing.T) {
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "too vague")
 	m = drive(t, m, press("enter"))
-	if view := ansi.Strip(m.Content()); !strings.Contains(view, "esc back to runs") {
+	if view := ansi.Strip(m.Content()); !strings.Contains(view, "esc back") {
 		t.Errorf("the footer does not say esc goes back:\n%s", view)
 	}
 
@@ -4297,7 +4297,7 @@ func TestDeleteThePlan(t *testing.T) {
 			},
 		},
 		{
-			name:  "y deletes and goes back to runs",
+			name:  "y deletes and goes back",
 			state: "Done",
 			host:  Model.WithBack,
 			check: func(t *testing.T, m Model, store *fakeStore) {
