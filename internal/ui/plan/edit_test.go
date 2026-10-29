@@ -154,6 +154,18 @@ func TestEditIsRefusedOnceFactoryStopsWaiting(t *testing.T) {
 	assert.Check(t, cmp.Contains(ansi.Strip(m.status), "factory is no longer waiting on you"))
 }
 
+func TestEditIsSavedWhileFactoryWaitsOnOpenQuestions(t *testing.T) {
+	m, store, _ := planInPlan(t)
+	store.setEvents("answer-open-questions", "abandon")
+	m = refreshed(t, m)
+	m.editing = true
+	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
+	m = drive(t, m, msg)
+
+	assert.Check(t, cmp.Len(store.Set, 1))
+	assert.Check(t, cmp.Equal(ansi.Strip(m.status), "Saved your edit."))
+}
+
 func TestFailedEditorSavesNothing(t *testing.T) {
 	m, store, _ := planInPlan(t)
 	m.editing = true

@@ -117,6 +117,8 @@ func stepText(s Step) string {
 			what = "start work · ctrl+s"
 		case "address-comments":
 			what = "send your comments"
+		case answerOpenQuestions:
+			what = "answer 3. Open Questions in comments"
 		case "merge-pr":
 			what = "merge the PR"
 		}

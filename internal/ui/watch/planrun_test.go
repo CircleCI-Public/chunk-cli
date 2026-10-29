@@ -40,6 +40,7 @@ func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 }
 func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return plan.Family{}, nil }
 func (f *fakePlanStore) AddressComments(context.Context) error       { return nil }
+func (f *fakePlanStore) AnswerOpenQuestions(context.Context) error   { return nil }
 func (f *fakePlanStore) ResolveConflicts(context.Context) error      { return nil }
 func (f *fakePlanStore) StartWork(context.Context) error             { return nil }
 func (f *fakePlanStore) Abandon(context.Context, string) error       { return nil }

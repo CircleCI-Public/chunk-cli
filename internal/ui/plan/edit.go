@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -160,7 +159,7 @@ func saveEditCmd(ctx context.Context, s Store, msg editedMsg, text string) tea.C
 			if err != nil {
 				return err
 			}
-			if !slices.Contains(flow.Events, addressComments) {
+			if handOffEventOf(flow.Events) == "" {
 				return errEditNotWaiting
 			}
 			now, err := s.Text(ctx)
