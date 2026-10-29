@@ -82,7 +82,7 @@ func newWatchCmd() *cobra.Command {
 				return err
 			}
 			if fm, ok := final.(watch.Model); ok && fm.HasPlan() {
-				iostream.FromCmd(cmd).ErrPrintln("Plans and saved comments remain in Factory. Reopen them with chunk watch; local chat and unsent input are not kept after quitting.")
+				iostream.FromCmd(cmd).ErrPrintln("Plans and saved comments remain in Factory. Reopen them with chunk watch; local activity and unsent input are not kept after quitting.")
 			}
 			return nil
 		},
@@ -218,7 +218,7 @@ func (d *watchPlans) plan(ctx context.Context, root, id string) (plan.Agent, pla
 
 func watchPlanProject(ctx context.Context, root string) error {
 	if root == "" {
-		return errors.New("open chunk watch in this plan's local repository to chat or build")
+		return errors.New("open chunk watch in this plan's local repository to plan or build")
 	}
 	return checkPlanProject(ctx, root)
 }

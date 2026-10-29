@@ -12,11 +12,14 @@ import (
 type fakeAgent struct {
 	// reply is what each message is answered with, if anything.
 	reply func(message string) []Event
-	// err fails every Send.
+	// err fails every Request.
 	err error
+	// resumeErr fails every Resume.
+	resumeErr error
 
 	mu      sync.Mutex
 	sent    []string
+	resumes int
 	pending []Event
 	closed  chan Event
 }
@@ -27,23 +30,36 @@ func newFakeAgent() *fakeAgent {
 	return &fakeAgent{closed: closed}
 }
 
-func (a *fakeAgent) Send(_ context.Context, message string) error {
+func (a *fakeAgent) Request(_ context.Context, message string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.sent = append(a.sent, message)
 	if a.err != nil {
 		return a.err
 	}
-	a.sent = append(a.sent, message)
 	if a.reply != nil {
 		a.pending = append(a.pending, a.reply(message)...)
 	}
 	return nil
 }
 
+func (a *fakeAgent) Resume(context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.resumes++
+	return a.resumeErr
+}
+
+func (a *fakeAgent) Resumes() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.resumes
+}
+
 // Events is closed, so the screen's wait on it ends at once.
 func (a *fakeAgent) Events() <-chan Event { return a.closed }
 
-// Sent is every message sent so far.
+// Sent is every request made so far, failed ones too.
 func (a *fakeAgent) Sent() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()

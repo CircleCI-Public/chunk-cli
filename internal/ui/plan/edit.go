@@ -202,6 +202,5 @@ func (m *Model) queueRereadNote(block int, text string) {
 		}
 	}
 	m.comments = append(m.comments, comment{block: block, span: 1, quote: quote, text: rereadNote})
-	m.syncPlaceholder()
 	m.renderChat()
 }

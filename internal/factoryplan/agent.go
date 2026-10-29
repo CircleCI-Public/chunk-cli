@@ -145,11 +145,6 @@ func (p *Agent) Request(ctx context.Context, text string) error {
 // session holds the claim, or while the holder can't be read.
 func (p *Agent) Resume(ctx context.Context) error { return p.send(ctx, "") }
 
-// Send delivers message to the session.
-//
-// Deprecated: use Request or Resume.
-func (p *Agent) Send(ctx context.Context, message string) error { return p.send(ctx, message) }
-
 // send delivers request to the session, starting it on the first message and
 // resuming it if it has ended; a request of "" is a resume. What is sent
 // tells the agent to claim the plan when it is the first since the plan was

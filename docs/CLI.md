@@ -232,7 +232,7 @@ chunk
   `ctrl+u`/`ctrl+d` page by half. `enter` goes in or confirms and `esc` goes
   back one level, cancelling a comment or prompt first when there is one, and
   leaves from the top; where leaving would drop unsent
-  comments or a message it asks first. `q` quits wherever no text is being
+  comments or a request it asks first. `q` quits wherever no text is being
   typed and `ctrl+c` always quits. A lowercase key is the common action and its
   capital the bigger one (`n` and `N` go to the next and previous comment). Plain letters are never actions while a text
   box has focus. Footer hints read `key action`, in lowercase.
@@ -304,33 +304,41 @@ chunk
   strip under the header shows the plan's step (`Planning › Building › Integrating › Done`), what is
   happening now (the factory task and its unit) and what comes next
   (`Next: you approve the plan · ctrl+s`, `Next: chunk: build-unit`,
-  `Waiting on <blocker>`). The chat is on the left. The right has two tabs:
+  `Waiting on <blocker>`). The left pane is the planning session's activity.
+  The right has two tabs:
   **Plan**, the plan rendered as markdown, and **Flow**, which shows progress
   (each unit ✓ done, ▸ being built, ○ to do, or for a plan with sub-plans its
   open sub-plans), the pull request and its deviations, and related plans
   (parent, sub-plans, blockers). With the right pane focused, `←` and `→`
   switch tabs. The screen opens on Plan while the plan is being planned and on
-  Flow once it is building. The first message creates the plan
-  in factory, named by Claude for what the message asks for, as a 2-3 word
+  Flow once it is building. The left pane is always titled Activity: for a
+  new plan it holds the request input until the plan is created, then it is
+  read-only activity. The request you type for a new plan (or the one passed as
+  `chunk factory plan "<request>"`) creates it
+  in factory, named by Claude for what the request asks for, as a 2-3 word
   slug (`dry-run-flag`), or for a slug of its first line (`add-a-dry-run-flag`)
   when Claude cannot name it,
   and starts one long-lived Claude Code session with factory's f
   plugin, which claims the plan and plans it through the factory daemon's
   tasks. The screen refreshes the plan's text, state and comments every 5s;
-  the plan's state is in the status strip. Messages go to the session at
-  once, even while it works. While it works on a factory task rather than on
-  a message, the chat names the task, as the plan's flow in factory names it,
+  the plan's state is in the status strip. Nothing typed after the request
+  reaches the session; it works through factory's tasks. The activity pane
+  names the task each turn is on, as the plan's flow in factory names it,
   in sentence case (`Early plan` for `early-plan`), and the reply is marked
   with it (`chunk · Early plan`). It needs factory, the f plugin, and the
   factory daemon running with `FACTORY_PLAN_STORE=circleci` as the CircleCI
   user chunk is signed in as; it checks the daemon before it opens, and says in
-  the chat if the session could not claim the plan. A session that ends is
-  resumed by the next message, and told to claim the plan again, as is one
-  factory says no longer holds it. Closing the screen stops the session,
+  the activity pane if the session could not claim the plan. While the plan
+  is in Planning (or Unprioritized, where factory starts a new plan) and
+  factory has a task for a session no one is running, the screen resumes the
+  session on its own and tells it to claim the plan again, with none of the
+  developer's words; it tries once per flow state, and never for a plan past
+  Planning. A new plan's request that could not start the session is kept,
+  and sent in place of that claim. Closing the screen stops the session,
   which frees its claim. A plan opened again in a later screen picks up the
   conversation that planned it, rather than starting a blank one. One chunk
   at a time plans a plan: another that opens it can read it and comment, but
-  is refused when it sends a message.
+  does not start a second session.
 
   The session works in a worktree of the plan's own rather than the
   developer's checkout, since that is where the plan is built once it
@@ -344,17 +352,15 @@ chunk
   queues it and `shift+enter`/`ctrl+j` adds a line. `shift+↑/↓` (or `K`/`J`)
   selects a run of parts for one comment, which hangs under the last of them;
   a selection that touches a comment takes in all of it, and its text, and
-  `esc` clears a selection. Sending (`enter` in the chat, or `s` in the plan,
-  which leaves a half-written message in the chat) saves the queued comments
-  to factory and hands them to the session to address; they never go in a
-  chat message. Comments are sent only when factory is ready to take them:
-  while factory works on the plan they stay queued, a message sent with them
-  goes on alone, and `s` is not offered. Once comments are handed off, the
+  `esc` clears a selection. Queued comments wait in the activity pane, marked
+  `queued · press enter or s to send`. Sending (`enter` in the activity pane,
+  or `s` in the plan) saves the queued comments
+  to factory and hands them to the session to address. Comments are sent
+  only when factory is ready to take them:
+  while factory works on the plan they stay queued, and `s` is not offered. Once comments are handed off, the
   action bar turns purple and says the screen is waiting for factory, until a
   refresh finds the plan has moved; comments queued meanwhile are held, and
-  after 15 seconds the bar says how long it has waited. While the plan waits
-  in a Human state, a
-  message gets an answer but only comments change the plan. While comments
+  after 15 seconds the bar says how long it has waited. While comments
   are saved they cannot be changed. A saved comment is edited at once with
   `c`, resolved with `r` and deleted with `d` (after a `y`); resolved ones are
   listed last. A comment on a part since rewritten is listed after the plan,
@@ -366,8 +372,9 @@ chunk
   developer, the same time comments are sent; at any other time the status
   bar says so and no editor opens. If the plan changed while the editor was
   open, nothing is saved and the edit is kept in the temporary file the status
-  names. A saved edit is told to the planning session in a chat message, so it
-  reads the plan again before it goes on. Comments on an edited part follow
+  names. A saved edit queues a comment on the edited part asking the planning
+  session to re-read it, unless one is queued there already; it is sent with
+  the other comments, and can be deleted before then. Comments on an edited part follow
   it, or are listed after the plan as for any part rewritten.
 
   `ctrl+s` approves the plan, after a `y`, once factory's review of it has
@@ -412,7 +419,8 @@ chunk
   Approving a plan with units has the chunk daemon build it, in a Claude Code
   session in the plan's worktree, through to a pull request. In `chunk watch`,
   the screen stays open after approval, on the Flow tab, to follow the build.
-  Its chat closes, because the planning session has stopped. `enter` on a
+  Its comments can no longer be sent, because the planning session has
+  stopped. `enter` on a
   related plan in the Flow tab opens it. The standalone `chunk factory plan`
   closes on approval. Approving frees the plan's claim from a session that
   is only planning it, a parent plan's included; while a build holds the claim,
@@ -460,17 +468,18 @@ chunk
   unavailable` under it. `Enter` opens the `chunk factory plan` screen on the
   selected flow's plan, and `n` on a new one, to plan the change with Claude
   before it is built. `q` or `esc` quits. Opening a plan only reads it: no session claims it
-  until a message is sent, and then in the project the dashboard was opened
+  until you send a new plan's request, or the screen resumes a planner factory
+  is waiting on, and then in the project the dashboard was opened
   in, since factory does not record a plan's repository; a plan another
   session holds is refused rather than taken over. `esc` or `ctrl+c` goes back
   to the plans with the plan and its session kept; `ctrl+p` does too, to
-  switch to another plan. Each opened plan keeps its own chat, unsent message
-  and session. An approved plan's screen stays open on its Flow tab, which
-  follows the build from factory. Quitting with a message unsent in any plan
-  asks for a second `ctrl+c`; plans and saved comments stay in factory, and
-  each plan's session keeps its conversation for the next time the plan is
-  opened, but the chat shown and unsent messages are not kept. Closing the
-  dashboard stops every planning session, not a build.
+  switch to another plan. Each opened plan keeps its own activity and
+  session. An approved plan's screen stays open on its Flow tab, which
+  follows the build from factory. Quitting with a request or comments unsent
+  in any plan asks for a second `ctrl+c`; plans and saved comments stay in
+  factory, and each plan's session keeps its conversation for the next time
+  the plan is opened, but the activity shown and an unsent request are not
+  kept. Closing the dashboard stops every planning session, not a build.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It checks the daemon answers every 5 seconds. Running `watch` in a project also registers that project so the daemon finds it.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a
