@@ -401,6 +401,16 @@ type Model struct {
 	// screen stays open; its comments are no longer sent.
 	built bool
 
+	// build reads the plan's build from the daemon; nil when the host has none.
+	build Build
+	// builds is each build session read, oldest first; reading is whether a
+	// read is out or its tick is set, so only one loop runs.
+	builds  []buildRun
+	reading bool
+	// buildMissing is that the last read found no build; buildErr that it failed.
+	buildMissing bool
+	buildErr     string
+
 	pending string
 	// lastClick is the plan block last clicked, to tell a double click.
 	lastClick *lastClick
@@ -568,7 +578,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case refreshedMsg:
 		m = m.applyRefresh(msg)
-		return m.resumeIfOwed()
+		var resume, follow tea.Cmd
+		m, resume = m.resumeIfOwed()
+		m, follow = m.followBuild()
+		return m, tea.Batch(resume, follow)
+
+	case buildTickMsg, buildReadMsg:
+		return m.updateBuild(msg)
 
 	case familiedMsg:
 		m.family, m.familyErr = msg.family, msg.err
@@ -703,7 +719,7 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 // spinning is whether something the spinner shows is under way: the agent's
 // turn, an approval or event not yet answered, or the wait for factory.
 func (m Model) spinning() bool {
-	return m.busy || m.approving || m.approvingDesign || m.resolvingConflicts || m.moving != nil
+	return m.busy || m.approving || m.approvingDesign || m.resolvingConflicts || m.moving != nil || m.buildRunning()
 }
 
 // awaitingStatus is whether the status bar holds something still under way
@@ -1236,9 +1252,12 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		m.built, m.tab, m.tabChosen = true, tabFlow, true
 		m.status = "Approved · building as run " + msg.buildID
+		var follow tea.Cmd
+		m, follow = m.followBuild()
 		return m, tea.Batch(
 			func() tea.Msg { return BuildingMsg{BuildID: msg.buildID} },
 			refreshCmd(m.ctx, m.store),
+			follow,
 		)
 	}
 	return m, nil
@@ -1570,6 +1589,9 @@ func (m *Model) renderChat() {
 	}
 	if m.busy {
 		b.WriteString(m.activityLog(w))
+	}
+	if m.showsBuild() {
+		b.WriteString(m.buildSection(w))
 	}
 	// The chat follows what is added to it unless the developer has
 	// scrolled up to read, when it stays where they are.

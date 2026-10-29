@@ -74,7 +74,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg:
+	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
