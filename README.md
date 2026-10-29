@@ -1,5 +1,7 @@
 # chunk
 
+<!-- This README is the entry point for the chunk CLI; see docs/ for details. -->
+
 CLI for [Chunk](https://chunk.ai/) — inner loop validation for software teams building with AI agents.
 
 **Chunk sidecars** are lightweight microVM environments that run alongside your AI agent and validate changes in the inner loop, before they reach CI.
