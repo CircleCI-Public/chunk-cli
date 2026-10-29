@@ -16,7 +16,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/factoryplan"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -223,7 +222,7 @@ func watchPlanProject(ctx context.Context, root string) error {
 	if root == "" {
 		return errors.New("open chunk watch in this plan's local repository to chat or build")
 	}
-	return checkFactoryProject(ctx, root)
+	return checkPlanProject(ctx, root)
 }
 
 // listFactoryFlows is the caller's open flows, for the flow list.
@@ -299,22 +298,6 @@ func watchFactoryProblem(err error) error {
 		return errors.New("the factory daemon is not running; run `factory daemon` with FACTORY_PLAN_STORE=circleci to plan")
 	}
 	return err
-}
-
-// checkFactoryProject checks what `chunk factory build` checks before it
-// starts a run in root, as one sentence for the dashboard.
-func checkFactoryProject(ctx context.Context, root string) error {
-	if _, err := gitremote.URL(ctx, root, "origin"); err != nil {
-		return errors.New("this project has no git remote named origin; add one with git remote add origin <url>")
-	}
-	cfg, err := config.LoadProjectConfig(root)
-	if err != nil {
-		return errors.New(dashboardMessage(&userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err}))
-	}
-	if _, _, err := factoryChecks(root, "", cfg, false); err != nil {
-		return errors.New(dashboardMessage(err))
-	}
-	return nil
 }
 
 // dashboardMessage is err as the dashboard shows it: a user error's message

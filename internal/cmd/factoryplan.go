@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -17,8 +18,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/factoryplan"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
@@ -62,7 +65,7 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 			if err != nil {
 				return err
 			}
-			if err := checkFactoryProject(ctx, root); err != nil {
+			if err := checkPlanProject(ctx, root); err != nil {
 				return err
 			}
 			api, err := factoryPlanClient()
@@ -103,6 +106,75 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 
 	cmd.Flags().StringVar(&model, "model", "", "model Claude plans and builds with (default: your Claude Code default)")
 	return cmd
+}
+
+// requireLocalDaemon refuses to run when the environment points at a remote
+// daemon. A plan works from files on this machine, so it belongs to the local
+// daemon; a remote daemon would be working on a different checkout.
+func requireLocalDaemon() error {
+	if chunkd.CurrentConnection().Remote == "" {
+		return nil
+	}
+	return newUserError("chunk factory plan works from this machine's files, on the local chunk daemon.").
+		withCode("command.invalid_args").
+		withSuggestion("Unset CHUNK_DAEMON_REMOTE_ADDR to use this command.").
+		withExitCode(ExitBadArgs).
+		withoutDetail()
+}
+
+// sessionProjectRoot names the project to work on: the git repository
+// containing the working directory.
+func sessionProjectRoot(ctx context.Context) (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("determine working directory: %w", err)
+	}
+	top := gitutil.TopLevelCtx(ctx, dir)
+	if top == "" {
+		return "", newUserError(fmt.Sprintf("%s is not inside a git repository.", dir)).
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	// The sandbox pool works out which repository to clone from the origin
+	// remote. Without one it fails deep inside pool setup with a git exit code,
+	// so say so here, before anything is started.
+	if _, err := gitremote.URL(ctx, top, "origin"); err != nil {
+		return "", newUserError("This project has no git remote named origin.").
+			withSuggestion("Add one with: git remote add origin <url>").
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			wrap(err)
+	}
+	// The daemon adopts a project it has not seen when asked to work on it, so
+	// there is nothing to register here.
+	return config.CanonicalProjectRoot(top), nil
+}
+
+// checkPlanProject checks that a plan's build can start in root, as one
+// sentence for the dashboard: root has an origin to push to, and a config
+// with validation commands, review prompts in review.DefaultDir, or both, to
+// check the build with.
+func checkPlanProject(ctx context.Context, root string) error {
+	if _, err := gitremote.URL(ctx, root, "origin"); err != nil {
+		return errors.New("this project has no git remote named origin; add one with git remote add origin <url>")
+	}
+	cfg, err := config.LoadProjectConfig(root)
+	if err != nil {
+		return errors.New(dashboardMessage(&userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err}))
+	}
+	dir := filepath.Join(root, review.DefaultDir)
+	_, _, err = factory.LoadChecks(dir, true, cfg, false)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, factory.ErrNothingToCheck):
+		return errors.New(dashboardMessage(&userError{
+			msg:        "Nothing for factory to check a plan's build with.",
+			suggestion: fmt.Sprintf("Add one .md or .txt file per review to %s, or add validation commands with 'chunk init'.", review.DefaultDir),
+		}))
+	}
+	return errors.New(dashboardMessage(&userError{msg: fmt.Sprintf("Could not read review prompts from %s.", dir), err: err}))
 }
 
 // factoryPlanClient resolves the CircleCI client the planning screen's store

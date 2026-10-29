@@ -899,7 +899,7 @@ func newSidecarSnapshotCreateCmd() *cobra.Command {
 		Long: `Create a snapshot of a sidecar and delete the source sidecar.
 
 The snapshot is recorded as validation.sidecarImage in .chunk/config.json, so
-chunk validate and chunk factory start their sidecars from it. When the project
+chunk validate and factory's build sidecars start from it. When the project
 already has a different image recorded, you are asked before it is replaced;
 without a terminal it is kept. --skip-config leaves the config alone.
 
