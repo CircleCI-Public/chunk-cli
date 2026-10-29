@@ -72,6 +72,7 @@ type Model struct {
 	planCtx                    context.Context
 	planOpening                bool
 	planner                    PlanOpener
+	builds                     plan.Build
 	planScreen                 *plan.Model
 	planOpen                   bool
 	planWorkspaces             map[uint64]*planWorkspace

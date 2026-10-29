@@ -9,9 +9,11 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
 // watchProject is the git top level chunk watch was opened under, canonical
@@ -124,4 +126,89 @@ func TestPlanParents(t *testing.T) {
 	got := planParents(plans)
 
 	assert.Check(t, cmp.DeepEqual(got, map[string]string{"c1": "p1", "c2": "p1"}))
+}
+
+func TestPlanBuildLevel(t *testing.T) {
+	for _, tc := range []struct {
+		in   chunkd.FeedLevel
+		want plan.BuildLevel
+	}{
+		{
+			in:   chunkd.FeedInfo,
+			want: plan.BuildInfo,
+		},
+		{
+			in:   chunkd.FeedStep,
+			want: plan.BuildStep,
+		},
+		{
+			in:   chunkd.FeedDone,
+			want: plan.BuildStep,
+		},
+		{
+			in:   chunkd.FeedWarn,
+			want: plan.BuildWarn,
+		},
+		{
+			in:   chunkd.FeedError,
+			want: plan.BuildError,
+		},
+		{
+			in:   chunkd.FeedLevel("shout"),
+			want: plan.BuildInfo,
+		},
+	} {
+		assert.Check(t, cmp.Equal(planBuildLevel(tc.in), tc.want), string(tc.in))
+	}
+}
+
+func TestPlanBuildActivity(t *testing.T) {
+	lines := []chunkd.FeedLine{
+		{Level: chunkd.FeedStep, Text: "Building plan p in /src"},
+		{Level: chunkd.FeedInfo, Text: "Read main.go"},
+	}
+	want := []plan.BuildLine{
+		{Level: plan.BuildStep, Text: "Building plan p in /src"},
+		{Level: plan.BuildInfo, Text: "Read main.go"},
+	}
+	for _, tc := range []struct {
+		name  string
+		in    chunkd.PlanBuildActivity
+		found bool
+		want  plan.BuildActivity
+	}{
+		{
+			name:  "running",
+			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionRunning, First: 3, Lines: lines, Total: 5},
+			found: true,
+			want:  plan.BuildActivity{Found: true, ID: "s1", Running: true, First: 3, Lines: want, Total: 5},
+		},
+		{
+			name:  "failed",
+			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionFailed, Error: "boom", Total: 2},
+			found: true,
+			want:  plan.BuildActivity{Found: true, ID: "s1", Failed: "boom", Total: 2},
+		},
+		{
+			name:  "done",
+			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionDone, Lines: lines, Total: 2},
+			found: true,
+			want:  plan.BuildActivity{Found: true, ID: "s1", Lines: want, Total: 2},
+		},
+		{
+			name:  "cancelled",
+			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionCancelled, Error: "stopped", Total: 2},
+			found: true,
+			want:  plan.BuildActivity{Found: true, ID: "s1", Total: 2},
+		},
+		{
+			name: "not found",
+			in:   chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionRunning, Lines: lines, Total: 2},
+			want: plan.BuildActivity{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.DeepEqual(planBuildFrom(tc.in, tc.found), tc.want))
+		})
+	}
 }

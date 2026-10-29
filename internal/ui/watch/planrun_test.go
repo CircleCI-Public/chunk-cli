@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -22,21 +23,31 @@ import (
 // when there is one, and approving records that it was. The store's text is
 // plan throughout.
 type fakePlans struct {
-	root    string
-	err     error
-	reply   string
-	plan    string
-	title   string
+	root  string
+	err   error
+	reply string
+	plan  string
+	title string
+	// newID is the ID factory gives a new plan as it is created; "" leaves
+	// it with none.
+	newID   string
 	release chan struct{}
 	sent    bool
 }
 
 // fakePlanStore is a plan.Store whose text never changes; these tests do not
 // exercise polling or comments.
-type fakePlanStore struct{ text, id, title string }
+// A new plan's store takes newID as its ID on Create, when there is one.
+type fakePlanStore struct{ text, id, newID, title string }
 
-func (f *fakePlanStore) ID() string                                     { return f.id }
-func (f *fakePlanStore) Create(context.Context, string) (string, error) { return f.title, nil }
+func (f *fakePlanStore) ID() string { return f.id }
+
+func (f *fakePlanStore) Create(context.Context, string) (string, error) {
+	if f.id == "" {
+		f.id = f.newID
+	}
+	return f.title, nil
+}
 func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 	return plan.Flow{State: plan.ReadyState, Events: []string{"address-comments", "approve-for-units", "approve-for-building"}}, nil
 }
@@ -58,6 +69,26 @@ func (f *fakePlanStore) AddComment(context.Context, string, string) (plan.Commen
 func (f *fakePlanStore) EditComment(context.Context, string, string) error { return nil }
 func (f *fakePlanStore) ResolveComment(context.Context, string) error      { return nil }
 func (f *fakePlanStore) DeleteComment(context.Context, string) error       { return nil }
+
+// fakePlanBuilds is a plan.Build that records the plans it is asked for, and
+// answers each with a running build.
+type fakePlanBuilds struct {
+	mu    sync.Mutex
+	asked []string
+}
+
+func (b *fakePlanBuilds) Activity(_ context.Context, planID string, _ int) (plan.BuildActivity, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.asked = append(b.asked, planID)
+	return plan.BuildActivity{Found: true, ID: "build-1", Running: true}, nil
+}
+
+func (b *fakePlanBuilds) planIDs() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.asked...)
+}
 
 // fakePlanAgent is a plan.Agent that answers the request with its
 // fakePlans' reply.
@@ -93,7 +124,7 @@ func (f *fakePlans) planner(_ context.Context, root, id string) (plan.Agent, pla
 		f.sent = true
 		return "build-1", nil
 	}
-	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id, title: f.title}, nil
+	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id, newID: f.newID, title: f.title}, nil
 }
 
 // flowList is a flow list of flows, each previewed as its title.
@@ -282,10 +313,23 @@ func TestArrowsReachTheOpenFlowScreen(t *testing.T) {
 }
 
 // Approving keeps the plan screen open on its Flow tab, which follows the
-// build.
+// build, and reads that build from the daemon when watch gives it one.
 func TestApprovingThePlanKeepsItsScreen(t *testing.T) {
-	f := &fakePlans{reply: "ok", plan: "# The plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
-	m := openPlanScreen(t, planModel(t, f))
+	for _, withBuilds := range []bool{true, false} {
+		t.Run(map[bool]string{true: "with builds", false: "without builds"}[withBuilds], func(t *testing.T) {
+			testApprovingThePlanKeepsItsScreen(t, withBuilds)
+		})
+	}
+}
+
+func testApprovingThePlanKeepsItsScreen(t *testing.T, withBuilds bool) {
+	f := &fakePlans{reply: "ok", newID: "plan-1", plan: "# The plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
+	builds := &fakePlanBuilds{}
+	m := planModel(t, f)
+	if withBuilds {
+		m = m.WithPlanBuilds(builds)
+	}
+	m = openPlanScreen(t, m)
 	m = typeInto(m, "add a flag")
 	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = deliverThen(t, m, cmd, 1)                                   // the plan is created, then the message sent
@@ -301,11 +345,18 @@ func TestApprovingThePlanKeepsItsScreen(t *testing.T) {
 	// The screen answers with BuildingMsg, and a refresh, as workspaceMsgs.
 	m = deliver(t, next.(Model), buildingCmd)
 	assert.Assert(t, f.sent, "the plan was not approved")
+	// The refresh after approval reads the build if the approval did not.
+	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
 
 	assert.Check(t, m.planOpen && m.HasPlan(), "an approved plan's screen stays open")
 	out := screen(m)
 	assert.Check(t, cmp.Contains(out, "Approved · building as run build-1"))
 	assert.Check(t, !strings.Contains(out, "Runs"), "the screen names Runs:\n%s", out)
+	if withBuilds {
+		assert.Check(t, cmp.DeepEqual(builds.planIDs(), []string{"plan-1"}))
+	} else {
+		assert.Check(t, cmp.Len(builds.planIDs(), 0))
+	}
 }
 
 // A ClosedMsg for an approved plan goes back to Flows, as one for a plan

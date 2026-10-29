@@ -64,6 +64,13 @@ func (m Model) WithPlans(ctx context.Context, root string, open PlanOpener) Mode
 	return m
 }
 
+// WithPlanBuilds returns a copy of m whose flow screens show their plan's
+// build, read from b.
+func (m Model) WithPlanBuilds(b plan.Build) Model {
+	m.builds = b
+	return m
+}
+
 // WithFlowList adds the flow list, the dashboard's first screen.
 func (m Model) WithFlowList(flows flowlist.Model) Model {
 	m.flows, m.flowsOpen = &flows, true
@@ -105,7 +112,8 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	m.note = ""
 	branch, _ := gitutil.CurrentBranchIn(msg.root)
 	screen := plan.New(m.planCtx, msg.agent, msg.approve, msg.store, "").
-		WithTerminal(m.hasDarkBG, m.superEnter).WithBranch(branch).WithInbox(msg.title, msg.root)
+		WithTerminal(m.hasDarkBG, m.superEnter).WithBranch(branch).WithInbox(msg.title, msg.root).
+		WithBuild(m.builds)
 	screen, cmd := screen.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 	m.planSeq++
 	ws := &planWorkspace{screen: screen, store: msg.store, root: msg.root}

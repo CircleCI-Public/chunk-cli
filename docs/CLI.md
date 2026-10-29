@@ -313,7 +313,10 @@ chunk
   switch tabs. The screen opens on Plan while the plan is being planned and on
   Flow once it is building. The left pane is always titled Activity: for a
   new plan it holds the request input until the plan is created, then it is
-  read-only activity. The request you type for a new plan (or the one passed as
+  read-only activity. Once the plan is being built, the activity pane also
+  shows the build session's progress from this machine's chunk daemon, under
+  a Building divider: each tool call, reply and note, including a warning
+  when another session holds the plan's claim. The request you type for a new plan (or the one passed as
   `chunk factory plan "<request>"`) creates it
   in factory, named by Claude for what the request asks for, as a 2-3 word
   slug (`dry-run-flag`), or for a slug of its first line (`add-a-dry-run-flag`)
@@ -418,7 +421,8 @@ chunk
 
   Approving a plan with units has the chunk daemon build it, in a Claude Code
   session in the plan's worktree, through to a pull request. In `chunk watch`,
-  the screen stays open after approval, on the Flow tab, to follow the build.
+  the screen stays open after approval, on the Flow tab, to follow the build;
+  the activity pane shows what the build session is doing.
   Its comments can no longer be sent, because the planning session has
   stopped. `enter` on a
   related plan in the Flow tab opens it. The standalone `chunk factory plan`
