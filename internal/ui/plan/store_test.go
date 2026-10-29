@@ -41,6 +41,9 @@ type fakeStore struct {
 	// call, in order. Like factory, which moves the plan at its next poll,
 	// AddressComments leaves StateV as it is.
 	HandedOff []string
+	// Answered records the state the plan was in at each AnswerOpenQuestions
+	// call, in order. Like AddressComments, it leaves StateV as it is.
+	Answered []string
 	// ConflictsSent records the state the plan was in at each
 	// ResolveConflicts call, in order.
 	ConflictsSent []string
@@ -141,6 +144,16 @@ func (f *fakeStore) AddressComments(context.Context) error {
 		return f.AddressErr
 	}
 	f.HandedOff = append(f.HandedOff, f.StateV)
+	return nil
+}
+
+func (f *fakeStore) AnswerOpenQuestions(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.AddressErr != nil {
+		return f.AddressErr
+	}
+	f.Answered = append(f.Answered, f.StateV)
 	return nil
 }
 

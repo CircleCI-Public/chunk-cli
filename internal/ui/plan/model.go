@@ -863,7 +863,7 @@ func (m Model) deliver(text string) (Model, tea.Cmd) {
 	m.savingComments = true
 	m.pendingText = text
 	m.status = ""
-	return m, saveQueued(m.ctx, m.store, queued, m.takesComments())
+	return m, saveQueued(m.ctx, m.store, queued, m.handOffEvent())
 }
 
 // answerYes does what the question in the status bar asked, now it has been

@@ -76,6 +76,11 @@ type Store interface {
 	// from a Human state to its phase's Agent state. Factory moves it at
 	// its next poll, not before AddressComments returns.
 	AddressComments(ctx context.Context) error
+	// AnswerOpenQuestions has factory take up the plan's comments, as
+	// AddressComments does, for a plan whose flow lists answer-open-questions
+	// in its place. Factory moves it at its next poll, not before
+	// AnswerOpenQuestions returns.
+	AnswerOpenQuestions(ctx context.Context) error
 	// ResolveConflicts has factory rebase the plan's conflicting PR, moving
 	// it from Integrating - Human to Integrating - Agent. Factory moves it at
 	// its next poll, not before ResolveConflicts returns.

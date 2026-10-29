@@ -45,15 +45,36 @@ func (m Model) openComments() int {
 	return n
 }
 
-// addressComments is factory's event that has it take up the plan's
-// comments.
-const addressComments = "address-comments"
+// addressComments and answerOpenQuestions are factory's events that have it
+// take up the plan's comments: answerOpenQuestions in place of
+// addressComments for a plan with open questions.
+const (
+	addressComments     = "address-comments"
+	answerOpenQuestions = "answer-open-questions"
+)
+
+// handOffEvent is the event that hands the queued comments to factory, as
+// the flow lists it: answer-open-questions over address-comments, or "" for
+// neither.
+func (m Model) handOffEvent() string {
+	return handOffEventOf(m.events)
+}
+
+// handOffEventOf is handOffEvent for the events a flow lists.
+func handOffEventOf(events []string) string {
+	for _, e := range []string{answerOpenQuestions, addressComments} {
+		if slices.Contains(events, e) {
+			return e
+		}
+	}
+	return ""
+}
 
 // takesComments is whether a send hands the queued comments to factory now:
-// the flow lists address-comments, and no earlier event is still waiting for
-// factory to apply it.
+// the flow lists an event that takes them, and no earlier event is still
+// waiting for factory to apply it.
 func (m Model) takesComments() bool {
-	return m.moving == nil && slices.Contains(m.events, addressComments)
+	return m.moving == nil && m.handOffEvent() != ""
 }
 
 // resolveConflicts is factory's event that has it rebase the plan's PR.
@@ -293,10 +314,10 @@ func (m *Model) widen(lo, hi int) (int, int, []int) {
 }
 
 // saveQueued saves the queued comments in order, deleting the saved comments
-// each replaces once it is saved, then, when handOff, has factory take them
-// up. It stops at the first failure; saved is how many were saved, so the
-// rest stay queued.
-func saveQueued(ctx context.Context, s Store, queued []comment, handOff bool) tea.Cmd {
+// each replaces once it is saved, then has factory take them up with event,
+// answer-open-questions or address-comments; "" saves them only. It stops at
+// the first failure; saved is how many were saved, so the rest stay queued.
+func saveQueued(ctx context.Context, s Store, queued []comment, event string) tea.Cmd {
 	return func() tea.Msg {
 		for i, c := range queued {
 			if _, err := s.AddComment(ctx, c.quote, c.text); err != nil {
@@ -308,10 +329,14 @@ func saveQueued(ctx context.Context, s Store, queued []comment, handOff bool) te
 				}
 			}
 		}
-		if !handOff {
+		if event == "" {
 			return queueSavedMsg{saved: len(queued)}
 		}
-		if err := s.AddressComments(ctx); err != nil {
+		send := s.AddressComments
+		if event == answerOpenQuestions {
+			send = s.AnswerOpenQuestions
+		}
+		if err := send(ctx); err != nil {
 			return queueSavedMsg{saved: len(queued), handOff: true, err: fmt.Errorf("hand the comments to factory: %w", err)}
 		}
 		return queueSavedMsg{saved: len(queued), handOff: true, handedOff: true}

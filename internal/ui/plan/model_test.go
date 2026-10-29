@@ -2936,58 +2936,89 @@ func TestCommentsFollowTheFlowsEventsNotItsState(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Agent"}))
 }
 
-// TestHandOffRetriedOnNextSendWithNothingQueued checks that an
-// address-comments event failing after every comment was saved is retried on
-// the next send, even with nothing queued, rather than leaving the plan stuck
-// in its Human state.
+// TestHandOffRetriedOnNextSendWithNothingQueued checks that a hand-off event
+// failing after every comment was saved is retried on the next send, even
+// with nothing queued, rather than leaving the plan stuck in its Human state,
+// and that the retry sends the event the flow lists then.
 func TestHandOffRetriedOnNextSendWithNothingQueued(t *testing.T) {
-	store := newFakeStore()
-	store.TextV = twoParts
-	store.AddressErr = errors.New("transient")
-	agent := turnReturning("ok")
-	m := New(context.Background(), agent, nil, store, "plan it")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	agent.reset()
+	for _, tc := range []struct {
+		name      string
+		first     []string
+		retry     []string
+		handedOff []string
+		answered  []string
+	}{
+		{
+			name:      "address-comments",
+			first:     []string{"address-comments"},
+			retry:     []string{"address-comments"},
+			handedOff: []string{"Planning - Human"},
+		},
+		{
+			name:     "to answer-open-questions",
+			first:    []string{"address-comments"},
+			retry:    []string{"answer-open-questions"},
+			answered: []string{"Planning - Human"},
+		},
+		{
+			name:      "to address-comments",
+			first:     []string{"answer-open-questions"},
+			retry:     []string{"address-comments"},
+			handedOff: []string{"Planning - Human"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.TextV = twoParts
+			store.setEvents(tc.first...)
+			store.AddressErr = errors.New("transient")
+			agent := turnReturning("ok")
+			m := New(context.Background(), agent, nil, store, "plan it")
+			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+			agent.reset()
 
-	m = drive(t, m, press("tab"))
-	m = drive(t, m, press("down"))
-	m = drive(t, m, press("c"))
-	m = typeText(t, m, "first")
-	m = drive(t, m, press("enter"))
-	m = drive(t, m, press("tab"))
-	m = typeText(t, m, "go")
-	m = drive(t, m, press("enter"))
+			m = drive(t, m, press("tab"))
+			m = drive(t, m, press("down"))
+			m = drive(t, m, press("c"))
+			m = typeText(t, m, "first")
+			m = drive(t, m, press("enter"))
+			m = drive(t, m, press("tab"))
+			m = typeText(t, m, "go")
+			m = drive(t, m, press("enter"))
 
-	if len(store.Added) != 1 {
-		t.Fatalf("comment not saved: %+v", store.Added)
-	}
-	if len(store.HandedOff) != 0 {
-		t.Fatalf("hand-off should have failed: %+v", store.HandedOff)
-	}
-	if len(agent.Sent()) != 0 {
-		t.Fatalf("a turn started despite the hand-off failing")
-	}
-	if strings.TrimSpace(m.input.Value()) != "go" {
-		t.Errorf("message not kept in the input: %q", m.input.Value())
-	}
-	if len(queuedComments(m.comments)) != 0 {
-		t.Fatalf("the saved comment should not stay queued: %+v", m.comments)
-	}
-	assert.Check(t, m.moving == nil, "a failed event started the wait")
+			if len(store.Added) != 1 {
+				t.Fatalf("comment not saved: %+v", store.Added)
+			}
+			assert.Check(t, cmp.Len(store.HandedOff, 0))
+			assert.Check(t, cmp.Len(store.Answered, 0))
+			if len(agent.Sent()) != 0 {
+				t.Fatalf("a turn started despite the hand-off failing")
+			}
+			if strings.TrimSpace(m.input.Value()) != "go" {
+				t.Errorf("message not kept in the input: %q", m.input.Value())
+			}
+			if len(queuedComments(m.comments)) != 0 {
+				t.Fatalf("the saved comment should not stay queued: %+v", m.comments)
+			}
+			assert.Check(t, m.moving == nil, "a failed event started the wait")
 
-	store.AddressErr = nil
-	m = drive(t, m, press("enter"))
+			store.AddressErr = nil
+			store.setEvents(tc.retry...)
+			// The retry reads m.events: poll so it sees tc.retry.
+			m = drive(t, m, pollMsg{})
+			m = drive(t, m, press("enter"))
 
-	if len(store.HandedOff) != 1 || store.HandedOff[0] != "Planning - Human" {
-		t.Fatalf("hand-off not retried: %+v", store.HandedOff)
+			assert.Check(t, cmp.DeepEqual(store.HandedOff, tc.handedOff))
+			assert.Check(t, cmp.DeepEqual(store.Answered, tc.answered))
+			if len(store.Added) != 1 {
+				t.Fatalf("the already-saved comment was saved again: %+v", store.Added)
+			}
+			if len(agent.Sent()) != 1 {
+				t.Fatalf("turn calls = %d, want 1", len(agent.Sent()))
+			}
+			assert.Check(t, m.moving != nil)
+		})
 	}
-	if len(store.Added) != 1 {
-		t.Fatalf("the already-saved comment was saved again: %+v", store.Added)
-	}
-	if len(agent.Sent()) != 1 {
-		t.Fatalf("turn calls = %d, want 1", len(agent.Sent()))
-	}
-	assert.Check(t, m.moving != nil)
 }
 
 // TestPlainMessageInHumanStateDoesNotHandOff checks that sending an ordinary
@@ -3284,36 +3315,58 @@ func TestDeleteSavedCommentAsksFirst(t *testing.T) {
 	}
 }
 
-// TestSendHandsOffFromEveryHumanState checks that sending comments hands
-// them to factory from each Human state, as factory's address-comments event
-// moves any of them to its phase's Agent state, not just from the Planning
-// state every other hand-off test exercises.
-func TestSendHandsOffFromEveryHumanState(t *testing.T) {
+// TestSendHandsOffWithTheEventTheFlowLists checks that sending comments hands
+// them to factory from each Human state past Planning, with the event the
+// flow lists: answer-open-questions for a plan with open questions, over
+// address-comments when both are listed, and address-comments otherwise.
+func TestSendHandsOffWithTheEventTheFlowLists(t *testing.T) {
 	for _, state := range []string{"Building - Human", "Integrating - Human"} {
-		t.Run(state, func(t *testing.T) {
-			store := newFakeStore()
-			store.TextV = twoParts
-			store.StateV = state
-			m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
-			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+		for _, tc := range []struct {
+			name      string
+			events    []string
+			handedOff []string
+			answered  []string
+		}{
+			{
+				name:      "address-comments",
+				events:    []string{"address-comments", "abandon"},
+				handedOff: []string{state},
+			},
+			{
+				name:     "answer-open-questions",
+				events:   []string{"answer-open-questions", "abandon"},
+				answered: []string{state},
+			},
+			{
+				name:     "both",
+				events:   []string{"answer-open-questions", "address-comments", "abandon"},
+				answered: []string{state},
+			},
+		} {
+			t.Run(state+"/"+tc.name, func(t *testing.T) {
+				store := newFakeStore()
+				store.TextV = twoParts
+				store.StateV = state
+				store.setEvents(tc.events...)
+				m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+				m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 
-			m = drive(t, m, press("tab"))
-			// A plan past Planning opens on the Flow tab.
-			m = drive(t, m, press("right"))
-			m = drive(t, m, press("down"))
-			m = drive(t, m, press("c"))
-			m = typeText(t, m, "first")
-			m = drive(t, m, press("enter"))
-			m = drive(t, m, press("tab"))
-			drive(t, m, press("enter"))
+				m = drive(t, m, press("tab"))
+				// A plan past Planning opens on the Flow tab.
+				m = drive(t, m, press("right"))
+				m = drive(t, m, press("down"))
+				m = drive(t, m, press("c"))
+				m = typeText(t, m, "first")
+				m = drive(t, m, press("enter"))
+				m = drive(t, m, press("tab"))
+				assert.Check(t, cmp.Equal(m.input.Placeholder, commentsPlaceholder))
+				drive(t, m, press("enter"))
 
-			if len(store.Added) != 1 {
-				t.Fatalf("comment not saved: %+v", store.Added)
-			}
-			if len(store.HandedOff) != 1 || store.HandedOff[0] != state {
-				t.Fatalf("handed off: %+v, want [%s]", store.HandedOff, state)
-			}
-		})
+				assert.Check(t, cmp.Len(store.Added, 1))
+				assert.Check(t, cmp.DeepEqual(store.HandedOff, tc.handedOff))
+				assert.Check(t, cmp.DeepEqual(store.Answered, tc.answered))
+			})
+		}
 	}
 }
 
