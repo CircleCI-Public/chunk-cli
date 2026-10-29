@@ -1,11 +1,7 @@
 # chunk-cli review suite
 
-Cases for `chunk factory eval`, taken from this repository's history. Run it
-from a full clone of chunk-cli, since each case's revision must be there:
-
-```bash
-chunk factory eval --suite harness/suites/chunk-cli [prompts-dir]
-```
+Review cases taken from this repository's history. Each case's revision must
+be in the clone that uses them.
 
 Each case is one commit on main, as its patch against its first parent, with
 its commit message as the request.

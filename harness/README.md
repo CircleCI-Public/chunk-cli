@@ -109,12 +109,6 @@ point, not a tuned value: with this few trials one unlucky run moves the rate a 
 `harness/results/` holds every trial and the report; the built `chunk` binary is left out of
 the CI artifact.
 
-`chunk factory eval` (a hidden command, `harness/suites/`) is a separate, smaller check: it
-scores review prompts against past changes whose problems are known, with no implementer. It
-needs no tasks, so it is the cheaper of the two for tuning prompts. `review_eval.py` measures
-noise on correct changes as well, and `factory.py` measures whether the whole loop produces
-correct code.
-
 ## Adaptive experiment (`factory.py adaptive`)
 
 The earlier harness, kept as a mode for exploring profiles on a single prompt. It has no
