@@ -1,13 +1,12 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
@@ -24,60 +23,11 @@ func finish(e *sessionEntry, state chunkd.SessionState) {
 func TestSessionStoreAllowsSessionsSideBySide(t *testing.T) {
 	store := newSessionStore(t.Context())
 
-	first, _, busy := store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
-	assert.Equal(t, busy, "")
+	first, _ := store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
 	assert.Equal(t, len(first.snapshot().Stages), len(newStages()))
 
-	_, _, busy = store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
-	assert.Equal(t, busy, "", "a second run in the same project has its own worktree")
+	store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{}})
 	assert.Equal(t, len(store.forProject("/p")), 2)
-}
-
-func TestSessionStoreRefusesToContinueARunInUse(t *testing.T) {
-	store := newSessionStore(t.Context())
-	const branch = "chunk/factory/add-a-flag/run-1"
-
-	running, _, busy := store.add(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{RunID: "run-1", Branch: branch}})
-	assert.Equal(t, busy, "")
-
-	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
-	assert.Assert(t, strings.Contains(busy, "still working on"), busy)
-
-	finish(running, chunkd.SessionDone)
-	continuing, _, busy := store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
-	assert.Equal(t, busy, "", "an ended run can be continued")
-
-	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
-	assert.Assert(t, strings.Contains(busy, "already starting on"), busy)
-
-	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-9"}}, "chunk/factory/fix-the-typo/run-9")
-	assert.Equal(t, busy, "", "continuing a run on another branch is independent")
-
-	finish(continuing, chunkd.SessionDone)
-	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
-	assert.Equal(t, busy, "", "an ended continuation no longer holds the branch")
-}
-
-// Every run of a chain of continuations works in the first run's worktree, so
-// continuing a later run of the chain is refused while another is going, though
-// the two continue different runs.
-func TestSessionStoreRefusesToContinueAChainInUse(t *testing.T) {
-	store := newSessionStore(t.Context())
-	const branch = "chunk/factory/add-a-flag/run-1"
-
-	// run-2 continued run-1 and ended; run-3 continues run-1 again.
-	second, _, busy := store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
-	assert.Equal(t, busy, "")
-	finish(second, chunkd.SessionDone)
-	third, _, busy := store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-1"}}, branch)
-	assert.Equal(t, busy, "")
-
-	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-2"}}, branch)
-	assert.Assert(t, busy != "", "two runs went in one worktree")
-
-	finish(third, chunkd.SessionDone)
-	_, _, busy = store.addOn(chunkd.Session{ProjectRoot: "/p", Factory: &chunkd.FactoryRun{ContinuesRunID: "run-2"}}, branch)
-	assert.Equal(t, busy, "")
 }
 
 func TestSessionStoreKeepsTheNewestFinishedSessionsNewestFirst(t *testing.T) {
@@ -85,8 +35,7 @@ func TestSessionStoreKeepsTheNewestFinishedSessionsNewestFirst(t *testing.T) {
 
 	var ids []string
 	for range MaxSessionsPerProject + 3 {
-		e, _, busy := store.add(chunkd.Session{ProjectRoot: "/p"})
-		assert.Equal(t, busy, "")
+		e, _ := store.add(chunkd.Session{ProjectRoot: "/p"})
 		ids = append(ids, e.snapshot().ID)
 		finish(e, chunkd.SessionDone)
 	}
@@ -97,41 +46,75 @@ func TestSessionStoreKeepsTheNewestFinishedSessionsNewestFirst(t *testing.T) {
 	assert.Assert(t, store.get(ids[0]) == nil, "the oldest finished session is dropped")
 }
 
-func TestSessionAPIListsGetsAndCancels(t *testing.T) {
-	d := newTestDaemon()
-	mux := http.NewServeMux()
-	registerSessionRoutes(mux, d)
-	srv := httptest.NewServer(mux)
+// The session API serves plan builds only: other factory routes are not
+// found, and a plan build can be stopped and forgotten.
+func TestFactoryRoutes(t *testing.T) {
+	pb := newPlanBuildDaemon(t)
+	sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+	assert.NilError(t, err)
+	srv := httptest.NewServer(newServer(pb.daemon).Handler)
 	t.Cleanup(srv.Close)
 
-	entry, ctx, busy := d.sessions.add(chunkd.Session{ProjectRoot: "/p"})
-	assert.Equal(t, busy, "")
-	id := entry.snapshot().ID
-	// Cancelling cancels the entry's context; settle it as a run would.
-	go func() {
-		<-ctx.Done()
-		finish(entry, chunkd.SessionCancelled)
-	}()
-
-	resp, err := http.Get(srv.URL + "/factory/" + id)
-	assert.NilError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	assert.Equal(t, resp.StatusCode, http.StatusOK)
-	var detail chunkd.SessionDetail
-	assert.NilError(t, json.NewDecoder(resp.Body).Decode(&detail))
-	assert.Equal(t, detail.ID, id)
-
-	missing, err := http.Get(srv.URL + "/factory/nope")
-	assert.NilError(t, err)
-	defer func() { _ = missing.Body.Close() }()
-	assert.Equal(t, missing.StatusCode, http.StatusNotFound)
-
-	for range 2 { // cancelling twice is not an error
-		cancel, err := http.Post(srv.URL+"/factory/"+id+"/cancel", "", nil)
+	do := func(method, path string) int {
+		t.Helper()
+		req, err := http.NewRequest(method, srv.URL+path, nil)
 		assert.NilError(t, err)
-		_ = cancel.Body.Close()
-		assert.Equal(t, cancel.StatusCode, http.StatusAccepted)
+		resp, err := http.DefaultClient.Do(req)
+		assert.NilError(t, err)
+		_ = resp.Body.Close()
+		return resp.StatusCode
 	}
-	<-entry.done
-	assert.Equal(t, entry.snapshot().State, chunkd.SessionCancelled)
+
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{
+			method: http.MethodPost,
+			path:   "/factory",
+		},
+		{
+			method: http.MethodGet,
+			path:   "/factory",
+		},
+		{
+			method: http.MethodGet,
+			path:   "/factory/x",
+		},
+		{
+			method: http.MethodGet,
+			path:   "/factory/" + sess.ID,
+		},
+		{
+			method: http.MethodPost,
+			path:   "/factory/warm",
+		},
+		{
+			method: http.MethodPost,
+			path:   "/factory/warm/x/cancel",
+		},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			code := do(tc.method, tc.path)
+			assert.Check(t, code == http.StatusNotFound || code == http.StatusMethodNotAllowed, "got %d", code)
+		})
+	}
+
+	t.Run("cancel stops the build", func(t *testing.T) {
+		code := do(http.MethodPost, "/factory/"+sess.ID+"/cancel")
+		assert.Check(t, code >= 200 && code < 300, "got %d", code)
+		got := waitForSessionEnd(t, pb.daemon, sess.ID)
+		assert.Check(t, cmp.Equal(got.State, chunkd.SessionCancelled))
+		assert.Check(t, pb.build.wasStopped(), "the build session was left running")
+	})
+
+	t.Run("delete forgets the build", func(t *testing.T) {
+		code := do(http.MethodDelete, "/factory/"+sess.ID)
+		assert.Check(t, code >= 200 && code < 300, "got %d", code)
+		for _, p := range pb.snapshot(nil).Projects {
+			for _, s := range p.Sessions {
+				assert.Check(t, s.ID != sess.ID, "the deleted build is still in the snapshot")
+			}
+		}
+	})
 }

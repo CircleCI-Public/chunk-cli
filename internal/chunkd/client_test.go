@@ -404,8 +404,8 @@ func TestFetchSnapshotRelaunching_neverRelaunchesARemoteDaemon(t *testing.T) {
 	assert.Equal(t, launches, 0)
 }
 
-// serveSessionDaemon is fakeDaemon for a daemon with a session API: /ping
-// answers build and GET /factory lists sessions.
+// serveSessionDaemon is fakeDaemon for a daemon with sessions: /ping answers
+// build and /snapshot lists the sessions in one project.
 func serveSessionDaemon(t *testing.T, build string, sessions ...Session) (sockPath string, launches *int) {
 	t.Helper()
 	dir := socketDir(t)
@@ -416,8 +416,8 @@ func serveSessionDaemon(t *testing.T, build string, sessions ...Session) (sockPa
 	assert.NilError(t, err)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, build) })
-	mux.HandleFunc("GET /factory", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(SessionList{Sessions: sessions})
+	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(Snapshot{Projects: []ProjectSnapshot{{Root: "/p"}, {Root: "/q", Sessions: sessions}}})
 	})
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
 	go func() { _ = srv.Serve(ln) }()
@@ -425,8 +425,8 @@ func serveSessionDaemon(t *testing.T, build string, sessions ...Session) (sockPa
 	return sockPath, stubLaunch(t)
 }
 
-// A newer binary must not replace a daemon that is in the middle of a factory
-// run: the run dies with it and its caller reports "no such session".
+// A newer binary must not replace a daemon that is in the middle of a plan
+// build: the build dies with it.
 func TestEnsureRunning_keepsAStaleDaemonWithARunGoing(t *testing.T) {
 	_, launches := serveSessionDaemon(t, "some-other-build",
 		Session{ID: "done", State: SessionDone},
@@ -448,7 +448,7 @@ func TestHasRunningSessions(t *testing.T) {
 		sock, _ := serveSessionDaemon(t, "b", Session{ID: "a", State: SessionRunning})
 		assert.Check(t, hasRunningSessions(sock))
 	})
-	t.Run("a daemon without the session API", func(t *testing.T) {
+	t.Run("a daemon that lists no sessions", func(t *testing.T) {
 		dir := socketDir(t)
 		serveFakeDaemon(t, dir, "b")
 		assert.Check(t, !hasRunningSessions(filepath.Join(dir, "daemon.sock")))
