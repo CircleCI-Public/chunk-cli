@@ -413,7 +413,7 @@ Design constraints worth preserving:
 
 ### Plan builds
 
-The daemon's only factory sessions are plan builds. A session is the daemon's
+The daemon's factory sessions are plan builds. A session is the daemon's
 record of building one approved factory plan for a project: a Claude Code
 session in the plan's worktree, with factory's f plugin, that works through
 factory's tasks for the plan through to a pull request. The daemon is the
@@ -454,6 +454,16 @@ DELETE /factory/{id}       → 204: forget a finished session; 409 while it is s
 GET  /snapshot             → each project carries `sessions` (state only), and the
                              top level a `review_auth_error` when plan builds cannot run
 ```
+
+A plan's planner is a long-lived Claude Code session with factory's f plugin
+that plans the plan through factory's tasks, one per plan. Planners are kept
+apart from sessions, in a registry of their own: they are not listed in
+`GET /factory` or the snapshot, so an idle planner never keeps an outdated
+daemon from being replaced. A planner starts on a request or resume, and
+stops on approval, when the plan's flow ends, or when the daemon stops. It
+outlives the screens that follow it: `chunk factory plan` and `chunk watch`
+poll `GET …/planner` while a plan is open, and closing them only ends that
+polling.
 
 A build records a `chunkd.Session` whose `factory` field (`FactoryRun`) names
 the plan, and runs a factory build session in the plan's worktree. While it

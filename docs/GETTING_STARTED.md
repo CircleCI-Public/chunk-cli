@@ -336,8 +336,8 @@ read-only preview of the selected one's plan. Flows are yours wherever
 reading a plan never claims it; the request you type for a new plan does, and
 the screen resumes a planner factory is waiting on, in the project
 `chunk watch` was opened in. `ctrl+p` goes back to the list to
-switch plans; each open plan keeps its activity and session
-while another is shown.
+switch plans; each open plan keeps its activity while another is shown,
+and its session keeps planning in the chunk daemon even once chunk is closed.
 The planner's activity is on the left and the plan is on the right, under a strip that says
 where the flow is and what comes next; with the plan focused, `←` shows the
 Flow tab (progress, PR, related plans) and `→` the plan again. `tab` moves to

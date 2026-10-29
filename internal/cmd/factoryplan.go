@@ -9,7 +9,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
@@ -21,7 +20,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
@@ -33,8 +31,8 @@ func newFactoryPlanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plan [prompt]",
 		Short: "Plan a change with Claude, then approve it and build it on the daemon",
-		Long: `Plan a change with a factory planning session of Claude Code on this
-machine. The request (the prompt, or what you type when there is none)
+		Long: `Plan a change with a factory planning session of Claude Code that the
+chunk daemon runs on this machine. The request (the prompt, or what you type when there is none)
 creates the plan; after that the session works through factory's tasks, and
 its activity is shown beside the plan. The plan is kept in factory; comment
 on it until it is right, then press ctrl+s to approve it in
@@ -76,13 +74,9 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 				return err
 			}
 
-			// The session runs as a process of its own, in a process group of
-			// its own, so it would outlive chunk: it is stopped, and waited
-			// for, as the screen closes.
+			// planCtx bounds the screen's polling of the planner.
 			planCtx, cancel := context.WithCancel(ctx)
 			agent, approve, store := planSession(planCtx, root, "", model, api)
-			// Cancelling first ends a session that is still starting, which
-			// Stop would otherwise wait out.
 			defer func() {
 				cancel()
 				_ = agent.Stop()
@@ -213,13 +207,14 @@ func reportPlanLeft(streams iostream.Streams, planID, buildID string) {
 }
 
 // planSession is a factory planning session in root for the planning
-// screen, on plan id or a new plan when id is "": the agent it talks to,
-// which lives as long as ctx, the store its plan and comments are kept in
-// through api, and the approval it ends with, which approves the plan in
-// factory and has the chunk daemon build it. The caller must Stop the agent.
+// screen, on plan id or a new plan when id is "": the agent that follows the
+// planner the chunk daemon runs for it, polling for as long as ctx lives, the
+// store its plan and comments are kept in through api, and the approval it
+// ends with, which has the chunk daemon approve the plan in factory and
+// build it. The caller must Stop the agent.
 func planSession(ctx context.Context, root, id, model string, api *circleci.Client) (*factoryplan.Agent, plan.Approver, *factoryplan.Store) {
 	store := factoryplan.NewStore(api, id)
-	agent := factoryplan.NewAgent(ctx, factory.AgentConfig{Dir: root, Model: model, SessionID: uuid.NewString()}, store)
+	agent := factoryplan.NewAgent(ctx, root, model, store)
 	approve := func(step func(string)) (string, error) {
 		// The daemon is started first, so a plan is not approved with
 		// nothing to build it.
@@ -227,59 +222,25 @@ func planSession(ctx context.Context, root, id, model string, api *circleci.Clie
 		if err := chunkd.EnsureRunning(); err != nil {
 			return "", fmt.Errorf("start the chunk daemon: %w", err)
 		}
-		return approveAndBuild(step,
-			func() error {
-				wt, err := factory.PlanWorktreePath(root, store.ID())
-				if err != nil {
-					return err
-				}
-				return planapprove.Approve(ctx, api, factory.SessionWorktree, store.ID(), agent.SessionID(), wt)
-			},
-			agent.Stop,
-			func() (string, error) { return buildPlan(root, store.ID(), model) },
-		)
+		step("Approving the plan and starting its build on the chunk daemon…")
+		return approvePlan(root, store.ID(), model)
 	}
 	return agent, approve, store
 }
 
-// approveAndBuild approves a plan in factory, stops its planning session,
-// then has the plan built, returning the build's ID. The planning session is
-// stopped as soon as the approval is in, whether or not the build then
-// starts: approving released the planning session's claim, or a parent
-// planner's, and a planning session still running could
-// claim the plan again, when factory would hand it the build tasks, which it
-// cannot do. A plan whose approval failed
-// keeps its session, to plan on. step is called with each step as it
-// starts.
-func approveAndBuild(step func(string), approve, stopPlanning func() error, build func() (string, error)) (string, error) {
-	step("Approving the plan in factory…")
-	if err := approve(); err != nil {
-		return "", err
-	}
-	step("Approved. Stopping the planning session…")
-	// The plan is approved, and the session stopped; how it stopped does not
-	// change what comes next.
-	_ = stopPlanning()
-	step("Starting the build on the chunk daemon…")
-	return build()
-}
+// approveAndBuild is chunkd.ApproveAndBuild but in tests.
+var approveAndBuild = chunkd.ApproveAndBuild
 
-// buildPlan has the chunk daemon build approved factory plan planID, in the
-// project at root, and returns the build's session ID. A plan it cannot
-// start building stays approved in factory, so the error says how to build
-// it another way.
-func buildPlan(root, planID, model string) (string, error) {
-	id, err := chunkd.StartPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: root, PlanID: planID, Model: model})
+// approvePlan has the chunk daemon approve and build factory plan planID, in
+// the project at root, and returns the build's session ID.
+func approvePlan(root, planID, model string) (string, error) {
+	id, err := approveAndBuild(planID, chunkd.PlanApproveRequest{ProjectRoot: root, Model: model})
 	var refused *chunkd.SessionRefused
 	switch {
 	case errors.As(err, &refused):
-		err = errors.New(refused.Message)
+		return "", errors.New(refused.Message)
 	case errors.Is(err, chunkd.ErrDaemonUnavailable):
-		err = errors.New("the chunk daemon is not reachable")
+		return "", errors.New("the chunk daemon is not reachable; the plan was not approved")
 	}
-	if err != nil {
-		return "", fmt.Errorf("the plan is approved in factory, but chunk could not start building it (%w); "+
-			"build it in Claude Code with /f:resume %s", err, planID)
-	}
-	return id, nil
+	return id, err
 }

@@ -2127,6 +2127,18 @@ func TestTaskDuringDevelopersTurnIsNotShown(t *testing.T) {
 	assert.Check(t, cmp.Contains(view, "working on a factory task"))
 }
 
+// A screen opened while the daemon's planner is mid-turn is told so with one
+// "Working…" activity, which shows the planner busy on a factory task.
+func TestAWorkingEventWhileIdleShowsTheAgentBusy(t *testing.T) {
+	m := New(context.Background(), turnReturning("ok"), nil, newFakeStore(), "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	assert.Assert(t, !m.busy, "still busy after the reply")
+
+	m = drive(t, m, eventMsg{agent: m.agent, Event: Event{Activity: "Working…"}})
+	assert.Check(t, m.busy && m.byTask, "busy %v, byTask %v; want a factory task's turn", m.busy, m.byTask)
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Working…"))
+}
+
 func TestProblemClearsTheTask(t *testing.T) {
 	store := newFakeStore()
 	m := New(context.Background(), turnReturning("ok"), nil, store, "do it")

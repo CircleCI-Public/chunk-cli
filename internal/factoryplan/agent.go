@@ -3,421 +3,228 @@ package factoryplan
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync"
+	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
-// Agent is a plan.Agent over a long-lived factory.Agent. The session starts
-// on Request, for a new plan, or on Resume, for one whose planner is not
-// running, since claude needs a message to start on. Resume also resumes it
-// if it ends without being stopped.
+// Agent is a plan.Agent over the planner the chunk daemon runs for store's
+// plan: a request and resumes go to the daemon, and the planner's log is
+// read back every pollInterval while the screen lives.
 type Agent struct {
-	ctx    context.Context // the session's lifetime
-	cfg    factory.AgentConfig
+	ctx    context.Context
+	root   string
+	model  string
 	store  *Store
 	events chan plan.Event
-	// start starts a session; factory.StartAgent but in tests.
-	start func(context.Context, factory.AgentConfig, string) (session, error)
-	// done is closed by Stop, after which nothing reads events.
-	done     chan struct{}
-	stopOnce sync.Once
-	// holder is the session holding the plan's claim in factory, "" when
-	// none does; the store's but in tests.
-	holder func(context.Context) (string, error)
-	// worktree is the directory each session starts in: the plan's
-	// worktree, opened by planWorktree but in tests.
-	worktree func(context.Context) (string, error)
-	// check is what must hold before the session starts or resumes, as
-	// CheckStart sets it; nil for nothing.
-	check func(context.Context) error
-	// openRecord opens this machine's record of the session planning the
-	// plan; factory.OpenPlanSession but in tests.
-	openRecord func() (sessionRecord, error)
-
-	// sendMu keeps sends in order. It is not mu: a send can block writing to
-	// a claude that stopped reading, and Stop must not wait on it.
-	sendMu sync.Mutex
-
-	mu sync.Mutex
-	// All fields below are guarded by mu.
-	agent   session
-	ended   chan struct{} // closed once agent's events end
-	stopped bool
-	// claimed is whether a message has told the agent to claim the plan
-	// since it last held no claim on it.
-	claimed bool
-	// checkClaim is set until the reply to that message, when the daemon
-	// should hold the plan's claim for this session.
-	checkClaim bool
-	// record is the plan's session record, held open from the first send
-	// that opens it until Stop, whether or not a session then starts; nil
-	// before then.
-	record sessionRecord
-	// requested is whether a session has started on Request.
-	requested bool
+	check  func(context.Context) error // CheckStart's; nil for none
+	// request, resume and fetch are chunkd.RequestPlanner, ResumePlanner and
+	// FetchPlanner but in tests.
+	request func(planID string, req chunkd.PlannerRequest) (chunkd.SessionLog, error)
+	resume  func(planID string, req chunkd.PlannerResume) (chunkd.SessionLog, error)
+	fetch   func(planID string, after int) (chunkd.SessionLog, error)
+	stop    context.CancelFunc
 }
 
-// sessionRecord is what Agent needs of a factory.PlanSession.
-type sessionRecord interface {
-	ID() (string, error)
-	Record(id string) error
-	Close() error
+// pollInterval is how often an Agent reads its planner's log.
+var pollInterval = 500 * time.Millisecond
+
+// errUnreachable is what the screen is told once while the daemon cannot be
+// read.
+var errUnreachable = errors.New("the chunk daemon is not reachable; chunk keeps trying")
+
+// NewAgent is the planner of store's plan in the project at root, followed
+// for as long as ctx lives or until Stop.
+func NewAgent(ctx context.Context, root, model string, store *Store) *Agent {
+	return newAgent(ctx, root, model, store, chunkd.RequestPlanner, chunkd.ResumePlanner, chunkd.FetchPlanner)
 }
 
-// ErrStopped is returned by a Request or Resume after Stop.
-var ErrStopped = errors.New("the planning session has been stopped")
-
-// ErrRequested is returned by a second Request.
-var ErrRequested = errors.New("the plan's request has already been sent to its planning session")
-
-// session is what Agent needs of a factory.Agent.
-type session interface {
-	Send(message string) error
-	Events() <-chan factory.AgentEvent
-	Stop() error
-}
-
-// NewAgent is the planning session for store's plan, in cfg.Dir, which lives
-// as long as ctx. The caller must Stop it.
-func NewAgent(ctx context.Context, cfg factory.AgentConfig, store *Store) *Agent {
-	return &Agent{
-		ctx:    ctx,
-		cfg:    cfg,
-		store:  store,
-		events: make(chan plan.Event),
-		done:   make(chan struct{}),
-		start: func(ctx context.Context, cfg factory.AgentConfig, message string) (session, error) {
-			return factory.StartAgent(ctx, cfg, message)
-		},
-		holder: store.Holder,
-		worktree: func(ctx context.Context) (string, error) {
-			return planWorktree(ctx, cfg.Dir, store)
-		},
-		openRecord: func() (sessionRecord, error) {
-			return factory.OpenPlanSession(cfg.Dir, store.ID())
-		},
+// newAgent is NewAgent over the given daemon calls; the poller starts here,
+// so tests pass their fakes before it can call fetch.
+func newAgent(
+	ctx context.Context, root, model string, store *Store,
+	request func(string, chunkd.PlannerRequest) (chunkd.SessionLog, error),
+	resume func(string, chunkd.PlannerResume) (chunkd.SessionLog, error),
+	fetch func(string, int) (chunkd.SessionLog, error),
+) *Agent {
+	ctx, stop := context.WithCancel(ctx)
+	p := &Agent{
+		ctx:     ctx,
+		root:    root,
+		model:   model,
+		store:   store,
+		events:  make(chan plan.Event),
+		request: request,
+		resume:  resume,
+		fetch:   fetch,
+		stop:    stop,
 	}
+	go p.poll()
+	return p
 }
 
-func (p *Agent) Events() <-chan plan.Event { return p.events }
-
-// SessionID is the factory session the agent claims its plan as: the one
-// recorded as planning the plan on this machine, once a send has opened the
-// record, so a plan reopened in a new screen is planned by the same session.
-func (p *Agent) SessionID() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.cfg.SessionID
-}
-
-// CheckStart has check run before the session starts or resumes, refusing to
-// start it when check fails, so a plan can be opened and read before what
-// planning needs is in place. It must be called before the first Request or
-// Resume.
+// CheckStart has check run before each Request or Resume, refusing it when
+// check fails, so a plan can be opened and read before what planning needs
+// is in place. It must be called before the first Request or Resume.
 func (p *Agent) CheckStart(check func(context.Context) error) { p.check = check }
 
-// Request starts the planning session on the developer's request for a new
-// plan, telling it to claim the plan. Once a session has started on it, a
-// second Request is refused; one that failed to start may be retried, since
-// the request is in no plan yet.
+// Request starts the planner on a new plan's request. The daemon refuses a
+// second one once a session started on it.
 func (p *Agent) Request(ctx context.Context, text string) error {
-	p.mu.Lock()
-	requested := p.requested
-	p.mu.Unlock()
-	if requested {
-		return ErrRequested
-	}
-	if err := p.send(ctx, text); err != nil {
+	id, err := p.ready(ctx)
+	if err != nil {
 		return err
 	}
-	p.mu.Lock()
-	p.requested = true
-	p.mu.Unlock()
-	return nil
+	_, err = p.request(id, chunkd.PlannerRequest{ProjectRoot: p.root, Text: text, Model: p.model})
+	return daemonProblem(err)
 }
 
-// Resume has the session claim the plan again when it holds no claim:
-// starting the session, or resuming the one recorded for the plan or one
-// that ended, with factory.PlanRetryMessage. A resume sends nothing while the
-// session holds the claim, or while the holder can't be read.
-func (p *Agent) Resume(ctx context.Context) error { return p.send(ctx, "") }
+// Resume has the planner claim the plan again when it holds no claim.
+func (p *Agent) Resume(ctx context.Context) error {
+	id, err := p.ready(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = p.resume(id, chunkd.PlannerResume{ProjectRoot: p.root, Model: p.model})
+	return daemonProblem(err)
+}
 
-// send delivers request to the session, starting it on the first message and
-// resuming it if it has ended; a request of "" is a resume. What is sent
-// tells the agent to claim the plan when it is the first since the plan was
-// created, or the agent has since lost its claim: factory frees the claims
-// of a session that ends, and an agent can release its plan, after which the
-// daemon hands it no tasks.
-func (p *Agent) send(ctx context.Context, request string) error {
-	p.sendMu.Lock()
-	defer p.sendMu.Unlock()
-
-	p.mu.Lock()
-	if p.stopped {
-		p.mu.Unlock()
-		return ErrStopped
-	}
-	a, live := p.agent, p.agent != nil && !p.hasEnded()
-	if a != nil && !live {
-		// factory frees the ended session's claim on its own time, so the
-		// plan may still read as claimed; the resumed session claims it
-		// again either way.
-		p.claimed = false
-	}
-	recheck := live && p.claimed && !p.checkClaim
-	p.mu.Unlock()
-
-	if recheck && !p.holds(ctx) {
-		p.mu.Lock()
-		p.claimed = false
-		p.mu.Unlock()
-	}
-
-	p.mu.Lock()
-	message, claimed := withClaim(p.claimed, p.store.ID(), request)
-	p.mu.Unlock()
-	if message == "" {
-		return nil
-	}
-
-	if live {
-		if err := a.Send(message); err != nil {
-			return err
-		}
-		p.mu.Lock()
-		p.claim(claimed)
-		p.mu.Unlock()
-		return nil
-	}
-	recorded := false
-	if a == nil {
-		var err error
-		if recorded, err = p.openSession(); err != nil {
-			return err
-		}
-	}
-	p.mu.Lock()
-	cfg := p.cfg
-	p.mu.Unlock()
-	// A session that ended is resumed rather than started afresh, so claude
-	// keeps the conversation so far, as is the one recorded as planning the
-	// plan when an earlier screen started it. The plan's worktree is where it
-	// was started, so claude finds that conversation there.
-	cfg.Resume = a != nil || recorded
+// ready is the plan's ID once CheckStart's check passes.
+func (p *Agent) ready(ctx context.Context) (string, error) {
 	if p.check != nil {
-		if err := p.check(p.ctx); err != nil {
-			return err
+		if err := p.check(ctx); err != nil {
+			return "", err
 		}
 	}
-	dir, err := p.worktree(p.ctx)
-	if err != nil {
-		return err
-	}
-	cfg.Dir = dir
-	started, err := p.start(p.ctx, cfg, message)
-	if err != nil && recorded && p.ctx.Err() == nil {
-		// The recorded session's conversation may be gone, deleted with
-		// claude's history say; start the session afresh under its ID.
-		cfg.Resume = false
-		started, err = p.start(p.ctx, cfg, message)
-	}
-	if err != nil {
-		return startProblem(err)
-	}
-	p.mu.Lock()
-	if p.record != nil {
-		// A failed write only costs the next screen the conversation.
-		_ = p.record.Record(cfg.SessionID)
-	}
-	p.agent, p.ended = started, make(chan struct{})
-	stopped := p.stopped
-	p.claim(claimed)
-	go p.forward(started, p.ended)
-	p.mu.Unlock()
-	if stopped {
-		// Stop came while the session was starting, before it had one to
-		// stop.
-		_ = started.Stop()
-		return ErrStopped
-	}
-	return nil
-}
-
-// openSession opens the plan's session record, once, and adopts the session
-// it records, reporting whether there was one to resume.
-func (p *Agent) openSession() (bool, error) {
-	p.mu.Lock()
-	opened := p.record != nil
-	p.mu.Unlock()
-	if opened || p.store.ID() == "" {
-		return false, nil
-	}
-	rec, err := p.openRecord()
-	if errors.Is(err, factory.ErrPlanSessionOpen) {
-		return false, errors.New("this plan is open for planning in another chunk window; send messages from there")
-	}
-	if err != nil {
-		return false, err
-	}
-	id, err := rec.ID()
-	if err != nil {
-		_ = rec.Close()
-		return false, err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.stopped {
-		_ = rec.Close()
-		return false, ErrStopped
-	}
-	p.record = rec
+	id := p.store.ID()
 	if id == "" {
-		return false, nil
+		return "", errNotCreated
 	}
-	p.cfg.SessionID = id
-	return true, nil
+	return id, nil
 }
 
-// holds is whether this session holds the plan's claim in factory. A failed
-// read counts as holding it, so a blip in the API does not have the agent
-// claim a plan it has.
-func (p *Agent) holds(ctx context.Context) bool {
-	h, err := p.holder(ctx)
-	return err != nil || h == p.SessionID()
-}
-
-// claim records whether the message just sent left the plan claimed, as
-// withClaim reported it; a message that first told the agent to claim it
-// is owed a check once the agent replies. The caller must hold mu.
-func (p *Agent) claim(claimed bool) {
-	if claimed && !p.claimed {
-		p.claimed, p.checkClaim = true, true
-	}
-}
-
-// hasEnded is whether the current session's events have ended. The caller
-// must hold mu.
-func (p *Agent) hasEnded() bool {
-	select {
-	case <-p.ended:
-		return true
-	default:
-		return false
-	}
-}
-
-// Stop ends the session, if one started, and waits for it. A session still
-// starting is stopped by the send starting it, once it has started.
-func (p *Agent) Stop() error {
-	p.stopOnce.Do(func() { close(p.done) })
-	p.mu.Lock()
-	p.stopped = true
-	a, rec := p.agent, p.record
-	p.record = nil
-	p.mu.Unlock()
-	var err error
-	if a != nil {
-		err = a.Stop()
-	}
-	if rec != nil {
-		err = errors.Join(err, rec.Close())
+// daemonProblem is a failed request or resume as the screen shows it.
+func daemonProblem(err error) error {
+	var refused *chunkd.SessionRefused
+	switch {
+	case errors.As(err, &refused):
+		return errors.New(refused.Message)
+	case errors.Is(err, chunkd.ErrDaemonUnavailable):
+		return errors.New("the chunk daemon is not reachable")
 	}
 	return err
 }
 
-// forward passes a's events on to the screen until they end. Once ctx ends,
-// or Stop is called, nothing reads them, so they are drained instead: a
-// factory.Agent's events must be read until they close.
-func (p *Agent) forward(a session, ended chan struct{}) {
-	defer close(ended)
-	for ev := range a.Events() {
-		out := event(ev)
-		if ev.TurnEnded != nil && !ev.TurnEnded.ByTask && p.takeClaimCheck() {
-			p.emit(out)
-			if err := p.checkClaimed(); err != nil {
-				p.emit(plan.Event{Problem: err})
-			}
-			continue
+func (p *Agent) Events() <-chan plan.Event { return p.events }
+
+// Stop ends polling; the planner runs on in the daemon.
+func (p *Agent) Stop() error {
+	p.stop()
+	return nil
+}
+
+// poll reads the planner's log every pollInterval until ctx ends.
+func (p *Agent) poll() {
+	t := time.NewTicker(pollInterval)
+	defer t.Stop()
+	var c cursor
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-t.C:
 		}
-		p.emit(out)
+		if id := p.store.ID(); id != "" {
+			p.tick(id, &c)
+		}
 	}
 }
 
-func (p *Agent) emit(ev plan.Event) {
+// cursor is where the poller has read the planner's log to.
+type cursor struct {
+	set   bool   // whether a first fetch has set next and logID
+	next  int    // the next seq to read
+	logID string // the log next came from
+	// warned is whether the screen has been told the daemon is unreachable
+	// since the last fetch that succeeded.
+	warned bool
+}
+
+// tick is one read of plan id's planner's log from c, passing what it holds
+// on to the screen.
+func (p *Agent) tick(id string, c *cursor) {
+	if !c.set {
+		l, ok := p.read(id, -1, c)
+		if !ok {
+			return
+		}
+		c.set, c.next, c.logID = true, l.Next, l.LogID
+		if l.Busy {
+			// A screen opened mid-turn shows the planner working; the screen
+			// acts only on an activity that says something.
+			activity := l.Activity
+			if activity == "" {
+				activity = "Working…"
+			}
+			p.emit(plan.Event{Activity: activity})
+		}
+		return
+	}
+	l, ok := p.read(id, c.next, c)
+	if !ok {
+		return
+	}
+	if l.LogID != c.logID {
+		// The daemon restarted, or the planner was made again: the cursor
+		// means nothing in this log, so it is read from the oldest event the
+		// log keeps, at the next tick.
+		c.next, c.logID = l.Oldest, l.LogID
+		return
+	}
+	for _, ev := range l.Events {
+		if !p.emit(event(ev)) {
+			return
+		}
+	}
+	c.next = l.Next
+}
+
+// read is plan id's planner's log after after, telling the screen once when
+// the daemon cannot be read.
+func (p *Agent) read(id string, after int, c *cursor) (chunkd.SessionLog, bool) {
+	l, err := p.fetch(id, after)
+	if err != nil {
+		if !c.warned && p.ctx.Err() == nil {
+			c.warned = true
+			p.emit(plan.Event{Problem: errUnreachable})
+		}
+		return chunkd.SessionLog{}, false
+	}
+	c.warned = false
+	return l, true
+}
+
+// emit passes ev on to the screen, reporting false once ctx ends and nothing
+// reads it.
+func (p *Agent) emit(ev plan.Event) bool {
 	select {
 	case p.events <- ev:
+		return true
 	case <-p.ctx.Done():
-	case <-p.done:
+		return false
 	}
-}
-
-// takeClaimCheck is whether a claim is owed a check, clearing it.
-func (p *Agent) takeClaimCheck() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	owed := p.checkClaim
-	p.checkClaim = false
-	return owed
-}
-
-// checkClaimed reports why the agent holds no claim on the plan after its
-// reply to the message telling it to claim it. Without the claim the daemon
-// hands it no planning tasks, and the plan never moves.
-func (p *Agent) checkClaimed() error {
-	id := p.store.ID()
-	h, err := p.holder(p.ctx)
-	switch {
-	case err != nil:
-		return fmt.Errorf("could not check chunk's claim on the plan: %w", err)
-	case h == p.SessionID():
-		return nil
-	case h != "":
-		return fmt.Errorf("plan %s is claimed by another factory session, so no planning tasks will come to chunk", id)
-	}
-	return fmt.Errorf("chunk could not claim plan %s in factory, so no planning tasks will come. "+
-		"Run the factory daemon with FACTORY_PLAN_STORE=circleci and FACTORY_PLAN_CIRCLECI_TOKEN "+
-		"set to a token for the CircleCI user chunk is signed in as", id)
 }
 
 // event is ev as the planning screen shows it.
-func event(ev factory.AgentEvent) plan.Event {
-	switch {
-	case ev.Activity != nil:
-		return plan.Event{Activity: ev.Activity.Line()}
-	case ev.TurnEnded != nil:
-		return plan.Event{Reply: &plan.Reply{Text: ev.TurnEnded.Reply, ByTask: ev.TurnEnded.ByTask}}
-	default:
-		return plan.Event{Problem: ev.Problem}
+func event(ev chunkd.SessionLogEvent) plan.Event {
+	switch ev.Kind {
+	case chunkd.SessionLogReply:
+		return plan.Event{Reply: &plan.Reply{Text: ev.Text, ByTask: ev.ByTask}}
+	case chunkd.SessionLogProblem:
+		return plan.Event{Problem: errors.New(ev.Text)}
+	case chunkd.SessionLogActivity:
 	}
-}
-
-// startProblem is a failure to start the session as a sentence for the
-// chat, saying how to fix it.
-func startProblem(err error) error {
-	switch {
-	case errors.Is(err, factory.ErrNoClaude):
-		return errors.New("this machine has no Claude Code to plan with; install it from https://claude.com/claude-code")
-	case errors.Is(err, factory.ErrNoFactory):
-		return errors.New("factory is not installed; install it and put it on PATH")
-	case errors.Is(err, factory.ErrNoFactoryPlugin):
-		return errors.New("factory's f plugin is not loaded in Claude Code; install it")
-	case errors.Is(err, factory.ErrFactoryMCP):
-		return errors.New("factory's MCP server is not connected; make sure factory is on PATH")
-	}
-	return fmt.Errorf("start the planning session: %w", err)
-}
-
-// withClaim is the message the session is next sent, or "" when nothing is
-// owed. claimed is carried by the caller across calls.
-func withClaim(claimed bool, planID, request string) (string, bool) {
-	switch {
-	case claimed || planID == "":
-		return request, claimed
-	case request == "":
-		return factory.PlanRetryMessage(planID), true
-	}
-	return factory.PlanMessage(planID, request), true
+	// An activity, or a kind from a newer daemon, is shown as a line.
+	return plan.Event{Activity: ev.Text}
 }

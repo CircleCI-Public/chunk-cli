@@ -1,6 +1,6 @@
 // Package factoryplan backs the planning screen with factory: the plan and its
-// comments in factory's V3 API (Store), and the long-lived factory session
-// that plans it (Agent).
+// comments in factory's V3 API (Store), and the planner the chunk daemon runs
+// for it (Agent).
 package factoryplan
 
 import (
@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"sync"
 
@@ -218,24 +217,6 @@ func (s *Store) parent(ctx context.Context, id string) (string, error) {
 	defer s.mu.Unlock()
 	s.parentID, s.parentRead = p.Parent, true
 	return s.parentID, nil
-}
-
-// Holder is the factory session holding the plan's claim, as its flow
-// references it, or "" when none does or the plan has not been created.
-func (s *Store) Holder(ctx context.Context) (string, error) {
-	id := s.ID()
-	if id == "" {
-		return "", nil
-	}
-	f, err := s.api.GetFlow(ctx, id)
-	var se *circleci.StatusError
-	if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("get the plan's claim: %w", err)
-	}
-	return f.SessionID, nil
 }
 
 // ErrDesignApproved is returned by ApproveDesign for a plan whose flow offers

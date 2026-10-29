@@ -439,35 +439,6 @@ func TestStoreWritesFailBeforeCreate(t *testing.T) {
 	assert.Check(t, cmp.Len(cs, 0))
 }
 
-// TestStoreHolderReadsTheClaimFromFactory checks that holder is the session
-// the plan's flow says holds its claim, and "" before the plan exists, before
-// a session claims it, and once its claim is released.
-func TestStoreHolderReadsTheClaimFromFactory(t *testing.T) {
-	client, cci := testClient(t)
-	store := newStore(client, "")
-	ctx := context.Background()
-
-	h, err := store.Holder(ctx)
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(h, ""))
-
-	_, err = store.Create(ctx, "a plan")
-	assert.NilError(t, err)
-	h, err = store.Holder(ctx)
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(h, ""))
-
-	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	h, err = store.Holder(ctx)
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(h, "s-1"))
-
-	cci.ReleaseFactoryPlan(store.ID())
-	h, err = store.Holder(ctx)
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(h, ""))
-}
-
 // TestStoreFlowReadsTheFlow checks that Flow is the events the plan's flow
 // lists as applicable and the category of the task it has out, and empty
 // before the plan exists or has a flow.
