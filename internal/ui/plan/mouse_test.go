@@ -22,6 +22,8 @@ func planned(t *testing.T, width, height int, text string, approve Approver) (Mo
 	store := newFakeStore()
 	store.TextV = text
 	m := New(context.Background(), turnReturning("ok"), approve, store, "plan it")
+	// The tests are not to touch the clipboard of the machine they run on.
+	m.copyText = tea.SetClipboard
 	return drive(t, m, tea.WindowSizeMsg{Width: width, Height: height}), store
 }
 

@@ -27,9 +27,9 @@ type lastClick struct {
 	at   time.Time
 }
 
-// updateMouse handles the mouse: the wheel scrolls the pane under it, and a
-// left click moves the keyboard to what was clicked. Motion and releases are
-// not used.
+// updateMouse handles the mouse: the wheel scrolls the pane under it, a left
+// click moves the keyboard to what was clicked, and dragging selects text to
+// copy.
 func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.MouseWheelMsg:
@@ -39,6 +39,13 @@ func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.click(msg.Mouse())
+	case tea.MouseMotionMsg:
+		if msg.Button != tea.MouseLeft {
+			return m, nil
+		}
+		return m.dragText(msg.Mouse()), nil
+	case tea.MouseReleaseMsg:
+		return m.endText()
 	}
 	return m, nil
 }
@@ -86,6 +93,7 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 	if m.width == 0 {
 		return m, nil
 	}
+	m.clearText()
 	if m.approving || m.approvingDesign {
 		return m, nil
 	}
@@ -124,16 +132,17 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 			return m.showTab(tabPlan)
 		}
 	}
-	if m.inPane(mouse.X) == panePlan && m.tab == tabFlow {
-		return m.focusOn(panePlan)
+	var cmd tea.Cmd
+	switch {
+	case m.inPane(mouse.X) == panePlan && m.tab == tabFlow:
+		m, cmd = m.focusOn(panePlan)
+	case m.inPane(mouse.X) == panePlan:
+		m, cmd = m.clickPlan(mouse)
+	case m.focus != paneChat:
+		m, cmd = m.focusOn(paneChat)
 	}
-	if m.inPane(mouse.X) == panePlan {
-		return m.clickPlan(mouse)
-	}
-	if m.focus != paneChat {
-		return m.focusOn(paneChat)
-	}
-	return m, nil
+	// The press may also begin a selection of text, if it is dragged.
+	return m.beginText(mouse), cmd
 }
 
 // clickTab picks chat, Flow or Plan from the tabs of a narrow screen.

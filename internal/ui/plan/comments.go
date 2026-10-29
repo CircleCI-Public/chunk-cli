@@ -765,7 +765,7 @@ func (m *Model) drawPlan() {
 	}
 	lines = m.drawOrphans(lines, w)
 	lines = m.drawResolved(lines, w)
-	m.planView.SetContentLines(lines)
+	m.setContent(textPlan, strings.Join(lines, "\n"))
 }
 
 // drawOrphans appends the comments on parts Claude has since rewritten,
