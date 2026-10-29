@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -32,6 +33,9 @@ type PlanConfig struct {
 	// CheckPlanner checks what a planner needs on this machine before one
 	// starts: factory.CheckClaude then factory.CheckFactoryDaemon when nil.
 	CheckPlanner func(ctx context.Context) error
+	// SessionWorktree finds where factory's daemon has a session working, as
+	// approving a plan checks its claim; factory.SessionWorktree when nil.
+	SessionWorktree planapprove.Locate
 }
 
 // Option customizes RunDaemon.

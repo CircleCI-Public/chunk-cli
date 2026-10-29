@@ -431,11 +431,17 @@ GET  /factory/plans/{plan}/build[?after=N] → PlanBuildActivity: the plan's bui
                              session (the running one, else the latest) and its feed
                              lines after the first N, numbered from first; total is the
                              next after (404 no build of the plan)
+POST /factory/plans/{plan}/approve {project_root, model?} → 202 {id}: approve the plan in
+                                   factory, stop its planner and start its build, in one call
+                                   that a client going away does not cut short (409 being
+                                   approved, not ready, no units, questions open or already being
+                                   built; 502 factory failed, or approved but the build would not
+                                   start; 503 not authenticated to CircleCI; 404 unknown project)
 POST /factory/plans/{plan}/planner/request {project_root, text, model?} → 200 SessionLog: start
                                    the plan's planner on a new plan's request, once (409 already
-                                   requested or claimed by another session; 503 no Claude Code,
-                                   factory or factory daemon, or not authenticated to CircleCI;
-                                   404 unknown project)
+                                   requested, claimed by another session, or the plan being
+                                   approved or approved; 503 no Claude Code, factory or factory
+                                   daemon, or not authenticated to CircleCI; 404 unknown project)
 POST /factory/plans/{plan}/planner/resume  {project_root, model?} → 200 SessionLog: have the
                                    planner claim the plan again, starting or resuming it, when it
                                    holds no claim; nothing while it does (409/503/404 as request)

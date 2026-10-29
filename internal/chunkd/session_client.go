@@ -107,6 +107,22 @@ func FetchPlanBuild(planID string, after int) (activity PlanBuildActivity, found
 	return activity, true, nil
 }
 
+// ApproveAndBuild has the daemon approve factory plan planID, stop its
+// planner and start its build, and returns the build's session ID. It uses
+// the long client: stopping and starting can outlast the short client's
+// timeout.
+func ApproveAndBuild(planID string, req PlanApproveRequest) (string, error) {
+	client, err := longDaemonClient()
+	if err != nil {
+		return "", err
+	}
+	var resp SessionStartResponse
+	if err := sessionCallWith(client, http.MethodPost, "/factory/plans/"+neturl.PathEscape(planID)+"/approve", req, &resp); err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
 // RequestPlanner starts factory plan planID's planner in the daemon on the
 // plan's request.
 func RequestPlanner(planID string, req PlannerRequest) (SessionLog, error) {

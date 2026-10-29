@@ -16,19 +16,24 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
 )
 
 // planBuildPoll is how often a plan build reads its plan and flow from
 // factory, to show where factory has it and to stop once it has ended.
 var planBuildPoll = 30 * time.Second
 
-// PlanAPI is what a plan build reads of a factory plan and its flow:
-// *circleci.Client.
+// PlanAPI is what the daemon reads of a factory plan and its flow, and
+// writes to approve one: *circleci.Client. It satisfies planapprove.API.
 type PlanAPI interface {
 	GetPlan(ctx context.Context, id string) (*circleci.Plan, error)
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
 	PlanText(ctx context.Context, id string) (string, error)
+	ReleaseClaim(ctx context.Context, sessionID, planID string) error
+	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
 }
+
+var _ planapprove.API = PlanAPI(nil)
 
 // planAPI is the factory API plan builds read plans through, or nil when
 // the daemon has no CircleCI client.

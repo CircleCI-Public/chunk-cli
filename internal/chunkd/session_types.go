@@ -166,7 +166,17 @@ type PlanBuildRequest struct {
 	Model  string `json:"model,omitempty"`
 }
 
-// SessionStartResponse answers an accepted POST /factory/plans.
+// PlanApproveRequest has the daemon approve a factory plan, stop its planner
+// and start its build.
+type PlanApproveRequest struct {
+	// ProjectRoot is a project the daemon tracks, or the top of a git
+	// repository. Required.
+	ProjectRoot string `json:"project_root"`
+	Model       string `json:"model,omitempty"`
+}
+
+// SessionStartResponse answers an accepted POST /factory/plans, or
+// POST /factory/plans/{plan}/approve.
 type SessionStartResponse struct {
 	ID string `json:"id"`
 }

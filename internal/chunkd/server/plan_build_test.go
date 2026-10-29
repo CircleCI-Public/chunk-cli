@@ -38,6 +38,22 @@ type fakePlans struct {
 	noFlow         bool
 	flowErr        error
 	holder         string
+	// events are the flow's applicable events.
+	events []circleci.FlowEvent
+	// task, when set, is the task a session takes to move the flow on, such
+	// as a review running.
+	task string
+	// released are the sessions whose claim ReleaseClaim released, and sent
+	// the events CreateFlowEvent sent; calls is both, in order.
+	released []string
+	sent     []circleci.FlowEvent
+	calls    []string
+	// releaseErr and eventErr fail ReleaseClaim and CreateFlowEvent.
+	releaseErr, eventErr error
+	// onRelease, when set, runs as ReleaseClaim is reached.
+	onRelease func()
+	// eventGate, when set, holds CreateFlowEvent until it is closed.
+	eventGate chan struct{}
 }
 
 func (f *fakePlans) GetPlan(_ context.Context, id string) (*circleci.Plan, error) {
@@ -61,7 +77,78 @@ func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error
 	if id != f.id || f.noFlow {
 		return nil, &circleci.StatusError{StatusCode: http.StatusNotFound}
 	}
-	return &circleci.Flow{ID: id, State: f.state, Phase: f.phase, Outcome: f.outcome, SessionID: f.holder}, nil
+	// As factory lists the events that apply in next, for the developer,
+	// after any task a session takes.
+	var next []circleci.Transition
+	if f.task != "" {
+		next = append(next, circleci.Transition{Actor: "session", TaskCategory: f.task, IsDispatched: true})
+	}
+	for _, e := range f.events {
+		next = append(next, circleci.Transition{Actor: "human", Event: e})
+	}
+	return &circleci.Flow{
+		ID: id, State: f.state, Phase: f.phase, Outcome: f.outcome, SessionID: f.holder,
+		ApplicableEvents: append([]circleci.FlowEvent(nil), f.events...),
+		Next:             next,
+	}, nil
+}
+
+// ReleaseClaim releases sessionID's claim on the plan, as factory does:
+// only the holder's release frees it.
+func (f *fakePlans) ReleaseClaim(_ context.Context, sessionID, _ string) error {
+	f.mu.Lock()
+	hook := f.onRelease
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
+	f.released = append(f.released, sessionID)
+	f.calls = append(f.calls, "release "+sessionID)
+	if f.holder == sessionID {
+		f.holder = ""
+	}
+	return nil
+}
+
+// CreateFlowEvent records event, once eventGate (when set) is closed.
+func (f *fakePlans) CreateFlowEvent(_ context.Context, _ string, event circleci.FlowEvent) error {
+	f.mu.Lock()
+	gate := f.eventGate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.eventErr != nil {
+		return f.eventErr
+	}
+	f.sent = append(f.sent, event)
+	f.calls = append(f.calls, "event "+string(event))
+	return nil
+}
+
+func (f *fakePlans) releasedSessions() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.released...)
+}
+
+func (f *fakePlans) sentEvents() []circleci.FlowEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]circleci.FlowEvent(nil), f.sent...)
+}
+
+func (f *fakePlans) callLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
 }
 
 // claim has holder claim the plan, as factory plan claim would; "" releases
@@ -102,6 +189,9 @@ type fakeBuild struct {
 	stopped bool
 	sent    []string
 	sendErr error
+	// stopGate, when set, holds Stop until it is closed, as a claude slow to
+	// exit would.
+	stopGate chan struct{}
 }
 
 func newFakeBuild() *fakeBuild { return &fakeBuild{events: make(chan factory.AgentEvent, 8)} }
@@ -123,6 +213,12 @@ func (b *fakeBuild) messages() []string {
 func (b *fakeBuild) Events() <-chan factory.AgentEvent { return b.events }
 
 func (b *fakeBuild) Stop() error {
+	b.mu.Lock()
+	gate := b.stopGate
+	b.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	b.mu.Lock()
 	b.stopped = true
 	b.mu.Unlock()

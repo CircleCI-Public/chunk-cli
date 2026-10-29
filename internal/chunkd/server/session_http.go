@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -19,6 +20,7 @@ const maxRequestBytes = 64 * 1024
 //
 //	POST /factory/plans                         build an approved factory plan
 //	GET  /factory/plans/{plan}/build            a plan's build session and its feed (?after=N)
+//	POST /factory/plans/{plan}/approve          approve a plan, stop its planner and build it
 //	POST /factory/plans/{plan}/planner/request  start a new plan's planner on its request
 //	POST /factory/plans/{plan}/planner/resume   have a plan's planner claim it again
 //	GET  /factory/plans/{plan}/planner          read a plan's planner's log (?after=N)
@@ -27,6 +29,7 @@ const maxRequestBytes = 64 * 1024
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /factory/plans", d.handlePlanBuild)
 	mux.HandleFunc("GET /factory/plans/{plan}/build", d.handlePlanBuildActivity)
+	mux.HandleFunc("POST /factory/plans/{plan}/approve", d.handlePlanApprove)
 	mux.HandleFunc("POST /factory/plans/{plan}/planner/request", d.handlePlannerRequest)
 	mux.HandleFunc("POST /factory/plans/{plan}/planner/resume", d.handlePlannerResume)
 	mux.HandleFunc("GET /factory/plans/{plan}/planner", d.handlePlannerLog)
@@ -79,6 +82,28 @@ func (d *daemon) handlePlanBuildActivity(w http.ResponseWriter, r *http.Request)
 	}
 	after, _ := strconv.Atoi(r.URL.Query().Get("after"))
 	writeJSON(w, http.StatusOK, planBuildActivity(entry.snapshot(), after))
+}
+
+func (d *daemon) handlePlanApprove(w http.ResponseWriter, r *http.Request) {
+	var req chunkd.PlanApproveRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ProjectRoot == "" {
+		http.Error(w, "project_root required", http.StatusBadRequest)
+		return
+	}
+	// Detached from the request: once accepted, a client that goes away does
+	// not leave the plan approved and unbuilt.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), planApproveTimeout)
+	defer cancel()
+	sess, err := d.approvePlan(ctx, r.PathValue("plan"), req)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, chunkd.SessionStartResponse{ID: sess.ID})
 }
 
 func (d *daemon) handlePlannerRequest(w http.ResponseWriter, r *http.Request) {

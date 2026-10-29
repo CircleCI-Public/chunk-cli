@@ -17,7 +17,7 @@ import (
 // makes: a request waits on them.
 const plannerReadTimeout = 30 * time.Second
 
-// Approval marks on a planner (Unit 3 sets them).
+// Approval marks on a planner, set by approvePlan.
 const (
 	approving = "approving"
 	approved  = "approved"
@@ -32,7 +32,7 @@ type planner struct {
 	planID, root string
 	api          PlanAPI
 	ctx          context.Context // the planner's lifetime, ended by cancel
-	run          *runner         // nil for a bare entry that only holds an approval mark (Unit 3)
+	run          *runner         // nil for a bare entry that only holds an approval mark
 	// sendMu is held through each request or resume, from the claim decision
 	// to the send, so two at once decide one after the other.
 	sendMu sync.Mutex
@@ -44,7 +44,7 @@ type planner struct {
 	// since it last held no claim; checkClaim, that the reply to it is owed
 	// a check.
 	claimed, checkClaim bool
-	// approval is "", approving or approved: see approvePlan (Unit 3).
+	// approval is "", approving or approved: see approvePlan.
 	approval string
 	watching bool               // the watch goroutine has started
 	cancel   context.CancelFunc // ends the watch goroutine
@@ -149,7 +149,7 @@ func (d *daemon) plannerSend(planID, root, model, text string) (chunkd.SessionLo
 	if err != nil {
 		return chunkd.SessionLog{}, err
 	}
-	p := d.planners.get(planID, ps.root, api, func(ctx context.Context) *runner {
+	newRun := func(ctx context.Context) *runner {
 		start := d.rcfg.StartPlanner
 		if start == nil {
 			start = func(ctx context.Context, cfg factory.AgentConfig, message string) (AgentSession, error) {
@@ -157,20 +157,28 @@ func (d *daemon) plannerSend(planID, root, model, text string) (chunkd.SessionLo
 			}
 		}
 		return newRunner(ctx, factory.AgentConfig{Model: model}, start)
-	})
-
-	p.sendMu.Lock()
+	}
+	var p *planner
+	var requested bool
+	for {
+		p = d.planners.get(planID, ps.root, api, newRun)
+		p.sendMu.Lock()
+		p.mu.Lock()
+		approval := p.approval
+		requested = p.requested
+		p.mu.Unlock()
+		if err := approvalRefusal(approval); err != nil {
+			p.sendMu.Unlock()
+			return chunkd.SessionLog{}, err
+		}
+		if p.run != nil {
+			break
+		}
+		// A bare entry whose approval was refused is no session yet, and
+		// is being dropped: the next get makes the plan its planner.
+		p.sendMu.Unlock()
+	}
 	defer p.sendMu.Unlock()
-
-	p.mu.Lock()
-	approval, requested := p.approval, p.requested
-	p.mu.Unlock()
-	if err := approvalRefusal(approval); err != nil {
-		return chunkd.SessionLog{}, err
-	}
-	if p.run == nil {
-		return chunkd.SessionLog{}, apiErr(http.StatusConflict, "the plan has no planner")
-	}
 	if text != "" && requested {
 		return chunkd.SessionLog{}, apiErr(http.StatusConflict, "%s", errRequested.Error())
 	}
