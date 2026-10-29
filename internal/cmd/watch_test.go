@@ -1,9 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -14,83 +14,95 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
-// registerProject writes the project-root breadcrumb chunk drops for every
-// project it has seen, so AllProjectRoots discovers root. It returns the root as
-// AllProjectRoots reports it — canonical, symlinks resolved — which is not the
-// string passed in when the path runs through one (every darwin temp dir does).
-func registerProject(t *testing.T, root string) string {
-	t.Helper()
-	dataDir, err := config.ProjectDataDir(root)
+// watchProject is the git top level chunk watch was opened under, canonical
+// and registered for the daemon to find, and nothing outside a repository.
+func TestWatchProject(t *testing.T) {
+	repo := gitRepo(t, "")
+	sub := filepath.Join(repo, "sub")
+	err := os.MkdirAll(sub, 0o755)
 	assert.NilError(t, err)
-	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, root))
-	canonical, err := filepath.EvalSymlinks(root)
+	// Reached through a symlink, as every darwin temp dir is.
+	link := filepath.Join(t.TempDir(), "link")
+	err = os.Symlink(repo, link)
 	assert.NilError(t, err)
-	return canonical
+	canonical := config.CanonicalProjectRoot(repo)
+
+	tests := []struct {
+		name     string
+		cwd      string
+		wantRoot string
+		wantOK   bool
+	}{
+		{
+			name:     "repo root",
+			cwd:      repo,
+			wantRoot: canonical,
+			wantOK:   true,
+		},
+		{
+			name:     "repo subdirectory",
+			cwd:      sub,
+			wantRoot: canonical,
+			wantOK:   true,
+		},
+		{
+			name:     "repo through a symlink",
+			cwd:      link,
+			wantRoot: canonical,
+			wantOK:   true,
+		},
+		{
+			name: "not a repo",
+			cwd:  t.TempDir(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateConfig(t)
+			t.Setenv(config.EnvXDGDataHome, t.TempDir())
+
+			root, ok := watchProject(t.Context(), tt.cwd)
+			assert.Check(t, cmp.Equal(ok, tt.wantOK))
+			assert.Check(t, cmp.Equal(root, tt.wantRoot))
+
+			known, err := sidecar.AllProjectRoots()
+			assert.NilError(t, err)
+			if !tt.wantOK {
+				assert.Check(t, cmp.Len(known, 0), "registered %v outside a repository", known)
+				return
+			}
+			dataDir, err := config.ProjectDataDir(root)
+			assert.NilError(t, err)
+			crumb, err := os.ReadFile(sidecar.ProjectRootPath(dataDir))
+			assert.NilError(t, err, "no project-root breadcrumb")
+			assert.Check(t, cmp.Equal(string(crumb), canonical))
+			assert.Check(t, cmp.DeepEqual(known, []string{canonical}))
+		})
+	}
 }
 
-func TestWatchRootsDefaultsToAllKnownProjects(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-
-	cwd, other := t.TempDir(), t.TempDir()
-	knownRoot := registerProject(t, other)
-
-	roots, err := watchRoots(cwd, false, nil)
-	assert.NilError(t, err)
-	assert.Assert(t, slices.Contains(roots, cwd), "cwd should always be watched: %v", roots)
-	assert.Assert(t, slices.Contains(roots, knownRoot), "known project should be watched by default: %v", roots)
-}
-
-func TestWatchRootsFocusLimitsToCwdAndArgs(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-
-	cwd, other, explicit := t.TempDir(), t.TempDir(), t.TempDir()
-	_ = registerProject(t, other)
-
-	roots, err := watchRoots(cwd, true, []string{explicit})
-	assert.NilError(t, err)
-	assert.DeepEqual(t, roots, []string{cwd, explicit})
-}
-
-func TestWatchAllFlagIsDeprecatedButAccepted(t *testing.T) {
+func TestWatchFlagsAreDeprecatedButAccepted(t *testing.T) {
 	cmd := newWatchCmd()
 
 	focus := cmd.Flags().Lookup("focus")
-	assert.Assert(t, focus != nil, "--focus should be registered")
+	assert.Assert(t, focus != nil, "--focus should still parse for existing invocations")
 	assert.Equal(t, focus.DefValue, "false")
+	assert.Assert(t, focus.Deprecated != "", "--focus should be marked deprecated")
 
 	all := cmd.Flags().Lookup("all")
 	assert.Assert(t, all != nil, "--all should still parse for existing invocations")
 	assert.Assert(t, all.Deprecated != "", "--all should be marked deprecated")
 }
 
-// --focus sends these roots to the daemon as a filter, and the daemon keys
-// projects by the canonical spelling, so a root that reaches it unresolved
-// matches nothing and the dashboard comes back empty. Git answers with a
-// resolved path on darwin, which would hide this on the platform it was
-// developed on.
-func TestWatchRootsAreCanonicalForTheDaemonFilter(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-
-	base := t.TempDir()
-	target := filepath.Join(base, "project")
-	assert.NilError(t, os.MkdirAll(target, 0o755))
-	link := filepath.Join(base, "link")
-	assert.NilError(t, os.Symlink(target, link))
-
-	canonical := config.CanonicalProjectRoot(target)
-	assert.Equal(t, config.CanonicalProjectRoot(link), canonical,
-		"both spellings must canonicalise to one root")
-
-	// What registration writes, and so what the daemon reports, for either.
-	dataDir, err := config.ProjectDataDir(link)
+func TestWatchTakesNoArgs(t *testing.T) {
+	cmd := newWatchCmd()
+	err := cmd.Args(cmd, nil)
 	assert.NilError(t, err)
-	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, link))
-	roots, err := sidecar.AllProjectRoots()
-	assert.NilError(t, err)
-	assert.DeepEqual(t, roots, []string{canonical})
+
+	err = cmd.Args(cmd, []string{"x"})
+	ue, ok := errors.AsType[*userError](err)
+	assert.Assert(t, ok, "not a user error: %v", err)
+	assert.Check(t, cmp.Equal(ue.UserExitCode(), ExitBadArgs))
 }
 
 func TestOpenFlows(t *testing.T) {

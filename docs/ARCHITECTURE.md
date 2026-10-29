@@ -322,9 +322,6 @@ The split is in the imports, not yet everywhere at runtime:
 - **Projects are registered by writing a file, not by asking the daemon.**
   `chunk watch`, `chunk validate` and `chunk review` write the breadcrumbs
   `AllProjectRoots` reads, and the daemon finds projects by scanning them.
-- **The snapshot carries more than the dashboard draws.** It holds each
-  project's sidecars, raw `eventlog.Event`s and buffered commands as well as its
-  sessions; `chunk watch` lists the sessions and ignores the rest.
 - **`chunk factory build` reads the daemon's files to check a request.** With
   `--continue`, `checkFactoryContinue` loads the earlier run's record from the
   repository's data directory before asking the daemon, which loads it again.
@@ -348,8 +345,10 @@ release until it exits.
 
 ### Remote viewing
 
-`chunk watch` is a pure client of `/snapshot` and `/output`; it opens no local
-state, so it works unchanged against a daemon reached over TCP. What differs:
+Clients of `/snapshot` and `/output` open no local state, so they work
+unchanged against a daemon reached over TCP. `chunk watch` is not one of them:
+its flows and plans are planned and built from this machine, so it refuses to
+start with `CHUNK_DAEMON_REMOTE_ADDR` set. What differs for the others:
 
 - `EnsureRunning` / `EnsureLaunched` are no-ops when `CHUNK_DAEMON_REMOTE_ADDR`
   is set. A remote daemon is managed where it runs.
@@ -357,8 +356,8 @@ state, so it works unchanged against a daemon reached over TCP. What differs:
   its own spelling or its symlink-resolved one, because a remote viewer can only
   type a path as it knows it and that need not be the daemon's key.
 - A 401 surfaces as `chunkd.ErrUnauthorized` and an unreachable address is
-  reported with the address in the message (`requestError`), so the header
-  (`Connection.Label`) and footer say which daemon failed and why.
+  reported with the address in the message (`requestError`), so a client can
+  say which daemon failed and why.
 
 Beyond that it owns three things that outlive the processes they came from.
 

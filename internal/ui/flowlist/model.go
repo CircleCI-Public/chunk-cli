@@ -25,9 +25,6 @@ type OpenMsg struct{ ID, Title string }
 // NewMsg asks the host to start a new plan workspace.
 type NewMsg struct{}
 
-// BackMsg asks the host to show runs, without ending the program.
-type BackMsg struct{}
-
 // QuitMsg asks the host to quit after checking for unsent workspace input.
 type QuitMsg struct{}
 
@@ -238,10 +235,8 @@ func (m *Model) startPreview() tea.Cmd {
 
 func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
-	case "ctrl+c":
+	case "ctrl+c", "q", "esc":
 		return func() tea.Msg { return QuitMsg{} }
-	case "tab", "esc", "2":
-		return func() tea.Msg { return BackMsg{} }
 	case "enter":
 		flows, _ := m.visible()
 		for _, f := range flows {
@@ -256,8 +251,6 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.move(-1)
 	case "n":
 		return func() tea.Msg { return NewMsg{} }
-	case "q":
-		return func() tea.Msg { return QuitMsg{} }
 	}
 	return nil
 }

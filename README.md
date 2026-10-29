@@ -8,7 +8,7 @@ On top of sidecars, chunk provides:
 
 - **`chunk validate`** to run your test, lint and format checks locally, on a sidecar, or in the background.
 - **`chunk factory`** to have an implementer agent make a change on a sidecar while reviewers check it against the prompts in `.chunk/reviews/`, until the checks pass.
-- **`chunk watch`** to follow and manage your factory runs live.
+- **`chunk watch`** to plan and follow your factory flows.
 - **`chunk mutate`** to find test coverage gaps with mutation testing.
 
 ## Why chunk?
@@ -41,7 +41,7 @@ Download the latest `chunk-cli_Windows_x86_64.zip` or `chunk-cli_Windows_arm64.z
 chunk init                                     # set up this project: config, sandbox, review prompts
 chunk factory start "add a --verbose flag"     # optional: hand chunk a diff you already started
 chunk factory build "add a --verbose flag"     # build a change from a prompt, review it, open the PR
-chunk watch                                    # follow and manage your factory runs — keep it open
+chunk watch                                    # plan and follow your factory flows — keep it open
 ```
 
 ### Project Setup
@@ -161,7 +161,7 @@ Add your own review prompts to `.chunk/reviews/`, one `.md` file per area, for `
 ## Other Tools
 
 ```bash
-chunk watch                  # follow and manage your factory runs live (--focus: this directory only)
+chunk watch                  # plan and follow your factory flows
 chunk mutate ./internal --parallel 4   # find coverage gaps; see docs/MUTATE.md
 chunk conflicts              # does this branch still merge cleanly? (advisory, always exits 0)
 chunk validate --async       # run in the background, then `chunk validate results`
@@ -185,7 +185,7 @@ chunk config set|show                      Manage configuration
 chunk validate [name]                      Run quality checks
 chunk validate results|variants            Background run results; validate code variants
 chunk factory bootstrap|build|start        Implement and review changes on sidecars
-chunk watch                                Follow and manage your factory runs live
+chunk watch                                Plan and follow your factory flows
 chunk mutate [path]                        Find test coverage gaps via mutation testing
 chunk conflicts                            Report whether this branch merges cleanly
 chunk hook disable|enable|status           Manage hook execution
