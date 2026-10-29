@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -334,12 +335,32 @@ func previewFactoryPlan(ctx context.Context, id string) (string, []circleci.Plan
 	if err != nil {
 		return "", nil, err
 	}
-	text, err := api.PlanText(ctx, id)
-	if err != nil {
+	return previewPlan(ctx, api, id)
+}
+
+// previewPlan is plan id's text and open comments, fetched at the same time.
+func previewPlan(ctx context.Context, api *circleci.Client, id string) (string, []circleci.PlanComment, error) {
+	g, ctx := errgroup.WithContext(ctx)
+	var text string
+	var comments []circleci.PlanComment
+	g.Go(func() error {
+		var err error
+		if text, err = api.PlanText(ctx, id); err != nil {
+			return fmt.Errorf("plan text: %w", err)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		var err error
+		if comments, err = api.ListComments(ctx, id, true); err != nil {
+			return fmt.Errorf("list comments: %w", err)
+		}
+		return nil
+	})
+	if err := g.Wait(); err != nil {
 		return "", nil, err
 	}
-	comments, err := api.ListComments(ctx, id, true)
-	return text, comments, err
+	return text, comments, nil
 }
 
 // watchFactoryProblem is CheckFactoryDaemon's error as one sentence for the

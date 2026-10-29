@@ -34,15 +34,14 @@ func (m Model) Content() string {
 	}
 	h := contentHeight + 2
 	listWidth := m.width - 2
-	if m.width-theme.ListWidth-4 >= minPreview {
+	rightWidth := m.previewWidth()
+	if rightWidth > 0 {
 		listWidth = theme.ListWidth
 	}
 	left := m.styles.Pane(true, listWidth+2, h, m.styles.Emphasis.Render("flows"),
 		strings.Join(fit(m.listLines(listWidth, contentHeight), listWidth, contentHeight), "\n"))
 	body := left
-	if listWidth == theme.ListWidth {
-		// The right box's border, then one leading space.
-		rightWidth := m.width - listWidth - 5
+	if rightWidth > 0 {
 		lines := fit(m.previewLines(rightWidth), rightWidth, contentHeight)
 		for i, l := range lines {
 			lines[i] = " " + l
@@ -212,8 +211,9 @@ func (m Model) previewLines(width int) []string {
 		note += ": " + oneLine(m.previewErr.Error())
 		rows = append(rows, m.styles.Warning.Render(note))
 	}
+	entry := m.cache[m.id]
 	commentsHeading := false
-	for _, c := range m.comments {
+	for _, c := range entry.comments {
 		if c.ResolvedAt != nil {
 			continue
 		}
@@ -230,21 +230,35 @@ func (m Model) previewLines(width int) []string {
 		rows = append(rows, "")
 	}
 	rows = append(rows, m.styles.Emphasis.Render("Plan"))
-	if m.previewLoaded && strings.TrimSpace(m.text) == "" {
+	if m.previewLoaded && strings.TrimSpace(entry.text) == "" {
 		return append(rows, m.styles.Dim.Render("No plan text yet."))
 	}
+	return append(rows, entry.lines...)
+}
+
+// previewWidth is the preview pane's width inside its border and leading
+// space, as Content draws it, or 0 when the pane is not drawn.
+func (m Model) previewWidth() int {
+	if m.width-theme.ListWidth-4 < minPreview {
+		return 0
+	}
+	return m.width - theme.ListWidth - 5
+}
+
+// glamourLines is text rendered as markdown wrapped at width, in the dark or
+// light style, as lines; text as it is when glamour fails.
+func glamourLines(text string, width int, dark bool) []string {
 	style := "light"
-	if m.dark {
+	if dark {
 		style = "dark"
 	}
-	text := clean(m.text)
-	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(max(width-4, 1)))
-	if err == nil {
-		if rendered, renderErr := renderer.Render(text); renderErr == nil {
+	text = clean(text)
+	if r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(max(width, 1))); err == nil {
+		if rendered, err := r.Render(text); err == nil {
 			text = strings.TrimSpace(rendered)
 		}
 	}
-	return append(rows, strings.Split(text, "\n")...)
+	return strings.Split(text, "\n")
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(clean(s)), " ") }

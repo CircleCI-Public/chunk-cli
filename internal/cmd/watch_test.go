@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
@@ -118,6 +122,82 @@ func TestOpenFlows(t *testing.T) {
 	got := openFlows(flows)
 
 	assert.Check(t, cmp.DeepEqual(got, []circleci.Flow{flows[0], flows[1], flows[3]}))
+}
+
+// previewPlan sends both requests at once, and fails when either does.
+func TestPreviewPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		textStatus   int
+		commentsCode int
+		wantErr      string
+	}{
+		{
+			name:         "both in parallel",
+			textStatus:   http.StatusOK,
+			commentsCode: http.StatusOK,
+		},
+		{
+			name:         "text fails",
+			textStatus:   http.StatusNotFound,
+			commentsCode: http.StatusOK,
+			wantErr:      "plan text",
+		},
+		{
+			name:         "comments fail",
+			textStatus:   http.StatusOK,
+			commentsCode: http.StatusNotFound,
+			wantErr:      "list comments",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Each handler waits for the other to start, so sequential calls
+			// time out instead of passing.
+			var started sync.WaitGroup
+			started.Add(2)
+			wait := func() {
+				started.Done()
+				done := make(chan struct{})
+				go func() { started.Wait(); close(done) }()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("the other request never started: calls are sequential")
+				}
+			}
+			reply := func(w http.ResponseWriter, status int, body string) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				if status == http.StatusOK {
+					_, _ = w.Write([]byte(body))
+					return
+				}
+				_, _ = w.Write([]byte(`{"message":"not found"}`))
+			}
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /api/v3/factory/plans/{id}/text", func(w http.ResponseWriter, _ *http.Request) {
+				wait()
+				reply(w, tc.textStatus, `{"data":{"attributes":{"text":"# plan"}}}`)
+			})
+			mux.HandleFunc("GET /api/v3/factory/comments", func(w http.ResponseWriter, _ *http.Request) {
+				wait()
+				reply(w, tc.commentsCode, `{"data":[{"id":"c1","attributes":{"quoted_text":"","body":"look","created_at":"2026-01-01T00:00:00Z","resolved_at":null},"references":{"factory_plan":{"id":"p1"}}}],"page":{"next":null}}`)
+			})
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+			assert.NilError(t, err)
+
+			text, comments, err := previewPlan(t.Context(), client, "p1")
+			if tc.wantErr != "" {
+				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
+				return
+			}
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(text, "# plan"))
+			assert.Check(t, cmp.Len(comments, 1))
+		})
+	}
 }
 
 func TestPlanParents(t *testing.T) {
