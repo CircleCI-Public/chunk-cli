@@ -143,54 +143,14 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
-├── factory                         # Build and manage factory runs
-│   ├── build [prompt|file|-]       # Implement a prompt on a sidecar, then review and validate it until it passes
-│   │   --max-attempts <n>          # Maximum rounds of implement, review and check (default: 3)
-│   │   --continue <run id|branch>  # Pick up an earlier run; its ID is the branch's final segment
-│   │   --reviewers <n>             # Reviewer sidecars (0: one per review prompt)
-│   │   --reviews <dir>             # Directory of review prompts (default: .chunk/reviews)
-│   │   --no-validate               # Skip the project's validation commands
-│   │   --keep-sidecars             # Leave the sidecars running when the run ends
-│   │   --org-id <id>               # Organization ID
-│   │   --image <id>                # Snapshot image ID (default: validation.sidecarImage)
-│   │   --model <name>              # Claude model (default: Claude Code's default)
-│   │   --implement-timeout <duration> # Max time for each implementer turn
-│   │   --review-timeout <duration> # Max time for each review
-│   │   --log                       # Keep a log of the run's full context in ~/.local/share/chunk/repo-<id>/factory/<start time>.log
-│   │   --log-file <path>           # Keep the log in this file instead (implies --log)
-│   │   --verbose                   # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
-│   │   --open-pr                   # Refuse to start the run unless its pull request could be opened
-│   │   --no-open-pr                # Do not push the branch or open a pull request when every check passes
-│   │   --draft                     # Open the pull request as a draft
-│   │   --remote                    # Provision a sidecar of its own for the run; bring the work back with 'chunk factory pull'
-│   │   --json                      # Output as JSON
-│   ├── pull [run id]               # Bring a --remote run's work back (default: the most recently started remote run)
-│   │   --json                      # Output as JSON
-│   ├── start [prompt|file|-]       # Hand the factory a diff and a prompt to refine
-│   │   --diff <file|->             # Start from a patch of work done elsewhere
-│   │   --json                      # Output as JSON
+├── factory                         # Plan changes and build them in factory
 │   ├── plan [prompt]               # Plan a change with Claude, then approve it and build it on the daemon
 │   │   --model <model>             # Model Claude plans with (default: your Claude Code default)
-│   ├── bootstrap                   # Set up this project for chunk factory: config and sidecar image
-│   │   --skip-sidecar              # Leave out setting up and recording the sidecar image
-│   │   --snapshot-name <name>      # Name the sidecar image's snapshot (default: <repo>-<YYYY-MM-DD>-<HHMMSS>)
-│   │   --org-id <id>               # Organization ID
-│   │   --image <id>                # Image the sidecar starts from (default: cimg-base:2026.09-claude)
-│   │   --json                      # Output as JSON
-│   └── eval [prompts-dir]          # (hidden) Score review prompts by reviewing past changes and grading what they find
-│       --commits <n>               # Review this many recent commits (this or --suite is required)
-│       --from <rev>                # Take --commits from this revision's history (default: HEAD)
-│       --suite <dir>               # Review the cases of the suite.json in this directory instead
-│       --runs <n>                  # Times to review each case (default: 1)
-│       --parallelism <n>           # Maximum number of sidecars (0: one per prompt)
-│       --output <path>             # Also write the full report as JSON to this file
+│   └── bootstrap                   # Set up this project for chunk factory: config and sidecar image
+│       --skip-sidecar              # Leave out setting up and recording the sidecar image
+│       --snapshot-name <name>      # Name the sidecar image's snapshot (default: <repo>-<YYYY-MM-DD>-<HHMMSS>)
 │       --org-id <id>               # Organization ID
-│       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
-│       --model <name>              # Claude model for reviews (default: Claude Code's default)
-│       --timeout <duration>        # Max time for each review
-│       --no-grade                  # Score on the suite's labels alone (not with --commits)
-│       --grader-model <name>       # Claude model for the grader (default: Claude Code's default)
-│       --grader-timeout <duration> # Max time for grading each case (default: 20m)
+│       --image <id>                # Image the sidecar starts from (default: cimg-base:2026.09-claude)
 │       --json                      # Output as JSON
 │
 ├── watch                           # Plan and follow your factory flows
@@ -332,248 +292,13 @@ chunk
   is run, and new plans are made in the project it was opened in, which it
   registers. An argument exits 2. `--focus` and `--all` still parse, deprecated,
   and do nothing.
-- **A lone prompt argument with no spaces that names an existing file is read as the
-  prompt, wherever the file is.** `chunk factory build ../notes/spec.md` (and
-  `chunk factory start`, the same way) reads that file on this machine and
-  runs on the repository where the command was triggered, never the file's
-  own repository, which is untouched. The run's record keeps the file's path
-  as where the prompt came from (`spec_origin` in its JSON, and `chunk watch`
-  shows it above the prompt). A word with no spaces and a `.md`, `.markdown`
-  or `.txt` extension that does not exist is an error, `file not found`,
-  rather than literal text, since that is a far likelier mistyped path than a
-  prompt; a directory, a binary file and a file over 1 MiB (chunk's cap on how
-  much of a file it reads as a prompt) are refused the same way, each before
-  any sidecar is created. Anything else — an argument with spaces, or a
-  single word that is not an existing file — is literal prompt text, even one
-  that names a file: `chunk factory build "fix README.md typos"`.
-- **`factory build` (and `factory build --remote`) say what they are about to do
-  before any of their plumbing.** On a terminal, before the run ID and
-  "started on the chunk daemon" (or, with `--remote`, before the sidecar is
-  provisioned), it prints a plain-language line: that chunk implements the
-  change (or, with `--continue`, reviews the existing work), reviews it and
-  runs the project's checks until they pass, for how many review rounds and
-  the flag that changes that ("up to 3 review rounds (change with
-  --max-attempts)"), and what the run ends with. A second line recommends
-  `chunk watch` as the best way to follow it and every other run, and what it
-  shows (findings, check output, the pull request); you can also leave it
-  running. What it says the run ends with matches the flags: a pull request by
-  default (hedged, since a project with no GitHub token or origin still runs
-  and opens none), the pull request with `--open-pr`, a draft pull request
-  with `--draft` and `--open-pr` together (hedged the same way as the default
-  when `--draft` is given alone, since `--draft` by itself still resolves to
-  the same auto mode as the default and can likewise end with none), none with
-  `--no-open-pr` (the work stays on the local branch), and with `--remote`,
-  that it keeps running on its own sidecar, `chunk factory pull` brings the
-  work back, and it opens no pull request yet.
-  These lines are left out with `--json`, in CI (`CI` set), and when stdout or
-  stderr is not a terminal (a log file, a pipe), so none of those changes
-  anything already being parsed.
-- **`chunk watch` is the recommended way to interact with chunk.** The plain
-  output of `factory build` is a log of a run; `chunk watch` shows every run
-  in every project, each review finding with its severity and location, the
-  output of each failed check, the implementer's live activity and the pull
-  request, with keys to copy, expand and cancel. So on a terminal chunk points
-  there when it helps: at the start of a run (above), at the end of a failed
-  check's or a review with findings' line ("details in chunk watch"), at the
-  end of every run with its run ID (before `--continue <run id>`, when the
-  run can be carried on), after `chunk init`, and in bare `chunk` help. Each
-  pointer follows the same rule as the start message: never with `--json`, in
-  CI, or when stdout or stderr is not a terminal. Chunk never opens `watch` for
-  you.
-- **A factory run works in rounds, and `--max-attempts` caps them.** A round
-  is one implementer pass, then the reviews and the project's checks. The run
-  stops when every check passes or after `--max-attempts` rounds (default: 3).
-  A run that reaches the cap with checks still failing says so, names
-  `--max-attempts` to raise it and, when it committed work, the
-  `chunk factory build --continue <run id>` command that carries it on. Raise
-  the cap when the change is large or the reviewers are strict and runs keep
-  ending with feedback left, so a run can finish without `--continue`. Lower
-  it, down to 1, for quick or exploratory changes or to cap spend: each round
-  costs an implementer turn plus every reviewer, so more rounds cost more and
-  take longer.
-- **`factory build` runs on the local daemon, in the background.** `chunk factory build "<prompt>"` (or
-  `chunk factory build < prompt.md`; `chunk factory build - < prompt.md` is the explicit
-  form; a prompt argument with a non-empty file on stdin is refused, so a
-  stray word such as `--log run.log < prompt.md` cannot drop the file) checks
-  the project's review prompts and validation commands, starts the daemon if
-  needed, and starts a factory session, which the daemon starts tracking the
-  project for if it has not seen it before; it follows the run
-  until it ends. Ctrl-C stops the run and waits for it to commit the work done
-  so far; the run belongs to the daemon, so if `chunk factory build` loses contact it
-  keeps going and `chunk watch` still shows it. It uses the daemon's
-  Claude and CircleCI credentials, resolved when the daemon started, and the
-  project's configured org and image unless `--org-id` or `--image` say
-  otherwise. It is refused when `CHUNK_DAEMON_REMOTE_ADDR` is set, since a run
-  works from this machine's files. The project needs a git remote named
-  `origin` (the sidecars clone from it); `factory build` fails up front without one.
-  A project can have several runs going at once, each in its own worktree and
-  on its own sidecars. A run that continues another works in the worktree of the
-  first run of its chain, so it is refused while any run of that chain is going. Runs are kept in memory: a daemon
-  restart loses the record, but not the work committed on the run's branch. `--reviews` must name a directory inside the project. Every reviewer is
-  given the original factory prompt as the requested-change specification, so
-  the files in that directory can be reusable review lenses rather than copies
-  of a particular request. Every reviewer is also given a severity rubric: only
-  a problem it can demonstrate (it breaks the requested behavior or existing
-  behavior, degrades run time, loses data or is a security problem) may be high
-  or medium and so send the implementer back; style remarks, tests that could
-  be more thorough and other suggestions are low and never block. From the
-  second round, each reviewer is shown its own earlier blocking findings and the
-  implementer's reply to them, so it checks whether they were fixed rather than
-  raising them again or contradicting itself. As it follows the run it prints the sidecars being
-  prepared and each round's findings, with the end of any failed validation
-  command's output. While the implementer works, a terminal shows one line,
-  redrawn in place, of how long the turn has run, what the implementer last did
-  and said, and how many tools it has used, with `quiet <n>m` once it has done
-  nothing for five minutes; without a terminal the same is printed every two
-  minutes.
-  Factory branches are named `chunk/factory/<description>/<run id>`. The
-  description is a short slug made from the prompt's first line (for a plan
-  from `factory plan`, its `# name` line), while the final segment remains the
-  stable run ID. When the run ends it prints that
-  branch, how to keep it, how long the run took and what the implementer cost,
-  and exits non-zero unless every check passed. `--log` has the run keep a
-  plain-text log in `~/.local/share/chunk/repo-<id>/factory/<start time>.log`, and
-  `--log-file <path>` keeps it in a file of your choosing instead (it implies
-  `--log`), with the full context the display leaves
-  out — each prompt the implementer is sent, what it did and said, every
-  review's findings and prose, and failed commands' output — for a person or an
-  agent to judge the run and its prompts by. The daemon writes it, so a
-  relative path is resolved against the caller's directory first. `--verbose`
-  adds the review prompts, passing commands' output, and a check each round
-  that every reviewer has the implementer's change, also shows the log in the
-  terminal as the run writes it, and implies `--log`.
-  `--implementer-instructions` appends run-specific guidance to the implementer's
-  fixed safety prompt, which is useful for controlled harness experiments.
-- **`factory build` opens a pull request once the checks pass.** When the loop
-  ends with every check passed, the daemon pushes the run's branch to `origin`
-  (with the developer's own git credentials, never prompting) and opens a pull
-  request on GitHub, ready for review; `--draft` opens a draft instead, and
-  `--no-open-pr` leaves the branch alone. The title is the prompt's first line,
-  or for a plan from `factory plan` the text of its `## 1. Outcome`, cut
-  between words to 72 characters; the commit's subject comes from the same
-  place. The description holds the request, the
-  diff stat and the checks that passed, with a note when the branch also carries
-  the uncommitted work the run started from. It targets the branch the run was
-  started from if `origin` has it, and the repository's default branch otherwise
-  (a local-only branch, or a factory branch, cannot be a target). A run whose
-  checks did not pass, was cancelled or made no changes pushes nothing and opens
-  nothing. It needs a GitHub token with write access to pull requests
-  (`GITHUB_TOKEN` or `chunk auth set github`, then restart the daemon, which reads
-  it at start) and an `origin` on GitHub; a project with neither still runs — the
-  work is worth doing either way — and the run records why it opened none.
-  `--open-pr` insists on the pull request instead: what it needs is checked when
-  the request is accepted, so a project that could not open one is refused before
-  the run costs minutes. `chunk auth` only checks that a token works, not what it
-  may do, so a read-only token is found when the pull request is refused. An
-  organization with single sign-on also refuses a token until it is authorized there
-  (GitHub's token page, Configure SSO), and the error says so. The branch includes
-  the baseline commit when the run started from uncommitted work, so that commit is
-  part of the pull request. A `--continue` run pushes the same branch again, which
-  updates the pull request already open for it: GitHub refuses a second one, and the
-  run records the open one rather than a failure. If the checks passed but the pull
-  request could not be opened (a refused token, say), the work stays committed, and
-  pushed if the push got that far; the command prints why, says where the work is,
-  and exits non-zero. The session's `factory.pull_request` records
-  `state` (`pending`, `pushing`, `opening`, `opened`, `failed` or `skipped`), `url`,
-  `number`, `base` and a `message` for the last two, which `chunk watch` draws as
-  the run pane's `Pull request` row and as `PR #<n>` beside an ended run in the run list.
-  Once it is open, the daemon asks GitHub about it about once a minute and records
-  `status`: `up` (nobody has reviewed it or been asked to), `in_review`, `feedback`
-  (changes requested, or review threads still unresolved), `checks_failing`,
-  `merged` or `closed`. Feedback outranks failing checks, and a reviewer's latest
-  verdict is the one that counts, so one who asked for changes and then approved
-  no longer blocks. `chunk watch` shows it as the run's chip in place of `passed`
-  (`PR up`, `in review`, `feedback`, `checks failing`, `merged`, `closed`) and on
-  the `Pull request` row, and the run list search finds it. It is followed while the run is
-  going and for a day after it ends, which is as long as the run list keeps it, and
-  not once merged or closed. With no GitHub token the status stays unset and the run
-  shows `passed`.
-  A `--remote` run does not go through the local daemon, so it opens none, and `--open-pr` or `--draft` with `--remote` is refused. Only GitHub is supported.
-- **`factory build --continue` picks up a finished run's work.** A run that
-  ends with committed work short of passing (exhausted or stuck, or failed or
-  cancelled part way, such as on a reviewer sidecar that could not be made)
-  prints `chunk factory build --continue <run id>`, and `r` in `chunk watch`
-  starts the same run, with no prompt, from the run's pane. The continued run reopens the earlier
-  run's worktree (adding it back from its branch if it was removed, and first
-  committing any edits made in it by hand), adds a commit to the same branch,
-  and measures the work from the same baseline, so reviewers see the whole
-  change rather than only what the continuation adds: the sidecars are synced
-  from the baseline's files and the work is then laid on the implementer's as
-  uncommitted changes. The implementer is a new Claude session and is told the
-  original request and where the work is. A prompt is optional and adds to the
-  request, for the implementer and the reviewers alike. With one, the
-  implementer starts on it; without one, the run checks the work as it is
-  first and sends the implementer what failed, and that round counts toward
-  `--max-attempts`. Given no prompt in a terminal, it asks what to do
-  differently first; Enter skips that and checks first. Without a terminal it
-  does not ask. Each run keeps a record (its request, worktree, branch
-  and baseline) in the repository's data directory beside its worktree, shared
-  by every checkout of the repository, which is what `--continue` reads, so a run can be continued after the daemon
-  restarts; runs from before records were kept cannot be continued. The
-  session's record names the run it continues as `continues_run_id`.
-- **`factory build --remote` runs the build on a sidecar of its own, so you can
-  close your laptop; `chunk factory pull` brings the work back.** It makes the
-  run's worktree and record locally, as a plain build does, then provisions a
-  one-sidecar pool for the host, installs chunk there (the release matching
-  this build, unless `--chunk-binary` uploads a Linux build of your own -
-  hidden, for testing), makes the baseline commit, and execs `chunk factory
-  build` on the host as one foreground command, with the flags that mean
-  something there forwarded (`--max-attempts`, `--image`, `--reviewers`,
-  `--reviews`, `--no-validate`, `--keep-sidecars`, `--model`,
-  `--implementer-instructions`, `--implement-timeout`, `--review-timeout`) and
-  always `--no-open-pr`: a remote run does not go through the local daemon,
-  so it opens no pull request, and `--open-pr`/`--draft` are refused with it.
-  `--continue`, `--log`, `--log-file` and `--verbose` are refused too, since
-  none have meaning without the local daemon. The host's stderr streams to the
-  terminal as the run goes; Ctrl-C only detaches - it sends no cancel and
-  deletes nothing - and prints `chunk factory pull <run id>`. The record is
-  saved once the host's own exec is submitted, with `remote` set to
-  `sidecar_id`, `command_id` and `host_repo` (the synced checkout, not where
-  the work ends up).
-  `chunk factory pull [run id]` brings that work back: with no run id, the
-  most recently saved record with `remote` set, and with one, that run; a
-  record with no remote run is refused. It waits out the host's run if it has
-  not ended yet (following it exactly as `--remote` does), then reads the
-  host's own run record over SSH - not anything the build printed, so it
-  works however little output the server still has - for the worktree the
-  host's `factory build` actually made (there is exactly one non-pool `*.json`
-  under the host's data directory; `Remote.HostRepo` is only the synced
-  checkout). It rsyncs that worktree into this run's local one and runs
-  `git add -A -N` there, so files the run added show up in `git diff HEAD`
-  rather than as untracked. Only once the work is local does it tear the host down:
-  the sidecar is deleted, the pool's state file removed, and `remote` cleared
-  from the record, leaving an ordinary local run pointing at the pulled
-  worktree. A failure before the work is local changes nothing - neither the
-  sidecar nor the record - so a pull is always safe to run again.
-- **`factory start` hands the factory a diff and a prompt.** The factory's
-  input is a diff, a first pass at the change, and the prompt it is for, not
-  where the work was done (`factory.Handoff`). Not every change starts as a
-  prompt fired at the cloud: some developers work out a first pass with an
-  agent first. Before it does anything, on a terminal it prints a line saying
-  it is only setting up a worktree and branch for the change (starting from
-  the diff, when `--diff` is given), that nothing is reviewed or pushed yet,
-  and that `chunk factory build --continue` is what reviews the work, runs the
-  checks, and, by default, opens the pull request — the same rule as
-  `factory build`'s own message about `--json` and a non-terminal stderr
-  applies here too. `chunk factory start "<prompt>"` makes a run's worktree and
-  branch, `chunk/factory/<description>/<run id>`, from the developer's files as
-  they are (uncommitted changes in the baseline, as for a build), and keeps the
-  run's record. The diff is made one of two ways: in the worktree, with Claude
-  Code, another agent or none, or elsewhere and passed with `--diff <file>` (or
-  `-` for stdin, with the prompt as an argument), which applies it to the
-  developer's files in the worktree. Other ways, such as a TUI that iterates
-  with the developer, hand over the same diff and prompt. Nothing runs on a
-  sidecar. `chunk factory build --continue <run id>` hands the diff, whatever
-  changed in the worktree since the baseline, committed or not, to the factory
-  to refine against the prompt. Its implementer is told the diff is the
-  developer's first pass and to finish it into something ready to merge. The
-  continued run says how big the diff is and refuses to start if there is
-  none. The record carries what the refining run needs to know as data,
-  `brief` (how its implementer is told about the work) and `needs_work`,
-  rather than where the work came from, so the factory does not change when a
-  new way to make a first pass does. Only the worktree's path goes to stdout,
-  so `cd "$(chunk factory start ...)"` lands in it; `--json` prints the record
-  instead.
+- **`chunk watch` is the recommended way to follow factory work.** It shows
+  your flows in factory and opens their plans. So on a terminal chunk points
+  there when it helps: once an approved plan starts building, after
+  `chunk init`, and in bare `chunk` help. These pointers are left out with
+  `--json`, in CI (`CI` set), and when stdout or stderr is not a terminal (a
+  log file, a pipe), so none of those changes anything already being parsed.
+  Chunk never opens `watch` for you.
 - **`factory plan` makes a plan with a factory planning session, then
   approves it in factory and builds it.** It opens a flow screen. A two-row
   strip under the header shows the plan's step (`Planning › Building › Integrating › Done`), what is
@@ -608,7 +333,7 @@ chunk
   is refused when it sends a message.
 
   The session works in a worktree of the plan's own rather than the
-  developer's checkout, since that is where factory builds the plan once it
+  developer's checkout, since that is where the plan is built once it
   is approved. It starts from a fresh fetch of origin's default branch, so
   unpushed and uncommitted work in the checkout is not in it, but for an
   uncommitted `.chunk/config.json`, which is copied in. It is removed once
@@ -698,7 +423,9 @@ chunk
   plan, so abandoning the plan (`x`) stops it at its next poll. A
   stopped one leaves the plan approved in factory, and `/f:resume <ID>` in
   Claude Code carries it on. A plan not approved stays in factory, and its ID
-  is printed. The screen checks what `factory build` checks before it opens.
+  is printed. Before it opens, the screen checks that the project has a git
+  remote named `origin` and something to check a build with: validation
+  commands, review prompts in `.chunk/reviews/`, or both.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans
   two parts, prints the plan, and leaves out each part already done, so a
   rerun finishes a setup that stopped partway; with nothing left to do it fails
@@ -710,8 +437,8 @@ chunk
   `sidecar setup` and then `sidecar snapshot create` do, on a sidecar of its
   own rather than the active one: it starts the sidecar from
   `cimg-base:2026.09-claude` rather than the provisioner's default
-  `cimg-base`, since `chunk factory build` runs its implementer and reviewers
-  as Claude Code on sidecars made from the snapshot. `--image` may name any
+  `cimg-base`, since factory's agents run as Claude Code on sidecars made
+  from the snapshot. `--image` may name any
   image instead; bootstrap does not check it for Claude Code. It syncs the
   project to `/home/user/<repo>`, runs the environment's setup steps, then
   snapshots the sidecar as `<repo>-<YYYY-MM-DD>-<HHMMSS>` (`--snapshot-name`
@@ -723,64 +450,6 @@ chunk
   a CircleCI token; it needs no Claude credential, GitHub token or GitHub
   `origin`. `--json` reports `config_written` and the snapshot as
   `sidecar_image` (empty when no image was recorded).
-- **`factory eval` scores review prompts, and is hidden.** It is for tuning
-  review prompts, not for everyday use. It
-  reviews a set of cases, each a change to the repository at a pinned revision
-  and the request it answers. `--commits <n>` makes cases of the `n` most recent
-  commits on the first-parent history of `--from`: each commit's diff against its
-  parent, with its message as the request. Merges, bots' commits (an author
-  ending in `[bot]`), commits that change only documentation or nothing, and
-  diffs over 48 KB are skipped, and at most ten times `n` commits are looked at.
-  `--suite <dir>` reads the cases from a `suite.json` instead: each a patch at a
-  `revision` and its `request`, optionally labeled with the problems a review
-  should find (`expect`: a `file`, optional `lines` as `[first, last]`, and
-  `about`) or as `clean`, but not both. Every case's revision and patch are
-  checked against the repository before any sidecar starts. Each case is put on
-  every sidecar of its own pool (`factory-eval`, destroyed when it ends) as
-  factory leaves a reviewer: the revision's tree committed as the baseline, the
-  patch uncommitted on top. The prompts are sent as factory's first round sends
-  them, with no implementer. Only high and medium findings count.
-- **A grader judges every case, so cases need no labels.** After a case's
-  reviews, a Claude run of its own on the first sidecar, where the case is still
-  the uncommitted work, is given the request, factory's blocking rubric and the
-  blocking findings, sorted by place and without the prompts that reported them.
-  It may read the code and run commands, such as a test, to check them. It gives
-  each finding a verdict, `confirmed` (a real problem that clears the bar),
-  `not_blocking` (a real point that does not) or `wrong`, marks findings about a
-  problem an earlier one reported as duplicates, and lists high and medium
-  problems no finding is about as missed. Literal requested behavior overrides
-  the reviewers: asking for broader or contrary behavior is `wrong`. Graded
-  precision is confirmed problems over problems with a verdict, a duplicate
-  counting once at its first finding's verdict; coverage is confirmed problems
-  over those plus the missed ones, so it is relative to what the grader finds. A
-  grading that fails leaves its case ungraded and the eval goes on; a missing
-  Claude Code or a rejected credential stops it. `--no-grade` skips the grader,
-  which leaves `--commits` with nothing to score, so the two cannot be combined.
-- **Labeled cases also score the reviews, and check the grader.** Findings are
-  grouped into the problems they are about, so a problem several prompts report
-  counts once. A finding is about an expected problem when it names the same
-  file and, if the problem has lines, a line within three of them; each expected
-  problem takes a finding of its own first. Other findings are about the same
-  problem as an earlier one in the same file within three lines, or about the
-  file as a whole. Where a run is graded, its problems are regrouped by the
-  grader's judgment, which reads the findings where nearby lines only place
-  them: an expected problem keeps the finding paired with it and gains those the
-  grader judged about the same problem, and the grader's other groups are
-  problems the case does not list. Which expected problems were caught does not
-  change. Recall is the share of expected problems caught. Problems a
-  labeled case does not list are unexpected: on a clean case they would send
-  sound work back, and on another they may be real, so the share of reported
-  problems the labels list is a floor. Unlabeled cases count towards overlap but
-  not towards these. Where a labeled case is graded, the summary's
-  `graded.calibration` says how the grader agreed: findings on expected problems
-  it confirmed, findings on clean cases it confirmed, misses it listed on clean
-  cases, and expected problems the reviews missed that it found. Each prompt's
-  row counts every problem it reported, how many of those another prompt
-  reported too, and its findings by verdict. A case whose setup or any review
-  fails is reported and left out of the totals rather than scored on the reviews
-  that ran. The command exits non-zero when no case could be scored; a run in
-  which only some cases errored still succeeds, and `summary.errored` counts
-  them.
 - **`watch` is Flows and the plans opened from it.** The dashboard opens on
   Flows: your open flows in factory, grouped by who they wait on, then by
   phase, with the selected flow's plan text and open comments previewed beside
@@ -790,7 +459,7 @@ chunk
   chunk cannot read the plans' parents the list is shown flat, with `sub-plans
   unavailable` under it. `Enter` opens the `chunk factory plan` screen on the
   selected flow's plan, and `n` on a new one, to plan the change with Claude
-  before the factory builds it. `q` or `esc` quits. Opening a plan only reads it: no session claims it
+  before it is built. `q` or `esc` quits. Opening a plan only reads it: no session claims it
   until a message is sent, and then in the project the dashboard was opened
   in, since factory does not record a plan's repository; a plan another
   session holds is refused rather than taken over. `esc` or `ctrl+c` goes back

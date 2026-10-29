@@ -22,8 +22,8 @@ import (
 )
 
 // bootstrapImage is the image bootstrap's sidecar starts from unless --image
-// names another: a system template with Claude Code installed, since chunk
-// factory build runs Claude on sidecars made from the snapshot. The
+// names another: a system template with Claude Code installed, since a
+// chunk factory plan's build runs Claude on sidecars made from the snapshot. The
 // provisioner has no alias for the newest template, so this names one and
 // needs bumping as they are added.
 const bootstrapImage = "cimg-base:2026.09-claude"

@@ -73,8 +73,7 @@ func NewRootCmd(version string) *cobra.Command {
 
 Start here
   chunk init                 Set up this project (config, sandbox, review prompts)
-  chunk factory start        Optional: hand chunk a diff you already started
-  chunk factory build        Build a change from a prompt, review it, open the PR
+  chunk factory plan         Plan a change with Claude; factory then builds it
   chunk watch                Plan and follow your factory flows. Keep it open.
 
 Other commands
