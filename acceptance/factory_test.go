@@ -1,24 +1,18 @@
 package acceptance
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
-	"time"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
@@ -26,26 +20,35 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
-// factory is a public command group, so both it and build have to reach the
-// user: listed by 'chunk commands', which skips hidden ones, and with help of
-// their own.
+// factory is a public command group, so it and plan have to reach the user:
+// listed by 'chunk commands', which skips hidden ones, and with help of their
+// own. Neither help lists a command factory does not have.
 func TestFactoryIsListedAndDocumented(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	list := binary.RunCLI(t, []string{"commands"}, env, env.HomeDir)
 	assert.Equal(t, list.ExitCode, 0, "stderr: %s", list.Stderr)
-	assert.Assert(t, strings.Contains(list.Stdout, "chunk factory build"), "stdout: %s", list.Stdout)
+	assert.Assert(t, strings.Contains(list.Stdout, "chunk factory plan"), "stdout: %s", list.Stdout)
 
 	help := binary.RunCLI(t, []string{"factory", "--help"}, env, env.HomeDir)
 	assert.Equal(t, help.ExitCode, 0, "stderr: %s", help.Stderr)
-	for _, want := range []string{"Build and manage factory runs", "build"} {
-		assert.Assert(t, strings.Contains(help.Stdout, want), "missing %q in stdout: %s", want, help.Stdout)
+	for _, want := range []string{"Plan changes and build them in factory", "plan", "bootstrap"} {
+		assert.Check(t, strings.Contains(help.Stdout, want), "missing %q in stdout: %s", want, help.Stdout)
+	}
+	for _, gone := range []string{"build [", "start", "pull", "eval"} {
+		assert.Check(t, !strings.Contains(help.Stdout, gone), "%q in stdout: %s", gone, help.Stdout)
 	}
 
-	buildHelp := binary.RunCLI(t, []string{"factory", "build", "--help"}, env, env.HomeDir)
-	assert.Equal(t, buildHelp.ExitCode, 0, "stderr: %s", buildHelp.Stderr)
-	for _, want := range []string{"chunk factory build [prompt|file|-]", "--max-attempts", "--reviews", "--no-validate"} {
-		assert.Assert(t, strings.Contains(buildHelp.Stdout, want), "missing %q in stdout: %s", want, buildHelp.Stdout)
+	root := binary.RunCLI(t, []string{"--help"}, env, env.HomeDir)
+	assert.Equal(t, root.ExitCode, 0, "stderr: %s", root.Stderr)
+	assert.Check(t, strings.Contains(root.Stdout, "chunk factory plan"), "stdout: %s", root.Stdout)
+
+	for _, args := range [][]string{{"--help"}, {"factory", "--help"}, {"watch", "--help"}} {
+		result := binary.RunCLI(t, args, env, env.HomeDir)
+		assert.Equal(t, result.ExitCode, 0, "%v stderr: %s", args, result.Stderr)
+		for _, gone := range []string{"factory build", "factory start", "factory pull", "factory eval"} {
+			assert.Check(t, !strings.Contains(result.Stdout, gone), "%v: %q in stdout: %s", args, gone, result.Stdout)
+		}
 	}
 }
 
@@ -56,7 +59,7 @@ func TestFactoryWithoutASubcommandShowsHelp(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stdout, "Available Commands:"), "stdout: %s", result.Stdout)
-	assert.Assert(t, strings.Contains(result.Stdout, "build"), "stdout: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stdout, "plan"), "stdout: %s", result.Stdout)
 }
 
 func TestFactoryRequiresASubcommand(t *testing.T) {
@@ -68,443 +71,17 @@ func TestFactoryRequiresASubcommand(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stderr, `"add a flag" is not a factory command`), "stderr: %s", result.Stderr)
 }
 
-// Build flags on the group must fail before pflag can consume the prompt as an
-// unknown flag's value and turn a legacy invocation into successful help output.
-func TestFactoryRejectsBuildFlagsWithoutBuildSubcommand(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-
-	result := binary.RunCLI(t, []string{"factory", "--no-validate", "add a flag"}, env, env.HomeDir)
-
-	assert.Equal(t, result.ExitCode, 2, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "unknown flag: --no-validate"), "stderr: %s", result.Stderr)
-}
-
-func TestFactoryBuildWithoutAPromptExitsBadArgs(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-
-	// With no argument the prompt is read from stdin, which is empty here.
-	result := binary.RunCLIWithStdin(t, []string{"factory", "build"}, env, env.HomeDir, []byte{})
-
-	assert.Equal(t, result.ExitCode, 2, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "The prompt on stdin is empty."), "stderr: %s", result.Stderr)
-}
-
-// Everything below returns before the chunk daemon is started, so these are
-// the paths a first run most often lands on, with nothing running.
-func TestFactoryOutsideAGitRepoExitsBadArgs(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-
-	result := binary.RunCLI(t, []string{"factory", "build", "add a --verbose flag"}, env, env.HomeDir)
-
-	assert.Equal(t, result.ExitCode, 2, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "is not inside a git repository."), "stderr: %s", result.Stderr)
-}
-
-func TestFactoryWithoutProjectConfigPointsAtInit(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-
-	result := binary.RunCLI(t, []string{"factory", "build", "add a --verbose flag"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "No validate commands configured"), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk init"), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory bootstrap"), "stderr: %s", result.Stderr)
-}
-
-// A config that cannot be read is reported as such, not as a project with no
-// config: bootstrap, which that would point at, refuses it too.
-func TestFactoryWithAnUnreadableProjectConfig(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, ".chunk"), 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, ".chunk", "config.json"), []byte("{"), 0o644))
-
-	result := binary.RunCLI(t, []string{"factory", "build", "add a --verbose flag"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "Could not read .chunk/config.json"), "stderr: %s", result.Stderr)
-	assert.Assert(t, !strings.Contains(result.Stderr, "No validate commands configured"), "stderr: %s", result.Stderr)
-}
-
-// A project with no sidecar image is told its sidecars start from the default
-// image, unless one is given for the run. --continue with a run that does not
-// exist stops the command just after, before the daemon is started.
-func TestFactoryHintsAtAMissingSidecarImage(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		extra    map[string]interface{}
-		args     []string
-		wantHint bool
-	}{
-		{name: "no image", wantHint: true},
-		{name: "image in config", extra: map[string]interface{}{"validation": map[string]any{"sidecarImage": "snap-1"}}},
-		{name: "image flag", args: []string{"--image", "snap-2"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+func TestFactoryOldCommandsAreGone(t *testing.T) {
+	for _, name := range []string{"build", "start", "pull", "eval"} {
+		t.Run(name, func(t *testing.T) {
 			env := testenv.NewTestEnv(t)
-			workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-			writeChunkConfig(t, workDir, tc.extra)
 
-			args := append([]string{"factory", "build", "--continue", "nope"}, tc.args...)
-			result := binary.RunCLI(t, append(args, "add a --verbose flag"), env, workDir)
+			result := binary.RunCLI(t, []string{"factory", name}, env, env.HomeDir)
 
-			assert.Equal(t, result.ExitCode, 2, "stderr: %s", result.Stderr)
-			assert.Assert(t, strings.Contains(result.Stderr, "No factory run nope to continue"), "stderr: %s", result.Stderr)
-			hint := strings.Contains(result.Stderr, "No validation.sidecarImage, so sidecars start from the default image")
-			assert.Equal(t, hint, tc.wantHint, "stderr: %s", result.Stderr)
+			assert.Check(t, cmp.Equal(result.ExitCode, 2), "stderr: %s", result.Stderr)
+			assert.Check(t, cmp.Contains(result.Stderr, `"`+name+`" is not a factory command`))
 		})
 	}
-}
-
-// Without reviews or validation commands the loop would pass whatever the
-// implementer wrote, so the run is refused instead.
-func TestFactoryWithNothingToCheck(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeChunkConfig(t, workDir, nil)
-
-	result := binary.RunCLI(t, []string{"factory", "build", "--no-validate", "add a --verbose flag"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "Nothing to check the implementer's work with."), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, ".chunk/reviews"), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "Add one .md or .txt file per review to .chunk/reviews"), "stderr: %s", result.Stderr)
-	assert.Assert(t, !strings.Contains(result.Stderr, "chunk factory bootstrap"), "stderr: %s", result.Stderr)
-}
-
-// chunk factory build --remote provisions a sidecar of its own for the run,
-// installs chunk on it with --chunk-binary, and makes the baseline commit
-// there, without starting the run itself.
-func TestFactoryBuildRemoteProvisionsAHostSidecar(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: "deadbeef\n"}, "correctness")
-
-	// The fake SSH server runs commands for real on this machine; $HOME there
-	// is redirected to the sidecar's home so the chunk binary --chunk-binary
-	// uploads lands in a temp dir rather than the real one.
-	sidecarHome := env.Extra["CHUNK_SIDECAR_HOME"]
-	t.Setenv("HOME", sidecarHome)
-
-	binContent := "#!/bin/sh\necho fake chunk\n"
-	binPath := filepath.Join(t.TempDir(), "chunk-linux")
-	assert.NilError(t, os.WriteFile(binPath, []byte(binContent), 0o755))
-
-	result := binary.RunCLI(t, []string{
-		"factory", "build", "--remote", "--chunk-binary", binPath, "--json", "add a --verbose flag",
-	}, env, workDir)
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	var report struct {
-		SidecarID string `json:"sidecar_id"`
-	}
-	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), result.Stdout)
-	assert.Assert(t, report.SidecarID != "", "stdout: %s", result.Stdout)
-
-	// The pool is created: a single sidecar for the one host.
-	creates := 0
-	for _, r := range cci.Recorder.AllRequests() {
-		if r.Method == "POST" && r.URL.Path == "/api/v3/sidecar/instances" {
-			creates++
-		}
-	}
-	assert.Equal(t, creates, 1, "requests: %v", cci.Recorder.AllRequests())
-
-	// The binary is installed on the host for real: --chunk-binary uploads it
-	// over the sidecar's SSH connection rather than installing a release.
-	data, err := os.ReadFile(filepath.Join(sidecarHome, "chunk"))
-	assert.NilError(t, err)
-	assert.Equal(t, string(data), binContent)
-	info, err := os.Stat(filepath.Join(sidecarHome, "chunk"))
-	assert.NilError(t, err)
-	assert.Assert(t, info.Mode()&0o100 != 0, "the uploaded chunk should be executable")
-
-	// The baseline commit is exec'd on the host.
-	baselineExecs := 0
-	for _, r := range cci.Recorder.AllRequests() {
-		if strings.HasSuffix(r.URL.Path, "/exec") && strings.Contains(string(r.Body), "chunk factory baseline") {
-			baselineExecs++
-		}
-	}
-	assert.Equal(t, baselineExecs, 1, "requests: %v", cci.Recorder.AllRequests())
-}
-
-func TestFactoryBuildRemoteRefusesAnUnsupportedFlagCombination(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeChunkConfig(t, workDir, nil)
-	writePrompts(t, filepath.Join(workDir, ".chunk", "reviews"), "correctness")
-
-	result := binary.RunCLI(t, []string{"factory", "build", "--remote", "--verbose", "add a --verbose flag"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "--verbose is not supported with --remote yet."), "stderr: %s", result.Stderr)
-}
-
-// Once the host is provisioned, chunk factory build --remote starts chunk
-// factory build on the host as one foreground exec and follows it: its
-// stderr reaches this terminal as it streams, and the run's record is saved
-// with Remote set before any of that output arrives. Ctrl-C only detaches -
-// it sends no cancel and no delete - and the command still exits 0.
-func TestFactoryBuildRemoteFollowsTheRunAndDetachesOnSIGINT(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{
-		CommandID: "cmd-1", Stdout: "deadbeef\n", Stderr: "building on the host\n",
-	}, "correctness")
-	// The baseline commit is the first exec; hold the second one's output -
-	// the run itself - until the client disconnects, so there is a genuine
-	// window to interrupt it in, rather than a race against a command that
-	// has already finished.
-	cci.HoldCommandOutputFromExec = 2
-
-	// The fake SSH server runs commands for real on this machine; $HOME there
-	// is redirected to the sidecar's home so --chunk-binary's upload lands in
-	// a temp dir rather than the real one.
-	sidecarHome := env.Extra["CHUNK_SIDECAR_HOME"]
-	t.Setenv("HOME", sidecarHome)
-	binPath := filepath.Join(t.TempDir(), "chunk-linux")
-	assert.NilError(t, os.WriteFile(binPath, []byte("#!/bin/sh\necho fake chunk\n"), 0o755))
-
-	// --reviews is given as an absolute path on this machine; the host has
-	// its own checkout, so it must be told the project-relative one.
-	cmd := exec.Command(binary.Path(), "--insecure-storage", "factory", "build",
-		"--remote", "--chunk-binary", binPath,
-		"--reviews", filepath.Join(workDir, ".chunk", "reviews"), "add a --verbose flag")
-	cmd.Dir = workDir
-	cmd.Env = env.Environ()
-	var stderr syncBuffer
-	cmd.Stderr = &stderr
-	cmd.Stdout = &syncBuffer{}
-	assert.NilError(t, cmd.Start())
-
-	waitForOutput(t, &stderr, "building on the host")
-
-	assert.NilError(t, cmd.Process.Signal(syscall.SIGINT))
-	waitErr := cmd.Wait()
-
-	assert.NilError(t, waitErr, "stderr: %s", stderr.String())
-	assert.Equal(t, cmd.ProcessState.ExitCode(), 0, "stderr: %s", stderr.String())
-	assert.Assert(t, strings.Contains(stderr.String(), "continues on sidecar"), "stderr: %s", stderr.String())
-	assert.Assert(t, strings.Contains(stderr.String(), "chunk factory pull"), "stderr: %s", stderr.String())
-
-	var runScript string
-	for _, r := range cci.Recorder.AllRequests() {
-		assert.Assert(t, r.Method != "DELETE" || !strings.HasPrefix(r.URL.Path, "/api/v3/sidecar/instances/"),
-			"a detached Ctrl-C must not delete the host sidecar: %v", r)
-		if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/exec") && strings.Contains(string(r.Body), "factory") {
-			runScript = string(r.Body)
-		}
-	}
-	assert.Assert(t, strings.Contains(runScript, `'--reviews' '.chunk/reviews'`), "run exec: %s", runScript)
-
-	t.Setenv(config.EnvXDGDataHome, filepath.Join(env.HomeDir, ".local", "share"))
-	root := config.CanonicalProjectRoot(workDir)
-	dataDir, err := config.RepoDataDir(root)
-	assert.NilError(t, err)
-	matches, err := filepath.Glob(filepath.Join(dataDir, "factory", "r-*.json"))
-	assert.NilError(t, err)
-	assert.Equal(t, len(matches), 1, "records: %v", matches)
-	data, err := os.ReadFile(matches[0])
-	assert.NilError(t, err)
-	var rec struct {
-		Remote *struct {
-			SidecarID string `json:"sidecar_id"`
-			CommandID string `json:"command_id"`
-			HostRepo  string `json:"host_repo"`
-		} `json:"remote"`
-	}
-	assert.NilError(t, json.Unmarshal(data, &rec))
-	assert.Assert(t, rec.Remote != nil, "record: %s", data)
-	assert.Assert(t, rec.Remote.SidecarID != "", "record: %s", data)
-	assert.Equal(t, rec.Remote.CommandID, "cmd-1")
-}
-
-// syncBuffer is a bytes.Buffer safe for a subprocess's output-copying
-// goroutine to write to while the test polls it from another.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-// waitForOutput polls buf until it contains want, so a check that depends on
-// a subprocess's progress does not race it.
-func waitForOutput(t *testing.T, buf *syncBuffer, want string) {
-	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		if strings.Contains(buf.String(), want) {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %q; output so far: %s", want, buf.String())
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-func TestFactoryBuildRefusesChunkBinaryWithoutRemote(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeChunkConfig(t, workDir, nil)
-	writePrompts(t, filepath.Join(workDir, ".chunk", "reviews"), "correctness")
-
-	result := binary.RunCLI(t, []string{"factory", "build", "--chunk-binary", "dist/chunk-linux", "add a --verbose flag"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "--chunk-binary needs --remote."), "stderr: %s", result.Stderr)
-}
-
-// pullTestRepo creates a plain git repo, independent of the project's own
-// checkout, with one commit holding the baseline files a pull test edits
-// against: a run's worktree, local or on the host, is never the project
-// itself.
-func pullTestRepo(t *testing.T, name string) string {
-	t.Helper()
-	dir := gitrepo.SetupGitRepo(t, "test-org", name)
-	for file, content := range map[string]string{
-		"keep.txt":   "keep\n",
-		"edit.txt":   "original\n",
-		"delete.txt": "delete me\n",
-	} {
-		assert.NilError(t, os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644))
-	}
-	gitrepo.AddFile(t, dir, ".")
-	cmd := exec.Command("git", "commit", "-q", "-m", "baseline")
-	cmd.Dir = dir
-	cmd.Env = gitrepo.GitEnv(dir)
-	out, err := cmd.CombinedOutput()
-	assert.NilError(t, err, string(out))
-	return dir
-}
-
-// chunk factory pull brings a finished remote run's work back: it reads the
-// host's own run record over SSH for its worktree - not anything the run
-// printed - rsyncs it into this run's local worktree, stages what it added so
-// 'git diff' shows it rather than "??", and only then tears the host down.
-func TestFactoryPullBringsAFinishedRunsWorkBackAndTearsDownTheHost(t *testing.T) {
-	env, cci, _, workDir := setupReviewProjectWithSSH(t, nil, "correctness")
-
-	// The record this test writes, and the one 'chunk factory pull' reads
-	// back afterward, must land in the same data directory the spawned
-	// binary uses.
-	t.Setenv(config.EnvXDGDataHome, filepath.Join(env.HomeDir, ".local", "share"))
-	root := config.CanonicalProjectRoot(workDir)
-	dataDir, err := config.RepoDataDir(root)
-	assert.NilError(t, err)
-
-	localWT := pullTestRepo(t, "local-wt")
-	hostWT := pullTestRepo(t, "host-wt")
-
-	// What the run did on the host: edited a file, added one, deleted one,
-	// and added a binary file, exactly as an implementer's workspace keeps
-	// its work - uncommitted changes on top of the baseline.
-	assert.NilError(t, os.WriteFile(filepath.Join(hostWT, "edit.txt"), []byte("edited!\n"), 0o644))
-	assert.NilError(t, os.WriteFile(filepath.Join(hostWT, "new.txt"), []byte("new file\n"), 0o644))
-	assert.NilError(t, os.Remove(filepath.Join(hostWT, "delete.txt")))
-	binaryContent := []byte{0x00, 0x01, 0xff, 0xfe, 'P', 'N', 'G'}
-	assert.NilError(t, os.WriteFile(filepath.Join(hostWT, "binary.bin"), binaryContent, 0o644))
-
-	// The host's own run record, read over SSH rather than parsed from any
-	// output: it names the worktree the host's 'factory build' actually made.
-	hostRec := factory.Record{RunID: "host-run", Worktree: hostWT}
-	hostRecJSON, err := json.Marshal(hostRec)
-	assert.NilError(t, err)
-	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-record-read", Stdout: string(hostRecJSON)}
-
-	// The host's 'chunk factory build' has already finished, successfully.
-	ended := "2026-01-15T10:05:00.000Z"
-	exitCode := 0
-	cci.CommandResponse = &fakes.CommandResponse{
-		CreatedAt: "2026-01-15T10:00:00.000Z", EndedAt: &ended, ExitCode: &exitCode, Phase: "ended", SidecarID: "sidecar-host-1",
-	}
-
-	rec := factory.Record{
-		RunID:    "r-pulltest",
-		Prompt:   "add a feature",
-		Worktree: localWT,
-		Branch:   "chunk/factory/add-a-feature/r-pulltest",
-		Baseline: "deadbeef",
-		Head:     "deadbeef",
-		Remote:   &factory.RemoteRun{SidecarID: "sidecar-host-1", CommandID: "cmd-build-1", HostRepo: "/home/user/test-repo"},
-	}
-	assert.NilError(t, factory.SaveRecord(dataDir, rec))
-
-	// The run's one-sidecar pool left a state file behind; pulling must clean
-	// it up along with the sidecar.
-	poolDataDir, err := config.ProjectDataDir(root)
-	assert.NilError(t, err)
-	poolStatePath := filepath.Join(poolDataDir, "pools", "factory-remote-"+rec.RunID+".json")
-	assert.NilError(t, os.MkdirAll(filepath.Dir(poolStatePath), 0o755))
-	assert.NilError(t, os.WriteFile(poolStatePath, []byte("{}"), 0o644))
-
-	result := binary.RunCLI(t, []string{"factory", "pull", rec.RunID}, env, workDir)
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-
-	// The pulled tree: the edit landed, the new and binary files are there,
-	// the deleted one is gone, and an untouched file stayed as it was.
-	assertFileContent(t, localWT, "edit.txt", "edited!\n")
-	assertFileContent(t, localWT, "new.txt", "new file\n")
-	assertFileContent(t, localWT, "keep.txt", "keep\n")
-	data, err := os.ReadFile(filepath.Join(localWT, "binary.bin"))
-	assert.NilError(t, err)
-	assert.DeepEqual(t, data, binaryContent)
-	_, err = os.Stat(filepath.Join(localWT, "delete.txt"))
-	assert.Assert(t, os.IsNotExist(err), "the deleted file should be gone from the pulled tree")
-
-	// The new and binary files were staged with 'git add -A -N', so they show
-	// up in 'git diff HEAD' rather than as untracked - and so does the
-	// deletion, which staging with '-A' would otherwise hide from a plain
-	// 'git diff' by removing it from the index too.
-	diffCmd := exec.Command("git", "diff", "HEAD", "--name-only")
-	diffCmd.Dir = localWT
-	diffCmd.Env = gitrepo.GitEnv(localWT)
-	diffOut, err := diffCmd.CombinedOutput()
-	assert.NilError(t, err, string(diffOut))
-	for _, want := range []string{"edit.txt", "new.txt", "binary.bin", "delete.txt"} {
-		assert.Assert(t, strings.Contains(string(diffOut), want), "git diff HEAD --name-only: %s", diffOut)
-	}
-
-	assert.Assert(t, strings.Contains(result.Stderr, localWT), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "git -C "+localWT+" diff HEAD"), "stderr: %s", result.Stderr)
-	// The record's own Baseline and Branch are the host's and mean nothing
-	// here; the printed hint must not mention them.
-	assert.Assert(t, !strings.Contains(result.Stderr, rec.Baseline), "stderr should not print the host's baseline: %s", result.Stderr)
-	assert.Assert(t, !strings.Contains(result.Stderr, rec.Branch), "stderr should not print the host's branch: %s", result.Stderr)
-
-	// Only once the work is local is the host torn down: its sidecar deleted
-	// and the record's remote run cleared.
-	var deleted bool
-	for _, r := range cci.Recorder.AllRequests() {
-		if r.Method == "DELETE" && r.URL.Path == "/api/v3/sidecar/instances/sidecar-host-1" {
-			deleted = true
-		}
-	}
-	assert.Assert(t, deleted, "expected the host sidecar to be deleted; requests: %v", cci.Recorder.AllRequests())
-
-	_, err = os.Stat(poolStatePath)
-	assert.Assert(t, os.IsNotExist(err), "expected the pool's state file to be removed: %v", err)
-
-	saved, err := factory.LoadRecord(root, rec.RunID)
-	assert.NilError(t, err)
-	assert.Assert(t, saved.Remote == nil, "record: %+v", saved)
-	assert.Equal(t, saved.Worktree, localWT)
-}
-
-func assertFileContent(t *testing.T, dir, name, want string) {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, name))
-	assert.NilError(t, err)
-	assert.Equal(t, string(data), want)
 }
 
 // Bootstrap writes the config and sets up the sidecar image, neither of which
@@ -608,77 +185,6 @@ func TestWatchTakesNoDirectories(t *testing.T) {
 	assert.Check(t, cmp.Contains(result.Stderr, "chunk watch takes no arguments"))
 }
 
-// A suite that cannot run here is refused before any sidecar starts: no
-// CircleCI is configured, so getting further would fail differently.
-func TestFactoryEvalRefusesCasesThatCannotRun(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	suite := t.TempDir()
-	assert.NilError(t, os.WriteFile(filepath.Join(suite, "case.patch"), []byte("diff --git a/x b/x\n"), 0o644))
-	assert.NilError(t, os.WriteFile(filepath.Join(suite, "suite.json"), []byte(`{"cases": [
-		{"name": "gone", "revision": "0000000000000000000000000000000000000000", "request": "r", "patch": "case.patch"}
-	]}`), 0o644))
-
-	result := binary.RunCLI(t, []string{"factory", "eval", "--suite", suite}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "Some cases cannot run in this repository."), "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "case gone: revision 0000000000000000000000000000000000000000 is not in this repository"), "stderr: %s", result.Stderr)
-}
-
-// Commits carry no labels, so without the grader nothing would score them,
-// and a run needs one source of cases or the other.
-func TestFactoryEvalRefusesFlagsThatScoreNothing(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-
-	for _, tc := range []struct {
-		args []string
-		want string
-	}{
-		{[]string{"factory", "eval"}, "at least one of the flags in the group [suite commits] is required"},
-		{[]string{"factory", "eval", "--commits", "3", "--no-grade"}, "[commits no-grade] were all set"},
-		{[]string{"factory", "eval", "--suite", t.TempDir(), "--commits", "3"}, "[commits suite] were all set"},
-		{[]string{"factory", "eval", "--suite", t.TempDir(), "--no-grade", "--grader-model", "x"}, "[grader-model no-grade] were all set"},
-		// The group is satisfied by --suite being given, so an empty one would
-		// otherwise fall through to the commits path and fail there.
-		{[]string{"factory", "eval", "--suite", ""}, "--suite needs a directory"},
-	} {
-		result := binary.RunCLI(t, tc.args, env, workDir)
-		assert.Assert(t, result.ExitCode != 0, "%v: expected non-zero exit code", tc.args)
-		assert.Assert(t, strings.Contains(result.Stderr, tc.want), "%v: stderr: %s", tc.args, result.Stderr)
-	}
-}
-
-// A revision with no history to take commits from is refused before any
-// sidecar starts.
-func TestFactoryEvalRefusesCommitsFromAMissingRevision(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-
-	result := binary.RunCLI(t, []string{"factory", "eval", "--commits", "3", "--from", "no-such-branch"}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "Could not make cases of the commits on no-such-branch."), "stderr: %s", result.Stderr)
-}
-
-// Without a GitHub origin the sidecars cannot name their copy of the
-// repository, which is said before any credential or org prompt.
-func TestFactoryEvalNeedsAGitHubOrigin(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	cmd := exec.Command("git", "remote", "remove", "origin")
-	cmd.Dir = workDir
-	cmd.Env = gitrepo.GitEnv(workDir)
-	out, err := cmd.CombinedOutput()
-	assert.NilError(t, err, string(out))
-
-	result := binary.RunCLI(t, []string{"factory", "eval", "--suite", t.TempDir()}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk factory eval needs a GitHub origin."), "stderr: %s", result.Stderr)
-}
-
 // readProjectConfig reads .chunk/config.json from workDir.
 func readProjectConfig(t *testing.T, workDir string) map[string]any {
 	t.Helper()
@@ -757,7 +263,7 @@ func TestFactoryBootstrapRecordsTheSidecarImage(t *testing.T) {
 	cfg := readProjectConfig(t, workDir)
 	assert.Equal(t, cfg["validation"].(map[string]any)["sidecarImage"], "snap-1")
 	// With no --image, the sidecar starts from the image that has Claude
-	// Code, which chunk factory build runs on snapshots of.
+	// Code, which a plan's build runs on snapshots of.
 	assert.DeepEqual(t, sidecarImages(t, cci), []string{"cimg-base:2026.09-claude"})
 
 	snaps := filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/snapshots")
@@ -1019,8 +525,8 @@ func TestFactoryBootstrapExplainsATakenSnapshotNameAtTheSnapshot(t *testing.T) {
 		"the sidecar is deleted")
 }
 
-// Bootstrap never runs Claude, so it needs no Claude credential: chunk
-// factory build asks for its own when it starts.
+// Bootstrap never runs Claude, so it needs no Claude credential: a plan's
+// build asks for its own when it starts.
 func TestFactoryBootstrapNeedsNoClaudeCredential(t *testing.T) {
 	env, _, workDir := sidecarImageProject(t)
 	env.AnthropicKey = ""
