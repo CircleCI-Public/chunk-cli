@@ -11,17 +11,12 @@ import (
 )
 
 // Plan is a factory plan, as /api/v3/factory/plans serves it. Its text is read
-// and replaced on its own, with PlanText and SetPlanText.
+// and replaced on its own, with PlanText and SetPlanText. Its phase and
+// outcome are read from its flow, with GetFlow.
 type Plan struct {
-	ID     string
-	Title  string
-	Branch string
-	// Phase is PhaseReceived, PhaseStarted or PhaseEnded. Unlike the flow's,
-	// it is served once the plan has ended and its flow is gone.
-	Phase string
-	// Outcome is how an ended plan ended, as factory names it; "" before it
-	// ends.
-	Outcome      string
+	ID           string
+	Title        string
+	Branch       string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	OpenComments int
@@ -127,6 +122,21 @@ const ResolveConflicts FlowEvent = "resolve-conflicts"
 // starts work on the plan. It applies at once when no task is out.
 const Prioritize FlowEvent = "prioritize"
 
+// Abandon is the event that ends a flow without its PR merging; it takes an
+// AbandonReason.
+const Abandon FlowEvent = "abandon"
+
+// An AbandonReason is why a human abandons a plan, as factory names it.
+type AbandonReason string
+
+// The reasons a plan is abandoned for. Factory ends the flow in Canceled,
+// Won't Do or Duplicate, with outcome canceled, rejected or duplicated.
+const (
+	AbandonCanceled  AbandonReason = "canceled"
+	AbandonWontDo    AbandonReason = "wont-do"
+	AbandonDuplicate AbandonReason = "duplicate"
+)
+
 // PlanComment is a comment on a factory plan. QuotedText is the part of the
 // plan's text it is about, or "" for a comment on the plan as a whole.
 type PlanComment struct {
@@ -142,8 +152,6 @@ type PlanComment struct {
 type planAttrs struct {
 	Title        string    `json:"title"`
 	Branch       string    `json:"branch"`
-	Phase        string    `json:"phase"`
-	Outcome      string    `json:"outcome"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	OpenComments int       `json:"open_comment_count"`
@@ -151,7 +159,7 @@ type planAttrs struct {
 
 func (a planAttrs) plan(id string) *Plan {
 	return &Plan{
-		ID: id, Title: a.Title, Branch: a.Branch, Phase: a.Phase, Outcome: a.Outcome,
+		ID: id, Title: a.Title, Branch: a.Branch,
 		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt, OpenComments: a.OpenComments,
 	}
 }
@@ -260,7 +268,8 @@ type taskRef struct {
 }
 
 type eventAttrs struct {
-	Event FlowEvent `json:"event"`
+	Event  FlowEvent     `json:"event"`
+	Reason AbandonReason `json:"reason,omitempty"`
 }
 
 type eventRefs struct {
@@ -401,6 +410,18 @@ func (c *Client) GetPlan(ctx context.Context, id string) (*Plan, error) {
 	return p, nil
 }
 
+// DeletePlan deletes factory plan id, with its comments and its flow. A plan
+// with sub-plans, or one a session claims, is a conflict (409).
+func (c *Client) DeletePlan(ctx context.Context, id string) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodDelete, "/api/v3/factory/plans/%s",
+		hc.RouteParams(url.PathEscape(id)),
+	))
+	if err != nil {
+		return mapErr("delete plan", err)
+	}
+	return nil
+}
+
 // PlanText returns factory plan id's text.
 func (c *Client) PlanText(ctx context.Context, id string) (string, error) {
 	var attrs planTextAttrs
@@ -498,14 +519,27 @@ func (c *Client) ListFlowBlockers(ctx context.Context, planID string) ([]Blocker
 // returns. It is not idempotent: each call stores an event. A plan with no
 // flow is a 404.
 func (c *Client) CreateFlowEvent(ctx context.Context, planID string, event FlowEvent) error {
+	return c.createEvent(ctx, planID, eventAttrs{Event: event}, "create flow event")
+}
+
+// AbandonFlow sends factory plan planID's flow the abandon event, for reason.
+// Factory ends the flow at the plan's next poll, in Canceled, Won't Do or
+// Duplicate. A plan with no flow is a 404.
+func (c *Client) AbandonFlow(ctx context.Context, planID string, reason AbandonReason) error {
+	return c.createEvent(ctx, planID, eventAttrs{Event: Abandon, Reason: reason}, "abandon flow")
+}
+
+// createEvent posts an event with attrs to factory plan planID's flow; label
+// names the call in its error.
+func (c *Client) createEvent(ctx context.Context, planID string, attrs eventAttrs, label string) error {
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/events",
 		hc.Body(v3Envelope{Data: v3DataEntity{
-			Attributes: eventAttrs{Event: event},
+			Attributes: attrs,
 			References: eventRefs{FactoryFlow: v3Ref{ID: planID}},
 		}}),
 	))
 	if err != nil {
-		return mapErr("create flow event", err)
+		return mapErr(label, err)
 	}
 	return nil
 }

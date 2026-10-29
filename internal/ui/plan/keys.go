@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"slices"
+
 	"charm.land/bubbles/v2/key"
 )
 
@@ -43,6 +45,11 @@ type keyMap struct {
 	// enter too, says no: approving moves the plan on in factory, so it
 	// takes a y.
 	Confirm key.Binding
+	// Abandon asks for a reason, then ends the plan without its PR merging;
+	// DeletePlan asks for a y, then deletes it. At the reason prompt the
+	// Abandon* keys pick the reason.
+	Abandon, DeletePlan                              key.Binding
+	AbandonCanceled, AbandonWontDo, AbandonDuplicate key.Binding
 
 	Focus    key.Binding
 	Switch   key.Binding
@@ -90,11 +97,17 @@ func (m Model) keys() keyMap {
 		PlanTab:        key.NewBinding(key.WithKeys("right")),
 		Open:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open plan")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
+		Abandon:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "abandon plan")),
+		DeletePlan:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
 		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", m.focusHelp())),
 		Switch:         key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
+	// The reason prompt says what these do, so they carry no hint.
+	k.AbandonCanceled = key.NewBinding(key.WithKeys("c"))
+	k.AbandonWontDo = key.NewBinding(key.WithKeys("w"))
+	k.AbandonDuplicate = key.NewBinding(key.WithKeys("d"))
 
 	// Esc leaves, unless it has a comment to cancel, a selection to clear or a
 	// question to answer no to. q leaves from the plan, where no text is being
@@ -110,7 +123,7 @@ func (m Model) keys() keyMap {
 	}
 	k.Switch.SetEnabled(m.inbox)
 	k.Quit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", quit))
-	if !m.commenting && !m.confirming && !m.selecting() {
+	if !m.commenting && !m.confirming && !m.askingReason && !m.selecting() {
 		keys := []string{"esc", "ctrl+c"}
 		if m.focus == panePlan {
 			keys = append(keys, "q")
@@ -144,7 +157,19 @@ func (m Model) keys() keyMap {
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)
 	k.Confirm.SetEnabled(m.confirming)
+	m.endKeys(&k)
 	return k
+}
+
+// endKeys enables the keys that end the plan: abandon, its reasons, and
+// delete.
+func (m Model) endKeys(k *keyMap) {
+	idle := m.focus == panePlan && !m.commenting && !m.confirming && !m.askingReason && !m.abandoning && !m.deleting
+	k.Abandon.SetEnabled(idle && m.created && slices.Contains(m.events, abandon))
+	k.DeletePlan.SetEnabled(idle && m.created && !m.flow.Claimed)
+	for _, b := range []*key.Binding{&k.AbandonCanceled, &k.AbandonWontDo, &k.AbandonDuplicate} {
+		b.SetEnabled(m.askingReason)
+	}
 }
 
 // focusHelp is where tab goes: to the right pane, or on a narrow screen
@@ -217,7 +242,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.Switch,
 		k.Send, k.Newline,
 		k.Open, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
-		k.Focus, k.SendPlan, k.Quit, k.FlowTab,
+		k.Focus, k.SendPlan, k.Quit, k.Abandon, k.DeletePlan, k.FlowTab,
 		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }

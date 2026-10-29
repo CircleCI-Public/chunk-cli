@@ -273,21 +273,76 @@ func TestStoreResolveConflictsSendsTheEvent(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"resolve-conflicts"}))
 }
 
-// TestStoreStartWorkSendsTheEvent checks that StartWork fails before Create,
-// and after it sends the plan's flow factory's prioritize event.
-func TestStoreStartWorkSendsTheEvent(t *testing.T) {
-	client, _ := testClient(t)
-	ctx := context.Background()
-	err := newStore(client, "").StartWork(ctx)
-	assert.Check(t, err != nil, "a plan not yet created took the event")
+// TestStoreSendsTheHumansActions checks that StartWork, Abandon and Delete
+// each fail before Create, and after it do what they say to the store's plan
+// in factory.
+func TestStoreSendsTheHumansActions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state string
+		call  func(context.Context, *Store) error
+		check func(t *testing.T, cci *fakes.FakeCircleCI, id string)
+	}{
+		{
+			name:  "StartWork sends prioritize",
+			state: "Unprioritized",
+			call:  func(ctx context.Context, s *Store) error { return s.StartWork(ctx) },
+			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
+				p, _ := cci.FactoryPlan(id)
+				assert.Check(t, cmp.DeepEqual(p.Events, []string{"prioritize"}))
+			},
+		},
+		{
+			name:  "Abandon sends abandon with its reason",
+			state: "Planning - Human",
+			call:  func(ctx context.Context, s *Store) error { return s.Abandon(ctx, "wont-do") },
+			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
+				p, _ := cci.FactoryPlan(id)
+				assert.Check(t, cmp.DeepEqual(p.Events, []string{"abandon"}))
+				assert.Check(t, cmp.DeepEqual(p.Reasons, []string{"wont-do"}))
+			},
+		},
+		{
+			name:  "Delete deletes the plan",
+			state: "Done",
+			call:  func(ctx context.Context, s *Store) error { return s.Delete(ctx) },
+			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
+				_, ok := cci.FactoryPlan(id)
+				assert.Check(t, !ok, "the plan is still there")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, _ := testClient(t)
+			ctx := context.Background()
+			err := tc.call(ctx, newStore(client, ""))
+			assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 
+			store, _, cci := createdStore(t)
+			cci.SetFactoryPlanState(store.ID(), tc.state)
+			cci.SetFactoryApplicableEvents(store.ID(), "prioritize", "abandon")
+			err = tc.call(ctx, store)
+			assert.Check(t, err)
+			tc.check(t, cci, store.ID())
+		})
+	}
+}
+
+// TestStoreFlowClaimed checks that Flow says whether a factory session claims
+// the plan.
+func TestStoreFlowClaimed(t *testing.T) {
 	store, _, cci := createdStore(t)
-	cci.SetFactoryPlanState(store.ID(), "Unprioritized")
-	cci.SetFactoryApplicableEvents(store.ID(), "prioritize", "abandon")
-	err = store.StartWork(ctx)
-	assert.Check(t, err)
-	p, _ := cci.FactoryPlan(store.ID())
-	assert.Check(t, cmp.DeepEqual(p.Events, []string{"prioritize"}))
+	ctx := context.Background()
+
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	f, err := store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, f.Claimed, "a claimed plan's flow is not claimed")
+
+	cci.ReleaseFactoryPlan(store.ID())
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, !f.Claimed, "a released plan's flow is still claimed")
 }
 
 // TestStoreApproveDesignSendsTheEvent checks that ApproveDesign sends the
@@ -787,6 +842,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		},
 		PR:         "https://github.com/o/r/pull/7",
 		Deviations: []string{"lint fails"},
+		Claimed:    true,
 	}))
 
 	cci.SetFactoryTask(store.ID(), "")
@@ -803,6 +859,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Deviations: []string{},
 		Ended:      true,
 		Outcome:    "merged",
+		Claimed:    true,
 	}))
 
 	cci.DropFactoryFlow(store.ID())

@@ -17,6 +17,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
@@ -3890,4 +3891,344 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 		assert.Check(t, !m.startingWork)
 		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Could not start work: factory is down"))
 	})
+}
+
+// endScreen is a 140×40 screen on store's plan, created and in state, whose
+// flow applies events now, refreshed once and with the plan pane focused.
+func endScreen(t *testing.T, store *fakeStore, state string, events ...string) Model {
+	t.Helper()
+	store.Created = true
+	store.TextV = twoParts
+	store.StateV = state
+	store.setEvents(events...)
+	m := New(context.Background(), turnReturning("ok"), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+	return drive(t, m, press("tab"))
+}
+
+// pressAll drives each of keys through m in turn.
+func pressAll(t *testing.T, m Model, keys ...string) Model {
+	t.Helper()
+	for _, k := range keys {
+		m = drive(t, m, press(k))
+	}
+	return m
+}
+
+// TestAbandonThePlan checks that x, while factory offers abandon, asks for a
+// reason and sends abandon with the one picked, and that any other key keeps
+// the plan.
+func TestAbandonThePlan(t *testing.T) {
+	abandoned := func(store *fakeStore) []string {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return slices.Clone(store.Abandoned)
+	}
+	live := []string{"address-comments", "abandon"}
+	for _, tc := range []struct {
+		name   string
+		state  string
+		events []string
+		ended  bool
+		err    error
+		check  func(t *testing.T, m Model, store *fakeStore)
+	}{
+		{
+			name:   "not offered without abandon",
+			state:  "Planning - Human",
+			events: []string{"address-comments"},
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "abandon plan"))
+				m = pressAll(t, m, "x")
+				assert.Check(t, !m.askingReason)
+				assert.Check(t, cmp.Len(abandoned(store), 0))
+			},
+		},
+		{
+			name:   "c abandons as canceled",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "x abandon plan"))
+				m = pressAll(t, m, "x")
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as: c canceled · w won't do · d duplicate · esc keep it"))
+				m = pressAll(t, m, "c")
+				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"canceled"}))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: canceled"))
+			},
+		},
+		{
+			name:   "w abandons as won't do",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x", "w")
+				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"wont-do"}))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: won't do"))
+			},
+		},
+		{
+			name:   "d abandons as duplicate",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x", "d")
+				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"duplicate"}))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: duplicate"))
+			},
+		},
+		{
+			name:   "esc keeps the plan",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x")
+				m, cmd := m.Update(press("esc"))
+				_, gone := closedBy(cmd)
+				assert.Check(t, !gone, "esc at the reason prompt left the screen")
+				assert.Check(t, !m.askingReason)
+				assert.Check(t, cmp.Equal(m.status, ""))
+				assert.Check(t, cmp.Len(abandoned(store), 0))
+			},
+		},
+		{
+			name:   "q keeps the plan",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x")
+				m, cmd := m.Update(press("q"))
+				_, gone := closedBy(cmd)
+				assert.Check(t, !gone, "q at the reason prompt left the screen")
+				assert.Check(t, !m.askingReason)
+				assert.Check(t, cmp.Equal(m.status, ""))
+				assert.Check(t, cmp.Len(abandoned(store), 0))
+			},
+		},
+		{
+			name:   "a failed abandon says so",
+			state:  "Planning - Human",
+			events: live,
+			err:    errors.New("factory is down"),
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x")
+				m, cmd := m.Update(press("w"))
+				assert.Assert(t, cmd != nil)
+				m, _ = m.Update(cmd())
+				assert.Check(t, !m.abandoning)
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not abandon the plan: factory is down"))
+			},
+		},
+		{
+			name:  "not offered once the flow has ended",
+			state: "Done",
+			ended: true,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "abandon plan"))
+				m = pressAll(t, m, "x")
+				assert.Check(t, !m.askingReason)
+			},
+		},
+		{
+			name:   "a refresh keeps the prompt",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x")
+				store.mu.Lock()
+				store.StateV = "Planning - Agent"
+				store.mu.Unlock()
+				m = refreshed(t, m)
+				assert.Check(t, m.askingReason)
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as:"))
+				m = pressAll(t, m, "w")
+				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"wont-do"}))
+			},
+		},
+		{
+			name:   "x while abandoning asks nothing",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x", "w")
+				assert.Assert(t, m.abandoning)
+				m = pressAll(t, m, "x")
+				assert.Check(t, !m.askingReason)
+				assert.Check(t, cmp.Len(abandoned(store), 1))
+			},
+		},
+		{
+			name:   "an abandon sent refreshes the plan",
+			state:  "Planning - Human",
+			events: live,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x", "w")
+				m, cmd := m.Update(abandonedMsg{})
+				assert.Check(t, !m.abandoning)
+				assert.Check(t, !strings.Contains(ansi.Strip(m.status), "Abandoning"))
+				assert.Check(t, cmd != nil, "no refresh after the abandon")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.FlowV.Ended = tc.ended
+			store.AbandonErr = tc.err
+			m := endScreen(t, store, tc.state, tc.events...)
+			tc.check(t, m, store)
+		})
+	}
+}
+
+// TestDeleteThePlan checks that X, while no session claims the plan, deletes
+// it after a y and closes the screen, and that a refusal keeps it.
+func TestDeleteThePlan(t *testing.T) {
+	deleted := func(store *fakeStore) bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.PlanDeleted
+	}
+	// deletes presses X and y, and delivers what the delete answers.
+	deletes := func(t *testing.T, m Model) (Model, tea.Cmd) {
+		t.Helper()
+		m = pressAll(t, m, "X")
+		assert.Assert(t, m.confirming)
+		m, cmd := m.Update(press("y"))
+		assert.Assert(t, cmd != nil)
+		return m.Update(cmd())
+	}
+	for _, tc := range []struct {
+		name    string
+		state   string
+		claimed bool
+		host    func(Model) Model
+		err     error
+		check   func(t *testing.T, m Model, store *fakeStore)
+	}{
+		{
+			name:    "not offered while claimed",
+			state:   "Planning - Human",
+			claimed: true,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "delete plan"))
+				m = pressAll(t, m, "X")
+				assert.Check(t, !m.confirming)
+				assert.Check(t, !m.pendingDeletePlan)
+			},
+		},
+		{
+			name: "offered on a plan with no flow",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "X delete plan"))
+			},
+		},
+		{
+			name:  "n keeps the plan",
+			state: "Done",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "X")
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Delete this plan, its comments and its flow?"))
+				m = pressAll(t, m, "n")
+				assert.Check(t, !m.pendingDeletePlan)
+				assert.Check(t, !deleted(store))
+			},
+		},
+		{
+			name:  "a refresh keeps the question",
+			state: "Done",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "X")
+				store.mu.Lock()
+				store.StateV = "Canceled"
+				store.mu.Unlock()
+				m = refreshed(t, m)
+				assert.Check(t, m.pendingDeletePlan)
+				_ = pressAll(t, m, "y")
+				assert.Check(t, deleted(store))
+			},
+		},
+		{
+			name:  "X while deleting asks nothing",
+			state: "Done",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "X", "y")
+				assert.Assert(t, m.deleting)
+				m = pressAll(t, m, "X")
+				assert.Check(t, !m.confirming)
+			},
+		},
+		{
+			name:  "y deletes and closes a screen with no host",
+			state: "Done",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m, cmd := deletes(t, m)
+				assert.Check(t, deleted(store))
+				assert.Check(t, !m.deleting)
+				_, gone := closedBy(cmd)
+				assert.Check(t, gone, "the screen stayed after the delete")
+			},
+		},
+		{
+			name:  "y deletes and goes back to runs",
+			state: "Done",
+			host:  Model.WithBack,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				_, cmd := deletes(t, m)
+				assert.Check(t, deleted(store))
+				_, gone := closedBy(cmd)
+				assert.Check(t, gone, "the screen stayed after the delete")
+			},
+		},
+		{
+			name:  "y deletes and goes back to plans",
+			state: "Done",
+			host:  func(m Model) Model { return m.WithInbox("A plan", "chunk") },
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				_, cmd := deletes(t, m)
+				assert.Check(t, deleted(store))
+				_, gone := closedBy(cmd)
+				assert.Check(t, gone, "the screen stayed after the delete")
+			},
+		},
+		{
+			name:  "a conflict says so and stays",
+			state: "Done",
+			err: &circleci.StatusError{
+				Op:            "delete plan",
+				StatusCode:    409,
+				ServerMessage: "plan has sub-plans",
+			},
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m, cmd := deletes(t, m)
+				assert.Check(t, !deleted(store))
+				_, gone := closedBy(cmd)
+				assert.Check(t, !gone, "the screen closed on a refused delete")
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not delete the plan: "))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "plan has sub-plans"))
+			},
+		},
+		{
+			name:  "a refusal says so and stays",
+			state: "Done",
+			err:   errors.New("plan has sub-plans"),
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m, cmd := deletes(t, m)
+				_, gone := closedBy(cmd)
+				assert.Check(t, !gone, "the screen closed on a refused delete")
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not delete the plan: plan has sub-plans"))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.FlowV.Claimed = tc.claimed
+			store.DeletePlanErr = tc.err
+			m := endScreen(t, store, tc.state)
+			if tc.host != nil {
+				m = tc.host(m)
+			}
+			tc.check(t, m, store)
+		})
+	}
 }

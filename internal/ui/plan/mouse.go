@@ -92,6 +92,11 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 	if m.confirming {
 		return m.clickConfirm(mouse)
 	}
+	if m.askingReason {
+		// A click keeps the plan, as any key but a reason does.
+		m.askingReason, m.status = false, ""
+		return m, nil
+	}
 	if m.quitting {
 		m.quitting, m.status = false, ""
 	}
@@ -237,12 +242,12 @@ func (m Model) clickConfirm(mouse tea.Mouse) (Model, tea.Cmd) {
 	m.status = ""
 	i := strings.Index(text, confirmYes)
 	if mouse.Y != m.height-footerRows+1 || i < 0 {
-		m.pendingDelete, m.pendingDesign = "", false
+		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan = "", false, false
 		return m, nil
 	}
 	left := 2 + ansi.StringWidth(text[:i])
 	if mouse.X < left || mouse.X >= left+ansi.StringWidth(confirmYes) {
-		m.pendingDelete, m.pendingDesign = "", false
+		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan = "", false, false
 		return m, nil
 	}
 	return m.answerYes()
