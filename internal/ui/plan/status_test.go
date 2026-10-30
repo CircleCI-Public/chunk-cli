@@ -169,6 +169,18 @@ func TestStatus(t *testing.T) {
 			next: "you start work · ctrl+s",
 		},
 		{
+			name: "only request-revision and abandon",
+			flow: Flow{State: "Building - Human", Next: []Step{{Actor: "session", Event: "request-revision"}, {Actor: "human", Event: "abandon"}}},
+			step: "Building",
+			next: "",
+		},
+		{
+			name: "comments beside request-revision",
+			flow: Flow{State: "Building - Human", Next: []Step{{Actor: "session", Event: "request-revision"}, {Actor: "human", Event: "address-comments"}}},
+			step: "Building",
+			next: "you send your comments",
+		},
+		{
 			name: "stuck with no blockers",
 			flow: Flow{State: "Building - Agent"},
 			step: "Building",

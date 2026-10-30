@@ -207,3 +207,59 @@ func TestStageOf(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentActs(t *testing.T) {
+	rr := Move{Actor: "session", Event: RequestRevision}
+	example := []Move{
+		{Actor: "human", Event: "address-comments"},
+		{Actor: "human", Event: "approve-for-building"},
+		rr,
+		{Actor: "human", Event: "abandon"},
+	}
+	for _, tc := range []struct {
+		name                                  string
+		state                                 string
+		next                                  []Move
+		agent, session, human, readyToApprove bool
+	}{
+		{
+			name:           "request-revision while the plan waits on you",
+			state:          "Planning - Human",
+			next:           example,
+			human:          true,
+			readyToApprove: true,
+		},
+		{
+			name:    "a session task beside request-revision",
+			state:   "Building - Agent",
+			next:    []Move{{Actor: "session"}, rr, {Actor: "human", Event: "abandon"}},
+			agent:   true,
+			session: true,
+		},
+		{
+			name:  "a daemon task beside request-revision",
+			state: "Planning - Agent",
+			next:  []Move{{Actor: "daemon"}, rr},
+			agent: true,
+		},
+		{
+			name:  "only request-revision and abandon",
+			state: "Planning - Human",
+			next:  []Move{rr, {Actor: "human", Event: "abandon"}},
+		},
+		{
+			name:           "request-revision with spaces",
+			state:          "Planning - Human",
+			next:           []Move{{Actor: " session ", Event: " request-revision "}, {Actor: "human", Event: "approve-for-building"}},
+			human:          true,
+			readyToApprove: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(AgentActs(tc.next), tc.agent))
+			assert.Check(t, cmp.Equal(SessionActs(tc.next), tc.session))
+			assert.Check(t, cmp.Equal(WaitsOnHuman(tc.next), tc.human))
+			assert.Check(t, cmp.Equal(ReadyToApprove(tc.state, tc.next), tc.readyToApprove))
+		})
+	}
+}

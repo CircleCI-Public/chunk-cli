@@ -77,13 +77,24 @@ type Move struct {
 // move it on.
 func ReadyToApprove(state string, next []Move) bool {
 	phase, _ := Parse(state)
-	return strings.EqualFold(phase, "Planning") && waitsOnHuman(next)
+	return strings.EqualFold(phase, "Planning") && WaitsOnHuman(next)
 }
 
-// waitsOnHuman is whether next waits only on the developer: it offers
+// RequestRevision is the event a session may send in any live state to ask
+// for a revision of the plan, with its why. Factory lists it in every live
+// flow's next, but never waits on it.
+const RequestRevision = "request-revision"
+
+// waitedOn is whether factory waits on m to move the plan on.
+func waitedOn(m Move) bool {
+	return strings.TrimSpace(m.Event) != RequestRevision
+}
+
+// WaitsOnHuman is whether next waits only on the developer: it offers
 // them a transition other than the escape hatches, and nothing by a
-// session or the daemon.
-func waitsOnHuman(next []Move) bool {
+// session or the daemon that factory waits on. An action, such as
+// merge-pr, counts.
+func WaitsOnHuman(next []Move) bool {
 	return !AgentActs(next) && slices.ContainsFunc(next, func(m Move) bool {
 		e := strings.TrimSpace(m.Event)
 		return strings.TrimSpace(m.Actor) == "human" && e != "abandon" && e != "abandon-integrate"
@@ -91,11 +102,19 @@ func waitsOnHuman(next []Move) bool {
 }
 
 // AgentActs is whether next has a transition a session or the daemon
-// takes.
+// takes that factory waits on: RequestRevision is not one.
 func AgentActs(next []Move) bool {
 	return slices.ContainsFunc(next, func(m Move) bool {
 		a := strings.TrimSpace(m.Actor)
-		return a == "session" || a == "daemon"
+		return (a == "session" || a == "daemon") && waitedOn(m)
+	})
+}
+
+// SessionActs is whether next has a transition a session takes that
+// factory waits on: RequestRevision is not one.
+func SessionActs(next []Move) bool {
+	return slices.ContainsFunc(next, func(m Move) bool {
+		return strings.TrimSpace(m.Actor) == "session" && waitedOn(m)
 	})
 }
 

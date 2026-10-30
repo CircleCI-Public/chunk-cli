@@ -319,6 +319,27 @@ func TestApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
 }
 
+// TestApproveIgnoresRequestRevision checks that a plan in Planning - Human is
+// approved though its next lists request-revision for a session, as factory
+// lists it in every live state without waiting on it.
+func TestApproveIgnoresRequestRevision(t *testing.T) {
+	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
+	ctx := context.Background()
+	cci.ClaimFactoryPlan(id, "s-1")
+	cci.SetFactoryPlanState(id, "Planning - Human")
+	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{Next: []fakes.FactoryTransition{
+		{Actor: "human", Event: "address-comments"},
+		{Actor: "human", Event: "approve-for-building"},
+		{Actor: "session", Event: "request-revision"},
+		{Actor: "human", Event: "abandon"},
+	}})
+
+	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+	assert.Check(t, err)
+	p, _ := cci.FactoryPlan(id)
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+}
+
 // TestApproveRefusesAPlanWithQuestionsOpen checks that Approve sends
 // nothing for a plan whose flow offers neither approval, and keeps the
 // planning session's claim.

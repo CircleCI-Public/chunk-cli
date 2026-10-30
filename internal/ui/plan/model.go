@@ -818,7 +818,7 @@ func resumeOwed(f Flow) bool {
 	phase, _ := planstate.Parse(f.State)
 	planning := strings.EqualFold(phase, "Planning") || planstate.IsUnprioritized(f.State)
 	return !f.Ended && !f.Claimed && planning &&
-		slices.ContainsFunc(f.Next, func(s Step) bool { return s.Actor == ActorSession })
+		planstate.SessionActs(moves(f.Next))
 }
 
 // resumeIfOwed has the planner claim the plan again when factory waits on a

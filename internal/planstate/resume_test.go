@@ -1,6 +1,7 @@
 package planstate
 
 import (
+	"slices"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -9,6 +10,7 @@ import (
 
 func TestResumeOf(t *testing.T) {
 	session := []Move{{Actor: "session"}}
+	rr := Move{Actor: "session", Event: RequestRevision}
 	done := []Blocker{{Title: "Add retry config", State: "Done"}}
 	const build = "No session holds this plan · R starts a build session"
 	const planner = "No session holds this plan · R resumes its planner"
@@ -198,6 +200,44 @@ func TestResumeOf(t *testing.T) {
 			f: ResumeFacts{
 				State:         "Planning - Human",
 				Next:          []Move{{Actor: "human", Event: "abandon"}},
+				BlockersKnown: true,
+			},
+			line: "",
+		},
+		{
+			name: "request-revision while waiting on you",
+			f: ResumeFacts{
+				State:         "Planning - Human",
+				Next:          []Move{{Actor: "human", Event: "address-comments"}, {Actor: "human", Event: "approve-for-building"}, rr, {Actor: "human", Event: "abandon"}},
+				BlockersKnown: true,
+			},
+			line: "Waiting on you",
+		},
+		{
+			name: "building beside request-revision",
+			f: ResumeFacts{
+				State:         "Building - Agent",
+				Next:          append(slices.Clone(session), rr),
+				BlockersKnown: true,
+			},
+			kind: ResumeBuild,
+			line: build,
+		},
+		{
+			name: "planning beside request-revision",
+			f: ResumeFacts{
+				State:         "Planning - Agent",
+				Next:          append(slices.Clone(session), rr),
+				BlockersKnown: true,
+			},
+			kind: ResumePlanner,
+			line: planner,
+		},
+		{
+			name: "only request-revision and abandon",
+			f: ResumeFacts{
+				State:         "Planning - Human",
+				Next:          []Move{rr, {Actor: "human", Event: "abandon"}},
 				BlockersKnown: true,
 			},
 			line: "",
