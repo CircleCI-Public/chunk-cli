@@ -71,28 +71,44 @@ const (
 	// commands are not among them: they run on its sidecar, with chunk.
 	buildTools = "Read,Grep,Glob,Edit,Write,Agent,TodoWrite,mcp__plugin_f_factory," +
 		"Bash(factory *),Bash(git *),Bash(gh *),Bash(chunk *),Bash(codegraph *)," + sourcegraphTools
-	// chatTools is what a chat session may use: only tools
-	// that read.
+	// chatTools is what a chat session may use: tools that read, and factory's
+	// own commands that act on a flow.
 	chatTools = "Read,Grep,Glob," +
 		"mcp__plugin_f_factory__plan_read,mcp__plugin_f_factory__plan_get," +
 		"mcp__plugin_f_factory__plan_grep,mcp__plugin_f_factory__plan_toc," +
 		"mcp__plugin_f_factory__plan_comments,mcp__plugin_f_factory__plan_list," +
 		"mcp__plugin_f_factory__plan_blockers," + sourcegraphTools + "," +
 		"Bash(git log *),Bash(git show *)," +
-		"Bash(factory daemon flow show *),Bash(factory daemon claim list),Bash(factory daemon session list)"
-	// chatDeniedTools also denies the git options that write a file,
-	// which the git read patterns would otherwise match.
+		"Bash(factory daemon flow show *),Bash(factory daemon claim list),Bash(factory daemon session list)," +
+		"Bash(factory daemon repair *),Bash(factory daemon release *)," +
+		"mcp__plugin_f_factory__task_request,mcp__plugin_f_factory__plan_block,mcp__plugin_f_factory__plan_resolve"
+	// chatDeniedTools also denies the git options that write a file, which the
+	// git read patterns would otherwise match, and the factory commands that are
+	// a planner's or builder's own or that start and stop factory's daemon,
+	// whatever the developer's settings allow.
 	chatDeniedTools = "Edit,Write,NotebookEdit," +
-		"Bash(git log *--output*),Bash(git show *--output*)"
+		"Bash(git log *--output*),Bash(git show *--output*)," +
+		"Bash(factory daemon wait*),Bash(factory plan claim *),Bash(factory task submit *)," +
+		"Bash(factory daemon start*),Bash(factory daemon stop*),Bash(factory daemon restart*)," +
+		"mcp__plugin_f_factory__task_submit,mcp__plugin_f_factory__plan_set,mcp__plugin_f_factory__plan_append," +
+		"mcp__plugin_f_factory__plan_delete,mcp__plugin_f_factory__plan_replace,mcp__plugin_f_factory__plan_sed-re2," +
+		"mcp__plugin_f_factory__plan_done,mcp__plugin_f_factory__plan_init"
 )
 
 // chatPrompt is what a chat session is told it is for.
-const chatPrompt = "You are a read-only chat about the developer's factory plans in this repository, in chunk watch. " +
-	"You read and explain; you never write, plan, claim a plan or run factory daemon wait, whatever the factory plugin's instructions say about starting or claiming plans. " +
+const chatPrompt = "You are a chat about the developer's factory plans in this repository, in chunk watch. " +
+	"You read and explain, and when the developer asks, you act on a flow with factory's own commands: " +
+	"`factory daemon repair PLAN --why TEXT` gives a stuck plan's session a repair task, replacing its outstanding one; " +
+	"`factory daemon release PLAN` frees a plan's claim, as when its session is gone; " +
+	"the task_request tool asks a parent plan in standing-by for a revision; plan_block adds or removes a blocker; plan_resolve removes the developer's comments. " +
+	"Act only when the developer asks you to, never on your own initiative, and say what you ran. " +
+	"You never plan, claim a plan, run factory daemon wait, submit tasks or write plan text, whatever the factory plugin's instructions say about starting or claiming plans. " +
+	"You cannot add comments to a plan: tell the developer to open it and press c on the part. " +
+	"If a command is denied, say so; do not try another way. " +
 	"Each message may start with where the developer is: [plan] the plan they are looking at, [flow] its status strip (step › now › next), " +
 	"or [flows] their open flows, one per line; these are as of that screen's last poll. " +
 	"Answer from the plans (the plan tools), the repository, Sourcegraph, git log and git show, and factory daemon flow show, claim list and session list. " +
-	"When the developer wants a plan changed, tell them which part to comment on and with what. Changing keys on a flow screen: " +
+	"When the developer wants a plan's text changed, tell them which part to comment on and with what. Changing keys on a flow screen: " +
 	"c comments on the highlighted part, s sends queued comments, e edits a part, ctrl+s approves or starts the plan, x abandons it, X deletes it. " +
 	"On the Flows list, enter opens a plan and n starts a new one. Keep replies short."
 
@@ -158,7 +174,8 @@ const (
 	// ModeBuild builds a plan: it may edit Dir and run what factory's build
 	// tasks run.
 	ModeBuild
-	// ModeChat only reads; chatTools is what it may read with.
+	// ModeChat reads, and acts on flows with factory's own commands; chatTools
+	// is what it may use.
 	ModeChat
 )
 
