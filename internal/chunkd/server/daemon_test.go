@@ -41,6 +41,7 @@ func newTestDaemon() *daemon {
 		planners: newPlannerSet(context.Background()),
 	}
 	d.tasks.onFinish = d.risk.record
+	d.chats = newChats(context.Background(), &d.rcfg)
 	return d
 }
 

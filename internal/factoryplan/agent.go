@@ -223,8 +223,9 @@ func event(ev chunkd.SessionLogEvent) plan.Event {
 		return plan.Event{Reply: &plan.Reply{Text: ev.Text, ByTask: ev.ByTask}}
 	case chunkd.SessionLogProblem:
 		return plan.Event{Problem: errors.New(ev.Text)}
-	case chunkd.SessionLogActivity:
+	case chunkd.SessionLogActivity, chunkd.SessionLogMessage:
 	}
-	// An activity, or a kind from a newer daemon, is shown as a line.
+	// An activity, or a kind a planner does not log or that comes from a
+	// newer daemon, is shown as a line.
 	return plan.Event{Activity: ev.Text}
 }

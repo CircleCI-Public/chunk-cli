@@ -166,6 +166,16 @@ type PlanBuildRequest struct {
 	Model  string `json:"model,omitempty"`
 }
 
+// ChatMessage is one message to a repository's chat.
+type ChatMessage struct {
+	Root string `json:"root"`
+	// Text is the developer's words, as the conversation shows them.
+	Text string `json:"text"`
+	// Context is what the screen it was sent from says, sent to claude
+	// before Text; "" for none.
+	Context string `json:"context,omitempty"`
+}
+
 // PlanApproveRequest has the daemon approve a factory plan, stop its planner
 // and start its build.
 type PlanApproveRequest struct {
@@ -205,6 +215,9 @@ const (
 	SessionLogActivity SessionLogKind = "activity"
 	SessionLogReply    SessionLogKind = "reply"
 	SessionLogProblem  SessionLogKind = "problem"
+	// SessionLogMessage is the developer's words to a chat, as they
+	// typed them, without the context sent with them.
+	SessionLogMessage SessionLogKind = "message"
 )
 
 // SessionLogEvent is one event in a SessionLog.

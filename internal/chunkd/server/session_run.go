@@ -36,6 +36,11 @@ type PlanConfig struct {
 	// SessionWorktree finds where factory's daemon has a session working, as
 	// approving a plan checks its claim; factory.SessionWorktree when nil.
 	SessionWorktree planapprove.Locate
+	// StartChat starts a chat session; factory.StartAgent when nil.
+	StartChat func(ctx context.Context, cfg factory.AgentConfig, message string) (AgentSession, error)
+	// OpenChatRecord opens a repository's chat record;
+	// factory.OpenChatSession when nil.
+	OpenChatRecord func(root string) (SessionRecord, error)
 }
 
 // Option customizes RunDaemon.
