@@ -322,7 +322,9 @@ chunk
   or why it can't, where it otherwise names the daemon; a daemon it can't
   reach is shown instead. On a screen opened by `chunk factory plan`, `R`
   resumes only a planner; resume a build from `chunk watch`. chunk never
-  resumes a build on its own. The request you type for a new plan (or the one passed as
+  resumes a build on its own. The flow list also offers `X`: it
+  deletes the selected plan, its comments and its flow after a y/n question in the footer, where any key but `y` cancels. It is
+  not offered on a plan a session claims. The request you type for a new plan (or the one passed as
   `chunk factory plan "<request>"`) creates it
   in factory, named by Claude for what the request asks for, as a 2-3 word
   slug (`dry-run-flag`), or for a slug of its first line (`add-a-dry-run-flag`)

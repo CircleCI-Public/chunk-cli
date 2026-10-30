@@ -10,7 +10,8 @@ import (
 type keyMap struct {
 	Select, Open, Resume, New, Quit key.Binding
 	// Chat is the host's; it is here for its hint.
-	Chat key.Binding
+	Chat   key.Binding
+	Delete key.Binding
 }
 
 func (m Model) keys() keyMap {
@@ -21,9 +22,11 @@ func (m Model) keys() keyMap {
 		New:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new plan")),
 		Quit:   key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("q", "quit")),
 
-		Chat: key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "chat")),
+		Chat:   key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "chat")),
+		Delete: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
 	}
 	k.Chat.SetEnabled(m.chatKey)
+	k.Delete.SetEnabled(m.deletable() && m.ask == "")
 	listed := len(m.flows) > 0
 	k.Select.SetEnabled(listed)
 	k.Open.SetEnabled(listed)
@@ -34,7 +37,7 @@ func (m Model) keys() keyMap {
 // ShortHelp puts what starts something first, so it is the last to go on a
 // narrow terminal.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.New, k.Select, k.Open, k.Resume, k.Chat, k.Quit}
+	return []key.Binding{k.New, k.Select, k.Open, k.Resume, k.Chat, k.Delete, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }

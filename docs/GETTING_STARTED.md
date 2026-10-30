@@ -334,7 +334,9 @@ read-only preview of the selected one's plan. Flows are yours wherever
 it (a build gets a fresh build session in the chunk daemon; a planner picks
 up its conversation). When `R` isn't offered, the header's right-hand end
 (where it otherwise shows `✓ local`) says why. For example, it names the session that holds the claim and the release
-command that frees it, or a blocker that isn't Done. `q` or `esc` quits. Opening or
+command that frees it, or a blocker that isn't Done. `X` deletes the selected
+plan, its comments and its flow after a y/n question (any key but `y` cancels);
+it isn't offered on a plan a session holds. `q` or `esc` quits. Opening or
 reading a plan never claims it; the request you type for a new plan does, and
 the screen resumes a planner factory is waiting on, in the project
 `chunk watch` was opened in. `ctrl+p` goes back to the list to

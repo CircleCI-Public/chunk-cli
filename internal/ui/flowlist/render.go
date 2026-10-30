@@ -64,6 +64,9 @@ func (m Model) Content() string {
 func (m Model) footerLines() []string {
 	bar := theme.Help(m.styles, m.width-2).View(m.keys())
 	rows := []string{"  " + bar}
+	if m.ask != "" {
+		rows[0] = "  " + m.styles.Emphasis.Render("Delete this plan, its comments and its flow? ") + "y / n"
+	}
 	if m.note != "" {
 		rows = append(rows, "  "+m.styles.Muted.Render(m.note))
 	}

@@ -297,6 +297,180 @@ func noResumeLine(t *testing.T, got string) {
 	}
 }
 
+// deleteMsgs runs cmd, and every command it batches, and returns the
+// DeleteMsgs they produce.
+func deleteMsgs(cmd tea.Cmd) []flowlist.DeleteMsg {
+	if cmd == nil {
+		return nil
+	}
+	switch msg := cmd().(type) {
+	case flowlist.DeleteMsg:
+		return []flowlist.DeleteMsg{msg}
+	case tea.BatchMsg:
+		var out []flowlist.DeleteMsg
+		for _, c := range msg {
+			out = append(out, deleteMsgs(c)...)
+		}
+		return out
+	}
+	return nil
+}
+
+func TestDelete(t *testing.T) {
+	const asking = "Delete this plan, its comments and its flow?"
+	alpha := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human", Next: waitHuman}
+	beta := circleci.Flow{ID: "b", Title: "Beta", State: "Planning - Human", Next: waitHuman}
+	chat := func(m flowlist.Model) flowlist.Model { return m.WithChatKey() }
+	loaded := func(t *testing.T, list func(context.Context) ([]circleci.Flow, error)) *driver {
+		d := newDriver(t, list, preview, chat)
+		d.send(tea.WindowSizeMsg{Width: 140, Height: 30})
+		d.load()
+		return d
+	}
+
+	t.Run("y deletes the asked flow", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := loaded(t, fixed(alpha, beta))
+			assert.Check(t, cmp.Contains(d.content(), "X delete plan"))
+			d.send(press('X'))
+			got := d.content()
+			assert.Check(t, cmp.Contains(got, asking))
+			assert.Check(t, cmp.Contains(got, "y / n"))
+			assert.Check(t, !strings.Contains(got, "X delete plan"), "help bar shown while asking:\n%s", got)
+			d.send(press('y'))
+			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.DeleteMsg{ID: "a", Title: "Alpha"}))
+			assert.Check(t, !strings.Contains(d.content(), asking))
+		})
+	})
+
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{
+			name: "n",
+			key:  press('n'),
+		},
+		{
+			name: "q",
+			key:  press('q'),
+		},
+		{
+			name: "esc",
+			key:  press(tea.KeyEscape),
+		},
+		{
+			name: "x",
+			key:  press('x'),
+		},
+		{
+			name: "ctrl+c",
+			key:  tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl},
+		},
+		{
+			name: "R",
+			key:  press('R'),
+		},
+		{
+			name: "enter",
+			key:  press(tea.KeyEnter),
+		},
+		{
+			name: "down",
+			key:  press(tea.KeyDown),
+		},
+	} {
+		t.Run("cancelled by "+tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := loaded(t, fixed(alpha, beta))
+				d.send(press('X'))
+				m, cmd := d.m.Update(tc.key)
+				d.m = m
+				assert.Check(t, cmd == nil, "the key did something")
+				got := d.content()
+				assert.Check(t, !strings.Contains(got, asking), "still asking:\n%s", got)
+				assert.Check(t, cmp.Contains(got, "X delete plan"))
+				// The selection did not move: X asks about Alpha again.
+				d.send(press('X'))
+				d.send(press('y'))
+				assert.Check(t, cmp.DeepEqual(d.next(), flowlist.DeleteMsg{ID: "a", Title: "Alpha"}))
+			})
+		})
+	}
+
+	t.Run("a claimed flow does not offer X", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			claimed := alpha
+			claimed.SessionID = "s1"
+			d := loaded(t, fixed(claimed))
+			assert.Check(t, !strings.Contains(d.content(), "X delete plan"))
+			d.send(press('X'))
+			assert.Check(t, !strings.Contains(d.content(), asking))
+		})
+	})
+
+	t.Run("an empty list does not offer X", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := newDriver(t, fixed(), preview, chat)
+			d.send(tea.WindowSizeMsg{Width: 140, Height: 30})
+			d.send(d.m.Init()())
+			d.step()
+			assert.Check(t, !strings.Contains(d.content(), "X delete plan"))
+			d.send(press('X'))
+			assert.Check(t, !strings.Contains(d.content(), asking))
+		})
+	})
+
+	t.Run("a flow being deleted does not offer X", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := loaded(t, fixed(alpha, beta))
+			d.m = d.m.WithDeleting("a")
+			assert.Check(t, !strings.Contains(d.content(), "X delete plan"))
+			d.send(press('X'))
+			assert.Check(t, !strings.Contains(d.content(), asking))
+			d.send(press(tea.KeyDown))
+			assert.Check(t, cmp.Contains(d.content(), "X delete plan"))
+		})
+	})
+
+	t.Run("a refresh moves the asked flow", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			flows := []circleci.Flow{alpha, beta}
+			d := loaded(t, func(context.Context) ([]circleci.Flow, error) { return flows, nil })
+			d.send(press('X'))
+			flows = []circleci.Flow{beta, alpha}
+			d.refresh()
+			assert.Check(t, cmp.Contains(d.content(), asking))
+			m, cmd := d.m.Update(press('y'))
+			d.m = m
+			assert.Check(t, cmp.DeepEqual(deleteMsgs(cmd), []flowlist.DeleteMsg{{ID: "a", Title: "Alpha"}}))
+		})
+	})
+
+	t.Run("a refresh drops the asked flow", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			flows := []circleci.Flow{alpha, beta}
+			d := loaded(t, func(context.Context) ([]circleci.Flow, error) { return flows, nil })
+			d.send(press('X'))
+			flows = []circleci.Flow{beta}
+			d.refresh()
+			assert.Check(t, !strings.Contains(d.content(), asking))
+			m, cmd := d.m.Update(press('y'))
+			d.m = m
+			assert.Check(t, cmp.Len(deleteMsgs(cmd), 0))
+		})
+	})
+
+	t.Run("help bar order", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := loaded(t, fixed(alpha))
+			got := d.content()
+			at, del, quit := strings.Index(got, "ctrl+o chat"), strings.Index(got, "X delete plan"), strings.Index(got, "q quit")
+			assert.Check(t, at >= 0 && at < del && del < quit, "help bar:\n%s", got)
+		})
+	})
+}
+
 func TestResume(t *testing.T) {
 	building := circleci.Flow{ID: "a", Title: "Alpha", State: "Building - Agent", Next: waitAgent}
 	for _, tc := range []struct {

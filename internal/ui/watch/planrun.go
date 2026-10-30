@@ -114,6 +114,73 @@ func (m Model) planResumed(msg planResumedMsg) (Model, tea.Cmd) {
 	return m, m.flows.Refresh()
 }
 
+// Deleter deletes plan planID.
+type Deleter interface {
+	Delete(ctx context.Context, planID string) error
+}
+
+// WithPlanDelete returns a copy of m that deletes plans with d, from the flow
+// list.
+func (m Model) WithPlanDelete(d Deleter) Model {
+	m.deleter = d
+	return m
+}
+
+// planDeletedMsg is the end of a delete started from the flow list.
+type planDeletedMsg struct {
+	id, title string
+	err       error
+}
+
+// deletePlan deletes the plan the list asks for. One delete runs at a time,
+// and asking again for the one running is ignored.
+func (m Model) deletePlan(msg flowlist.DeleteMsg) (Model, tea.Cmd) {
+	if m.deleter == nil || m.deleting == msg.ID {
+		return m, nil
+	}
+	if m.deleting != "" {
+		m.note = "a delete is in progress"
+		return m, nil
+	}
+	m.deleting = msg.ID
+	m.note = "deleting " + msg.Title + "…"
+	if m.flows != nil {
+		*m.flows = m.flows.WithDeleting(msg.ID)
+	}
+	d, ctx := m.deleter, m.planCtx
+	return m, func() tea.Msg {
+		return planDeletedMsg{id: msg.ID, title: msg.Title, err: d.Delete(ctx, msg.ID)}
+	}
+}
+
+// planDeleted notes how a delete ended. A deleted plan's open screen is
+// dropped, and the list refreshes to select a neighbour.
+func (m Model) planDeleted(msg planDeletedMsg) (Model, tea.Cmd) {
+	m.deleting = ""
+	if m.flows != nil {
+		*m.flows = m.flows.WithDeleting("")
+	}
+	if msg.err != nil {
+		m.note = "could not delete " + msg.title + ": " + msg.err.Error()
+	} else {
+		m.note = "deleted " + msg.title
+		for key, ws := range m.planWorkspaces {
+			if ws.store.ID() != msg.id {
+				continue
+			}
+			delete(m.planWorkspaces, key)
+			if key == m.planKey {
+				m.planScreen = nil
+				m.planOpen, m.flowsOpen = false, true
+			}
+		}
+	}
+	if m.flows == nil {
+		return m, nil
+	}
+	return m, m.flows.Refresh()
+}
+
 // WithFlowList adds the flow list, the dashboard's first screen.
 func (m Model) WithFlowList(flows flowlist.Model) Model {
 	if m.newChat != nil {
@@ -207,6 +274,10 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.resumePlan(msg)
 	case planResumedMsg:
 		return m.planResumed(msg)
+	case flowlist.DeleteMsg:
+		return m.deletePlan(msg)
+	case planDeletedMsg:
+		return m.planDeleted(msg)
 	case flowlist.NewMsg:
 		return m.openPlanID("", "New plan")
 	case flowlist.QuitMsg:
