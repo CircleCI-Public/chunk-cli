@@ -352,11 +352,13 @@ func TestStoreFlowClaimed(t *testing.T) {
 	f, err := store.Flow(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, f.Claimed, "a claimed plan's flow is not claimed")
+	assert.Check(t, cmp.Equal(f.Holder, "s-1"))
 
 	cci.ReleaseFactoryPlan(store.ID())
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, !f.Claimed, "a released plan's flow is still claimed")
+	assert.Check(t, cmp.Equal(f.Holder, ""))
 }
 
 // TestStoreApproveDesignSendsTheEvent checks that ApproveDesign sends the
@@ -509,6 +511,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		PR:         "https://github.com/o/r/pull/7",
 		Deviations: []string{"lint fails"},
 		Claimed:    true,
+		Holder:     "s-1",
 	}))
 
 	cci.SetFactoryTask(store.ID(), "")
@@ -526,6 +529,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Ended:      true,
 		Outcome:    "merged",
 		Claimed:    true,
+		Holder:     "s-1",
 	}))
 
 	cci.SetFactoryPlanState(store.ID(), "ended")

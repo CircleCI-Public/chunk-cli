@@ -20,6 +20,7 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
@@ -109,6 +110,14 @@ func fixed(flows ...circleci.Flow) func(context.Context) ([]circleci.Flow, error
 func parents(m map[string]string) func(flowlist.Model) flowlist.Model {
 	return func(fm flowlist.Model) flowlist.Model {
 		return fm.WithParents(func(context.Context) (map[string]string, error) { return m, nil })
+	}
+}
+
+func blockers(m map[string][]planstate.Blocker, err error) func(flowlist.Model) flowlist.Model {
+	return func(fm flowlist.Model) flowlist.Model {
+		return fm.WithBlockers(func(_ context.Context, id string) ([]planstate.Blocker, error) {
+			return m[id], err
+		})
 	}
 }
 
@@ -273,6 +282,151 @@ func TestHostMessages(t *testing.T) {
 			d.send(key)
 			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.QuitMsg{}), "%s must ask the host to quit, not tea.Quit", key.String())
 		}
+	})
+}
+
+// resumeLines are every line ResumeLine can say, so a test can check the
+// list itself shows none: the host shows it, in its header.
+var resumeLines = []string{"No session holds", "Claimed by", "Waiting on", "chunk can't resume", "No flow"}
+
+// noResumeLine checks the list's own view says nothing about resuming.
+func noResumeLine(t *testing.T, got string) {
+	t.Helper()
+	for _, l := range resumeLines {
+		assert.Check(t, !strings.Contains(got, l), "the list says %q:\n%s", l, got)
+	}
+}
+
+func TestResume(t *testing.T) {
+	building := circleci.Flow{ID: "a", Title: "Alpha", State: "Building - Agent", Next: waitAgent}
+	for _, tc := range []struct {
+		name     string
+		flow     circleci.Flow
+		blockers map[string][]planstate.Blocker
+		err      error
+		// kind is what R asks the host for; ResumeNone is nothing.
+		kind planstate.ResumeKind
+		line string
+	}{
+		{
+			name: "building, unclaimed",
+			flow: building,
+			kind: planstate.ResumeBuild,
+			line: "No session holds this plan · R starts a build session",
+		},
+		{
+			name: "planning",
+			flow: circleci.Flow{
+				ID:    "a",
+				Title: "Alpha",
+				State: "Planning - Agent",
+				Next:  []circleci.Transition{{Actor: "session", TaskCategory: "write-units"}},
+			},
+			kind: planstate.ResumePlanner,
+			line: "No session holds this plan · R resumes its planner",
+		},
+		{
+			name: "claimed",
+			flow: circleci.Flow{
+				ID:        "a",
+				Title:     "Alpha",
+				State:     "Building - Agent",
+				Next:      waitAgent,
+				SessionID: "bb5a623b-0000",
+			},
+			line: "Claimed by session bb5a623b · factory daemon release a frees it",
+		},
+		{
+			name: "waiting on you",
+			flow: circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human", Next: waitHuman},
+			line: "Waiting on you",
+		},
+		{
+			name:     "blocked",
+			flow:     building,
+			blockers: map[string][]planstate.Blocker{"a": {{Title: "Retry config", State: "Building - Agent"}}},
+			line:     "Waiting on Retry config",
+		},
+		{
+			name:     "blockers done",
+			flow:     building,
+			blockers: map[string][]planstate.Blocker{"a": {{Title: "Retry config", State: "Done"}, {Title: "Docs", State: "ended", Outcome: "merged"}}},
+			kind:     planstate.ResumeBuild,
+			line:     "No session holds this plan · R starts a build session",
+		},
+		{
+			name: "blockers fail to load",
+			flow: building,
+			err:  errors.New("factory is down"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := newDriver(t, fixed(tc.flow), preview, blockers(tc.blockers, tc.err))
+				d.load()
+				got := d.content()
+				assert.Check(t, cmp.Contains(got, "Preview a"), "the preview has not loaded:\n%s", got)
+				assert.Check(t, cmp.Equal(strings.Contains(got, "R resume"), tc.kind != planstate.ResumeNone), "help bar:\n%s", got)
+				assert.Check(t, cmp.Equal(d.m.ResumeLine(), tc.line))
+				noResumeLine(t, got)
+				if tc.kind == planstate.ResumeNone {
+					_, cmd := d.m.Update(press('R'))
+					assert.Check(t, cmd == nil, "R did something")
+					return
+				}
+				d.send(press('R'))
+				assert.Check(t, cmp.DeepEqual(d.next(), flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: tc.kind}))
+			})
+		})
+	}
+	t.Run("without blockers", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			// A host that reads no blockers still offers resume.
+			d := newDriver(t, fixed(building), preview)
+			d.load()
+			assert.Check(t, cmp.Contains(d.content(), "R resume"))
+			d.send(press('R'))
+			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeBuild}))
+		})
+	})
+	t.Run("before the preview loads", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			release := make(chan struct{})
+			slow := func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+				return preview(ctx, id)
+			}
+			d := newDriver(t, fixed(building), slow, blockers(nil, nil))
+			d.send(d.m.Init()())
+			d.step() // List response starts the preview, which waits.
+			got := d.content()
+			assert.Check(t, !strings.Contains(got, "R resume"), "help bar:\n%s", got)
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), ""))
+			_, cmd := d.m.Update(press('R'))
+			assert.Check(t, cmd == nil, "R did something before the blockers loaded")
+			close(release)
+			d.step()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "No session holds this plan · R starts a build session"))
+			noResumeLine(t, d.content())
+		})
+	})
+	t.Run("selection moves", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			claimed := circleci.Flow{ID: "b", Title: "Beta", State: "Building - Agent", Next: waitAgent, SessionID: "cc6b734c-1111"}
+			d := newDriver(t, fixed(building, claimed), preview, blockers(nil, nil))
+			d.load()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "No session holds this plan · R starts a build session"))
+			d.send(press('j'))
+			d.step() // Beta's preview, and its blockers.
+			got := d.content()
+			assert.Check(t, cmp.Contains(got, "▶ Beta"))
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Claimed by session cc6b734c · factory daemon release b frees it"))
+			noResumeLine(t, got)
+			assert.Check(t, !strings.Contains(got, "R resume"), "help bar:\n%s", got)
+		})
 	})
 }
 
@@ -1028,7 +1182,10 @@ func TestGroupsAndRows(t *testing.T) {
 				for _, line := range lines {
 					assert.Assert(t, ansi.StringWidth(line) <= size.Width, "width %d exceeds %d: %q", ansi.StringWidth(line), size.Width, line)
 				}
-				// The help bar, then the host's note under it.
+				// The help bar, then the host's note under it; why the
+				// claimed flow can't be resumed is the host's to show.
+				noResumeLine(t, text)
+				assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Claimed by session s1 · factory daemon release human frees it"))
 				if size.Width == 50 {
 					for _, not := range []string{"preview", "Markdown heading", "Please clarify"} {
 						assert.Check(t, !strings.Contains(text, not), "%q shows at width 50:\n%s", not, text)

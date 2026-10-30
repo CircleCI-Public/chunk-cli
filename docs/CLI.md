@@ -311,7 +311,18 @@ chunk
   read-only activity. Once the plan is being built, the activity pane also
   shows the build session's progress from this machine's chunk daemon, under
   a Building divider: each tool call, reply and note, including a warning
-  when another session holds the plan's claim. The request you type for a new plan (or the one passed as
+  when another session holds the plan's claim. The Flow tab's first line
+  says whether `R` can resume the plan. When it can't, the line says why.
+  For example, it names the session that holds the claim and the
+  `factory daemon release` command that frees it, or a blocker that isn't
+  Done. In `chunk watch`, `R`
+  resumes a planner or starts a fresh build session in the chunk daemon, in
+  the project `chunk watch` was opened in, and the flow list offers the same
+  `R` for the selected flow. The dashboard's header says what `R` does there
+  or why it can't, where it otherwise names the daemon; a daemon it can't
+  reach is shown instead. On a screen opened by `chunk factory plan`, `R`
+  resumes only a planner; resume a build from `chunk watch`. chunk never
+  resumes a build on its own. The request you type for a new plan (or the one passed as
   `chunk factory plan "<request>"`) creates it
   in factory, named by Claude for what the request asks for, as a 2-3 word
   slug (`dry-run-flag`), or for a slug of its first line (`add-a-dry-run-flag`)

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg:
+	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg, buildResumedMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -4568,4 +4569,270 @@ func TestDeleteThePlan(t *testing.T) {
 			tc.check(t, m, store)
 		})
 	}
+}
+
+// fakeResumer is a Resumer that records each call, as "root plan kind".
+type fakeResumer struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+}
+
+func (r *fakeResumer) Resume(_ context.Context, root, planID string, kind planstate.ResumeKind) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, fmt.Sprintf("%s %s %d", root, planID, kind))
+	return r.err
+}
+
+// Calls is every call so far.
+func (r *fakeResumer) Calls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+// fail has every later call fail with err.
+func (r *fakeResumer) fail(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err = err
+}
+
+// resumeScreen is resumeModel's screen, on a host that resumes through a fake
+// Resumer and reads builds from a fake Build, refreshed once after setup, when
+// not nil, has changed the store.
+func resumeScreen(t *testing.T, agent *fakeAgent, state string, next []Step, setup func(*fakeStore)) (Model, *fakeStore, *fakeResumer, *fakeBuild) {
+	t.Helper()
+	m, store := resumeModel(t, agent, state, next)
+	if setup != nil {
+		store.mu.Lock()
+		setup(store)
+		store.mu.Unlock()
+	}
+	r, b := &fakeResumer{}, &fakeBuild{}
+	m = m.WithResume(r).WithInbox("Alpha", "/src/app").WithBuild(b)
+	return refreshed(t, m), store, r, b
+}
+
+// offersResume is whether the footer's hints, given all the room they want,
+// offer R.
+func offersResume(m Model) bool {
+	return strings.Contains(ansi.Strip(theme.Help(theme.New(m.dark), 1000).View(m.keys())), "R resume")
+}
+
+// flowLines is the Flow tab's text, line by line, without styles.
+func flowLines(m Model) []string {
+	return strings.Split(ansi.Strip(m.flowView.GetContent()), "\n")
+}
+
+// TestFlowTabSaysWhetherItResumes checks the Flow tab's first line, which
+// says what R does or why it does nothing, and that the footer offers R only
+// when it does something.
+func TestFlowTabSaysWhetherItResumes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		state   string
+		next    []Step
+		setup   func(*fakeStore)
+		line    string
+		offered bool
+	}{
+		{
+			name:    "a build nobody holds",
+			state:   "Building - Agent",
+			next:    sessionStep,
+			line:    "No session holds this plan · R starts a build session",
+			offered: true,
+		},
+		{
+			name:  "claimed",
+			state: "Building - Agent",
+			next:  sessionStep,
+			setup: func(s *fakeStore) {
+				s.FlowV.Claimed = true
+				s.FlowV.Holder = "bb5a623b-8dd3-4ae8-9c91-48b4eaaf6d62"
+			},
+			line: "Claimed by session bb5a623b · factory daemon release saved-plan frees it",
+		},
+		{
+			name:  "waiting on the developer",
+			state: "Integrating - Human",
+			line:  "Waiting on you",
+		},
+		{
+			name:  "blocked",
+			state: "Building - Agent",
+			next:  sessionStep,
+			setup: func(s *fakeStore) {
+				s.FamilyV.Blockers = []Relative{{ID: "p-1", Title: "Add the flag", State: "Building - Agent"}}
+			},
+			line: "Waiting on Add the flag",
+		},
+		{
+			name:  "no flow",
+			state: "",
+			line:  "No flow: factory hands this plan no tasks",
+		},
+		{
+			name:  "blockers not read",
+			state: "Building - Agent",
+			next:  sessionStep,
+			setup: func(s *fakeStore) {
+				s.FamilyErr = errors.New("factory is down")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, _, _ := resumeScreen(t, newFakeAgent(), tc.state, tc.next, tc.setup)
+			lines := flowLines(m)
+			if tc.line == "" {
+				assert.Check(t, strings.HasPrefix(lines[0], "PROGRESS"), "the Flow tab starts %q", lines[0])
+			} else {
+				assert.Assert(t, len(lines) > 2)
+				assert.Check(t, cmp.Equal(lines[0], tc.line))
+				assert.Check(t, cmp.Equal(lines[1], ""))
+				assert.Check(t, strings.HasPrefix(lines[2], "PROGRESS"), "the Flow tab goes on %q", lines[2])
+			}
+			assert.Check(t, cmp.Equal(offersResume(m), tc.offered))
+		})
+	}
+}
+
+// TestRBuildResumeStartsABuildSession checks that R on a build nobody holds
+// starts a build session in the host's project, then follows it at once,
+// before factory's state moves.
+func TestRBuildResumeStartsABuildSession(t *testing.T) {
+	m, _ := resumeModel(t, newFakeAgent(), "Building - Agent", sessionStep)
+	r, b := &fakeResumer{}, &fakeBuild{}
+	// The build is read from after the first refresh, so the only read is
+	// the one the resume starts.
+	m = refreshed(t, m.WithResume(r).WithInbox("Alpha", "/src/app")).WithBuild(b)
+	assert.Assert(t, offersResume(m))
+
+	m, cmd := m.Update(press("R"))
+	assert.Check(t, m.resumingBuild)
+	assert.Check(t, cmp.Contains(ansi.Strip(m.status), "starting a build session…"))
+	assert.Check(t, !offersResume(m), "R offered while the build session starts")
+	msgs := run(cmd)
+	assert.Check(t, cmp.DeepEqual(r.Calls(), []string{"/src/app saved-plan 2"}))
+	assert.Assert(t, cmp.Len(msgs, 1))
+
+	m, cmd = m.Update(msgs[0])
+	assert.Check(t, m.built)
+	assert.Check(t, !m.resumingBuild)
+	assert.Check(t, cmp.Equal(m.status, ""))
+	assert.Check(t, cmp.Len(b.Asked(), 0))
+	run(cmd)
+	askedFor(t, b, 0)
+	assert.Check(t, cmp.Equal(m.state, "Building - Agent"))
+}
+
+// TestRBuildResumeFailureShowsInTheStatusBar checks that the daemon's refusal
+// is shown as it is, and R is offered again.
+func TestRBuildResumeFailureShowsInTheStatusBar(t *testing.T) {
+	m, _, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, nil)
+	r.fail(errors.New("plan p is claimed by session s"))
+	m = drive(t, m, press("R"))
+	assert.Check(t, cmp.Len(r.Calls(), 1))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not start a build session: plan p is claimed by session s"))
+	assert.Check(t, !m.built)
+	assert.Check(t, !m.resumingBuild)
+	assert.Check(t, offersResume(m), "R not offered again after a failure")
+}
+
+// TestRPlannerResumeGoesThroughTheAgent checks that R on a planning plan
+// nobody holds has the screen's own planner claim it again, not the Resumer.
+func TestRPlannerResumeGoesThroughTheAgent(t *testing.T) {
+	agent := newFakeAgent()
+	m, _, r, _ := resumeScreen(t, agent, "Planning - Agent", sessionStep, nil)
+	// The refresh resumed the planner on its own, once.
+	assert.Assert(t, cmp.Equal(agent.Resumes(), 1))
+	assert.Assert(t, !m.resuming)
+	assert.Check(t, cmp.Equal(flowLines(m)[0], "No session holds this plan · R resumes its planner"))
+	assert.Assert(t, offersResume(m))
+
+	m, cmd := m.Update(press("R"))
+	assert.Check(t, m.resuming)
+	for _, msg := range run(cmd) {
+		m = drive(t, m, msg)
+	}
+	assert.Check(t, cmp.Equal(agent.Resumes(), 2))
+	assert.Check(t, !m.resuming)
+	assert.Check(t, cmp.Len(r.Calls(), 0))
+}
+
+// TestRIsIgnoredWhileBusy checks that R resumes nothing while the developer
+// is writing, being asked something, or before the plan exists, and that a
+// build resume under way is not started twice.
+func TestRIsIgnoredWhileBusy(t *testing.T) {
+	t.Run("writing a comment", func(t *testing.T) {
+		m, _, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, nil)
+		m = pressAll(t, m, "right", "c")
+		assert.Assert(t, m.commenting)
+		assert.Check(t, !offersResume(m))
+		m = pressAll(t, m, "R")
+		assert.Check(t, cmp.Len(r.Calls(), 0))
+		assert.Check(t, !m.resumingBuild)
+		assert.Check(t, cmp.Equal(m.commentInput.Value(), "R"))
+	})
+	t.Run("asked why the plan is abandoned", func(t *testing.T) {
+		m, _, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, func(s *fakeStore) {
+			s.EventsV, s.eventsSet = []string{"abandon"}, true
+		})
+		m = pressAll(t, m, "x")
+		assert.Assert(t, m.askingReason)
+		assert.Check(t, !offersResume(m))
+		m = pressAll(t, m, "R")
+		assert.Check(t, cmp.Len(r.Calls(), 0))
+		assert.Check(t, !m.resumingBuild)
+	})
+	t.Run("asked for a y", func(t *testing.T) {
+		m, store, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, nil)
+		m = pressAll(t, m, "X")
+		assert.Assert(t, m.confirming)
+		assert.Check(t, !offersResume(m))
+		m = pressAll(t, m, "R")
+		assert.Check(t, cmp.Len(r.Calls(), 0))
+		assert.Check(t, !m.resumingBuild)
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		assert.Check(t, !store.PlanDeleted)
+	})
+	t.Run("plan not created", func(t *testing.T) {
+		agent := newFakeAgent()
+		r := &fakeResumer{}
+		m := New(context.Background(), agent, nil, newFakeStore(), "").
+			WithResume(r).WithInbox("Alpha", "/src/app").WithBuild(&fakeBuild{})
+		m = refreshed(t, drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40}))
+		assert.Check(t, !offersResume(m))
+		m = pressAll(t, m, "R")
+		assert.Check(t, cmp.Len(r.Calls(), 0))
+		assert.Check(t, cmp.Equal(agent.Resumes(), 0))
+		assert.Check(t, !m.resumingBuild)
+	})
+	t.Run("build resume under way", func(t *testing.T) {
+		m, _, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, nil)
+		m, first := m.Update(press("R"))
+		m, second := m.Update(press("R"))
+		run(first)
+		run(second)
+		assert.Check(t, cmp.Len(r.Calls(), 1))
+		assert.Check(t, m.resumingBuild)
+	})
+}
+
+// TestNoResumerOffersNoBuildResume checks that a screen whose host has no
+// Resumer says where a build can be resumed from, and R does nothing.
+func TestNoResumerOffersNoBuildResume(t *testing.T) {
+	agent := newFakeAgent()
+	m, _ := resumeModel(t, agent, "Building - Agent", sessionStep)
+	m = refreshed(t, m.WithInbox("Alpha", "/src/app").WithBuild(&fakeBuild{}))
+	assert.Check(t, cmp.Equal(flowLines(m)[0], "Resume this build from chunk watch"))
+	assert.Check(t, !offersResume(m))
+	m = pressAll(t, m, "R")
+	assert.Check(t, !m.resumingBuild)
+	assert.Check(t, !m.built)
+	assert.Check(t, cmp.Equal(m.status, ""))
+	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
 }

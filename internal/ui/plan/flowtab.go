@@ -82,7 +82,11 @@ func (m *Model) renderFlow() {
 // flowContent is the Flow tab, w cells wide.
 func (m Model) flowContent(w int) string {
 	fit := func(s string) string { return ansi.Truncate(s, w, "…") }
-	lines := []string{m.sectionHeading("Progress", m.dim(), w)}
+	var lines []string
+	if line := clean(m.resumable().Line()); line != "" {
+		lines = append(lines, m.style(m.dim()).Render(line), "")
+	}
+	lines = append(lines, m.sectionHeading("Progress", m.dim(), w))
 	lines = append(lines, m.progress()...)
 
 	if pr := clean(m.flow.PR); pr != "" {

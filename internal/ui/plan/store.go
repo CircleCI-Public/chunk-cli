@@ -34,6 +34,8 @@ type Flow struct {
 	Outcome string
 	// Claimed is whether a factory session claims the plan now.
 	Claimed bool
+	// Holder is the session claiming the plan, "" when none does.
+	Holder string
 }
 
 // Actor is who takes a Step, as factory names them.

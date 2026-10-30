@@ -118,6 +118,7 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		Ended:      f.Phase == circleci.PhaseEnded,
 		Outcome:    f.Outcome,
 		Claimed:    f.SessionID != "",
+		Holder:     f.SessionID,
 	}
 	for i, e := range f.ApplicableEvents {
 		out.Events[i] = string(e)

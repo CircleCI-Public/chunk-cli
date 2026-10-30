@@ -239,7 +239,10 @@ type Model struct {
 	// and familyErr why that read failed, or nil.
 	family    Family
 	familyErr error
-	messages  []message
+	// familyLoaded is whether a read of the relatives has succeeded, so the
+	// plan's blockers are known.
+	familyLoaded bool
+	messages     []message
 	// created is whether the plan has been made in factory with store.Create,
 	// and creating whether that is under way.
 	created, creating bool
@@ -390,6 +393,10 @@ type Model struct {
 	// buildMissing is that the last read found no build; buildErr that it failed.
 	buildMissing bool
 	buildErr     string
+	// resumer starts a build session of the plan on R; nil when the host has
+	// none. resumingBuild is set from that R until the daemon answers.
+	resumer       Resumer
+	resumingBuild bool
 
 	pending string
 	// lastClick is the plan block last clicked, to tell a double click.
@@ -585,10 +592,22 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case buildTickMsg, buildReadMsg:
 		return m.updateBuild(msg)
 
+	case buildResumedMsg:
+		m.resumingBuild = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not start a build session: " + msg.err.Error())
+			return m, nil
+		}
+		// The new session is followed at once, before factory's state moves.
+		m.status, m.built = "", true
+		return m.followBuild()
+
 	case familiedMsg:
 		m.family, m.familyErr = msg.family, msg.err
 		if msg.err != nil {
 			m.family = Family{}
+		} else {
+			m.familyLoaded = true
 		}
 		// The cursor stays on a row that is still there.
 		m.related = max(min(m.related, len(m.relatedRows())-1), 0)
@@ -818,6 +837,48 @@ func (m Model) resumeIfOwed() (Model, tea.Cmd) {
 	return m, resumeCmd(m.ctx, m.agent)
 }
 
+// resumable is whether R resumes the plan, and how, or why not, as
+// planstate.ResumeOf decides. Before the plan exists there is nothing to say.
+// A screen with no Resumer starts no build: it says where one can be.
+func (m Model) resumable() planstate.Resume {
+	if !m.created {
+		return planstate.Resume{}
+	}
+	blockers := make([]planstate.Blocker, len(m.family.Blockers))
+	for i, b := range m.family.Blockers {
+		blockers[i] = planstate.Blocker{Title: clean(b.Title), State: clean(b.State), Outcome: clean(b.Outcome)}
+	}
+	r := planstate.ResumeOf(planstate.ResumeFacts{
+		State:         clean(m.flow.State),
+		Ended:         m.flow.Ended,
+		PlanID:        m.store.ID(),
+		Holder:        clean(m.flow.Holder),
+		Next:          moves(m.flow.Next),
+		Blockers:      blockers,
+		BlockersKnown: m.familyLoaded,
+	})
+	if r.Kind == planstate.ResumeBuild && m.resumer == nil {
+		return planstate.Resume{Why: "Resume this build from chunk watch"}
+	}
+	return r
+}
+
+// resume is the developer's R: it has the planner claim the plan again, as
+// resumeIfOwed does, or starts a build session of it.
+func (m Model) resume() (Model, tea.Cmd) {
+	switch m.resumable().Kind {
+	case planstate.ResumePlanner:
+		m.resuming, m.resumedIn = true, m.state
+		return m, resumeCmd(m.ctx, m.agent)
+	case planstate.ResumeBuild:
+		m.resumingBuild = true
+		m.status = "starting a build session…"
+		return m, resumeBuildCmd(m.ctx, m.resumer, m.project, m.store.ID())
+	case planstate.ResumeNone:
+	}
+	return m, nil
+}
+
 // tabFor is the tab the right pane opens on for a plan in state: the plan
 // while it is being planned, or has not started, and its flow after.
 func tabFor(state string) rightTab {
@@ -869,6 +930,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.focusOn(paneChat)
 	case key.Matches(msg, k.SendPlan):
 		return m.askToApprove(), nil
+	case key.Matches(msg, k.Resume):
+		return m.resume()
 	case key.Matches(msg, k.Abandon):
 		m.askingReason = true
 		m.status = ui.TitleStyle.Render("Abandon plan as: ") + "c canceled · w won't do · d duplicate · esc keep it"

@@ -407,10 +407,11 @@ build's progress is the plan's flow in factory; the daemon's session only
 records that the build is running.
 
 ```
-POST /factory/plans        {project_root, plan_id, model?} → 202 {id}: build an approved
-                             factory plan (409 plan over or already building, 404 unknown
-                             project, 502 factory unreachable, 503 not authenticated to
-                             CircleCI)
+POST /factory/plans        {project_root, plan_id, model?} → 202 {id}: build a factory plan
+                             no session holds, in a fresh build session that claims it (409
+                             claimed by another session, no flow, plan over or already
+                             building; 404 unknown project; 502 factory unreachable; 503 not
+                             authenticated to CircleCI)
 GET  /factory/plans/{plan}/build[?after=N] → PlanBuildActivity: the plan's build
                              session (the running one, else the latest) and its feed
                              lines after the first N, numbered from first; total is the

@@ -74,6 +74,7 @@ type Model struct {
 	planOpening                bool
 	planner                    PlanOpener
 	builds                     plan.Build
+	resumer                    plan.Resumer
 	planScreen                 *plan.Model
 	planOpen                   bool
 	planWorkspaces             map[uint64]*planWorkspace
@@ -210,7 +211,7 @@ func (m Model) renderHeader(st watchStyles) string {
 		n = m.flows.Len()
 	}
 	title := st.brand("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(fmt.Sprintf("%d flow%s", n, plural(n)))
-	right := m.updateTag(st) + m.connectionTag(st)
+	right := m.updateTag(st) + m.statusTag(st)
 	gap := max(m.width-lipgloss.Width(title)-lipgloss.Width(right), 1)
 	// Clipped like every other line: one that wraps costs a row the fixed-height
 	// layout never budgeted for.
@@ -223,6 +224,19 @@ func (m Model) updateTag(st watchStyles) string {
 		return ""
 	}
 	return "↑ " + m.updateAvailable + " " + st.dim(m.upgradeCmd) + "  "
+}
+
+// statusTag is the header's right-hand end: an unreachable daemon first, as
+// nothing is built without it, then what resuming the selected flow does or
+// why it can't, then the daemon the dashboard uses.
+func (m Model) statusTag(st watchStyles) string {
+	if m.daemonErr != nil || m.flows == nil {
+		return m.connectionTag(st)
+	}
+	if line := m.flows.ResumeLine(); line != "" {
+		return st.muted(line)
+	}
+	return m.connectionTag(st)
 }
 
 // connectionTag says which daemon the dashboard uses and whether it is

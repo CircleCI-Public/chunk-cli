@@ -66,6 +66,27 @@ func (m Model) WithBuild(b Build) Model {
 	return m
 }
 
+// Resumer starts a plan's agent again in the chunk daemon, in the project at
+// root, as kind says.
+type Resumer interface {
+	Resume(ctx context.Context, root, planID string, kind planstate.ResumeKind) error
+}
+
+// WithResume returns a copy of m whose R starts a build session of its plan
+// through r, when factory waits on one that is not there. Without it, R only
+// resumes the plan's planner.
+func (m Model) WithResume(r Resumer) Model {
+	m.resumer = r
+	return m
+}
+
+// buildResumedMsg is the end of starting a build session of the plan.
+type buildResumedMsg struct{ err error }
+
+func resumeBuildCmd(ctx context.Context, r Resumer, root, planID string) tea.Cmd {
+	return func() tea.Msg { return buildResumedMsg{err: r.Resume(ctx, root, planID, planstate.ResumeBuild)} }
+}
+
 // buildEvery is how often the screen reads its plan's build while one is
 // expected.
 const buildEvery = 2 * time.Second

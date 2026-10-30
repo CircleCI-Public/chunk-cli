@@ -101,6 +101,28 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 	return entry.snapshot(), nil
 }
 
+// resumePlanBuild starts a build of plan req.PlanID for a client resuming
+// it: as startPlanBuild, but refusing a plan with no flow, since factory
+// hands it no tasks, and one a session has claimed.
+func (d *daemon) resumePlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, error) {
+	api := d.planAPI()
+	if api == nil {
+		return chunkd.Session{}, apiErr(http.StatusServiceUnavailable, "not authenticated to CircleCI — plan builds unavailable (run: chunk auth login)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	f, err := planFlow(ctx, api, req.PlanID)
+	switch {
+	case err != nil:
+		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s's flow from factory: %v", req.PlanID, err)
+	case f == nil:
+		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s has no flow; factory hands it no tasks", req.PlanID)
+	case f.Phase != circleci.PhaseEnded && f.SessionID != "":
+		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %[1]s is claimed by session %[2]s; release it with factory daemon release %[1]s to resume it", req.PlanID, f.SessionID)
+	}
+	return d.startPlanBuild(req)
+}
+
 // planProject is the project at root that a plan's session works in, adopted
 // when the daemon does not track it yet.
 func (d *daemon) planProject(root string) (*projectState, error) {
