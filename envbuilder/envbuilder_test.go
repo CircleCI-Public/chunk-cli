@@ -517,6 +517,29 @@ func TestDetectNodeTestCommand(t *testing.T) {
 	})
 }
 
+func TestDetectNodeTestSuite(t *testing.T) {
+	t.Parallel()
+
+	t.Run("npm passes atoms after --", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"scripts":{"test":"jest"}}`)
+		got := detectNodeTestSuite(dir, "npm")
+		assert.Equal(t, got.Run, "npm test -- << test.atoms >>")
+		assert.Assert(t, strings.HasPrefix(got.Discover, "find . "), got.Discover)
+	})
+
+	t.Run("yarn workspace lists files relative to the workspace", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"scripts":{},"devDependencies":{"nx":"1.0.0"},"workspaces":["packages/*"]}`)
+		writeFile(t, dir, "packages/app/package.json", `{"name":"app","scripts":{"test":"jest"}}`)
+		got := detectNodeTestSuite(dir, "yarn")
+		assert.Assert(t, strings.HasPrefix(got.Discover, "cd packages/app && find . "), got.Discover)
+		assert.Equal(t, got.Run, "yarn workspace app test << test.atoms >>")
+	})
+}
+
 func TestDetectPlaywrightInstallCmd(t *testing.T) {
 	t.Parallel()
 
@@ -660,9 +683,12 @@ func TestDetectCommands(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "go.mod", "module github.com/foo/bar\n\ngo 1.22\n")
-		install, test, deps := detectCommands(dir, stackGo)
+		install, suite, deps := detectCommands(dir, stackGo)
+		test := suite.Run
 		assert.Equal(t, install, "go mod download")
-		assert.Equal(t, test, "go test -p 1 ./...")
+		assert.Equal(t, suite.Name, "go tests")
+		assert.Equal(t, suite.Discover, "go list -f '{{ if or (len .TestGoFiles) (len .XTestGoFiles) }} {{ .ImportPath }} {{end}}' ./...")
+		assert.Equal(t, test, `rc=0; for pkg in << test.atoms >>; do go test -p 1 "$pkg" || rc=1; done; exit $rc`)
 		assert.Assert(t, len(deps) > 0, "expected system deps for go")
 	})
 
@@ -670,9 +696,11 @@ func TestDetectCommands(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "uv.lock", "# uv lockfile\n")
-		install, testCmd, _ := detectCommands(dir, stackPython)
+		install, suite, _ := detectCommands(dir, stackPython)
+		testCmd := suite.Run
 		assert.Equal(t, install, "uv sync")
-		assert.Equal(t, testCmd, "uv run pytest")
+		assert.Equal(t, suite.Discover, `find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \)`)
+		assert.Equal(t, testCmd, "uv run pytest << test.atoms >>")
 	})
 
 	t.Run("python requirements.txt", func(t *testing.T) {
@@ -688,26 +716,29 @@ func TestDetectCommands(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "yarn.lock", "")
 		writeFile(t, dir, "package.json", `{"scripts":{"test":"jest"}}`)
-		install, testCmd, _ := detectCommands(dir, stackJavaScript)
+		install, suite, _ := detectCommands(dir, stackJavaScript)
+		testCmd := suite.Run
 		assert.Equal(t, install, "yarn install")
-		assert.Equal(t, testCmd, "yarn test")
+		assert.Equal(t, testCmd, "yarn test << test.atoms >>")
 	})
 
 	t.Run("elixir", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "mix.exs", "defmodule MyApp.MixProject do\nend\n")
-		install, test, _ := detectCommands(dir, stackElixir)
+		install, suite, _ := detectCommands(dir, stackElixir)
+		test := suite.Run
 		assert.Assert(t, strings.Contains(install, "mix deps.get"), "expected mix deps.get in install, got: %s", install)
-		assert.Equal(t, test, "mix test")
+		assert.Equal(t, test, "mix test << test.atoms >>")
 	})
 
 	t.Run("dotnet no subdir", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		install, test, _ := detectCommands(dir, stackDotNet)
+		install, suite, _ := detectCommands(dir, stackDotNet)
+		test := suite.Run
 		assert.Equal(t, install, "dotnet restore")
-		assert.Assert(t, strings.HasPrefix(test, "dotnet test"), "expected dotnet test prefix, got: %s", test)
+		assert.Assert(t, strings.HasPrefix(test, `rc=0; for proj in << test.atoms >>; do dotnet test "$proj" --filter`), "got: %s", test)
 	})
 
 	t.Run("dotnet with framework flag", func(t *testing.T) {
@@ -721,7 +752,8 @@ func TestDetectCommands(t *testing.T) {
     <TargetFramework>net8.0</TargetFramework>
   </PropertyGroup>
 </Project>`)
-		_, test, _ := detectCommands(dir, stackDotNet)
+		_, suite, _ := detectCommands(dir, stackDotNet)
+		test := suite.Run
 		assert.Assert(t, strings.Contains(test, "--framework net8.0"), "expected --framework net8.0, got: %s", test)
 	})
 
@@ -729,9 +761,11 @@ func TestDetectCommands(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "pubspec.yaml", "name: my_package\n")
-		install, test, _ := detectCommands(dir, stackDart)
+		install, suite, _ := detectCommands(dir, stackDart)
+		test := suite.Run
 		assert.Equal(t, install, "dart pub get")
-		assert.Equal(t, test, cmdDartTest)
+		assert.Equal(t, suite.Discover, "find test -type f -name '*_test.dart'")
+		assert.Equal(t, test, "dart test << test.atoms >>")
 	})
 
 	t.Run("dart monorepo with test dirs", func(t *testing.T) {
@@ -741,9 +775,11 @@ func TestDetectCommands(t *testing.T) {
 		assert.NilError(t, os.MkdirAll(filepath.Join(dir, "pkgs", "foo", "test"), 0755))
 		writeFile(t, dir, "pkgs/bar/pubspec.yaml", "name: bar\n")
 		assert.NilError(t, os.MkdirAll(filepath.Join(dir, "pkgs", "bar", "test"), 0755))
-		install, test, _ := detectCommands(dir, stackDart)
+		install, suite, _ := detectCommands(dir, stackDart)
+		test := suite.Run
 		assert.Assert(t, strings.Contains(install, "dart pub get"), "expected dart pub get in install, got: %s", install)
-		assert.Assert(t, strings.Contains(test, "dart test"), "expected dart test in test, got: %s", test)
+		assert.Equal(t, suite.Discover, `printf '%s\n' pkgs/bar pkgs/foo`)
+		assert.Equal(t, test, `for pkg in << test.atoms >>; do (cd "$pkg" && dart test) || exit 1; done`)
 	})
 
 	t.Run("dart monorepo flutter package excluded", func(t *testing.T) {
@@ -761,42 +797,47 @@ func TestDetectCommands(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "stack.yaml", "resolver: lts-21.0\n")
-		install, test, _ := detectCommands(dir, stackHaskell)
+		install, suite, _ := detectCommands(dir, stackHaskell)
+		test := suite.Run
 		assert.Equal(t, install, "stack build --only-dependencies --test")
-		assert.Equal(t, test, "stack test")
+		assert.Equal(t, test, "stack test << test.atoms >>")
 	})
 
 	t.Run("haskell cabal", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "cabal.project", "packages: .\n")
-		install, test, _ := detectCommands(dir, stackHaskell)
+		install, suite, _ := detectCommands(dir, stackHaskell)
+		test := suite.Run
 		assert.Assert(t, strings.Contains(install, "cabal"), "expected cabal in install, got: %s", install)
-		assert.Equal(t, test, "cabal test all")
+		assert.Equal(t, test, "cabal test << test.atoms >>")
 	})
 
 	t.Run("scala plain", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "build.sbt", "name := \"myapp\"\n")
-		install, test, _ := detectCommands(dir, stackScala)
+		install, suite, _ := detectCommands(dir, stackScala)
+		test := suite.Run
 		assert.Equal(t, install, "sbt update")
-		assert.Equal(t, test, "sbt test")
+		assert.Equal(t, test, `sbt "testOnly $(printf '*%s ' << test.atoms >>)"`)
 	})
 
 	t.Run("scala cross-platform (JSPlatform)", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "build.sbt", "lazy val foo = crossProject(JSPlatform, JVMPlatform)\n")
-		_, test, _ := detectCommands(dir, stackScala)
-		assert.Equal(t, test, "sbt rootJVM/test")
+		_, suite, _ := detectCommands(dir, stackScala)
+		test := suite.Run
+		assert.Equal(t, test, `sbt "rootJVM/testOnly $(printf '*%s ' << test.atoms >>)"`)
 	})
 
 	t.Run("cpp cmake", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\n")
-		install, test, _ := detectCommands(dir, stackCPP)
+		install, suite, _ := detectCommands(dir, stackCPP)
+		test := suite.Run
 		assert.Assert(t, strings.Contains(install, "cmake"), "expected cmake in install, got: %s", install)
 		assert.Assert(t, strings.Contains(test, "ctest"), "expected ctest in test, got: %s", test)
 	})
@@ -805,16 +846,17 @@ func TestDetectCommands(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "meson.build", "project('myapp', 'cpp')\n")
-		install, test, _ := detectCommands(dir, stackCPP)
+		install, suite, _ := detectCommands(dir, stackCPP)
+		test := suite.Run
 		assert.Assert(t, strings.Contains(install, "meson"), "expected meson in install, got: %s", install)
-		assert.Equal(t, test, "meson test -C build")
+		assert.Equal(t, test, "meson test -C build << test.atoms >>")
 	})
 
 	t.Run("unknown stack", func(t *testing.T) {
 		t.Parallel()
-		install, test, _ := detectCommands(t.TempDir(), stackUnknown)
+		install, suite, _ := detectCommands(t.TempDir(), stackUnknown)
 		assert.Equal(t, install, stackUnknown)
-		assert.Equal(t, test, stackUnknown)
+		assert.Assert(t, suite == nil)
 	})
 }
 
@@ -829,9 +871,11 @@ func TestDockerfileContent(t *testing.T) {
 			Stack: stackGo,
 			Setup: []Step{
 				{Name: "install", Command: "go mod download"},
+				{Name: "test", Command: "circleci testsuite run 'go tests'"},
 			},
 			Image:        "cimg/go",
 			ImageVersion: "1.22.3",
+			TestSuite:    &TestSuite{Name: "go tests", Discover: "go list ./...", Run: "go test << test.atoms >>"},
 		}
 		content := dockerfileContent(dir, env)
 		assertContains(t, content, "FROM cimg/go:1.22.3")
@@ -841,8 +885,17 @@ func TestDockerfileContent(t *testing.T) {
 		assertContains(t, content, "COPY --chown=circleci:circleci go.mod go.sum ./")
 		assertContains(t, content, "RUN go mod download")
 		assertContains(t, content, "COPY --chown=circleci:circleci . .")
-		// Dep-ordered per-package loop to bound peak GOTMPDIR usage.
-		assertContains(t, content, "go list -deps ./... | grep -Fxf")
+		// The suite runs through the CircleCI CLI the sidecar already has.
+		assertContains(t, content, "| base64 -d >> .circleci/test-suites.yml")
+		assertContains(t, content, "CMD circleci testsuite run 'go tests'")
+	})
+
+	t.Run("no test suite means no CMD", func(t *testing.T) {
+		t.Parallel()
+		env := &Environment{Stack: stackRust, Image: "cimg/rust", ImageVersion: "1.80.0"}
+		content := dockerfileContent(t.TempDir(), env)
+		assert.Assert(t, !strings.Contains(content, "testsuite"), "got: %s", content)
+		assert.Assert(t, !strings.Contains(content, "CMD"), "got: %s", content)
 	})
 
 	t.Run("non-cimg image uses plain COPY", func(t *testing.T) {
@@ -1552,11 +1605,12 @@ func TestDetectCommands_MavenSkipModulesInjection(t *testing.T) {
     <module>graal-native'; touch pwned; echo '</module>
   </modules>
 </project>`)
-		install, test, _ := detectCommands(dir, stackJava)
+		install, suite, _ := detectCommands(dir, stackJava)
+		test := suite.Run
 		assert.Check(t, !strings.Contains(install, "touch pwned"))
 		assert.Check(t, !strings.Contains(test, "touch pwned"))
 		assert.Check(t, cmp.Equal(install, "mvn install -DskipTests"))
-		assert.Check(t, cmp.Equal(test, "mvn test"))
+		assert.Check(t, cmp.Equal(test, "mvn test -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dtest=$(echo << test.atoms >> | tr ' ' ',')"))
 	})
 
 	t.Run("safe module name still excludes it", func(t *testing.T) {
@@ -1569,9 +1623,11 @@ func TestDetectCommands_MavenSkipModulesInjection(t *testing.T) {
     <module>graal-native</module>
   </modules>
 </project>`)
-		install, test, _ := detectCommands(dir, stackJava)
+		install, suite, _ := detectCommands(dir, stackJava)
+		test := suite.Run
 		assert.Check(t, cmp.Equal(install, "mvn install -DskipTests -pl '!graal-native' --also-make"))
-		assert.Check(t, cmp.Equal(test, "mvn test -pl '!graal-native' --also-make"))
+		assert.Check(t, cmp.Equal(test, "mvn test -pl '!graal-native' --also-make -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dtest=$(echo << test.atoms >> | tr ' ' ',')"))
+		assert.Check(t, strings.Contains(suite.Discover, "-o -path './graal-native' \\) -prune"), suite.Discover)
 	})
 }
 
@@ -1585,9 +1641,10 @@ func TestDetectCommands_RustNightlyExcludeInjection(t *testing.T) {
 		writeFile(t, dir, "bad/Cargo.toml", "[package]\nname = \"bad'; touch pwned; echo '\"\n")
 		writeFile(t, dir, "bad/src/lib.rs", "#![feature(async_closure)]\npub fn foo() {}\n")
 
-		_, test, _ := detectCommands(dir, stackRust)
+		_, suite, _ := detectCommands(dir, stackRust)
+		test := suite.Run
 		assert.Check(t, !strings.Contains(test, "touch pwned"))
-		assert.Check(t, cmp.Equal(test, "cargo test --workspace"))
+		assert.Check(t, cmp.Equal(test, "cargo test --workspace -- << test.atoms >>"))
 	})
 
 	t.Run("safe member name still excludes it", func(t *testing.T) {
@@ -1597,8 +1654,9 @@ func TestDetectCommands_RustNightlyExcludeInjection(t *testing.T) {
 		writeFile(t, dir, "sub/Cargo.toml", "[package]\nname = \"sub-nightly\"\n")
 		writeFile(t, dir, "sub/src/lib.rs", "#![feature(async_closure)]\npub fn foo() {}\n")
 
-		_, test, _ := detectCommands(dir, stackRust)
-		assert.Check(t, cmp.Equal(test, "cargo test --workspace --exclude sub-nightly"))
+		_, suite, _ := detectCommands(dir, stackRust)
+		test := suite.Run
+		assert.Check(t, cmp.Equal(test, "cargo test --workspace --exclude sub-nightly -- << test.atoms >>"))
 	})
 }
 
@@ -1673,11 +1731,13 @@ func TestDetectCommands_DartPackageDirInjection(t *testing.T) {
 		writeFile(t, dir, "pkgs/good/pubspec.yaml", "name: good\n")
 		writeFile(t, dir, "pkgs/good/test/foo_test.dart", "")
 
-		install, test, _ := detectCommands(dir, stackDart)
+		install, suite, _ := detectCommands(dir, stackDart)
+		test := suite.Run
 		assert.Check(t, !strings.Contains(install, "touch pwned"))
 		assert.Check(t, !strings.Contains(test, "touch pwned"))
+		assert.Check(t, !strings.Contains(suite.Discover, "touch pwned"))
 		assert.Check(t, cmp.Equal(install, "(cd pkgs/good && dart pub get)"))
-		assert.Check(t, cmp.Equal(test, "(cd pkgs/good && dart test)"))
+		assert.Check(t, cmp.Equal(suite.Discover, `printf '%s\n' pkgs/good`))
 	})
 }
 

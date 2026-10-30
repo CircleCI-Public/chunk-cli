@@ -5,13 +5,27 @@
     "ref": "7ef2946fb5151b745df30201b8c27790cac53875",
     "env": {
       "stack": "python",
-      "install": "uv sync --no-default-groups --group pre-commit --group tests --group dev --group gha-update --extra async --extra dotenv",
-      "test": "uv run pytest",
-      "system_deps": [
-        "uv"
+      "setup": [
+        {
+          "name": "system",
+          "command": "pip install uv"
+        },
+        {
+          "name": "install",
+          "command": "uv sync --no-default-groups --group gha-update --group pre-commit --group tests --group dev --extra async --extra dotenv"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'python tests'"
+        }
       ],
       "image": "cimg/python",
-      "image_version": "3.14.3"
+      "image_version": "3.15.2",
+      "test_suite": {
+        "name": "python tests",
+        "discover": "find tests -type f \\( -name 'test_*.py' -o -name '*_test.py' \\)",
+        "run": "uv run pytest << test.atoms >>"
+      }
     }
   },
   {
@@ -20,11 +34,23 @@
     "ref": "fa7da4a93567ed347ad0735c28e439fca688ef26",
     "env": {
       "stack": "rust",
-      "install": "cargo fetch",
-      "test": "cargo test --workspace --exclude serde --exclude serde_core --exclude serde_test_suite",
-      "system_deps": [],
+      "setup": [
+        {
+          "name": "install",
+          "command": "cargo fetch"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'rust tests'"
+        }
+      ],
       "image": "cimg/rust",
-      "image_version": "1.95.0"
+      "image_version": "1.99.1",
+      "test_suite": {
+        "name": "rust tests",
+        "discover": "cargo test --workspace --exclude serde --exclude serde_core --exclude serde_test_suite -- --list --format terse | sed -n 's/: test$//p' | sed 's/ - .*//' | sort -u",
+        "run": "cargo test --workspace --exclude serde --exclude serde_core --exclude serde_test_suite -- << test.atoms >>"
+      }
     }
   },
   {
@@ -33,14 +59,27 @@
     "ref": "1fa9b7a0a994b006b3be00e2df9de778e71e6807",
     "env": {
       "stack": "java",
-      "install": "mvn install -DskipTests -pl '!test-jpms,!test-graal-native-image,!test-shrinker' --also-make",
-      "test": "mvn test -pl '!test-jpms,!test-graal-native-image,!test-shrinker' --also-make",
-      "system_deps": [
-        "java",
-        "mvn"
+      "setup": [
+        {
+          "name": "system",
+          "command": "curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | sudo tar -xz -C /opt && sudo ln -s /opt/apache-maven-3.9.6/bin/mvn /usr/local/bin/mvn"
+        },
+        {
+          "name": "install",
+          "command": "mvn install -DskipTests -pl '!test-jpms,!test-graal-native-image,!test-shrinker' --also-make"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'java tests'"
+        }
       ],
       "image": "cimg/openjdk",
-      "image_version": "21.0.9"
+      "image_version": "21.0.13",
+      "test_suite": {
+        "name": "java tests",
+        "discover": "find . \\( -name target -o -name .git -o -path './test-jpms' -o -path './test-graal-native-image' -o -path './test-shrinker' \\) -prune -o -type f \\( -name '*Test.java' -o -name '*Tests.java' -o -name '*TestCase.java' -o -name '*Test.kt' -o -name '*Tests.kt' -o -name '*_test.clj' \\) -print | sed 's|.*/||; /\\.clj$/y/_/-/; s|\\.[a-z]*$||' | sort -u",
+        "run": "mvn test -pl '!test-jpms,!test-graal-native-image,!test-shrinker' --also-make -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dtest=$(echo << test.atoms >> | tr ' ' ',')"
+      }
     }
   },
   {
@@ -49,14 +88,27 @@
     "ref": "c7805073fef5b6b8857307c3d4b3597a70613bc2",
     "env": {
       "stack": "typescript",
-      "install": "pnpm install",
-      "test": "pnpm test",
-      "system_deps": [
-        "node",
-        "pnpm"
+      "setup": [
+        {
+          "name": "system",
+          "command": "curl -fsSL https://deb.nodesource.com/setup_26.x | sudo -E bash - && sudo apt-get install -y nodejs --no-install-recommends && sudo rm -rf /var/lib/apt/lists/* && sudo npm install -g pnpm@10.12.1"
+        },
+        {
+          "name": "install",
+          "command": "pnpm install"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'typescript tests'"
+        }
       ],
       "image": "cimg/node",
-      "image_version": "25.8.2"
+      "image_version": "26.13.0",
+      "test_suite": {
+        "name": "typescript tests",
+        "discover": "find . \\( -name node_modules -o -name .git \\) -prune -o -type f \\( -name '*.test.*' -o -name '*.spec.*' -o -path '*/__tests__/*' \\) \\( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' -o -name '*.mjs' -o -name '*.cjs' -o -name '*.mts' -o -name '*.cts' \\) -print",
+        "run": "pnpm test << test.atoms >>"
+      }
     }
   },
   {
@@ -65,14 +117,27 @@
     "ref": "a17e3ac882581ddf4503a27762b355b7c7961eb2",
     "env": {
       "stack": "go",
-      "install": "go mod download",
-      "test": "go test -p 1 ./...",
-      "system_deps": [
-        "go",
-        "git"
+      "setup": [
+        {
+          "name": "system",
+          "command": "sudo apt-get update && sudo apt-get install -y git --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"
+        },
+        {
+          "name": "install",
+          "command": "go mod download"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'go tests'"
+        }
       ],
       "image": "cimg/go",
-      "image_version": "1.23.12"
+      "image_version": "1.23.12",
+      "test_suite": {
+        "name": "go tests",
+        "discover": "go list -f '{{ if or (len .TestGoFiles) (len .XTestGoFiles) }} {{ .ImportPath }} {{end}}' ./...",
+        "run": "rc=0; for pkg in << test.atoms >>; do go test -p 1 \"$pkg\" || rc=1; done; exit $rc"
+      }
     }
   },
   {
@@ -128,14 +193,27 @@
     "ref": "c15b37f81ba5f5abea8c872b0189a70b150df4cb",
     "env": {
       "stack": "typescript",
-      "install": "yarn install",
-      "test": "yarn workspace @rxjs/observable test",
-      "system_deps": [
-        "node",
-        "yarn"
+      "setup": [
+        {
+          "name": "system",
+          "command": "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs --no-install-recommends && sudo rm -rf /var/lib/apt/lists/* && sudo npm install -g yarn"
+        },
+        {
+          "name": "install",
+          "command": "yarn install"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'typescript tests'"
+        }
       ],
       "image": "cimg/node",
-      "image_version": "20.20.2"
+      "image_version": "20.20.2",
+      "test_suite": {
+        "name": "typescript tests",
+        "discover": "cd packages/observable && find . \\( -name node_modules -o -name .git \\) -prune -o -type f \\( -name '*.test.*' -o -name '*.spec.*' -o -path '*/__tests__/*' \\) \\( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' -o -name '*.mjs' -o -name '*.cjs' -o -name '*.mts' -o -name '*.cts' \\) -print",
+        "run": "yarn workspace @rxjs/observable test << test.atoms >>"
+      }
     }
   },
   {
@@ -144,11 +222,23 @@
     "ref": "a6b82fca094b0c0975e6323131a50f53703bb367",
     "env": {
       "stack": "rust",
-      "install": "cargo fetch",
-      "test": "cargo test --workspace --exclude rayon-demo",
-      "system_deps": [],
+      "setup": [
+        {
+          "name": "install",
+          "command": "cargo fetch"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'rust tests'"
+        }
+      ],
       "image": "cimg/rust",
-      "image_version": "1.94.1"
+      "image_version": "1.99.1",
+      "test_suite": {
+        "name": "rust tests",
+        "discover": "cargo test --workspace --exclude rayon-demo -- --list --format terse | sed -n 's/: test$//p' | sed 's/ - .*//' | sort -u",
+        "run": "cargo test --workspace --exclude rayon-demo -- << test.atoms >>"
+      }
     }
   },
   {
@@ -157,18 +247,27 @@
     "ref": "df520e315087210e069050a873fb5e208659af91",
     "env": {
       "stack": "go",
-      "install": "go mod download",
-      "test": "go test -p 1 ./...",
-      "system_deps": [
-        "go",
-        "git",
-        "dart-sass",
-        "asciidoctor",
-        "pandoc",
-        "rst2html"
+      "setup": [
+        {
+          "name": "system",
+          "command": "sudo apt-get update && sudo apt-get install -y git --no-install-recommends && sudo rm -rf /var/lib/apt/lists/* && sudo apt-get update && sudo apt-get install -y curl --no-install-recommends && sudo rm -rf /var/lib/apt/lists/* && ARCH=$(uname -m) && case \"$ARCH\" in x86_64) SASS_ARCH=linux-x64 ;; aarch64) SASS_ARCH=linux-arm64 ;; *) echo \"Unsupported arch: $ARCH\" && exit 1 ;; esac && curl -fsSL \"https://github.com/sass/dart-sass/releases/download/1.80.3/dart-sass-1.80.3-${SASS_ARCH}.tar.gz\" | sudo tar -xz -C /usr/local && sudo chmod -R 755 /usr/local/dart-sass && printf '#!/bin/sh\\nexec /usr/local/dart-sass/sass \"$@\"\\n' | sudo tee /usr/local/bin/sass > /dev/null && sudo chmod +x /usr/local/bin/sass && sudo apt-get update && sudo apt-get install -y asciidoctor --no-install-recommends && sudo rm -rf /var/lib/apt/lists/* && sudo apt-get update && sudo apt-get install -y pandoc --no-install-recommends && sudo rm -rf /var/lib/apt/lists/* && sudo apt-get update && sudo apt-get install -y python3-docutils --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"
+        },
+        {
+          "name": "install",
+          "command": "go mod download"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'go tests'"
+        }
       ],
       "image": "cimg/go",
-      "image_version": "1.25.8"
+      "image_version": "1.25.14",
+      "test_suite": {
+        "name": "go tests",
+        "discover": "go list -f '{{ if or (len .TestGoFiles) (len .XTestGoFiles) }} {{ .ImportPath }} {{end}}' ./...",
+        "run": "rc=0; for pkg in << test.atoms >>; do go test -p 1 \"$pkg\" || rc=1; done; exit $rc"
+      }
     }
   },
   {
@@ -206,11 +305,23 @@
     "ref": "4f73e74372445108d2c1bda37b36e6f5e43402e0",
     "env": {
       "stack": "dotnet",
-      "install": "cd Src && dotnet restore",
-      "test": "cd Src && dotnet test --framework net8.0 --filter \"FullyQualifiedName!~BufferErroringWithInvalidSize&FullyQualifiedName!~MemoryTraceWriter&FullyQualifiedName!~Issue1619&FullyQualifiedName!~SerializeFormattedDateTimeNewZealandCulture\"",
-      "system_deps": [],
+      "setup": [
+        {
+          "name": "install",
+          "command": "cd Src && dotnet restore"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'dotnet tests'"
+        }
+      ],
       "image": "mcr.microsoft.com/dotnet/sdk",
-      "image_version": "9.0"
+      "image_version": "9.0",
+      "test_suite": {
+        "name": "dotnet tests",
+        "discover": "grep -rl --include='*.csproj' Microsoft.NET.Test.Sdk .",
+        "run": "rc=0; for proj in << test.atoms >>; do dotnet test \"$proj\" --framework net8.0 --filter \"FullyQualifiedName!~BufferErroringWithInvalidSize&FullyQualifiedName!~MemoryTraceWriter&FullyQualifiedName!~Issue1619&FullyQualifiedName!~SerializeFormattedDateTimeNewZealandCulture\" || rc=1; done; exit $rc"
+      }
     }
   },
   {
@@ -219,17 +330,27 @@
     "ref": "e5136b341dfde10dac63f3c8ce8ea175b10f7e6c",
     "env": {
       "stack": "php",
-      "install": "composer install",
-      "test": "faketime '@1718452800' vendor/bin/phpunit",
-      "system_deps": [
-        "php",
-        "composer",
-        "locales",
-        "tzdata",
-        "faketime"
+      "setup": [
+        {
+          "name": "system",
+          "command": "php -r \"copy('https://getcomposer.org/installer', 'composer-setup.php');\" && sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer && php -r \"unlink('composer-setup.php');\" && sudo apt-get update && sudo apt-get install -y locales --no-install-recommends && sudo locale-gen fr_FR.UTF-8 && sudo update-locale && sudo rm -rf /var/lib/apt/lists/* && DEBIAN_FRONTEND=noninteractive sudo apt-get update && sudo apt-get install -y tzdata --no-install-recommends && sudo rm -rf /var/lib/apt/lists/* && sudo apt-get update && sudo apt-get install -y faketime --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"
+        },
+        {
+          "name": "install",
+          "command": "composer install"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'php tests'"
+        }
       ],
       "image": "cimg/php",
-      "image_version": "8.5.4"
+      "image_version": "8.5.12",
+      "test_suite": {
+        "name": "php tests",
+        "discover": "find . \\( -name vendor -o -name .git \\) -prune -o -type f -name '*Test.php' -print | sed 's|.*/||; s|\\.php$||' | sort -u",
+        "run": "faketime '@1718452800' vendor/bin/phpunit --filter \"$(echo << test.atoms >> | tr ' ' '|')\""
+      }
     }
   },
   {
@@ -238,15 +359,27 @@
     "ref": "8af8dd8791b9473309b650626850eb974ecae445",
     "env": {
       "stack": "java",
-      "install": "./gradlew dependencies",
-      "test": "./gradlew test",
-      "system_deps": [
-        "java",
-        "openjdk-8",
-        "openjdk-11"
+      "setup": [
+        {
+          "name": "system",
+          "command": "ARCH=$(uname -m) && case \"$ARCH\" in x86_64) JDK_ARCH=x64 ;; aarch64) JDK_ARCH=aarch64 ;; *) echo \"Unsupported arch: $ARCH\" && exit 1 ;; esac && curl -fsSL \"https://api.adoptium.net/v3/binary/latest/8/ga/linux/${JDK_ARCH}/jdk/hotspot/normal/eclipse\" -o /tmp/jdk8.tar.gz && sudo mkdir -p /usr/lib/jvm/java-8-temurin && sudo tar -xzf /tmp/jdk8.tar.gz -C /usr/lib/jvm/java-8-temurin --strip-components=1 && rm /tmp/jdk8.tar.gz && ARCH=$(uname -m) && case \"$ARCH\" in x86_64) JDK_ARCH=x64 ;; aarch64) JDK_ARCH=aarch64 ;; *) echo \"Unsupported arch: $ARCH\" && exit 1 ;; esac && curl -fsSL \"https://api.adoptium.net/v3/binary/latest/11/ga/linux/${JDK_ARCH}/jdk/hotspot/normal/eclipse\" -o /tmp/jdk11.tar.gz && sudo mkdir -p /usr/lib/jvm/java-11-temurin && sudo tar -xzf /tmp/jdk11.tar.gz -C /usr/lib/jvm/java-11-temurin --strip-components=1 && rm /tmp/jdk11.tar.gz"
+        },
+        {
+          "name": "install",
+          "command": "./gradlew dependencies"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'java tests'"
+        }
       ],
       "image": "cimg/openjdk",
-      "image_version": "21.0.9"
+      "image_version": "21.0.13",
+      "test_suite": {
+        "name": "java tests",
+        "discover": "find . \\( -name build -o -name .gradle -o -name .git \\) -prune -o -type f \\( -name '*Test.java' -o -name '*Tests.java' -o -name '*TestCase.java' -o -name '*Test.kt' -o -name '*Tests.kt' -o -name '*Test.groovy' -o -name '*Spec.groovy' \\) -print | sed 's|.*/||; s|\\.[a-z]*$||' | sort -u",
+        "run": "echo 'allprojects { tasks.withType(Test).configureEach { filter.failOnNoMatchingTests = false } }' > /tmp/chunk-tests.gradle && ./gradlew test --init-script /tmp/chunk-tests.gradle $(printf -- '--tests %s ' << test.atoms >>)"
+      }
     }
   },
   {
@@ -255,11 +388,23 @@
     "ref": "9a737481aed085fd289f82dff1fa8c3c66627a7e",
     "env": {
       "stack": "cpp",
-      "install": "cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build && sudo cmake --install build",
-      "test": "cd build && ctest --output-on-failure",
-      "system_deps": [],
+      "setup": [
+        {
+          "name": "install",
+          "command": "cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build && sudo cmake --install build"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'cpp tests'"
+        }
+      ],
       "image": "cimg/base",
-      "image_version": "2026.03"
+      "image_version": "2026.10",
+      "test_suite": {
+        "name": "cpp tests",
+        "discover": "cd build && ctest -N | sed -n 's/^ *Test *#[0-9]*: //p'",
+        "run": "cd build && ctest --output-on-failure -R \"^($(echo << test.atoms >> | tr ' ' '|'))$\""
+      }
     }
   },
   {
@@ -268,14 +413,27 @@
     "ref": "94463ffb54482427fd9b31f264b06bff6dcfd557",
     "env": {
       "stack": "java",
-      "install": "mvn install -DskipTests",
-      "test": "mvn test",
-      "system_deps": [
-        "java",
-        "mvn"
+      "setup": [
+        {
+          "name": "system",
+          "command": "curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | sudo tar -xz -C /opt && sudo ln -s /opt/apache-maven-3.9.6/bin/mvn /usr/local/bin/mvn"
+        },
+        {
+          "name": "install",
+          "command": "mvn install -DskipTests"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'java tests'"
+        }
       ],
       "image": "cimg/openjdk",
-      "image_version": "25.0.1"
+      "image_version": "26.0.2",
+      "test_suite": {
+        "name": "java tests",
+        "discover": "find . \\( -name target -o -name .git \\) -prune -o -type f \\( -name '*Test.java' -o -name '*Tests.java' -o -name '*TestCase.java' -o -name '*Test.kt' -o -name '*Tests.kt' -o -name '*_test.clj' \\) -print | sed 's|.*/||; /\\.clj$/y/_/-/; s|\\.[a-z]*$||' | sort -u",
+        "run": "mvn test -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dtest=$(echo << test.atoms >> | tr ' ' ',')"
+      }
     }
   },
   {
@@ -284,11 +442,23 @@
     "ref": "ba5f36800879af15f0531a0c5723e9baef7a0a57",
     "env": {
       "stack": "dart",
-      "install": "(cd pkgs/http && dart pub get) && (cd pkgs/http2 && dart pub get) && (cd pkgs/http_client_conformance_tests && dart pub get) && (cd pkgs/http_multi_server && dart pub get) && (cd pkgs/http_parser && dart pub get) && (cd pkgs/http_profile && dart pub get) && (cd pkgs/web_socket && dart pub get) && (cd pkgs/web_socket_channel && dart pub get) && (cd pkgs/web_socket_conformance_tests && dart pub get)",
-      "test": "(cd pkgs/http && dart test) && (cd pkgs/http2 && dart test) && (cd pkgs/http_multi_server && dart test) && (cd pkgs/http_parser && dart test) && (cd pkgs/http_profile && dart test) && (cd pkgs/web_socket && dart test) && (cd pkgs/web_socket_channel && dart test)",
-      "system_deps": [],
+      "setup": [
+        {
+          "name": "install",
+          "command": "(cd pkgs/http && dart pub get) && (cd pkgs/http2 && dart pub get) && (cd pkgs/http_client_conformance_tests && dart pub get) && (cd pkgs/http_multi_server && dart pub get) && (cd pkgs/http_parser && dart pub get) && (cd pkgs/http_profile && dart pub get) && (cd pkgs/web_socket && dart pub get) && (cd pkgs/web_socket_channel && dart pub get) && (cd pkgs/web_socket_conformance_tests && dart pub get)"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'dart tests'"
+        }
+      ],
       "image": "dart",
-      "image_version": "3.11.2"
+      "image_version": "3.13.7",
+      "test_suite": {
+        "name": "dart tests",
+        "discover": "printf '%s\\n' pkgs/http pkgs/http2 pkgs/http_multi_server pkgs/http_parser pkgs/http_profile pkgs/web_socket pkgs/web_socket_channel",
+        "run": "for pkg in << test.atoms >>; do (cd \"$pkg\" && dart test) || exit 1; done"
+      }
     }
   },
   {
@@ -297,13 +467,27 @@
     "ref": "6b6956a5f62b512a019fa70ecf50e7f4d5bec3ea",
     "env": {
       "stack": "scala",
-      "install": "sbt update",
-      "test": "sbt rootJVM/test",
-      "system_deps": [
-        "sbt"
+      "setup": [
+        {
+          "name": "system",
+          "command": "curl -fsSL https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz | sudo tar -xz -C /usr/local && sudo ln -sf /usr/local/sbt/bin/sbt /usr/local/bin/sbt"
+        },
+        {
+          "name": "install",
+          "command": "sbt update"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'scala tests'"
+        }
       ],
       "image": "cimg/openjdk",
-      "image_version": "17.0.17"
+      "image_version": "17.0.21",
+      "test_suite": {
+        "name": "scala tests",
+        "discover": "find . \\( -name target -o -name .git -o -name .bsp \\) -prune -o -type f \\( -name '*Suite.scala' -o -name '*Spec.scala' -o -name '*Test.scala' -o -name '*Tests.scala' \\) -print | sed 's|.*/||; s|\\.scala$||' | sort -u",
+        "run": "sbt \"rootJVM/testOnly $(printf '*%s ' << test.atoms >>)\""
+      }
     }
   },
   {
@@ -312,11 +496,23 @@
     "ref": "45d31f1bd9a0edbd6ba55fbcdd5082b159d33106",
     "env": {
       "stack": "haskell",
-      "install": "cabal update && cabal build --enable-tests all",
-      "test": "cabal test all",
-      "system_deps": [],
+      "setup": [
+        {
+          "name": "install",
+          "command": "cabal update && cabal build --enable-tests all"
+        },
+        {
+          "name": "test",
+          "command": "circleci testsuite run 'haskell tests'"
+        }
+      ],
       "image": "haskell",
-      "image_version": "9.12.2"
+      "image_version": "9.12.4",
+      "test_suite": {
+        "name": "haskell tests",
+        "discover": "find . \\( -name dist-newstyle -o -name .stack-work \\) -prune -o -type f -name '*.cabal' -exec awk 'tolower($1)==\"name:\"{n=$2} tolower($1)==\"test-suite\"{print n\":test:\"$2}' {} +",
+        "run": "cabal test << test.atoms >>"
+      }
     }
   }
 ]

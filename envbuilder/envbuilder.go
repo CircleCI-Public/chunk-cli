@@ -35,15 +35,15 @@ const (
 	stackHaskell    = "haskell"
 	stackUnknown    = "unknown"
 
-	cimgPrefix  = "cimg/"
-	cmdDartTest = "dart test"
-	toolPytest  = "pytest"
+	cimgPrefix = "cimg/"
+	toolPytest = "pytest"
 )
 
 // Step and Environment are defined in internal/envspec; alias them here so
 // existing callers using envbuilder.Step / envbuilder.Environment continue to work.
 type Step = envspec.Step
 type Environment = envspec.Environment
+type TestSuite = envspec.TestSuite
 
 func fileExists(dir, name string) bool {
 	_, err := os.Stat(filepath.Join(dir, name))
@@ -599,7 +599,7 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 		sdkRe := regexp.MustCompile(`^(\d+)\.`)
 		tfmRe := regexp.MustCompile(`--framework net(\d+)\.0`)
 		if sdkM := sdkRe.FindStringSubmatch(env.ImageVersion); len(sdkM) == 2 {
-			if tfmM := tfmRe.FindStringSubmatch(env.SetupStep(envspec.StepTest)); len(tfmM) == 2 {
+			if tfmM := tfmRe.FindStringSubmatch(testRun(env)); len(tfmM) == 2 {
 				sdkMajor, sdkErr := strconv.Atoi(sdkM[1])
 				tfmMajor, tfmErr := strconv.Atoi(tfmM[1])
 				if sdkErr == nil && tfmErr == nil && sdkMajor > tfmMajor && tfmMajor >= 6 {
@@ -678,50 +678,22 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	}
 
 	// Use shell form for CMD to allow proper shell quoting/expansion.
-	//
-	// For Go projects, use per-package invocations instead of a single
-	// "go test ./..." to avoid GOTMPDIR exhaustion.  A single "./..."
-	// invocation keeps every b<n>/ temp dir in GOTMPDIR alive for the
-	// entire run — they are not cleaned up incrementally — so for large
-	// projects with many packages the peak GOTMPDIR footprint can exhaust
-	// the container's writable overlay layer.  Individual "go test <pkg>"
-	// invocations clean up their GOTMPDIR when each process exits, bounding
-	// peak disk usage to one package's worth of temp files at a time.
-	//
-	// Dependency-ordering is critical: "go list ./..." outputs packages in
-	// alphabetical order, which puts the root package first (e.g.
-	// "github.com/gohugoio/hugo" < "github.com/gohugoio/hugo/common/...").
-	// The root package imports everything, so testing it first forces Go to
-	// compile all 700+ transitive dependencies simultaneously into GOTMPDIR,
-	// exhausting disk space before the test even runs.
-	//
-	// "go list -deps ./..." outputs packages in topological post-order
-	// (dependencies before the packages that depend on them).  By filtering
-	// that list to only the module's own testable packages we get a run order
-	// where every leaf package is tested first.  GOCACHE warms incrementally
-	// — each package adds only its own newly-compiled deps — so that by the
-	// time the root package is reached all its deps are already cached and
-	// the GOTMPDIR footprint for that final invocation is tiny (just the
-	// linked test binary).
-	//
-	// NOTE: do NOT add a pre-build RUN step that populates GOCACHE here.
-	// Although pre-building test-variant archives into GOCACHE and baking
-	// them into the image avoids GOTMPDIR writes at runtime, the GOCACHE
-	// for a large project (e.g. Hugo) grows to several GB.  Docker's layer
-	// export then fails with "no space left on device" when the host's
-	// containerd storage cannot accommodate the oversized layer.  The
-	// per-package CMD loop below achieves the same GOTMPDIR bound without
-	// inflating the image.
-	if env.Stack == stackGo {
-		// Build a dep-ordered list of this module's testable packages, then
-		// test them one at a time.  $$ is the shell PID, used to give the
-		// temp file a unique name so concurrent runs don't collide.
-		sb.WriteString("\nCMD go list ./... > /tmp/mod-pkgs-$$ && go list -deps ./... | grep -Fxf /tmp/mod-pkgs-$$ | while IFS= read -r pkg; do go test \"$pkg\" || exit 1; done\n")
-	} else if testCmd := env.SetupStep(envspec.StepTest); testCmd != "" {
+	if env.TestSuite != nil {
+		sb.WriteString("\nRUN " + env.TestSuite.AppendCommand() + "\n")
+	}
+	if testCmd := env.SetupStep(envspec.StepTest); testCmd != "" {
 		sb.WriteString("\nCMD " + testCmd + "\n")
 	}
 
 	return sb.String()
+}
+
+// testRun returns the run command of env's test suite, or "" if it has none.
+func testRun(env *Environment) string {
+	if env.TestSuite == nil {
+		return ""
+	}
+	return env.TestSuite.Run
 }
 
 // WriteDockerfile writes Dockerfile.test (and Dockerfile.test.dockerignore if needed)
@@ -1235,24 +1207,36 @@ func isDartNativeOnlyPackage(pkgDir string) bool {
 	return false
 }
 
-func detectCommands(dir, stack string) (string, string, []string) { //nolint:gocyclo
-	var install, test string
+func detectCommands(dir, stack string) (string, *TestSuite, []string) { //nolint:gocyclo
+	var install string
+	var suite TestSuite
 	var systemDeps []string
 
 	switch stack {
 	case stackPython:
+		// Discover lists the files in tests/ matching pytest's default test
+		// file names.
 		switch {
 		case fileExists(dir, "uv.lock"):
 			install = buildUVSyncCommand(dir)
-			test = "uv run " + toolPytest
+			suite = TestSuite{
+				Discover: `find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \)`,
+				Run:      "uv run pytest << test.atoms >>",
+			}
 			systemDeps = []string{"uv"}
 		case fileExists(dir, "Pipfile"):
 			install = "pipenv install --dev"
-			test = "pipenv run " + toolPytest
+			suite = TestSuite{
+				Discover: `find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \)`,
+				Run:      "pipenv run pytest << test.atoms >>",
+			}
 			systemDeps = []string{stackPython, "pipenv"}
 		case fileExists(dir, "requirements.txt"):
 			install = "pip install -r requirements.txt"
-			test = toolPytest
+			suite = TestSuite{
+				Discover: `find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \)`,
+				Run:      "pytest << test.atoms >>",
+			}
 			systemDeps = []string{stackPython, "pip"}
 		default:
 			var installParts []string
@@ -1287,15 +1271,24 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 				installParts = append(installParts, "pip install "+strings.Join(quoted, " "))
 			}
 			install = strings.Join(installParts, " && ")
-			test = toolPytest
+			suite = TestSuite{
+				Discover: `find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \)`,
+				Run:      "pytest << test.atoms >>",
+			}
 			systemDeps = []string{stackPython, "pip"}
 		}
 
 	case stackGo:
 		install = "go mod download"
-		// -p 1 serialises package compilation so only one package's temp build
-		// artifacts occupy /tmp at a time.
-		test = "go test -p 1 ./..."
+		// Each package is tested by its own go test, whose temp build
+		// artifacts are cleared from /tmp when it exits. A single go test over
+		// every package keeps them all until the end, which exhausts the disk
+		// on large modules such as hugo. Every package runs even after one
+		// fails.
+		suite = TestSuite{
+			Discover: "go list -f '{{ if or (len .TestGoFiles) (len .XTestGoFiles) }} {{ .ImportPath }} {{end}}' ./...",
+			Run:      `rc=0; for pkg in << test.atoms >>; do go test -p 1 "$pkg" || rc=1; done; exit $rc`,
+		}
 		systemDeps = []string{stackGo, "git"}
 		if detectGoDartSassDep(dir) {
 			systemDeps = append(systemDeps, "dart-sass")
@@ -1326,7 +1319,7 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 			install = "npm install"
 			systemDeps = []string{"node", "npm"}
 		}
-		test = detectNodeTestCommand(dir, pkgMgr)
+		suite = detectNodeTestSuite(dir, pkgMgr)
 
 	case stackJava:
 		if fileExists(dir, "pom.xml") {
@@ -1334,24 +1327,41 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 			// literal single-quotes below, so a module name containing one would
 			// break out of the quoting; drop anything that isn't a plain path
 			// segment rather than risk that.
-			var exclusions []string
+			var exclusions, prunes []string
 			for _, m := range detectMavenSkipModules(dir) {
 				if isSafeCommandToken(m) {
 					exclusions = append(exclusions, "!"+m)
+					prunes = append(prunes, " -o -path './"+m+"'")
 				}
 			}
+			// The atoms are test class names, which -Dtest takes comma-separated.
+			// A module the selected classes are not in has no matching tests,
+			// which is not a failure.
 			if len(exclusions) > 0 {
 				excludeArg := strings.Join(exclusions, ",")
 				install = "mvn install -DskipTests -pl '" + excludeArg + "' --also-make"
-				test = "mvn test -pl '" + excludeArg + "' --also-make"
+				suite = TestSuite{
+					Discover: `find . \( -name target -o -name .git` + strings.Join(prunes, "") + ` \) -prune -o -type f \( -name '*Test.java' -o -name '*Tests.java' -o -name '*TestCase.java' -o -name '*Test.kt' -o -name '*Tests.kt' -o -name '*_test.clj' \) -print | sed 's|.*/||; /\.clj$/y/_/-/; s|\.[a-z]*$||' | sort -u`,
+					Run:      "mvn test -pl '" + excludeArg + "' --also-make -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dtest=$(echo << test.atoms >> | tr ' ' ',')",
+				}
 			} else {
 				install = "mvn install -DskipTests"
-				test = "mvn test"
+				suite = TestSuite{
+					Discover: `find . \( -name target -o -name .git \) -prune -o -type f \( -name '*Test.java' -o -name '*Tests.java' -o -name '*TestCase.java' -o -name '*Test.kt' -o -name '*Tests.kt' -o -name '*_test.clj' \) -print | sed 's|.*/||; /\.clj$/y/_/-/; s|\.[a-z]*$||' | sort -u`,
+					Run:      "mvn test -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dtest=$(echo << test.atoms >> | tr ' ' ',')",
+				}
 			}
 			systemDeps = []string{stackJava, "mvn"}
 		} else {
 			install = "./gradlew dependencies"
-			test = "./gradlew test"
+			// Discover lists test classes by file name, as for Maven: source sets
+			// are not always under src/ (kotlinx-datetime uses core/common/test).
+			// Each is selected with --tests, which matches a simple class name;
+			// the init script stops a project with none of them failing the build.
+			suite = TestSuite{
+				Discover: `find . \( -name build -o -name .gradle -o -name .git \) -prune -o -type f \( -name '*Test.java' -o -name '*Tests.java' -o -name '*TestCase.java' -o -name '*Test.kt' -o -name '*Tests.kt' -o -name '*Test.groovy' -o -name '*Spec.groovy' \) -print | sed 's|.*/||; s|\.[a-z]*$||' | sort -u`,
+				Run:      `echo 'allprojects { tasks.withType(Test).configureEach { filter.failOnNoMatchingTests = false } }' > /tmp/chunk-tests.gradle && ./gradlew test --init-script /tmp/chunk-tests.gradle $(printf -- '--tests %s ' << test.atoms >>)`,
+			}
 			// Detect and install any additional JDK toolchain versions required by
 			// the build (e.g. Java 8 for compileJavaModuleInfo in Kotlin/JVM projects
 			// like kotlinx-datetime).  openjdk-8 is installed via Adoptium/Temurin
@@ -1362,6 +1372,7 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 
 	case stackRust:
 		install = "cargo fetch"
+		cargoTest := "cargo test"
 		if fileExists(dir, "Cargo.toml") {
 			// Check if it's a workspace by looking for [workspace] in Cargo.toml
 			data, readErr := os.ReadFile(filepath.Join(dir, "Cargo.toml"))
@@ -1378,22 +1389,26 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 						excludeParts = append(excludeParts, "--exclude "+name)
 					}
 				}
-				if len(excludeParts) > 0 {
-					test = "cargo test --workspace " + strings.Join(excludeParts, " ")
-				} else {
-					test = "cargo test --workspace"
-				}
-			} else {
-				test = "cargo test"
+				cargoTest = strings.Join(append([]string{"cargo test --workspace"}, excludeParts...), " ")
 			}
-		} else {
-			test = "cargo test"
+		}
+		// Discover is the test binaries' own listing, which also builds them
+		// for the run. Doc test names ("src/lib.rs - f (line 3)") contain
+		// spaces, which atoms cannot, so each doc test is listed as its file.
+		// The atoms are libtest's substring filters, so a file selects its
+		// doc tests.
+		suite = TestSuite{
+			Discover: cargoTest + " -- --list --format terse | sed -n 's/: test$//p' | sed 's/ - .*//' | sort -u",
+			Run:      cargoTest + " -- << test.atoms >>",
 		}
 		systemDeps = []string{}
 
 	case stackRuby:
 		install = "bundle install"
-		test = "bundle exec rspec"
+		suite = TestSuite{
+			Discover: "find spec -type f -name '*_spec.rb'",
+			Run:      "bundle exec rspec << test.atoms >>",
+		}
 		systemDeps = []string{stackRuby, "bundle"}
 
 	case stackPHP:
@@ -1427,7 +1442,12 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 		// The mid-June 2024 anchor keeps "now" and "now minus 3 weeks" in the same
 		// DST offset (EDT, UTC-4), avoiding the 1-hour DateTime::diff discrepancy
 		// that would occur if the interval spanned the America/Toronto spring-forward.
-		test = `faketime '@1718452800' vendor/bin/phpunit`
+		//
+		// The atoms are test class names, selected with --filter.
+		suite = TestSuite{
+			Discover: `find . \( -name vendor -o -name .git \) -prune -o -type f -name '*Test.php' -print | sed 's|.*/||; s|\.php$||' | sort -u`,
+			Run:      `faketime '@1718452800' vendor/bin/phpunit --filter "$(echo << test.atoms >> | tr ' ' '|')"`,
+		}
 		// locales is needed for PHP projects that test i18n features (e.g. Carbon
 		// requires fr_FR.UTF-8 for its testSetLocaleToAuto suite).
 		// tzdata is needed so date_default_timezone_set('America/Toronto') succeeds;
@@ -1437,7 +1457,10 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 
 	case stackElixir:
 		install = "mix local.hex --force && mix local.rebar --force && mix deps.get"
-		test = "mix test"
+		suite = TestSuite{
+			Discover: `find . \( -name deps -o -name _build \) -prune -o -type f -name '*_test.exs' -print`,
+			Run:      "mix test << test.atoms >>",
+		}
 		systemDeps = []string{}
 
 	case stackDotNet:
@@ -1474,26 +1497,36 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 		// assertion fails unconditionally on Linux regardless of globalization
 		// settings.
 		filterFlag := " --filter \"FullyQualifiedName!~BufferErroringWithInvalidSize&FullyQualifiedName!~MemoryTraceWriter&FullyQualifiedName!~Issue1619&FullyQualifiedName!~SerializeFormattedDateTimeNewZealandCulture\""
+		//
+		// Discover lists the test projects, by the same marker
+		// detectDotNetTestFramework uses; each is tested in turn.
 		if dotnetDir != "" {
 			install = "cd " + dotnetDir + " && dotnet restore"
-			test = "cd " + dotnetDir + " && dotnet test" + fwFlag + filterFlag
 		} else {
 			install = "dotnet restore"
-			test = "dotnet test" + fwFlag + filterFlag
+		}
+		suite = TestSuite{
+			Discover: "grep -rl --include='*.csproj' Microsoft.NET.Test.Sdk .",
+			Run:      `rc=0; for proj in << test.atoms >>; do dotnet test "$proj"` + fwFlag + filterFlag + ` || rc=1; done; exit $rc`,
 		}
 		systemDeps = []string{}
 
 	case stackDart:
+		// Discover lists the test files dart test runs by default, or in a
+		// monorepo the packages that have tests.
 		if fileExists(dir, "pubspec.yaml") {
 			// Single-package repository.
 			install = "dart pub get"
-			test = cmdDartTest
+			suite = TestSuite{
+				Discover: "find test -type f -name '*_test.dart'",
+				Run:      "dart test << test.atoms >>",
+			}
 		} else {
 			// Monorepo: find Dart packages under pkgs/ or packages/.
 			pkgDirs := detectDartPackages(dir)
 			if len(pkgDirs) > 0 {
 				installParts := make([]string, 0, len(pkgDirs))
-				var testParts []string
+				var testPkgs []string
 				for _, pkg := range pkgDirs {
 					// pkg is "pkgs/<dir-entry-name>" and is interpolated with no
 					// quoting below; an unsafe directory name is dropped rather
@@ -1509,42 +1542,69 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 					// standalone test suite; invoking dart test there prints help
 					// text and exits with a non-zero code.
 					if fileExists(filepath.Join(dir, pkg), "test") {
-						testParts = append(testParts, "(cd "+pkg+" && dart test)")
+						testPkgs = append(testPkgs, pkg)
 					}
 				}
 				install = strings.Join(installParts, " && ")
-				if len(testParts) > 0 {
-					test = strings.Join(testParts, " && ")
+				if len(testPkgs) > 0 {
+					// The atoms are the packages, tested in turn.
+					suite = TestSuite{
+						Discover: "printf '%s\\n' " + strings.Join(testPkgs, " "),
+						Run:      `for pkg in << test.atoms >>; do (cd "$pkg" && dart test) || exit 1; done`,
+					}
 				} else {
-					test = cmdDartTest
+					suite = TestSuite{
+						Discover: "find test -type f -name '*_test.dart'",
+						Run:      "dart test << test.atoms >>",
+					}
 				}
 			} else {
 				install = "dart pub get"
-				test = cmdDartTest
+				suite = TestSuite{
+					Discover: "find test -type f -name '*_test.dart'",
+					Run:      "dart test << test.atoms >>",
+				}
 			}
 		}
 		systemDeps = []string{}
 
 	case stackHaskell:
+		// Discover lists each package's test suites as <package>:test:<suite>
+		// targets, which cabal and stack both take.
 		if fileExists(dir, "stack.yaml") {
 			install = "stack build --only-dependencies --test"
-			test = "stack test"
+			suite = TestSuite{
+				Discover: `find . \( -name dist-newstyle -o -name .stack-work \) -prune -o -type f -name '*.cabal' -exec awk 'tolower($1)=="name:"{n=$2} tolower($1)=="test-suite"{print n":test:"$2}' {} +`,
+				Run:      "stack test << test.atoms >>",
+			}
 		} else {
 			install = "cabal update && cabal build --enable-tests all"
-			test = "cabal test all"
+			suite = TestSuite{
+				Discover: `find . \( -name dist-newstyle -o -name .stack-work \) -prune -o -type f -name '*.cabal' -exec awk 'tolower($1)=="name:"{n=$2} tolower($1)=="test-suite"{print n":test:"$2}' {} +`,
+				Run:      "cabal test << test.atoms >>",
+			}
 		}
 		systemDeps = []string{}
 
 	case stackScala:
 		install = "sbt update"
-		test = detectSBTTestCommand(dir)
+		// The atoms are test classes, by file name, selected with testOnly.
+		// Many suites only extend a base suite rather than import a test
+		// framework themselves.
+		suite = TestSuite{
+			Discover: `find . \( -name target -o -name .git -o -name .bsp \) -prune -o -type f \( -name '*Suite.scala' -o -name '*Spec.scala' -o -name '*Test.scala' -o -name '*Tests.scala' \) -print | sed 's|.*/||; s|\.scala$||' | sort -u`,
+			Run:      `sbt "` + strings.TrimPrefix(detectSBTTestCommand(dir), "sbt ") + `Only $(printf '*%s ' << test.atoms >>)"`,
+		}
 		systemDeps = []string{"sbt"}
 
 	case stackCPP:
 		// Detect whether CMake or Meson is the primary build system.
 		if fileExists(dir, "meson.build") && !fileExists(dir, "CMakeLists.txt") {
 			install = "meson setup build && meson compile -C build"
-			test = "meson test -C build"
+			suite = TestSuite{
+				Discover: "meson test -C build --list",
+				Run:      "meson test -C build << test.atoms >>",
+			}
 		} else {
 			// CMake: configure with test-enabling flags if a CTest configuration
 			// is present, otherwise fall back to a plain release build.
@@ -1554,17 +1614,19 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 			// as the non-root "circleci" user, so sudo is required to write
 			// to /usr/local.
 			install = "cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build && sudo cmake --install build"
-			test = "cd build && ctest --output-on-failure"
+			suite = TestSuite{
+				Discover: `cd build && ctest -N | sed -n 's/^ *Test *#[0-9]*: //p'`,
+				Run:      `cd build && ctest --output-on-failure -R "^($(echo << test.atoms >> | tr ' ' '|'))$"`,
+			}
 		}
 		systemDeps = []string{}
 
 	default:
-		install = stackUnknown
-		test = stackUnknown
-		systemDeps = []string{}
+		return stackUnknown, nil, []string{}
 	}
 
-	return install, test, systemDeps
+	suite.Name = stack + " tests"
+	return install, &suite, systemDeps
 }
 
 // mavenProject is the Maven POM XML structure for parsing version constraints.
@@ -1659,9 +1721,42 @@ func parseJavaVersionConstraint(versionStr string) int {
 	return -1
 }
 
+// detectNodeTestSuite returns the test suite for a Node.js project, built on
+// its test invocation (see detectNodeTest).
+func detectNodeTestSuite(dir, pkgMgr string) TestSuite {
+	cmd, wsDir := detectNodeTest(dir, pkgMgr)
+	// Jest's and Vitest's default test file patterns, for JavaScript and
+	// TypeScript files only: tsconfig.test.json and the like are not tests.
+	findTests := `find . \( -name node_modules -o -name .git \) -prune -o -type f \( -name '*.test.*' -o -name '*.spec.*' -o -path '*/__tests__/*' \) \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' -o -name '*.mjs' -o -name '*.cjs' -o -name '*.mts' -o -name '*.cts' \) -print`
+	switch {
+	case strings.HasSuffix(cmd, " nx run-many --target=test"):
+		// run-many takes no test files; it ignores the atoms on stdin.
+		return TestSuite{Discover: findTests, Run: cmd}
+	case wsDir != "":
+		// The workspace's test script runs in its own directory, so its test
+		// files are listed relative to it.
+		return TestSuite{
+			Discover: "cd " + wsDir + " && " + findTests,
+			Run:      cmd + " << test.atoms >>",
+		}
+	case pkgMgr == "npm":
+		// npm passes arguments after -- on to the test script.
+		return TestSuite{Discover: findTests, Run: cmd + " -- << test.atoms >>"}
+	default:
+		return TestSuite{Discover: findTests, Run: cmd + " << test.atoms >>"}
+	}
+}
+
 // detectNodeTestCommand inspects package.json scripts and the presence of nx.json
 // to determine the right test invocation for a Node.js project.
 func detectNodeTestCommand(dir, pkgMgr string) string {
+	cmd, _ := detectNodeTest(dir, pkgMgr)
+	return cmd
+}
+
+// detectNodeTest is detectNodeTestCommand, also returning the directory,
+// relative to dir, of the yarn workspace whose test script it runs, if any.
+func detectNodeTest(dir, pkgMgr string) (cmd, wsDir string) {
 	pkgPath := filepath.Join(dir, "package.json")
 	data, err := os.ReadFile(pkgPath)
 	if err == nil {
@@ -1674,7 +1769,7 @@ func detectNodeTestCommand(dir, pkgMgr string) string {
 		}
 		if json.Unmarshal(data, &pkg) == nil {
 			if _, ok := pkg.Scripts["test"]; ok {
-				return pkgMgr + " test"
+				return pkgMgr + " test", ""
 			}
 			isNx := fileExists(dir, "nx.json")
 			if !isNx {
@@ -1694,21 +1789,22 @@ func detectNodeTestCommand(dir, pkgMgr string) string {
 				}
 			}
 			if isNx && pkgMgr == "yarn" && len(workspacePatterns) > 0 {
-				if wsName := findWorkspaceWithTest(dir, pkg.Name, workspacePatterns); wsName != "" {
-					return "yarn workspace " + wsName + " test"
+				if wsName, wsDir := findWorkspaceWithTest(dir, pkg.Name, workspacePatterns); wsName != "" {
+					return "yarn workspace " + wsName + " test", wsDir
 				}
 			}
 			if isNx {
-				return pkgMgr + " nx run-many --target=test"
+				return pkgMgr + " nx run-many --target=test", ""
 			}
 		}
 	}
-	return pkgMgr + " test"
+	return pkgMgr + " test", ""
 }
 
 // findWorkspaceWithTest expands workspace glob patterns and returns the package
-// name of the first workspace that has a "test" script.
-func findWorkspaceWithTest(dir, rootName string, patterns []string) string {
+// name and directory, relative to dir, of the first workspace that has a
+// "test" script.
+func findWorkspaceWithTest(dir, rootName string, patterns []string) (name, wsDir string) {
 	for _, pattern := range patterns {
 		matches, err := filepath.Glob(filepath.Join(dir, pattern))
 		if err != nil {
@@ -1728,13 +1824,14 @@ func findWorkspaceWithTest(dir, rootName string, patterns []string) string {
 				continue
 			}
 			if rootName == "" || pkg.Name == rootName {
-				if _, ok := pkg.Scripts["test"]; ok && isSafeCommandToken(pkg.Name) {
-					return pkg.Name
+				rel, relErr := filepath.Rel(dir, match)
+				if _, ok := pkg.Scripts["test"]; ok && isSafeCommandToken(pkg.Name) && relErr == nil && isSafeCommandToken(rel) {
+					return pkg.Name, rel
 				}
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // detectPlaywrightInstallCmd returns the command to download Playwright browsers
@@ -2037,7 +2134,7 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 		return nil, err
 	}
 
-	install, test, systemDeps := detectCommands(dir, stack)
+	install, suite, systemDeps := detectCommands(dir, stack)
 
 	image, ok := circleciImages[stack]
 	if !ok {
@@ -2084,8 +2181,8 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 	if pwCmd := detectPlaywrightInstallCmd(dir); pwCmd != "" {
 		setup = append(setup, Step{Name: "playwright-install", Command: pwCmd})
 	}
-	if test != "" && test != stackUnknown {
-		setup = append(setup, Step{Name: envspec.StepTest, Command: test})
+	if suite != nil {
+		setup = append(setup, Step{Name: envspec.StepTest, Command: suite.RunCommand()})
 	}
 
 	return &Environment{
@@ -2093,6 +2190,7 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 		Setup:        setup,
 		Image:        image,
 		ImageVersion: imageVersion,
+		TestSuite:    suite,
 	}, nil
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 )
 
@@ -80,7 +81,8 @@ func resolveRepos(t *testing.T) []repoEntry {
 
 // TestSidecarsBuildEndToEnd clones real open-source repos, runs
 // `chunk sidecars build` to generate a Dockerfile.test, builds the image,
-// and runs the tests inside the container.
+// and runs the tests inside the container through the image's Smarter
+// Testing suite (`circleci testsuite run`).
 //
 // Enable with: CHUNK_ENV_BUILDER_ACCEPTANCE=1
 // Requires: git and docker accessible without sudo.
@@ -142,7 +144,7 @@ func TestSidecarsBuildEndToEnd(t *testing.T) {
 			assert.NilError(t, err, "Dockerfile.test not created")
 
 			t.Log("Running tests in container...")
-			testsOK, testOutput := e2eDockerRun(t, tag)
+			testsOK, testOutput := e2eDockerRun(t, tag, envJSON)
 			assert.Assert(t, testsOK,
 				"tests failed in container\n%s", lastLines(testOutput, 30))
 		})
@@ -245,12 +247,26 @@ func e2eRunBuild(t *testing.T, dir, tag, envJSON string) (output string, exitCod
 	return outBuf.String(), exitCode
 }
 
-func e2eDockerRun(t *testing.T, tag string) (bool, string) {
+// circleciInstall installs the CircleCI CLI and its testsuite extension into
+// the container user's home. Sidecars already have both, but a plain docker
+// run of the test image does not, and its test step is `circleci testsuite run`.
+const circleciInstall = `mkdir -p "$HOME/.local/bin" && ` +
+	`curl -fsSL https://raw.githubusercontent.com/CircleCI-Public/circleci-cli/main/install.sh | DESTDIR="$HOME/.local/bin" bash && ` +
+	`export PATH="$HOME/.local/bin:$PATH" && ` +
+	`circleci extension install testsuite`
+
+// e2eDockerRun runs the env spec's test step in the image, as a sidecar would.
+func e2eDockerRun(t *testing.T, tag, envJSON string) (bool, string) {
 	t.Helper()
+	var env envspec.Environment
+	assert.NilError(t, json.Unmarshal([]byte(envJSON), &env), "parse env spec")
+	testCmd := env.SetupStep(envspec.StepTest)
+	assert.Assert(t, testCmd != "", "env spec has no test step")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
-	args := []string{"run", "--rm", tag}
+	args := []string{"run", "--rm", "--entrypoint", "sh", tag, "-c", circleciInstall + " && " + testCmd}
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	out, err := cmd.CombinedOutput()
 	return err == nil, string(out)
