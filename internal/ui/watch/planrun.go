@@ -9,6 +9,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
@@ -75,6 +76,9 @@ func (m Model) WithPlanBuilds(b plan.Build) Model {
 
 // WithFlowList adds the flow list, the dashboard's first screen.
 func (m Model) WithFlowList(flows flowlist.Model) Model {
+	if m.newChat != nil {
+		flows = flows.WithChatKey()
+	}
 	m.flows, m.flowsOpen = &flows, true
 	return m
 }
@@ -121,6 +125,9 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	screen := plan.New(m.planCtx, msg.agent, msg.approve, msg.store, "").
 		WithTerminal(m.hasDarkBG, m.superEnter).WithBranch(branch).WithInbox(msg.title, msg.root).
 		WithBuild(m.builds)
+	if m.newChat != nil {
+		screen = screen.WithChatKey()
+	}
 	screen, cmd := screen.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 	m.planSeq++
 	ws := &planWorkspace{screen: screen, store: msg.store, root: msg.root}
@@ -144,6 +151,11 @@ func (m Model) showFlows() (Model, tea.Cmd) {
 }
 
 func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if chat.IsMsg(msg) && m.chatView != nil {
+		var cmd tea.Cmd
+		*m.chatView, cmd = m.chatView.Update(msg)
+		return m, cmd
+	}
 	switch msg := msg.(type) {
 	case workspaceMsg:
 		return m.updateWorkspace(msg.key, msg.msg)
@@ -162,6 +174,9 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			m.confirmPlanQuit, m.note = false, ""
+		}
+		if next, cmd, ok := m.updateChat(msg); ok {
+			return next, cmd
 		}
 		if key.Matches(msg, k.Flows) {
 			return m.showFlows()
@@ -184,6 +199,14 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg = tea.WindowSizeMsg{Width: m.width, Height: m.height}
 		}
 		cmds := []tea.Cmd{cmd}
+		if m.chatView != nil {
+			switch msg := msg.(type) {
+			case tea.WindowSizeMsg:
+				*m.chatView = m.chatView.SetSize(m.width, m.height)
+			case tea.BackgroundColorMsg:
+				*m.chatView, _ = m.chatView.Update(msg)
+			}
+		}
 		for key := range m.planWorkspaces {
 			m, cmd = m.updateWorkspace(key, msg)
 			cmds = append(cmds, cmd)

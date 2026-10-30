@@ -33,6 +33,8 @@ type fakePlans struct {
 	newID   string
 	release chan struct{}
 	sent    bool
+	// requests is how many messages the agent was sent.
+	requests int
 }
 
 // fakePlanStore is a plan.Store whose text never changes; these tests do not
@@ -105,6 +107,7 @@ type fakePlanAgent struct {
 func (a *fakePlanAgent) Resume(context.Context) error { return nil }
 
 func (a *fakePlanAgent) Request(ctx context.Context, _ string) error {
+	a.f.requests++
 	go func() {
 		if a.f.release != nil {
 			select {

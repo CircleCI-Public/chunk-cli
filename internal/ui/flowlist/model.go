@@ -71,10 +71,12 @@ type Model struct {
 	phases []string
 	id     string
 	note   string
-	width  int
-	height int
-	dark   bool
-	styles theme.Styles
+	// chatKey is whether the host offers ctrl+o, for the help bar.
+	chatKey bool
+	width   int
+	height  int
+	dark    bool
+	styles  theme.Styles
 
 	loaded, listing bool
 	listErr         error
@@ -134,6 +136,13 @@ func (m Model) Init() tea.Cmd { return m.Refresh() }
 // clears it.
 func (m Model) WithNote(note string) Model {
 	m.note = oneLine(note)
+	return m
+}
+
+// WithChatKey has the help bar name ctrl+o, for a host that opens
+// its chat with it.
+func (m Model) WithChatKey() Model {
+	m.chatKey = true
 	return m
 }
 

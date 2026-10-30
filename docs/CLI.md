@@ -233,7 +233,8 @@ chunk
   back one level, cancelling a comment or prompt first when there is one, and
   leaves from the top; where leaving would drop unsent
   comments or a request it asks first. `q` quits wherever no text is being
-  typed and `ctrl+c` always quits. A lowercase key is the common action and its
+  typed and `ctrl+c` always quits. `ctrl+o` opens a chat from any
+  screen. A lowercase key is the common action and its
   capital the bigger one (`n` and `N` go to the next and previous comment). Plain letters are never actions while a text
   box has focus. Footer hints read `key action`, in lowercase.
 - Telemetry is opt-out. Events are anonymous until you authenticate with
@@ -505,6 +506,17 @@ chunk
   its conversation, for the next time the plan is opened, but the activity
   shown and an unsent request are not kept. Closing the dashboard stops no
   planning session or build: both run in the chunk daemon.
+- **`ctrl+o` opens a chat over any screen** of `watch`: a read-only
+  Claude Code session that answers questions about your plans and flows, from
+  the plans, the code, Sourcegraph, git history and the factory daemon. It is
+  told where it was opened: on a plan's screen, the plan and its status strip;
+  on Flows, the open flows. It changes nothing; asked to, it says what to
+  comment or which key to press. `esc` or `ctrl+o` goes back to the screen as
+  it was. The chunk daemon runs one chat session per repository, so every
+  `chunk watch` there shares its conversation, and quitting `chunk watch` does
+  not end it. The daemon stops it after 30 idle minutes and resumes it on the
+  next message. Outside a repository it says it is unavailable, and takes no
+  input.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It checks the daemon answers every 5 seconds. Running `watch` in a project also registers that project so the daemon finds it.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

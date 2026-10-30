@@ -14,6 +14,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
@@ -79,6 +80,13 @@ type Model struct {
 	planKey, planSeq           uint64
 	flows                      *flowlist.Model
 	flowsOpen, confirmPlanQuit bool
+
+	// chatView is the chat newChat made on the first ctrl+o, nil
+	// before it, or when the host offers none. While chatOpen it is
+	// shown over the screen it was opened from, and has the keyboard.
+	chatView *chat.Model
+	chatOpen bool
+	newChat  func() chat.Model
 
 	// bottomMargin is how many of the terminal's last rows are left blank, for
 	// a terminal that reports more rows than it shows.
@@ -164,6 +172,14 @@ func (m Model) pingDaemon() tea.Msg {
 }
 
 func (m Model) View() tea.View {
+	if m.chatOpen {
+		v := tea.NewView(m.chatView.Content())
+		v.AltScreen = true
+		// The conversation scrolls with the wheel.
+		v.MouseMode = tea.MouseModeCellMotion
+		v.WindowTitle = "chunk watch — chat"
+		return v
+	}
 	if m.planOpen {
 		v := tea.NewView(m.planScreen.Content())
 		v.AltScreen = true

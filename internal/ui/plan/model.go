@@ -366,7 +366,9 @@ type Model struct {
 	// so leaving it loses nothing and stops nothing.
 	back bool
 	// inbox is whether the host offers a plan inbox and Ctrl+P switching.
-	inbox   bool
+	inbox bool
+	// chatKey is whether the host opens its chat with ctrl+o.
+	chatKey bool
 	title   string
 	project string
 	// branch is the git branch the plan is for, shown in the header.
@@ -497,6 +499,13 @@ func (m Model) WithBack() Model {
 // visit.
 func (m Model) WithInbox(title, project string) Model {
 	m.back, m.inbox, m.title, m.project = true, true, title, project
+	return m
+}
+
+// WithChatKey returns a copy of m whose footer names ctrl+o, for a
+// host that opens its chat with it.
+func (m Model) WithChatKey() Model {
+	m.chatKey = true
 	return m
 }
 

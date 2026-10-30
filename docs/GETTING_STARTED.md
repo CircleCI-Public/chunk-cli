@@ -364,6 +364,9 @@ abandons a plan, and stops its build with it.
 comments still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.
 
+`ctrl+o` opens a chat you can ask about your plans and flows from any
+screen; it answers straight away and changes nothing.
+
 `watch` requires a TTY — it will not run in a non-interactive shell (CI,
 pipes). It works with the chunk daemon on this machine, and refuses to start
 with `CHUNK_DAEMON_REMOTE_ADDR` set. It takes no directories; `--focus` and
