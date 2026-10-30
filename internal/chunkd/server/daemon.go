@@ -91,6 +91,9 @@ type daemon struct {
 	// sessions holds plan builds, and rcfg what the daemon builds them with.
 	sessions *sessionStore
 	rcfg     PlanConfig
+	// planners holds the plans' planning sessions, apart from sessions so
+	// they stay out of the runs list.
+	planners *plannerSet
 	// polled is closed once the first poll has finished, so /snapshot can wait
 	// for data while /ping answers straight away. Nil in daemons built without
 	// one, which have nothing to wait for.
@@ -229,6 +232,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		claims:    newClaimStore(),
 		live:      newLivenessChecker(listFor(client)),
 		sessions:  newSessionStore(ctx),
+		planners:  newPlannerSet(ctx),
 		rcfg:      dopts.plans,
 		polled:    make(chan struct{}),
 	}
@@ -242,6 +246,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	defer d.res.stopAll()
 	defer d.tasks.stopAll()
 	defer d.sessions.stopAll()
+	defer d.planners.stopAll()
 	if prov != nil {
 		defer prov.stopAll(context.Background())
 	}

@@ -118,7 +118,7 @@ const stripRows = 2
 func (m Model) strip() string {
 	f := m.flow
 	f.State = m.state
-	step, now, next := status(f, m.family, StageOf(m.events, m.units), m.inReview())
+	step, now, next := status(f, m.family, planstate.StageOf(m.events, m.units), m.inReview())
 	if m.moving != nil {
 		// The developer has made the move the state asks for; factory has
 		// yet to apply it, and the header says so.
@@ -353,9 +353,9 @@ func (m Model) actions() (main, side string) {
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
 	case !ReadyToApprove(m.flow):
 		return "", m.style(m.faint()).Render(approve + " · " + m.notReady())
-	case StageOf(m.events, m.units) == StageQuestions:
+	case planstate.StageOf(m.events, m.units) == planstate.StageQuestions:
 		return "", m.style(m.faint()).Render("ctrl+s Approve · answer 3. Open Questions first")
-	case StageOf(m.events, m.units) == StageDesign:
+	case planstate.StageOf(m.events, m.units) == planstate.StageDesign:
 		return button(m.green(), "ctrl+s Approve design"), ""
 	}
 	return button(m.green(), approve), ""

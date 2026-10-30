@@ -5,6 +5,8 @@ import (
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 )
 
 func TestStatus(t *testing.T) {
@@ -12,7 +14,7 @@ func TestStatus(t *testing.T) {
 		name            string
 		flow            Flow
 		family          Family
-		stage           Stage
+		stage           planstate.Stage
 		inReview        bool
 		step, now, next string
 	}{
@@ -35,21 +37,21 @@ func TestStatus(t *testing.T) {
 		{
 			name:  "design waits",
 			flow:  Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
-			stage: StageDesign,
+			stage: planstate.StageDesign,
 			step:  "Planning",
 			next:  "you approve the design · ctrl+s",
 		},
 		{
 			name:  "plan waits",
 			flow:  Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
-			stage: StagePlan,
+			stage: planstate.StagePlan,
 			step:  "Planning",
 			next:  "you approve the plan · ctrl+s",
 		},
 		{
 			name:  "questions",
 			flow:  Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
-			stage: StageQuestions,
+			stage: planstate.StageQuestions,
 			step:  "Planning",
 			next:  "you answer 3. Open Questions in comments",
 		},
@@ -209,7 +211,7 @@ func TestStatus(t *testing.T) {
 				Next:  []Step{{Actor: "human", Event: "approve-for-building"}},
 			},
 			family: Family{Blockers: []Relative{{Title: "retry-config"}}},
-			stage:  StagePlan,
+			stage:  planstate.StagePlan,
 			step:   "Planning",
 			next:   "you approve the plan · ctrl+s",
 		},

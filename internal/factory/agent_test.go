@@ -205,6 +205,22 @@ func startTestAgent(ctx context.Context, t *testing.T, cfg AgentConfig, first st
 	return a
 }
 
+func TestPlanMessageNamesThePlanAndTheRequest(t *testing.T) {
+	msg := PlanMessage("plan-1", "add a flag")
+	assert.Check(t, cmp.Contains(msg, "as plan plan-1"))
+	assert.Check(t, cmp.Contains(msg, "`factory plan claim plan-1`"))
+	assert.Check(t, strings.HasSuffix(msg, "The developer's request:\n\nadd a flag"), msg)
+	assert.Check(t, cmp.Contains(msg, "put every question for the developer in 3. Open Questions, never in a reply"))
+}
+
+func TestPlanRetryMessageNamesThePlan(t *testing.T) {
+	msg := PlanRetryMessage("plan-1")
+	assert.Check(t, cmp.Contains(msg, "Your claim on plan plan-1 has been released"))
+	assert.Check(t, cmp.Contains(msg, "`factory plan claim plan-1`"))
+	assert.Check(t, cmp.Contains(msg, "put every question for the developer in 3. Open Questions, never in a reply"))
+	assert.Check(t, !strings.Contains(msg, "request"), msg)
+}
+
 func TestAgentArgs(t *testing.T) {
 	agentFakeEnv(t)
 	fakeClaude(t, agentFakeScript)

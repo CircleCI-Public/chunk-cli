@@ -130,7 +130,7 @@ func (m Model) progress() []string {
 		}
 		return rows
 	}
-	units := Units(m.plan)
+	units := planstate.Units(m.plan)
 	if len(units) == 0 {
 		return []string{m.style(m.dim()).Render("No units")}
 	}

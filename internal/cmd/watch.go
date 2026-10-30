@@ -16,7 +16,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/factoryplan"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -157,7 +156,7 @@ type watchPlans struct {
 
 	mu sync.Mutex
 	// planAgents are the agents of every plan opened from the dashboard,
-	// stopped as it closes. Approving a plan stops its agent already.
+	// whose polling stops as it closes.
 	planAgents []*factoryplan.Agent
 }
 
@@ -177,8 +176,8 @@ func (d *watchPlans) stop() {
 }
 
 // plan opens an existing plan or a new workspace. Reading requires only the
-// API; local project, daemon and claim checks happen when starting an agent.
-// Approving the plan stops its session.
+// API; the local project is checked before a request, resume or approval.
+// The agent's polling stops as the dashboard closes.
 func (d *watchPlans) plan(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
 	api, err := factoryPlanClient()
 	if err != nil {
@@ -191,23 +190,7 @@ func (d *watchPlans) plan(ctx context.Context, root, id string) (plan.Agent, pla
 	}
 	agent, build, store := planSession(d.ctx, root, id, "", api)
 	agent.CheckStart(func(ctx context.Context) error {
-		holder, err := store.Holder(ctx)
-		if err != nil {
-			return err
-		}
-		if holder != "" && holder != agent.SessionID() {
-			return errors.New("this plan is claimed by another factory session; you can read and comment without taking its claim")
-		}
-		if err := watchPlanProject(ctx, root); err != nil {
-			return err
-		}
-		if err := factory.CheckClaude(); err != nil {
-			return errors.New("this machine has no Claude Code to plan with; install it from https://claude.com/claude-code")
-		}
-		if err := factory.CheckFactoryDaemon(ctx); err != nil {
-			return watchFactoryProblem(err)
-		}
-		return nil
+		return watchPlanProject(ctx, root)
 	})
 	approve := func(step func(string)) (string, error) {
 		if err := watchPlanProject(ctx, root); err != nil {
@@ -368,18 +351,6 @@ func previewPlan(ctx context.Context, api *circleci.Client, id string) (string, 
 		return "", nil, err
 	}
 	return text, comments, nil
-}
-
-// watchFactoryProblem is CheckFactoryDaemon's error as one sentence for the
-// dashboard.
-func watchFactoryProblem(err error) error {
-	switch {
-	case errors.Is(err, factory.ErrNoFactory):
-		return errors.New("factory is not installed; install it and put it on PATH to plan")
-	case errors.Is(err, factory.ErrNoFactoryDaemon):
-		return errors.New("the factory daemon is not running; run `factory daemon` with FACTORY_PLAN_STORE=circleci to plan")
-	}
-	return err
 }
 
 // dashboardMessage is err as the dashboard shows it: a user error's message

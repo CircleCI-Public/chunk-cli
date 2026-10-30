@@ -166,7 +166,64 @@ type PlanBuildRequest struct {
 	Model  string `json:"model,omitempty"`
 }
 
-// SessionStartResponse answers an accepted POST /factory/plans.
+// PlanApproveRequest has the daemon approve a factory plan, stop its planner
+// and start its build.
+type PlanApproveRequest struct {
+	// ProjectRoot is a project the daemon tracks, or the top of a git
+	// repository. Required.
+	ProjectRoot string `json:"project_root"`
+	Model       string `json:"model,omitempty"`
+}
+
+// SessionStartResponse answers an accepted POST /factory/plans, or
+// POST /factory/plans/{plan}/approve.
 type SessionStartResponse struct {
 	ID string `json:"id"`
+}
+
+// SessionLog is a daemon-run session's recent events, after a cursor.
+type SessionLog struct {
+	SessionID string `json:"session_id"`
+	// LogID names this run of the log; a client whose cursor came from
+	// another (the daemon restarted) starts again at Oldest.
+	LogID string `json:"log_id"`
+	// Oldest is the first seq still kept; events before it were dropped.
+	Oldest int `json:"oldest"`
+	// Busy is whether the session is mid-turn, and Activity the turn's last
+	// activity line, so a screen opened mid-turn can show it working.
+	Busy     bool              `json:"busy"`
+	Activity string            `json:"activity,omitempty"`
+	Next     int               `json:"next"`
+	Events   []SessionLogEvent `json:"events"`
+}
+
+// SessionLogKind is what one event in a SessionLog is.
+type SessionLogKind string
+
+// Session log event kinds.
+const (
+	SessionLogActivity SessionLogKind = "activity"
+	SessionLogReply    SessionLogKind = "reply"
+	SessionLogProblem  SessionLogKind = "problem"
+)
+
+// SessionLogEvent is one event in a SessionLog.
+type SessionLogEvent struct {
+	Seq    int            `json:"seq"`
+	Kind   SessionLogKind `json:"kind"`
+	Text   string         `json:"text"`
+	ByTask bool           `json:"by_task,omitempty"`
+}
+
+// PlannerRequest is a new plan's request, for its planner.
+type PlannerRequest struct {
+	ProjectRoot string `json:"project_root"`
+	Text        string `json:"text"`
+	Model       string `json:"model,omitempty"`
+}
+
+// PlannerResume has a plan's planner claim it again.
+type PlannerResume struct {
+	ProjectRoot string `json:"project_root"`
+	Model       string `json:"model,omitempty"`
 }

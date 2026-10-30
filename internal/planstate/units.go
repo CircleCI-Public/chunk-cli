@@ -1,4 +1,4 @@
-package plan
+package planstate
 
 import (
 	"regexp"
@@ -13,8 +13,8 @@ type Unit struct {
 	Done bool
 }
 
-// unitsHeading is the heading of the section that holds a plan's units.
-const unitsHeading = "## 5. Units"
+// UnitsHeading is the heading of the section that holds a plan's units.
+const UnitsHeading = "## 5. Units"
 
 // doneSuffix ends a done unit's heading, as factory's plan done writes it:
 // " (done)", or " (done, SHA)" as an older daemon wrote it.
@@ -36,20 +36,20 @@ func Units(text string) []Unit {
 			continue
 		}
 		if strings.HasPrefix(line, "# ") || strings.HasPrefix(line, "## ") {
-			inUnits = strings.TrimSpace(line) == unitsHeading
+			inUnits = strings.TrimSpace(line) == UnitsHeading
 			continue
 		}
 		if heading, ok := strings.CutPrefix(line, "### "); ok && inUnits {
-			name, done := unitName(strings.TrimSpace(heading))
+			name, done := UnitName(strings.TrimSpace(heading))
 			out = append(out, Unit{Name: name, Done: done})
 		}
 	}
 	return out
 }
 
-// unitName is a unit heading's text without its done suffix, and whether it
+// UnitName is a unit heading's text without its done suffix, and whether it
 // had one.
-func unitName(text string) (string, bool) {
+func UnitName(text string) (string, bool) {
 	loc := doneSuffix.FindStringIndex(text)
 	if loc == nil {
 		return strings.TrimSpace(text), false

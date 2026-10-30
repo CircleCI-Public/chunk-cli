@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -24,7 +25,17 @@ type PlanConfig struct {
 	// factory.OpenPlanWorktree when nil.
 	OpenPlanWorktree func(ctx context.Context, root, planID string) (string, error)
 	// StartBuild starts a plan's build session; factory.StartAgent when nil.
-	StartBuild func(ctx context.Context, cfg factory.AgentConfig, message string) (BuildAgent, error)
+	StartBuild func(ctx context.Context, cfg factory.AgentConfig, message string) (AgentSession, error)
+	// StartPlanner starts a plan's planner session; factory.StartAgent when nil.
+	StartPlanner func(ctx context.Context, cfg factory.AgentConfig, message string) (AgentSession, error)
+	// OpenPlanSession opens a plan's session record; factory.OpenPlanSession when nil.
+	OpenPlanSession func(root, planID string) (SessionRecord, error)
+	// CheckPlanner checks what a planner needs on this machine before one
+	// starts: factory.CheckClaude then factory.CheckFactoryDaemon when nil.
+	CheckPlanner func(ctx context.Context) error
+	// SessionWorktree finds where factory's daemon has a session working, as
+	// approving a plan checks its claim; factory.SessionWorktree when nil.
+	SessionWorktree planapprove.Locate
 }
 
 // Option customizes RunDaemon.

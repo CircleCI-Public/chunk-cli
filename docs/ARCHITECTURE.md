@@ -413,7 +413,7 @@ Design constraints worth preserving:
 
 ### Plan builds
 
-The daemon's only factory sessions are plan builds. A session is the daemon's
+The daemon's factory sessions are plan builds. A session is the daemon's
 record of building one approved factory plan for a project: a Claude Code
 session in the plan's worktree, with factory's f plugin, that works through
 factory's tasks for the plan through to a pull request. The daemon is the
@@ -431,11 +431,39 @@ GET  /factory/plans/{plan}/build[?after=N] → PlanBuildActivity: the plan's bui
                              session (the running one, else the latest) and its feed
                              lines after the first N, numbered from first; total is the
                              next after (404 no build of the plan)
+POST /factory/plans/{plan}/approve {project_root, model?} → 202 {id}: approve the plan in
+                                   factory, stop its planner and start its build, in one call
+                                   that a client going away does not cut short (409 being
+                                   approved, not ready, no units, questions open or already being
+                                   built; 502 factory failed, or approved but the build would not
+                                   start; 503 not authenticated to CircleCI; 404 unknown project)
+POST /factory/plans/{plan}/planner/request {project_root, text, model?} → 200 SessionLog: start
+                                   the plan's planner on a new plan's request, once (409 already
+                                   requested, claimed by another session, or the plan being
+                                   approved or approved; 503 no Claude Code, factory or factory
+                                   daemon, or not authenticated to CircleCI; 404 unknown project)
+POST /factory/plans/{plan}/planner/resume  {project_root, model?} → 200 SessionLog: have the
+                                   planner claim the plan again, starting or resuming it, when it
+                                   holds no claim; nothing while it does (409/503/404 as request)
+GET  /factory/plans/{plan}/planner[?after=N] → {session_id, log_id, oldest, busy, activity?,
+                                   next, events[]}: the planner's events from cursor N (the
+                                   `next` of an earlier read), and whether it is mid-turn;
+                                   without after, no events
 POST /factory/{id}/cancel  → 202 (idempotent): stop a build without ending its plan
 DELETE /factory/{id}       → 204: forget a finished session; 409 while it is still running
 GET  /snapshot             → each project carries `sessions` (state only), and the
                              top level a `review_auth_error` when plan builds cannot run
 ```
+
+A plan's planner is a long-lived Claude Code session with factory's f plugin
+that plans the plan through factory's tasks, one per plan. Planners are kept
+apart from sessions, in a registry of their own: they are not listed in
+`GET /factory` or the snapshot, so an idle planner never keeps an outdated
+daemon from being replaced. A planner starts on a request or resume, and
+stops on approval, when the plan's flow ends, or when the daemon stops. It
+outlives the screens that follow it: `chunk factory plan` and `chunk watch`
+poll `GET …/planner` while a plan is open, and closing them only ends that
+polling.
 
 A build records a `chunkd.Session` whose `factory` field (`FactoryRun`) names
 the plan, and runs a factory build session in the plan's worktree. While it

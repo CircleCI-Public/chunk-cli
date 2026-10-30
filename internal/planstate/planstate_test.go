@@ -127,3 +127,83 @@ func TestIsUnprioritized(t *testing.T) {
 	assert.Check(t, !IsUnprioritized("Unprioritized - Human"))
 	assert.Check(t, !IsUnprioritized(""))
 }
+
+func TestStageOf(t *testing.T) {
+	both := []string{"approve-for-units", "approve-for-building"}
+	cases := []struct {
+		name   string
+		events []string
+		units  int
+		want   Stage
+	}{
+		{
+			name: "no events, no units",
+			want: StageDesign,
+		},
+		{
+			name:  "no events, units",
+			units: 2,
+			want:  StagePlan,
+		},
+		{
+			name:   "both, no units",
+			events: both,
+			want:   StageDesign,
+		},
+		{
+			name:   "both, units",
+			events: both,
+			units:  2,
+			want:   StagePlan,
+		},
+		{
+			name:   "only units, no units",
+			events: []string{"approve-for-units"},
+			want:   StageDesign,
+		},
+		{
+			name:   "only units, units",
+			events: []string{"address-comments", "approve-for-units"},
+			units:  2,
+			want:   StageDesign,
+		},
+		{
+			name:   "only building, no units",
+			events: []string{"address-comments", "approve-for-building"},
+			want:   StagePlan,
+		},
+		{
+			name:   "only building, units",
+			events: []string{"approve-for-building"},
+			units:  2,
+			want:   StagePlan,
+		},
+		{
+			name:   "unrelated, no units",
+			events: []string{"address-comments", "abandon"},
+			want:   StageQuestions,
+		},
+		{
+			name:   "unrelated, units",
+			events: []string{"address-comments", "abandon"},
+			units:  2,
+			want:   StageQuestions,
+		},
+		{
+			name:   "empty, no units",
+			events: []string{},
+			want:   StageQuestions,
+		},
+		{
+			name:   "empty, units",
+			events: []string{},
+			units:  2,
+			want:   StageQuestions,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(StageOf(tc.events, tc.units), tc.want))
+		})
+	}
+}

@@ -38,6 +38,7 @@ func newTestDaemon() *daemon {
 		hist:     newRiskHistory(),
 		claims:   newClaimStore(),
 		sessions: newSessionStore(context.Background()),
+		planners: newPlannerSet(context.Background()),
 	}
 	d.tasks.onFinish = d.risk.record
 	return d

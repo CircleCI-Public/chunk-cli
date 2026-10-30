@@ -605,86 +605,6 @@ func TestCtrlSWaitsForCommentsBeforeApprovingTheDesign(t *testing.T) {
 	}
 }
 
-func TestStageOf(t *testing.T) {
-	both := []string{"approve-for-units", "approve-for-building"}
-	cases := []struct {
-		name   string
-		events []string
-		units  int
-		want   Stage
-	}{
-		{
-			name: "no events, no units",
-			want: StageDesign,
-		},
-		{
-			name:  "no events, units",
-			units: 2,
-			want:  StagePlan,
-		},
-		{
-			name:   "both, no units",
-			events: both,
-			want:   StageDesign,
-		},
-		{
-			name:   "both, units",
-			events: both,
-			units:  2,
-			want:   StagePlan,
-		},
-		{
-			name:   "only units, no units",
-			events: []string{"approve-for-units"},
-			want:   StageDesign,
-		},
-		{
-			name:   "only units, units",
-			events: []string{"address-comments", "approve-for-units"},
-			units:  2,
-			want:   StageDesign,
-		},
-		{
-			name:   "only building, no units",
-			events: []string{"address-comments", "approve-for-building"},
-			want:   StagePlan,
-		},
-		{
-			name:   "only building, units",
-			events: []string{"approve-for-building"},
-			units:  2,
-			want:   StagePlan,
-		},
-		{
-			name:   "unrelated, no units",
-			events: []string{"address-comments", "abandon"},
-			want:   StageQuestions,
-		},
-		{
-			name:   "unrelated, units",
-			events: []string{"address-comments", "abandon"},
-			units:  2,
-			want:   StageQuestions,
-		},
-		{
-			name:   "empty, no units",
-			events: []string{},
-			want:   StageQuestions,
-		},
-		{
-			name:   "empty, units",
-			events: []string{},
-			units:  2,
-			want:   StageQuestions,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Check(t, cmp.Equal(StageOf(tc.events, tc.units), tc.want))
-		})
-	}
-}
-
 // A plan whose flow offers neither approval waits for its open questions to
 // be answered: ctrl+s approves nothing and says so.
 func TestCtrlSApprovesNothingWhileQuestionsAreOpen(t *testing.T) {
@@ -2205,6 +2125,18 @@ func TestTaskDuringDevelopersTurnIsNotShown(t *testing.T) {
 	assert.Check(t, m.byTask)
 	view = ansi.Strip(m.Content())
 	assert.Check(t, cmp.Contains(view, "working on a factory task"))
+}
+
+// A screen opened while the daemon's planner is mid-turn is told so with one
+// "Working…" activity, which shows the planner busy on a factory task.
+func TestAWorkingEventWhileIdleShowsTheAgentBusy(t *testing.T) {
+	m := New(context.Background(), turnReturning("ok"), nil, newFakeStore(), "do it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	assert.Assert(t, !m.busy, "still busy after the reply")
+
+	m = drive(t, m, eventMsg{agent: m.agent, Event: Event{Activity: "Working…"}})
+	assert.Check(t, m.busy && m.byTask, "busy %v, byTask %v; want a factory task's turn", m.busy, m.byTask)
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Working…"))
 }
 
 func TestProblemClearsTheTask(t *testing.T) {

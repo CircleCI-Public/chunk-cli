@@ -321,9 +321,12 @@ chunk
   in factory, named by Claude for what the request asks for, as a 2-3 word
   slug (`dry-run-flag`), or for a slug of its first line (`add-a-dry-run-flag`)
   when Claude cannot name it,
-  and starts one long-lived Claude Code session with factory's f
-  plugin, which claims the plan and plans it through the factory daemon's
-  tasks. The screen refreshes the plan's text, state and comments every 5s;
+  and has the chunk daemon start one long-lived Claude Code session with
+  factory's f plugin, which claims the plan and plans it through the factory
+  daemon's tasks. The session runs in the chunk daemon, not in the screen:
+  closing the screen leaves it planning, and any chunk window that opens the
+  plan shows the same session's activity. A screen opened while it is working
+  shows it working. The screen refreshes the plan's text, state and comments every 5s;
   the plan's state is in the status strip. Nothing typed after the request
   reaches the session; it works through factory's tasks. The activity pane
   names the task each turn is on, as the plan's flow in factory names it,
@@ -434,14 +437,16 @@ chunk
   was opened from. Factory refuses to delete a plan with sub-plans, and
   the strip says so.
 
-  Approving a plan with units has the chunk daemon build it, in a Claude Code
-  session in the plan's worktree, through to a pull request. In `chunk watch`,
+  Approving a plan with units is one request to the chunk daemon, which
+  approves it in factory, stops its planning session and starts its build, in
+  a Claude Code session in the plan's worktree, through to a pull request.
+  Closing chunk once the daemon has the request does not stop it. In `chunk watch`,
   the screen stays open after approval, on the Flow tab, to follow the build;
   the activity pane shows what the build session is doing.
   Its comments can no longer be sent, because the planning session has
   stopped. `enter` on a
   related plan in the Flow tab opens it. The standalone `chunk factory plan`
-  closes on approval. Approving frees the plan's claim from a session that
+  closes on approval. The daemon frees the plan's claim from a session that
   is only planning it, a parent plan's included; while a build holds the claim,
   approving is refused and names its session. A build whose plan another
   session holds says so in `chunk watch`, and picks the plan up once the claim
@@ -496,9 +501,10 @@ chunk
   session. An approved plan's screen stays open on its Flow tab, which
   follows the build from factory. Quitting with a request or comments unsent
   in any plan asks for a second `ctrl+c`; plans and saved comments stay in
-  factory, and each plan's session keeps its conversation for the next time
-  the plan is opened, but the activity shown and an unsent request are not
-  kept. Closing the dashboard stops every planning session, not a build.
+  factory, and each plan's session keeps planning in the chunk daemon, with
+  its conversation, for the next time the plan is opened, but the activity
+  shown and an unsent request are not kept. Closing the dashboard stops no
+  planning session or build: both run in the chunk daemon.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It checks the daemon answers every 5 seconds. Running `watch` in a project also registers that project so the daemon finds it.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

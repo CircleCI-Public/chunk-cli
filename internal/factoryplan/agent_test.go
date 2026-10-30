@@ -4,655 +4,485 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
-// fakeSession is a session that records what it is sent and reports
-// what a test puts on its events.
-type fakeSession struct {
-	first  string
-	events chan factory.AgentEvent
-	// block, when set, holds Send until it is closed, as a claude that
-	// stopped reading its stdin would.
-	block chan struct{}
-
-	mu      sync.Mutex
-	sent    []string
-	stopped bool
+// answer is one answer of the fake daemon to a fetch.
+type answer struct {
+	log chunkd.SessionLog
+	err error
 }
 
-func newFakeSession(first string) *fakeSession {
-	return &fakeSession{first: first, events: make(chan factory.AgentEvent, 8)}
-}
-
-func (s *fakeSession) Send(message string) error {
-	if s.block != nil {
-		<-s.block
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sent = append(s.sent, message)
-	return nil
-}
-
-func (s *fakeSession) Events() <-chan factory.AgentEvent { return s.events }
-
-func (s *fakeSession) Stop() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.block != nil {
-		// Stopping claude ends a write to it.
-		select {
-		case <-s.block:
-		default:
-			close(s.block)
-		}
-	}
-	if !s.stopped {
-		s.stopped = true
-		close(s.events)
-	}
-	return nil
-}
-
-// end closes the session's events as claude exiting would.
-func (s *fakeSession) end() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.stopped {
-		s.stopped = true
-		close(s.events)
-	}
-}
-
-// fakeRecord is a plan's session record: id is the session it records,
-// and openErr fails opening it, as another chunk holding it open would.
-type fakeRecord struct {
-	mu      sync.Mutex
-	id      string
-	openErr error
-	opened  int
-	closed  bool
-}
-
-func (r *fakeRecord) ID() (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.id, nil
-}
-
-func (r *fakeRecord) Record(id string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.id = id
-	return nil
-}
-
-func (r *fakeRecord) Close() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.closed = true
-	return nil
-}
-
-func (r *fakeRecord) recorded() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.id
-}
-
-// testAgent is an Agent for a plan created as planID, whose sessions
-// are fakes; starts records each session started and the config it was
-// started with. holderID is the session factory says holds the plan's claim,
-// and holderErr fails reading it.
-type testAgent struct {
-	*Agent
+// fakeDaemon is the chunk daemon's planner routes: it records what an Agent
+// posts and the cursor of each fetch, and answers fetches from answers in
+// order, then with no events at the end of the last log it answered with.
+type fakeDaemon struct {
 	mu        sync.Mutex
-	sessions  []*fakeSession
-	configs   []factory.AgentConfig
-	startErr  error
-	holderID  string
-	holderErr error
-	// worktreeErr fails opening the plan's worktree.
-	worktreeErr error
-	// started, when set, is called as each session starts.
-	started func()
-	// resumeErr fails starting a session that resumes one.
-	resumeErr error
-	// record is the plan's session record on this machine.
-	record *fakeRecord
+	answers   []answer
+	afters    []int
+	planIDs   []string
+	requests  []chunkd.PlannerRequest
+	resumes   []chunkd.PlannerResume
+	postErr   error
+	lastLog   chunkd.SessionLog
+	fetchedCh chan struct{} // signalled after each fetch
 }
 
-func (tp *testAgent) setHolder(id string, err error) {
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	tp.holderID, tp.holderErr = id, err
+func newFakeDaemon(answers ...answer) *fakeDaemon {
+	return &fakeDaemon{answers: answers, fetchedCh: make(chan struct{}, 1)}
 }
 
-func newTestAgent(t *testing.T, planID string) *testAgent {
+func (f *fakeDaemon) request(planID string, req chunkd.PlannerRequest) (chunkd.SessionLog, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.planIDs = append(f.planIDs, planID)
+	f.requests = append(f.requests, req)
+	return chunkd.SessionLog{}, f.postErr
+}
+
+func (f *fakeDaemon) resume(planID string, req chunkd.PlannerResume) (chunkd.SessionLog, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.planIDs = append(f.planIDs, planID)
+	f.resumes = append(f.resumes, req)
+	return chunkd.SessionLog{}, f.postErr
+}
+
+func (f *fakeDaemon) fetch(planID string, after int) (chunkd.SessionLog, error) {
+	f.mu.Lock()
+	defer func() {
+		f.mu.Unlock()
+		select {
+		case f.fetchedCh <- struct{}{}:
+		default:
+		}
+	}()
+	f.afters = append(f.afters, after)
+	if len(f.answers) == 0 {
+		return chunkd.SessionLog{LogID: f.lastLog.LogID, Oldest: f.lastLog.Oldest, Next: f.lastLog.Next}, nil
+	}
+	a := f.answers[0]
+	f.answers = f.answers[1:]
+	if a.err == nil {
+		f.lastLog = a.log
+	}
+	return a.log, a.err
+}
+
+// fetched is the cursor of each fetch so far.
+func (f *fakeDaemon) fetched() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.afters...)
+}
+
+func (f *fakeDaemon) posts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.requests) + len(f.resumes)
+}
+
+// newTestAgent is an Agent for plan planID, "" for one not yet created, over
+// the fake daemon d, polling until the test ends. It is called in a synctest
+// bubble, so the poller's ticks fire as soon as everything else is blocked.
+func newTestAgent(t *testing.T, planID string, d *fakeDaemon) (*Agent, *Store) {
 	t.Helper()
 	store := &Store{planID: planID}
-	tp := &testAgent{Agent: NewAgent(t.Context(), factory.AgentConfig{Dir: "/src", SessionID: "s-1"}, store)}
-	tp.start = func(_ context.Context, cfg factory.AgentConfig, message string) (session, error) {
-		tp.mu.Lock()
-		defer tp.mu.Unlock()
-		if tp.startErr != nil {
-			return nil, tp.startErr
-		}
-		if cfg.Resume && tp.resumeErr != nil {
-			tp.configs = append(tp.configs, cfg)
-			return nil, tp.resumeErr
-		}
-		s := newFakeSession(message)
-		tp.sessions = append(tp.sessions, s)
-		tp.configs = append(tp.configs, cfg)
-		if tp.started != nil {
-			tp.started()
-		}
-		return s, nil
-	}
-	tp.holder = func(context.Context) (string, error) {
-		tp.mu.Lock()
-		defer tp.mu.Unlock()
-		return tp.holderID, tp.holderErr
-	}
-	tp.worktree = func(context.Context) (string, error) {
-		tp.mu.Lock()
-		defer tp.mu.Unlock()
-		return "/worktrees/" + planID, tp.worktreeErr
-	}
-	tp.record = &fakeRecord{}
-	tp.openRecord = func() (sessionRecord, error) {
-		tp.record.mu.Lock()
-		defer tp.record.mu.Unlock()
-		if tp.record.openErr != nil {
-			return nil, tp.record.openErr
-		}
-		tp.record.opened++
-		return tp.record, nil
-	}
-	return tp
+	a := newAgent(t.Context(), "/src", "opus", store, d.request, d.resume, d.fetch)
+	t.Cleanup(func() { _ = a.Stop() })
+	return a, store
 }
 
-func (tp *testAgent) session(i int) *fakeSession {
-	tp.mu.Lock()
-	defer tp.mu.Unlock()
-	return tp.sessions[i]
-}
-
-// next is the Agent's next event, failing the test if none comes.
-func next(t *testing.T, a *Agent) plan.Event {
+// collect is every event a emits before d has been fetched from n times.
+// Events are sent unbuffered, so a fetch only follows once what the fetch
+// before it read has been taken: all of the first n-1 fetches' events are in
+// the result.
+func collect(t *testing.T, a *Agent, d *fakeDaemon, n int) []plan.Event {
 	t.Helper()
-	select {
-	case ev := <-a.Events():
-		return ev
-	case <-time.After(5 * time.Second):
-		t.Fatal("no event from the planning agent")
-		return plan.Event{}
-	}
-}
-
-func TestAgentStartsOnTheFirstMessageWithTheClaim(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("s-1", nil)
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	err = tp.Request(t.Context(), "keep it small")
-	assert.Check(t, cmp.ErrorIs(err, ErrRequested))
-
-	assert.Assert(t, cmp.Len(tp.sessions, 1), "one session for the conversation")
-	s := tp.session(0)
-	assert.Check(t, cmp.Equal(s.first, fmt.Sprintf(claimMessage, "plan-1", "add a flag")))
-	assert.Check(t, cmp.Contains(s.first, "never in a reply"))
-	assert.Check(t, cmp.Len(s.sent, 0))
-	assert.Check(t, !tp.configs[0].Resume)
-}
-
-func TestAgentStartsOnlyOnceItsCheckPasses(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	problem := errors.New("open chunk watch in this plan's repository")
-	tp.CheckStart(func(context.Context) error { return problem })
-	err := tp.Request(t.Context(), "add a flag")
-	assert.Check(t, cmp.ErrorIs(err, problem))
-	tp.mu.Lock()
-	assert.Check(t, cmp.Len(tp.sessions, 0))
-	tp.mu.Unlock()
-
-	// A request that started nothing is still to be sent.
-	tp.CheckStart(func(context.Context) error { return nil })
-	err = tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(tp.session(0).first, fmt.Sprintf(claimMessage, "plan-1", "add a flag")))
-}
-
-func TestAgentPassesEventsOn(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("s-1", nil)
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	s := tp.session(0)
-
-	s.events <- factory.AgentEvent{Activity: &claudecode.Activity{Tool: "Read", Detail: "main.go"}}
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Claimed it."}}
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Wrote the outcome.", ByTask: true}}
-
-	ev := next(t, tp.Agent)
-	assert.Check(t, cmp.Equal(ev.Activity, "Read main.go"))
-	ev = next(t, tp.Agent)
-	assert.Assert(t, ev.Reply != nil)
-	assert.Check(t, cmp.Equal(ev.Reply.Text, "Claimed it."))
-	ev = next(t, tp.Agent)
-	assert.Assert(t, ev.Reply != nil)
-	assert.Check(t, cmp.Equal(ev.Reply.Text, "Wrote the outcome."))
-	assert.Check(t, ev.Reply.ByTask)
-}
-
-func TestAgentSaysWhenTheDaemonHoldsNoClaim(t *testing.T) {
-	tp := newTestAgent(t, "plan-1") // a daemon on another store claims nothing here
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	s := tp.session(0)
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "I could not claim it."}}
-
-	ev := next(t, tp.Agent)
-	assert.Assert(t, ev.Reply != nil)
-	assert.Check(t, cmp.Equal(ev.Reply.Text, "I could not claim it."))
-	ev = next(t, tp.Agent)
-	assert.Assert(t, ev.Problem != nil)
-	assert.Check(t, cmp.ErrorContains(ev.Problem, "FACTORY_PLAN_STORE=circleci"))
-
-	// Only the reply to the claim is checked.
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "ok"}}
-	ev = next(t, tp.Agent)
-	assert.Assert(t, ev.Reply != nil)
-	assert.Check(t, cmp.Equal(ev.Reply.Text, "ok"))
-}
-
-func TestAgentSaysWhenAnotherSessionHoldsTheClaim(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("s-other", nil)
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	tp.session(0).events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "ok"}}
-
-	next(t, tp.Agent)
-	ev := next(t, tp.Agent)
-	assert.Assert(t, ev.Problem != nil)
-	assert.Check(t, cmp.ErrorContains(ev.Problem, "claimed by another factory session"))
-}
-
-func TestAgentSaysWhenItCannotReadTheClaim(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("", errors.New("503 from factory"))
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	tp.session(0).events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "ok"}}
-
-	next(t, tp.Agent)
-	ev := next(t, tp.Agent)
-	assert.Assert(t, ev.Problem != nil)
-	assert.Check(t, cmp.ErrorContains(ev.Problem, "503 from factory"))
-}
-
-// A session that holds the plan's claim is not told to claim it again; one
-// that has lost it, as an agent that released the plan has, is.
-func TestAgentClaimsAgainOnceTheClaimIsLost(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("s-1", nil)
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	s := tp.session(0)
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Claimed it."}}
-	next(t, tp.Agent)
-
-	err = tp.Resume(t.Context())
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Len(s.sent, 0), "nothing is owed to a session holding the claim")
-	tp.setHolder("", nil)
-	err = tp.Resume(t.Context())
-	assert.NilError(t, err)
-	assert.Check(t, cmp.DeepEqual(s.sent, []string{fmt.Sprintf(claimRetryMessage, "plan-1")}))
-
-	// The claim it was just told to make is checked once it replies.
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Claimed it again."}}
-	ev := next(t, tp.Agent)
-	assert.Assert(t, ev.Reply != nil)
-	assert.Check(t, cmp.Equal(ev.Reply.Text, "Claimed it again."))
-	ev = next(t, tp.Agent)
-	assert.Check(t, ev.Problem != nil, "the claim is still missing")
-}
-
-// A refresh right after the request, before the planner has claimed, finds
-// no claim; the claim the request asked for is not asked for again.
-func TestResumeRightAfterTheRequestSendsNothing(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	err = tp.Resume(t.Context())
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Len(tp.sessions, 1))
-	assert.Check(t, cmp.Len(tp.session(0).sent, 0))
-}
-
-// An existing plan whose planner is not running is resumed with the claim
-// alone, never a request.
-func TestResumeStartsAPlanWithNoSessionOnTheClaimAlone(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	err := tp.Resume(t.Context())
-	assert.NilError(t, err)
-	assert.Assert(t, cmp.Len(tp.sessions, 1))
-	first := tp.session(0).first
-	assert.Check(t, cmp.Equal(first, fmt.Sprintf(claimRetryMessage, "plan-1")))
-	assert.Check(t, cmp.Contains(first, "never in a reply"))
-	assert.Check(t, !strings.Contains(first, "request"))
-}
-
-// A blip reading the claim does not have the agent claim a plan it holds.
-func TestAgentKeepsTheClaimWhenItCannotReadIt(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("s-1", nil)
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	s := tp.session(0)
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Claimed it."}}
-	next(t, tp.Agent)
-
-	tp.setHolder("", errors.New("503 from factory"))
-	err = tp.Resume(t.Context())
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Len(s.sent, 0))
-}
-
-func TestAgentResumesASessionThatEnded(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("s-1", nil)
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	tp.session(0).end()
-	// The ended session's events close; wait for forward to see it.
-	ended := waitFor(func() bool {
-		tp.Agent.mu.Lock()
-		defer tp.Agent.mu.Unlock()
-		return tp.hasEnded()
-	})
-	assert.Assert(t, ended)
-
-	err = tp.Resume(t.Context())
-	assert.NilError(t, err)
-	assert.Assert(t, cmp.Len(tp.sessions, 2))
-	assert.Check(t, tp.configs[1].Resume)
-	assert.Check(t, cmp.Equal(tp.configs[1].SessionID, "s-1"))
-	// The ended session's claim was freed with it, so the resumed one claims
-	// the plan again.
-	assert.Check(t, cmp.Equal(tp.session(1).first, fmt.Sprintf(claimRetryMessage, "plan-1")))
-}
-
-// Each session, the resumed one too, starts in the plan's worktree rather
-// than the developer's checkout, where another session ending would free the
-// plan's claim.
-func TestAgentStartsEachSessionInThePlansWorktree(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("s-1", nil)
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	tp.session(0).end()
-	ended := waitFor(func() bool {
-		tp.Agent.mu.Lock()
-		defer tp.Agent.mu.Unlock()
-		return tp.hasEnded()
-	})
-	assert.Assert(t, ended)
-	err = tp.Resume(t.Context())
-	assert.NilError(t, err)
-
-	assert.Assert(t, cmp.Len(tp.configs, 2))
-	assert.Check(t, cmp.Equal(tp.configs[0].Dir, "/worktrees/plan-1"))
-	assert.Check(t, cmp.Equal(tp.configs[1].Dir, "/worktrees/plan-1"))
-}
-
-func TestAgentWithoutAWorktreeStartsNoSession(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.worktreeErr = errors.New("open the plan's worktree: no origin/main")
-
-	err := tp.Request(t.Context(), "add a flag")
-	assert.Check(t, cmp.ErrorContains(err, "no origin/main"))
-	assert.Check(t, cmp.Len(tp.sessions, 0))
-}
-
-func TestAgentStartFailureIsASentence(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.startErr = factory.ErrNoFactoryPlugin
-	err := tp.Request(t.Context(), "add a flag")
-	assert.Check(t, cmp.ErrorContains(err, "f plugin is not loaded"))
-
-	// The claim goes on the request that does start the session.
-	tp.startErr = nil
-	err = tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(tp.session(0).first, fmt.Sprintf(claimMessage, "plan-1", "add a flag")))
-}
-
-func TestAgentStopsItsSessionAndRefusesMore(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	err := tp.Stop()
-	assert.Check(t, err, "nothing to stop before the first message")
-
-	tp = newTestAgent(t, "plan-1")
-	err = tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	err = tp.Stop()
-	assert.NilError(t, err)
-	assert.Check(t, tp.session(0).stopped)
-	err = tp.Resume(t.Context())
-	assert.Check(t, cmp.ErrorIs(err, ErrStopped))
-}
-
-func waitFor(cond func() bool) bool {
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return true
+	var got []plan.Event
+	for len(d.fetched()) < n {
+		select {
+		case ev := <-a.Events():
+			got = append(got, ev)
+		case <-d.fetchedCh:
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	return false
+	return got
 }
 
-// A Send stuck writing to a claude that stopped reading must not hold up
-// Stop, which ends the write.
-func TestAgentStopWhileSendIsBlocked(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("s-1", nil)
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	s := tp.session(0)
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "Claimed it."}}
-	next(t, tp.Agent)
-	// The claim is lost, so the resume owes the session the claim, and
-	// writing it blocks.
-	tp.setHolder("", nil)
-	s.mu.Lock()
-	s.block = make(chan struct{})
-	s.mu.Unlock()
-
-	sent := make(chan error, 1)
-	go func() { sent <- tp.Resume(t.Context()) }()
-	select {
-	case err := <-sent:
-		t.Fatalf("Send returned before the session stopped: %v", err)
-	case <-time.After(100 * time.Millisecond):
+func logOf(id string, oldest, next int, events ...chunkd.SessionLogEvent) chunkd.SessionLog {
+	if events == nil {
+		events = []chunkd.SessionLogEvent{}
 	}
-
-	stopped := make(chan error, 1)
-	go func() { stopped <- tp.Stop() }()
-	select {
-	case err := <-stopped:
-		assert.Check(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Stop waited on the blocked Send")
-	}
-	<-sent
+	return chunkd.SessionLog{LogID: id, Oldest: oldest, Next: next, Events: events}
 }
 
-// A Stop that comes while the session is starting stops it once it has.
-func TestAgentStopWhileStartingStopsTheSession(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.started = func() {
-		go func() { _ = tp.Stop() }()
-		stopped := waitFor(func() bool {
-			tp.Agent.mu.Lock()
-			defer tp.Agent.mu.Unlock()
-			return tp.stopped
+func activity(seq int, text string) chunkd.SessionLogEvent {
+	return chunkd.SessionLogEvent{Seq: seq, Kind: chunkd.SessionLogActivity, Text: text}
+}
+
+func TestAgentRequestAndResumeEachPostOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon()
+		a, _ := newTestAgent(t, "plan-1", d)
+
+		err := a.Request(t.Context(), "add a flag")
+		assert.NilError(t, err)
+		err = a.Resume(t.Context())
+		assert.NilError(t, err)
+
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		assert.Check(t, cmp.DeepEqual(d.requests, []chunkd.PlannerRequest{{ProjectRoot: "/src", Text: "add a flag", Model: "opus"}}))
+		assert.Check(t, cmp.DeepEqual(d.resumes, []chunkd.PlannerResume{{ProjectRoot: "/src", Model: "opus"}}))
+		assert.Check(t, cmp.DeepEqual(d.planIDs, []string{"plan-1", "plan-1"}))
+	})
+}
+
+func TestAgentDaemonRefusalsAreSentences(t *testing.T) {
+	other := errors.New("decode response: unexpected EOF")
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "refused",
+			err:  &chunkd.SessionRefused{Status: 409, Message: "the plan's request has already been sent to its planning session"},
+			want: "the plan's request has already been sent to its planning session",
+		},
+		{
+			name: "unreachable",
+			err:  fmt.Errorf("%w: dial unix: no such file", chunkd.ErrDaemonUnavailable),
+			want: "the chunk daemon is not reachable",
+		},
+		{
+			name: "other",
+			err:  other,
+			want: other.Error(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := newFakeDaemon()
+				d.postErr = tt.err
+				a, _ := newTestAgent(t, "plan-1", d)
+
+				err := a.Request(t.Context(), "add a flag")
+				assert.Check(t, cmp.Error(err, tt.want))
+				err = a.Resume(t.Context())
+				assert.Check(t, cmp.Error(err, tt.want))
+				assert.Check(t, cmp.Equal(d.posts(), 2))
+			})
 		})
-		assert.Check(t, stopped)
 	}
-	err := tp.Request(t.Context(), "add a flag")
-	assert.Check(t, cmp.ErrorIs(err, ErrStopped))
-	assert.Check(t, tp.sessions[0].stopped)
 }
 
-// Once stopped, the agent's events are drained, not held for a screen that
-// no longer reads them.
-func TestAgentDrainsEventsOnceStopped(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.setHolder("s-1", nil)
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	s := tp.session(0)
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "unread"}}
-	s.events <- factory.AgentEvent{TurnEnded: &factory.AgentTurn{Reply: "unread too"}}
-	err = tp.Stop()
-	assert.NilError(t, err)
-	drained := waitFor(func() bool {
-		tp.Agent.mu.Lock()
-		defer tp.Agent.mu.Unlock()
-		return tp.hasEnded()
+func TestAgentCheckStartRefusesBeforeTheDaemon(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon()
+		a, _ := newTestAgent(t, "plan-1", d)
+		checked := 0
+		a.CheckStart(func(context.Context) error {
+			checked++
+			return errors.New("open chunk watch in this plan's local repository to plan or build")
+		})
+
+		err := a.Request(t.Context(), "add a flag")
+		assert.Check(t, cmp.ErrorContains(err, "local repository"))
+		err = a.Resume(t.Context())
+		assert.Check(t, cmp.ErrorContains(err, "local repository"))
+		assert.Check(t, cmp.Equal(checked, 2))
+		assert.Check(t, cmp.Equal(d.posts(), 0))
 	})
-	assert.Check(t, drained, "forward is still waiting to hand on an event")
 }
 
-// TestWithClaimOnlyPrependsOnce checks that the claim instruction goes only on
-// the first message sent after the plan exists: the agent needs the plan's ID
-// once, to claim it, and every message after would otherwise repeat an
-// instruction it has already followed.
-func TestWithClaimOnlyPrependsOnce(t *testing.T) {
-	msg, claimed := withClaim(false, "plan-1", "hello")
-	assert.Check(t, claimed)
-	assert.Check(t, cmp.Equal(msg, fmt.Sprintf(claimMessage, "plan-1", "hello")))
+func TestAgentCheckStartRunsBeforeEachCall(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon()
+		a, _ := newTestAgent(t, "plan-1", d)
+		checked := 0
+		a.CheckStart(func(context.Context) error { checked++; return nil })
 
-	msg, claimed = withClaim(claimed, "plan-1", "a later message")
-	assert.Check(t, claimed)
-	assert.Check(t, cmp.Equal(msg, "a later message"))
-
-	msg, claimed = withClaim(false, "plan-1", "")
-	assert.Check(t, claimed)
-	assert.Check(t, cmp.Equal(msg, fmt.Sprintf(claimRetryMessage, "plan-1")))
-
-	msg, claimed = withClaim(true, "plan-1", "")
-	assert.Check(t, claimed)
-	assert.Check(t, cmp.Equal(msg, ""), "nothing is owed to a session holding the claim")
-}
-
-// TestWithClaimWaitsForAnID checks that a message sent before the plan has
-// been created passes through unchanged, since there is no ID yet to tell the
-// agent to claim.
-func TestWithClaimWaitsForAnID(t *testing.T) {
-	msg, claimed := withClaim(false, "", "hello")
-	assert.Check(t, !claimed)
-	assert.Check(t, cmp.Equal(msg, "hello"))
-}
-
-// A plan reopened in a new screen resumes the session an earlier screen
-// recorded as planning it, so claude keeps that conversation, and claims
-// the plan as that session.
-func TestAgentResumesTheSessionRecordedForThePlan(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.record.id = "s-0"
-	var checked string
-	tp.CheckStart(func(context.Context) error {
-		checked = tp.SessionID()
-		return nil
+		err := a.Request(t.Context(), "add a flag")
+		assert.NilError(t, err)
+		err = a.Resume(t.Context())
+		assert.NilError(t, err)
+		err = a.Resume(t.Context())
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(checked, 3))
+		assert.Check(t, cmp.Equal(d.posts(), 3))
 	})
-
-	err := tp.Resume(t.Context())
-	assert.NilError(t, err)
-	assert.Assert(t, cmp.Len(tp.configs, 1))
-	assert.Check(t, tp.configs[0].Resume)
-	assert.Check(t, cmp.Equal(tp.configs[0].SessionID, "s-0"))
-	assert.Check(t, cmp.Equal(tp.SessionID(), "s-0"))
-	assert.Check(t, cmp.Equal(checked, "s-0"), "the start check saw the screen's own session")
-	assert.Check(t, cmp.Equal(tp.session(0).first, fmt.Sprintf(claimRetryMessage, "plan-1")))
 }
 
-func TestAgentRecordsTheSessionItStarts(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	assert.Assert(t, cmp.Len(tp.configs, 1))
-	assert.Check(t, !tp.configs[0].Resume)
-	assert.Check(t, cmp.Equal(tp.record.recorded(), "s-1"))
+func TestAgentWaitsForThePlan(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon(answer{log: logOf("log-1", 0, 0)})
+		_, store := newTestAgent(t, "", d)
 
-	// A session that ends is resumed without opening the record again.
-	tp.session(0).end()
-	ended := waitFor(func() bool {
-		tp.Agent.mu.Lock()
-		defer tp.Agent.mu.Unlock()
-		return tp.hasEnded()
+		time.Sleep(20 * pollInterval)
+		synctest.Wait()
+		assert.Check(t, cmp.Len(d.fetched(), 0))
+
+		store.mu.Lock()
+		store.planID = "plan-1"
+		store.mu.Unlock()
+		<-d.fetchedCh
+		assert.Check(t, cmp.DeepEqual(d.fetched()[:1], []int{-1}))
 	})
-	assert.Assert(t, ended)
-	err = tp.Resume(t.Context())
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(tp.record.opened, 1))
 }
 
-// claude may no longer have a recorded session's conversation; the session
-// then starts afresh under the recorded ID.
-func TestAgentStartsTheRecordedSessionAfreshWhenItCannotResume(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.record.id = "s-0"
-	tp.resumeErr = errors.New("claude exited before it started: No conversation found")
+func TestAgentPollsFromTheFirstFetchsEnd(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon(
+			answer{log: logOf("log-1", 0, 5)},
+			answer{log: logOf("log-1", 0, 6, activity(5, "Reading the plan"))},
+		)
+		a, _ := newTestAgent(t, "plan-1", d)
 
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	assert.Assert(t, cmp.Len(tp.configs, 2))
-	assert.Check(t, tp.configs[0].Resume)
-	assert.Check(t, !tp.configs[1].Resume)
-	assert.Check(t, cmp.Equal(tp.configs[1].SessionID, "s-0"))
-	assert.Check(t, cmp.Equal(tp.record.recorded(), "s-0"))
+		got := collect(t, a, d, 3)
+		assert.Check(t, cmp.DeepEqual(d.fetched()[:3], []int{-1, 5, 6}))
+		assert.Check(t, cmp.DeepEqual(got, []plan.Event{{Activity: "Reading the plan"}}))
+	})
 }
 
-func TestAgentRefusesAPlanOpenInAnotherChunk(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	tp.record.openErr = factory.ErrPlanSessionOpen
+func TestAgentMapsEvents(t *testing.T) {
+	tests := []struct {
+		name string
+		ev   chunkd.SessionLogEvent
+		want plan.Event
+	}{
+		{
+			name: "activity",
+			ev:   chunkd.SessionLogEvent{Seq: 0, Kind: chunkd.SessionLogActivity, Text: "Edit plan"},
+			want: plan.Event{Activity: "Edit plan"},
+		},
+		{
+			name: "reply",
+			ev:   chunkd.SessionLogEvent{Seq: 0, Kind: chunkd.SessionLogReply, Text: "Done.", ByTask: true},
+			want: plan.Event{Reply: &plan.Reply{Text: "Done.", ByTask: true}},
+		},
+		{
+			name: "problem",
+			ev:   chunkd.SessionLogEvent{Seq: 0, Kind: chunkd.SessionLogProblem, Text: "claude exited"},
+			want: plan.Event{Problem: errors.New("claude exited")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := newFakeDaemon(
+					answer{log: logOf("log-1", 0, 0)},
+					answer{log: logOf("log-1", 0, 1, tt.ev)},
+				)
+				a, _ := newTestAgent(t, "plan-1", d)
 
-	err := tp.Request(t.Context(), "add a flag")
-	assert.Check(t, cmp.ErrorContains(err, "open for planning in another chunk window"))
-	assert.Check(t, cmp.Len(tp.configs, 0))
-
-	// Once the other chunk lets go, the next message starts the session.
-	tp.record.openErr = nil
-	err = tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Len(tp.configs, 1))
+				got := collect(t, a, d, 3)
+				assert.Assert(t, cmp.Len(got, 1))
+				ev := got[0]
+				assert.Check(t, cmp.Equal(ev.Activity, tt.want.Activity))
+				assert.Check(t, cmp.DeepEqual(ev.Reply, tt.want.Reply))
+				if tt.want.Problem == nil {
+					assert.Check(t, ev.Problem == nil)
+				} else {
+					assert.Check(t, cmp.Error(ev.Problem, tt.want.Problem.Error()))
+				}
+			})
+		})
+	}
 }
 
-func TestAgentStopClosesThePlansSessionRecord(t *testing.T) {
-	tp := newTestAgent(t, "plan-1")
-	err := tp.Request(t.Context(), "add a flag")
-	assert.NilError(t, err)
-	err = tp.Stop()
-	assert.NilError(t, err)
-	tp.record.mu.Lock()
-	defer tp.record.mu.Unlock()
-	assert.Check(t, tp.record.closed)
+func TestAgentEmitsEventsInOrder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon(
+			answer{log: logOf("log-1", 0, 0)},
+			answer{log: logOf("log-1", 0, 3,
+				activity(0, "one"),
+				activity(1, "two"),
+				chunkd.SessionLogEvent{Seq: 2, Kind: chunkd.SessionLogReply, Text: "three"},
+			)},
+		)
+		a, _ := newTestAgent(t, "plan-1", d)
+
+		got := collect(t, a, d, 3)
+		assert.Check(t, cmp.DeepEqual(got, []plan.Event{
+			{Activity: "one"},
+			{Activity: "two"},
+			{Reply: &plan.Reply{Text: "three"}},
+		}))
+		assert.Check(t, cmp.DeepEqual(d.fetched()[:3], []int{-1, 0, 3}))
+	})
+}
+
+// A new log ID means the daemon restarted, or the planner was made again:
+// the cursor is reset to the new log's oldest event, so a screen polling at
+// seq 57 of the old log still sees the new one's seq 3.
+func TestAgentReadsANewLogFromItsOldest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon(
+			answer{log: logOf("log-1", 0, 57)},
+			answer{log: logOf("log-2", 1, 4)},
+			answer{log: logOf("log-2", 1, 4, activity(1, "one"), activity(2, "two"), activity(3, "three"))},
+		)
+		a, _ := newTestAgent(t, "plan-1", d)
+
+		got := collect(t, a, d, 4)
+		assert.Check(t, cmp.DeepEqual(d.fetched()[:4], []int{-1, 57, 1, 4}))
+		assert.Check(t, cmp.DeepEqual(got, []plan.Event{{Activity: "one"}, {Activity: "two"}, {Activity: "three"}}))
+	})
+}
+
+func TestAgentShowsAPlannerMidTurnWorking(t *testing.T) {
+	tests := []struct {
+		name     string
+		busy     bool
+		activity string
+		want     []plan.Event
+	}{
+		{
+			name:     "busy with an activity",
+			busy:     true,
+			activity: "Read plan.md",
+			want:     []plan.Event{{Activity: "Read plan.md"}},
+		},
+		{
+			name: "busy before any activity",
+			busy: true,
+			want: []plan.Event{{Activity: "Working…"}},
+		},
+		{
+			name: "idle",
+			busy: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				first := logOf("log-1", 0, 2)
+				first.Busy, first.Activity = tt.busy, tt.activity
+				// A later fetch's busy says nothing on its own.
+				later := logOf("log-1", 0, 2)
+				later.Busy, later.Activity = true, "Edit plan"
+				d := newFakeDaemon(answer{log: first}, answer{log: later})
+				a, _ := newTestAgent(t, "plan-1", d)
+
+				got := collect(t, a, d, 4)
+				assert.Check(t, cmp.DeepEqual(got, tt.want))
+			})
+		})
+	}
+}
+
+func TestAgentWarnsOnceWhileTheDaemonIsUnreachable(t *testing.T) {
+	down := answer{err: fmt.Errorf("%w: connection refused", chunkd.ErrDaemonUnavailable)}
+	busy := logOf("log-1", 0, 5)
+	busy.Busy = true
+	tests := []struct {
+		name    string
+		answers []answer
+		// afters is the cursor of each fetch.
+		afters []int
+		want   []plan.Event
+	}{
+		{
+			name:    "from the first fetch",
+			answers: []answer{down, down, down, down, {log: busy}},
+			afters:  []int{-1, -1, -1, -1, -1, 5},
+			want:    []plan.Event{{Problem: errUnreachable}, {Activity: "Working…"}},
+		},
+		{
+			name:    "after a fetch",
+			answers: []answer{{log: logOf("log-1", 0, 2)}, down, down, down, {log: logOf("log-1", 0, 2)}},
+			afters:  []int{-1, 2, 2, 2, 2, 2},
+			want:    []plan.Event{{Problem: errUnreachable}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := newFakeDaemon(tt.answers...)
+				a, _ := newTestAgent(t, "plan-1", d)
+
+				got := collect(t, a, d, len(tt.afters))
+				assert.Check(t, cmp.DeepEqual(d.fetched()[:len(tt.afters)], tt.afters))
+				problems := 0
+				for _, ev := range got {
+					if ev.Problem != nil {
+						problems++
+					}
+				}
+				assert.Check(t, cmp.Equal(problems, 1))
+				assert.Check(t, cmp.Len(got, len(tt.want)))
+				for i := range min(len(got), len(tt.want)) {
+					assert.Check(t, cmp.Equal(got[i].Activity, tt.want[i].Activity))
+					assert.Check(t, cmp.Equal(got[i].Problem, tt.want[i].Problem))
+				}
+			})
+		})
+	}
+}
+
+// Once a fetch has succeeded, the next failure warns again.
+func TestAgentWarnsAgainAfterTheDaemonCameBack(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		down := answer{err: fmt.Errorf("%w: connection refused", chunkd.ErrDaemonUnavailable)}
+		d := newFakeDaemon(answer{log: logOf("log-1", 0, 0)}, down, down, answer{log: logOf("log-1", 0, 0)}, down, down)
+		a, _ := newTestAgent(t, "plan-1", d)
+
+		got := collect(t, a, d, 7)
+		assert.Assert(t, cmp.Len(got, 2))
+		for _, ev := range got {
+			assert.Check(t, cmp.Equal(ev.Problem, errUnreachable))
+		}
+	})
+}
+
+func TestAgentStopEndsPollingAndSendsNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon()
+		a, _ := newTestAgent(t, "plan-1", d)
+		collect(t, a, d, 2)
+
+		err := a.Stop()
+		assert.NilError(t, err)
+		// A fetch already under way may finish; none starts after it.
+		synctest.Wait()
+		n := len(d.fetched())
+		time.Sleep(20 * pollInterval)
+		synctest.Wait()
+		assert.Check(t, cmp.Len(d.fetched(), n))
+		assert.Check(t, cmp.Equal(d.posts(), 0))
+	})
+}
+
+// A screen that stops reading does not hold up the poller once it is
+// stopped.
+func TestAgentStopEndsAnEmitNobodyReads(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon(
+			answer{log: logOf("log-1", 0, 0)},
+			answer{log: logOf("log-1", 0, 2, activity(0, "one"), activity(1, "two"))},
+		)
+		a, _ := newTestAgent(t, "plan-1", d)
+		for len(d.fetched()) < 2 {
+			<-d.fetchedCh
+		}
+		err := a.Stop()
+		assert.NilError(t, err)
+		// The bubble ends only once the poller has returned, so an emit
+		// blocked past Stop fails the test as a deadlock.
+		time.Sleep(20 * pollInterval)
+		synctest.Wait()
+		assert.Check(t, cmp.Len(d.fetched(), 2))
+	})
 }

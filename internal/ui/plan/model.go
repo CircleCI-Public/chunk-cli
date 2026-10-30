@@ -39,72 +39,25 @@ import (
 // it starts, as a line for the screen to show while it works.
 type Approver func(step func(string)) (string, error)
 
-// ReadyToApprove is whether f waits for the developer to approve it: it is
-// in Planning and only a human can move it on.
+// ReadyToApprove is whether f waits for the developer to approve it, as
+// planstate.ReadyToApprove decides.
 func ReadyToApprove(f Flow) bool {
-	phase, _ := planstate.Parse(f.State)
-	return strings.EqualFold(phase, "Planning") && waitsOnHuman(f.Next)
-}
-
-// waitsOnHuman is whether next waits only on the developer: it offers
-// them a transition other than the escape hatches, and nothing by a
-// session or the daemon.
-func waitsOnHuman(next []Step) bool {
-	return !agentActs(next) && slices.ContainsFunc(next, func(s Step) bool {
-		e := clean(s.Event)
-		return Actor(clean(string(s.Actor))) == ActorHuman && e != "abandon" && e != "abandon-integrate"
-	})
+	return planstate.ReadyToApprove(clean(f.State), moves(f.Next))
 }
 
 // agentActs is whether next has a transition a session or the daemon
 // takes.
 func agentActs(next []Step) bool {
-	return slices.ContainsFunc(next, func(s Step) bool {
-		a := Actor(clean(string(s.Actor)))
-		return a == ActorSession || a == ActorDaemon
-	})
+	return planstate.AgentActs(moves(next))
 }
 
-// The events that approve a plan ReadyToApprove: its design, so factory
-// writes its units, or the plan, so factory builds it.
-const (
-	approveForUnits    = "approve-for-units"
-	approveForBuilding = "approve-for-building"
-)
-
-// Stage is what ctrl+s approves for a plan ReadyToApprove.
-type Stage int
-
-const (
-	// StageDesign is a plan whose design waits for approval, so factory
-	// writes its units.
-	StageDesign Stage = iota
-	// StagePlan is a plan that waits for approval, so factory builds it.
-	StagePlan
-	// StageQuestions is a plan factory offers no approval for: it waits for
-	// a human to answer 3. Open Questions in comments.
-	StageQuestions
-)
-
-// StageOf is what ctrl+s approves, given the events the plan's flow applies
-// and how many units the plan has. When events lists exactly one approval,
-// that one wins. When it lists both, as a flow factory stored before it
-// told the two apart does, or is nil, because it has not loaded or there is
-// no flow, the plan's units decide: none is StageDesign, any is StagePlan.
-// When it is loaded and lists neither, even empty, it is StageQuestions.
-func StageOf(events []string, units int) Stage {
-	design, build := slices.Contains(events, approveForUnits), slices.Contains(events, approveForBuilding)
-	switch {
-	case design && !build:
-		return StageDesign
-	case build && !design:
-		return StagePlan
-	case !design && events != nil:
-		return StageQuestions
-	case units == 0:
-		return StageDesign
+// moves is next as planstate reads it, stripped of escapes.
+func moves(next []Step) []planstate.Move {
+	out := make([]planstate.Move, len(next))
+	for i, s := range next {
+		out[i] = planstate.Move{Actor: clean(string(s.Actor)), Event: clean(s.Event)}
 	}
-	return StagePlan
+	return out
 }
 
 // pane is which side of the screen the keyboard goes to.
@@ -1061,11 +1014,11 @@ func (m Model) askToApprove() Model {
 		m.status = warn("The plan is not ready yet: wait for its review to pass.")
 	case !ReadyToApprove(m.flow):
 		m.status = warn("The plan cannot be approved while it is " + m.stateText() + ".")
-	case StageOf(m.events, m.units) == StageQuestions:
+	case planstate.StageOf(m.events, m.units) == planstate.StageQuestions:
 		m.status = warn("Answer 3. Open Questions in comments first; factory offers no approval yet.")
-	case StageOf(m.events, m.units) == StageDesign && (queued > 0 || m.openComments() > 0):
+	case planstate.StageOf(m.events, m.units) == planstate.StageDesign && (queued > 0 || m.openComments() > 0):
 		m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
-	case StageOf(m.events, m.units) == StageDesign:
+	case planstate.StageOf(m.events, m.units) == planstate.StageDesign:
 		m.confirming, m.pendingDesign = true, true
 		m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? ") + confirmButtons
 	case queued > 0:

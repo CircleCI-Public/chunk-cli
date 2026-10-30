@@ -74,6 +74,24 @@ func TestPlanSessionIsOpenInOneProcessAtATime(t *testing.T) {
 	openPlanSession(t, root, "plan-1")
 }
 
+func TestRecordedPlanSessionReadsWhileOpen(t *testing.T) {
+	root := newSessionProject(t)
+	s := openPlanSession(t, root, "plan-1")
+	err := s.Record("s-1")
+	assert.NilError(t, err)
+
+	id, err := RecordedPlanSession(root, "plan-1")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(id, "s-1"))
+}
+
+func TestRecordedPlanSessionIsEmptyAtFirst(t *testing.T) {
+	root := newSessionProject(t)
+	id, err := RecordedPlanSession(root, "plan-1")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(id, ""))
+}
+
 func TestPlanSessionRefusesAnIDThatIsNotOneDirectory(t *testing.T) {
 	root := newSessionProject(t)
 	_, err := OpenPlanSession(root, "../escape")
