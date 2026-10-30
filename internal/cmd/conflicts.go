@@ -96,6 +96,19 @@ func runConflicts(cmd *cobra.Command, projectDir string, hookMode, jsonOut bool)
 	return nil
 }
 
+// hookResponse is the JSON hook response `chunk conflicts --hook` writes to
+// stdout.
+type hookResponse struct {
+	HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput,omitempty"`
+}
+
+// hookSpecificOutput carries PreToolUse hook data: an advisory notice passed
+// to the agent via additionalContext without blocking the tool call.
+type hookSpecificOutput struct {
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext,omitempty"`
+}
+
 // reportConflictLookupError explains a missing answer, but only where an
 // explanation is wanted. A hook stays silent: the daemon is optional, and a
 // hook that announced its absence would fire on every commit for everyone not

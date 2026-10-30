@@ -36,8 +36,6 @@ type silentExitError struct{ code int }
 func (e *silentExitError) Error() string { return "" }
 func (e *silentExitError) ExitCode() int { return e.code }
 
-var errSilentExit error = &silentExitError{code: 1}
-
 func notAuthorized(action, tokenSource string, err error) error {
 	if !errors.Is(err, circleci.ErrNotAuthorized) {
 		return nil
@@ -343,7 +341,7 @@ func warnUserError(streams iostream.Streams, prefix string, err error) {
 }
 
 // UserExitCode returns the specific exit code for this error.
-// Distinct from ExitCode() (the silent-exit interface used by HookExitError).
+// Distinct from ExitCode() (the silent-exit interface).
 func (e *userError) UserExitCode() int {
 	if e.exitCode != 0 {
 		return e.exitCode

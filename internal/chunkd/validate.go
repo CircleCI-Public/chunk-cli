@@ -27,31 +27,15 @@ type ValidateRequest struct {
 	// exists. It is an offer, not an instruction: the daemon weighs the change
 	// and may hold the caller anyway.
 	//
-	// Only a caller that has somewhere to hear the answer later should set it.
-	// A hook does — the next turn collects background results — while a developer
-	// watching a terminal does not, and releasing them would leave the run's
-	// output going nowhere they are looking.
+	// Only a caller that has somewhere to hear the answer later should set it:
+	// one that collects background results on a later run. A caller waiting on
+	// the verdict must leave it unset, or the run's output goes nowhere it is
+	// looking.
 	AllowAsync bool `json:"allow_async,omitempty"`
 	// OrgID is the CircleCI org UUID for this project. When set and the daemon
 	// has credentials, the daemon provisions a fresh sidecar for the run rather
 	// than expecting one to already be registered on its filesystem.
 	OrgID string `json:"org_id,omitempty"`
-	// HookCodex says the run is a hook invocation from Codex, and the daemon
-	// passes it on to the run as --hook-codex.
-	//
-	// It travels as a field rather than in Args because a remote daemon's build
-	// cannot be checked, and one that predates the flag would reject the whole
-	// run with a non-blocking exit — a commit gate would pass having checked
-	// nothing. A daemon that predates this field ignores it instead, and the run
-	// goes ahead, just without Codex's quieter output.
-	HookCodex bool `json:"hook_codex,omitempty"`
-	// HookEvent is the hook payload's hook_event_name, which the daemon passes
-	// on to the run as --hook-event. A commit gate never gives up on repeated
-	// failures the way a Stop hook does, and the run can only tell them apart
-	// by this. A field for the same reason as HookCodex: a daemon that predates
-	// it ignores it, and the run falls back to treating the hook as it always
-	// has.
-	HookEvent string `json:"hook_event,omitempty"`
 	// WorkDir is the caller's working directory, which the daemon passes to the
 	// subprocess as --project so it can load .chunk/config.json from the right
 	// location. It equals ProjectRoot for callers whose working directory is the

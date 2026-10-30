@@ -2,17 +2,13 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +19,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/filecache"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/notify"
@@ -55,180 +49,6 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 			streams.ErrPrintf("  %s\n", ui.ErrError(msg))
 		}
 	}
-}
-
-// hookEventStop is the hook_event_name of the end-of-turn hook, the one run
-// whose answer may arrive after it has exited.
-const hookEventStop = "Stop"
-
-// hookEventPreToolUse is the hook_event_name of the commit gate.
-const hookEventPreToolUse = "PreToolUse"
-
-// hookContext holds the Claude Code hook payload fields.
-type hookContext struct {
-	sessionID      string
-	stopHookActive bool
-	// event is the payload's hook_event_name — "Stop", "PreToolUse", and so on.
-	// Empty when the payload does not carry one, as an older Claude Code or
-	// another agent's hook runner may not.
-	event string
-	// codex is set when the payload came from Codex, which marks its payloads
-	// with turn_id, a field Claude Code does not send. Codex surfaces a hook's
-	// systemMessage as a warning rather than a note, so a run that has nothing
-	// wrong to report stays quiet there.
-	codex bool
-	// toolCommand is the shell command a PreToolUse payload is about to run,
-	// from tool_input.command. Empty for other events and other tools.
-	toolCommand string
-}
-
-// skipsCommitGate reports whether this is a PreToolUse run for a command that
-// is not a git commit. Claude Code filters those out with the entry's "if"
-// condition before chunk ever starts; Codex has no such field and runs the
-// commit gate before every Bash call, so chunk has to filter them itself.
-//
-// A payload whose command could not be read runs the gate: the gate exists to
-// hold back commits, and a run it did not need costs less than a commit it
-// missed.
-func (h *hookContext) skipsCommitGate() bool {
-	return h != nil && h.event == hookEventPreToolUse && h.toolCommand != "" && !gitutil.IsCommitCommand(h.toolCommand)
-}
-
-// isCommitGate reports whether this is a PreToolUse run, the hook that holds
-// back a commit. A commit gate never gives up after repeated failures the way
-// the Stop hook does: giving up exits 0, and on PreToolUse exit 0 lets the
-// commit through unvalidated, which is the one outcome the gate exists to
-// prevent. Stop gives up so a failure the agent cannot fix does not re-signal
-// it forever; a blocked commit ends the tool call, not the turn, so there is no
-// loop to break.
-//
-// A payload with no hook_event_name keeps the old behaviour and may give up. It
-// is what an older Claude Code or an older daemon sends, and for a Stop hook
-// that never gave up the failure would re-signal the agent without end.
-func (h *hookContext) isCommitGate() bool {
-	return h != nil && h.event == hookEventPreToolUse
-}
-
-// hookEvent returns the hook_event_name of hook, or "" when not a hook run.
-func hookEvent(hook *hookContext) string {
-	if hook == nil {
-		return ""
-	}
-	return hook.event
-}
-
-// hookResponse is the JSON hook response written to stdout.
-//
-// Deliberately absent from Stop hook usage: hookSpecificOutput.additionalContext.
-// On Stop that field is injected into the model's context and the conversation
-// *continues* so the model can act on it, so announcing a pass with it
-// re-signals the agent and the turn never ends. systemMessage is display-only
-// and leaves the turn alone. Blocking stays with exit code 2 plus stderr,
-// which stopHookMaxAttempts caps.
-//
-// PreToolUse hooks use HookSpecificOutput to pass advisory context to the agent
-// without blocking the tool call.
-type hookResponse struct {
-	SystemMessage      string              `json:"systemMessage,omitempty"`
-	HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput,omitempty"`
-}
-
-// hookSpecificOutput carries PreToolUse hook data: an advisory notice passed
-// to the agent via additionalContext without blocking the tool call.
-type hookSpecificOutput struct {
-	HookEventName     string `json:"hookEventName"`
-	AdditionalContext string `json:"additionalContext,omitempty"`
-}
-
-// writeStopHookMessage writes a display-only Stop hook response, in the Claude
-// Code format also understood by Codex and Cursor. Hook stdout must contain JSON
-// only; progress and command output continue to use stderr.
-func writeStopHookMessage(w io.Writer, message string) error {
-	if err := json.NewEncoder(w).Encode(hookResponse{SystemMessage: message}); err != nil {
-		return fmt.Errorf("write Stop hook response: %w", err)
-	}
-	return nil
-}
-
-// writeHookOutcome reports a hook run that has nothing wrong to report — a
-// pass, or a cache hit. It is the note Claude Code shows once the hook
-// finishes; under Codex it writes nothing, since there it would be a warning on
-// every turn. Exit 0 with no output is a success to both.
-func writeHookOutcome(w io.Writer, hook *hookContext, message string) error {
-	if hook.codex {
-		return nil
-	}
-	return writeStopHookMessage(w, message)
-}
-
-// detectHook reads the Claude Code hook JSON payload from r when r is not a
-// terminal. Returns nil if not running as a hook.
-func detectHook(r io.Reader) *hookContext {
-	if f, ok := r.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		return nil
-	}
-	var p struct {
-		SessionID      string `json:"session_id"`
-		StopHookActive bool   `json:"stop_hook_active"`
-		HookEventName  string `json:"hook_event_name"`
-		TurnID         string `json:"turn_id"`
-		ToolInput      struct {
-			Command string `json:"command"`
-		} `json:"tool_input"`
-	}
-	_ = json.NewDecoder(r).Decode(&p)
-	if p.SessionID == "" {
-		return nil
-	}
-	return &hookContext{
-		sessionID:      p.SessionID,
-		stopHookActive: p.StopHookActive,
-		event:          p.HookEventName,
-		codex:          p.TurnID != "",
-		toolCommand:    p.ToolInput.Command,
-	}
-}
-
-// peekHookPayload decodes the hook payload on cmd's stdin without consuming
-// it: what it read is put back in front of the rest, so detectHook reads the
-// same payload again in RunE.
-func peekHookPayload(cmd *cobra.Command) *hookContext {
-	in := cmd.InOrStdin()
-	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		return nil
-	}
-	var buf bytes.Buffer
-	hook := detectHook(io.TeeReader(in, &buf))
-	cmd.SetIn(io.MultiReader(&buf, in))
-	return hook
-}
-
-// isSkippedCommitGate reports whether cmd is a commit gate run for a command
-// that is not a git commit (see skipsCommitGate). The root command asks before
-// its setup (telemetry, the update check, the daemon launch) since under
-// Codex this is every Bash call the agent makes, and none of that is wanted
-// for a run that ends straight away.
-func isSkippedCommitGate(cmd *cobra.Command) bool {
-	if cmd.Name() != "validate" || cmd.Parent() == nil || cmd.Parent().Parent() != nil {
-		return false
-	}
-	return peekHookPayload(cmd).skipsCommitGate()
-}
-
-// mayRunInBackground reports whether this run may be handed to the daemon and
-// left to finish after the caller has exited.
-//
-// Only the Stop hook may. Every hook payload looks alike from here — a session
-// ID and little else — but they are not alike in what a release would mean. A
-// Stop hook has a next turn to hear the answer on. The commit gate on
-// PreToolUse does not: releasing it would let the commit it exists to hold back
-// go through unvalidated, which is the one outcome the gate has to prevent.
-//
-// A payload with no hook_event_name is not released either. It is what an older
-// Claude Code or another agent's runner sends, and an unrecognised hook is not
-// evidence of a hook that can wait.
-func mayRunInBackground(hook *hookContext) bool {
-	return hook != nil && hook.event == hookEventStop
 }
 
 func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, statusFn iostream.StatusFunc) error {
@@ -309,28 +129,24 @@ func reportSkippedAutofix(skipped []string, streams iostream.Streams) {
 }
 
 type validateOpts struct {
-	sidecarID      string
-	workdir        string
-	orgID          string
-	dryRun         bool
-	list           bool
-	save           bool
-	remote         bool
-	local          bool
-	parallel       int
-	markRemote     bool
-	jsonOut        bool
-	inlineCmd      string
-	projectDir     string
-	envVarsFlag    []string
-	envFile        string
-	async          bool   // run via the daemon without waiting for the result
-	noDaemon       bool   // bypasses daemon delegation; set by the daemon when calling in-process
-	attributeTo    string // project the results belong to, when commands run in a snapshot copy
-	hookSessionID  string // hook session ID forwarded from client to daemon subprocess
-	stopHookActive bool   // stop_hook_active forwarded from client to daemon subprocess
-	hookCodex      bool   // Codex payload detection forwarded from client to daemon subprocess
-	hookEvent      string // hook_event_name forwarded from client to daemon subprocess
+	sidecarID   string
+	workdir     string
+	orgID       string
+	dryRun      bool
+	list        bool
+	save        bool
+	remote      bool
+	local       bool
+	parallel    int
+	markRemote  bool
+	jsonOut     bool
+	inlineCmd   string
+	projectDir  string
+	envVarsFlag []string
+	envFile     string
+	async       bool   // run via the daemon without waiting for the result
+	noDaemon    bool   // bypasses daemon delegation; set by the daemon when calling in-process
+	attributeTo string // project the results belong to, when commands run in a snapshot copy
 }
 
 func newValidateCmd() *cobra.Command {
@@ -375,83 +191,11 @@ func newValidateCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("no-daemon")
 	cmd.Flags().StringVar(&opts.attributeTo, "attribute-to", "", "")
 	_ = cmd.Flags().MarkHidden("attribute-to")
-	cmd.Flags().StringVar(&opts.hookSessionID, "hook-session-id", "", "")
-	_ = cmd.Flags().MarkHidden("hook-session-id")
-	cmd.Flags().BoolVar(&opts.stopHookActive, "stop-hook-active", false, "")
-	_ = cmd.Flags().MarkHidden("stop-hook-active")
-	cmd.Flags().BoolVar(&opts.hookCodex, "hook-codex", false, "")
-	_ = cmd.Flags().MarkHidden("hook-codex")
-	cmd.Flags().StringVar(&opts.hookEvent, "hook-event", "", "")
-	_ = cmd.Flags().MarkHidden("hook-event")
 
 	cmd.AddCommand(newValidateVariantsCmd())
 	cmd.AddCommand(newValidateResultsCmd())
 
 	return cmd
-}
-
-// initHook applies hook-specific context, stream, and early-exit logic.
-// tree is the working-tree fingerprint for this run, and treeErr the reason it
-// could not be taken. A zero tree reports as not clean, so validation still runs
-// in ambiguous cases.
-// Returns updated ctx and streams, a skip flag (true = return nil immediately),
-// and a non-nil error when the hook should exit with a non-zero code.
-func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitutil.Worktree, treeErr error, snapshot bool, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
-	if hook == nil {
-		return ctx, streams, false, nil
-	}
-	ctx = session.WithID(ctx, hook.sessionID)
-	// The counter is the Stop hook's. A commit gate never gives up, so it
-	// neither counts toward it nor clears it.
-	if !hook.stopHookActive && !hook.isCommitGate() {
-		validate.ResetAttempts(hook.sessionID)
-	}
-	// Route stdout to stderr so all output appears in the Stop
-	// hook feedback block that Claude Code shows the agent.
-	streams = iostream.Streams{Out: streams.Err, Err: streams.Err}
-	// Print a header so concurrent stop-hook runs are distinguishable.
-	sessionLabel := hook.sessionID
-	if len(sessionLabel) > 8 {
-		sessionLabel = sessionLabel[:8]
-	}
-	if branch, err := gitutil.CurrentBranchIn(workDir); err == nil && branch != "" {
-		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate · %s [%s]", branch, sessionLabel)))
-	} else {
-		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate [%s]", sessionLabel)))
-	}
-	if validate.HooksDisabled(workDir, envctx.Getenv(ctx, config.EnvChunkHooksDisabled) != "") {
-		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
-		return ctx, streams, false, validate.NewHookExitError(1)
-	}
-	// Say so when the tree could not be fingerprinted. Everything below degrades
-	// silently on a zero tree — the clean-tree skip and the result cache both just
-	// run the commands — so a repo that never once prints "skipped" (one with a
-	// dirty submodule, say) is otherwise indistinguishable from one where the
-	// cache is working and nothing is ever unchanged.
-	if treeErr != nil {
-		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: working tree state unavailable (%v); running everything, caching nothing", treeErr)))
-	}
-	// A snapshot run is exempt from the clean-tree skip, and must be: the
-	// snapshot was checked out from the state being validated, so git sees a
-	// tree with nothing changed in it and "nothing changed" here means the
-	// opposite of what it usually means. Skipping would run no commands and
-	// report a pass — a green light for code nothing looked at.
-	if tree.Clean && !snapshot {
-		return ctx, streams, true, nil
-	}
-	return ctx, streams, false, nil
-}
-
-// hookMissingAuth reports whether a hook run should stop because remote work
-// needs a CircleCI token. Interactive runs prompt through client setup instead.
-func hookMissingAuth(hook *hookContext, needsSidecar bool, token string, streams iostream.Streams) bool {
-	if hook == nil || !needsSidecar || token != "" {
-		return false
-	}
-	streams.ErrPrintln("CircleCI auth is not configured.")
-	streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
-	streams.ErrPrintln("Don't have an account? Sign up at https://app.circleci.com/signup")
-	return true
 }
 
 func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, needsSidecar bool, streams iostream.Streams) (*circleci.Client, error) {
@@ -477,14 +221,6 @@ func (o *validateOpts) attributionRoot(workDir string) string {
 	return workDir
 }
 
-// snapshotRun reports whether the commands are running against a checked-out
-// copy of a project rather than the project itself.
-//
-// It reads off the attribution root for a reason: results belonging to a
-// different directory than the one being validated is exactly what a snapshot
-// run is, and the daemon is the only thing that arranges one.
-func (o *validateOpts) snapshotRun() bool { return o.attributeTo != "" }
-
 func resolveWorkDir(opts *validateOpts) (string, error) {
 	if opts.projectDir != "" {
 		return opts.projectDir, nil
@@ -493,68 +229,11 @@ func resolveWorkDir(opts *validateOpts) (string, error) {
 }
 
 // shouldUseDaemon reports whether this validate run should be delegated to the
-// chunk daemon. Hook runs always run inline (stdin consumed, per-session attempt
-// tracking). --no-daemon skips this to avoid re-delegation when the daemon calls
-// us in-process. Delegation is skipped for daemons from a different build since
-// they may not support the /validate endpoint.
-func shouldUseDaemon(hook *hookContext, noDaemon bool) bool {
-	return hook == nil && !noDaemon && chunkd.IsDaemonCompatible()
-}
-
-// resolveHookRun completes the hook context read from stdin and settles the
-// project it validates. A daemon subprocess has no payload of its own, so its
-// hook context arrives via flags.
-func resolveHookRun(hook *hookContext, opts *validateOpts, workDir string) (*hookContext, string) {
-	if hook != nil && opts.projectDir == "" {
-		workDir = hookProjectRoot(workDir)
-	}
-	if opts.hookSessionID != "" && hook == nil {
-		hook = &hookContext{sessionID: opts.hookSessionID, stopHookActive: opts.stopHookActive, codex: opts.hookCodex, event: opts.hookEvent}
-	}
-	return hook, workDir
-}
-
-// hookProjectRoot returns the project a hook run validates, starting from dir:
-// the nearest directory at or above it holding .chunk/config.json, stopping at
-// the git root. Codex runs hooks in the session's working directory, which is
-// wherever Codex was started and may be a subdirectory of the project. Returns
-// dir when no config is found, so the run reports the missing config as usual.
-func hookProjectRoot(dir string) string {
-	for d := dir; ; {
-		if _, err := os.Stat(filepath.Join(d, ".chunk", "config.json")); err == nil {
-			return d
-		}
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return dir
-		}
-		d = parent
-	}
-}
-
-func maybeReturnCachedHookResult(
-	cmd *cobra.Command,
-	hook *hookContext,
-	resultCache *filecache.FileCache[validate.CachedResult],
-	cacheKey string,
-	start time.Time,
-	cfg *config.ProjectConfig,
-	statusFn iostream.StatusFunc,
-	streams iostream.Streams,
-) (bool, error) {
-	if resultCache == nil {
-		return false, nil
-	}
-	if _, ok := resultCache.Get(cacheKey); !ok {
-		return false, nil
-	}
-	streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
-	n := len(cfg.Commands)
-	const skipped = "chunk validate: skipped, nothing changed since the last pass"
-	return true, finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, skipped, nil, statusFn, streams, nil)
+// chunk daemon. --no-daemon skips this to avoid re-delegation when the daemon
+// calls us in-process. Delegation is skipped for daemons from a different build
+// since they may not support the /validate endpoint.
+func shouldUseDaemon(noDaemon bool) bool {
+	return !noDaemon && chunkd.IsDaemonCompatible()
 }
 
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
@@ -576,40 +255,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	hook := detectHook(cmd.InOrStdin())
-	if hook.skipsCommitGate() {
-		return nil // not a commit; stdout stays empty so the tool call goes ahead
-	}
-	hook, workDir = resolveHookRun(hook, opts, workDir)
 	ctx := cmd.Context()
-
-	// Delegate hook runs to the daemon before initHook so the subprocess prints
-	// the session header (not the client, which would cause it to appear twice).
-	if done, err := tryHookDelegate(cmd, hook, workDir, opts.noDaemon, streams); done {
-		return err
-	}
-
-	// The working-tree fingerprint answers both hook-only questions about the
-	// tree: whether there is anything to validate at all, and whether this exact
-	// tree already validated successfully. Computing it once keeps the two
-	// consistent and costs a single pass over the changed files. On failure it is
-	// the zero Worktree, which reads as "not clean" and is refused as a cache
-	// key, so both questions fall back to running the commands.
-	var tree gitutil.Worktree
-	var treeErr error
-	if hook != nil {
-		tree, treeErr = gitutil.Fingerprint(workDir)
-	}
-
-	var skip bool
-	var hookErr error
-	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, tree, treeErr, opts.snapshotRun(), streams)
-	if hookErr != nil {
-		return hookErr
-	}
-	if skip {
-		return nil // nothing ran; stdout stays empty so the turn can end
-	}
 	statusFn := newStatusFunc(streams)
 	insecureStorage := insecureStorageFlag(cmd)
 
@@ -618,7 +264,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		name = args[0]
 	}
 
-	cfg, done, err := validateEarlyExits(hook, opts, name, workDir, streams, statusFn)
+	cfg, done, err := validateEarlyExits(opts, name, workDir, streams, statusFn)
 	if done || err != nil {
 		return err
 	}
@@ -627,25 +273,13 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	// Hook: fail early when CircleCI auth is missing and remote commands need it.
-	// In non-hook context ensureCircleCIClient prompts interactively; hooks have
-	// no TTY so we surface a clear message here instead of a confusing fallback.
 	rc, _ := config.ResolveCircleCI(insecureStorage)
 
 	executionPlan := planValidationExecution(cfg, opts, name)
 	needsSidecar := executionPlan.PoolSize > 0
-	if err := checkHookAuth(hook, needsSidecar, rc.CircleCIToken, streams); err != nil {
-		return err
-	}
-
-	activeSidecar, _ := sidecar.LoadActive(ctx)
-	resultCache, cacheKey := hookResultCache(hook, opts.inlineCmd, workDir, tree, name, cfg, execTarget(opts, cfg, activeSidecar))
-	if cached, err := maybeReturnCachedHookResult(cmd, hook, resultCache, cacheKey, start, cfg, statusFn, streams); cached || err != nil {
-		return err
-	}
 
 	image := resolveImage(name, cfg)
-	if done, err := delegateToDaemon(opts, hook, workDir, rc.CircleCIToken, cfg.OrgID, image, streams); done {
+	if done, err := delegateToDaemon(opts, workDir, rc.CircleCIToken, cfg.OrgID, image, streams); done {
 		return err
 	}
 
@@ -662,7 +296,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if needsSidecar {
 		reapAbandonedSidecars(ctx, circleCIClient, workDir, statusFn, streams)
 	}
-	activeSidecar, _ = sidecar.LoadActive(ctx)
+	activeSidecar, _ := sidecar.LoadActive(ctx)
 
 	validatePool, err := prepareValidationTarget(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, executionPlan.PoolSize, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
@@ -684,7 +318,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		attributionDir = gitRoot
 	}
 	pooled := executionPlan.PoolSize > 1
-	statusFn, recorder := wrapEventLogStatusFn(statusFn, runRecorderSidecarID(pooled, opts.sidecarID), activeSidecar, attributionDir, hook)
+	statusFn, recorder := wrapEventLogStatusFn(statusFn, runRecorderSidecarID(pooled, opts.sidecarID), activeSidecar, attributionDir)
 	setupComplete := false
 	var setupErr error
 	defer func() {
@@ -716,13 +350,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			statusFn(iostream.LevelWarn, fmt.Sprintf("could not save active sidecar: %v", err))
 		}
 	}
-	if execErr == nil && resultCache != nil {
-		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
-			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
-		}
-	}
-	passed := fmt.Sprintf("chunk validate passed: %s (%s)", commandNames(slices.Concat(executionPlan.LocalCommands, executionPlan.RemoteCommands)), ui.FormatDuration(time.Since(start)))
-	return finishValidate(cmd, hook, execErr, start, cfg, result, passed, recorder, statusFn, streams, notifyFunc(rc.Notifications))
+	return finishValidate(execErr, start, result, recorder, statusFn, notifyFunc(rc.Notifications))
 }
 
 func planValidationExecution(cfg *config.ProjectConfig, opts *validateOpts, name string) validate.Plan {
@@ -852,22 +480,12 @@ func saveActivePoolState(ctx context.Context, pool *sidecar.Pool, fallbackOrgID 
 	return sidecar.SaveActive(ctx, next)
 }
 
-func checkHookAuth(hook *hookContext, needsSidecar bool, token string, streams iostream.Streams) error {
-	if hookMissingAuth(hook, needsSidecar, token, streams) {
-		return errSilentExit
-	}
-	return nil
-}
-
-func prepareValidateConfig(workDir string, hook *hookContext, opts *validateOpts, name string, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
+func prepareValidateConfig(workDir string, opts *validateOpts, name string, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
 	cfg, err := config.LoadProjectConfig(workDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, false, &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 	}
 	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
-		if hook != nil {
-			return nil, true, nil // no config in hook context: skip silently
-		}
 		return nil, false, &userError{
 			msg:        msgValidateNotConfigured,
 			blocked:    true,
@@ -942,7 +560,7 @@ func ensureRequestedValidateCommand(workDir, name, inlineCmd string, cfg *config
 // A project with no readable data directory is the one case that gets statusFn
 // back unchanged: there is nowhere to write, so the run reports without
 // recording.
-func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) (iostream.StatusFunc, *eventlog.Recorder) {
+func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string) (iostream.StatusFunc, *eventlog.Recorder) {
 	// Callers pass the git top-level (not their cwd) so the event log lands in
 	// the same data directory as sidecar state, which sidecar.StateDir also keys
 	// on the git top-level.  See the call site in runValidateCmdE for where the
@@ -956,10 +574,6 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 	if activeSidecar != nil && activeSidecar.ID() == sidecarID {
 		scName = activeSidecar.Name
 	}
-	op := eventlog.OpValidate
-	if hook != nil && hook.stopHookActive {
-		op = eventlog.OpHook
-	}
 	// Register the project alongside the log about to be written to it. A run's
 	// results are never sent to the chunk daemon — it reads this same log off
 	// disk — and only saving sidecar state used to register a project, so a run
@@ -970,7 +584,7 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 	// Best-effort: a run still records without the breadcrumb, and still reports
 	// without the log.
 	_ = sidecar.RegisterProjectRoot(dataDir, workDir)
-	recorder := eventlog.Record(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
+	recorder := eventlog.Record(dataDir, statusFn, eventlog.OpValidate, sidecarID, scName, sidecar.CurrentBranch(workDir))
 	return recorder.Status, recorder
 }
 
@@ -1063,58 +677,29 @@ func notifyFunc(enabled bool) func(title, body string) {
 	return nil
 }
 
-// finishValidate reports the validate outcome and handles hook exit codes.
-// passMessage is what a hook run that succeeded tells the user it did.
+// finishValidate reports the validate outcome and returns execErr.
 // notifyFn, when non-nil, is called with the notification title and body;
 // pass notify.Send for real desktop notifications, or a capturing closure in tests.
-func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, passMessage string, recorder *eventlog.Recorder, statusFn iostream.StatusFunc, streams iostream.Streams, notifyFn func(title, body string)) error {
-	maxAttempts := validate.DefaultMaxAttempts
-	if hook != nil {
-		if ma := cfg.StopHookMaxAttempts; ma > 0 {
-			maxAttempts = ma
-		}
-	}
-
+func finishValidate(execErr error, start time.Time, result validate.Result, recorder *eventlog.Recorder, statusFn iostream.StatusFunc, notifyFn func(title, body string)) error {
 	elapsed := ui.FormatDuration(time.Since(start))
-	summary := fmt.Sprintf("%d/%d passed", result.Passed, result.Total)
 	level := iostream.LevelDone
-	message := fmt.Sprintf("%s  %s", summary, elapsed)
-	switch {
-	case execErr != nil && hook.isCommitGate():
-		level = iostream.LevelError
-	case execErr != nil && hook != nil:
-		attempt := validate.ReadAttempts(hook.sessionID) + 1
-		level = iostream.LevelError
-		message = fmt.Sprintf("%s  %s (attempt %d/%d)", summary, elapsed, attempt, maxAttempts)
-	case execErr != nil:
+	if execErr != nil {
 		level = iostream.LevelError
 	}
+	message := fmt.Sprintf("%d/%d passed  %s", result.Passed, result.Total, elapsed)
 	if recorder != nil {
 		recorder.Final(level, message, result.Passed, result.Total)
 	} else {
 		statusFn(level, message)
 	}
 	if notifyFn != nil {
+		verdict := "passed"
 		if execErr != nil {
-			notifyFn("chunk validate failed", fmt.Sprintf("%d/%d checks passed · %s", result.Passed, result.Total, elapsed))
-		} else {
-			notifyFn("chunk validate passed", fmt.Sprintf("%d/%d checks passed · %s", result.Passed, result.Total, elapsed))
+			verdict = "failed"
 		}
+		notifyFn("chunk validate "+verdict, fmt.Sprintf("%d/%d checks passed · %s", result.Passed, result.Total, elapsed))
 	}
-	if hook == nil {
-		return execErr
-	}
-	if hook.isCommitGate() {
-		if execErr != nil {
-			return validate.NewHookExitError(2)
-		}
-		return writeHookOutcome(cmd.OutOrStdout(), hook, passMessage)
-	}
-	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
-	if hookErr == nil && execErr == nil {
-		return writeHookOutcome(cmd.OutOrStdout(), hook, passMessage)
-	}
-	return hookErr
+	return execErr
 }
 
 func validateEnvFlag(envVarsFlag []string) error {
@@ -1125,8 +710,7 @@ func validateEnvFlag(envVarsFlag []string) error {
 }
 
 // runValidateViaDaemon delegates a validate run to the chunk daemon and writes
-// its captured output to streams. When hook is non-nil its context is forwarded
-// to the subprocess via hidden flags so it runs as a hook invocation.
+// its captured output to streams.
 //
 // workDir travels with the request because the daemon cannot work it out: it
 // serves every repo on the machine from whatever directory it was launched in,
@@ -1136,26 +720,14 @@ func validateEnvFlag(envVarsFlag []string) error {
 // image is the sidecar image this process would have booted, sent so the
 // daemon's sidecar matches a --no-daemon run's.
 //
-// A Stop hook run also offers the daemon the option of taking the run into the
-// background — see mayRunInBackground for why only that one. A developer
-// waiting at a terminal has no next turn, and releasing them would send the
-// run's output somewhere they are not looking.
-func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, image string, hook *hookContext, streams iostream.Streams) error {
-	reqArgs := args
-	if hook != nil {
-		reqArgs = append(append([]string(nil), args...), "--hook-session-id", hook.sessionID)
-		if hook.stopHookActive {
-			reqArgs = append(reqArgs, "--stop-hook-active")
-		}
-	}
+// The run is never offered to the background: the caller waits for the
+// verdict, and only --async (a different endpoint) releases it.
+func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, image string, streams iostream.Streams) error {
 	req := chunkd.ValidateRequest{
-		Args:         reqArgs,
+		Args:         args,
 		ProjectRoot:  workDir,
 		WorkDir:      workDir,
 		OrgID:        orgID,
-		AllowAsync:   mayRunInBackground(hook),
-		HookCodex:    hook != nil && hook.codex,
-		HookEvent:    hookEvent(hook),
 		SidecarImage: image,
 	}
 	// Forward local credentials only over the Unix socket (isolated to the local
@@ -1171,7 +743,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, i
 	if err != nil {
 		return fmt.Errorf("daemon validate: %w", err)
 	}
-	return reportDelegatedValidate(resp, hook, streams)
+	return reportDelegatedValidate(resp, streams)
 }
 
 // reportDelegatedValidate writes what the daemon made of a delegated run and
@@ -1179,24 +751,16 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, i
 //
 // Three shapes arrive here. A task ID means the run was taken into the
 // background and nothing has happened yet, so there is no output and no verdict
-// to pass on — the answer reaches the agent on its next turn, through the
-// collect hook. A reason with no task ID means the run was offered to the
-// background and held here instead, and the reason says why. Neither means the
-// caller never offered, and there was no decision to explain.
-//
-// A hook released to the background exits before anything has run, so it also
-// says so in its hook response; otherwise the user sees the hook finish with
-// nothing to show whether it checked anything. That is written under Codex
-// too, where it shows as a warning: work still outstanding is worth one.
-func reportDelegatedValidate(resp chunkd.ValidateResponse, hook *hookContext, streams iostream.Streams) error {
+// to pass on — the answer is collected later with `chunk validate results`. A
+// reason with no task ID means the run was offered to the background and held
+// here instead, and the reason says why. Neither means the caller never
+// offered, and there was no decision to explain.
+func reportDelegatedValidate(resp chunkd.ValidateResponse, streams iostream.Streams) error {
 	if resp.TaskID != "" {
 		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf(
 			"validating in the background: %s (%s)", shortTaskID(resp.TaskID), resp.Reason)))
 		reportRisk(resp.Risk, streams)
-		if hook == nil {
-			return nil
-		}
-		return writeStopHookMessage(streams.Out, fmt.Sprintf("chunk validate: running in the background (%s)", resp.Reason))
+		return nil
 	}
 	if resp.Reason != "" {
 		streams.ErrPrintf("  %s\n", ui.ErrDim("validating now: "+resp.Reason))
@@ -1229,37 +793,6 @@ func reportRisk(risk *chunkd.RiskSummary, streams iostream.Streams) {
 	}
 }
 
-// tryHookDelegate delegates a hook-invoked validate run to the daemon before
-// initHook runs, so the subprocess prints the session header (not the client).
-// Returns (true, err) when the call was delegated, (false, nil) to run inline.
-//
-// A local daemon from another build runs inline instead: the hook context
-// travels as hidden flags, and a daemon that predates one rejects the whole run
-// with exit 1. That is not the blocking exit, so the hook would pass having
-// checked nothing — a commit gate would let the commit through. A remote
-// daemon's build cannot be checked, which is why a new piece of hook context
-// goes in a request field (see ValidateRequest.HookCodex) rather than a flag.
-func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDaemon bool, streams iostream.Streams) (bool, error) {
-	if hook == nil || noDaemon || !chunkd.IsDaemonCompatible() {
-		return false, nil
-	}
-	// If hooks are disabled in this environment, don't delegate — the daemon
-	// subprocess won't inherit this process's env var, so initHook must handle it.
-	if os.Getenv(config.EnvChunkHooksDisabled) != "" {
-		return false, nil
-	}
-	insecureStorage := insecureStorageFlag(cmd)
-	rc, err := config.ResolveCircleCI(insecureStorage)
-	if err != nil {
-		return false, nil // fall back to inline; inline path handles auth
-	}
-	err = runValidateViaDaemon(workDir, os.Args[1:], rc.CircleCIToken, "", "", hook, streams)
-	if errors.Is(err, chunkd.ErrDaemonUnavailable) {
-		return false, nil // daemon disappeared between check and POST; run inline
-	}
-	return true, err
-}
-
 // delegateToDaemon hands the run to the chunk daemon when it should be, and
 // reports whether it did. A caller told false runs the commands inline.
 //
@@ -1268,14 +801,14 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDa
 // whether this process waits for the answer. Either can decline — an
 // unfingerprintable tree, an old daemon, no daemon at all — and every decline
 // means the same thing, which is to run the commands here instead.
-func delegateToDaemon(opts *validateOpts, hook *hookContext, workDir, circleCIToken, orgID, image string, streams iostream.Streams) (bool, error) {
+func delegateToDaemon(opts *validateOpts, workDir, circleCIToken, orgID, image string, streams iostream.Streams) (bool, error) {
 	if opts.async && !opts.noDaemon {
 		// A refusal falls through to inline: slower than the caller asked for,
 		// but it always tells them the truth about the tree in front of them.
 		return tryAsyncDelegate(workDir, circleCIToken, streams)
 	}
-	if shouldUseDaemon(hook, opts.noDaemon) {
-		err := runValidateViaDaemon(workDir, os.Args[1:], circleCIToken, orgID, image, nil, streams)
+	if shouldUseDaemon(opts.noDaemon) {
+		err := runValidateViaDaemon(workDir, os.Args[1:], circleCIToken, orgID, image, streams)
 		// ErrDaemonUnavailable covers two cases: the daemon disappeared between
 		// the IsDaemonCompatible check and the POST (connection refused), and the
 		// daemon lacks the /validate endpoint because it is from an older build
@@ -1421,7 +954,7 @@ func printResults(streams iostream.Streams, tasks []chunkd.TaskState) {
 
 // validateEarlyExits handles --list, --mark-remote, missing config, --dry-run.
 // Returns (cfg, done=true, err) to stop, or (cfg, false, nil) to continue.
-func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir string, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
+func validateEarlyExits(opts *validateOpts, name, workDir string, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
 	if opts.list {
 		return nil, true, runValidateList(workDir, opts.jsonOut, streams, statusFn)
 	}
@@ -1431,7 +964,7 @@ func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir str
 	if opts.markRemote {
 		return nil, true, runMarkRemote(workDir, name, streams)
 	}
-	return prepareValidateConfig(workDir, hook, opts, name, statusFn)
+	return prepareValidateConfig(workDir, opts, name, statusFn)
 }
 
 func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc) error {
@@ -1693,8 +1226,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		return false, image, nil
 	}
 	// A status line, not stderr prose: having no sidecar yet is the normal state
-	// of a first run, and printing it raw made it the headline of the hook's
-	// "Stop hook error:" banner even when everything then went fine.
+	// of a first run, not something to headline.
 	statusFn := newStatusFunc(streams)
 	statusFn(iostream.LevelInfo, "no active sidecar; creating one")
 	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource, streams))
@@ -1799,68 +1331,6 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 
 const suggestionValidateNotConfigured = "Run 'chunk init' to detect and configure validation commands.\n" +
 	"This also installs the /chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
-
-// validateCacheDir returns the directory used to store validate result cache
-// entries for the repository at workDir. Entries are keyed by the tree's
-// fingerprint, so every checkout of the repository can share them.
-func validateCacheDir(workDir string) (string, error) {
-	dataDir, err := config.RepoDataDir(workDir)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dataDir, "validate-cache"), nil
-}
-
-// hookResultCache returns a cache and cache key for hook-mode runs, or
-// (nil, "") when caching does not apply: non-hook runs, inline commands, or a
-// working tree whose state could not be fingerprinted.
-//
-// The cache keeps itself to a bounded size as it is written to; entries live for
-// filecache.DefaultMaxAge.
-func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.Worktree, commandName string, cfg *config.ProjectConfig, target string) (*filecache.FileCache[validate.CachedResult], string) {
-	if hook == nil || inlineCmd != "" {
-		return nil, ""
-	}
-	cacheDir, err := validateCacheDir(workDir)
-	if err != nil {
-		return nil, ""
-	}
-	key, ok := validate.BuildCacheKey(validate.CacheKeyInputs{
-		Worktree:    tree,
-		CommandName: commandName,
-		Config:      cfg,
-		Target:      target,
-		Project:     gitutil.Prefix(workDir),
-	})
-	if !ok {
-		return nil, ""
-	}
-	return &filecache.FileCache[validate.CachedResult]{Dir: cacheDir}, key
-}
-
-// execTarget describes where this run's commands will execute, for inclusion in
-// the cache key. Which sidecar is used depends on the configured snapshot image
-// and on the active sidecar — mutable state that lives outside the repo, so
-// neither shows up in the working-tree digest. Without it, switching the active
-// sidecar between runs leaves the key unchanged and the second sidecar is never
-// validated against.
-//
-// Returns "" for a purely local run. The sidecar ID is empty when one will be
-// created during this run; the image still distinguishes those from local runs.
-func execTarget(opts *validateOpts, cfg *config.ProjectConfig, active *sidecar.ActiveSidecar) string {
-	id := opts.sidecarID
-	if id == "" && active != nil {
-		id = active.ID()
-	}
-	var image string
-	if cfg.HasSidecarImage() {
-		image = cfg.Validation.SidecarImage
-	}
-	if id == "" && image == "" {
-		return ""
-	}
-	return id + "\x00" + image
-}
 
 func mapValidateError(r validate.Result, err error) (validate.Result, error) {
 	if errors.Is(err, validate.ErrNotConfigured) {

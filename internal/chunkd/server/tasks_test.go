@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -970,64 +969,24 @@ func TestValidateEndpointTellsTheRunnerWhichProject(t *testing.T) {
 	assert.Equal(t, ran, "/repo/b", "the runner was not told which project to validate")
 }
 
-// Codex detection travels as a request field so that a daemon too old to know
-// the flag ignores it instead of rejecting the run. A daemon that does know it
-// has to hand it on, or the run never learns it is under Codex.
-func TestValidateEndpointPassesHookCodexToTheRunner(t *testing.T) {
-	for name, tc := range map[string]struct {
-		codex bool
-	}{
-		"codex":  {codex: true},
-		"claude": {codex: false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			d := newTestDaemon()
-			t.Cleanup(d.tasks.stopAll)
+// An older client may still send the hook fields that used to become flags on
+// the run. The daemon ignores them and runs the args exactly as sent: passing
+// them on would make the run fail on flags validate no longer has.
+func TestValidateEndpointIgnoresOldHookFields(t *testing.T) {
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
 
-			var ran []string
-			d.runner = func(_ context.Context, _ string, _ string, args []string, _ []string, _ io.Writer, _ io.Writer) int {
-				ran = args
-				return 0
-			}
-
-			body, err := json.Marshal(chunkd.ValidateRequest{Args: []string{"validate"}, ProjectRoot: "/repo", HookCodex: tc.codex})
-			assert.NilError(t, err)
-			rec := serve(d, httptest.NewRequest(http.MethodPost, "/validate", bytes.NewReader(body)))
-
-			assert.Equal(t, rec.Code, http.StatusOK)
-			assert.Equal(t, slices.Contains(ran, "--hook-codex"), tc.codex, "args: %q", ran)
-		})
+	var ran []string
+	d.runner = func(_ context.Context, _ string, _ string, args []string, _ []string, _ io.Writer, _ io.Writer) int {
+		ran = args
+		return 0
 	}
-}
 
-// The hook event decides whether a failing run may give up, which a commit gate
-// must never do, so a daemon that knows the field has to hand it on.
-func TestValidateEndpointPassesHookEventToTheRunner(t *testing.T) {
-	for name, tc := range map[string]struct {
-		event string
-		want  []string
-	}{
-		"commit gate": {event: "PreToolUse", want: []string{"validate", "--hook-event", "PreToolUse"}},
-		"no event":    {want: []string{"validate"}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			d := newTestDaemon()
-			t.Cleanup(d.tasks.stopAll)
+	body := `{"args":["validate"],"hook_codex":true,"hook_event":"PreToolUse"}`
+	rec := serve(d, httptest.NewRequest(http.MethodPost, "/validate", strings.NewReader(body)))
 
-			var ran []string
-			d.runner = func(_ context.Context, _ string, _ string, args []string, _ []string, _ io.Writer, _ io.Writer) int {
-				ran = args
-				return 0
-			}
-
-			body, err := json.Marshal(chunkd.ValidateRequest{Args: []string{"validate"}, ProjectRoot: "/repo", HookEvent: tc.event})
-			assert.NilError(t, err)
-			rec := serve(d, httptest.NewRequest(http.MethodPost, "/validate", bytes.NewReader(body)))
-
-			assert.Equal(t, rec.Code, http.StatusOK)
-			assert.DeepEqual(t, ran, tc.want)
-		})
-	}
+	assert.Equal(t, rec.Code, http.StatusOK)
+	assert.DeepEqual(t, ran, []string{"validate"})
 }
 
 // Output under the cap is the whole of what the run printed, unmarked. A

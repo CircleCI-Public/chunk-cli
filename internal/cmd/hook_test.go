@@ -111,26 +111,3 @@ func TestHooksStatus_Enabled(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(out, "enabled"), "got: %s", out)
 }
-
-// TestValidateHookPath_HooksDisabled verifies that when CHUNK_HOOKS_DISABLED is
-// set the validate hook path exits 1 and prints a clear message to stderr.
-func TestValidateHookPath_HooksDisabled(t *testing.T) {
-	t.Setenv(config.EnvChunkHooksDisabled, "1")
-
-	dir := t.TempDir()
-	root := newTestRootCmd()
-	var errOut bytes.Buffer
-	root.SetErr(&errOut)
-	root.SetArgs([]string{"validate", "--project", dir})
-
-	// Provide a valid Stop hook JSON payload so detectHook returns non-nil.
-	hookPayload := `{"session_id":"test-hooks-disabled","stop_hook_active":false}`
-	root.SetIn(strings.NewReader(hookPayload))
-
-	err := root.Execute()
-	type exitCoder interface{ ExitCode() int }
-	ec, ok := err.(exitCoder)
-	assert.Assert(t, ok, "expected ExitCode() method on error, got: %v", err)
-	assert.Equal(t, ec.ExitCode(), 1)
-	assert.Assert(t, strings.Contains(errOut.String(), "hooks are disabled"), "got: %s", errOut.String())
-}

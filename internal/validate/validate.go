@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -329,19 +328,6 @@ func (e *CheckFailedError) Error() string {
 // TelemetryOutcome satisfies telemetry.Classified.
 func (e *CheckFailedError) TelemetryOutcome() string { return telemetry.OutcomeCheckFailed }
 
-// HookExitError signals a specific process exit code without printing
-// additional error output. All output must be written before this error
-// is returned.
-type HookExitError struct {
-	code int
-}
-
-func (e *HookExitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
-func (e *HookExitError) ExitCode() int { return e.code }
-
-// NewHookExitError returns a HookExitError with the given exit code.
-func NewHookExitError(code int) error { return &HookExitError{code: code} }
-
 // HooksDisabledPaths returns where the hooks-disabled sentinel can live: the
 // project data dir first, then the repo's .chunk/ where older versions wrote it.
 func HooksDisabledPaths(workDir string) ([]string, error) {
@@ -374,23 +360,4 @@ func HooksDisabled(workDir string, envDisabled bool) bool {
 		}
 	}
 	return false
-}
-
-// WrapHookResult applies Stop hook lifecycle to the result of running validate
-// commands. On success it resets the attempt counter. On failure it increments
-// the counter and returns a HookExitError with code 2 to re-signal the agent,
-// or prints a give-up message and returns nil once maxAttempts is reached.
-func WrapHookResult(sessionID string, execErr error, maxAttempts int, warn io.Writer) error {
-	if execErr == nil {
-		ResetAttempts(sessionID)
-		return nil
-	}
-	n := TrackFailedAttempt(sessionID, warn)
-	if n >= maxAttempts {
-		_, _ = fmt.Fprintf(warn, "chunk validate: validation has failed %d time(s) in a row.\n", n)
-		_, _ = fmt.Fprintf(warn, "The failures above do not appear to be resolving automatically.\n")
-		_, _ = fmt.Fprintf(warn, "Stop attempting to fix this and ask the user for guidance instead.\n")
-		return nil
-	}
-	return &HookExitError{code: 2}
 }
