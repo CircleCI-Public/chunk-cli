@@ -66,7 +66,6 @@ func agentFakeEnv(t *testing.T) (argsFile, sigsFile, stdinLog string) {
 // reports init only once a message arrives, and again on every turn.
 const agentFakeScript = `
 echo "$@" > "$ARGS"
-echo "hooks=$CHUNK_HOOKS_DISABLED" >> "$ARGS"
 pwd >> "$ARGS"
 trap 'echo INT >> "$SIGS"; [ -n "$FAKE_IGNORE_INT" ] || exit 130' INT
 trap 'echo TERM >> "$SIGS"; exit 143' TERM
@@ -251,7 +250,6 @@ func TestAgentArgs(t *testing.T) {
 	assert.Assert(t, strings.Contains(gotArgs, "--permission-mode default"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, "--disallowedTools Edit,Write,NotebookEdit"), gotArgs)
 	assert.Assert(t, !strings.Contains(gotArgs, "acceptEdits"), gotArgs)
-	assert.Assert(t, strings.Contains(gotArgs, "hooks=1"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, dir), gotArgs)
 }
 

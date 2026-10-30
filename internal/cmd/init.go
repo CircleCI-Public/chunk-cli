@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/settings"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -37,31 +35,6 @@ func initStatus(streams iostream.Streams) iostream.StatusFunc {
 		case iostream.LevelError:
 			streams.ErrPrintln(ui.ErrError(msg))
 		}
-	}
-}
-
-// confirmDiff shows the change init would make to a file and asks
-// whether to make it.
-func confirmDiff(streams iostream.Streams, confirm confirmFunc) settings.ConfirmFunc {
-	return func(path, diff string) (bool, error) {
-		streams.ErrPrintln("")
-		streams.ErrPrintln(ui.Bold("Changes to " + path + ":"))
-		streams.ErrPrintln("")
-		for _, line := range strings.Split(diff, "\n") {
-			switch {
-			case strings.HasPrefix(line, "---"), strings.HasPrefix(line, "+++"):
-				streams.ErrPrintln(ui.Bold(line))
-			case strings.HasPrefix(line, "@@"):
-				streams.ErrPrintln(ui.Cyan(line))
-			case strings.HasPrefix(line, "+"):
-				streams.ErrPrintln(ui.Green(line))
-			case strings.HasPrefix(line, "-"):
-				streams.ErrPrintln(ui.Red(line))
-			default:
-				streams.ErrPrintln(line)
-			}
-		}
-		return confirm("Apply changes to "+path+"?", false)
 	}
 }
 
@@ -203,15 +176,9 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 	status(iostream.LevelDone, "Wrote .chunk/config.json")
 
 	updateGitignore(workDir, status)
-	if !opts.skipHooks {
-		confirm := confirmDiff(streams, ui.Confirm)
-		if err := writeAgentHooks(workDir, os.Getenv(config.EnvHome), cfg.Commands, status, confirm); err != nil {
+	if !opts.skipHooks && !opts.skipGitHook {
+		if err := writeGitHook(gitCommonDir, status); err != nil {
 			return err
-		}
-		if !opts.skipGitHook {
-			if err := writeGitHook(gitCommonDir, status); err != nil {
-				return err
-			}
 		}
 	}
 	if !opts.skipCompletions {
@@ -240,8 +207,8 @@ func newInitCmd() *cobra.Command {
 		Short: "Initialize project configuration",
 		Long: `Set up .chunk/config.json with VCS and validate command configuration.
 
-Detects VCS org/repo from git remote, detects test commands, and generates
-hook config files.`,
+Detects VCS org/repo from git remote, detects test commands, and installs a
+git pre-commit hook.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			workDir := projectDir
 			if workDir == "" {
@@ -257,7 +224,7 @@ hook config files.`,
 	}
 
 	cmd.Flags().BoolVar(&opts.force, "force", false, "Overwrite existing config")
-	cmd.Flags().BoolVar(&opts.skipHooks, "skip-hooks", false, "Skip hook file generation")
+	cmd.Flags().BoolVar(&opts.skipHooks, "skip-hooks", false, "Skip git pre-commit hook installation")
 	cmd.Flags().BoolVar(&opts.skipGitHook, "skip-git-hook", false, "Skip git pre-commit hook installation")
 	cmd.Flags().BoolVar(&opts.skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&opts.skipCompletions, "skip-completions", false, "Skip shell completion installation")

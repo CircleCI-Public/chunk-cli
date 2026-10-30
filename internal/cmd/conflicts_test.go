@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +18,14 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
+
+func TestResolveConflictsRootHonoursCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := resolveConflictsRoot(ctx, "")
+	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
+}
 
 // noDaemon points the daemon socket at an empty directory, so nothing is
 // listening. The daemon is optional, and its absence must not be able to fail a

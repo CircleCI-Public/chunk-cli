@@ -106,7 +106,7 @@ Agent: [probes state — active sidecar found]
        ✓ all validations passed
 ```
 
-**Parallel sessions**: When multiple Claude sessions are open in the same repo, each session automatically targets its own sidecar pool — two sessions never sync into the same remote workspace. State is keyed by session and branch and stored in `XDG_DATA_HOME` (see Architecture docs); the session comes from the Stop hook payload, or from `CLAUDE_CODE_SESSION_ID` for commands the agent runs itself. No manual configuration is needed; set `CHUNK_SESSION_ID` to pin the identity by hand (for an agent other than Claude Code, say).
+**Parallel sessions**: When multiple Claude sessions are open in the same repo, each session automatically targets its own sidecar pool — two sessions never sync into the same remote workspace. State is keyed by session and branch and stored in `XDG_DATA_HOME` (see Architecture docs); the session comes from `CLAUDE_CODE_SESSION_ID`. No manual configuration is needed; set `CHUNK_SESSION_ID` to pin the identity by hand (for an agent other than Claude Code, say).
 
 ---
 
@@ -155,7 +155,7 @@ It will not put source extensions (`.go`, `.ts`, `.py`) in the inert list, and
 it asks before setting `asyncValidateWorktree`, which reports environment
 failures as code failures in a project whose checks need gitignored files.
 
-See [HOOKS.md](HOOKS.md#background-validation) for what each key means.
+See the [config keys table in CLI.md](CLI.md#config-keys) for what each key means.
 
 ---
 

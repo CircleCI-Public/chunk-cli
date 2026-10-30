@@ -7,17 +7,21 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io/fs"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
@@ -43,41 +47,83 @@ func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string
 		commands = append(commands, command{Name: "test", Run: testCmd})
 	}
 
-	config := map[string]interface{}{"commands": commands}
-	data, err := json.Marshal(config)
+	cfg := map[string]interface{}{"commands": commands}
+	data, err := json.Marshal(cfg)
 	assert.NilError(t, err)
 	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644)
 	assert.NilError(t, err)
 }
 
-// hookPayload mirrors the Claude Code Stop hook JSON fields.
+// hookPayload mirrors the JSON an agent's hook runner pipes to a hook command:
+// Claude Code's Stop and PreToolUse payloads, and Codex's, which add turn_id.
 type hookPayload struct {
-	SessionID      string `json:"session_id"`
-	StopHookActive bool   `json:"stop_hook_active"`
+	SessionID      string     `json:"session_id"`
+	StopHookActive bool       `json:"stop_hook_active"`
+	HookEventName  string     `json:"hook_event_name,omitempty"`
+	TurnID         string     `json:"turn_id,omitempty"`
+	ToolInput      *toolInput `json:"tool_input,omitempty"`
 }
 
-func hookStdin(t *testing.T, sessionID string, stopHookActive bool) []byte {
+type toolInput struct {
+	Command string `json:"command"`
+}
+
+func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
-	data, err := json.Marshal(hookPayload{SessionID: sessionID, StopHookActive: stopHookActive})
+	data, err := json.Marshal(v)
 	assert.NilError(t, err)
 	return data
 }
 
-// hookSystemMessage parses the Stop hook response and returns its display-only
-// systemMessage. It also pins the absence of additionalContext: on Stop that
-// field is injected into the model's context and continues the conversation, so
-// emitting it on a passing run stops the turn from ever ending.
-func hookSystemMessage(t *testing.T, stdout string) string {
+// hasDir reports whether any directory under root is called name.
+func hasDir(t *testing.T, root, name string) bool {
 	t.Helper()
-	var response struct {
-		SystemMessage      string          `json:"systemMessage"`
-		HookSpecificOutput json.RawMessage `json:"hookSpecificOutput"`
-	}
-	assert.NilError(t, json.Unmarshal([]byte(stdout), &response),
-		"stdout must be one valid JSON hook response; got: %s", stdout)
-	assert.Equal(t, len(response.HookSpecificOutput), 0,
-		"Stop response must not inject model context; got: %s", stdout)
-	return response.SystemMessage
+	found := false
+	err := filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == name {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	assert.NilError(t, err)
+	return found
+}
+
+// eventLogOps returns the op of every event in every events.jsonl under root.
+func eventLogOps(t *testing.T, root string) []string {
+	t.Helper()
+	var ops []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || d.Name() != "events.jsonl" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			var ev struct {
+				Op string `json:"op"`
+			}
+			if err := json.Unmarshal([]byte(line), &ev); err != nil {
+				return fmt.Errorf("decode %s: %w", path, err)
+			}
+			ops = append(ops, ev.Op)
+		}
+		return nil
+	})
+	assert.NilError(t, err)
+	return ops
 }
 
 // commitAll stages and commits all files in dir.
@@ -95,49 +141,94 @@ func commitAll(t *testing.T, dir, message string) {
 	}
 }
 
-// TestValidateHookMode_DirtyTree verifies that piping a hook payload triggers
-// hook mode and re-signals the agent (exit 2) when commands fail.
-func TestValidateHookMode_DirtyTree(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	// writeProjectConfig creates an untracked file → dirty working tree.
-	writeProjectConfig(t, workDir, "", "false")
-
-	env := testenv.NewTestEnv(t)
-	result := binary.RunCLIWithStdin(t, []string{"validate", "--local"}, env, workDir,
-		hookStdin(t, "test-session-dirty", false))
-
-	assert.Equal(t, result.ExitCode, 2,
-		"expected exit 2 (hook re-signal) for dirty tree with failing command; stderr: %s", result.Stderr)
+// chunk validate reads nothing from stdin: whatever an agent's hook runner
+// pipes in, the configured commands run as they would from a terminal.
+func TestValidateIgnoresHookPayload(t *testing.T) {
+	payloads := map[string][]byte{
+		"no payload":         nil,
+		"stop":               mustJSON(t, hookPayload{SessionID: "s1", HookEventName: "Stop"}),
+		"stop hook active":   mustJSON(t, hookPayload{SessionID: "s1", HookEventName: "Stop", StopHookActive: true}),
+		"claude commit gate": mustJSON(t, hookPayload{SessionID: "s1", HookEventName: "PreToolUse", ToolInput: &toolInput{Command: "git commit -m x"}}),
+		"codex non-commit":   mustJSON(t, hookPayload{SessionID: "s1", HookEventName: "PreToolUse", TurnID: "t1", ToolInput: &toolInput{Command: "ls"}}),
+	}
+	for name, stdin := range payloads {
+		t.Run(name, func(t *testing.T) {
+			t.Run("clean tree runs and reruns", func(t *testing.T) {
+				workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+				// Appends a line per run, outside the tree so it stays clean.
+				marker := filepath.Join(t.TempDir(), "ran")
+				writeProjectConfig(t, workDir, "", "echo validation-command-output; echo x >> "+marker)
+				commitAll(t, workDir, "add config")
+				env := testenv.NewTestEnv(t)
+				for range 2 {
+					r := binary.RunCLIWithStdin(t, []string{"validate", "--local"}, env, workDir, stdin)
+					assert.Check(t, cmp.Equal(r.ExitCode, 0), "stderr: %s", r.Stderr)
+					assert.Check(t, !strings.Contains(r.Stdout, "systemMessage"), "stdout: %s", r.Stdout)
+					assert.Check(t, cmp.Contains(r.Stdout, "validation-command-output"))
+					assert.Check(t, !strings.Contains(r.Stderr, "── validate"), "stderr: %s", r.Stderr)
+				}
+				data, err := os.ReadFile(marker)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.Equal(strings.Count(string(data), "x\n"), 2), "commands must run on both clean-tree runs")
+				cached := hasDir(t, env.HomeDir, "validate-cache")
+				assert.Check(t, !cached, "no result cache may be written")
+				ops := eventLogOps(t, env.HomeDir)
+				assert.Check(t, len(ops) > 0, "expected event-log entries")
+				assert.Check(t, !slices.Contains(ops, "hook"), "ops: %v", ops)
+				assert.Check(t, slices.Contains(ops, "validate"), "ops: %v", ops)
+			})
+			t.Run("failure exits 1 every time", func(t *testing.T) {
+				workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+				writeProjectConfig(t, workDir, "", "false")
+				env := testenv.NewTestEnv(t)
+				for i := range 4 {
+					r := binary.RunCLIWithStdin(t, []string{"validate", "--local"}, env, workDir, stdin)
+					assert.Check(t, cmp.Equal(r.ExitCode, 1), "run %d; stderr: %s", i, r.Stderr)
+				}
+			})
+			t.Run("no config is an error", func(t *testing.T) {
+				workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+				r := binary.RunCLIWithStdin(t, []string{"validate"}, testenv.NewTestEnv(t), workDir, stdin)
+				assert.Check(t, r.ExitCode != 0)
+				assert.Check(t, cmp.Contains(r.Stderr, "chunk init"))
+			})
+			t.Run("subdirectory does not walk up", func(t *testing.T) {
+				workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+				writeProjectConfig(t, workDir, "", "true")
+				sub := filepath.Join(workDir, "sub")
+				err := os.MkdirAll(sub, 0o755)
+				assert.NilError(t, err)
+				r := binary.RunCLIWithStdin(t, []string{"validate"}, testenv.NewTestEnv(t), sub, stdin)
+				assert.Check(t, r.ExitCode != 0, "a run from sub/ must not find ../.chunk/config.json; stderr: %s", r.Stderr)
+			})
+		})
+	}
 }
 
-// TestValidateHookMode_CleanTree verifies that piping a hook payload exits 0
-// without running any commands when the working tree is clean.
-func TestValidateHookMode_CleanTree(t *testing.T) {
+// CHUNK_HOOKS_DISABLED does not stop chunk validate: under a Stop payload a
+// passing command still runs and its output reaches stdout.
+func TestValidateIgnoresHooksDisabled(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	// Write config then commit it so the tree is clean.
-	writeProjectConfig(t, workDir, "", "false") // deliberately failing command
-	commitAll(t, workDir, "add config")
-
+	writeProjectConfig(t, workDir, "", "echo validation-command-output")
 	env := testenv.NewTestEnv(t)
-	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
-		hookStdin(t, "test-session-clean", false))
+	env.Extra["CHUNK_HOOKS_DISABLED"] = "1"
 
-	assert.Equal(t, result.ExitCode, 0,
-		"expected exit 0 (skipped) for clean tree; stderr: %s", result.Stderr)
-	assert.Equal(t, result.Stdout, "",
-		"a skipped run must write nothing to stdout so the turn can end")
+	r := binary.RunCLIWithStdin(t, []string{"validate", "--local"}, env, workDir,
+		mustJSON(t, hookPayload{SessionID: "s1", HookEventName: "Stop"}))
+
+	assert.Check(t, cmp.Equal(r.ExitCode, 0), "stderr: %s", r.Stderr)
+	assert.Check(t, cmp.Contains(r.Stdout, "validation-command-output"))
 }
 
-func TestValidateHookMode_NoConfig(t *testing.T) {
+// --hook-session-id is an unknown flag to chunk validate.
+func TestValidateRejectsHookSessionIDFlag(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "dirty.txt"), []byte("changed"), 0o644))
-	env := testenv.NewTestEnv(t)
-	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
-		hookStdin(t, "test-session-no-config", false))
+	writeProjectConfig(t, workDir, "", "true")
 
-	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for unconfigured hook; stderr: %s", result.Stderr)
-	assert.Equal(t, result.Stdout, "",
-		"an unconfigured run must write nothing to stdout so the turn can end")
+	r := binary.RunCLI(t, []string{"validate", "--local", "--hook-session-id", "x"}, testenv.NewTestEnv(t), workDir)
+
+	assert.Check(t, r.ExitCode != 0)
+	assert.Check(t, cmp.Contains(r.Stderr, "unknown flag"))
 }
 
 func TestValidateRunDryRun(t *testing.T) {
@@ -506,9 +597,9 @@ func TestValidateSidecarImageNoActiveSidecarAutoCreates(t *testing.T) {
 	assert.Equal(t, org["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
 }
 
-func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
-	// Stop hook + validation.sidecarImage (no remote: true) should still resolve
-	// a sidecar from the configured snapshot and attempt remote validation.
+func TestValidateAutoCreatesSidecarFromSidecarImageWithoutRemoteFlag(t *testing.T) {
+	// validation.sidecarImage (no remote: true) should still resolve a sidecar
+	// from the configured snapshot and attempt remote validation.
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyURL = "127.0.0.1"
 	srv := httptest.NewServer(cci)
@@ -538,9 +629,7 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
 	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
 
-	result := binary.RunCLIWithStdin(t, []string{
-		"validate",
-	}, env, workDir, hookStdin(t, "test-session-sidecar-image", false))
+	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
 
@@ -676,30 +765,9 @@ func projectDataDir(t *testing.T, e *testenv.TestEnv, projectRoot string) string
 	return filepath.Join(e.HomeDir, ".local", "share", "chunk", fmt.Sprintf("%x", sum))
 }
 
-// TestValidateHookMode_SuccessResponse verifies that a successful hook run
-// reports completion using Claude Code's structured JSON response format.
-func TestValidateHookMode_SuccessResponse(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	// writeProjectConfig leaves an untracked file → dirty tree → hook runs.
-	writeProjectConfig(t, workDir, "", "echo validation-command-output")
-
-	env := testenv.NewTestEnv(t)
-	result := binary.RunCLIWithStdin(t, []string{"validate", "--local"}, env, workDir,
-		hookStdin(t, "test-session-success-line", false))
-
-	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for passing hook; stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(hookSystemMessage(t, result.Stdout), "chunk validate passed"),
-		"expected completion message; got stdout: %s stderr: %s", result.Stdout, result.Stderr)
-	assert.Assert(t, !strings.Contains(result.Stdout, "validation-command-output"),
-		"command output must not contaminate hook JSON; got stdout: %s", result.Stdout)
-	assert.Assert(t, strings.Contains(result.Stderr, "validation-command-output"),
-		"command output must be written to stderr; got stderr: %s", result.Stderr)
-}
-
-// TestValidateHookMode_SetupErrorFlushedToStderr verifies that when setup fails
-// in hook mode (e.g. SSH unreachable), the error output is flushed to stderr
-// rather than silently discarded by hookBuf.
-func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
+// TestValidateSetupErrorReachesStderr verifies that when setup fails (e.g. SSH
+// unreachable), the setup output reaches stderr rather than being dropped.
+func TestValidateSetupErrorReachesStderr(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyURL = "127.0.0.1" // no real SSH server — sync will fail
 	srv := httptest.NewServer(cci)
@@ -710,8 +778,6 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 	cfg := `{"commands":[{"name":"test","run":"true","remote":true}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
-	// Dirty tree ensures the hook actually runs.
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "dirty.txt"), []byte("x"), 0o644))
 
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
@@ -721,9 +787,7 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
 	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
 
-	result := binary.RunCLIWithStdin(t, []string{
-		"validate",
-	}, env, workDir, hookStdin(t, "test-session-setup-err", false))
+	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected failure; stderr: %s", result.Stderr)
 	// Sync status messages must reach stderr — proves setup output is not silently dropped.
@@ -746,24 +810,22 @@ func gitCurrentBranch(t *testing.T, dir string) string {
 	return b
 }
 
-// TestValidateHookMode_SessionIsolation verifies that two concurrent Claude
-// sessions each see their own sidecar state rather than sharing one file.
-func TestValidateHookMode_SessionIsolation(t *testing.T) {
+// TestValidateSessionIsolation verifies that two concurrent agent sessions each
+// see their own sidecar state rather than sharing one file.
+func TestValidateSessionIsolation(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRemoteProjectConfig(t, workDir)
-	// Add an untracked file so the working tree is dirty and validate runs.
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "dirty.txt"), []byte("x"), 0o644))
 
 	envA := testenv.NewTestEnv(t)
 	envB := testenv.NewTestEnv(t)
+	envA.Extra[config.EnvChunkSessionID] = "sess-a"
+	envB.Extra[config.EnvChunkSessionID] = "sess-b"
 
 	writeSidecarState(t, envA, workDir, "sess-a", "sidecar-aaa")
 	writeSidecarState(t, envB, workDir, "sess-b", "sidecar-bbb")
 
-	resultA := binary.RunCLIWithStdin(t, []string{"validate"}, envA, workDir,
-		hookStdin(t, "sess-a", true))
-	resultB := binary.RunCLIWithStdin(t, []string{"validate"}, envB, workDir,
-		hookStdin(t, "sess-b", true))
+	resultA := binary.RunCLI(t, []string{"validate"}, envA, workDir)
+	resultB := binary.RunCLI(t, []string{"validate"}, envB, workDir)
 
 	assert.Assert(t, strings.Contains(resultA.Stderr, "sidecar-aaa"),
 		"session A should load sidecar-aaa; stderr: %s", resultA.Stderr)

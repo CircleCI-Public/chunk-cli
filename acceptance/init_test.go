@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
@@ -600,37 +600,14 @@ func TestInitDetectsUnknownToolchainNoClaude(t *testing.T) {
 
 // --- Hook setup (Gap 3) ---
 
-func TestInitCreatesHookFiles(t *testing.T) {
+// chunk init writes no agent hook files, even for a project that has a .codex
+// directory, and still installs the git pre-commit hook.
+func TestInitWritesNoAgentHookFiles(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
-
-	env := testenv.NewTestEnv(t)
-	env.AnthropicKey = ""
-	env.CircleToken = ""
-
-	result := binary.RunCLI(t, []string{
-		"init",
-	}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	// .claude/settings.json should exist with hooks
-	settingsPath := filepath.Join(workDir, ".claude", "settings.json")
-	data, err := os.ReadFile(settingsPath)
-	assert.NilError(t, err, "expected .claude/settings.json to exist")
-
-	settingsContent := string(data)
-	assert.Assert(t, strings.Contains(settingsContent, "hooks"),
-		"expected hooks section in settings.json, got: %s", settingsContent)
-}
-
-// A repo initialized by the real binary ends up with a Stop hook that actually
-// fires chunk validate. Asserting the hooks key merely exists is not enough: a
-// repo can carry commit hooks and no Stop hook at all, which is how repos ended
-// up looking configured while nothing validated at session end.
-func TestInitWritesFiringStopHook(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+	err := os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644)
+	assert.NilError(t, err)
+	err = os.MkdirAll(filepath.Join(workDir, ".codex"), 0o755)
+	assert.NilError(t, err)
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
@@ -639,119 +616,67 @@ func TestInitWritesFiringStopHook(t *testing.T) {
 	result := binary.RunCLI(t, []string{"init"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	data, err := os.ReadFile(filepath.Join(workDir, ".claude", "settings.json"))
-	assert.NilError(t, err, "expected .claude/settings.json to exist")
-
-	var parsed map[string]interface{}
-	assert.NilError(t, json.Unmarshal(data, &parsed))
-	hooks, ok := parsed["hooks"].(map[string]interface{})
-	assert.Assert(t, ok, "expected a hooks object, got: %s", data)
-
-	// The commit hooks and the Stop hook are written by separate branches of the
-	// merge, so a repo can have one without the other. Both must be present.
-	commitCommands := hookCommands(t, hooks["PreToolUse"])
-	assert.Assert(t, len(commitCommands) > 0, "expected a PreToolUse commit hook, got: %s", data)
-
-	stopCommands := hookCommands(t, hooks["Stop"])
-	assert.Assert(t, slices.Contains(stopCommands, "chunk validate"),
-		"expected a Stop hook running chunk validate, got: %v", stopCommands)
-}
-
-// hookCommands flattens the hook entry commands across every group of one hook
-// type, so a test can assert on what actually runs regardless of grouping.
-func hookCommands(t *testing.T, groups interface{}) []string {
-	t.Helper()
-	list, _ := groups.([]interface{})
-	var commands []string
-	for _, g := range list {
-		group, ok := g.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		entries, _ := group["hooks"].([]interface{})
-		for _, e := range entries {
-			entry, ok := e.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if cmd, ok := entry["command"].(string); ok {
-				commands = append(commands, cmd)
-			}
-		}
+	for _, rel := range []string{
+		".claude/settings.json",
+		".claude/settings.example.json",
+		".codex/hooks.json",
+		".codex/hooks.example.json",
+	} {
+		_, err := os.Stat(filepath.Join(workDir, rel))
+		assert.Check(t, os.IsNotExist(err), "expected no %s, stat err: %v", rel, err)
 	}
-	return commands
+
+	hook, err := os.ReadFile(filepath.Join(workDir, ".git", "hooks", "pre-commit"))
+	assert.NilError(t, err, "expected .git/hooks/pre-commit to exist")
+	assert.Check(t, cmp.Contains(string(hook), "chunk validate"))
 }
 
-func TestInitHookExistingSettingsForceWritesExample(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+// Agent files a project already has are left exactly as they are, with or
+// without --force, and no example is written beside them.
+func TestInitLeavesExistingAgentFilesAlone(t *testing.T) {
+	files := map[string]string{
+		".claude/settings.json": `{"existing": true}`,
+		".codex/hooks.json":     `{"hooks":{}}`,
+	}
+	for _, args := range [][]string{{"init"}, {"init", "--force"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+			err := os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644)
+			assert.NilError(t, err)
+			for rel, content := range files {
+				path := filepath.Join(workDir, rel)
+				err = os.MkdirAll(filepath.Dir(path), 0o755)
+				assert.NilError(t, err)
+				err = os.WriteFile(path, []byte(content), 0o644)
+				assert.NilError(t, err)
+			}
 
-	// Pre-create .claude/settings.json
-	claudeDir := filepath.Join(workDir, ".claude")
-	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{"existing": true}`), 0o644))
+			env := testenv.NewTestEnv(t)
+			env.AnthropicKey = ""
+			env.CircleToken = ""
 
-	env := testenv.NewTestEnv(t)
-	env.AnthropicKey = ""
-	env.CircleToken = ""
+			result := binary.RunCLI(t, args, env, workDir)
+			assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	result := binary.RunCLI(t, []string{
-		"init", "--force",
-	}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	// settings.json is scaffold-once: even with --force, existing file is preserved
-	// and an example is written instead
-	data, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "existing"),
-		"expected settings.json to be preserved, got: %s", string(data))
-
-	exampleData, err := os.ReadFile(filepath.Join(claudeDir, "settings.example.json"))
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(exampleData), "hooks"),
-		"expected example to contain hooks, got: %s", string(exampleData))
+			for rel, want := range files {
+				got, err := os.ReadFile(filepath.Join(workDir, rel))
+				assert.NilError(t, err)
+				assert.Check(t, cmp.Equal(string(got), want), rel)
+			}
+			for _, rel := range []string{".claude/settings.example.json", ".codex/hooks.example.json"} {
+				_, err := os.Stat(filepath.Join(workDir, rel))
+				assert.Check(t, os.IsNotExist(err), "expected no %s, stat err: %v", rel, err)
+			}
+		})
+	}
 }
 
-func TestInitHookExistingSettingsWritesExample(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
-
-	// Pre-create .claude/settings.json
-	claudeDir := filepath.Join(workDir, ".claude")
-	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{"existing": true}`), 0o644))
-
+// chunk hook status fails as an unknown command.
+func TestHookCommandIsUnknown(t *testing.T) {
 	env := testenv.NewTestEnv(t)
-	env.AnthropicKey = ""
-	env.CircleToken = ""
-
-	// Without --force on config, but config doesn't exist yet so init proceeds.
-	// However settings.json already exists, so hook setup writes .example.
-	result := binary.RunCLI(t, []string{
-		"init",
-	}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	// Original settings.json should be unchanged
-	data, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "existing"),
-		"expected original settings.json to be preserved without --force")
-
-	// Example should exist, and carry the Stop hook — it is what the user is told
-	// to copy, so an example without it hands them a half-configured repo.
-	exampleData, err := os.ReadFile(filepath.Join(claudeDir, "settings.example.json"))
-	assert.NilError(t, err, "expected settings.example.json to exist")
-
-	var example map[string]interface{}
-	assert.NilError(t, json.Unmarshal(exampleData, &example))
-	exampleHooks, ok := example["hooks"].(map[string]interface{})
-	assert.Assert(t, ok, "expected a hooks object in the example, got: %s", exampleData)
-	assert.Assert(t, slices.Contains(hookCommands(t, exampleHooks["Stop"]), "chunk validate"),
-		"expected the example to run chunk validate at session end, got: %s", exampleData)
+	result := binary.RunCLI(t, []string{"hook", "status"}, env, t.TempDir())
+	assert.Check(t, result.ExitCode != 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Check(t, cmp.Contains(result.Stderr, "unknown command"))
 }
 
 // --- init never touches CircleCI ---

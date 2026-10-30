@@ -31,19 +31,6 @@ import (
 // Returns the exit code.
 type ValidateRunner func(ctx context.Context, projectRoot, workDir string, args []string, env []string, stdout, stderr io.Writer) int
 
-// validateRunArgs is the command line the run is given: the caller's args, plus
-// whatever the request carries as fields that the run takes as flags.
-func validateRunArgs(req chunkd.ValidateRequest) []string {
-	args := req.Args
-	if req.HookCodex {
-		args = append(append([]string(nil), args...), "--hook-codex")
-	}
-	if req.HookEvent != "" {
-		args = append(append([]string(nil), args...), "--hook-event", req.HookEvent)
-	}
-	return args
-}
-
 // handleAsyncValidate starts a validate run in the background and returns its
 // task ID immediately. This is the explicit path — `chunk validate --async` —
 // so no risk assessment is made: the caller has already decided.
@@ -121,7 +108,7 @@ func (d *daemon) startValidateTask(req chunkd.ValidateRequest, risk *chunkd.Risk
 		env = append(append([]string(nil), env...), "CIRCLE_TOKEN="+req.CircleCIToken)
 	}
 	sessionID := session.IDFromSlice(req.Env)
-	args := validateRunArgs(req)
+	args := req.Args
 	// Taken before the run, because this is the state the run is about to
 	// validate. A tree that cannot be captured at all just means the next change
 	// is measured against HEAD instead.
@@ -391,7 +378,7 @@ func (d *daemon) runValidateNow(ctx context.Context, req chunkd.ValidateRequest,
 	d.validateMu.Lock()
 	defer d.validateMu.Unlock()
 
-	args := validateRunArgs(req)
+	args := req.Args
 	if d.prov != nil && req.OrgID != "" {
 		name := fmt.Sprintf("validate-%x", time.Now().UnixNano())
 		image, err := validateSidecarImage(req)

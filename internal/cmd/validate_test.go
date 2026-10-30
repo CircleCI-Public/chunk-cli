@@ -19,14 +19,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -34,121 +32,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
-
-// hookPayload is the JSON Claude Code sends to Stop hooks via stdin.
-const hookPayload = `{"session_id":"test-session-001","stop_hook_active":false}`
-
-func runValidateHook(t *testing.T, workDir string) (stdout, stderr string, err error) {
-	t.Helper()
-	var outBuf, errBuf bytes.Buffer
-	root := newTestRootCmd()
-	root.SetOut(&outBuf)
-	root.SetErr(&errBuf)
-	root.SetIn(strings.NewReader(hookPayload))
-	root.SetArgs([]string{"validate", "--project", workDir})
-	err = root.Execute()
-	return outBuf.String(), errBuf.String(), err
-}
-
-func TestWriteStopHookMessage(t *testing.T) {
-	var out bytes.Buffer
-	assert.NilError(t, writeStopHookMessage(&out, "validation completed: 2/2 passed"))
-
-	var response hookResponse
-	assert.NilError(t, json.Unmarshal(out.Bytes(), &response))
-	assert.Equal(t, response.SystemMessage, "validation completed: 2/2 passed")
-
-	// additionalContext on Stop continues the conversation, so a passing run
-	// must never emit it — that is what looped the turn in #577.
-	assert.Assert(t, !strings.Contains(out.String(), "additionalContext"),
-		"Stop response must not inject model context; got: %s", out.String())
-}
-
-// TestValidateHookNoConfigIsSilent pins the unconfigured skip to empty stdout.
-// Any response here is a signal to the agent that no check ran and none needs
-// reporting, so silence is what lets the turn end.
-func TestValidateHookNoConfigIsSilent(t *testing.T) {
-	isolateConfig(t)
-	stdout, _, err := runValidateHook(t, t.TempDir())
-	assert.NilError(t, err)
-	assert.Equal(t, stdout, "", "unconfigured hook must write nothing to stdout")
-}
-
-func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvCircleToken, "")
-	t.Setenv(config.EnvCircleCIToken, "")
-
-	// Set up a project dir with a remote command. A non-git dir cannot be
-	// fingerprinted, and an unusable fingerprint reads as not clean, so the hook
-	// won't short-circuit on the clean-tree check.
-	dir := t.TempDir()
-	projCfg := &config.ProjectConfig{
-		Commands: []config.Command{
-			{Name: "test", Run: "go test ./...", Remote: true},
-		},
-	}
-	assert.NilError(t, config.SaveProjectConfig(dir, projCfg))
-
-	_, stderr, err := runValidateHook(t, dir)
-
-	assert.Assert(t, err != nil)
-	var ec interface{ ExitCode() int }
-	assert.Assert(t, errors.As(err, &ec), "expected ExitCode error, got %T: %v", err, err)
-	assert.Equal(t, ec.ExitCode(), 1)
-	assert.Assert(t, strings.Contains(stderr, "CircleCI auth is not configured"),
-		"expected auth message in stderr, got: %q", stderr)
-	assert.Assert(t, strings.Contains(stderr, "chunk auth login"),
-		"expected auth hint in stderr, got: %q", stderr)
-}
-
-func TestValidateHookExitsOneWhenCircleCITokenMissingAndSidecarImage(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvCircleToken, "")
-	t.Setenv(config.EnvCircleCIToken, "")
-
-	dir := t.TempDir()
-	projCfg := &config.ProjectConfig{
-		Commands: []config.Command{
-			{Name: "test", Run: "npm test", Role: config.RoleGate},
-		},
-		Validation: &config.ValidationConfig{
-			SidecarImage: "my-snapshot-abc123",
-		},
-	}
-	assert.NilError(t, config.SaveProjectConfig(dir, projCfg))
-
-	_, stderr, err := runValidateHook(t, dir)
-
-	assert.Assert(t, err != nil)
-	var ec interface{ ExitCode() int }
-	assert.Assert(t, errors.As(err, &ec), "expected ExitCode error, got %T: %v", err, err)
-	assert.Equal(t, ec.ExitCode(), 1)
-	assert.Assert(t, strings.Contains(stderr, "CircleCI auth is not configured"),
-		"expected auth message in stderr, got: %q", stderr)
-}
-
-// TestValidateHookRequiresAuthByDefault verifies that hook invocations always
-// require CircleCI auth, even when no commands are explicitly marked remote.
-func TestValidateHookRequiresAuthByDefault(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvCircleToken, "")
-	t.Setenv(config.EnvCircleCIToken, "")
-
-	dir := t.TempDir()
-	projCfg := &config.ProjectConfig{
-		Commands: []config.Command{
-			{Name: "lint", Run: "echo ok", Remote: false},
-		},
-	}
-	assert.NilError(t, config.SaveProjectConfig(dir, projCfg))
-
-	_, stderr, err := runValidateHook(t, dir)
-
-	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(stderr, "CircleCI auth is not configured"),
-		"auth check must fire because remote is the default, stderr: %q", stderr)
-}
 
 func TestRemoteExecEnv(t *testing.T) {
 	t.Run("returns nil when token is empty", func(t *testing.T) {
@@ -589,347 +472,6 @@ func TestValidateEnvFlagBadValue(t *testing.T) {
 	assert.Assert(t, strings.Contains(err.Error(), "BADVALUE"), "got: %v", err)
 }
 
-// activeStopHookPayload is a re-signalled Stop hook: stop_hook_active is true,
-// so initHook leaves the failure counter alone and the counter's fate is decided
-// by how the run itself ends.
-const activeStopHookPayload = `{"session_id":"test-session-001","stop_hook_active":true}`
-
-// skipMsg is the one line that tells the agent no commands ran.
-const skipMsg = "skipped (no changes since last successful run)"
-
-// runActiveStopHook fires a re-signalled Stop hook against dir and returns what
-// the agent would see, along with the exit error. Unlike runValidateHook it does
-// not assert on the error, so failing runs can be exercised too.
-// --local is passed so the tests focus on hook caching semantics rather than
-// remote routing — caching is orthogonal to where commands run.
-func runActiveStopHookOutput(t *testing.T, dir string) (stdout, stderr string, err error) {
-	t.Helper()
-	var outBuf, errBuf bytes.Buffer
-	root := newTestRootCmd()
-	root.SetOut(&outBuf)
-	root.SetErr(&errBuf)
-	root.SetIn(strings.NewReader(activeStopHookPayload))
-	root.SetArgs([]string{"validate", "--local", "--project", dir})
-	err = root.Execute()
-	return outBuf.String(), errBuf.String(), err
-}
-
-func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
-	t.Helper()
-	_, stderr, err = runActiveStopHookOutput(t, dir)
-	return stderr, err
-}
-
-// countingCommand returns a command that appends a line to a marker file each
-// time it runs and then exits with code, plus a func reporting how many times it
-// has run. The marker lives outside the repo on purpose: written inside it, every
-// run would change the working-tree digest and a re-run would prove nothing about
-// the cache.
-func countingCommand(t *testing.T, code int) (run string, runs func() int) {
-	t.Helper()
-	marker := filepath.Join(t.TempDir(), "runs")
-	return fmt.Sprintf("echo x >> %s; exit %d", marker, code), func() int {
-		t.Helper()
-		data, err := os.ReadFile(marker)
-		if errors.Is(err, os.ErrNotExist) {
-			return 0
-		}
-		assert.NilError(t, err)
-		return len(strings.Fields(string(data)))
-	}
-}
-
-// hookProject sets up a git repo with one configured command. Saving the config
-// leaves .chunk/ untracked, so the tree is never clean and the hook reaches the
-// cache instead of short-circuiting on the clean-tree check.
-func hookProject(t *testing.T, run string) string {
-	t.Helper()
-	// The attempt counter lives under os.TempDir(); isolate it from other tests
-	// sharing this session ID.
-	t.Setenv("TMPDIR", t.TempDir())
-	dir := t.TempDir()
-	gitSetup(t, dir, "main")
-	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
-		Commands: []config.Command{{Name: "test", Run: run}},
-	}))
-	return dir
-}
-
-// TestValidateHookCacheHitResetsAttempts covers a Stop hook firing again on a
-// tree that already validated. The commands are skipped, and because a cache hit
-// is a success it must clear the failure counter — otherwise a stale count
-// brings the "ask the user for guidance" bail-out forward by a turn.
-func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
-	isolateConfig(t)
-	const sessionID = "test-session-001"
-	dir := hookProject(t, "exit 0")
-
-	run := func() string {
-		t.Helper()
-		stderr, err := runActiveStopHook(t, dir)
-		assert.NilError(t, err)
-		return stderr
-	}
-
-	first := run()
-	assert.Assert(t, !strings.Contains(first, skipMsg), "first run must execute, got: %q", first)
-
-	// A failure at some other tree state leaves a count of 1 behind.
-	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
-
-	stdout, second, err := runActiveStopHookOutput(t, dir)
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(second, skipMsg), "second run must hit the cache, got: %q", second)
-	var response hookResponse
-	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Equal(t, response.SystemMessage, "chunk validate: skipped, nothing changed since the last pass",
-		"cache hit must return a successful hook response that says nothing ran")
-
-	// The hit cleared the counter, so the next failure is attempt 1 again.
-	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
-}
-
-// TestValidateHookFailureIsNotCached is the guarantee the whole cache rests on.
-// If a failing run were ever stored, every later hook invocation on the same tree
-// would print "skipped" and return nil, so the agent would stop with the build
-// broken — and nothing else in the suite would notice.
-func TestValidateHookFailureIsNotCached(t *testing.T) {
-	isolateConfig(t)
-	run, runs := countingCommand(t, 1)
-	dir := hookProject(t, run)
-
-	_, err := runActiveStopHook(t, dir)
-	assert.Assert(t, err != nil, "a failing command must fail the hook")
-	assert.Equal(t, runs(), 1)
-
-	second, err := runActiveStopHook(t, dir)
-	assert.Assert(t, err != nil, "the second run must fail too, not report a hit")
-	assert.Assert(t, !strings.Contains(second, skipMsg),
-		"a failed run must not be cached, got: %q", second)
-	assert.Equal(t, runs(), 2, "the commands must run again after a failure")
-}
-
-// commitGatePayload is a Claude Code PreToolUse payload for a git commit.
-const commitGatePayload = `{"session_id":"test-session-001","hook_event_name":"PreToolUse","tool_input":{"command":"git commit -m x"}}`
-
-// runCommitGate fires the commit gate against dir, with the hook context read
-// from stdin as Claude Code sends it, or from the flags a daemon subprocess is
-// given when forwarded is true.
-func runCommitGate(t *testing.T, dir string, forwarded bool) error {
-	t.Helper()
-	root := newTestRootCmd()
-	root.SetOut(io.Discard)
-	root.SetErr(io.Discard)
-	args := []string{"validate", "--local", "--project", dir}
-	if forwarded {
-		args = append(args, "--hook-session-id", "test-session-001", "--hook-event", "PreToolUse")
-	} else {
-		root.SetIn(strings.NewReader(commitGatePayload))
-	}
-	root.SetArgs(args)
-	return root.Execute()
-}
-
-// The Stop hook gives up after stopHookMaxAttempts failures by exiting 0. On a
-// commit gate exit 0 lets the commit through, so a gate that gave up would wave
-// through exactly the commit that kept failing. It has to block every time.
-func TestValidateCommitGateNeverGivesUp(t *testing.T) {
-	for name, forwarded := range map[string]bool{"payload": false, "forwarded": true} {
-		t.Run(name, func(t *testing.T) {
-			isolateConfig(t)
-			dir := hookProject(t, "exit 1")
-
-			for i := range validate.DefaultMaxAttempts + 2 {
-				err := runCommitGate(t, dir, forwarded)
-				var ec interface{ ExitCode() int }
-				assert.Assert(t, errors.As(err, &ec), "run %d: expected a blocking exit, got %v", i+1, err)
-				assert.Equal(t, ec.ExitCode(), 2, "run %d", i+1)
-			}
-		})
-	}
-}
-
-// The failure counter is the Stop hook's. A commit gate running in the same
-// session must neither add to it, bringing the Stop hook's give-up forward, nor
-// clear it, letting the Stop hook re-signal past its limit.
-func TestValidateCommitGateLeavesStopAttemptsAlone(t *testing.T) {
-	const sessionID = "test-session-001"
-	for name, code := range map[string]int{"failing": 1, "passing": 0} {
-		t.Run(name, func(t *testing.T) {
-			isolateConfig(t)
-			dir := hookProject(t, fmt.Sprintf("exit %d", code))
-			assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
-
-			_ = runCommitGate(t, dir, false)
-
-			assert.Equal(t, validate.ReadAttempts(sessionID), 1)
-		})
-	}
-}
-
-// TestValidateHookCacheMissAfterEdit is the other half of the contract: a hit is
-// only correct while the tree is untouched, so an edit between runs has to reach
-// the key and put the commands back on.
-func TestValidateHookCacheMissAfterEdit(t *testing.T) {
-	isolateConfig(t)
-	run, runs := countingCommand(t, 0)
-	dir := hookProject(t, run)
-
-	_, err := runActiveStopHook(t, dir)
-	assert.NilError(t, err)
-	assert.Equal(t, runs(), 1)
-
-	second, err := runActiveStopHook(t, dir)
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(second, skipMsg), "unchanged tree must hit, got: %q", second)
-	assert.Equal(t, runs(), 1, "a cache hit must not execute the commands")
-
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644))
-
-	third, err := runActiveStopHook(t, dir)
-	assert.NilError(t, err)
-	assert.Assert(t, !strings.Contains(third, skipMsg),
-		"an edited tree must miss the cache, got: %q", third)
-	assert.Equal(t, runs(), 2, "the commands must run again after an edit")
-}
-
-// --- hookResultCache ---
-
-// hookTree stands in for the fingerprint the hook computes once per run; gitutil
-// owns the tests that prove a digest tracks the working tree.
-var hookTree = gitutil.Worktree{Head: "abc123", Digest: "deadbeef"}
-
-// hookResultCache is the boundary between "these runs are cacheable" and
-// "these are not"; each guard below must return no cache so the run always
-// executes.
-func TestHookResultCacheDisabledCases(t *testing.T) {
-	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
-	hook := &hookContext{sessionID: "s1"}
-
-	tests := []struct {
-		name      string
-		hook      *hookContext
-		inlineCmd string
-		tree      gitutil.Worktree
-	}{
-		{name: "not a hook run", hook: nil, tree: hookTree},
-		{name: "inline command", hook: hook, inlineCmd: "go test ./foo", tree: hookTree},
-		{name: "unusable git state", hook: hook, tree: gitutil.Worktree{}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cache, key := hookResultCache(tt.hook, tt.inlineCmd, t.TempDir(), tt.tree, "", cfg, "")
-			assert.Assert(t, cache == nil, "expected no cache")
-			assert.Equal(t, key, "")
-		})
-	}
-}
-
-func TestHookResultCacheEnabledForNamedCommand(t *testing.T) {
-	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
-
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-	dir := gitrepo.SetupGitRepo(t, "org", "repo")
-	cache, key := hookResultCache(&hookContext{sessionID: "s1"}, "", dir, hookTree, "test", cfg, "")
-	assert.Assert(t, cache != nil, "expected a cache for a named command in hook mode")
-	assert.Assert(t, key != "")
-	dataDir, err := config.RepoDataDir(dir)
-	assert.NilError(t, err)
-	assert.Equal(t, cache.Dir, filepath.Join(dataDir, "validate-cache"))
-}
-
-// TestHookResultCacheTargetAffectsKey pins the wiring: a different execution
-// target has to reach the key, or a run validated on one sidecar reports a hit
-// for another.
-func TestHookResultCacheTargetAffectsKey(t *testing.T) {
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-	dir := gitrepo.SetupGitRepo(t, "org", "repo")
-	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
-	hook := &hookContext{sessionID: "s1"}
-
-	_, local := hookResultCache(hook, "", dir, hookTree, "test", cfg, "")
-	_, remote := hookResultCache(hook, "", dir, hookTree, "test", cfg, "sidecar-a\x00")
-	assert.Assert(t, local != remote, "target must participate in the cache key")
-}
-
-// TestHookResultCacheSubprojectAffectsKey covers a monorepo: the cache directory
-// and the fingerprint are both repository-wide, so two subprojects with the same
-// config share a key unless the subproject reaches it, and a pass in one skips
-// the other's commands.
-func TestHookResultCacheSubprojectAffectsKey(t *testing.T) {
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-	repo := gitrepo.SetupGitRepo(t, "org", "repo")
-	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
-	hook := &hookContext{sessionID: "s1"}
-
-	keys := map[string]string{}
-	for _, sub := range []string{"", "svc-a", "svc-b"} {
-		dir := filepath.Join(repo, sub)
-		assert.NilError(t, os.MkdirAll(dir, 0o755))
-		_, key := hookResultCache(hook, "", dir, hookTree, "test", cfg, "")
-		assert.Assert(t, key != "", sub)
-		keys[key] = sub
-	}
-	assert.Equal(t, len(keys), 3, "each subproject must get its own cache key")
-}
-
-// --- execTarget ---
-
-func TestExecTarget(t *testing.T) {
-	withImage := &config.ProjectConfig{Validation: &config.ValidationConfig{SidecarImage: "snap-1"}}
-
-	tests := []struct {
-		name   string
-		opts   *validateOpts
-		cfg    *config.ProjectConfig
-		active *sidecar.ActiveSidecar
-		want   string
-	}{
-		{name: "local run", opts: &validateOpts{}, cfg: &config.ProjectConfig{}, want: ""},
-		{
-			name: "explicit sidecar id",
-			opts: &validateOpts{sidecarID: "sc-1"},
-			cfg:  &config.ProjectConfig{},
-			want: "sc-1\x00",
-		},
-		{
-			name:   "active sidecar",
-			opts:   &validateOpts{},
-			cfg:    &config.ProjectConfig{},
-			active: &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-2"}},
-			want:   "sc-2\x00",
-		},
-		{
-			name:   "explicit id wins over active",
-			opts:   &validateOpts{sidecarID: "sc-1"},
-			cfg:    &config.ProjectConfig{},
-			active: &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-2"}},
-			want:   "sc-1\x00",
-		},
-		{
-			name: "configured image with no sidecar yet",
-			opts: &validateOpts{},
-			cfg:  withImage,
-			want: "\x00snap-1",
-		},
-		{
-			name:   "image and active sidecar",
-			opts:   &validateOpts{},
-			cfg:    withImage,
-			active: &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-2"}},
-			want:   "sc-2\x00snap-1",
-		},
-		{name: "nil config", opts: &validateOpts{}, cfg: nil, want: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, execTarget(tt.opts, tt.cfg, tt.active), tt.want)
-		})
-	}
-}
-
 // gitSetup initialises a minimal git repo at dir on the given branch name.
 func gitSetup(t *testing.T, dir, branch string) {
 	t.Helper()
@@ -1275,7 +817,7 @@ func TestReportDelegatedValidateAnnouncesABackgroundRun(t *testing.T) {
 		// sends them anyway must not have them read as a result.
 		ExitCode: 1,
 		Stderr:   "should not be shown",
-	}, nil, streams)
+	}, streams)
 
 	assert.NilError(t, err)
 	assert.Equal(t, outBuf.String(), "")
@@ -1296,7 +838,7 @@ func TestReportDelegatedValidateExplainsAHeldRun(t *testing.T) {
 		ExitCode: 2,
 		Stdout:   "on stdout",
 		Stderr:   "on stderr",
-	}, nil, streams)
+	}, streams)
 
 	var silent *silentExitError
 	assert.Assert(t, errors.As(err, &silent), "a failing run must carry its exit code, got %v", err)
@@ -1311,41 +853,9 @@ func TestReportDelegatedValidateSaysNothingWhenThereWasNoDecision(t *testing.T) 
 	var outBuf, errBuf bytes.Buffer
 	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
 
-	assert.NilError(t, reportDelegatedValidate(chunkd.ValidateResponse{Stderr: "1/1 passed"}, nil, streams))
+	err := reportDelegatedValidate(chunkd.ValidateResponse{Stderr: "1/1 passed"}, streams)
+	assert.NilError(t, err)
 	assert.Equal(t, errBuf.String(), "1/1 passed")
-}
-
-// The commit gate and the end-of-turn hook arrive here looking alike, and only
-// one of them can be released: a released commit gate is a commit that went
-// through without the checks it exists to run.
-func TestOnlyTheStopHookMayRunInBackground(t *testing.T) {
-	for _, tc := range []struct {
-		payload string
-		want    bool
-	}{
-		{`{"session_id":"s","hook_event_name":"Stop"}`, true},
-		{`{"session_id":"s","hook_event_name":"PreToolUse"}`, false},
-		{`{"session_id":"s","hook_event_name":"UserPromptSubmit"}`, false},
-		// No event name: an older Claude Code, or another agent's hook runner.
-		// An unrecognised hook is not evidence of one that can wait.
-		{`{"session_id":"s"}`, false},
-	} {
-		hook := detectHook(strings.NewReader(tc.payload))
-		assert.Assert(t, hook != nil, "payload was not read as a hook: %s", tc.payload)
-		assert.Equal(t, mayRunInBackground(hook), tc.want, "payload: %s", tc.payload)
-	}
-
-	// Not a hook at all — a developer at a terminal, with no next turn to hear
-	// the answer on.
-	assert.Equal(t, mayRunInBackground(nil), false)
-}
-
-func TestDetectHookReadsTheEventName(t *testing.T) {
-	hook := detectHook(strings.NewReader(`{"session_id":"abc","stop_hook_active":true,"hook_event_name":"Stop"}`))
-	assert.Assert(t, hook != nil)
-	assert.Equal(t, hook.sessionID, "abc")
-	assert.Equal(t, hook.stopHookActive, true)
-	assert.Equal(t, hook.event, "Stop")
 }
 
 // A low-risk change gets no score line: it is the common case, and a number
@@ -1353,13 +863,14 @@ func TestDetectHookReadsTheEventName(t *testing.T) {
 // there is any.
 func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
 	var quiet bytes.Buffer
-	assert.NilError(t, reportDelegatedValidate(chunkd.ValidateResponse{
+	err := reportDelegatedValidate(chunkd.ValidateResponse{
 		Risk: &chunkd.RiskSummary{Score: 12, Band: chunkd.BandLow, Parts: []string{"12 lines (1)"}},
-	}, nil, iostream.Streams{Out: &quiet, Err: &quiet}))
+	}, iostream.Streams{Out: &quiet, Err: &quiet})
+	assert.NilError(t, err)
 	assert.Equal(t, quiet.String(), "", "a low-risk change was narrated")
 
 	var loud bytes.Buffer
-	err := reportDelegatedValidate(chunkd.ValidateResponse{
+	err = reportDelegatedValidate(chunkd.ValidateResponse{
 		Reason:   "large change, 2000 lines, over the 500-line limit",
 		ExitCode: 1,
 		Risk: &chunkd.RiskSummary{
@@ -1368,65 +879,13 @@ func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
 			Parts:  []string{"2000 lines (60)", "3 files (6)"},
 			Advice: "committing it in parts would get each piece checked sooner",
 		},
-	}, nil, iostream.Streams{Out: &loud, Err: &loud})
+	}, iostream.Streams{Out: &loud, Err: &loud})
 
 	assert.Assert(t, err != nil)
 	out := loud.String()
 	assert.Assert(t, strings.Contains(out, "risk 92/100 high"), "got %q", out)
 	assert.Assert(t, strings.Contains(out, "2000 lines (60)"), "got %q", out)
 	assert.Assert(t, strings.Contains(out, "committing it in parts"), "got %q", out)
-}
-
-// A snapshot run validates a tree that was checked out from the state being
-// validated, so git sees nothing changed in it. The clean-tree skip must not
-// fire there: skipping would run no commands and report a pass, which is a
-// green light for code nothing looked at.
-//
-// This is the shape of a real bug. The unit tests around the daemon stub the
-// runner, so the skip lived below all of them and the first honest end-to-end
-// run reported "passed" having executed nothing.
-func TestASnapshotRunIsNotSkippedForBeingClean(t *testing.T) {
-	isolateConfig(t)
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-	t.Setenv(config.EnvCircleToken, "")
-	t.Setenv(config.EnvCircleCIToken, "")
-
-	// A clean repo: everything committed, exactly as a checked-out snapshot is.
-	dir := t.TempDir()
-	marker := filepath.Join(t.TempDir(), "ran")
-	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
-		Commands: []config.Command{{Name: "test", Run: "touch " + marker}},
-	}))
-	for _, args := range [][]string{
-		{"init"}, {"config", "user.email", "t@t.co"}, {"config", "user.name", "t"},
-		{"add", "-A"}, {"commit", "-m", "init"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		assert.NilError(t, err, "git %v: %s", args, out)
-	}
-
-	run := func(extra ...string) {
-		var outBuf, errBuf bytes.Buffer
-		root := newTestRootCmd()
-		root.SetOut(&outBuf)
-		root.SetErr(&errBuf)
-		root.SetIn(strings.NewReader(hookPayload))
-		root.SetArgs(append([]string{"--insecure-storage", "validate", "--local", "--project", dir}, extra...))
-		_ = root.Execute()
-	}
-
-	// Without the attribution, a clean tree is skipped — the behaviour every
-	// ordinary hook run relies on.
-	run()
-	_, err := os.Stat(marker)
-	assert.Assert(t, err != nil, "a clean ordinary run should have been skipped")
-
-	// With it, the commands run.
-	run("--attribute-to", dir)
-	_, err = os.Stat(marker)
-	assert.NilError(t, err, "a snapshot run was skipped and reported without running anything")
 }
 
 func TestFinishValidateFinalizesEventLog(t *testing.T) {
@@ -1446,10 +905,7 @@ func TestFinishValidateFinalizesEventLog(t *testing.T) {
 			recorder := log.Recorder(func(iostream.Level, string) {}, eventlog.OpValidate, "sb-1", "sidecar", "main")
 			result := validate.Result{Passed: 1, Total: 2}
 
-			err = finishValidate(
-				&cobra.Command{}, nil, tt.execErr, time.Now(), &config.ProjectConfig{}, result, "",
-				recorder, recorder.Status, iostream.Streams{Out: io.Discard, Err: io.Discard}, nil,
-			)
+			err = finishValidate(tt.execErr, time.Now(), result, recorder, recorder.Status, nil)
 			if tt.execErr == nil {
 				assert.NilError(t, err)
 			} else {
@@ -1466,63 +922,6 @@ func TestFinishValidateFinalizesEventLog(t *testing.T) {
 			assert.Equal(t, total, result.Total)
 		})
 	}
-}
-
-// A passing hook run names what it ran, so the user can tell a full check from
-// a single command.
-func TestValidateHookPassNamesTheCommands(t *testing.T) {
-	isolateConfig(t)
-	dir := hookProject(t, "exit 0")
-
-	stdout, _, err := runActiveStopHookOutput(t, dir)
-	assert.NilError(t, err)
-	var response hookResponse
-	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Assert(t, strings.HasPrefix(response.SystemMessage, "chunk validate passed: test ("),
-		"got %q", response.SystemMessage)
-}
-
-// Codex shows a systemMessage as a warning, so a pass says nothing there. The
-// client detects Codex from the payload and the daemon subprocess is told by
-// flag; both must reach the same answer.
-func TestValidateHookPassIsQuietUnderCodex(t *testing.T) {
-	for name, tc := range map[string]struct {
-		stdin string
-		args  []string
-	}{
-		"payload": {
-			stdin: `{"session_id":"test-session-001","stop_hook_active":true,"hook_event_name":"Stop","turn_id":"turn-1"}`,
-		},
-		"forwarded": {
-			args: []string{"--hook-session-id", "test-session-001", "--stop-hook-active", "--hook-codex"},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			isolateConfig(t)
-			dir := hookProject(t, "exit 0")
-
-			var outBuf, errBuf bytes.Buffer
-			root := newTestRootCmd()
-			root.SetOut(&outBuf)
-			root.SetErr(&errBuf)
-			root.SetIn(strings.NewReader(tc.stdin))
-			root.SetArgs(append([]string{"validate", "--local", "--no-daemon", "--project", dir}, tc.args...))
-			assert.NilError(t, root.Execute())
-
-			assert.Equal(t, outBuf.String(), "", "a pass under Codex must not write a hook response")
-			assert.Assert(t, strings.Contains(errBuf.String(), "1/1 passed"), "the run did not happen: %q", errBuf.String())
-		})
-	}
-}
-
-func TestDetectHookRecognisesCodex(t *testing.T) {
-	hook := detectHook(strings.NewReader(`{"session_id":"abc","hook_event_name":"Stop","turn_id":"turn-1"}`))
-	assert.Assert(t, hook != nil)
-	assert.Assert(t, hook.codex)
-
-	hook = detectHook(strings.NewReader(`{"session_id":"abc","hook_event_name":"Stop"}`))
-	assert.Assert(t, hook != nil)
-	assert.Assert(t, !hook.codex)
 }
 
 // fakeValidateDaemon stands up a Unix socket answering /ping with build and
@@ -1565,7 +964,7 @@ func TestRunValidateViaDaemonForwardsSidecarImage(t *testing.T) {
 	reqs := fakeValidateDaemon(t, chunkd.BuildID())
 
 	var outBuf, errBuf bytes.Buffer
-	err := runValidateViaDaemon(t.TempDir(), []string{"validate", "test"}, "", "org-1", "snap-test", nil,
+	err := runValidateViaDaemon(t.TempDir(), []string{"validate", "test"}, "", "org-1", "snap-test",
 		iostream.Streams{Out: &outBuf, Err: &errBuf})
 	assert.NilError(t, err)
 
@@ -1573,167 +972,35 @@ func TestRunValidateViaDaemonForwardsSidecarImage(t *testing.T) {
 	assert.Equal(t, req.SidecarImage, "snap-test")
 }
 
-// The daemon subprocess learns it is under Codex only from the request, so the
-// client must say so for a Codex payload and only for one. It says so in a field
-// and never as a flag: a remote daemon's build cannot be checked, and one that
-// predates the flag would reject the run with a non-blocking exit.
-func TestRunValidateViaDaemonForwardsCodex(t *testing.T) {
-	for name, tc := range map[string]struct {
-		hook  *hookContext
-		codex bool
-	}{
-		"claude": {hook: &hookContext{sessionID: "abc", event: hookEventStop}},
-		"codex":  {hook: &hookContext{sessionID: "abc", event: hookEventStop, codex: true}, codex: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			reqs := fakeValidateDaemon(t, chunkd.BuildID())
-
-			var outBuf, errBuf bytes.Buffer
-			err := runValidateViaDaemon(t.TempDir(), []string{"validate"}, "", "", "", tc.hook,
-				iostream.Streams{Out: &outBuf, Err: &errBuf})
-			assert.NilError(t, err)
-
-			req := <-reqs
-			assert.Equal(t, req.HookCodex, tc.codex)
-			assert.Assert(t, !slices.Contains(req.Args, "--hook-codex"), "args: %q", req.Args)
-		})
-	}
-}
-
-// A daemon from another build may not know the hook flags, and rejects a run
-// carrying one with a non-blocking exit — a commit gate would pass having
-// checked nothing. The hook runs inline instead.
-func TestTryHookDelegateSkipsADaemonFromAnotherBuild(t *testing.T) {
-	reqs := fakeValidateDaemon(t, "some-older-build")
-	hook := &hookContext{sessionID: "abc", event: "PreToolUse", codex: true}
-
-	delegated, err := tryHookDelegate(&cobra.Command{}, hook, t.TempDir(), false, iostream.Streams{})
+// A hook payload on stdin changes nothing about delegation: the run goes to the
+// daemon synchronously, never offered to the background, and carries no hook
+// context.
+func TestValidateWithStopPayloadDelegatesSynchronously(t *testing.T) {
+	isolateConfig(t)
+	reqs := fakeValidateDaemon(t, chunkd.BuildID())
+	dir := t.TempDir()
+	err := config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "true"}},
+	})
 	assert.NilError(t, err)
-	assert.Assert(t, !delegated)
-	assert.Equal(t, len(reqs), 0, "the run was sent to the mismatched daemon")
-}
 
-// A hook released to the background says so in its response, under Codex too:
-// otherwise the hook finishes with nothing to show it checked anything.
-func TestReportDelegatedValidateTellsTheHookAboutABackgroundRun(t *testing.T) {
-	for name, hook := range map[string]*hookContext{
-		"claude": {sessionID: "abc", event: hookEventStop},
-		"codex":  {sessionID: "abc", event: hookEventStop, codex: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			var outBuf, errBuf bytes.Buffer
-			err := reportDelegatedValidate(chunkd.ValidateResponse{
-				TaskID: "0192cf6e-1b9f-7c3e-8a11-2b3c4d5e6f70",
-				Reason: "small change, 42 lines",
-			}, hook, iostream.Streams{Out: &outBuf, Err: &errBuf})
-			assert.NilError(t, err)
+	var outBuf, errBuf bytes.Buffer
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetIn(strings.NewReader(`{"session_id":"s1","hook_event_name":"Stop"}`))
+	root.SetArgs([]string{"validate", "--local", "--project", dir})
+	err = root.Execute()
+	assert.NilError(t, err, "stderr: %s", errBuf.String())
 
-			var response hookResponse
-			assert.NilError(t, json.Unmarshal(outBuf.Bytes(), &response))
-			assert.Equal(t, response.SystemMessage, "chunk validate: running in the background (small change, 42 lines)")
-		})
+	var req chunkd.ValidateRequest
+	select {
+	case req = <-reqs:
+	default:
+		t.Fatalf("the run was not delegated to the daemon; stderr: %s", errBuf.String())
 	}
-}
-
-func TestDetectHookReadsToolCommand(t *testing.T) {
-	hook := detectHook(strings.NewReader(`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"git commit -m x"}}`))
-	assert.Equal(t, hook.toolCommand, "git commit -m x")
-
-	hook = detectHook(strings.NewReader(`{"session_id":"s","hook_event_name":"Stop"}`))
-	assert.Equal(t, hook.toolCommand, "")
-}
-
-func TestSkipsCommitGate(t *testing.T) {
-	cases := []struct {
-		payload string
-		want    bool
-	}{
-		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"ls -la"}}`, true},
-		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"cd sub && git commit -m x"}}`, false},
-		// A command chunk cannot read runs the gate rather than risk missing a commit.
-		{`{"session_id":"s","hook_event_name":"PreToolUse"}`, false},
-		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":42}}`, false},
-		// Only the commit gate is filtered; the Stop hook always runs.
-		{`{"session_id":"s","hook_event_name":"Stop","tool_input":{"command":"ls"}}`, false},
-	}
-	for _, tc := range cases {
-		hook := detectHook(strings.NewReader(tc.payload))
-		assert.Equal(t, hook.skipsCommitGate(), tc.want, tc.payload)
-	}
-	assert.Assert(t, !(*hookContext)(nil).skipsCommitGate())
-}
-
-// Codex has no per-entry "if", so its commit gate starts before every Bash
-// call. Anything but a git commit must end the run at once, writing nothing and
-// running nothing.
-func TestValidateCommitGateRunsOnlyForCommits(t *testing.T) {
-	for name, tc := range map[string]struct {
-		command string
-		wantRun bool
-	}{
-		"not a commit": {command: "ls -la", wantRun: false},
-		"commit":       {command: "git add . && git commit -m x", wantRun: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			isolateConfig(t)
-			marker := filepath.Join(t.TempDir(), "ran")
-			dir := hookProject(t, "touch "+marker)
-
-			payload, err := json.Marshal(map[string]any{
-				"session_id":      "test-session-001",
-				"hook_event_name": "PreToolUse",
-				"turn_id":         "turn-1",
-				"tool_name":       "Bash",
-				"tool_input":      map[string]string{"command": tc.command},
-			})
-			assert.NilError(t, err)
-
-			var outBuf, errBuf bytes.Buffer
-			root := newTestRootCmd()
-			root.SetOut(&outBuf)
-			root.SetErr(&errBuf)
-			root.SetIn(bytes.NewReader(payload))
-			root.SetArgs([]string{"validate", "--local", "--no-daemon", "--project", dir})
-			assert.NilError(t, root.Execute(), "stderr: %s", errBuf.String())
-
-			_, statErr := os.Stat(marker)
-			assert.Equal(t, statErr == nil, tc.wantRun, "stderr: %s", errBuf.String())
-			if !tc.wantRun {
-				assert.Equal(t, outBuf.String(), "")
-				assert.Equal(t, errBuf.String(), "")
-			}
-		})
-	}
-}
-
-// Codex runs hooks in the session's working directory, which may sit below the
-// project that holds .chunk/config.json.
-func TestHookProjectRoot(t *testing.T) {
-	root := t.TempDir()
-	gitSetup(t, root, "main")
-	assert.NilError(t, config.SaveProjectConfig(root, &config.ProjectConfig{
-		Commands: []config.Command{{Name: "test", Run: "true"}},
-	}))
-	sub := filepath.Join(root, "internal", "pkg")
-	assert.NilError(t, os.MkdirAll(sub, 0o755))
-
-	assert.Equal(t, hookProjectRoot(root), root)
-	assert.Equal(t, hookProjectRoot(sub), root)
-
-	// A project nested in a repository is found before the repository root.
-	nested := filepath.Join(root, "services", "api")
-	assert.NilError(t, config.SaveProjectConfig(nested, &config.ProjectConfig{
-		Commands: []config.Command{{Name: "test", Run: "true"}},
-	}))
-	assert.Equal(t, hookProjectRoot(nested), nested)
-
-	// With no config up to the git root, the search stops there and the
-	// directory is used as given.
-	other := t.TempDir()
-	gitSetup(t, other, "main")
-	otherSub := filepath.Join(other, "sub")
-	assert.NilError(t, os.MkdirAll(otherSub, 0o755))
-	assert.Equal(t, hookProjectRoot(otherSub), otherSub)
+	assert.Check(t, !req.AllowAsync)
+	assert.Check(t, !slices.Contains(req.Args, "--hook-session-id"), "args: %q", req.Args)
 }
 
 // A formatter has to run before the gates check the tree, wherever it sits in

@@ -3,7 +3,6 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/settings"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
@@ -58,54 +56,6 @@ func TestDetectVCSWithoutOrigin(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, vcs == nil)
 	assert.Assert(t, strings.Contains(out.String(), "Could not detect VCS info"), out.String())
-}
-
-func TestReportAgentFile(t *testing.T) {
-	tests := []struct {
-		name string
-		res  settings.WriteResult
-		want []string
-	}{
-		{"created", settings.WriteResult{Outcome: settings.Created, Path: ".claude/settings.json"},
-			[]string{"Wrote .claude/settings.json", "about"}},
-		{"updated", settings.WriteResult{Outcome: settings.Updated, Path: ".claude/settings.json"},
-			[]string{"Updated .claude/settings.json", "about"}},
-		{"up to date", settings.WriteResult{Outcome: settings.UpToDate, Path: ".claude/settings.json"},
-			[]string{"up to date"}},
-		{"wrote example", settings.WriteResult{
-			Outcome:    settings.WroteExample,
-			Path:       ".claude/settings.json",
-			Example:    ".claude/settings.example.json",
-			ConfirmErr: errors.New("no tty"),
-		}, []string{"Could not confirm: no tty", "Wrote .claude/settings.example.json (existing settings.json preserved)"}},
-		{"declined", settings.WriteResult{Outcome: settings.Declined, Path: ".claude/settings.json"}, nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			status, out := recordStatus()
-			reportAgentFile(tt.res, status, "about", "up to date")
-			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-			if tt.want == nil {
-				assert.Equal(t, out.Len(), 0, out.String())
-				return
-			}
-			assert.DeepEqual(t, lines, tt.want)
-		})
-	}
-}
-
-func TestWriteAgentHooksSkipsCodexWhenAbsent(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PATH", t.TempDir()) // no codex on PATH
-	status, _ := recordStatus()
-
-	commands := []config.Command{{Name: "test", Run: "go test ./..."}}
-	assert.NilError(t, writeAgentHooks(dir, t.TempDir(), commands, status, func(_, _ string) (bool, error) { return true, nil }))
-
-	_, err := os.Stat(filepath.Join(dir, ".claude", "settings.json"))
-	assert.NilError(t, err)
-	_, err = os.Stat(filepath.Join(dir, ".codex"))
-	assert.Assert(t, os.IsNotExist(err))
 }
 
 func TestWriteGitHookWarnsAboutSymlink(t *testing.T) {
@@ -174,25 +124,4 @@ func TestReportDetectionSourceNotesWithoutSource(t *testing.T) {
 	errOut.Reset()
 	reportDetectionSource(validate.Detection{Source: "Makefile", Notes: []string{"no lint target"}}, initStatus(streams))
 	assert.Equal(t, errOut.String(), "Detected commands from Makefile\n  no lint target\n")
-}
-
-// When chunk cannot ask and the example it writes instead fails, the error
-// names the example, and says why it was written.
-func TestWriteAgentHooksNamesTheExampleThatFailed(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PATH", t.TempDir()) // no codex on PATH
-	claudeDir := filepath.Join(dir, ".claude")
-	assert.NilError(t, os.MkdirAll(filepath.Join(claudeDir, "settings.example.json"), 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{"theme":"dark"}`+"\n"), 0o644))
-	status, out := recordStatus()
-
-	commands := []config.Command{{Name: "test", Run: "go test ./..."}}
-	err := writeAgentHooks(dir, t.TempDir(), commands, status, func(_, _ string) (bool, error) {
-		return false, errors.New("no terminal")
-	})
-
-	ue, ok := errors.AsType[*userError](err)
-	assert.Assert(t, ok, "got %v", err)
-	assert.Equal(t, ue.msg, "Could not update .claude/settings.example.json.")
-	assert.Assert(t, strings.Contains(out.String(), "Could not confirm: no terminal"), out.String())
 }

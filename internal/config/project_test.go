@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 )
@@ -244,4 +245,17 @@ func TestSaveProjectConfigTrimsPathRules(t *testing.T) {
 	cfg, err := LoadProjectConfig(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, cfg.AsyncValidateInert, []string{".sql"})
+}
+
+// A config written while stopHookMaxAttempts was a field still loads.
+func TestLoadProjectConfigIgnoresRemovedStopHookMaxAttempts(t *testing.T) {
+	dir := t.TempDir()
+	err := os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755)
+	assert.NilError(t, err)
+	err = os.WriteFile(filepath.Join(dir, ".chunk", "config.json"),
+		[]byte(`{"stopHookMaxAttempts": 3, "commands": [{"name": "test", "run": "go test ./..."}]}`), 0o644)
+	assert.NilError(t, err)
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Len(cfg.Commands, 1))
 }

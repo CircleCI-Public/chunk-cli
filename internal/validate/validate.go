@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -328,69 +325,3 @@ func (e *CheckFailedError) Error() string {
 
 // TelemetryOutcome satisfies telemetry.Classified.
 func (e *CheckFailedError) TelemetryOutcome() string { return telemetry.OutcomeCheckFailed }
-
-// HookExitError signals a specific process exit code without printing
-// additional error output. All output must be written before this error
-// is returned.
-type HookExitError struct {
-	code int
-}
-
-func (e *HookExitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
-func (e *HookExitError) ExitCode() int { return e.code }
-
-// NewHookExitError returns a HookExitError with the given exit code.
-func NewHookExitError(code int) error { return &HookExitError{code: code} }
-
-// HooksDisabledPaths returns where the hooks-disabled sentinel can live: the
-// project data dir first, then the repo's .chunk/ where older versions wrote it.
-func HooksDisabledPaths(workDir string) ([]string, error) {
-	dir, err := config.ProjectDataDir(workDir)
-	if err != nil {
-		return nil, err
-	}
-	return []string{
-		filepath.Join(dir, "hooks-disabled"),
-		filepath.Join(workDir, ".chunk", "hooks-disabled"),
-	}, nil
-}
-
-// HooksDisabled reports whether chunk validate hooks are currently suppressed.
-// envDisabled should be set by the caller from CHUNK_HOOKS_DISABLED; it returns
-// true when that flag is set or a sentinel from HooksDisabledPaths exists.
-// On any error other than ErrNotExist the function fails open (returns false)
-// so hooks continue to run when the check is uncertain.
-func HooksDisabled(workDir string, envDisabled bool) bool {
-	if envDisabled {
-		return true
-	}
-	paths, err := HooksDisabledPaths(workDir)
-	if err != nil {
-		return false
-	}
-	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
-// WrapHookResult applies Stop hook lifecycle to the result of running validate
-// commands. On success it resets the attempt counter. On failure it increments
-// the counter and returns a HookExitError with code 2 to re-signal the agent,
-// or prints a give-up message and returns nil once maxAttempts is reached.
-func WrapHookResult(sessionID string, execErr error, maxAttempts int, warn io.Writer) error {
-	if execErr == nil {
-		ResetAttempts(sessionID)
-		return nil
-	}
-	n := TrackFailedAttempt(sessionID, warn)
-	if n >= maxAttempts {
-		_, _ = fmt.Fprintf(warn, "chunk validate: validation has failed %d time(s) in a row.\n", n)
-		_, _ = fmt.Fprintf(warn, "The failures above do not appear to be resolving automatically.\n")
-		_, _ = fmt.Fprintf(warn, "Stop attempting to fix this and ask the user for guidance instead.\n")
-		return nil
-	}
-	return &HookExitError{code: 2}
-}

@@ -9,8 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // namePrompt is the system prompt NamePlan gives claude.
@@ -40,7 +38,6 @@ func NamePlan(ctx context.Context, message string) (string, error) {
 	// Run outside the repository so its CLAUDE.md and project settings are
 	// not loaded into a call that only reads the message.
 	cmd.Dir = os.TempDir()
-	cmd.Env = append(os.Environ(), config.EnvChunkHooksDisabled+"=1")
 	cmd.Stdin = strings.NewReader(message)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &limitWriter{buf: &stderr}

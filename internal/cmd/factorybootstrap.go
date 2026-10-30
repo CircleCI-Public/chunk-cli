@@ -434,7 +434,7 @@ func repoName(ctx context.Context, workDir string) string {
 func bootstrapNextStep(streams iostream.Streams, workDir string) {
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("Next: ") + ui.Cyan(`chunk factory plan "<what to change>"`))
-	if _, err := os.Stat(filepath.Join(workDir, ".claude", "settings.json")); err != nil {
-		streams.ErrPrintln(ui.Dim("  chunk init also adds the hooks and skills that run chunk validate in your agent."))
+	if _, err := os.Stat(filepath.Join(workDir, ".claude", "skills", "chunk-sidecar")); err != nil {
+		streams.ErrPrintln(ui.Dim("  chunk init also installs the skills that help your agent use chunk."))
 	}
 }

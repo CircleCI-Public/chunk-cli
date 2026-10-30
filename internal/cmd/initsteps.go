@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
@@ -14,7 +13,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/settings"
 	"github.com/CircleCI-Public/chunk-cli/internal/skills"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
@@ -96,62 +94,6 @@ func updateGitignore(dir string, status iostream.StatusFunc) {
 	if added {
 		status(iostream.LevelDone, "Updated .gitignore with local pool state patterns")
 		status(iostream.LevelInfo, "Machine-local sidecar pool IDs; not for commit. Keeps .chunk/config.json tracked.")
-	}
-}
-
-// writeAgentHooks writes hook config files for all supported agents. Cursor
-// reads .claude/settings.json natively so no extra file is needed for it.
-// Codex hooks are only written when Codex is installed or the project already
-// has a .codex directory.
-func writeAgentHooks(dir, homeDir string, commands []config.Command, status iostream.StatusFunc, confirm settings.ConfirmFunc) error {
-	res, err := settings.WriteClaude(dir, commands, confirm)
-	if err != nil {
-		return agentFileError(res, err, status)
-	}
-	reportAgentFile(res, status,
-		"Hidden Claude Code config. Runs `chunk validate` before commits and after each agent session.",
-		"Settings already up to date")
-
-	if !settings.CodexWanted(dir, homeDir) {
-		return nil
-	}
-	res, err = settings.WriteCodex(dir, commands, confirm)
-	if err != nil {
-		return agentFileError(res, err, status)
-	}
-	reportAgentFile(res, status,
-		"Hidden Codex config. Same hooks as .claude/settings.json, for Codex sessions.",
-		"Codex hooks already up to date")
-	return nil
-}
-
-// agentFileError names the file that could not be written. When chunk could
-// not ask before changing an agent's file and wrote its example instead, the
-// example is the one that failed, and the user is told why it was written.
-func agentFileError(res settings.WriteResult, err error, status iostream.StatusFunc) error {
-	if res.Outcome != settings.WroteExample {
-		return fileError(res.Path, err)
-	}
-	status(iostream.LevelWarn, fmt.Sprintf("Could not confirm: %v", res.ConfirmErr))
-	return fileError(res.Example, err)
-}
-
-// reportAgentFile says what writing an agent's hook file did. about explains
-// a file that was written; upToDate is said of one that needed no change.
-func reportAgentFile(res settings.WriteResult, status iostream.StatusFunc, about, upToDate string) {
-	switch res.Outcome {
-	case settings.Created:
-		status(iostream.LevelDone, "Wrote "+res.Path)
-		status(iostream.LevelInfo, about)
-	case settings.Updated:
-		status(iostream.LevelDone, "Updated "+res.Path)
-		status(iostream.LevelInfo, about)
-	case settings.UpToDate:
-		status(iostream.LevelDone, upToDate)
-	case settings.WroteExample:
-		status(iostream.LevelWarn, fmt.Sprintf("Could not confirm: %v", res.ConfirmErr))
-		status(iostream.LevelDone, fmt.Sprintf("Wrote %s (existing %s preserved)", res.Example, path.Base(res.Path)))
-	case settings.Declined:
 	}
 }
 

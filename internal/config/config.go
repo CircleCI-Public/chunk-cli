@@ -58,7 +58,6 @@ const (
 	EnvGitHubAPIURL       = "GITHUB_API_URL"
 	EnvModel              = "CODE_REVIEW_CLI_MODEL"
 	EnvCircleCIOrgID      = "CIRCLECI_ORG_ID"
-	EnvChunkHooksDisabled = "CHUNK_HOOKS_DISABLED"
 	EnvChunkNoTelemetry   = "CHUNK_NO_TELEMETRY"
 	EnvChunkSessionID     = "CHUNK_SESSION_ID"
 	EnvChunkNoUpdateCheck = "CHUNK_NO_UPDATE_CHECK"
