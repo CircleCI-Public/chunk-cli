@@ -112,18 +112,25 @@ func parents(m map[string]string) func(flowlist.Model) flowlist.Model {
 	}
 }
 
+// waitHuman and waitAgent are the next of a flow that waits on the
+// developer and on a session.
+var (
+	waitHuman = []circleci.Transition{{Actor: "human", Event: circleci.AddressComments}}
+	waitAgent = []circleci.Transition{{Actor: "session", TaskCategory: "build-unit", IsDispatched: true}}
+)
+
 // subPlans are flows with sub-plans in one sub-group and across two, and
 // subPlanParents their parents.
 var (
 	subPlans = []circleci.Flow{
-		{ID: "docs", Title: "retry-docs", State: "Planning - Human"},
-		{ID: "other", Title: "other", State: "Planning - Human"},
-		{ID: "p1", Title: "retry-policy", State: "Building - Agent"},
-		{ID: "cfg", Title: "retry-config", State: "Building - Agent"},
-		{ID: "cfg2", Title: "retry-backoff", State: "Building - Agent"},
-		{ID: "deep", Title: "retry-jitter", State: "Building - Agent"},
-		{ID: "orphan", Title: "orphan", State: "Building - Agent"},
-		{ID: "skip", Title: "retry-docs-site", State: "Building - Agent"},
+		{ID: "docs", Title: "retry-docs", State: "Planning - Human", Next: waitHuman},
+		{ID: "other", Title: "other", State: "Planning - Human", Next: waitHuman},
+		{ID: "p1", Title: "retry-policy", State: "Building - Agent", Next: waitAgent},
+		{ID: "cfg", Title: "retry-config", State: "Building - Agent", Next: waitAgent},
+		{ID: "cfg2", Title: "retry-backoff", State: "Building - Agent", Next: waitAgent},
+		{ID: "deep", Title: "retry-jitter", State: "Building - Agent", Next: waitAgent},
+		{ID: "orphan", Title: "orphan", State: "Building - Agent", Next: waitAgent},
+		{ID: "skip", Title: "retry-docs-site", State: "Building - Agent", Next: waitAgent},
 	}
 	subPlanParents = map[string]string{"docs": "p1", "cfg": "p1", "cfg2": "p1", "deep": "cfg", "orphan": "gone", "skip": "docs"}
 )
@@ -184,11 +191,11 @@ func open(d *driver, id string) {
 func TestNavigation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		d := newDriver(t, fixed(
-			circleci.Flow{ID: "a1", Title: "Fix parser", State: "Planning - Human"},
-			circleci.Flow{ID: "b2", Title: "Cache café\x1b[31m\x00", State: "Review - Agent"},
+			circleci.Flow{ID: "a1", Title: "Fix parser", State: "Planning - Human", Next: waitHuman},
+			circleci.Flow{ID: "b2", Title: "Cache café\x1b[31m\x00", State: "Review - Agent", Next: waitAgent},
 			// Listed in reverse phase order: Planning shows before Building.
-			circleci.Flow{ID: "c3", Title: "Build it", State: "Building - Human"},
-			circleci.Flow{ID: "d4", Title: "Plan it", State: "Planning - Human"},
+			circleci.Flow{ID: "c3", Title: "Build it", State: "Building - Human", Next: waitHuman},
+			circleci.Flow{ID: "d4", Title: "Plan it", State: "Planning - Human", Next: waitHuman},
 		), preview)
 		d.load()
 		text := d.content()
@@ -272,12 +279,12 @@ func TestHostMessages(t *testing.T) {
 func TestStableRefreshAndSelect(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var call atomic.Int32
-		a := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
-		b := circleci.Flow{ID: "b", Title: "Beta", State: "Planning - Human"}
-		c := circleci.Flow{ID: "c", Title: "Gamma", State: "Planning - Human"}
-		zeta := circleci.Flow{ID: "z", Title: "Zeta plan", State: "Zeta - Human"}
-		alphaPhase := circleci.Flow{ID: "al", Title: "Alpha plan", State: "Alpha - Human"}
-		zetaToo := circleci.Flow{ID: "z2", Title: "Zeta too", State: " zeta - Human"}
+		a := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human", Next: waitHuman}
+		b := circleci.Flow{ID: "b", Title: "Beta", State: "Planning - Human", Next: waitHuman}
+		c := circleci.Flow{ID: "c", Title: "Gamma", State: "Planning - Human", Next: waitHuman}
+		zeta := circleci.Flow{ID: "z", Title: "Zeta plan", State: "Zeta - Human", Next: waitHuman}
+		alphaPhase := circleci.Flow{ID: "al", Title: "Alpha plan", State: "Alpha - Human", Next: waitHuman}
+		zetaToo := circleci.Flow{ID: "z2", Title: "Zeta too", State: " zeta - Human", Next: waitHuman}
 		d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 			if call.Add(1) == 1 {
 				return []circleci.Flow{a, b, zeta, alphaPhase}, nil
@@ -797,39 +804,51 @@ func TestPreviewCache(t *testing.T) {
 }
 
 func TestPhase(t *testing.T) {
+	human := []circleci.Transition{{Actor: "human", Event: circleci.AddressComments}}
+	review := []circleci.Transition{{Actor: "session", TaskCategory: "review-plan", IsDispatched: true}}
 	for _, tc := range []struct {
-		name  string
-		state string
-		want  string
+		name string
+		flow circleci.Flow
+		want string
 	}{
 		{
-			name:  "bare word",
-			state: "Planning",
-			want:  "",
+			name: "bare word",
+			flow: circleci.Flow{State: "Planning"},
+			want: "",
 		},
 		{
-			name:  "any case",
-			state: "planning - human",
-			want:  "planning",
+			name: "any case",
+			flow: circleci.Flow{State: "planning - human", Next: human},
+			want: "planning",
 		},
 		{
-			name:  "empty",
-			state: "",
-			want:  "",
+			name: "empty",
+			flow: circleci.Flow{State: "", Next: human},
+			want: "",
 		},
 		{
-			name:  "unknown phase",
-			state: "Integrating - Agent",
-			want:  "Integrating",
+			name: "unknown phase",
+			flow: circleci.Flow{State: "Integrating - Agent", Next: review},
+			want: "Integrating",
 		},
 		{
-			name:  "unknown actor",
-			state: "Integrating - Bot",
-			want:  "",
+			name: "new name",
+			flow: circleci.Flow{State: "refine-units", Next: review},
+			want: "Planning",
+		},
+		{
+			name: "held, next empty",
+			flow: circleci.Flow{State: "build"},
+			want: "",
+		},
+		{
+			name: "not started",
+			flow: circleci.Flow{State: "init", Next: human},
+			want: "",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Check(t, cmp.Equal(flowlist.Phase(tc.state), tc.want))
+			assert.Check(t, cmp.Equal(flowlist.Phase(tc.flow), tc.want))
 		})
 	}
 }
@@ -837,23 +856,38 @@ func TestPhase(t *testing.T) {
 func TestGroupsAndRows(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now()
+		human := []circleci.Transition{{Actor: "human", Event: circleci.AddressComments}}
+		session := func(task string) []circleci.Transition {
+			return []circleci.Transition{{Actor: "session", TaskCategory: task, IsDispatched: true}}
+		}
 		flows := []circleci.Flow{
 			{ID: "other", Title: "Other plan", State: "Custom exact state"},
 			{ID: "bot", Title: "Bot plan", State: "Integrating - Bot"},
 			{ID: "new", Title: "New plan", State: "Unprioritized"},
-			{ID: "agent", Title: "Agent plan", State: "Planning - Agent"},
-			{ID: "untitled", State: "Building - Agent"},
-			{ID: "built", Title: "Built", State: "Building - Human", Task: &circleci.FlowTask{ID: "t"}},
+			{ID: "agent", Title: "Agent plan", State: "Planning - Agent", Next: session("review-plan")},
+			{ID: "untitled", State: "Building - Agent", Next: session("build-unit")},
+			{ID: "built", Title: "Built", State: "Building - Human", Task: &circleci.FlowTask{ID: "t"}, Next: human},
 			{
 				ID: "human", Title: "Planned", State: "Planning - Human", UpdatedAt: now,
 				SessionID: "s1", Task: &circleci.FlowTask{ID: "t1", Category: "build-unit"},
 				ApplicableEvents: []circleci.FlowEvent{circleci.AddressComments, circleci.ResolveConflicts},
+				Next: []circleci.Transition{
+					{Actor: "human", Event: circleci.AddressComments},
+					{Actor: "human", Event: circleci.ResolveConflicts},
+				},
 			},
-			{ID: "zeta", Title: "Zeta", State: "Zeta - Human"},
-			{ID: "alpha", Title: "Alpha", State: "Alpha - Human"},
-			{ID: "planned-too", Title: "Planned too", State: "planning - human"},
+			{ID: "zeta", Title: "Zeta", State: "Zeta - Human", Next: human},
+			{ID: "alpha", Title: "Alpha", State: "Alpha - Human", Next: human},
+			{ID: "planned-too", Title: "Planned too", State: "planning - human", Next: human},
 			{ID: "long-state", Title: "Long state", State: "Custom " + strings.Repeat("state ", 20)},
 			{ID: "blank-state", Title: "Blank state", State: ""},
+			{ID: "refined", Title: "Refined", State: "refine-units", Next: human},
+			{ID: "building", Title: "Building new", State: "build", Next: session("build-unit")},
+			{ID: "held", Title: "Held", State: "build"},
+			{ID: "ended", Title: "Ended", State: "ended", Phase: circleci.PhaseEnded, Outcome: "canceled"},
+			{ID: "merging", Title: "Merging", State: "Integrating - Human", Next: []circleci.Transition{{Actor: "human", Action: "merge-pr"}}},
+			{ID: "merged", Title: "Merged", State: "ended", Phase: circleci.PhaseEnded, Outcome: "merged"},
+			{ID: "abandon-only", Title: "Abandon only", State: "refine-units", Next: []circleci.Transition{{Actor: "human", Event: circleci.Abandon}}},
 		}
 		d := newDriver(t, fixed(flows...), func(context.Context, string) (string, []circleci.PlanComment, error) {
 			return "# Markdown heading\n\n**Plan prose**\n\n" + strings.Repeat("界", 150), []circleci.PlanComment{
@@ -864,7 +898,7 @@ func TestGroupsAndRows(t *testing.T) {
 		d.load()
 		rows := listRows(d)
 		all := strings.Join(rows, "\n")
-		for _, want := range []string{"flows", "Needs your review  5", "With agent  2", "Not started  1", "Other  4", "custom exact state", "integrating - bot", "Untitled plan"} {
+		for _, want := range []string{"flows", "Needs your review  7", "With agent  3", "Not started  1", "Other  8", "custom exact state", "integrating - bot", "Untitled plan"} {
 			assert.Check(t, cmp.Contains(all, want))
 		}
 		index := func(row string) int {
@@ -886,16 +920,30 @@ func TestGroupsAndRows(t *testing.T) {
 		// A phase spelled differently shares its sub-heading.
 		planned := index("Planned")
 		assert.Check(t, cmp.Equal(rows[planned+2], "Planned too"), "rows:\n%s", all)
-		review := rows[index("Needs your review  5"):index("With agent  2")]
+		review := rows[index("Needs your review  7"):index("With agent  3")]
 		assert.Check(t, cmp.Equal(count(review, "Planning"), 1), "want one Planning sub-heading:\n%s", all)
 		assert.Check(t, cmp.Equal(count(review, "Building"), 1), "want one Building sub-heading:\n%s", all)
+		// A new-spelled state lists by its next, under its old phase.
+		review = rows[index("Needs your review  7"):index("With agent  3")]
+		assert.Check(t, slices.Contains(review, "Refined"), "rows:\n%s", all)
+		assert.Check(t, slices.Contains(review, "Merging"), "rows:\n%s", all)
+		agent := rows[index("With agent  3"):index("Not started  1")]
+		assert.Check(t, slices.Contains(agent, "Building new"), "rows:\n%s", all)
+		// A held flow, its next empty, and an ended one list in Other,
+		// labelled by phase and by outcome.
+		assert.Check(t, cmp.Equal(rows[index("Held")+1], "building"), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(rows[index("Ended")+1], "canceled"), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(rows[index("Merged")+1], "done"), "rows:\n%s", all)
+		// Only the escape hatches left: nothing for the developer to do.
+		assert.Check(t, index("Abandon only") > index("Other  8"), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(rows[index("Abandon only")+1], "planning"), "rows:\n%s", all)
 		// Each sub-heading is directly above its first title.
 		for title, heading := range map[string]string{"Planned": "Planning", "Built": "Building", "Zeta": "Zeta", "Alpha": "Alpha"} {
 			assert.Check(t, cmp.Equal(rows[index(title)-1], heading), "rows:\n%s", all)
 		}
 		// Not started and Other have no sub-headings: only titles and details.
 		// Only Other names the state, since no heading does; an empty one is unknown.
-		other := index("Other  4")
+		other := index("Other  8")
 		assert.Check(t, cmp.DeepEqual(rows[other+1:other+5], []string{"Other plan", "custom exact state", "Bot plan", "integrating - bot"}), "rows:\n%s", all)
 		assert.Check(t, cmp.Equal(rows[index("Blank state")+1], "unknown"), "rows:\n%s", all)
 		longState := rows[index("Long state")+1]
@@ -985,7 +1033,7 @@ func TestSubPlanRows(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(listRows(without), listRows(plain)))
 
 		// Indented rows and long hints fit every size.
-		long := append(slices.Clone(subPlans), circleci.Flow{ID: "long", Title: strings.Repeat("界", 80), State: "Building - Agent"})
+		long := append(slices.Clone(subPlans), circleci.Flow{ID: "long", Title: strings.Repeat("界", 80), State: "Building - Agent", Next: waitAgent})
 		withLong := maps.Clone(subPlanParents)
 		withLong["long"] = "deep"
 		d = newDriver(t, fixed(long...), preview, parents(withLong))
@@ -1008,7 +1056,7 @@ func TestLongListKeepsSelectedRowVisible(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var flows []circleci.Flow
 		for i := range 80 {
-			flows = append(flows, circleci.Flow{ID: fmt.Sprintf("id-%d", i), Title: fmt.Sprintf("Title-%02d", i), State: "Planning - Human"})
+			flows = append(flows, circleci.Flow{ID: fmt.Sprintf("id-%d", i), Title: fmt.Sprintf("Title-%02d", i), State: "Planning - Human", Next: waitHuman})
 		}
 		d := newDriver(t, fixed(flows...), preview)
 		d.load()

@@ -386,33 +386,50 @@ func (m *Model) keepSelection() {
 	}
 }
 
-// group is where a flow in state goes in the list. A state chunk does not
-// know goes in the last group.
-func group(state string) int {
-	if planstate.IsUnprioritized(state) {
+// group is where flow f goes in the list: by who its next waits on, after
+// Not started. A flow whose next is empty, such as one its blockers hold,
+// goes in the last group.
+func group(f circleci.Flow) int {
+	switch {
+	case planstate.IsUnprioritized(f.State):
 		return 2
-	}
-	switch _, actor := planstate.Parse(state); actor {
-	case planstate.Human:
+	case waitsOnHuman(f.Next):
 		return 0
-	case planstate.Agent:
+	case agentActs(f.Next):
 		return 1
-	case planstate.Unknown:
 	}
 	return 3
 }
 
-// phaseOrder is how the phases chunk knows sort within an actor group;
+// waitsOnHuman is whether next waits only on the developer: a transition
+// for them other than the escape hatches, and none by a session or the
+// daemon. merge-pr, an action, counts.
+func waitsOnHuman(next []circleci.Transition) bool {
+	return !agentActs(next) && slices.ContainsFunc(next, func(t circleci.Transition) bool {
+		e := t.Event
+		return t.Actor == "human" && e != circleci.Abandon && e != "abandon-integrate"
+	})
+}
+
+// agentActs is whether next has a transition a session or the daemon
+// takes.
+func agentActs(next []circleci.Transition) bool {
+	return slices.ContainsFunc(next, func(t circleci.Transition) bool {
+		return t.Actor == "session" || t.Actor == "daemon"
+	})
+}
+
+// phaseOrder is how the phases chunk knows sort within a group;
 // others follow in the order they first appear.
 var phaseOrder = []string{"Planning", "Building"}
 
-// phase is the sub-group a flow in state goes in: the phase part of a
-// "Phase - Actor" state, or "" for a state with no actor.
-func phase(state string) string {
-	p, actor := planstate.Parse(state)
-	if actor != planstate.Human && actor != planstate.Agent {
+// phase is the sub-group flow f goes in within the first two groups: its
+// state's phase, or "" in the others.
+func phase(f circleci.Flow) string {
+	if g := group(f); g != 0 && g != 1 {
 		return ""
 	}
+	p, _ := planstate.Parse(f.State)
 	return p
 }
 
@@ -425,7 +442,7 @@ func samePhase(a, b string) bool {
 // phaseOrder nor known appended, in the order flows has them.
 func seenPhases(known []string, flows []circleci.Flow) []string {
 	for _, f := range flows {
-		p := phase(f.State)
+		p := phase(f)
 		match := func(o string) bool { return samePhase(o, p) }
 		if p == "" || slices.ContainsFunc(phaseOrder, match) || slices.ContainsFunc(known, match) {
 			continue
@@ -454,10 +471,10 @@ func (m Model) phaseRank(p string) int {
 func (m Model) visible() ([]circleci.Flow, map[string]int) {
 	sorted := slices.Clone(m.flows)
 	slices.SortStableFunc(sorted, func(a, b circleci.Flow) int {
-		if c := cmp.Compare(group(a.State), group(b.State)); c != 0 {
+		if c := cmp.Compare(group(a), group(b)); c != 0 {
 			return c
 		}
-		return cmp.Compare(m.phaseRank(phase(a.State)), m.phaseRank(phase(b.State)))
+		return cmp.Compare(m.phaseRank(phase(a)), m.phaseRank(phase(b)))
 	})
 	out := make([]circleci.Flow, 0, len(sorted))
 	depth := make(map[string]int)
@@ -474,7 +491,7 @@ func (m Model) visible() ([]circleci.Flow, map[string]int) {
 
 // sameSubGroup is whether a and b are listed under one heading.
 func (m Model) sameSubGroup(a, b circleci.Flow) bool {
-	return group(a.State) == group(b.State) && m.phaseRank(phase(a.State)) == m.phaseRank(phase(b.State))
+	return group(a) == group(b) && m.phaseRank(phase(a)) == m.phaseRank(phase(b))
 }
 
 // nest appends run, the flows of one sub-group, to out depth-first: each
