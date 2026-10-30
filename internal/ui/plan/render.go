@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -46,7 +47,7 @@ func (m Model) styled(b block, st *planStats, w int) ([]string, bool) {
 	case 2:
 		name := sectionNumRe.ReplaceAllString(text, "")
 		st.section = strings.ToLower(name)
-		st.inUnits = "## "+text == unitsHeading
+		st.inUnits = "## "+text == planstate.UnitsHeading
 		c := m.dim()
 		if strings.Contains(st.section, "question") {
 			c = m.amber()
@@ -57,7 +58,7 @@ func (m Model) styled(b block, st *planStats, w int) ([]string, bool) {
 		return nil, false
 	}
 	st.units++
-	text, done := unitName(text)
+	text, done := planstate.UnitName(text)
 	name := unitNumRe.ReplaceAllString(text, "")
 	if name == "" {
 		name = text

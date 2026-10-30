@@ -4,7 +4,10 @@
 // so every reading here has an answer for a state it does not recognise.
 package planstate
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Actor is who factory waits on to move a plan on.
 type Actor int
@@ -60,4 +63,81 @@ func Parse(state string) (phase string, actor Actor) {
 func IsUnprioritized(state string) bool {
 	state = strings.TrimSpace(state)
 	return strings.EqualFold(state, Unprioritized) || strings.EqualFold(state, "init")
+}
+
+// Move is a way factory offers to move a plan on now: who takes it, as
+// factory names them ("human", "session" or "daemon"), and its event, if
+// it is one.
+type Move struct {
+	Actor, Event string
+}
+
+// ReadyToApprove is whether a plan in state, which next can move on, waits
+// for the developer to approve it: it is in Planning and only a human can
+// move it on.
+func ReadyToApprove(state string, next []Move) bool {
+	phase, _ := Parse(state)
+	return strings.EqualFold(phase, "Planning") && waitsOnHuman(next)
+}
+
+// waitsOnHuman is whether next waits only on the developer: it offers
+// them a transition other than the escape hatches, and nothing by a
+// session or the daemon.
+func waitsOnHuman(next []Move) bool {
+	return !AgentActs(next) && slices.ContainsFunc(next, func(m Move) bool {
+		e := strings.TrimSpace(m.Event)
+		return strings.TrimSpace(m.Actor) == "human" && e != "abandon" && e != "abandon-integrate"
+	})
+}
+
+// AgentActs is whether next has a transition a session or the daemon
+// takes.
+func AgentActs(next []Move) bool {
+	return slices.ContainsFunc(next, func(m Move) bool {
+		a := strings.TrimSpace(m.Actor)
+		return a == "session" || a == "daemon"
+	})
+}
+
+// The events that approve a plan ReadyToApprove: its design, so factory
+// writes its units, or the plan, so factory builds it.
+const (
+	approveForUnits    = "approve-for-units"
+	approveForBuilding = "approve-for-building"
+)
+
+// Stage is what the developer approves next for a plan ReadyToApprove.
+type Stage int
+
+const (
+	// StageDesign is a plan whose design waits for approval, so factory
+	// writes its units.
+	StageDesign Stage = iota
+	// StagePlan is a plan that waits for approval, so factory builds it.
+	StagePlan
+	// StageQuestions is a plan factory offers no approval for: it waits for
+	// a human to answer 3. Open Questions in comments.
+	StageQuestions
+)
+
+// StageOf is what the developer approves next, given the events the plan's
+// flow applies and how many units the plan has. When events lists exactly
+// one approval, that one wins. When it lists both, as a flow factory stored
+// before it told the two apart does, or is nil, because it has not loaded or
+// there is no flow, the plan's units decide: none is StageDesign, any is
+// StagePlan. When it is loaded and lists neither, even empty, it is
+// StageQuestions.
+func StageOf(events []string, units int) Stage {
+	design, build := slices.Contains(events, approveForUnits), slices.Contains(events, approveForBuilding)
+	switch {
+	case design && !build:
+		return StageDesign
+	case build && !design:
+		return StagePlan
+	case !design && events != nil:
+		return StageQuestions
+	case units == 0:
+		return StageDesign
+	}
+	return StagePlan
 }

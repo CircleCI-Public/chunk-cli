@@ -21,6 +21,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
@@ -232,7 +233,7 @@ func planSession(ctx context.Context, root, id, model string, api *circleci.Clie
 				if err != nil {
 					return err
 				}
-				return store.Approve(ctx, agent.SessionID(), wt)
+				return planapprove.Approve(ctx, api, factory.SessionWorktree, store.ID(), agent.SessionID(), wt)
 			},
 			agent.Stop,
 			func() (string, error) { return buildPlan(root, store.ID(), model) },

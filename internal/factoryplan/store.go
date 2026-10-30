@@ -9,13 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
@@ -25,9 +24,6 @@ type Store struct {
 	api *circleci.Client
 	// name names a new plan for the developer's first message.
 	name func(ctx context.Context, message string) (string, error)
-	// location is the worktree root factory's daemon has a session working
-	// in, as factory.SessionWorktree reports it.
-	location func(ctx context.Context, session string) (string, error)
 
 	mu     sync.Mutex
 	planID string
@@ -40,7 +36,7 @@ type Store struct {
 // NewStore is the store for plan id in factory, or for a plan Create makes
 // when id is "".
 func NewStore(api *circleci.Client, id string) *Store {
-	return &Store{api: api, name: factory.NamePlan, location: factory.SessionWorktree, planID: id}
+	return &Store{api: api, name: factory.NamePlan, planID: id}
 }
 
 // ID is the plan's ID in factory, or "" before Create.
@@ -242,118 +238,9 @@ func (s *Store) Holder(ctx context.Context) (string, error) {
 	return f.SessionID, nil
 }
 
-// ErrNotReady is returned by Approve for a plan whose review has not passed:
-// factory has not made it plan.ReadyToApprove.
-var ErrNotReady = errors.New("the plan is not ready yet: wait for its review to pass")
-
-// ErrBeingBuilt is returned by Approve for a plan a session that may be building it holds.
-var ErrBeingBuilt = errors.New("the plan is already being built")
-
-// Approve approves the plan for factory to build, once its review has passed,
-// with the approve-for-building event. So that a build session can claim the
-// plan, it first releases a claim held by a session that is only planning
-// it: session, the screen's own, or one working outside the plan's
-// worktree, as a parent's planning session does. It refuses with
-// ErrBeingBuilt, sending nothing, while a session in worktree or one
-// factory's daemon does not know holds it, as either may be building it.
-// The flow and text are read from factory, not the screen's copy, so a
-// plan that moved after the screen last polled is still refused.
-func (s *Store) Approve(ctx context.Context, session, worktree string) error {
-	f, err := s.Flow(ctx)
-	if err != nil {
-		return fmt.Errorf("get the plan's flow: %w", err)
-	}
-	if !plan.ReadyToApprove(f) {
-		return ErrNotReady
-	}
-	text, err := s.Text(ctx)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(text) == "" {
-		return errors.New("the plan in factory is empty")
-	}
-	switch plan.StageOf(f.Events, unitCount(text)) {
-	case plan.StageDesign:
-		return ErrNoUnits
-	case plan.StageQuestions:
-		return ErrQuestionsOpen
-	case plan.StagePlan:
-		// The plan is what waits for approval: send it below.
-	}
-	h, err := s.Holder(ctx)
-	if err != nil {
-		return err
-	}
-	if h != "" {
-		if err := s.releasePlanner(ctx, h, session, worktree); err != nil {
-			return err
-		}
-	}
-	if err := s.api.CreateFlowEvent(ctx, s.ID(), circleci.ApproveForBuilding); err != nil {
-		return fmt.Errorf("send the approve-for-building event: %w", err)
-	}
-	return nil
-}
-
-// releasePlanner releases holder's claim, or refuses, as Approve describes.
-func (s *Store) releasePlanner(ctx context.Context, holder, session, worktree string) error {
-	id := s.ID()
-	if holder == session {
-		if err := s.api.ReleaseClaim(ctx, session, id); err != nil {
-			return fmt.Errorf("release the planning session's claim: %w", err)
-		}
-		return nil
-	}
-	dir, err := s.location(ctx, holder)
-	if errors.Is(err, factory.ErrUnknownSession) {
-		return fmt.Errorf("%w: plan %s is held by session %s, which factory's daemon does not know; release it with factory daemon release %[2]s", ErrBeingBuilt, id, holder)
-	}
-	if err != nil {
-		return fmt.Errorf("find where session %s works: %w", holder, err)
-	}
-	if samePath(dir, worktree) {
-		return fmt.Errorf("%w: plan %s is already being built by session %s; stop it, or release it with factory daemon release %[2]s", ErrBeingBuilt, id, holder)
-	}
-	if err := s.api.ReleaseClaim(ctx, holder, id); err != nil {
-		return fmt.Errorf("release session %s's claim: %w", holder, err)
-	}
-	return nil
-}
-
-// samePath reports whether a and b name the same directory, compared with
-// symlinks resolved, as macOS temp dirs differ by /private. A path that
-// cannot be resolved, such as one not made yet, is compared as spelled.
-func samePath(a, b string) bool {
-	return resolved(a) == resolved(b)
-}
-
-func resolved(p string) string {
-	r, err := filepath.EvalSymlinks(p)
-	if err != nil {
-		return filepath.Clean(p)
-	}
-	return r
-}
-
-// ErrNoUnits is returned by Approve for a plan.ReadyToApprove plan whose
-// design, not the plan, is what waits for approval, as plan.StageOf
-// decides.
-var ErrNoUnits = errors.New("the plan has no units yet: approve its design with ctrl+s, so chunk writes them")
-
-// ErrQuestionsOpen is returned by Approve and ApproveDesign for a plan whose
-// flow offers neither approval, as plan.StageOf decides: its 3. Open
-// Questions wait for answers in comments, sent before either is approved.
-var ErrQuestionsOpen = errors.New("the plan has open questions: answer 3. Open Questions in comments, then send them")
-
 // ErrDesignApproved is returned by ApproveDesign for a plan whose flow offers
 // to approve the plan but not its design: the design is approved already.
 var ErrDesignApproved = errors.New("the plan's design is approved already: approve the plan with ctrl+s")
-
-// unitCount is how many units text has, as plan.Units finds them.
-func unitCount(text string) int {
-	return len(plan.Units(text))
-}
 
 // AddressComments sends the plan's flow factory's address-comments event,
 // which moves it out of a Human state at its next poll.
@@ -437,8 +324,8 @@ func (s *Store) Delete(ctx context.Context) error {
 // ApproveDesign sends the plan's flow factory's approve-for-units event,
 // which approves its design. A flow that does not list the event now is
 // refused without sending it: with ErrDesignApproved when it lists
-// approve-for-building instead, and with ErrQuestionsOpen when it lists
-// neither. A plan with no flow yet sends it.
+// approve-for-building instead, and with planapprove.ErrQuestionsOpen when
+// it lists neither. A plan with no flow yet sends it.
 func (s *Store) ApproveDesign(ctx context.Context) error {
 	id := s.ID()
 	if id == "" {
@@ -453,7 +340,7 @@ func (s *Store) ApproveDesign(ctx context.Context) error {
 		if slices.Contains(events, string(circleci.ApproveForBuilding)) {
 			return ErrDesignApproved
 		}
-		return ErrQuestionsOpen
+		return planapprove.ErrQuestionsOpen
 	}
 	if err := s.api.CreateFlowEvent(ctx, id, circleci.ApproveForUnits); err != nil {
 		return fmt.Errorf("send the approve-for-units event: %w", err)

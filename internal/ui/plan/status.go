@@ -20,7 +20,7 @@ var steps = []string{"Planning", "Building", "Integrating", done}
 // what is happening now, and what comes next. stage is what ctrl+s approves
 // for a plan ReadyToApprove, and inReview whether factory is working on the
 // plan. Text from factory is stripped of escapes and kept to one line.
-func status(f Flow, fam Family, stage Stage, inReview bool) (step, now, next string) {
+func status(f Flow, fam Family, stage planstate.Stage, inReview bool) (step, now, next string) {
 	state := clean(f.State)
 	switch phase, _ := planstate.Parse(state); {
 	case planstate.IsUnprioritized(state):
@@ -92,13 +92,13 @@ func forward(next []Step) (Step, bool) {
 }
 
 // stageText is what the developer does next for a plan ReadyToApprove.
-func stageText(stage Stage) string {
+func stageText(stage planstate.Stage) string {
 	switch stage {
-	case StageDesign:
+	case planstate.StageDesign:
 		return "you approve the design · ctrl+s"
-	case StagePlan:
+	case planstate.StagePlan:
 		return "you approve the plan · ctrl+s"
-	case StageQuestions:
+	case planstate.StageQuestions:
 		return "you answer 3. Open Questions in comments"
 	}
 	return ""
