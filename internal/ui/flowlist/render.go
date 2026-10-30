@@ -59,8 +59,8 @@ func (m Model) Content() string {
 	return strings.Join(fit(rows, m.width, m.height), "\n")
 }
 
-// footerLines is the help bar, then the host's note and a list error, each on
-// a line of its own.
+// footerLines is the help bar, then the host's note and a list error, each
+// on a line of its own. What resuming does is the host's to show: ResumeLine.
 func (m Model) footerLines() []string {
 	bar := theme.Help(m.styles, m.width-2).View(m.keys())
 	rows := []string{"  " + bar}

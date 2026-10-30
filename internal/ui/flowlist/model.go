@@ -26,6 +26,12 @@ type OpenMsg struct{ ID, Title string }
 // NewMsg asks the host to start a new plan workspace.
 type NewMsg struct{}
 
+// ResumeMsg asks the host to start the flow's agent again, as kind says.
+type ResumeMsg struct {
+	ID, Title string
+	Kind      planstate.ResumeKind
+}
+
 // QuitMsg asks the host to quit after checking for unsent workspace input.
 type QuitMsg struct{}
 
@@ -43,6 +49,9 @@ type previewedMsg struct {
 	text       string
 	comments   []circleci.PlanComment
 	err        error
+	// blockers are the flow's blockers, read with its preview.
+	blockers    []planstate.Blocker
+	blockersErr error
 	// lines is text rendered for key, when the fetch rendered it.
 	lines []string
 	key   renderKey
@@ -61,7 +70,10 @@ type Model struct {
 	list    func(context.Context) ([]circleci.Flow, error)
 	preview func(context.Context, string) (string, []circleci.PlanComment, error)
 	parents func(context.Context) (map[string]string, error)
-	flows   []circleci.Flow
+	// blockers reads a flow's blockers along with its preview; nil when the
+	// host has none to read, so every flow has none.
+	blockers func(context.Context, string) ([]planstate.Blocker, error)
+	flows    []circleci.Flow
 	// parentOf is each sub-plan's parent plan ID, from the last list.
 	parentOf   map[string]string
 	parentsErr error
@@ -103,6 +115,10 @@ type cached struct {
 	key      renderKey
 	// pending is the key of a render in flight, so one is not started twice.
 	pending renderKey
+	// blockers are the flow's blockers as the last preview read them;
+	// blockersOK is whether that read succeeded.
+	blockers   []planstate.Blocker
+	blockersOK bool
 }
 
 // renderKey is what a rendered preview depends on.
@@ -126,6 +142,14 @@ func New(ctx context.Context, list func(context.Context) ([]circleci.Flow, error
 // whose parent is listed is drawn as its sub-plan.
 func (m Model) WithParents(parents func(context.Context) (map[string]string, error)) Model {
 	m.parents = parents
+	return m
+}
+
+// WithBlockers has the list read the selected flow's blockers with
+// blockers, along with its preview, so it offers to resume a flow only once
+// they have loaded and every one is done. Without it, no flow has blockers.
+func (m Model) WithBlockers(blockers func(context.Context, string) ([]planstate.Blocker, error)) Model {
+	m.blockers = blockers
 	return m
 }
 
@@ -224,6 +248,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				// and a render for an old size or style is dropped.
 				entry := m.cache[msg.id]
 				entry.text, entry.comments = msg.text, msg.comments
+				entry.blockers, entry.blockersOK = msg.blockers, msg.blockersErr == nil
 				if msg.lines != nil && msg.key == m.renderKey(msg.text) {
 					entry.lines, entry.key = msg.lines, msg.key
 				}
@@ -330,7 +355,7 @@ func (m Model) poll() tea.Cmd {
 func (m *Model) startPreview() tea.Cmd {
 	m.previewing = true
 	m.previewGeneration++
-	ctx, preview, render, id, generation := m.ctx, m.preview, m.render, m.id, m.previewGeneration
+	ctx, preview, blockers, render, id, generation := m.ctx, m.preview, m.blockers, m.render, m.id, m.previewGeneration
 	// The fetch renders its text for the pane as it is now, off the UI
 	// goroutine, unless that render is cached or in flight already.
 	entry := m.cache[id]
@@ -345,6 +370,9 @@ func (m *Model) startPreview() tea.Cmd {
 		}
 		text, comments, err := preview(ctx, id)
 		msg := previewedMsg{id: id, generation: generation, text: text, comments: comments, err: err}
+		if err == nil && blockers != nil {
+			msg.blockers, msg.blockersErr = blockers(ctx, id)
+		}
 		key := renderKey{text: text, width: width, dark: dark}
 		if err == nil && drawn && strings.TrimSpace(text) != "" && key != have {
 			msg.lines, msg.key = render(text, width, dark), key
@@ -358,11 +386,14 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+c", "q", "esc":
 		return func() tea.Msg { return QuitMsg{} }
 	case "enter":
-		flows, _ := m.visible()
-		for _, f := range flows {
-			if f.ID == m.id {
-				return func() tea.Msg { return OpenMsg{ID: f.ID, Title: f.Title} }
-			}
+		if f, ok := m.selected(); ok {
+			return func() tea.Msg { return OpenMsg{ID: f.ID, Title: f.Title} }
+		}
+		return nil
+	case "R":
+		f, _ := m.selected()
+		if kind := m.resume().Kind; kind != planstate.ResumeNone {
+			return func() tea.Msg { return ResumeMsg{ID: f.ID, Title: f.Title, Kind: kind} }
 		}
 		return nil
 	case "down", "j":
@@ -373,6 +404,50 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return func() tea.Msg { return NewMsg{} }
 	}
 	return nil
+}
+
+// selected is the selected flow, if the list shows it.
+func (m Model) selected() (circleci.Flow, bool) {
+	flows, _ := m.visible()
+	for _, f := range flows {
+		if f.ID == m.id {
+			return f, true
+		}
+	}
+	return circleci.Flow{}, false
+}
+
+// ResumeLine is what resuming the selected flow does or why it can't, on one
+// line and free of escapes, for the host to show; "" when there is nothing to
+// say, as before the selected flow's blockers have loaded.
+func (m Model) ResumeLine() string { return oneLine(m.resume().Line()) }
+
+// resume is whether chunk resumes the selected flow, and how: nothing until
+// its blockers have loaded, so a blocked flow is never offered on a guess.
+func (m Model) resume() planstate.Resume {
+	f, ok := m.selected()
+	entry := m.cache[m.id]
+	if !ok || !entry.blockersOK {
+		return planstate.Resume{}
+	}
+	next := make([]planstate.Move, len(f.Next))
+	for i, t := range f.Next {
+		next[i] = planstate.Move{Actor: oneLine(t.Actor), Event: oneLine(string(t.Event))}
+	}
+	// BlockerDone reads states as given, so their escapes go first.
+	blockers := make([]planstate.Blocker, len(entry.blockers))
+	for i, b := range entry.blockers {
+		blockers[i] = planstate.Blocker{Title: oneLine(b.Title), State: oneLine(b.State), Outcome: oneLine(b.Outcome)}
+	}
+	return planstate.ResumeOf(planstate.ResumeFacts{
+		PlanID:        oneLine(f.ID),
+		State:         oneLine(f.State),
+		Ended:         f.Phase == circleci.PhaseEnded,
+		Holder:        oneLine(f.SessionID),
+		Next:          next,
+		Blockers:      blockers,
+		BlockersKnown: true,
+	})
 }
 
 func (m *Model) move(step int) {
