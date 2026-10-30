@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
@@ -98,7 +100,7 @@ func (m Model) listLines(width, height int) []string {
 		}
 		// A sub-heading is spelled as the first flow in it spells its phase.
 		if p := phase(f); p != "" && !samePhase(p, lastPhase) {
-			rows = append(rows, " "+st.Dim.Render(oneLine(p)))
+			rows = append(rows, " "+st.Dim.Render(capitalize(oneLine(p))))
 			lastPhase = p
 		}
 		title := oneLine(f.Title)
@@ -172,13 +174,13 @@ func sectionHeading(st theme.Styles, g, n int) string {
 // section.
 func stateText(f circleci.Flow) string {
 	if o := strings.ToLower(oneLine(f.Outcome)); f.Phase == circleci.PhaseEnded && o != "" && o != "merged" {
-		return o
+		return capitalize(o)
 	}
 	phase, _ := planstate.Parse(oneLine(f.State))
 	if phase == "" {
-		return "unknown"
+		return "Unknown"
 	}
-	return strings.ToLower(phase)
+	return capitalize(strings.ToLower(phase))
 }
 
 // ago is how long since t, as the run list says it.
@@ -265,6 +267,16 @@ func glamourLines(text string, width int, dark bool) []string {
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(clean(s)), " ") }
+
+// capitalize is s with its first letter upper-cased, as the list's
+// headings are.
+func capitalize(s string) string {
+	r, n := utf8.DecodeRuneInString(s)
+	if n == 0 {
+		return s
+	}
+	return string(unicode.ToUpper(r)) + s[n:]
+}
 
 func fit(rows []string, width, height int) []string {
 	out := make([]string, height)

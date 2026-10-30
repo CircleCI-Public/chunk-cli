@@ -853,6 +853,62 @@ func TestPhase(t *testing.T) {
 	}
 }
 
+func TestCapitalize(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name: "lower word",
+			in:   "planning",
+			want: "Planning",
+		},
+		{
+			name: "hyphenated",
+			in:   "standing-by",
+			want: "Standing-by",
+		},
+		{
+			name: "later words keep case",
+			in:   "custom phase",
+			want: "Custom phase",
+		},
+		{
+			name: "already capitalized",
+			in:   "Agent Ready",
+			want: "Agent Ready",
+		},
+		{
+			name: "digit first",
+			in:   "2nd pass",
+			want: "2nd pass",
+		},
+		{
+			name: "punctuation first",
+			in:   "-x",
+			want: "-x",
+		},
+		{
+			name: "uncased script",
+			in:   "界",
+			want: "界",
+		},
+		{
+			name: "multi-byte letter",
+			in:   "école",
+			want: "École",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(flowlist.Capitalize(tc.in), tc.want))
+		})
+	}
+}
+
 func TestGroupsAndRows(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now()
@@ -898,7 +954,7 @@ func TestGroupsAndRows(t *testing.T) {
 		d.load()
 		rows := listRows(d)
 		all := strings.Join(rows, "\n")
-		for _, want := range []string{"flows", "Needs your review  7", "With agent  3", "Not started  1", "Other  8", "custom exact state", "integrating - bot", "Untitled plan"} {
+		for _, want := range []string{"flows", "Needs your review  7", "With agent  3", "Not started  1", "Other  8", "Custom exact state", "Integrating - bot", "Untitled plan"} {
 			assert.Check(t, cmp.Contains(all, want))
 		}
 		index := func(row string) int {
@@ -931,12 +987,12 @@ func TestGroupsAndRows(t *testing.T) {
 		assert.Check(t, slices.Contains(agent, "Building new"), "rows:\n%s", all)
 		// A held flow, its next empty, and an ended one list in Other,
 		// labelled by phase and by outcome.
-		assert.Check(t, cmp.Equal(rows[index("Held")+1], "building"), "rows:\n%s", all)
-		assert.Check(t, cmp.Equal(rows[index("Ended")+1], "canceled"), "rows:\n%s", all)
-		assert.Check(t, cmp.Equal(rows[index("Merged")+1], "done"), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(rows[index("Held")+1], "Building"), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(rows[index("Ended")+1], "Canceled"), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(rows[index("Merged")+1], "Done"), "rows:\n%s", all)
 		// Only the escape hatches left: nothing for the developer to do.
 		assert.Check(t, index("Abandon only") > index("Other  8"), "rows:\n%s", all)
-		assert.Check(t, cmp.Equal(rows[index("Abandon only")+1], "planning"), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(rows[index("Abandon only")+1], "Planning"), "rows:\n%s", all)
 		// Each sub-heading is directly above its first title.
 		for title, heading := range map[string]string{"Planned": "Planning", "Built": "Building", "Zeta": "Zeta", "Alpha": "Alpha"} {
 			assert.Check(t, cmp.Equal(rows[index(title)-1], heading), "rows:\n%s", all)
@@ -944,10 +1000,10 @@ func TestGroupsAndRows(t *testing.T) {
 		// Not started and Other have no sub-headings: only titles and details.
 		// Only Other names the state, since no heading does; an empty one is unknown.
 		other := index("Other  8")
-		assert.Check(t, cmp.DeepEqual(rows[other+1:other+5], []string{"Other plan", "custom exact state", "Bot plan", "integrating - bot"}), "rows:\n%s", all)
-		assert.Check(t, cmp.Equal(rows[index("Blank state")+1], "unknown"), "rows:\n%s", all)
+		assert.Check(t, cmp.DeepEqual(rows[other+1:other+5], []string{"Other plan", "Custom exact state", "Bot plan", "Integrating - bot"}), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(rows[index("Blank state")+1], "Unknown"), "rows:\n%s", all)
 		longState := rows[index("Long state")+1]
-		assert.Check(t, strings.HasPrefix(longState, "custom state state"), "rows:\n%s", all)
+		assert.Check(t, strings.HasPrefix(longState, "Custom state state"), "rows:\n%s", all)
 		assert.Check(t, strings.HasSuffix(longState, "…"), "a long state is not truncated:\n%s", all)
 		notStarted := index("Not started  1")
 		assert.Check(t, cmp.DeepEqual(rows[notStarted+1:notStarted+3], []string{"New plan", ""}), "rows:\n%s", all)
@@ -992,6 +1048,39 @@ func TestGroupsAndRows(t *testing.T) {
 				}
 			}
 		}
+	})
+}
+
+func TestSubHeadingCase(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newDriver(t, fixed(
+			circleci.Flow{ID: "p", Title: "Lower planning", State: "planning - human", Next: waitHuman},
+			circleci.Flow{ID: "p2", Title: "Upper planning", State: "Planning - Human", Next: waitHuman},
+			circleci.Flow{ID: "s", Title: "Parent", State: "stand-by", Next: waitHuman},
+			circleci.Flow{ID: "c", Title: "Custom", State: "custom phase - human", Next: waitHuman},
+			circleci.Flow{ID: "r", Title: "Ready", State: "ready", Next: waitHuman},
+			circleci.Flow{ID: "n", Title: "Numbered", State: "2nd pass - human", Next: waitHuman},
+		), preview)
+		d.load()
+		rows := listRows(d)
+		all := strings.Join(rows, "\n")
+		// Each sub-heading is directly above its first title, its first
+		// letter upper-cased and the rest as that flow spells it.
+		for title, heading := range map[string]string{
+			"Lower planning": "Planning",
+			"Parent":         "Standing-by",
+			"Custom":         "Custom phase",
+			"Ready":          "Agent Ready",
+			"Numbered":       "2nd pass",
+		} {
+			// The selected flow's row keeps its marker in listRows.
+			i := slices.IndexFunc(rows, func(r string) bool { return strings.TrimPrefix(r, "▶ ") == title })
+			assert.Assert(t, i > 0, "no row %q:\n%s", title, all)
+			assert.Check(t, cmp.Equal(rows[i-1], heading), "rows:\n%s", all)
+		}
+		// Spellings that differ only in case still share one sub-heading.
+		assert.Check(t, cmp.Equal(count(rows, "Planning"), 1), "rows:\n%s", all)
+		assert.Check(t, cmp.Equal(count(rows, "planning"), 0), "rows:\n%s", all)
 	})
 }
 
