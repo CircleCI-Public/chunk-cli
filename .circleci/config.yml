@@ -20,7 +20,7 @@ jobs:
   lint:
     docker:
       - image: cimg/go:1.26
-    resource_class: medium
+    resource_class: medium.gen3
     steps:
       - checkout
       - run: task mod-download
@@ -40,7 +40,7 @@ jobs:
   test:
     docker:
       - image: cimg/go:1.26
-    resource_class: medium
+    resource_class: medium.gen3
     steps:
       - checkout
       - run: task mod-download
@@ -56,7 +56,7 @@ jobs:
   acceptance-test:
     docker:
       - image: cimg/go:1.26
-    resource_class: medium
+    resource_class: medium.gen3
     steps:
       - checkout
       - run: task mod-download
@@ -72,7 +72,7 @@ jobs:
   build-smoke-test:
     docker:
       - image: cimg/go:1.26
-    resource_class: medium
+    resource_class: medium.gen3
     steps:
       - checkout
       - run: task mod-download
@@ -97,7 +97,7 @@ jobs:
   docs-sync:
     docker:
       - image: cimg/go:1.26-node
-    resource_class: medium
+    resource_class: medium.gen3
     steps:
       - checkout
       - run: task mod-download
@@ -115,7 +115,7 @@ jobs:
   eval-check-tasks:
     docker:
       - image: cimg/go:1.26-node
-    resource_class: large
+    resource_class: large.gen3
     steps:
       - checkout
       - run: task mod-download
@@ -148,7 +148,7 @@ jobs:
         default: "0.5"
     docker:
       - image: cimg/go:1.26-node
-    resource_class: large
+    resource_class: large.gen3
     steps:
       - checkout
       - run: task mod-download
