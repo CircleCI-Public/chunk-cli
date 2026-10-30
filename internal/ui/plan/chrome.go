@@ -351,7 +351,7 @@ func (m Model) actions() (main, side string) {
 		return button(m.amber(), "ctrl+s Resolve conflicts"), ""
 	case open > 0:
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
-	case m.state != ReadyState:
+	case !ReadyToApprove(m.flow):
 		return "", m.style(m.faint()).Render(approve + " · " + m.notReady())
 	case StageOf(m.events, m.units) == StageQuestions:
 		return "", m.style(m.faint()).Render("ctrl+s Approve · answer 3. Open Questions first")
@@ -361,15 +361,15 @@ func (m Model) actions() (main, side string) {
 	return button(m.green(), approve), ""
 }
 
-// inReview is whether factory's agent is reviewing the plan, so it will be
-// ready to approve once the review passes. No state yet counts: the plan has
-// just been made.
+// inReview is whether factory is working on the plan while it is planned,
+// such as reviewing it, so it will be ready to approve once that is done.
+// No state yet counts: the plan has just been made.
 func (m Model) inReview() bool {
-	phase, actor := planstate.Parse(m.state)
-	return strings.TrimSpace(m.state) == "" || actor == planstate.Agent && strings.EqualFold(phase, "Planning")
+	phase, _ := planstate.Parse(m.state)
+	return strings.TrimSpace(m.state) == "" || strings.EqualFold(phase, "Planning") && agentActs(m.flow.Next)
 }
 
-// notReady says why a plan not in ReadyState cannot be approved yet: its
+// notReady says why a plan not ReadyToApprove cannot be approved yet: its
 // review is running, or factory has it in some other state, which is named
 // as factory gives it, since chunk may not know it.
 func (m Model) notReady() string {

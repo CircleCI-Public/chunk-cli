@@ -49,7 +49,12 @@ func (f *fakePlanStore) Create(context.Context, string) (string, error) {
 	return f.title, nil
 }
 func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
-	return plan.Flow{State: plan.ReadyState, Events: []string{"address-comments", "approve-for-units", "approve-for-building"}}, nil
+	events := []string{"address-comments", "approve-for-units", "approve-for-building"}
+	var next []plan.Step
+	for _, e := range events {
+		next = append(next, plan.Step{Actor: "human", Event: e})
+	}
+	return plan.Flow{State: "Planning - Human", Events: events, Next: next}, nil
 }
 func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return plan.Family{}, nil }
 func (f *fakePlanStore) AddressComments(context.Context) error       { return nil }

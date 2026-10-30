@@ -114,6 +114,12 @@ func (f *fakeStore) Flow(context.Context) (Flow, error) {
 		// apart lists, so the plan's units decide which ctrl+s offers.
 		out.Events = []string{"address-comments", "approve-for-units", "approve-for-building"}
 	}
+	if out.Next == nil {
+		// As conductor lists the events that apply in next.
+		for _, e := range out.Events {
+			out.Next = append(out.Next, Step{Actor: "human", Event: e})
+		}
+	}
 	return out, nil
 }
 

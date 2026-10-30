@@ -206,6 +206,7 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan"
 	store.StateV = "Planning - Agent"
+	store.FlowV = Flow{Claimed: true, Next: []Step{{Actor: "session", Task: "review-plan", Dispatched: true}}}
 	sent := false
 	approve := func(func(string)) (string, error) {
 		sent = true
@@ -230,12 +231,120 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	}
 }
 
+// ReadyToApprove lets a plan be approved only in Planning while factory
+// waits on the developer alone, whichever name the state has.
+func TestReadyToApprove(t *testing.T) {
+	human := func(events ...string) []Step {
+		var next []Step
+		for _, e := range events {
+			next = append(next, Step{Actor: "human", Event: e})
+		}
+		return next
+	}
+	review := Step{Actor: "session", Task: "review-plan", Dispatched: true}
+	move := Step{Actor: "daemon", Task: "move"}
+	for _, tc := range []struct {
+		name string
+		flow Flow
+		want bool
+	}{
+		{
+			name: "old name waits on you",
+			flow: Flow{State: "Planning - Human", Next: human("address-comments", "approve-for-building", "abandon")},
+			want: true,
+		},
+		{
+			name: "new name waits on you",
+			flow: Flow{State: "refine-units", Next: human("address-comments", "approve-for-building", "abandon")},
+			want: true,
+		},
+		{
+			name: "open questions",
+			flow: Flow{State: "refine-proposal", Next: human("answer-open-questions", "abandon")},
+			want: true,
+		},
+		{
+			name: "review running",
+			flow: Flow{State: "refine-units", Next: append([]Step{review}, human("approve-for-building", "abandon")...)},
+		},
+		{
+			name: "old review running",
+			flow: Flow{State: "Planning - Agent", Next: append([]Step{review}, human("approve-for-units", "approve-for-building")...)},
+		},
+		{
+			name: "approved, factory moving it",
+			flow: Flow{State: "Planning - Human", Next: []Step{move}},
+		},
+		{
+			name: "no next",
+			flow: Flow{State: "Planning - Human"},
+		},
+		{
+			name: "only abandon",
+			flow: Flow{State: "refine-units", Next: human("abandon")},
+		},
+		{
+			name: "building waits on you",
+			flow: Flow{State: "build", Next: human("address-comments")},
+		},
+		{
+			name: "ended",
+			flow: Flow{State: "ended", Ended: true},
+		},
+		{
+			name: "not started",
+			flow: Flow{State: "init", Next: human("prioritize", "approve-for-units")},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(ReadyToApprove(tc.flow), tc.want))
+		})
+	}
+}
+
+// A plan in a new-spelled planning state is approved as the old one is,
+// and one whose review runs is not.
+func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
+	t.Run("waits on you", func(t *testing.T) {
+		store := newFakeStore()
+		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+		store.StateV = "refine-units"
+		store.setEvents("address-comments", "approve-for-building", "abandon")
+		sent := false
+		approve := func(func(string)) (string, error) {
+			sent = true
+			return "build-1", nil
+		}
+		m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
+		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Next: you approve the plan · ctrl+s"))
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		assert.Assert(t, m.confirming, "ctrl+s did not ask to approve: %q", m.status)
+		drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+		assert.Check(t, sent, "the plan was not sent")
+	})
+	t.Run("review running", func(t *testing.T) {
+		store := newFakeStore()
+		store.TextV = "# Plan"
+		store.StateV = "refine-units"
+		store.FlowV = Flow{Claimed: true, Next: []Step{
+			{Actor: "session", Task: "review-plan", Dispatched: true},
+			{Actor: "human", Event: "approve-for-building"},
+		}}
+		m := New(context.Background(), turnReturning("ok"), nil, store, "do it")
+		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "wait for the review"))
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		assert.Check(t, !m.confirming, "ctrl+s asked to approve a plan in review")
+	})
+}
+
 // A plan in a state chunk does not know, as factory may add before chunk is
 // updated, or one chunk offers no action for, such as Integrating - Human
 // with no conflict, is shown in that state, is not said to be in review, and
 // is not sent.
 func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
-	for _, state := range []string{"Blocked", "Building - Agent", "Integrating - Bot", "Integrating - Human", "Paused\x1b[31m"} {
+	for _, state := range []string{"Blocked", "Building - Agent", "Integrating - Bot", "Integrating - Human", "Paused\x1b[31m", "build", "ended"} {
 		t.Run(state, func(t *testing.T) {
 			store := newFakeStore()
 			store.TextV = "# Plan"
@@ -272,7 +381,7 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 	}
 }
 
-// A plan waits in ReadyState after early-plan too, for its design to be
+// A plan waits ReadyToApprove after early-plan too, for its design to be
 // reviewed: with no units yet there is nothing to build, so ctrl+s approves
 // the design instead, for factory to write its units. The plan's build is not
 // started.

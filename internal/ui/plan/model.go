@@ -39,18 +39,40 @@ import (
 // it starts, as a line for the screen to show while it works.
 type Approver func(step func(string)) (string, error)
 
-// ReadyState is the state a plan waits in for the developer once its review
-// has passed; it can be approved only from there.
-const ReadyState = "Planning - Human"
+// ReadyToApprove is whether f waits for the developer to approve it: it is
+// in Planning and only a human can move it on.
+func ReadyToApprove(f Flow) bool {
+	phase, _ := planstate.Parse(f.State)
+	return strings.EqualFold(phase, "Planning") && waitsOnHuman(f.Next)
+}
 
-// The events that approve a plan in ReadyState: its design, so factory
+// waitsOnHuman is whether next waits only on the developer: it offers
+// them a transition other than the escape hatches, and nothing by a
+// session or the daemon.
+func waitsOnHuman(next []Step) bool {
+	return !agentActs(next) && slices.ContainsFunc(next, func(s Step) bool {
+		e := clean(s.Event)
+		return Actor(clean(string(s.Actor))) == ActorHuman && e != "abandon" && e != "abandon-integrate"
+	})
+}
+
+// agentActs is whether next has a transition a session or the daemon
+// takes.
+func agentActs(next []Step) bool {
+	return slices.ContainsFunc(next, func(s Step) bool {
+		a := Actor(clean(string(s.Actor)))
+		return a == ActorSession || a == ActorDaemon
+	})
+}
+
+// The events that approve a plan ReadyToApprove: its design, so factory
 // writes its units, or the plan, so factory builds it.
 const (
 	approveForUnits    = "approve-for-units"
 	approveForBuilding = "approve-for-building"
 )
 
-// Stage is what ctrl+s approves for a plan in ReadyState.
+// Stage is what ctrl+s approves for a plan ReadyToApprove.
 type Stage int
 
 const (
@@ -807,7 +829,7 @@ func resumeOwed(f Flow) bool {
 	phase, _ := planstate.Parse(f.State)
 	planning := strings.EqualFold(phase, "Planning") || planstate.IsUnprioritized(f.State)
 	return !f.Ended && !f.Claimed && planning &&
-		slices.ContainsFunc(f.Next, func(s Step) bool { return s.Actor == "session" })
+		slices.ContainsFunc(f.Next, func(s Step) bool { return s.Actor == ActorSession })
 }
 
 // resumeIfOwed has the planner claim the plan again when factory waits on a
@@ -1035,9 +1057,9 @@ func (m Model) askToApprove() Model {
 		m.status = ui.TitleStyle.Render("Start work on the plan? ") + confirmButtons
 	case strings.TrimSpace(m.plan) == "":
 		m.status = warn("There is no plan to approve yet.")
-	case m.state != ReadyState && m.inReview():
+	case !ReadyToApprove(m.flow) && m.inReview():
 		m.status = warn("The plan is not ready yet: wait for its review to pass.")
-	case m.state != ReadyState:
+	case !ReadyToApprove(m.flow):
 		m.status = warn("The plan cannot be approved while it is " + m.stateText() + ".")
 	case StageOf(m.events, m.units) == StageQuestions:
 		m.status = warn("Answer 3. Open Questions in comments first; factory offers no approval yet.")

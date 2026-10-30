@@ -36,10 +36,23 @@ type Flow struct {
 	Claimed bool
 }
 
+// Actor is who takes a Step, as factory names them.
+type Actor string
+
+const (
+	// ActorHuman is the developer.
+	ActorHuman Actor = "human"
+	// ActorSession is the Claude session that claimed the plan.
+	ActorSession Actor = "session"
+	// ActorDaemon is the factory daemon.
+	ActorDaemon Actor = "daemon"
+)
+
 // Step is a way the flow can move on now, and who takes it, as factory
 // names them: one of Event, Task and Action is set.
 type Step struct {
-	Actor, Event, Task, Action string
+	Actor               Actor
+	Event, Task, Action string
 	// Dispatched is whether Task is the flow's outstanding task.
 	Dispatched bool
 }

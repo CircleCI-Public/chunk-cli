@@ -134,7 +134,7 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		out.Next = make([]plan.Step, len(f.Next))
 		for i, t := range f.Next {
 			out.Next[i] = plan.Step{
-				Actor:      t.Actor,
+				Actor:      plan.Actor(t.Actor),
 				Event:      string(t.Event),
 				Task:       t.TaskCategory,
 				Action:     t.Action,
@@ -243,7 +243,7 @@ func (s *Store) Holder(ctx context.Context) (string, error) {
 }
 
 // ErrNotReady is returned by Approve for a plan whose review has not passed:
-// factory has not moved it to plan.ReadyState.
+// factory has not made it plan.ReadyToApprove.
 var ErrNotReady = errors.New("the plan is not ready yet: wait for its review to pass")
 
 // ErrBeingBuilt is returned by Approve for a plan a session that may be building it holds.
@@ -256,14 +256,14 @@ var ErrBeingBuilt = errors.New("the plan is already being built")
 // worktree, as a parent's planning session does. It refuses with
 // ErrBeingBuilt, sending nothing, while a session in worktree or one
 // factory's daemon does not know holds it, as either may be building it.
-// The state and text are read from factory, not the screen's copy, so a
+// The flow and text are read from factory, not the screen's copy, so a
 // plan that moved after the screen last polled is still refused.
 func (s *Store) Approve(ctx context.Context, session, worktree string) error {
-	state, err := s.State(ctx)
+	f, err := s.Flow(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("get the plan's flow: %w", err)
 	}
-	if state != plan.ReadyState {
+	if !plan.ReadyToApprove(f) {
 		return ErrNotReady
 	}
 	text, err := s.Text(ctx)
@@ -272,10 +272,6 @@ func (s *Store) Approve(ctx context.Context, session, worktree string) error {
 	}
 	if strings.TrimSpace(text) == "" {
 		return errors.New("the plan in factory is empty")
-	}
-	f, err := s.Flow(ctx)
-	if err != nil {
-		return fmt.Errorf("get the flow's events: %w", err)
 	}
 	switch plan.StageOf(f.Events, unitCount(text)) {
 	case plan.StageDesign:
@@ -340,7 +336,7 @@ func resolved(p string) string {
 	return r
 }
 
-// ErrNoUnits is returned by Approve for a plan in plan.ReadyState whose
+// ErrNoUnits is returned by Approve for a plan.ReadyToApprove plan whose
 // design, not the plan, is what waits for approval, as plan.StageOf
 // decides.
 var ErrNoUnits = errors.New("the plan has no units yet: approve its design with ctrl+s, so chunk writes them")

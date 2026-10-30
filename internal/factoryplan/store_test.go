@@ -386,7 +386,7 @@ func TestStoreApproveDesignSendsTheEvent(t *testing.T) {
 	store, _, cci := createdStore(t)
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
 	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "approve-for-units", "abandon")
 
 	err := store.ApproveDesign(ctx)
@@ -419,7 +419,7 @@ func TestStoreApproveDesignRefusesWhatFactoryDoesNotOffer(t *testing.T) {
 			store, _, cci := createdStore(t)
 			ctx := context.Background()
 			cci.ClaimFactoryPlan(store.ID(), "s-1")
-			cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+			cci.SetFactoryPlanState(store.ID(), "Planning - Human")
 			cci.SetFactoryApplicableEvents(store.ID(), tc.events...)
 
 			err := store.ApproveDesign(ctx)
@@ -448,6 +448,14 @@ func TestStoreApproveWaitsForTheReview(t *testing.T) {
 	assert.Check(t, cmp.Len(p.Events, 0))
 	assert.Check(t, cmp.Equal(p.Session, "s-1"))
 
+	cci.SetFactoryPlanState(store.ID(), "refine-units")
+	cci.SetFactoryApplicableEvents(store.ID(), "approve-for-building")
+	cci.SetFactoryTask(store.ID(), "review-plan")
+	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
+	assert.Check(t, cmp.ErrorIs(err, ErrNotReady), "a review running")
+	p, _ = cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.Len(p.Events, 0))
+
 	cci.DropFactoryFlow(store.ID())
 	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
@@ -465,7 +473,7 @@ func TestStoreApproveReleasesThePlanningSession(t *testing.T) {
 	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	assert.NilError(t, err)
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
 	cci.SetFactoryApplicableEvents(store.ID(), "approve-for-building")
 
 	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
@@ -486,6 +494,17 @@ func TestStoreApproveReleasesThePlanningSession(t *testing.T) {
 	}))
 }
 
+// TestStoreApproveReadsTheNewName checks that a plan in refine-units,
+// waiting on the developer, is approved as one in Planning - Human is.
+func TestStoreApproveReadsTheNewName(t *testing.T) {
+	store, cci := approvableStore(t, "s-1")
+	cci.SetFactoryPlanState(store.ID(), "refine-units")
+	err := store.Approve(context.Background(), "s-1", "/data/plans/"+store.ID())
+	assert.NilError(t, err)
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+}
+
 // approvableStore is a created Store whose plan factory offers to approve for
 // building, claimed by holder unless that is "".
 func approvableStore(t *testing.T, holder string) (*Store, *fakes.FakeCircleCI) {
@@ -496,7 +515,7 @@ func approvableStore(t *testing.T, holder string) (*Store, *fakes.FakeCircleCI) 
 	if holder != "" {
 		cci.ClaimFactoryPlan(store.ID(), holder)
 	}
-	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
 	cci.SetFactoryApplicableEvents(store.ID(), "approve-for-building")
 	return store, cci
 }
@@ -656,7 +675,7 @@ func TestStoreApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
 	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n1. FNDSF-21 api: add it\n")
 	assert.NilError(t, err)
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
 	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "approve-for-building", "abandon")
 
 	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
@@ -674,7 +693,7 @@ func TestStoreApproveRefusesAPlanWithQuestionsOpen(t *testing.T) {
 	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	assert.NilError(t, err)
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
 	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "abandon")
 
 	err = store.Approve(ctx, "s-1", "/data/plans/"+store.ID())
@@ -689,7 +708,7 @@ func TestStoreApproveWaitsForUnits(t *testing.T) {
 	store, client, cci := createdStore(t)
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
 
 	for _, tc := range []struct {
 		name   string
@@ -740,7 +759,7 @@ func TestStoreApproveWaitsForUnits(t *testing.T) {
 func TestStoreApproveCountsDoneUnits(t *testing.T) {
 	store, client, cci := createdStore(t)
 	ctx := context.Background()
-	cci.SetFactoryPlanState(store.ID(), plan.ReadyState)
+	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
 	err := client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag (done)\n")
 	assert.NilError(t, err)
 	cci.SetFactoryApplicableEvents(store.ID(), "approve-for-units", "approve-for-building")
