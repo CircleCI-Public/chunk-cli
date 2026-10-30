@@ -22,7 +22,7 @@ const maxRequestBytes = 64 * 1024
 // transport's normal auth: the Unix socket is user-local, and the TCP listener
 // demands the bearer token.
 //
-//	POST /factory/plans                         build an approved factory plan
+//	POST /factory/plans                         start a build of a factory plan no session holds
 //	GET  /factory/plans/{plan}/build            a plan's build session and its feed (?after=N)
 //	POST /factory/plans/{plan}/approve          approve a plan, stop its planner and build it
 //	POST /factory/plans/{plan}/planner/request  start a new plan's planner on its request
@@ -71,7 +71,7 @@ func (d *daemon) handlePlanBuild(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project_root and plan_id required", http.StatusBadRequest)
 		return
 	}
-	sess, err := d.startPlanBuild(req)
+	sess, err := d.resumePlanBuild(req)
 	if err != nil {
 		writeAPIError(w, err)
 		return

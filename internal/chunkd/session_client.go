@@ -81,9 +81,10 @@ func sessionCallWith(client *http.Client, method, path string, in, out any) erro
 	return nil
 }
 
-// StartPlanBuild asks the daemon to build an approved factory plan, and
-// returns the build's session ID without waiting for it. It is cancelled like
-// any other session.
+// StartPlanBuild asks the daemon to start a build of a plan no session holds,
+// and returns the build's session ID without waiting for it; the daemon
+// refuses a claimed plan or one with no flow. It is cancelled like any other
+// session.
 func StartPlanBuild(req PlanBuildRequest) (string, error) {
 	var resp SessionStartResponse
 	if err := sessionCall(http.MethodPost, "/factory/plans", req, &resp); err != nil {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -248,6 +249,7 @@ type planBuildDaemon struct {
 	firsts  []string
 	opened  []string
 	openErr error
+	mux     *http.ServeMux
 }
 
 // newSessionDaemon builds a daemon that tracks one real git repo holding two
@@ -325,7 +327,29 @@ func newPlanBuildDaemon(t *testing.T) *planBuildDaemon {
 		pb.firsts = append(pb.firsts, message)
 		return pb.build, nil
 	}
+	pb.mux = http.NewServeMux()
+	registerSessionRoutes(pb.mux, d)
 	return pb
+}
+
+// postBuild sends POST /factory/plans for plan-1 through the routes.
+func (pb *planBuildDaemon) postBuild(t *testing.T) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+	assert.NilError(t, err)
+	w := httptest.NewRecorder()
+	pb.mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/factory/plans", bytes.NewReader(b)))
+	return w
+}
+
+// startedID is the session ID an accepted POST /factory/plans answered.
+func startedID(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	assert.Assert(t, cmp.Equal(w.Code, http.StatusAccepted), "body: %s", w.Body.String())
+	var resp chunkd.SessionStartResponse
+	err := json.NewDecoder(w.Body).Decode(&resp)
+	assert.NilError(t, err)
+	return resp.ID
 }
 
 func TestPlanBuildStartsABuildSessionInThePlansWorktree(t *testing.T) {
@@ -580,6 +604,110 @@ func TestPlanBuildNeedsCircleCI(t *testing.T) {
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae), "err %v", err)
 	assert.Check(t, cmp.Equal(ae.status, http.StatusServiceUnavailable))
+}
+
+// A build-phase plan no session holds resumes into a fresh build session,
+// which is told to claim it.
+func TestPlanBuildResumesAnUnclaimedPlan(t *testing.T) {
+	pb := newPlanBuildDaemon(t)
+	pb.plans.mu.Lock()
+	pb.plans.state, pb.plans.task = "Building - Agent", "build-unit"
+	pb.plans.mu.Unlock()
+
+	id := startedID(t, pb.postBuild(t))
+	waitUntil(t, "the build session to start", func() bool {
+		pb.mu.Lock()
+		defer pb.mu.Unlock()
+		return len(pb.cfgs) == 1
+	})
+	pb.mu.Lock()
+	cfg, first := pb.cfgs[0], pb.firsts[0]
+	pb.mu.Unlock()
+	assert.Check(t, cfg.SessionID != "")
+	assert.Check(t, !cfg.Resume, "a build resumed an old transcript")
+	assert.Check(t, cmp.Equal(first, factory.BuildMessage("plan-1")))
+
+	// The session claims the plan.
+	pb.plans.claim(cfg.SessionID)
+	entry := pb.sessions.get(id)
+	time.Sleep(5 * planBuildPoll)
+	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
+	assert.Check(t, cmp.Equal(entry.snapshot().Factory.PlanState, "Building - Agent"))
+	_ = pb.stopBuild(t, id)
+}
+
+func TestPlanBuildRouteRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		setup  func(pb *planBuildDaemon)
+		status int
+		msg    string
+	}{
+		{
+			name:   "claimed by another session",
+			setup:  func(pb *planBuildDaemon) { pb.plans.holder = "sess-other" },
+			status: http.StatusConflict,
+			msg:    "plan plan-1 is claimed by session sess-other; release it with factory daemon release plan-1 to resume it",
+		},
+		{
+			name:   "no flow",
+			setup:  func(pb *planBuildDaemon) { pb.plans.noFlow = true },
+			status: http.StatusConflict,
+			msg:    "plan plan-1 has no flow; factory hands it no tasks",
+		},
+		{
+			name:   "flow read fails",
+			setup:  func(pb *planBuildDaemon) { pb.plans.flowErr = errors.New("factory is down") },
+			status: http.StatusBadGateway,
+			msg:    "factory is down",
+		},
+		{
+			name:   "ended",
+			setup:  func(pb *planBuildDaemon) { pb.plans.phase, pb.plans.outcome = circleci.PhaseEnded, "merged" },
+			status: http.StatusConflict,
+			msg:    "merged",
+		},
+		{
+			name: "ended while claimed",
+			setup: func(pb *planBuildDaemon) {
+				pb.plans.phase, pb.plans.outcome, pb.plans.holder = circleci.PhaseEnded, "merged", "sess-other"
+			},
+			status: http.StatusConflict,
+			msg:    "merged",
+		},
+		{
+			name:   "not authenticated",
+			setup:  func(pb *planBuildDaemon) { pb.rcfg.PlanAPI = nil; pb.client = nil },
+			status: http.StatusServiceUnavailable,
+			msg:    "not authenticated to CircleCI",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pb := newPlanBuildDaemon(t)
+			pb.plans.mu.Lock()
+			pb.plans.state = "Building - Agent"
+			tc.setup(pb)
+			pb.plans.mu.Unlock()
+
+			w := pb.postBuild(t)
+			assert.Check(t, cmp.Equal(w.Code, tc.status))
+			assert.Check(t, cmp.Contains(w.Body.String(), tc.msg))
+			assert.Check(t, cmp.Len(pb.sessions.forProject(pb.root), 0))
+			pb.mu.Lock()
+			defer pb.mu.Unlock()
+			assert.Check(t, cmp.Len(pb.cfgs, 0), "a build session started")
+		})
+	}
+}
+
+func TestPlanBuildRouteRefusesAPlanAlreadyBuilding(t *testing.T) {
+	pb := newPlanBuildDaemon(t)
+	id := startedID(t, pb.postBuild(t))
+
+	w := pb.postBuild(t)
+	assert.Check(t, cmp.Equal(w.Code, http.StatusConflict))
+	assert.Check(t, cmp.Contains(w.Body.String(), id))
+	_ = pb.stopBuild(t, id)
 }
 
 // nudge drives a build through a nudge test, inside a synctest bubble: it
