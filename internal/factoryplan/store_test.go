@@ -897,6 +897,12 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Claimed:    true,
 	}))
 
+	cci.SetFactoryPlanState(store.ID(), "ended")
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, f.Ended, "an ended flow is not ended")
+	assert.Check(t, cmp.Equal(f.Outcome, "merged"))
+
 	cci.DropFactoryFlow(store.ID())
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
@@ -935,7 +941,9 @@ func TestStoreFamily(t *testing.T) {
 	for _, c := range []string{c1, done, c2} {
 		cci.SetFactoryParent(c, id)
 	}
-	cci.BlockFactoryPlan(id, blocker)
+	ended := newPlan("ended blocker", "ended")
+	cci.SetFactoryFlowStatus(ended, fakes.FactoryFlowStatus{Outcome: "canceled"})
+	cci.BlockFactoryPlan(id, blocker, ended)
 
 	want := plan.Family{
 		Parent: &plan.Relative{
@@ -960,6 +968,12 @@ func TestStoreFamily(t *testing.T) {
 				ID:    blocker,
 				Title: "blocker",
 				State: "Integrating - Human",
+			},
+			{
+				ID:      ended,
+				Title:   "ended blocker",
+				State:   "ended",
+				Outcome: "canceled",
 			},
 		},
 	}

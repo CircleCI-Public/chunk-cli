@@ -178,6 +178,7 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 		r := plan.Relative{ID: pid, Title: title}
 		if f, ok := byID[pid]; ok {
 			r.Title, r.State = cmp.Or(f.Title, title), f.State
+			r.Outcome = f.Outcome
 		}
 		return r
 	}

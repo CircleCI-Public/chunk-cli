@@ -84,7 +84,7 @@ var abandonReasons = []string{"canceled", "wont-do", "duplicate"}
 
 // factoryEnds are the states a plan ends in, which the plan list leaves out
 // (conductor.Ends in circleci/factory).
-var factoryEnds = []string{"Done", "Canceled", "Won't Do", "Duplicate"}
+var factoryEnds = []string{"Done", "Canceled", "Won't Do", "Duplicate", "ended"}
 
 // FactoryPlan is a plan as the fake holds it, for a test to inspect.
 type FactoryPlan struct {
@@ -292,7 +292,7 @@ func addPlanRefs(ent gin.H, p *factoryPlan) {
 // factoryPhase is the phase factory serves for a plan or flow in state.
 func factoryPhase(state string) string {
 	switch {
-	case strings.EqualFold(state, "Unprioritized"):
+	case strings.EqualFold(state, "Unprioritized"), strings.EqualFold(state, "init"):
 		return "received"
 	case slices.ContainsFunc(factoryEnds, func(s string) bool { return strings.EqualFold(s, state) }):
 		return "ended"

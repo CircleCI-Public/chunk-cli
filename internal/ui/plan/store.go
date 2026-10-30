@@ -45,9 +45,9 @@ type Step struct {
 }
 
 // Relative is a plan related to the screen's: its parent, a sub-plan or a
-// blocker.
+// blocker. Outcome is how its flow ended, "" until it ends.
 type Relative struct {
-	ID, Title, State string
+	ID, Title, State, Outcome string
 }
 
 // Family is the plans related to the screen's plan. Children are its open

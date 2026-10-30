@@ -51,7 +51,7 @@ func status(f Flow, fam Family, stage Stage, inReview bool) (step, now, next str
 	blocker := -1
 	if !f.Ended && len(f.Next) == 0 {
 		blocker = slices.IndexFunc(fam.Blockers, func(b Relative) bool {
-			return strings.TrimSpace(b.State) != done
+			return !blockerDone(b)
 		})
 	}
 	switch {
@@ -65,6 +65,13 @@ func status(f Flow, fam Family, stage Stage, inReview bool) (step, now, next str
 		}
 	}
 	return step, now, next
+}
+
+// blockerDone is whether b no longer holds the flow it blocks: its flow
+// merged, whichever name its end state has.
+func blockerDone(b Relative) bool {
+	state := strings.TrimSpace(b.State)
+	return state == done || strings.EqualFold(state, "ended") && clean(b.Outcome) == "merged"
 }
 
 // forward is the transition in next that moves the flow on: resolve-conflicts

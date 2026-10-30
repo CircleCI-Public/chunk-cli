@@ -63,6 +63,51 @@ func TestParse(t *testing.T) {
 			phase: "- Human",
 			actor: Unknown,
 		},
+		{
+			state: "refine-units",
+			phase: "Planning",
+			actor: Unknown,
+		},
+		{
+			state: "Refine-Proposal",
+			phase: "Planning",
+			actor: Unknown,
+		},
+		{
+			state: " build ",
+			phase: "Building",
+			actor: Unknown,
+		},
+		{
+			state: "integrate",
+			phase: "Integrating",
+			actor: Unknown,
+		},
+		{
+			state: "ready",
+			phase: "Agent Ready",
+			actor: Unknown,
+		},
+		{
+			state: "init",
+			phase: "Unprioritized",
+			actor: Unknown,
+		},
+		{
+			state: "stand-by",
+			phase: "standing-by",
+			actor: Unknown,
+		},
+		{
+			state: "ended",
+			phase: "Done",
+			actor: Unknown,
+		},
+		{
+			state: "build - Human",
+			phase: "build",
+			actor: Human,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.state, func(t *testing.T) {
@@ -76,6 +121,9 @@ func TestParse(t *testing.T) {
 func TestIsUnprioritized(t *testing.T) {
 	assert.Check(t, IsUnprioritized("Unprioritized"))
 	assert.Check(t, IsUnprioritized(" unprioritized "))
+	assert.Check(t, IsUnprioritized("init"))
+	assert.Check(t, IsUnprioritized(" Init "))
+	assert.Check(t, !IsUnprioritized("init - Human"))
 	assert.Check(t, !IsUnprioritized("Unprioritized - Human"))
 	assert.Check(t, !IsUnprioritized(""))
 }
