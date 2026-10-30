@@ -1,14 +1,39 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
+
+// resolveConflictsRoot names the project to report on: override when set,
+// otherwise the enclosing git repository, otherwise the working directory.
+func resolveConflictsRoot(ctx context.Context, override string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if override != "" {
+		return override, nil
+	}
+	if root := gitutil.TopLevelCtx(ctx, "."); root != "" {
+		return root, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ".", nil
+	}
+	return cwd, nil
+}
 
 func newConflictsCmd() *cobra.Command {
 	var (
@@ -50,7 +75,7 @@ This command always exits 0. It is advisory, and is not a check that can fail.`,
 // the wrong branch to be taken.
 func runConflicts(cmd *cobra.Command, projectDir string, hookMode, jsonOut bool) error {
 	streams := iostream.FromCmd(cmd)
-	root, err := resolveHookRoot(cmd.Context(), projectDir)
+	root, err := resolveConflictsRoot(cmd.Context(), projectDir)
 	if err != nil {
 		reportConflictLookupError(streams, root, err, hookMode, jsonOut)
 		return nil

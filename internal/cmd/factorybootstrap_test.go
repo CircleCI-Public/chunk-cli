@@ -1,12 +1,16 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func TestFactoryBootstrapIsRegisteredUnderFactory(t *testing.T) {
@@ -110,6 +114,50 @@ func TestPlanBootstrap(t *testing.T) {
 			assert.Check(t, cmp.Equal(got.Config, tt.want.Config))
 			assert.Check(t, cmp.Equal(got.Sidecar, tt.want.Sidecar))
 			assert.Check(t, cmp.Equal(got.empty(), tt.empty))
+		})
+	}
+}
+
+// The skills hint shows until chunk init has installed chunk's skills, and an
+// agent settings file is no sign that it has.
+func TestBootstrapNextStepSkillsHint(t *testing.T) {
+	ui.SetColorEnabled(false)
+	t.Cleanup(func() { ui.SetColorEnabled(true) })
+	const hint = "  chunk init also installs the skills that help your agent use chunk.\n"
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, dir string)
+		wantHint bool
+	}{
+		{
+			name: "only an agent settings file",
+			setup: func(t *testing.T, dir string) {
+				err := os.MkdirAll(filepath.Join(dir, ".claude"), 0o755)
+				assert.NilError(t, err)
+				err = os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte("{}\n"), 0o644)
+				assert.NilError(t, err)
+			},
+			wantHint: true,
+		},
+		{
+			name: "chunk's skills installed",
+			setup: func(t *testing.T, dir string) {
+				err := os.MkdirAll(filepath.Join(dir, ".claude", "skills", "chunk-sidecar"), 0o755)
+				assert.NilError(t, err)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tt.setup(t, dir)
+			streams, out, errOut := testStreams()
+
+			bootstrapNextStep(streams, dir)
+
+			assert.Check(t, cmp.Equal(out.String(), ""))
+			assert.Check(t, cmp.Equal(strings.HasSuffix(errOut.String(), hint), tt.wantHint), errOut.String())
+			assert.Check(t, cmp.Contains(errOut.String(), `Next: chunk factory plan "<what to change>"`))
 		})
 	}
 }

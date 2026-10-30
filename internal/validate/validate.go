@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -327,37 +325,3 @@ func (e *CheckFailedError) Error() string {
 
 // TelemetryOutcome satisfies telemetry.Classified.
 func (e *CheckFailedError) TelemetryOutcome() string { return telemetry.OutcomeCheckFailed }
-
-// HooksDisabledPaths returns where the hooks-disabled sentinel can live: the
-// project data dir first, then the repo's .chunk/ where older versions wrote it.
-func HooksDisabledPaths(workDir string) ([]string, error) {
-	dir, err := config.ProjectDataDir(workDir)
-	if err != nil {
-		return nil, err
-	}
-	return []string{
-		filepath.Join(dir, "hooks-disabled"),
-		filepath.Join(workDir, ".chunk", "hooks-disabled"),
-	}, nil
-}
-
-// HooksDisabled reports whether chunk validate hooks are currently suppressed.
-// envDisabled should be set by the caller from CHUNK_HOOKS_DISABLED; it returns
-// true when that flag is set or a sentinel from HooksDisabledPaths exists.
-// On any error other than ErrNotExist the function fails open (returns false)
-// so hooks continue to run when the check is uncertain.
-func HooksDisabled(workDir string, envDisabled bool) bool {
-	if envDisabled {
-		return true
-	}
-	paths, err := HooksDisabledPaths(workDir)
-	if err != nil {
-		return false
-	}
-	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
-			return true
-		}
-	}
-	return false
-}

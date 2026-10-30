@@ -46,10 +46,10 @@ chunk watch                                    # plan and follow your factory fl
 
 ### Project Setup
 
-Initialize your project for hook automation and validation:
+Initialize your project for validation:
 
 ```bash
-# Detect test commands, configure hooks, set up .claude/settings.json
+# Detect test commands, install a git pre-commit hook and agent skills
 chunk init
 
 # Run configured validations
@@ -183,7 +183,6 @@ chunk factory plan|bootstrap               Plan changes and build them in factor
 chunk watch                                Plan and follow your factory flows
 chunk mutate [path]                        Find test coverage gaps via mutation testing
 chunk conflicts                            Report whether this branch merges cleanly
-chunk hook disable|enable|status           Manage hook execution
 chunk skill install|list                   Manage AI agent skills
 chunk task config|run                      Configure and trigger CI tasks
 chunk commands                             List all available commands
@@ -200,7 +199,6 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Step-by-step guide: auth, init, sidecar setup, dev loop, skills |
 | [docs/SKILLS.md](docs/SKILLS.md) | Skills reference: installing, triggering, and troubleshooting agent skills |
 | [docs/CLI.md](docs/CLI.md) | Full command and flag reference |
-| [docs/HOOKS.md](docs/HOOKS.md) | Pre-commit and Stop hook configuration |
 | [docs/MUTATE.md](docs/MUTATE.md) | Mutation testing with `chunk mutate` |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal module layout and dependency rules |
 

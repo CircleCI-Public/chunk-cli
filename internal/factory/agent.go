@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // ErrNoFactory is returned when factory is not installed, so there is nothing
@@ -255,7 +254,6 @@ func StartAgent(ctx context.Context, cfg AgentConfig, message string) (*Agent, e
 	// itself, so exec must not send a signal of its own as well.
 	cmd := exec.Command(claudeBinary, agentArgs(cfg)...)
 	cmd.Dir = cfg.Dir
-	cmd.Env = append(os.Environ(), config.EnvChunkHooksDisabled+"=1")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("open claude's stdin: %w", err)

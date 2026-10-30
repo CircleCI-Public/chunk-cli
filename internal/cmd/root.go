@@ -121,7 +121,6 @@ Configuration:
 	rootCmd.AddCommand(newMutateCmd())
 	rootCmd.AddCommand(newReviewCmd())
 	rootCmd.AddCommand(newFactoryCmd())
-	rootCmd.AddCommand(newHookCmd())
 	rootCmd.AddCommand(newConflictsCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
 	rootCmd.AddCommand(newReceiveTelemetryCmd())

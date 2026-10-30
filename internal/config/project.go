@@ -68,12 +68,11 @@ type ValidationConfig struct {
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
-	Commands            []Command            `json:"commands,omitempty"`
-	VCS                 *VCSConfig           `json:"vcs,omitempty"`
-	Validation          *ValidationConfig    `json:"validation,omitempty"`
-	OrgID               string               `json:"orgID,omitempty"`
-	StopHookMaxAttempts int                  `json:"stopHookMaxAttempts,omitempty"`
-	Environment         *envspec.Environment `json:"environment,omitempty"`
+	Commands    []Command            `json:"commands,omitempty"`
+	VCS         *VCSConfig           `json:"vcs,omitempty"`
+	Validation  *ValidationConfig    `json:"validation,omitempty"`
+	OrgID       string               `json:"orgID,omitempty"`
+	Environment *envspec.Environment `json:"environment,omitempty"`
 	// AsyncValidate is one of the AsyncValidate* modes. Empty means auto.
 	AsyncValidate string `json:"asyncValidate,omitempty"`
 	// AsyncValidateMaxLines overrides how large a change may be and still be

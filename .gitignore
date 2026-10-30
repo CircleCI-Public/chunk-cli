@@ -50,9 +50,6 @@ PLANS.md
 # mutation variants scratch file
 .chunk/variants.json
 
-# hook disable sentinel
-.chunk/hooks-disabled
-
 # unikraft
 .unikraft/
 test-fetch-on-stale-sidecar.log

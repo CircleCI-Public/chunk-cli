@@ -326,9 +326,9 @@ func TestFactoryBootstrapWritesTheConfig(t *testing.T) {
 			vcs := cfg["vcs"].(map[string]any)
 			assert.Equal(t, vcs["org"], "test-org")
 			assert.Equal(t, vcs["repo"], "test-repo")
-			// Hooks belong to chunk init.
+			// Bootstrap writes no agent settings.
 			_, err = os.Stat(filepath.Join(workDir, ".claude", "settings.json"))
-			assert.Assert(t, os.IsNotExist(err), "bootstrap wrote agent hooks")
+			assert.Assert(t, os.IsNotExist(err), "bootstrap wrote agent settings")
 			if len(extra) == 0 {
 				return
 			}

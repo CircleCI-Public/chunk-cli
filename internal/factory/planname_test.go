@@ -19,7 +19,6 @@ func TestNamePlanAsksClaudeForAName(t *testing.T) {
 	out := t.TempDir()
 	fakeClaude(t, `printf '%s\n' "$@" > `+out+`/args
 pwd -P > `+out+`/cwd
-echo "$CHUNK_HOOKS_DISABLED" > `+out+`/hooks
 cat > `+out+`/stdin
 echo '  dry-run-flag  '
 `)
@@ -43,7 +42,6 @@ echo '  dry-run-flag  '
 	tmp, err := filepath.EvalSymlinks(os.TempDir())
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(strings.TrimSpace(readFile(t, out, "cwd")), tmp))
-	assert.Check(t, cmp.Equal(strings.TrimSpace(readFile(t, out, "hooks")), "1"))
 	assert.Check(t, cmp.Equal(readFile(t, out, "stdin"), msg))
 }
 

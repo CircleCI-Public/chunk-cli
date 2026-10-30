@@ -15,8 +15,7 @@ chunk-cli/
     │   ├── auth.go            # auth set, auth status, auth remove
     │   ├── completion.go      # completion install/uninstall/zsh
     │   ├── config.go          # config show/set
-    │   ├── init.go            # init (project setup, settings.json generation)
-    │   ├── hook.go            # hook disable/enable/status
+    │   ├── init.go            # init (project setup, git pre-commit hook)
     │   ├── sidecar.go         # sidecar list/create/exec/add-ssh-key/ssh/sync/env/build/setup/snapshot
     │   ├── skills.go          # skill install/list
     │   ├── task.go            # task run/config
@@ -40,7 +39,6 @@ chunk-cli/
     ├── task/                  # Task run config and CircleCI trigger
     ├── secrets/               # Secret resolution (env var value expansion)
     ├── session/               # Which agent session this invocation belongs to
-    ├── settings/              # .claude/settings.json build and merge
     ├── telemetry/             # Usage telemetry (Segment)
     │   └── receiver/          # Forwards buffered events to Segment (used by receive-telemetry)
     ├── testing/recorder/      # HTTP recorder for tests
@@ -185,13 +183,10 @@ in `config.Resolve` and makes clients testable.
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |
 | `CIRCLECI_ORG_ID` | sidecar | CircleCI organization ID (overrides `orgID` in `.chunk/config.json`) |
 | `CIRCLECI_BASE_URL` | circleci | CircleCI endpoint override |
-| `CLAUDE_PROJECT_DIR` | settings | IDE-provided project directory used by generated `PreToolUse` hooks |
-| `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
-| `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
 | `CLAUDE_CODE_SESSION_ID` | session, sidecar | Which agent session is running the command, so parallel sessions in one working tree get their own sidecar pool |
 | `CHUNK_SESSION_ID` | session, sidecar | Pins that session identity by hand; wins over `CLAUDE_CODE_SESSION_ID` |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
-| `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
+| `XDG_DATA_HOME` | sidecar, validate | Per-project state directory (default: `~/.local/share`) |
 | `XDG_STATE_HOME` | upgrade, chunkd | User state directory for the 24 h update-check cache and the daemon's socket, pid file and log (default: `~/.local/state`) |
 | `CHUNK_NO_TELEMETRY` | telemetry | Disable usage telemetry (any non-empty value) |
 | `NO_ANALYTICS` | telemetry | Disable usage telemetry (any non-empty value) |
@@ -276,23 +271,12 @@ known agent is found, the common case for a human running `chunk` directly.
 
 ## Pre-Commit Hooks
 
-`chunk init` generates `.claude/settings.json` with a `PreToolUse` hook that
-runs configured validation commands before the AI agent commits code. See
-**[docs/HOOKS.md](HOOKS.md)** for details.
+`chunk init` installs `.git/hooks/pre-commit`, which runs `chunk validate`
+before every commit; a non-zero exit blocks the commit. It writes no agent hook
+files.
 
-`chunk validate` runs those same commands manually. In hook mode it additionally
-caches successful runs. Both tree-dependent hook decisions read one
-`gitutil.Fingerprint` call: it returns the HEAD SHA, a digest of the contents of
-every changed file, and whether the tree is clean at all. A clean tree skips the
-run outright; otherwise `validate.BuildCacheKey` combines the fingerprint with the
-project config and execution target into a key, and a repeat hook invocation that
-hits an entry skips execution — going through the same `finishValidate` path as a
-real success, so hook bookkeeping has one home. The unit of caching is the whole
-run, not individual files. Manual runs never cache, and an unusable fingerprint is
-refused as a key, since a config-only key would stay stable across code changes;
-`Fingerprint` returns an error saying which condition it hit, and hook mode prints
-it, because a repo that never caches is otherwise silent about why. See
-**[docs/HOOKS.md](HOOKS.md#result-caching)** for the user-facing behaviour.
+`chunk validate` always runs its commands, whatever is on stdin and whether or
+not the tree has changed since the last run.
 
 ## Chunk Daemon (`internal/chunkd/`, `internal/chunkd/server/`)
 
@@ -530,11 +514,12 @@ no SSH involved.
 
 ### Background validation
 
-A hook run delegated to the daemon (`POST /validate`) can set `allow_async`,
+A run delegated to the daemon (`POST /validate`) can set `allow_async`,
 offering to be released before the answer exists. The daemon weighs the change
 (`risk.go`) and either runs it while the caller waits or starts a tracked task
 (`asyncvalidate.go`) and answers with its ID. `chunk validate results` reads
-finished results back on the next turn.
+finished results back later. The CLI does not currently set `allow_async`; its
+own background runs go through `POST /validate/async` (`chunk validate --async`).
 
 ```
 POST /validate         {args, env, project_root, allow_async}
@@ -561,8 +546,8 @@ GET  /validate/collect?root=<path>                 → {tasks}
   exception and keeps its verdict — see the snapshot bullet below.
 - **A failure leaves a debt, so a discarded result is not a lost one.**
   `riskMemory` remembers a project whose last run failed — including one whose
-  failure went stale — and the next run is held rather than released, where a
-  hook can act on it. Any passing run clears it.
+  failure went stale — and the next run is held rather than released, where its
+  caller can act on it. Any passing run clears it.
 - **Both stores are in memory.** A daemon restart loses in-flight tasks and
   forgets the debt. A lost task reports nothing rather than reporting wrongly,
   and a forgotten debt costs one turn's delay before the failure is found again.
@@ -583,15 +568,12 @@ GET  /validate/collect?root=<path>                 → {tasks}
   other. A cancelled run records nothing — not a failure, not a known-good state
   — because it concluded nothing. Snapshot-backed runs are exempt: their verdict
   survives the tree moving, so they are the one thing here worth letting finish.
-- **A snapshot run is exempt from the clean-tree skip.** `gitutil.MaterializeTree`
+- **A snapshot run validates a copy.** `gitutil.MaterializeTree`
   checks the snapshot out into a temp worktree (opt-in: `asyncValidateWorktree`),
   so the checks cannot be raced by an edit — and a result about a copy is
   reported even when the live tree has moved, since it is still exactly true
-  about the state it ran against. The trap is that a fresh checkout is a *clean*
-  tree, and the Stop hook skips clean trees: without the exemption the run
-  executes nothing and reports a pass. `--attribute-to` is both the signal for
-  that exemption and what keeps the event log and the project breadcrumb under
-  the real repository rather than the copy.
+  about the state it ran against. `--attribute-to` keeps the event log and the
+  project breadcrumb under the real repository rather than the copy.
 - **History tightens, never loosens.** `riskHistory` keeps each project's
   finished runs (`risk-history.jsonl`: sizes and verdicts, no paths, no content)
   and answers what an absolute threshold cannot — is this change large *for this

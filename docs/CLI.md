@@ -25,7 +25,7 @@ chunk
 │
 ├── init                            # Initialize project configuration
 │   --force                         # Overwrite existing config
-│   --skip-hooks                    # Skip hook file generation
+│   --skip-hooks                    # Skip git pre-commit hook installation
 │   --skip-validate                 # Skip validate command detection
 │   --skip-completions              # Skip shell completion installation
 │   --skip-skills                   # Skip agent skill installation
@@ -160,12 +160,6 @@ chunk
 │   --hook                          # Emit Claude Code hook JSON so the notice reaches the agent
 │   --json                          # Print the raw conflict report as JSON
 │
-├── hook                            # Manage chunk hook execution
-│   --project <path>                # Override project directory
-│   ├── disable                     # Disable chunk validate hooks
-│   ├── enable                      # Re-enable chunk validate hooks
-│   └── status                      # Show whether hooks are enabled or disabled
-│
 ├── completion
 │   ├── install                     # Install zsh completion
 │   └── uninstall                   # Remove zsh completion
@@ -249,10 +243,10 @@ chunk
   pass `--org-id` / `CIRCLECI_ORG_ID`.
 - **`conflicts` is advisory and always exits 0.** It reports what the watch
   daemon already computed and never previews a merge itself, so it returns
-  immediately. It is deliberately incapable of failing: it runs from the same
-  commit hook group as `chunk validate`, whose non-zero exit blocks a commit,
-  and a merge conflict with the default branch is information rather than a
-  reason to stop. With no daemon running, `--hook` prints nothing at all —
+  immediately. It is deliberately incapable of failing: run from an agent's
+  commit hook, a non-zero exit would block the commit, and a merge conflict
+  with the default branch is information rather than a reason to stop. With no
+  daemon running, `--hook` prints nothing at all —
   the daemon is optional, and announcing its absence on every commit would be
   noise — while a manual run says why there is no answer.
 - **`conflicts --json` always emits one shape.** Output is a `ConflictReport`
@@ -532,7 +526,8 @@ chunk
     not a failing read — conflating the two would make the exit status useless to
     a caller.
 - `chunk init` uses Claude to auto-detect the test command for the project.
-  It generates `.claude/settings.json` with pre-commit hooks. It never touches
+  It installs a git pre-commit hook (`.git/hooks/pre-commit`) that runs
+  `chunk validate`, and writes no agent hook files. It never touches
   CircleCI — tokens are prompted inline only when a command actually needs them.
 - `sidecar sync` mirrors the working tree to the sidecar with rsync, leaving
   out whatever git ignores and keeping ignored files already on the sidecar
@@ -553,9 +548,8 @@ chunk
 - **Sidecar state is per agent session.** Two agent sessions open in the same
   working tree must not share a sidecar: they would sync into the same remote
   workspace and reset the checkout under each other's test run. State files are
-  keyed by session and branch, where the session is the Stop hook payload's
-  `session_id`, or `CLAUDE_CODE_SESSION_ID` (overridable with `CHUNK_SESSION_ID`)
-  for the commands an agent runs itself. Every session always creates its own
+  keyed by session and branch, where the session is `CLAUDE_CODE_SESSION_ID`
+  (overridable with `CHUNK_SESSION_ID`). Every session always creates its own
   sidecar — adoption was removed to prevent two sessions from syncing into the
   same remote workspace and resetting each other's checkout. Parallel sessions
   cost one sidecar each; sequential ones reuse the same one (same session ID,
@@ -607,33 +601,13 @@ chunk
   failing with an error.
 - `chunk auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.
-- `chunk hook disable` creates a `hooks-disabled` sentinel file in the project data directory (`~/.local/share/chunk/<hash>/`) inspected by the `chunk validate` Stop hook; `hook enable` removes it, along with any `.chunk/hooks-disabled` left by older versions. Stop-hook validation is also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
-- **Hook runs may be validated in the background.** When the chunk daemon is
-  running, a Stop-hook `chunk validate` offers the daemon the choice of running
-  the checks after the hook has exited. The daemon takes the offer for a change
-  under 500 lines, or one confined to docs and text files, and holds the caller
-  for anything larger, anything it cannot measure, and any project whose last
-  run failed. Size is measured against the last state that passed its checks
-  rather than against `HEAD`, so consecutive small changes do not accumulate
-  into a large one and a commit neither hides a change nor resets the count. Results of a background run reach the agent on its next turn, via
-  the `chunk validate results` hook. Only hook runs are ever released — a
-  `chunk validate` typed at a terminal always waits. Set `asyncValidate` in
-  `.chunk/config.json` to `never` or `always` to override the judgement, and
-  `asyncValidateMaxLines` to move the threshold, `asyncValidateInert` and
-  `asyncValidateBlocking` to say which paths it applies to. See
-  [HOOKS.md](HOOKS.md#background-validation).
-- `chunk validate` caches successful runs in hook mode only, keyed by
-  `.chunk/config.json`, the execution target, the HEAD SHA, and the contents of
-  all changed files; a repeat hook invocation with nothing changed prints
-  `skipped` instead of re-running. Manual runs, `--cmd` inline commands, and
-  repos whose state cannot be hashed never cache. Entries expire after 7 days.
-  See [HOOKS.md](HOOKS.md#result-caching).
+- **`chunk validate` always runs its commands.** Whatever is on stdin, on a
+  clean tree or a repeat run with nothing changed, it runs the configured
+  commands and exits with their status. Nothing is cached between runs.
 - **`validate --async` and `validate results` are two halves of one flow.**
   `--async` hands the run to the chunk daemon and returns immediately; `results`
-  reads what finished and prints it to stdout. Nothing installs a hook to call
-  `results` yet: a background run is something you ask for explicitly, so
-  reading its answer back is too. Wiring it into a hook waits for the change
-  that makes background runs happen on their own. A result is reported once and
+  reads what finished and prints it to stdout. A background run is something
+  you ask for explicitly, so reading its answer back is too. A result is reported once and
   then forgotten. A live-tree run whose working tree changed while it was in
   flight has its verdict discarded: a pass describing code that is no longer on
   disk reads as a green light for work already changed. The discard itself is
@@ -678,11 +652,22 @@ chunk
 | `notifications` | user config (`~/.config/chunk/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
 | `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
 | `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
-| `asyncValidate` | `.chunk/config.json` | Whether hook runs may be validated in the background: `auto` (default), `always`, `never` |
+| `asyncValidate` | `.chunk/config.json` | Whether the chunk daemon may run a validate request in the background: `auto` (default), `always`, `never` |
 | `asyncValidateMaxLines` | `.chunk/config.json` | Largest change, in lines, still validated in the background under `auto` (default: 500) |
 | `asyncValidateWorktree` | `.chunk/config.json` | Run background checks in a checked-out snapshot so edits cannot make the result stale (`true`/`false`, default: `false` — a snapshot holds nothing gitignored) |
-| `asyncValidateInert` | `.chunk/config.json` | Extensions (`.sql`) or file names (`NOTICE`) this project also counts as prose, validated in the background at any size; adds to the built-in list |
-| `asyncValidateBlocking` | `.chunk/config.json` | Extensions or file names that always block, over an inert default, the line threshold, and `asyncValidate: always` |
+| `asyncValidateInert` | `.chunk/config.json` | Extensions or file names this project also counts as prose (see below) |
+| `asyncValidateBlocking` | `.chunk/config.json` | Extensions or file names that always block (see below) |
+
+`asyncValidateInert` adds extensions (`.sql`) or file names (`NOTICE`) to the
+built-in prose list (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`, `LICENSE`,
+`NOTICE`, `AUTHORS`, `CHANGELOG`), which is validated in the background at any
+size; it never replaces that list. `asyncValidateBlocking` names extensions or
+file names that always block, over an inert default, the line threshold, and
+`asyncValidate: always`; a repo that lints its markdown lists `.md` there.
+Entries in either list are refused when the config loads if they are paths,
+globs, or extensions without their dot. An extension matches whatever its case;
+a file name must match exactly. Set these keys with `chunk config set`, which
+validates the value before writing it; each `set` replaces that list.
 
 `chunk config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project

@@ -211,26 +211,6 @@ func TestDetectOrgID_NoOrgs_NoTTYSuggestsOrgCreate(t *testing.T) {
 	assert.Assert(t, strings.Contains(errOut.String(), "chunk org create"), errOut.String())
 }
 
-func TestConfirmDiffShowsChangeAndAsks(t *testing.T) {
-	ui.SetColorEnabled(false)
-	defer ui.SetColorEnabled(true)
-
-	streams, _, errOut := testStreams()
-	var asked string
-	confirm := confirmDiff(streams, func(label string, defaultYes bool) (bool, error) {
-		asked = label
-		assert.Assert(t, !defaultYes, "a change to existing settings must default to no")
-		return true, nil
-	})
-
-	ok, err := confirm(".claude/settings.json", "--- a\n+++ b\n+added")
-	assert.NilError(t, err)
-	assert.Assert(t, ok)
-	assert.Equal(t, asked, "Apply changes to .claude/settings.json?")
-	assert.Assert(t, strings.Contains(errOut.String(), "Changes to .claude/settings.json:"), errOut.String())
-	assert.Assert(t, strings.Contains(errOut.String(), "+added"), errOut.String())
-}
-
 func TestGitDirError(t *testing.T) {
 	ue, ok := errors.AsType[*userError](gitDirError(fmt.Errorf("%w: exit status 128", gitutil.ErrNotGitRepo)))
 	assert.Assert(t, ok)
@@ -243,16 +223,16 @@ func TestGitDirError(t *testing.T) {
 }
 
 func TestFileError(t *testing.T) {
-	denied := fmt.Errorf("write .claude/settings.json: %w", &fs.PathError{Op: "open", Path: "x", Err: fs.ErrPermission})
-	ue, ok := errors.AsType[*userError](fileError(".claude/settings.json", denied))
+	denied := fmt.Errorf("write .git/hooks/pre-commit: %w", &fs.PathError{Op: "open", Path: "x", Err: fs.ErrPermission})
+	ue, ok := errors.AsType[*userError](fileError(".git/hooks/pre-commit", denied))
 	assert.Assert(t, ok)
-	assert.Equal(t, ue.msg, "Could not update .claude/settings.json.")
+	assert.Equal(t, ue.msg, "Could not update .git/hooks/pre-commit.")
 	assert.Equal(t, ue.suggestion, suggestionCheckPerms)
 
-	// A file that cannot be merged is not a permissions problem.
-	ue, ok = errors.AsType[*userError](fileError(".codex/hooks.json", errors.New("merge .codex/hooks.json: invalid character")))
+	// A file that cannot be parsed is not a permissions problem.
+	ue, ok = errors.AsType[*userError](fileError(".circleci/test-suites.yml", errors.New("parse .circleci/test-suites.yml: invalid character")))
 	assert.Assert(t, ok)
-	assert.Equal(t, ue.msg, "Could not update .codex/hooks.json.")
+	assert.Equal(t, ue.msg, "Could not update .circleci/test-suites.yml.")
 	assert.Equal(t, ue.suggestion, "")
 	assert.Assert(t, strings.Contains(ue.Error(), "invalid character"), ue.Error())
 }

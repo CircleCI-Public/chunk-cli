@@ -83,7 +83,7 @@ Credentials are stored in your system keychain by default. Pass `--insecure-stor
 
 ## Step 2: Initialize your project
 
-Run this once per project. It auto-detects your test and lint commands (using Claude), creates `.chunk/config.json`, and wires up `.claude/settings.json` so hooks run automatically when your AI coding agent commits code.
+Run this once per project. It auto-detects your test and lint commands (using Claude), creates `.chunk/config.json`, and installs a git pre-commit hook that runs `chunk validate` before every commit.
 
 ```bash
 chunk init
@@ -95,8 +95,6 @@ What it creates:
 
 - **`.chunk/config.json`** — list of validation commands (test, lint, format) and your CircleCI org ID; tracked in git
 - **`.gitignore` entry for `.chunk/*-pool.json`** — pool state (sidecar IDs) written there by older versions; current versions keep it in the project data dir. Keeps `.chunk/config.json` tracked
-- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session, plus one that reports finished background runs before each prompt; tracked in git
-- **`.codex/hooks.json`** — the commit and session hooks, for Codex sessions (only written if Codex is installed); tracked in git
 - **`.git/hooks/pre-commit`** — runs `chunk validate` locally before every commit; not tracked in git
 
 `chunk init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.
@@ -472,21 +470,6 @@ The `--suite` value must match the `name` field in `.circleci/test-suites.yml`. 
 
 ---
 
-## Hook behavior
-
-After `chunk init`, two hooks run automatically in Claude Code and Cursor:
-
-- **PreToolUse** — runs before every `git commit`. Blocks the commit if any validation command fails.
-- **Stop** — runs when the agent finishes a session. Skips if the working tree is clean; runs all configured commands otherwise.
-
-The Stop hook retries up to `stopHookMaxAttempts` times (default: 3) before giving up and letting the session end.
-
-A successful Stop-hook run is cached, so if the hook fires again with nothing changed it prints `skipped (no changes since last successful run)` rather than re-running your commands. Failures are never cached. Running `chunk validate` yourself always executes the commands.
-
-See [docs/HOOKS.md](HOOKS.md) for configuration details and [Result Caching](HOOKS.md#result-caching) for what invalidates the cache.
-
----
-
 ## Review prompts
 
 An additional tool, independent of the sidecar workflow above. Review prompts are one `.md` or `.txt` file per area in `.chunk/reviews/`, such as `testing.md`, written by your team. `chunk review` and `chunk factory plan` review changes with them. Commit them with the config so the whole team shares them.
@@ -524,7 +507,7 @@ Validate on a sidecar
     └─ chunk watch   (recommended: keep it open to plan and follow your factory flows)
 
 Before committing
-    └─ Hook runs chunk validate automatically
+    └─ The git pre-commit hook runs chunk validate
 
 Push
 
