@@ -259,7 +259,7 @@ func TestAgentArgsBuild(t *testing.T) {
 	fakeFactory(t)
 	dir := t.TempDir()
 
-	startTestAgent(context.Background(), t, AgentConfig{Dir: dir, SessionID: "s-123", Build: true}, "hello")
+	startTestAgent(context.Background(), t, AgentConfig{Dir: dir, SessionID: "s-123", Mode: ModeBuild}, "hello")
 
 	gotArgs := readFile(t, filepath.Dir(os.Getenv("ARGS")), "args")
 	// A build session edits its worktree and runs what factory's build
@@ -288,6 +288,35 @@ func TestAgentArgsBuild(t *testing.T) {
 	assert.Check(t, !strings.Contains(gotArgs, "--disallowedTools"), gotArgs)
 	assert.Check(t, !strings.Contains(gotArgs, "bypassPermissions"), gotArgs)
 	assert.Check(t, cmp.Contains(gotArgs, dir))
+}
+
+func TestAgentArgsChat(t *testing.T) {
+	agentFakeEnv(t)
+	fakeClaude(t, agentFakeScript)
+	fakeFactory(t)
+	dir := t.TempDir()
+
+	startTestAgent(context.Background(), t, AgentConfig{Dir: dir, SessionID: "s-123", Mode: ModeChat}, "hello")
+
+	gotArgs := readFile(t, filepath.Dir(os.Getenv("ARGS")), "args")
+	assert.Check(t, cmp.Contains(gotArgs, "--permission-mode default"))
+	assert.Check(t, cmp.Contains(gotArgs, "--allowedTools "+chatTools))
+	assert.Check(t, cmp.Contains(gotArgs, "--disallowedTools "+chatDeniedTools))
+	assert.Check(t, cmp.Contains(gotArgs, "--append-system-prompt"))
+	assert.Check(t, cmp.Contains(chatTools, sourcegraphTools))
+	// It reads and changes nothing: no tool that writes, claims, waits for
+	// tasks or runs any command but the read ones.
+	for _, tool := range strings.Split(chatTools, ",") {
+		assert.Check(t, tool != "Bash" && tool != "mcp__plugin_f_factory" && tool != "Agent", tool)
+		assert.Check(t, !strings.HasPrefix(tool, "Bash(") ||
+			strings.HasPrefix(tool, "Bash(git log ") || strings.HasPrefix(tool, "Bash(git show ") ||
+			strings.HasPrefix(tool, "Bash(factory daemon flow show") ||
+			tool == "Bash(factory daemon claim list)" || tool == "Bash(factory daemon session list)", tool)
+	}
+	for _, never := range []string{"plan_set", "plan_replace", "plan_resolve", "plan_init", "factory plan claim", "factory daemon wait", "Edit", "Write"} {
+		assert.Check(t, !strings.Contains(chatTools, never), never)
+	}
+	assert.Check(t, !strings.Contains(gotArgs, "acceptEdits"), gotArgs)
 }
 
 func TestAgentArgsResume(t *testing.T) {
@@ -344,11 +373,18 @@ func TestAgentByTask(t *testing.T) {
 func TestAgentInitErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
+		mode         Mode
 		plugins, mcp string
 		wantErr      error
 	}{
 		{name: "no plugin", plugins: `[]`, wantErr: ErrNoFactoryPlugin},
 		{name: "mcp not connected", mcp: `[{"name":"plugin:f:factory","status":"failed"}]`, wantErr: ErrFactoryMCP},
+		{
+			name:    "chat without the plugin",
+			mode:    ModeChat,
+			plugins: `[]`,
+			wantErr: ErrNoFactoryPlugin,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agentFakeEnv(t)
@@ -363,7 +399,7 @@ func TestAgentInitErrors(t *testing.T) {
 			setVar(t, &stopInterruptWait, 200*time.Millisecond)
 			setVar(t, &stopTerminateWait, 200*time.Millisecond)
 
-			_, err := StartAgent(context.Background(), AgentConfig{SessionID: "s1"}, "hello")
+			_, err := StartAgent(context.Background(), AgentConfig{SessionID: "s1", Mode: tc.mode}, "hello")
 			assert.Assert(t, errors.Is(err, tc.wantErr), "got %v", err)
 		})
 	}

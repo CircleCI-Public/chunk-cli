@@ -92,6 +92,31 @@ func StartPlanBuild(req PlanBuildRequest) (string, error) {
 	return resp.ID, nil
 }
 
+// SendChat sends msg to its repository's chat, starting or
+// resuming its session, and returns once the session has it. It uses the
+// long client: starting a session can outlast the short client's timeout.
+func SendChat(msg ChatMessage) (SessionLog, error) {
+	client, err := longDaemonClient()
+	if err != nil {
+		return SessionLog{}, err
+	}
+	var log SessionLog
+	err = sessionCallWith(client, http.MethodPost, "/chat", msg, &log)
+	return log, err
+}
+
+// FetchChat is root's chat's log from cursor after, the Next
+// of an earlier read; after < 0 reads only where it ends.
+func FetchChat(root string, after int) (SessionLog, error) {
+	path := "/chat?root=" + neturl.QueryEscape(root)
+	if after >= 0 {
+		path += "&after=" + strconv.Itoa(after)
+	}
+	var log SessionLog
+	err := sessionCall(http.MethodGet, path, nil, &log)
+	return log, err
+}
+
 // FetchPlanBuild returns plan planID's build session and its feed lines past
 // the first after. found is false when the daemon has no build of the plan.
 func FetchPlanBuild(planID string, after int) (activity PlanBuildActivity, found bool, err error) {

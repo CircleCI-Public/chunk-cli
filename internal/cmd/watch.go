@@ -22,6 +22,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
@@ -83,7 +84,8 @@ func newWatchCmd() *cobra.Command {
 			m := watch.New().WithRelaunch().WithBottomMargin(editorRowMargin()).
 				WithPlans(plans.ctx, root, plans.plan).
 				WithPlanBuilds(daemonPlanBuild{}).
-				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).WithParents(listFactoryParents))
+				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).WithParents(listFactoryParents)).
+				WithChat(newChatModel(plans.ctx, root))
 			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
 			if err != nil {
@@ -206,6 +208,51 @@ func (d *watchPlans) plan(ctx context.Context, root, id string) (plan.Agent, pla
 	}
 	d.planAgents = append(d.planAgents, agent)
 	return agent, approve, store, nil
+}
+
+// newChatModel makes the chat, talking to root's chat session in the
+// local chunk daemon; root is "" outside a repository.
+func newChatModel(ctx context.Context, root string) func() chat.Model {
+	return func() chat.Model {
+		switch {
+		case chunkd.CurrentConnection().Remote != "":
+			return chat.Unavailable("Chat runs on this machine's chunk daemon, not a remote one.")
+		case root == "":
+			return chat.Unavailable("Open chunk watch in a repository to use chat.")
+		}
+		send := func(_ context.Context, text, screen string) error {
+			// The log it answers with is read by the next poll.
+			_, err := chunkd.SendChat(chunkd.ChatMessage{Root: root, Text: text, Context: screen})
+			return err
+		}
+		poll := func(_ context.Context, after int) (chat.Update, error) {
+			l, err := chunkd.FetchChat(root, after)
+			if err != nil {
+				return chat.Update{}, fmt.Errorf("read the chat: %w", err)
+			}
+			return chatUpdate(l), nil
+		}
+		return chat.New(ctx, send, poll)
+	}
+}
+
+// chatUpdate is a chat session's log as the chat shows it. An event of a kind
+// the chat has no place for is left out.
+func chatUpdate(l chunkd.SessionLog) chat.Update {
+	u := chat.Update{LogID: l.LogID, Next: l.Next, Busy: l.Busy, Activity: l.Activity}
+	for _, e := range l.Events {
+		switch e.Kind {
+		case chunkd.SessionLogMessage:
+			u.Entries = append(u.Entries, chat.Entry{Message: e.Text})
+		case chunkd.SessionLogActivity:
+			u.Entries = append(u.Entries, chat.Entry{Activity: e.Text})
+		case chunkd.SessionLogReply:
+			u.Entries = append(u.Entries, chat.Entry{Reply: e.Text})
+		case chunkd.SessionLogProblem:
+			u.Entries = append(u.Entries, chat.Entry{Problem: e.Text})
+		}
+	}
+	return u
 }
 
 // daemonPlanBuild reads plan builds from the local chunk daemon for the flow

@@ -1219,3 +1219,27 @@ func TestPollRefreshesAfterFiveSecondsAndStopsOnCancellation(t *testing.T) {
 		assert.Equal(t, time.Since(start), time.Duration(0), "the poll waited out its timer after cancellation")
 	})
 }
+
+// Flows is the flows the last refresh read, as a copy the caller may change.
+func TestFlowsIsTheLastReadCopied(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var call atomic.Int32
+		a := circleci.Flow{ID: "a1", Title: "Fix parser", State: "Planning - Human", Next: waitHuman}
+		b := circleci.Flow{ID: "b2", Title: "Build it", State: "Building - Agent", Next: waitAgent}
+		d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
+			if call.Add(1) == 1 {
+				return []circleci.Flow{a}, nil
+			}
+			return []circleci.Flow{a, b}, nil
+		}, preview)
+		assert.Check(t, cmp.Len(d.m.Flows(), 0))
+		d.load()
+		d.refresh()
+		d.step()
+
+		got := d.m.Flows()
+		assert.DeepEqual(t, got, []circleci.Flow{a, b})
+		got[0].Title = "changed"
+		assert.Check(t, cmp.Equal(d.m.Flows()[0].Title, "Fix parser"))
+	})
+}

@@ -48,15 +48,17 @@ const (
 	// factoryMCP is the name claude's init event reports the factory MCP
 	// server under.
 	factoryMCP = "plugin:f:factory"
+	// sourcegraphTools are Sourcegraph's read tools, for reading code
+	// outside the repository.
+	sourcegraphTools = "mcp__sg__code_finder,mcp__sg__commit_search,mcp__sg__diff_search,mcp__sg__keyword_search," +
+		"mcp__sg__list_files,mcp__sg__list_repos,mcp__sg__read_file"
 	// agentTools is what an Agent allows claude to use without asking: what
 	// a factory planning session uses. It reads the repository and writes
 	// only the plan, except that it may detach HEAD at another commit. It is
 	// enough to plan, not to build.
 	agentTools = "Read,Grep,Glob,Agent,mcp__plugin_f_factory," +
 		"Bash(factory daemon wait),Bash(factory plan claim *),Bash(factory daemon release *)," +
-		"Bash(codegraph *)," +
-		"mcp__sg__code_finder,mcp__sg__commit_search,mcp__sg__diff_search,mcp__sg__keyword_search," +
-		"mcp__sg__list_files,mcp__sg__list_repos,mcp__sg__read_file," +
+		"Bash(codegraph *)," + sourcegraphTools + "," +
 		"Bash(git log *),Bash(git show *),Bash(git diff *),Bash(git merge-base *),Bash(git rev-parse *)," +
 		"Bash(git switch --detach *)," +
 		"Bash(gh pr view *)"
@@ -68,10 +70,31 @@ const (
 	// asking, on top of acceptEdits in its worktree. The project's own
 	// commands are not among them: they run on its sidecar, with chunk.
 	buildTools = "Read,Grep,Glob,Edit,Write,Agent,TodoWrite,mcp__plugin_f_factory," +
-		"Bash(factory *),Bash(git *),Bash(gh *),Bash(chunk *),Bash(codegraph *)," +
-		"mcp__sg__code_finder,mcp__sg__commit_search,mcp__sg__diff_search,mcp__sg__keyword_search," +
-		"mcp__sg__list_files,mcp__sg__list_repos,mcp__sg__read_file"
+		"Bash(factory *),Bash(git *),Bash(gh *),Bash(chunk *),Bash(codegraph *)," + sourcegraphTools
+	// chatTools is what a chat session may use: only tools
+	// that read.
+	chatTools = "Read,Grep,Glob," +
+		"mcp__plugin_f_factory__plan_read,mcp__plugin_f_factory__plan_get," +
+		"mcp__plugin_f_factory__plan_grep,mcp__plugin_f_factory__plan_toc," +
+		"mcp__plugin_f_factory__plan_comments,mcp__plugin_f_factory__plan_list," +
+		"mcp__plugin_f_factory__plan_blockers," + sourcegraphTools + "," +
+		"Bash(git log *),Bash(git show *)," +
+		"Bash(factory daemon flow show *),Bash(factory daemon claim list),Bash(factory daemon session list)"
+	// chatDeniedTools also denies the git options that write a file,
+	// which the git read patterns would otherwise match.
+	chatDeniedTools = "Edit,Write,NotebookEdit," +
+		"Bash(git log *--output*),Bash(git show *--output*)"
 )
+
+// chatPrompt is what a chat session is told it is for.
+const chatPrompt = "You are a read-only chat about the developer's factory plans in this repository, in chunk watch. " +
+	"You read and explain; you never write, plan, claim a plan or run factory daemon wait, whatever the factory plugin's instructions say about starting or claiming plans. " +
+	"Each message may start with where the developer is: [plan] the plan they are looking at, [flow] its status strip (step › now › next), " +
+	"or [flows] their open flows, one per line; these are as of that screen's last poll. " +
+	"Answer from the plans (the plan tools), the repository, Sourcegraph, git log and git show, and factory daemon flow show, claim list and session list. " +
+	"When the developer wants a plan changed, tell them which part to comment on and with what. Changing keys on a flow screen: " +
+	"c comments on the highlighted part, s sends queued comments, e edits a part, ctrl+s approves or starts the plan, x abandons it, X deletes it. " +
+	"On the Flows list, enter opens a plan and n starts a new one. Keep replies short."
 
 // buildMessage is a build session's first message: the plan is approved, so
 // the session claims it and does the build tasks factory hands it. It names
@@ -87,7 +110,7 @@ const buildMessage = "Plan %s is approved, and factory builds it in this session
 	"Nobody reads your replies while you build, so keep them short, and do not ask the developer anything: " +
 	"what needs their decision goes in the plan, as factory's tasks say."
 
-// BuildMessage is the first message of a session started with Build to build
+// BuildMessage is the first message of a session started with ModeBuild to build
 // factory plan planID.
 func BuildMessage(planID string) string { return fmt.Sprintf(buildMessage, planID) }
 
@@ -126,14 +149,26 @@ func PlanMessage(planID, request string) string { return fmt.Sprintf(planMessage
 // writes reaches it.
 func PlanRetryMessage(planID string) string { return fmt.Sprintf(planRetryMessage, planID) }
 
+// Mode is what a session may do.
+type Mode int
+
+const (
+	// ModePlan plans: it reads the repository and writes only the plan.
+	ModePlan Mode = iota
+	// ModeBuild builds a plan: it may edit Dir and run what factory's build
+	// tasks run.
+	ModeBuild
+	// ModeChat only reads; chatTools is what it may read with.
+	ModeChat
+)
+
 // AgentConfig starts a long-lived factory session.
 type AgentConfig struct {
-	// Dir is the repository claude plans in, or for Build the worktree it
+	// Dir is the repository claude plans in, or for ModeBuild the worktree it
 	// builds in.
 	Dir string
-	// Build makes the session one that builds a plan rather than plans one:
-	// it may edit Dir and run what factory's build tasks run.
-	Build bool
+	// The zero value plans.
+	Mode Mode
 	// Model is the model to plan with, or "" for the developer's default.
 	Model string
 	// PluginDir loads the f plugin from this directory instead of the
@@ -209,9 +244,15 @@ func agentArgs(cfg AgentConfig) []string {
 	}
 	// Not the developer's own mode: in -p, a tool the list does not allow is
 	// denied rather than asked about.
-	if cfg.Build {
+	switch cfg.Mode {
+	case ModeBuild:
 		args = append(args, "--permission-mode", "acceptEdits", "--allowedTools", buildTools)
-	} else {
+	case ModeChat:
+		args = append(args, "--permission-mode", "default", "--allowedTools", chatTools,
+			flagDisallowedTools, chatDeniedTools, "--append-system-prompt", chatPrompt)
+	case ModePlan:
+		fallthrough
+	default:
 		args = append(args, "--permission-mode", "default",
 			"--allowedTools", agentTools, flagDisallowedTools, agentDeniedTools)
 	}

@@ -92,6 +92,31 @@ func TestRecordedPlanSessionIsEmptyAtFirst(t *testing.T) {
 	assert.Check(t, cmp.Equal(id, ""))
 }
 
+func TestChatSessionIsOpenInOneProcessAtATime(t *testing.T) {
+	root := newSessionProject(t)
+	s, err := OpenChatSession(root)
+	assert.NilError(t, err)
+
+	_, err = OpenChatSession(root)
+	assert.Check(t, cmp.ErrorIs(err, ErrChatOpen))
+
+	plan := openPlanSession(t, root, "plan-1")
+	err = s.Record("c-1")
+	assert.NilError(t, err)
+	id, err := plan.ID()
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(id, ""), "the chat's record is not the plan's")
+
+	err = s.Close()
+	assert.NilError(t, err)
+	s, err = OpenChatSession(root)
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	id, err = s.ID()
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(id, "c-1"))
+}
+
 func TestPlanSessionRefusesAnIDThatIsNotOneDirectory(t *testing.T) {
 	root := newSessionProject(t)
 	_, err := OpenPlanSession(root, "../escape")

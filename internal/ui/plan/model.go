@@ -30,6 +30,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/clipboard"
 )
 
@@ -365,7 +366,9 @@ type Model struct {
 	// so leaving it loses nothing and stops nothing.
 	back bool
 	// inbox is whether the host offers a plan inbox and Ctrl+P switching.
-	inbox   bool
+	inbox bool
+	// chatKey is whether the host opens its chat with ctrl+o.
+	chatKey bool
 	title   string
 	project string
 	// branch is the git branch the plan is for, shown in the header.
@@ -498,6 +501,20 @@ func (m Model) WithInbox(title, project string) Model {
 	m.back, m.inbox, m.title, m.project = true, true, title, project
 	return m
 }
+
+// WithChatKey returns a copy of m whose footer names ctrl+o, for a
+// host that opens its chat with it.
+func (m Model) WithChatKey() Model {
+	m.chatKey = true
+	return m
+}
+
+// Title is the plan's title as the host named it, or as factory named it
+// once created; "" when the host gave none.
+func (m Model) Title() string { return m.title }
+
+// ID is the plan's ID, "" until it is created.
+func (m Model) ID() string { return m.store.ID() }
 
 // Unsent reports local input that quitting the host would discard.
 func (m Model) Unsent() string { return m.unsent() }
@@ -1405,30 +1422,6 @@ func (m *Model) layout() {
 	m.renderFlow()
 }
 
-// newRenderer is a glamour renderer for the terminal's background that wraps
-// at width.
-func newRenderer(dark bool, width int) (*glamour.TermRenderer, error) {
-	style := "light"
-	if dark {
-		style = "dark"
-	}
-	return glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(width))
-}
-
-// renderMarkdown renders md with glamour at width, or returns it as typed
-// when it cannot be rendered.
-func renderMarkdown(md string, dark bool, width int) string {
-	r, err := newRenderer(dark, width)
-	if err != nil {
-		return md
-	}
-	out, err := r.Render(md)
-	if err != nil {
-		return md
-	}
-	return strings.Trim(out, "\n")
-}
-
 // renderLines renders one block with r, without the blank lines glamour puts
 // around a document.
 func renderLines(r *glamour.TermRenderer, md string) []string {
@@ -1473,7 +1466,7 @@ func (m *Model) renderPlan() {
 		m.drawPlan()
 		return
 	}
-	r, err := newRenderer(m.dark, w-1)
+	r, err := chat.NewRenderer(m.dark, w-1)
 	if err != nil {
 		m.setContent(textPlan, m.plan)
 		return
@@ -1581,7 +1574,7 @@ func (m *Model) renderChat() {
 			}
 			b.WriteString("\n")
 			if msg.renderedWidth != w {
-				msg.rendered, msg.renderedWidth = renderMarkdown(msg.text, m.dark, w-2), w
+				msg.rendered, msg.renderedWidth = chat.RenderMarkdown(msg.text, m.dark, w-2), w
 			}
 			b.WriteString(msg.rendered)
 		}

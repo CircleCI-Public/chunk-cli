@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
@@ -291,4 +292,23 @@ func TestPlanBuildActivity(t *testing.T) {
 			assert.Check(t, cmp.DeepEqual(planBuildFrom(tc.in, tc.found), tc.want))
 		})
 	}
+}
+
+// A chat session's log reaches the chat as it is, each event by its kind, and
+// an event of a kind the chat has no place for is left out.
+func TestChatUpdate(t *testing.T) {
+	u := chatUpdate(chunkd.SessionLog{
+		LogID: "log-1", Next: 5, Busy: true, Activity: "Reading plan",
+		Events: []chunkd.SessionLogEvent{
+			{Seq: 0, Kind: chunkd.SessionLogMessage, Text: "hi"},
+			{Seq: 1, Kind: chunkd.SessionLogActivity, Text: "Read plan"},
+			{Seq: 2, Kind: "later", Text: "unknown"},
+			{Seq: 3, Kind: chunkd.SessionLogReply, Text: "hello"},
+			{Seq: 4, Kind: chunkd.SessionLogProblem, Text: "claude exited"},
+		},
+	})
+	assert.Check(t, cmp.DeepEqual(u, chat.Update{
+		LogID: "log-1", Next: 5, Busy: true, Activity: "Reading plan",
+		Entries: []chat.Entry{{Message: "hi"}, {Activity: "Read plan"}, {Reply: "hello"}, {Problem: "claude exited"}},
+	}))
 }

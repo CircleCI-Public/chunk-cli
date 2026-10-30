@@ -32,7 +32,7 @@ type SessionRecord interface {
 var errRunnerStopped = errors.New("the session has been stopped")
 
 // sessionStartProblem is a failure to start a daemon-run session, saying how
-// to fix it. verb is what the session does: "build" or "plan".
+// to fix it. verb is what the session does: "build", "plan" or "chat".
 func sessionStartProblem(err error, verb string) error {
 	switch {
 	case errors.Is(err, factory.ErrNoClaude):
@@ -60,11 +60,13 @@ func isStartSentinel(err error) bool {
 	return false
 }
 
-// sessionName is the session a verb's session is called: the build session,
-// the planning session.
+// sessionName is what a verb's session is called.
 func sessionName(verb string) string {
-	if verb == "plan" {
+	switch verb {
+	case "plan":
 		return "planning"
+	case "chat":
+		return "chat"
 	}
 	return verb
 }

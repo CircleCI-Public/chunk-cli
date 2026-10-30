@@ -220,7 +220,7 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 			return factory.StartAgent(ctx, cfg, message)
 		}
 	}
-	cfg := factory.AgentConfig{Dir: dir, Model: req.Model, SessionID: uuid.NewString(), Build: true}
+	cfg := factory.AgentConfig{Dir: dir, Model: req.Model, SessionID: uuid.NewString(), Mode: factory.ModeBuild}
 	agent, err := start(ctx, cfg, factory.BuildMessage(req.PlanID))
 	if err != nil {
 		d.settleSession(entry, sessionStartProblem(err, "build"))

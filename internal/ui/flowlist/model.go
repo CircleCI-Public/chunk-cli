@@ -71,10 +71,12 @@ type Model struct {
 	phases []string
 	id     string
 	note   string
-	width  int
-	height int
-	dark   bool
-	styles theme.Styles
+	// chatKey is whether the host offers ctrl+o, for the help bar.
+	chatKey bool
+	width   int
+	height  int
+	dark    bool
+	styles  theme.Styles
 
 	loaded, listing bool
 	listErr         error
@@ -136,6 +138,16 @@ func (m Model) WithNote(note string) Model {
 	m.note = oneLine(note)
 	return m
 }
+
+// WithChatKey has the help bar name ctrl+o, for a host that opens
+// its chat with it.
+func (m Model) WithChatKey() Model {
+	m.chatKey = true
+	return m
+}
+
+// Flows is the open flows as the list last read them.
+func (m Model) Flows() []circleci.Flow { return slices.Clone(m.flows) }
 
 // Len is how many open flows the list shows.
 func (m Model) Len() int { return len(m.flows) }

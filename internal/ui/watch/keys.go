@@ -11,11 +11,16 @@ type keyMap struct {
 	Flows key.Binding
 	// ForceQuit confirms quitting when plans have unsent input.
 	ForceQuit key.Binding
+	// Chat opens or closes the chat, which CloseChat also closes.
+	Chat, CloseChat key.Binding
 }
 
 func (m Model) keys() keyMap {
 	return keyMap{
 		Flows:     key.NewBinding(key.WithKeys("ctrl+p")),
 		ForceQuit: key.NewBinding(key.WithKeys("ctrl+c")),
+
+		Chat:      key.NewBinding(key.WithKeys("ctrl+o")),
+		CloseChat: key.NewBinding(key.WithKeys("esc")),
 	}
 }

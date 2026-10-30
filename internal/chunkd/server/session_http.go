@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 )
 
 // maxRequestBytes bounds a session request body. A request names a project and
@@ -26,6 +30,8 @@ const maxRequestBytes = 64 * 1024
 //	GET  /factory/plans/{plan}/planner          read a plan's planner's log (?after=N)
 //	POST /factory/{id}/cancel                   stop a session
 //	DELETE /factory/{id}                        forget a finished session (409 while it is running)
+//	POST /chat                                  send a message to a repository's chat, starting or resuming it
+//	GET  /chat                                  a repository's chat's log (?root=<path>&after=N)
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /factory/plans", d.handlePlanBuild)
 	mux.HandleFunc("GET /factory/plans/{plan}/build", d.handlePlanBuildActivity)
@@ -35,6 +41,8 @@ func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("GET /factory/plans/{plan}/planner", d.handlePlannerLog)
 	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
 	mux.HandleFunc("DELETE /factory/{id}", d.handleSessionDelete)
+	mux.HandleFunc("POST /chat", d.handleChatSend)
+	mux.HandleFunc("GET /chat", d.handleChatLog)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -175,4 +183,70 @@ func (d *daemon) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// handleChatSend sends a message to a repository's chat and
+// answers with its log once the session has it. A failure to reach the
+// session is a problem in the log, not the status, so every window shows it.
+func (d *daemon) handleChatSend(w http.ResponseWriter, r *http.Request) {
+	var msg chunkd.ChatMessage
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&msg); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(msg.Text) == "" {
+		http.Error(w, "text required", http.StatusBadRequest)
+		return
+	}
+	root, err := chatRoot(msg.Root)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// The session runs in root, so root must be a repository on this machine,
+	// spelled as its top level.
+	top := gitutil.TopLevelCtx(r.Context(), root)
+	if top == "" || config.CanonicalProjectRoot(top) != root {
+		http.Error(w, fmt.Sprintf("%q is not the top of a git repository", msg.Root), http.StatusBadRequest)
+		return
+	}
+	msg.Root = root
+	c := d.chats.get(root)
+	if c == nil {
+		http.Error(w, "the chunk daemon is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	log, err := c.send(msg)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, log)
+}
+
+// handleChatLog answers with a repository's chat's log from
+// ?after=N, without making a chat for a repository that has none.
+// A missing after reads only where the log ends.
+func (d *daemon) handleChatLog(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	root, err := chatRoot(q.Get("root"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	after := -1
+	if s := q.Get("after"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			http.Error(w, "after must be an integer", http.StatusBadRequest)
+			return
+		}
+		after = n
+	}
+	c := d.chats.lookup(root)
+	if c == nil {
+		writeJSON(w, http.StatusOK, chunkd.SessionLog{Events: []chunkd.SessionLogEvent{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, c.run.view(after))
 }

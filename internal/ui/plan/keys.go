@@ -51,8 +51,10 @@ type keyMap struct {
 	Abandon, DeletePlan                              key.Binding
 	AbandonCanceled, AbandonWontDo, AbandonDuplicate key.Binding
 
-	Focus    key.Binding
-	Switch   key.Binding
+	Focus  key.Binding
+	Switch key.Binding
+	// Chat is the host's; it is here for its hint.
+	Chat     key.Binding
 	SendPlan key.Binding
 	Quit     key.Binding
 }
@@ -101,6 +103,7 @@ func (m Model) keys() keyMap {
 		DeletePlan:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
 		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", m.focusHelp())),
 		Switch:         key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
+		Chat:           key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "chat")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
@@ -183,6 +186,7 @@ func (m Model) endKeys(k *keyMap) {
 	for _, b := range []*key.Binding{&k.AbandonCanceled, &k.AbandonWontDo, &k.AbandonDuplicate} {
 		b.SetEnabled(m.askingReason)
 	}
+	k.Chat.SetEnabled(m.chatKey && !m.commenting)
 }
 
 // focusHelp is where tab goes: to the right pane, or on a narrow screen
@@ -255,7 +259,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.Switch,
 		k.Send, k.Newline,
 		k.Open, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
-		k.Focus, k.SendPlan, k.Quit, k.Abandon, k.DeletePlan, k.FlowTab,
+		k.Focus, k.SendPlan, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
 		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }

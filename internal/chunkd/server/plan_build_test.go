@@ -349,7 +349,7 @@ func TestPlanBuildStartsABuildSessionInThePlansWorktree(t *testing.T) {
 	pb.mu.Lock()
 	cfg, first := pb.cfgs[0], pb.firsts[0]
 	pb.mu.Unlock()
-	assert.Check(t, cfg.Build, "the session may not build")
+	assert.Check(t, cmp.Equal(cfg.Mode, factory.ModeBuild), "the session may not build")
 	assert.Check(t, cmp.Equal(cfg.Dir, "/data/plans/plan-1"))
 	assert.Check(t, cmp.Equal(cfg.Model, "sonnet"))
 	assert.Check(t, cfg.SessionID != "")
