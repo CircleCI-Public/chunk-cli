@@ -369,7 +369,9 @@ comments still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.
 
 `ctrl+o` opens a chat you can ask about your plans and flows from any
-screen; it answers straight away and changes nothing.
+screen. Ask it to, and it gets a stuck flow going with factory's own commands:
+it repairs a plan, frees a dead session's claim, changes blockers or resolves
+comments. It does nothing else to your plans.
 
 `watch` requires a TTY — it will not run in a non-interactive shell (CI,
 pipes). It works with the chunk daemon on this machine, and refuses to start

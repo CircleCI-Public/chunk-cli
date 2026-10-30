@@ -457,17 +457,18 @@ outlives the screens that follow it: `chunk factory plan` and `chunk watch`
 poll `GET …/planner` while a plan is open, and closing them only ends that
 polling.
 
-**The chat.** The daemon runs one chat per repository: a
-read-only Claude Code session in `factory.ModeChat`, in the repository's
-root, that answers questions about its factory plans. It starts on the
-repository's first message, resuming the session recorded in
-`factory.OpenChatSession(root)`. It runs on the same session runner as
-the planner, so its conversation is the runner's log, including the
-developer's messages (`message` events, without the context sent with them),
-and a client reads it by cursor and `log_id` as it reads a planner's. The
-daemon stops the session after 30 idle minutes, keeping the log; the next
-message resumes it. A restarted daemon has no log to show, and a new `log_id`
-says so, but its next message resumes the same Claude session.
+**The chat.** The daemon runs one chat per repository: a Claude Code session
+in `factory.ModeChat`, in the repository's root, that answers questions about
+its factory plans and, when asked, acts on their flows with factory's own
+commands: what `chatTools` allows, and never what `chatDeniedTools` denies. It
+starts on the repository's first message, resuming the session recorded in
+`factory.OpenChatSession(root)`. It runs on the same session runner as the
+planner, so its conversation is the runner's log, including the developer's
+messages (`message` events, without the context sent with them), and a client
+reads it by cursor and `log_id` as it reads a planner's. The daemon stops the
+session after 30 idle minutes, keeping the log; the next message resumes it. A
+restarted daemon has no log to show, and a new `log_id` says so, but its next
+message resumes the same Claude session.
 
 A build records a `chunkd.Session` whose `factory` field (`FactoryRun`) names
 the plan, and runs a factory build session in the plan's worktree. While it
