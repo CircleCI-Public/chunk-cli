@@ -207,7 +207,7 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan"
 	store.StateV = "Planning - Agent"
-	store.FlowV = Flow{Claimed: true, Next: []Step{{Actor: "session", Task: "review-plan", Dispatched: true}}}
+	store.FlowV = Flow{Claimed: true, Next: []Step{{Actor: "session", Task: "review-plan", Dispatched: true}, {Actor: "session", Event: "request-revision"}}}
 	sent := false
 	approve := func(func(string)) (string, error) {
 		sent = true
@@ -243,6 +243,7 @@ func TestReadyToApprove(t *testing.T) {
 		return next
 	}
 	review := Step{Actor: "session", Task: "review-plan", Dispatched: true}
+	rr := Step{Actor: "session", Event: "request-revision"}
 	move := Step{Actor: "daemon", Task: "move"}
 	for _, tc := range []struct {
 		name string
@@ -271,6 +272,15 @@ func TestReadyToApprove(t *testing.T) {
 		{
 			name: "old review running",
 			flow: Flow{State: "Planning - Agent", Next: append([]Step{review}, human("approve-for-units", "approve-for-building")...)},
+		},
+		{
+			name: "request-revision while it waits on you",
+			flow: Flow{State: "Planning - Human", Next: append(human("address-comments", "approve-for-building"), rr, Step{Actor: "human", Event: "abandon"})},
+			want: true,
+		},
+		{
+			name: "review running beside request-revision",
+			flow: Flow{State: "refine-units", Next: append([]Step{review, rr}, human("approve-for-building")...)},
 		},
 		{
 			name: "approved, factory moving it",
@@ -310,6 +320,30 @@ func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
 		store := newFakeStore()
 		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 		store.StateV = "refine-units"
+		store.setEvents("address-comments", "approve-for-building", "abandon")
+		sent := false
+		approve := func(func(string)) (string, error) {
+			sent = true
+			return "build-1", nil
+		}
+		m := New(context.Background(), turnReturning("ok"), approve, store, "do it")
+		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Next: you approve the plan · ctrl+s"))
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		assert.Assert(t, m.confirming, "ctrl+s did not ask to approve: %q", m.status)
+		drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+		assert.Check(t, sent, "the plan was not sent")
+	})
+	t.Run("request-revision listed", func(t *testing.T) {
+		store := newFakeStore()
+		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+		store.StateV = "Planning - Human"
+		store.FlowV = Flow{Next: []Step{
+			{Actor: "human", Event: "address-comments"},
+			{Actor: "human", Event: "approve-for-building"},
+			{Actor: "session", Event: "request-revision"},
+			{Actor: "human", Event: "abandon"},
+		}}
 		store.setEvents("address-comments", "approve-for-building", "abandon")
 		sent := false
 		approve := func(func(string)) (string, error) {
@@ -2203,6 +2237,7 @@ func chatText(m Model) string {
 
 func TestResumeOwed(t *testing.T) {
 	session := []Step{{Actor: "session", Task: "write-units", Dispatched: true}}
+	rr := Step{Actor: "session", Event: "request-revision"}
 	for _, tc := range []struct {
 		name string
 		flow Flow
@@ -2237,6 +2272,19 @@ func TestResumeOwed(t *testing.T) {
 		{
 			name: "deferred",
 			flow: Flow{State: "Unprioritized", Next: []Step{{Actor: "human", Event: "prioritize"}}},
+		},
+		{
+			name: "waiting on the developer, request-revision listed",
+			flow: Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}, rr}},
+		},
+		{
+			name: "deferred, request-revision listed",
+			flow: Flow{State: "Unprioritized", Next: []Step{{Actor: "human", Event: "prioritize"}, rr}},
+		},
+		{
+			name: "waiting on a planner, request-revision listed",
+			flow: Flow{State: "Planning - Agent", Next: append(slices.Clone(session), rr)},
+			want: true,
 		},
 		{
 			name: "no flow",

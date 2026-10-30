@@ -68,15 +68,16 @@ func status(f Flow, fam Family, stage planstate.Stage, inReview bool) (step, now
 }
 
 // forward is the transition in next that moves the flow on: resolve-conflicts
-// when it is offered, and otherwise the first that is not abandon or
-// abandon-integrate, the escape hatches factory offers in every live state.
+// when it is offered, and otherwise the first that is not abandon,
+// abandon-integrate or planstate.RequestRevision, which factory offers in
+// every live state but never waits on.
 func forward(next []Step) (Step, bool) {
 	if i := slices.IndexFunc(next, func(s Step) bool { return clean(s.Event) == resolveConflicts }); i >= 0 {
 		return next[i], true
 	}
 	i := slices.IndexFunc(next, func(s Step) bool {
 		e := clean(s.Event)
-		return e != "abandon" && e != "abandon-integrate"
+		return e != "abandon" && e != "abandon-integrate" && e != planstate.RequestRevision
 	})
 	if i < 0 {
 		return Step{}, false

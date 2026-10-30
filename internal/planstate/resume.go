@@ -2,7 +2,6 @@ package planstate
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -64,9 +63,9 @@ func ResumeOf(f ResumeFacts) Resume {
 			return Resume{Why: "Waiting on " + b.Title}
 		}
 	}
-	if !slices.ContainsFunc(f.Next, func(m Move) bool { return strings.TrimSpace(m.Actor) == "session" }) {
+	if !SessionActs(f.Next) {
 		switch {
-		case waitsOnHuman(f.Next):
+		case WaitsOnHuman(f.Next):
 			return Resume{Why: "Waiting on you"}
 		case AgentActs(f.Next):
 			return Resume{Why: "Waiting on factory"}

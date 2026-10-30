@@ -1070,6 +1070,7 @@ func TestGroupsAndRows(t *testing.T) {
 		session := func(task string) []circleci.Transition {
 			return []circleci.Transition{{Actor: "session", TaskCategory: task, IsDispatched: true}}
 		}
+		rr := circleci.Transition{Actor: "session", Event: "request-revision"}
 		flows := []circleci.Flow{
 			{ID: "other", Title: "Other plan", State: "Custom exact state"},
 			{ID: "bot", Title: "Bot plan", State: "Integrating - Bot"},
@@ -1098,6 +1099,9 @@ func TestGroupsAndRows(t *testing.T) {
 			{ID: "merging", Title: "Merging", State: "Integrating - Human", Next: []circleci.Transition{{Actor: "human", Action: "merge-pr"}}},
 			{ID: "merged", Title: "Merged", State: "ended", Phase: circleci.PhaseEnded, Outcome: "merged"},
 			{ID: "abandon-only", Title: "Abandon only", State: "refine-units", Next: []circleci.Transition{{Actor: "human", Event: circleci.Abandon}}},
+			{ID: "asked", Title: "Asked", State: "Planning - Human", Next: []circleci.Transition{{Actor: "human", Event: circleci.AddressComments}, rr}},
+			{ID: "building-rr", Title: "Building beside", State: "Building - Agent", Next: append(session("build-unit"), rr)},
+			{ID: "rr-only", Title: "Revision only", State: "refine-units", Next: []circleci.Transition{rr, {Actor: "human", Event: circleci.Abandon}}},
 		}
 		d := newDriver(t, fixed(flows...), func(context.Context, string) (string, []circleci.PlanComment, error) {
 			return "# Markdown heading\n\n**Plan prose**\n\n" + strings.Repeat("界", 150), []circleci.PlanComment{
@@ -1108,7 +1112,7 @@ func TestGroupsAndRows(t *testing.T) {
 		d.load()
 		rows := listRows(d)
 		all := strings.Join(rows, "\n")
-		for _, want := range []string{"flows", "Needs your review  7", "With agent  3", "Not started  1", "Other  8", "Custom exact state", "Integrating - bot", "Untitled plan"} {
+		for _, want := range []string{"flows", "Needs your review  8", "With agent  4", "Not started  1", "Other  9", "Custom exact state", "Integrating - bot", "Untitled plan"} {
 			assert.Check(t, cmp.Contains(all, want))
 		}
 		index := func(row string) int {
@@ -1130,22 +1134,29 @@ func TestGroupsAndRows(t *testing.T) {
 		// A phase spelled differently shares its sub-heading.
 		planned := index("Planned")
 		assert.Check(t, cmp.Equal(rows[planned+2], "Planned too"), "rows:\n%s", all)
-		review := rows[index("Needs your review  7"):index("With agent  3")]
+		review := rows[index("Needs your review  8"):index("With agent  4")]
 		assert.Check(t, cmp.Equal(count(review, "Planning"), 1), "want one Planning sub-heading:\n%s", all)
 		assert.Check(t, cmp.Equal(count(review, "Building"), 1), "want one Building sub-heading:\n%s", all)
 		// A new-spelled state lists by its next, under its old phase.
-		review = rows[index("Needs your review  7"):index("With agent  3")]
+		review = rows[index("Needs your review  8"):index("With agent  4")]
 		assert.Check(t, slices.Contains(review, "Refined"), "rows:\n%s", all)
 		assert.Check(t, slices.Contains(review, "Merging"), "rows:\n%s", all)
-		agent := rows[index("With agent  3"):index("Not started  1")]
+		agent := rows[index("With agent  4"):index("Not started  1")]
 		assert.Check(t, slices.Contains(agent, "Building new"), "rows:\n%s", all)
+		// request-revision, which factory lists in every live state, is
+		// not a move factory waits on.
+		review = rows[index("Needs your review  8"):index("With agent  4")]
+		assert.Check(t, slices.Contains(review, "Asked"), "rows:\n%s", all)
+		agent = rows[index("With agent  4"):index("Not started  1")]
+		assert.Check(t, slices.Contains(agent, "Building beside"), "rows:\n%s", all)
+		assert.Check(t, index("Revision only") > index("Other  9"), "rows:\n%s", all)
 		// A held flow, its next empty, and an ended one list in Other,
 		// labelled by phase and by outcome.
 		assert.Check(t, cmp.Equal(rows[index("Held")+1], "Building"), "rows:\n%s", all)
 		assert.Check(t, cmp.Equal(rows[index("Ended")+1], "Canceled"), "rows:\n%s", all)
 		assert.Check(t, cmp.Equal(rows[index("Merged")+1], "Done"), "rows:\n%s", all)
 		// Only the escape hatches left: nothing for the developer to do.
-		assert.Check(t, index("Abandon only") > index("Other  8"), "rows:\n%s", all)
+		assert.Check(t, index("Abandon only") > index("Other  9"), "rows:\n%s", all)
 		assert.Check(t, cmp.Equal(rows[index("Abandon only")+1], "Planning"), "rows:\n%s", all)
 		// Each sub-heading is directly above its first title.
 		for title, heading := range map[string]string{"Planned": "Planning", "Built": "Building", "Zeta": "Zeta", "Alpha": "Alpha"} {
@@ -1153,7 +1164,7 @@ func TestGroupsAndRows(t *testing.T) {
 		}
 		// Not started and Other have no sub-headings: only titles and details.
 		// Only Other names the state, since no heading does; an empty one is unknown.
-		other := index("Other  8")
+		other := index("Other  9")
 		assert.Check(t, cmp.DeepEqual(rows[other+1:other+5], []string{"Other plan", "Custom exact state", "Bot plan", "Integrating - bot"}), "rows:\n%s", all)
 		assert.Check(t, cmp.Equal(rows[index("Blank state")+1], "Unknown"), "rows:\n%s", all)
 		longState := rows[index("Long state")+1]

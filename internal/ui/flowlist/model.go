@@ -430,10 +430,7 @@ func (m Model) resume() planstate.Resume {
 	if !ok || !entry.blockersOK {
 		return planstate.Resume{}
 	}
-	next := make([]planstate.Move, len(f.Next))
-	for i, t := range f.Next {
-		next[i] = planstate.Move{Actor: oneLine(t.Actor), Event: oneLine(string(t.Event))}
-	}
+	next := moves(f.Next)
 	// BlockerDone reads states as given, so their escapes go first.
 	blockers := make([]planstate.Blocker, len(entry.blockers))
 	for i, b := range entry.blockers {
@@ -477,33 +474,25 @@ func (m *Model) keepSelection() {
 // Not started. A flow whose next is empty, such as one its blockers hold,
 // goes in the last group.
 func group(f circleci.Flow) int {
+	next := moves(f.Next)
 	switch {
 	case planstate.IsUnprioritized(f.State):
 		return 2
-	case waitsOnHuman(f.Next):
+	case planstate.WaitsOnHuman(next):
 		return 0
-	case agentActs(f.Next):
+	case planstate.AgentActs(next):
 		return 1
 	}
 	return 3
 }
 
-// waitsOnHuman is whether next waits only on the developer: a transition
-// for them other than the escape hatches, and none by a session or the
-// daemon. merge-pr, an action, counts.
-func waitsOnHuman(next []circleci.Transition) bool {
-	return !agentActs(next) && slices.ContainsFunc(next, func(t circleci.Transition) bool {
-		e := t.Event
-		return t.Actor == "human" && e != circleci.Abandon && e != "abandon-integrate"
-	})
-}
-
-// agentActs is whether next has a transition a session or the daemon
-// takes.
-func agentActs(next []circleci.Transition) bool {
-	return slices.ContainsFunc(next, func(t circleci.Transition) bool {
-		return t.Actor == "session" || t.Actor == "daemon"
-	})
+// moves is next as planstate reads it, each field kept to one line.
+func moves(next []circleci.Transition) []planstate.Move {
+	out := make([]planstate.Move, len(next))
+	for i, t := range next {
+		out[i] = planstate.Move{Actor: oneLine(t.Actor), Event: oneLine(string(t.Event))}
+	}
+	return out
 }
 
 // phaseOrder is how the phases chunk knows sort within a group;
