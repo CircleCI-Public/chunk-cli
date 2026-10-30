@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
@@ -35,12 +37,18 @@ type fakePlans struct {
 	sent    bool
 	// requests is how many messages the agent was sent.
 	requests int
+	// flow is the flow the store serves, when it is not the default.
+	flow *plan.Flow
 }
 
 // fakePlanStore is a plan.Store whose text never changes; these tests do not
 // exercise polling or comments.
 // A new plan's store takes newID as its ID on Create, when there is one.
-type fakePlanStore struct{ text, id, newID, title string }
+// Its flow is flow when there is one, else a plan waiting on the developer.
+type fakePlanStore struct {
+	text, id, newID, title string
+	flow                   *plan.Flow
+}
 
 func (f *fakePlanStore) ID() string { return f.id }
 
@@ -51,6 +59,9 @@ func (f *fakePlanStore) Create(context.Context, string) (string, error) {
 	return f.title, nil
 }
 func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
+	if f.flow != nil {
+		return *f.flow, nil
+	}
 	events := []string{"address-comments", "approve-for-units", "approve-for-building"}
 	var next []plan.Step
 	for _, e := range events {
@@ -132,7 +143,28 @@ func (f *fakePlans) planner(_ context.Context, root, id string) (plan.Agent, pla
 		f.sent = true
 		return "build-1", nil
 	}
-	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id, newID: f.newID, title: f.title}, nil
+	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id, newID: f.newID, title: f.title, flow: f.flow}, nil
+}
+
+// fakeResumer is a plan.Resumer that records each resume as "root plan
+// kind", and answers err.
+type fakeResumer struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+}
+
+func (r *fakeResumer) Resume(_ context.Context, root, planID string, kind planstate.ResumeKind) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, fmt.Sprintf("%s %s %d", root, planID, kind))
+	return r.err
+}
+
+func (r *fakeResumer) called() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
 }
 
 // flowList is a flow list of flows, each previewed as its title.
@@ -551,4 +583,76 @@ func TestOpenMsgOpensOrReusesAWorkspace(t *testing.T) {
 	assert.Check(t, cmp.Equal(calls, 2), "the planner was called again for an open workspace")
 	assert.Check(t, cmp.Equal(m.planKey, parentKey))
 	assert.Check(t, m.planOpen)
+}
+
+// R on the flow list resumes the selected flow through the resumer, in the
+// dashboard's project, and the list stays where it is.
+func TestFlowListResumeCallsTheResumer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "resumed",
+			want: "resumed Alpha",
+		},
+		{
+			name: "refused",
+			err:  errors.New("no flow"),
+			want: "could not resume Alpha: no flow",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &fakeResumer{err: tc.err}
+			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Building - Agent",
+				Next: []circleci.Transition{{Actor: "session", TaskCategory: "build-unit"}}}
+			m := sized(New().WithConnection(chunkd.Connection{}).
+				WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
+				WithPlanResume(r).WithFlowList(flowList(t, flow)))
+			m = deliverThen(t, m, m.flows.Init(), 1)
+
+			next, cmd := m.Update(flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeBuild})
+			m = next.(Model)
+			assert.Check(t, cmp.Equal(m.note, "resuming Alpha…"))
+			assert.Assert(t, cmd != nil, "the resume was not started")
+			msg := cmd()
+			assert.Check(t, cmp.DeepEqual(r.called(), []string{fmt.Sprintf("/src/chunk-cli a %d", planstate.ResumeBuild)}))
+
+			next, refresh := m.Update(msg)
+			m = next.(Model)
+			assert.Check(t, cmp.Equal(m.note, tc.want))
+			assert.Check(t, refresh != nil, "the list was not refreshed")
+			assert.Check(t, cmp.Contains(screen(m), "▶ Alpha"), "the list lost its selection:\n%s", screen(m))
+			assert.Check(t, cmp.Contains(screen(m), tc.want))
+		})
+	}
+}
+
+// Without a resumer the flow list's resume does nothing.
+func TestFlowListResumeWithoutAResumer(t *testing.T) {
+	m := planModel(t, &fakePlans{})
+	next, cmd := m.Update(flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeBuild})
+	assert.Check(t, cmd == nil)
+	assert.Check(t, cmp.Equal(next.(Model).note, ""))
+}
+
+// A flow screen the dashboard opens resumes its build through the
+// dashboard's resumer.
+func TestOpenedScreensGetTheResumer(t *testing.T) {
+	r := &fakeResumer{}
+	f := &fakePlans{plan: "# Retry uploads", flow: &plan.Flow{
+		State: "Building - Agent",
+		Next:  []plan.Step{{Actor: "session", Task: "build-unit"}},
+	}}
+	m := planModel(t, f).WithPlanResume(r)
+	next, cmd := m.Update(flowlist.OpenMsg{ID: "p1", Title: "Retry uploads"})
+	m = deliverThen(t, next.(Model), cmd, 0)
+	assert.Assert(t, m.planOpen)
+	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
+
+	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'R', Text: "R"})
+	assert.Assert(t, cmd != nil, "R did nothing:\n%s", screen(m))
+	_ = deliver(t, m, cmd)
+	assert.Check(t, cmp.DeepEqual(r.called(), []string{fmt.Sprintf("/src/chunk-cli p1 %d", planstate.ResumeBuild)}))
 }

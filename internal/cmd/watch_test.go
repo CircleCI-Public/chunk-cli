@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
@@ -311,4 +314,130 @@ func TestChatUpdate(t *testing.T) {
 		LogID: "log-1", Next: 5, Busy: true, Activity: "Reading plan",
 		Entries: []chat.Entry{{Message: "hi"}, {Activity: "Read plan"}, {Reply: "hello"}, {Problem: "claude exited"}},
 	}))
+}
+
+// daemonResume checks the project, then calls the daemon's route for the
+// kind of resume, and gives the daemon's refusal as it gives it.
+func TestDaemonResume(t *testing.T) {
+	refused := &chunkd.SessionRefused{Status: 409, Message: "plan p is claimed by session s; release it with factory daemon release p to resume it"}
+	for _, tc := range []struct {
+		name string
+		root string
+		kind planstate.ResumeKind
+		// fails is what the daemon answers.
+		fails       error
+		wantErr     string
+		wantPlanner []string
+		wantBuild   []chunkd.PlanBuildRequest
+	}{
+		{
+			name:    "outside a repository",
+			root:    "",
+			kind:    planstate.ResumeBuild,
+			wantErr: "open chunk watch in this plan's local repository to plan or build",
+		},
+		{
+			name:    "nothing to resume",
+			root:    "/src/app",
+			kind:    planstate.ResumeNone,
+			wantErr: "this plan has nothing for chunk to resume",
+		},
+		{
+			name:        "planner",
+			root:        "/src/app",
+			kind:        planstate.ResumePlanner,
+			wantPlanner: []string{"p /src/app"},
+		},
+		{
+			name:      "build",
+			root:      "/src/app",
+			kind:      planstate.ResumeBuild,
+			wantBuild: []chunkd.PlanBuildRequest{{ProjectRoot: "/src/app", PlanID: "p"}},
+		},
+		{
+			name:      "refused",
+			root:      "/src/app",
+			kind:      planstate.ResumeBuild,
+			fails:     refused,
+			wantErr:   refused.Message,
+			wantBuild: []chunkd.PlanBuildRequest{{ProjectRoot: "/src/app", PlanID: "p"}},
+		},
+		{
+			name:        "daemon unavailable",
+			root:        "/src/app",
+			kind:        planstate.ResumePlanner,
+			fails:       fmt.Errorf("resume: %w", chunkd.ErrDaemonUnavailable),
+			wantErr:     "the chunk daemon is not reachable",
+			wantPlanner: []string{"p /src/app"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			savedCheck, savedPlanner, savedBuild := checkWatchProject, resumePlanner, startPlanBuild
+			t.Cleanup(func() { checkWatchProject, resumePlanner, startPlanBuild = savedCheck, savedPlanner, savedBuild })
+			if tc.root != "" {
+				// The real check needs a git origin and config; "" is
+				// refused before it is reached.
+				checkWatchProject = func(context.Context, string) error { return nil }
+			}
+			var planners []string
+			var builds []chunkd.PlanBuildRequest
+			resumePlanner = func(planID string, req chunkd.PlannerResume) (chunkd.SessionLog, error) {
+				planners = append(planners, planID+" "+req.ProjectRoot)
+				return chunkd.SessionLog{}, tc.fails
+			}
+			startPlanBuild = func(req chunkd.PlanBuildRequest) (string, error) {
+				builds = append(builds, req)
+				return "s-9", tc.fails
+			}
+
+			err := daemonResume{}.Resume(t.Context(), tc.root, "p", tc.kind)
+			if tc.wantErr == "" {
+				assert.Check(t, err)
+			} else {
+				assert.Check(t, cmp.Error(err, tc.wantErr))
+			}
+			assert.Check(t, cmp.DeepEqual(planners, tc.wantPlanner))
+			assert.Check(t, cmp.DeepEqual(builds, tc.wantBuild))
+		})
+	}
+}
+
+// A blocker takes its state and outcome from its flow, which the blockers
+// endpoint does not serve, and keeps its own when it has no flow listed.
+func TestBlockerStates(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		blockers []circleci.Blocker
+		flows    []circleci.Flow
+		want     []planstate.Blocker
+	}{
+		{
+			name:     "listed",
+			blockers: []circleci.Blocker{{ID: "p-41", Title: "old title", State: "Integrating - Human"}},
+			flows: []circleci.Flow{
+				{ID: "p-40", Title: "Other", State: "Building - Agent"},
+				{ID: "p-41", Title: "Add retry config", State: "Integrating - Human", Phase: circleci.PhaseEnded, Outcome: "merged"},
+			},
+			want: []planstate.Blocker{{Title: "Add retry config", State: "Integrating - Human", Outcome: "merged"}},
+		},
+		{
+			name:     "listed without a title",
+			blockers: []circleci.Blocker{{ID: "p-41", Title: "Add retry config", State: "Building - Agent"}},
+			flows:    []circleci.Flow{{ID: "p-41", State: "Done"}},
+			want:     []planstate.Blocker{{Title: "Add retry config", State: "Done"}},
+		},
+		{
+			name:     "not listed",
+			blockers: []circleci.Blocker{{ID: "p-41", Title: "Add retry config", State: "Building - Agent"}},
+			want:     []planstate.Blocker{{Title: "Add retry config", State: "Building - Agent"}},
+		},
+		{
+			name: "none",
+			want: []planstate.Blocker{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.DeepEqual(blockerStates(tc.blockers, tc.flows), tc.want))
+		})
+	}
 }

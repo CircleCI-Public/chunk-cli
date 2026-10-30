@@ -74,6 +74,46 @@ func (m Model) WithPlanBuilds(b plan.Build) Model {
 	return m
 }
 
+// WithPlanResume returns a copy of m that starts plans' agents again with r,
+// from the flow list and each flow screen.
+func (m Model) WithPlanResume(r plan.Resumer) Model {
+	m.resumer = r
+	return m
+}
+
+// planResumedMsg is the end of a resume started from the flow list.
+type planResumedMsg struct {
+	title string
+	err   error
+}
+
+// resumePlan starts the agent of the flow the list asks for, in the project
+// the dashboard was opened in.
+func (m Model) resumePlan(msg flowlist.ResumeMsg) (Model, tea.Cmd) {
+	if m.resumer == nil {
+		return m, nil
+	}
+	m.note = "resuming " + msg.Title + "…"
+	r, ctx, root := m.resumer, m.planCtx, m.root
+	return m, func() tea.Msg {
+		return planResumedMsg{title: msg.Title, err: r.Resume(ctx, root, msg.ID, msg.Kind)}
+	}
+}
+
+// planResumed notes how a resume ended, and refreshes the list so its claim
+// shows.
+func (m Model) planResumed(msg planResumedMsg) (Model, tea.Cmd) {
+	if msg.err != nil {
+		m.note = "could not resume " + msg.title + ": " + msg.err.Error()
+	} else {
+		m.note = "resumed " + msg.title
+	}
+	if m.flows == nil {
+		return m, nil
+	}
+	return m, m.flows.Refresh()
+}
+
 // WithFlowList adds the flow list, the dashboard's first screen.
 func (m Model) WithFlowList(flows flowlist.Model) Model {
 	if m.newChat != nil {
@@ -124,7 +164,7 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	branch, _ := gitutil.CurrentBranchIn(msg.root)
 	screen := plan.New(m.planCtx, msg.agent, msg.approve, msg.store, "").
 		WithTerminal(m.hasDarkBG, m.superEnter).WithBranch(branch).WithInbox(msg.title, msg.root).
-		WithBuild(m.builds)
+		WithBuild(m.builds).WithResume(m.resumer)
 	if m.newChat != nil {
 		screen = screen.WithChatKey()
 	}
@@ -163,6 +203,10 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.withPlanReady(msg)
 	case flowlist.OpenMsg:
 		return m.openPlanID(msg.ID, msg.Title)
+	case flowlist.ResumeMsg:
+		return m.resumePlan(msg)
+	case planResumedMsg:
+		return m.planResumed(msg)
 	case flowlist.NewMsg:
 		return m.openPlanID("", "New plan")
 	case flowlist.QuitMsg:

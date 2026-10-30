@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/factoryplan"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -84,7 +86,9 @@ func newWatchCmd() *cobra.Command {
 			m := watch.New().WithRelaunch().WithBottomMargin(editorRowMargin()).
 				WithPlans(plans.ctx, root, plans.plan).
 				WithPlanBuilds(daemonPlanBuild{}).
-				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).WithParents(listFactoryParents)).
+				WithPlanResume(daemonResume{}).
+				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).
+					WithParents(listFactoryParents).WithBlockers(listFactoryBlockers)).
 				WithChat(newChatModel(plans.ctx, root))
 			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
@@ -315,6 +319,87 @@ func watchPlanProject(ctx context.Context, root string) error {
 		return errors.New("open chunk watch in this plan's local repository to plan or build")
 	}
 	return checkPlanProject(ctx, root)
+}
+
+// checkWatchProject, resumePlanner and startPlanBuild are watchPlanProject
+// and the chunk daemon's routes but in tests.
+var (
+	checkWatchProject = watchPlanProject
+	resumePlanner     = chunkd.ResumePlanner
+	startPlanBuild    = chunkd.StartPlanBuild
+)
+
+// errNothingToResume is a resume of a kind chunk does not start.
+var errNothingToResume = errors.New("this plan has nothing for chunk to resume")
+
+// daemonResume starts plans' agents again in the local chunk daemon.
+type daemonResume struct{}
+
+// Resume has plan planID's planner claim it again, or starts a build session
+// of it, as kind says, in the project at root.
+func (daemonResume) Resume(ctx context.Context, root, planID string, kind planstate.ResumeKind) error {
+	if err := checkWatchProject(ctx, root); err != nil {
+		return err
+	}
+	var err error
+	switch kind {
+	case planstate.ResumePlanner:
+		_, err = resumePlanner(planID, chunkd.PlannerResume{ProjectRoot: root})
+	case planstate.ResumeBuild:
+		_, err = startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: root, PlanID: planID})
+	case planstate.ResumeNone:
+		return errNothingToResume
+	default:
+		return errNothingToResume
+	}
+	return resumeProblem(err)
+}
+
+// resumeProblem is a failed resume as the dashboard shows it: the daemon's
+// refusal as it gives it.
+func resumeProblem(err error) error {
+	if refused, ok := errors.AsType[*chunkd.SessionRefused](err); ok {
+		return errors.New(refused.Message)
+	}
+	if errors.Is(err, chunkd.ErrDaemonUnavailable) {
+		return errors.New("the chunk daemon is not reachable")
+	}
+	return err
+}
+
+// listFactoryBlockers is the plans blocking plan id, each with its flow's
+// state and outcome, for the flow list.
+func listFactoryBlockers(ctx context.Context, id string) ([]planstate.Blocker, error) {
+	api, err := factoryPlanClient()
+	if err != nil {
+		return nil, err
+	}
+	blockers, err := api.ListFlowBlockers(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("list the plan's blockers: %w", err)
+	}
+	flows, err := api.ListFlows(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list the plans' flows: %w", err)
+	}
+	return blockerStates(blockers, flows), nil
+}
+
+// blockerStates is blockers, with state and outcome taken from their listed
+// flows. The blockers endpoint serves no outcome.
+func blockerStates(blockers []circleci.Blocker, flows []circleci.Flow) []planstate.Blocker {
+	byID := make(map[string]circleci.Flow, len(flows))
+	for _, f := range flows {
+		byID[f.ID] = f
+	}
+	out := make([]planstate.Blocker, len(blockers))
+	for i, b := range blockers {
+		out[i] = planstate.Blocker{Title: b.Title, State: b.State}
+		if f, ok := byID[b.ID]; ok {
+			out[i] = planstate.Blocker{Title: cmp.Or(f.Title, b.Title), State: f.State, Outcome: f.Outcome}
+		}
+	}
+	return out
 }
 
 // listFactoryFlows is the caller's open flows, for the flow list.

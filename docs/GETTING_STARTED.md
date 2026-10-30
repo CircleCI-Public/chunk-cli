@@ -329,8 +329,12 @@ shows how many flows it holds) and then by phase (Planning, Building, ...), a
 sub-plan marked `↳` with its parent (and indented under it when both are under
 the same heading), a flow whose PR factory could not rebase marked ⚠, with a
 read-only preview of the selected one's plan. Flows are yours wherever
-`chunk watch` is run. `Enter` opens a flow's plan, `n` starts a new one, and
-`q` or `esc` quits. Opening or
+`chunk watch` is run. `Enter` opens a flow's plan, `n` starts a new one,
+`R` resumes the selected flow when it waits on an agent and no session holds
+it (a build gets a fresh build session in the chunk daemon; a planner picks
+up its conversation). When `R` isn't offered, the header's right-hand end
+(where it otherwise shows `✓ local`) says why. For example, it names the session that holds the claim and the release
+command that frees it, or a blocker that isn't Done. `q` or `esc` quits. Opening or
 reading a plan never claims it; the request you type for a new plan does, and
 the screen resumes a planner factory is waiting on, in the project
 `chunk watch` was opened in. `ctrl+p` goes back to the list to
@@ -355,8 +359,10 @@ Once approved, the screen stays open on the Flow tab, which follows the
 build: each unit done, being built or to do, and the pull request.
 The left pane then shows the builder at work. If it warns that another
 session holds the plan's claim, run the `factory daemon release` command it
-names. A plan built on another machine, or before the daemon restarted,
-shows no build activity here; the Flow tab still shows its progress. `x`
+names. Once factory frees the old claim of a plan whose build stopped, after
+the daemon restarted say, its Flow tab says that no session holds the plan and
+that `R` starts a build session; `R` starts a new build that picks up
+factory's next task. `x`
 abandons a plan, and stops its build with it.
 `esc` goes back to your plans with the plan kept. Quitting with a request or
 comments still unsent in any plan asks for a second `ctrl+c`.
