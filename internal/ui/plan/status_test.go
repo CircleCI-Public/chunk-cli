@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -8,6 +9,49 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 )
+
+// FlowText is the status strip's step, now and next, as a line, from the
+// screen's last read of the flow.
+func TestFlowText(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		state, task string
+		flow        Flow
+		want        string
+	}{
+		{
+			name:  "not started",
+			state: "Unprioritized",
+			want:  "Not started",
+		},
+		{
+			name:  "in review",
+			state: "Planning - Agent",
+			flow:  Flow{Next: []Step{{Actor: "session", Task: "review-plan", Dispatched: true}}},
+			want:  "Planning › Now: factory is reviewing the plan › Next: chunk: review-plan",
+		},
+		{
+			name:  "building a unit",
+			state: "Building - Agent",
+			task:  "build-unit",
+			flow: Flow{
+				Unit: "Unit 2: parser",
+				Next: []Step{{Actor: "session", Task: "build-unit", Dispatched: true}},
+			},
+			want: "Building › Now: Build unit · Unit 2: parser › Next: chunk: build-unit",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, store := planModel(t)
+			store.FlowV, store.StateV, store.TaskV = tc.flow, tc.state, tc.task
+			m = refreshed(t, m)
+			assert.Check(t, cmp.Equal(m.FlowText(), tc.want))
+		})
+	}
+
+	fresh := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+	assert.Check(t, cmp.Equal(fresh.FlowText(), ""))
+}
 
 func TestStatus(t *testing.T) {
 	for _, tc := range []struct {

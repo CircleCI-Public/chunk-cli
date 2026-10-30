@@ -110,6 +110,25 @@ func (m Model) header() string {
 	return left + strings.Repeat(" ", gap) + state + right
 }
 
+// FlowText is where the flow stands as the status strip says it, "" until
+// the screen has read a flow.
+func (m Model) FlowText() string {
+	if m.state == "" {
+		return ""
+	}
+	f := m.flow
+	f.State = m.state
+	step, now, next := status(f, m.family, planstate.StageOf(m.events, m.units), m.inReview())
+	parts := []string{step}
+	if now != "" {
+		parts = append(parts, "Now: "+now)
+	}
+	if next != "" {
+		parts = append(parts, "Next: "+next)
+	}
+	return strings.Join(parts, " › ")
+}
+
 // stripRows is the status strip's height in rows.
 const stripRows = 2
 

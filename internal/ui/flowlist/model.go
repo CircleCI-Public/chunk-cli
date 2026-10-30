@@ -137,6 +137,9 @@ func (m Model) WithNote(note string) Model {
 	return m
 }
 
+// Flows is the open flows as the list last read them.
+func (m Model) Flows() []circleci.Flow { return slices.Clone(m.flows) }
+
 // Len is how many open flows the list shows.
 func (m Model) Len() int { return len(m.flows) }
 
