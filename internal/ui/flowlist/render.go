@@ -85,10 +85,10 @@ func (m Model) listLines(width, height int) []string {
 	flows, depth := m.visible()
 	counts := make([]int, 4)
 	for _, f := range flows {
-		counts[group(f.State)]++
+		counts[group(f)]++
 	}
 	for _, f := range flows {
-		g := group(f.State)
+		g := group(f)
 		if g != lastGroup {
 			if lastGroup != -1 {
 				rows = append(rows, "")
@@ -97,7 +97,7 @@ func (m Model) listLines(width, height int) []string {
 			lastGroup, lastPhase = g, ""
 		}
 		// A sub-heading is spelled as the first flow in it spells its phase.
-		if p := phase(f.State); p != "" && !samePhase(p, lastPhase) {
+		if p := phase(f); p != "" && !samePhase(p, lastPhase) {
 			rows = append(rows, " "+st.Dim.Render(oneLine(p)))
 			lastPhase = p
 		}
@@ -116,7 +116,7 @@ func (m Model) listLines(width, height int) []string {
 		var detail []string
 		// Only Other's heading does not say the state.
 		if g == 3 {
-			detail = append(detail, st.VDim.Render(stateText(f.State)))
+			detail = append(detail, st.VDim.Render(stateText(f)))
 		}
 		if p := m.parentTitle(f.ID); p != "" {
 			detail = append(detail, st.VDim.Render("↳ "+p))
@@ -168,10 +168,13 @@ func sectionHeading(st theme.Styles, g, n int) string {
 	return style.Render(labels[g]) + "  " + st.VDim.Render(strconv.Itoa(n))
 }
 
-// stateText is the state of a flow no heading names, for the Other section:
-// its whole state lowercased, or "unknown".
-func stateText(state string) string {
-	phase, _ := planstate.Parse(oneLine(state))
+// stateText is the state of a flow no heading names, for the Other
+// section.
+func stateText(f circleci.Flow) string {
+	if o := strings.ToLower(oneLine(f.Outcome)); f.Phase == circleci.PhaseEnded && o != "" && o != "merged" {
+		return o
+	}
+	phase, _ := planstate.Parse(oneLine(f.State))
 	if phase == "" {
 		return "unknown"
 	}

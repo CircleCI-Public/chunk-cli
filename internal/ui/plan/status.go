@@ -18,8 +18,8 @@ var steps = []string{"Planning", "Building", "Integrating", done}
 
 // status is the strip's text for flow and its family: the step it is at,
 // what is happening now, and what comes next. stage is what ctrl+s approves
-// in ReadyState, and inReview whether factory's agent is reviewing the plan.
-// Text from factory is stripped of escapes and kept to one line.
+// for a plan ReadyToApprove, and inReview whether factory is working on the
+// plan. Text from factory is stripped of escapes and kept to one line.
 func status(f Flow, fam Family, stage Stage, inReview bool) (step, now, next string) {
 	state := clean(f.State)
 	switch phase, _ := planstate.Parse(state); {
@@ -51,13 +51,13 @@ func status(f Flow, fam Family, stage Stage, inReview bool) (step, now, next str
 	blocker := -1
 	if !f.Ended && len(f.Next) == 0 {
 		blocker = slices.IndexFunc(fam.Blockers, func(b Relative) bool {
-			return strings.TrimSpace(b.State) != done
+			return !blockerDone(b)
 		})
 	}
 	switch {
 	case blocker >= 0:
 		next = "Waiting on " + clean(fam.Blockers[blocker].Title)
-	case strings.TrimSpace(f.State) == ReadyState:
+	case ReadyToApprove(f):
 		next = stageText(stage)
 	default:
 		if s, ok := forward(f.Next); ok {
@@ -65,6 +65,13 @@ func status(f Flow, fam Family, stage Stage, inReview bool) (step, now, next str
 		}
 	}
 	return step, now, next
+}
+
+// blockerDone is whether b no longer holds the flow it blocks: its flow
+// merged, whichever name its end state has.
+func blockerDone(b Relative) bool {
+	state := strings.TrimSpace(b.State)
+	return state == done || strings.EqualFold(state, "ended") && clean(b.Outcome) == "merged"
 }
 
 // forward is the transition in next that moves the flow on: resolve-conflicts
@@ -84,7 +91,7 @@ func forward(next []Step) (Step, bool) {
 	return next[i], true
 }
 
-// stageText is what the developer does next for a plan in ReadyState.
+// stageText is what the developer does next for a plan ReadyToApprove.
 func stageText(stage Stage) string {
 	switch stage {
 	case StageDesign:
@@ -107,9 +114,10 @@ func stepText(s Step) string {
 	if what == "" {
 		what = clean(s.Action)
 	}
-	who := clean(s.Actor)
-	switch who {
-	case "human":
+	actor := Actor(clean(string(s.Actor)))
+	who := string(actor)
+	switch actor {
+	case ActorHuman:
 		switch what {
 		case "resolve-conflicts":
 			what = "resolve conflicts · ctrl+s"
@@ -123,9 +131,9 @@ func stepText(s Step) string {
 			what = "merge the PR"
 		}
 		return strings.TrimSpace("you " + what)
-	case "session":
+	case ActorSession:
 		who = "chunk"
-	case "daemon":
+	case ActorDaemon:
 		who = "factory"
 	}
 	if what == "" {

@@ -396,7 +396,7 @@ chunk
   it, or are listed after the plan as for any part rewritten.
 
   `ctrl+s` approves the plan, after a `y`, once factory's review of it has
-  passed and moved it to Planning - Human, when the status strip under the
+  passed and factory waits on you, when the status strip under the
   header reads `Next: you approve the plan · ctrl+s`; until then it reads
   `Now: factory is reviewing the plan`. A plan waits there after its design
   is written too: while factory waits for the design to be approved rather

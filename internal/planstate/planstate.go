@@ -21,10 +21,27 @@ const (
 // Unprioritized is the state of a plan nobody has started.
 const Unprioritized = "Unprioritized"
 
-// Parse splits state into its phase and the actor it waits on. A state
-// without a recognised actor comes back whole as the phase, with Unknown.
+// newNames are the names factory gives states after collapsing their
+// actors, each to the phase chunk reads for its old name.
+var newNames = map[string]string{
+	"init":            Unprioritized,
+	"ready":           "Agent Ready",
+	"refine-proposal": "Planning",
+	"refine-units":    "Planning",
+	"stand-by":        "standing-by",
+	"build":           "Building",
+	"integrate":       "Integrating",
+	"ended":           "Done",
+}
+
+// Parse splits state into its phase and the actor it waits on. A new name
+// comes back as its old phase, with Unknown. A state without a recognised
+// actor comes back whole as the phase, with Unknown.
 func Parse(state string) (phase string, actor Actor) {
 	state = strings.TrimSpace(state)
+	if p, ok := newNames[strings.ToLower(state)]; ok {
+		return p, Unknown
+	}
 	i := strings.LastIndex(state, " - ")
 	if i < 0 {
 		return state, Unknown
@@ -41,5 +58,6 @@ func Parse(state string) (phase string, actor Actor) {
 
 // IsUnprioritized is whether state is the state of a plan nobody has started.
 func IsUnprioritized(state string) bool {
-	return strings.EqualFold(strings.TrimSpace(state), Unprioritized)
+	state = strings.TrimSpace(state)
+	return strings.EqualFold(state, Unprioritized) || strings.EqualFold(state, "init")
 }

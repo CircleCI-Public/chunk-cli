@@ -22,29 +22,33 @@ func TestStatus(t *testing.T) {
 			step: "Not started",
 		},
 		{
-			name:     "in review",
-			flow:     Flow{State: "Planning - Agent"},
+			name: "in review",
+			flow: Flow{
+				State: "Planning - Agent",
+				Next:  []Step{{Actor: "session", Task: "review-plan", Dispatched: true}},
+			},
 			inReview: true,
 			step:     "Planning",
 			now:      "factory is reviewing the plan",
+			next:     "chunk: review-plan",
 		},
 		{
 			name:  "design waits",
-			flow:  Flow{State: "Planning - Human"},
+			flow:  Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
 			stage: StageDesign,
 			step:  "Planning",
 			next:  "you approve the design · ctrl+s",
 		},
 		{
 			name:  "plan waits",
-			flow:  Flow{State: "Planning - Human"},
+			flow:  Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
 			stage: StagePlan,
 			step:  "Planning",
 			next:  "you approve the plan · ctrl+s",
 		},
 		{
 			name:  "questions",
-			flow:  Flow{State: "Planning - Human"},
+			flow:  Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
 			stage: StageQuestions,
 			step:  "Planning",
 			next:  "you answer 3. Open Questions in comments",
@@ -142,6 +146,24 @@ func TestStatus(t *testing.T) {
 			step: "Done · canceled",
 		},
 		{
+			name: "ended canceled",
+			flow: Flow{
+				State:   "ended",
+				Ended:   true,
+				Outcome: "canceled",
+			},
+			step: "Done · canceled",
+		},
+		{
+			name: "new name for a phase",
+			flow: Flow{
+				State: "build",
+				Next:  []Step{{Actor: "session", Task: "build-unit", Dispatched: true}},
+			},
+			step: "Building",
+			next: "chunk: build-unit",
+		},
+		{
 			name: "unknown state",
 			flow: Flow{State: "Paused\x1b[31m now\n"},
 			step: "Paused now",
@@ -216,6 +238,33 @@ func TestStatus(t *testing.T) {
 				{Title: "b", State: " Done "},
 			}},
 			step: "Building",
+		},
+		{
+			name: "a blocker ended merged is done",
+			flow: Flow{State: "build"},
+			family: Family{Blockers: []Relative{
+				{Title: "a", State: "ended", Outcome: "merged"},
+			}},
+			step: "Building",
+		},
+		{
+			name: "a blocker ended abandoned still blocks",
+			flow: Flow{State: "build"},
+			family: Family{Blockers: []Relative{
+				{Title: "a", State: "Done"},
+				{Title: "b", State: "ended", Outcome: "canceled"},
+			}},
+			step: "Building",
+			next: "Waiting on b",
+		},
+		{
+			name: "an old abandoned blocker still blocks",
+			flow: Flow{State: "Building - Agent"},
+			family: Family{Blockers: []Relative{
+				{Title: "a", State: "Canceled", Outcome: "canceled"},
+			}},
+			step: "Building",
+			next: "Waiting on a",
 		},
 		{
 			name: "ended with a blocker",
