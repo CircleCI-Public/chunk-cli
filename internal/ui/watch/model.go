@@ -75,6 +75,8 @@ type Model struct {
 	planner                    PlanOpener
 	builds                     plan.Build
 	resumer                    plan.Resumer
+	deleter                    Deleter
+	deleting                   string
 	planScreen                 *plan.Model
 	planOpen                   bool
 	planWorkspaces             map[uint64]*planWorkspace

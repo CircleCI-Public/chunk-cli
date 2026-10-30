@@ -167,6 +167,32 @@ func (r *fakeResumer) called() []string {
 	return append([]string(nil), r.calls...)
 }
 
+// fakeDeleter is a Deleter that records each plan it is asked to delete and
+// answers err. When gate is set, Delete waits for it to close.
+type fakeDeleter struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+	gate  chan struct{}
+}
+
+func (d *fakeDeleter) Delete(_ context.Context, planID string) error {
+	d.mu.Lock()
+	d.calls = append(d.calls, planID)
+	gate, err := d.gate, d.err
+	d.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	return err
+}
+
+func (d *fakeDeleter) called() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.calls...)
+}
+
 // flowList is a flow list of flows, each previewed as its title.
 func flowList(t *testing.T, flows ...circleci.Flow) flowlist.Model {
 	t.Helper()
@@ -655,4 +681,164 @@ func TestOpenedScreensGetTheResumer(t *testing.T) {
 	assert.Assert(t, cmd != nil, "R did nothing:\n%s", screen(m))
 	_ = deliver(t, m, cmd)
 	assert.Check(t, cmp.DeepEqual(r.called(), []string{fmt.Sprintf("/src/chunk-cli p1 %d", planstate.ResumeBuild)}))
+}
+
+// X on the flow list asks, and the confirmed delete goes through the deleter;
+// the result is noted and the list refreshed.
+func TestFlowListDeleteCallsTheDeleter(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "deleted",
+			want: "deleted Alpha",
+		},
+		{
+			name: "refused",
+			err:  errors.New("plan has sub-plans"),
+			want: "could not delete Alpha: plan has sub-plans",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &fakeDeleter{err: tc.err}
+			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+			m := sized(New().WithConnection(chunkd.Connection{}).
+				WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
+				WithPlanDelete(d).WithFlowList(flowList(t, flow)))
+			m = deliverThen(t, m, m.flows.Init(), 1)
+			assert.Check(t, cmp.Contains(screen(m), "X delete plan"), "X is not offered:\n%s", screen(m))
+
+			next, cmd := m.Update(flowlist.DeleteMsg{ID: "a", Title: "Alpha"})
+			m = next.(Model)
+			assert.Check(t, cmp.Equal(m.note, "deleting Alpha…"))
+			assert.Assert(t, cmd != nil, "the delete was not started")
+			msg := cmd()
+			assert.Check(t, cmp.DeepEqual(d.called(), []string{"a"}))
+
+			next, refresh := m.Update(msg)
+			m = next.(Model)
+			assert.Check(t, cmp.Equal(m.note, tc.want))
+			assert.Check(t, refresh != nil, "the list was not refreshed")
+			assert.Check(t, cmp.Equal(m.deleting, ""))
+		})
+	}
+}
+
+// X then y, pressed on the dashboard, reach the flow list and delete the
+// selected flow through the deleter.
+func TestDeleteKeysReachTheListThroughTheDashboard(t *testing.T) {
+	d := &fakeDeleter{}
+	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+	m := sized(New().WithConnection(chunkd.Connection{}).
+		WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
+		WithPlanDelete(d).WithFlowList(flowList(t, flow)))
+	m = deliverThen(t, m, m.flows.Init(), 1)
+
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'X', Text: "X"})
+	assert.Check(t, cmp.Contains(screen(m), "Delete this plan"), "X did not ask:\n%s", screen(m))
+	m, cmd := pressKey(m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	assert.Assert(t, cmd != nil, "y did not confirm")
+
+	next, cmd := m.Update(cmd())
+	m = next.(Model)
+	assert.Assert(t, cmd != nil, "the delete was not started")
+	next, _ = m.Update(cmd())
+	m = next.(Model)
+	assert.Check(t, cmp.DeepEqual(d.called(), []string{"a"}))
+	assert.Check(t, cmp.Equal(m.note, "deleted Alpha"))
+}
+
+// Without a deleter the flow list's delete does nothing.
+func TestFlowListDeleteWithoutADeleter(t *testing.T) {
+	m := planModel(t, &fakePlans{})
+	next, cmd := m.Update(flowlist.DeleteMsg{ID: "a", Title: "Alpha"})
+	assert.Check(t, cmd == nil)
+	assert.Check(t, cmp.Equal(next.(Model).note, ""))
+}
+
+// While a delete is in flight, the same plan is not deleted twice, another
+// is refused, and the list stops offering X on the one being deleted until
+// the result arrives.
+func TestDeleteInFlight(t *testing.T) {
+	d := &fakeDeleter{gate: make(chan struct{})}
+	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+	m := sized(New().WithConnection(chunkd.Connection{}).
+		WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
+		WithPlanDelete(d).WithFlowList(flowList(t, flow)))
+	m = deliverThen(t, m, m.flows.Init(), 1)
+
+	next, cmd := m.Update(flowlist.DeleteMsg{ID: "a", Title: "Alpha"})
+	m = next.(Model)
+	assert.Assert(t, cmd != nil)
+	assert.Check(t, !strings.Contains(ansi.Strip(m.flows.Content()), "X delete plan"), "X is offered mid-delete:\n%s", ansi.Strip(m.flows.Content()))
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+
+	next, again := m.Update(flowlist.DeleteMsg{ID: "a", Title: "Alpha"})
+	m = next.(Model)
+	assert.Check(t, again == nil, "the same plan was deleted twice")
+
+	next, other := m.Update(flowlist.DeleteMsg{ID: "b", Title: "Beta"})
+	m = next.(Model)
+	assert.Check(t, other == nil)
+	assert.Check(t, cmp.Equal(m.note, "a delete is in progress"))
+
+	close(d.gate)
+	<-result
+	assert.Check(t, cmp.DeepEqual(d.called(), []string{"a"}))
+	next, _ = m.Update(planDeletedMsg{id: "a", title: "Alpha", err: errors.New("refused")})
+	m = next.(Model)
+	assert.Check(t, cmp.Equal(m.deleting, ""))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.flows.Content()), "X delete plan"), "X is still hidden:\n%s", ansi.Strip(m.flows.Content()))
+
+	_, cmd = m.Update(flowlist.DeleteMsg{ID: "b", Title: "Beta"})
+	assert.Check(t, cmd != nil, "a new delete did not start")
+}
+
+// A plan screen open for a deleted plan is dropped, so opening the plan again
+// asks for it anew; one for another plan stays.
+func TestDeleteDropsTheOpenPlanScreen(t *testing.T) {
+	d := &fakeDeleter{}
+	f := &fakePlans{plan: "# Plan"}
+	m := planModel(t, f).WithPlanDelete(d)
+	for _, id := range []string{"p2", "p1"} {
+		next, cmd := m.Update(flowlist.OpenMsg{ID: id, Title: id})
+		m = deliverThen(t, next.(Model), cmd, 0)
+	}
+	assert.Assert(t, m.HasPlan())
+	m, _ = m.showFlows()
+
+	next, cmd := m.Update(flowlist.DeleteMsg{ID: "p1", Title: "p1"})
+	m = next.(Model)
+	m = deliver(t, m, cmd)
+	assert.Check(t, cmp.Equal(m.note, "deleted p1"))
+	assert.Check(t, cmp.Len(m.planWorkspaces, 1))
+	for _, ws := range m.planWorkspaces {
+		assert.Check(t, cmp.Equal(ws.store.ID(), "p2"))
+	}
+
+	// Opening p1 again asks the planner, instead of reusing the screen.
+	f.root = ""
+	_, cmd = m.Update(flowlist.OpenMsg{ID: "p1", Title: "p1"})
+	assert.Assert(t, cmd != nil, "p1 was not opened anew")
+	_ = cmd()
+	assert.Check(t, cmp.Equal(f.root, "/src/chunk-cli"), "the planner was not asked")
+}
+
+// If the plan shown is the one deleted, the dashboard falls back to the list.
+func TestDeleteOfTheShownPlanShowsTheList(t *testing.T) {
+	f := &fakePlans{plan: "# Plan"}
+	m := planModel(t, f)
+	next, cmd := m.Update(flowlist.OpenMsg{ID: "p1", Title: "p1"})
+	m = deliverThen(t, next.(Model), cmd, 0)
+	assert.Assert(t, m.planOpen)
+
+	next, _ = m.Update(planDeletedMsg{id: "p1", title: "p1"})
+	m = next.(Model)
+	assert.Check(t, !m.planOpen)
+	assert.Check(t, m.flowsOpen)
+	assert.Check(t, m.planScreen == nil)
+	assert.Check(t, !m.HasPlan())
 }
