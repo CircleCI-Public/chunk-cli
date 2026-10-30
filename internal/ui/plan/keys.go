@@ -4,6 +4,8 @@ import (
 	"slices"
 
 	"charm.land/bubbles/v2/key"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 )
 
 // keyMap is every key the planning screen answers to. The handlers match
@@ -56,7 +58,10 @@ type keyMap struct {
 	// Chat is the host's; it is here for its hint.
 	Chat     key.Binding
 	SendPlan key.Binding
-	Quit     key.Binding
+	// Resume starts the plan's agent again when factory waits on one that is
+	// not there.
+	Resume key.Binding
+	Quit   key.Binding
 }
 
 // keys returns the screen's bindings as they stand for the current focus and
@@ -105,6 +110,7 @@ func (m Model) keys() keyMap {
 		Switch:         key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
 		Chat:           key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "chat")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
+		Resume:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resume")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 	// The reason prompt says what these do, so they carry no hint.
@@ -156,8 +162,15 @@ func (m Model) keys() keyMap {
 	k.CancelComment.SetEnabled(m.commenting)
 	k.Focus.SetEnabled(!m.commenting)
 	k.Confirm.SetEnabled(m.confirming)
+	k.Resume.SetEnabled(m.resumeOffered())
 	m.endKeys(&k)
 	return k
+}
+
+// resumeOffered is whether R is offered now.
+func (m Model) resumeOffered() bool {
+	return m.created && !m.commenting && !m.confirming && !m.askingReason &&
+		!m.resumingBuild && !m.resuming && m.resumable().Kind != planstate.ResumeNone
 }
 
 // chatKeys enables the left pane's keys: the request input's until the plan
@@ -259,7 +272,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.Switch,
 		k.Send, k.Newline,
 		k.Open, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
-		k.Focus, k.SendPlan, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
+		k.Focus, k.SendPlan, k.Resume, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
 		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }
