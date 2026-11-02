@@ -210,6 +210,23 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 	return out, nil
 }
 
+// Units are the plan's units as factory parses them.
+func (s *Store) Units(ctx context.Context) ([]plan.Unit, error) {
+	id := s.ID()
+	if id == "" {
+		return nil, nil
+	}
+	sc, err := s.api.PlanStructuredContent(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get the plan's units: %w", err)
+	}
+	units := make([]plan.Unit, len(sc.Units))
+	for i, u := range sc.Units {
+		units[i] = plan.Unit{Name: u.Name, Done: u.Done}
+	}
+	return units, nil
+}
+
 // parent is plan id's parent's ID, "" for a top-level plan, read from
 // factory the first time and kept after.
 func (s *Store) parent(ctx context.Context, id string) (string, error) {

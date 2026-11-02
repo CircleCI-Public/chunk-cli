@@ -183,6 +183,7 @@ func TestExistingPlanOpensWithoutStartingOrRecreatingIt(t *testing.T) {
 func TestApprovingApprovesThePlanInFactory(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 	agent := turnReturning("ok")
 	sent := false
 	approve := func(func(string)) (string, error) {
@@ -572,6 +573,7 @@ func TestWaitingForFactoryEndsWhenTheStateMoves(t *testing.T) {
 			store.mu.Lock()
 			store.StateV = "Planning - Human"
 			store.TextV += "\n### Unit 1: add the flag\n\nParse it in main.go.\n"
+			store.UnitsV = []Unit{{Name: "Unit 1: add the flag"}}
 			store.mu.Unlock()
 			m = drive(t, m, pollMsg{})
 			assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "ctrl+s Approve plan"))
@@ -1798,6 +1800,7 @@ func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 	store := newFakeStore()
 	store.Created = true
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 	approvals := 0
 	approve := func(func(string)) (string, error) {
 		approvals++
@@ -1843,6 +1846,7 @@ func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 func TestApprovingShowsEachStep(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 	release := make(chan struct{})
 	approve := func(step func(string)) (string, error) {
 		step("Approving the plan in factory…")
@@ -2792,6 +2796,7 @@ func TestStripShowsFlowStatus(t *testing.T) {
 	assert.Check(t, cmp.Contains(lines[2], "Next: you approve the design · ctrl+s"))
 
 	store.TextV += "\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 	m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Wrote the units."}}))
 	view = ansi.Strip(m.Content())
 	if !strings.Contains(view, "Next: you approve the plan · ctrl+s") {
@@ -2835,9 +2840,13 @@ Code.
 
 More code.`
 
+// planWithUnitsRead are planWithUnits' units, as factory reads them.
+var planWithUnitsRead = []Unit{{Name: "Unit 1: Add RetryPolicy", Done: true}, {Name: "Unit 2: Wire it in"}}
+
 func TestPlanShowsUnitsAsSteps(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = planWithUnits
+	store.UnitsV = []Unit{{Name: "Unit 1: Add RetryPolicy", Done: true}, {Name: "Unit 2: Wire it in"}}
 	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it").WithBranch("hanabel/retry-429")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := ansi.Strip(m.Content())
@@ -2849,26 +2858,74 @@ func TestPlanShowsUnitsAsSteps(t *testing.T) {
 	assert.Check(t, !strings.Contains(view, "(done)"), "a done unit's heading keeps its suffix:\n%s", view)
 }
 
-// TestPlanStepsAreFactorysUnits checks that the plan pane's steps are the
-// units factory counts: not a worked example's fenced heading, nor a unit's
-// own subsection, and a unit done with a SHA is drawn done.
-func TestPlanStepsAreFactorysUnits(t *testing.T) {
+// TestPlanStepsComeFromTheRoute checks that the plan pane's steps are the
+// units the route answers, matched to the text's headings: a done unit's SHA
+// suffix is not drawn, and a heading in an earlier section with a unit's name
+// is not its step.
+func TestPlanStepsComeFromTheRoute(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Retry on 429\n\n## 1. Outcome\n\nCreate retries.\n\n" +
-		"## 4. Worked example\n\n```md\n### Unit 9: example\n```\n\n" +
+		"## 4. Worked example\n\n### Unit 1: Add RetryPolicy\n\nAn example.\n\n" +
 		"## 5. Units\n\n### Unit 1: Add RetryPolicy (done, abc1234)\n\nCode.\n\n#### Building\n\nCommitted.\n"
+	store.UnitsV = []Unit{{Name: "Unit 1: Add RetryPolicy", Done: true}}
 	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := ansi.Strip(m.Content())
 	assert.Check(t, strings.Contains(view, "✓ 1  Add RetryPolicy"), "no done step:\n%s", view)
-	for _, unwanted := range []string{"○ 2", "✓ 2", "○ 1  example", "abc1234"} {
+	assert.Check(t, cmp.Equal(strings.Count(view, "✓ 1  Add RetryPolicy"), 1), "the step is drawn more than once:\n%s", view)
+	for _, unwanted := range []string{"○ 2", "✓ 2", "abc1234"} {
 		assert.Check(t, !strings.Contains(view, unwanted), "view has %q:\n%s", unwanted, view)
 	}
 }
 
-func TestNarrowScreenTakesTurnsWithTabs(t *testing.T) {
+// TestPlanWaitsForItsUnits checks that a plan's text is not drawn until its
+// units are read with it: a failed units read fails the refresh, and the next
+// good refresh draws the text with its steps.
+func TestPlanWaitsForItsUnits(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = planWithUnits
+	store.UnitsErr = errors.New("503 service unavailable")
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "could not refresh the plan: 503 service unavailable"), "view:\n%s", view)
+	for _, unwanted := range []string{"Retry on 429", "✓ 1", "○ 2", "2 units"} {
+		assert.Check(t, !strings.Contains(view, unwanted), "view has %q:\n%s", unwanted, view)
+	}
+
+	store.mu.Lock()
+	store.UnitsErr, store.UnitsV = nil, planWithUnitsRead
+	store.mu.Unlock()
+	m = refreshed(t, m)
+	view = ansi.Strip(m.Content())
+	for _, want := range []string{"✓ 1  Add RetryPolicy", "○ 2  Wire it in", "2 units"} {
+		assert.Check(t, cmp.Contains(view, want), "view:\n%s", view)
+	}
+	assert.Check(t, !strings.Contains(view, "could not refresh the plan"), "view:\n%s", view)
+}
+
+// TestPlanDrawsUnitsThatChangeWithTheText checks that the plan pane is drawn
+// again when only the units change, as a unit marked done before its text is.
+func TestPlanDrawsUnitsThatChangeWithTheText(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = planWithUnits
+	store.UnitsV = []Unit{{Name: "Unit 1: Add RetryPolicy"}, {Name: "Unit 2: Wire it in"}}
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "○ 1  Add RetryPolicy"), "view:\n%s", view)
+
+	store.mu.Lock()
+	store.UnitsV = planWithUnitsRead
+	store.mu.Unlock()
+	m = refreshed(t, m)
+	view = ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "✓ 1  Add RetryPolicy"), "view:\n%s", view)
+}
+
+func TestNarrowScreenTakesTurnsWithTabs(t *testing.T) {
+	store := newFakeStore()
+	store.TextV, store.UnitsV = planWithUnits, planWithUnitsRead
 	m := New(context.Background(), turnReturning("Wrote it."), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 70, Height: 30})
 	view := ansi.Strip(m.Content())
@@ -4188,8 +4245,8 @@ func flowModel(t *testing.T, store *fakeStore) Model {
 	return refreshed(t, m)
 }
 
-// threeUnits is a plan whose first unit is done.
-const threeUnits = "# Parse it\n\n## 5. Units\n\n### Unit 1: lexer (done)\n\n### Unit 2: parser\n\n### Unit 3: printer\n"
+// threeUnitsRead are a plan's three units, the first done, as factory reads them.
+var threeUnitsRead = []Unit{{Name: "Unit 1: lexer", Done: true}, {Name: "Unit 2: parser"}, {Name: "Unit 3: printer"}}
 
 func TestRightPaneOpensOnTheTabForItsPhase(t *testing.T) {
 	for _, tc := range []struct {
@@ -4322,7 +4379,7 @@ func TestTabKeysSwitchTheRightPane(t *testing.T) {
 func TestFlowTabShowsProgress(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		text    string
+		units   []Unit
 		unit    string
 		family  Family
 		flow    Flow
@@ -4330,26 +4387,30 @@ func TestFlowTabShowsProgress(t *testing.T) {
 		without []string
 	}{
 		{
-			name: "units",
-			text: threeUnits,
-			unit: "Unit 2: parser",
-			want: []string{"✓ 1  lexer", "▸ 2  parser", "○ 3  printer"},
+			name:  "units",
+			units: threeUnitsRead,
+			unit:  "Unit 2: parser",
+			want:  []string{"✓ 1  lexer", "▸ 2  parser", "○ 3  printer"},
 		},
 		{
 			name:    "a task unit that matches none",
-			text:    threeUnits,
+			units:   threeUnitsRead,
 			unit:    "Unit 9: nothing",
 			want:    []string{"✓ 1  lexer", "○ 2  parser", "○ 3  printer"},
 			without: []string{"▸"},
 		},
 		{
 			name: "no units",
-			text: twoParts,
 			want: []string{"No units"},
 		},
 		{
-			name: "open sub-plans",
-			text: threeUnits,
+			name:  "units factory answers as an empty list",
+			units: []Unit{},
+			want:  []string{"No units"},
+		},
+		{
+			name:  "open sub-plans",
+			units: threeUnitsRead,
 			family: Family{Children: []Relative{
 				{ID: "c1", Title: "Lex it", State: "Building - Agent"},
 				{ID: "c2", Title: "Print it", State: "Planning - Human"},
@@ -4359,57 +4420,57 @@ func TestFlowTabShowsProgress(t *testing.T) {
 		},
 		{
 			name:   "a family without sub-plans",
-			text:   threeUnits,
+			units:  threeUnitsRead,
 			family: Family{Parent: &Relative{ID: "p", Title: "Everything", State: "Building - Agent"}},
 			want:   []string{"✓ 1  lexer", "○ 2  parser"},
 		},
 		{
-			name: "summary and counts",
-			text: threeUnits,
-			unit: "Unit 2: parser",
-			flow: Flow{Progress: &Progress{Summary: "Building unit 2 of 3", Findings: 3, Fixups: 1, Deviations: ptr(2), BindingDeviations: ptr(1)}},
-			want: []string{"Building unit 2 of 3 · 3 review findings · 2 deviations (1 binding) · 1 fixup left"},
+			name:  "summary and counts",
+			units: threeUnitsRead,
+			unit:  "Unit 2: parser",
+			flow:  Flow{Progress: &Progress{Summary: "Building unit 2 of 3", Findings: 3, Fixups: 1, Deviations: ptr(2), BindingDeviations: ptr(1)}},
+			want:  []string{"Building unit 2 of 3 · 3 review findings · 2 deviations (1 binding) · 1 fixup left"},
 		},
 		{
-			name: "counts without a summary",
-			text: threeUnits,
-			flow: Flow{Progress: &Progress{Findings: 1}},
-			want: []string{"1 review finding"},
+			name:  "counts without a summary",
+			units: threeUnitsRead,
+			flow:  Flow{Progress: &Progress{Findings: 1}},
+			want:  []string{"1 review finding"},
 		},
 		{
 			name:    "nothing to say: no line",
-			text:    threeUnits,
+			units:   threeUnitsRead,
 			flow:    Flow{Progress: &Progress{Deviations: ptr(0)}},
 			without: []string{"·", "deviation"},
 		},
 		{
-			name: "waiting on with why",
-			text: threeUnits,
-			flow: Flow{WaitingOn: "session", WaitingOnWhy: "the session builds Unit 2: parser"},
-			want: []string{"Waiting on session: the session builds Unit 2: parser"},
+			name:  "waiting on with why",
+			units: threeUnitsRead,
+			flow:  Flow{WaitingOn: "session", WaitingOnWhy: "the session builds Unit 2: parser"},
+			want:  []string{"Waiting on session: the session builds Unit 2: parser"},
 		},
 		{
 			name:    "waiting on without why",
-			text:    threeUnits,
+			units:   threeUnitsRead,
 			flow:    Flow{WaitingOn: "human"},
 			want:    []string{"Waiting on human"},
 			without: []string{"human:"},
 		},
 		{
 			name:    "no waiting_on: no line",
-			text:    threeUnits,
+			units:   threeUnitsRead,
 			without: []string{"Waiting on"},
 		},
 		{
-			name: "current_unit wins over the task's unit",
-			text: threeUnits,
-			unit: "Unit 2: parser",
-			flow: Flow{Progress: &Progress{CurrentUnit: "Unit 3: printer"}},
-			want: []string{"○ 2  parser", "▸ 3  printer"},
+			name:  "current_unit wins over the task's unit",
+			units: threeUnitsRead,
+			unit:  "Unit 2: parser",
+			flow:  Flow{Progress: &Progress{CurrentUnit: "Unit 3: printer"}},
+			want:  []string{"○ 2  parser", "▸ 3  printer"},
 		},
 		{
 			name:    "a current_unit that matches none: no ▸, no fallback",
-			text:    threeUnits,
+			units:   threeUnitsRead,
 			unit:    "Unit 2: parser",
 			flow:    Flow{Progress: &Progress{CurrentUnit: "Unit 9: nothing"}},
 			want:    []string{"○ 2  parser"},
@@ -4417,7 +4478,7 @@ func TestFlowTabShowsProgress(t *testing.T) {
 		},
 		{
 			name:   "sub-plans keep the summary line",
-			text:   threeUnits,
+			units:  threeUnitsRead,
 			family: Family{Children: []Relative{{ID: "c1", Title: "Lex it", State: "Building - Agent"}}},
 			flow:   Flow{Progress: &Progress{Summary: "Waiting on 1 sub-plan"}},
 			want:   []string{"Waiting on 1 sub-plan", "Progress · 1 open sub-plan", "▸ Lex it"},
@@ -4425,7 +4486,7 @@ func TestFlowTabShowsProgress(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newFakeStore()
-			store.StateV, store.TextV = "Building - Agent", tc.text
+			store.StateV, store.UnitsV = "Building - Agent", tc.units
 			store.FlowV.Progress = tc.flow.Progress
 			store.FlowV.WaitingOn, store.FlowV.WaitingOnWhy = tc.flow.WaitingOn, tc.flow.WaitingOnWhy
 			store.FlowV.Unit, store.FamilyV = tc.unit, tc.family
@@ -4448,7 +4509,7 @@ func TestFlowTabShowsProgress(t *testing.T) {
 func TestFlowTabShowsThePR(t *testing.T) {
 	const url = "https://github.com/o/r/pull/7"
 	store := newFakeStore()
-	store.StateV, store.TextV = "Integrating - Agent", threeUnits
+	store.StateV, store.UnitsV = "Integrating - Agent", threeUnitsRead
 	store.FlowV.PR = url
 	view := ansi.Strip(flowModel(t, store).Content())
 	assert.Check(t, cmp.Contains(view, "PULL REQUEST"))
@@ -4485,7 +4546,7 @@ func TestRelatedOpensARelative(t *testing.T) {
 		t.Helper()
 		store := newFakeStore()
 		store.Created = true
-		store.StateV, store.TextV, store.FamilyV = "Building - Agent", threeUnits, fam
+		store.StateV, store.UnitsV, store.FamilyV = "Building - Agent", threeUnitsRead, fam
 		m := New(context.Background(), newFakeAgent(), nil, store, "").WithInbox("Plan", "/src/p")
 		m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 		// An existing plan opens on the right pane.
@@ -4536,7 +4597,7 @@ func TestRelatedOpensARelative(t *testing.T) {
 
 	t.Run("without an inbox", func(t *testing.T) {
 		store := newFakeStore()
-		store.StateV, store.TextV, store.FamilyV = "Building - Agent", threeUnits, family
+		store.StateV, store.UnitsV, store.FamilyV = "Building - Agent", threeUnitsRead, family
 		m := drive(t, flowModel(t, store), press("tab"))
 		view := ansi.Strip(m.Content())
 		assert.Check(t, cmp.Contains(view, "Parent plan"))
@@ -4567,6 +4628,33 @@ func TestFamilyErrorIsQuiet(t *testing.T) {
 	store.mu.Unlock()
 	m = refreshed(t, m)
 	assert.Check(t, !strings.Contains(row2(m), "could not read related plans"), row2(m))
+}
+
+// TestUnitsErrorFailsTheRefresh checks that a failed units read fails the
+// plan's refresh, as a failed text read does: the screen keeps its last text
+// and units, and the next good refresh clears the note.
+func TestUnitsErrorFailsTheRefresh(t *testing.T) {
+	store := newFakeStore()
+	store.StateV, store.TextV, store.UnitsV = "Building - Agent", twoParts, []Unit{{Name: "Unit 1: lexer"}}
+	m := flowModel(t, store)
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "1  lexer"))
+	assert.Check(t, cmp.Equal(m.refreshErr, ""))
+
+	store.mu.Lock()
+	store.UnitsErr = errors.New("boom")
+	store.TextV = "## 1. Outcome\n\nA new outcome."
+	store.mu.Unlock()
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Equal(m.refreshErr, "could not refresh the plan: boom"))
+	assert.Check(t, cmp.Equal(m.plan, twoParts), "a failed units read keeps the last text")
+	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "1  lexer"))
+
+	store.mu.Lock()
+	store.UnitsErr = nil
+	store.mu.Unlock()
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Equal(m.refreshErr, ""))
+	assert.Check(t, cmp.Contains(m.plan, "A new outcome."))
 }
 
 // TestCtrlSStartsAnUnprioritizedPlan checks that ctrl+s, after a y, sends

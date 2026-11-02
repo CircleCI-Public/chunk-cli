@@ -51,6 +51,7 @@ func TestApprovalIsTrackedOnceFactoryTakesIt(t *testing.T) {
 			ctx, ev := tracking(t)
 			store := newFakeStore()
 			store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+			store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 			m := New(ctx, turnReturning("ok"), tt.approve, store, "do it")
 			m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 
