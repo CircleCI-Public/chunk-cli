@@ -672,6 +672,9 @@ func flowEntity(p *factoryPlan) gin.H {
 	if p.session != "" {
 		refs["factory_session"] = gin.H{"id": p.session}
 	}
+	if p.parent != "" {
+		refs["factory_plans"] = []gin.H{{"id": p.parent, "rel": "parent"}}
+	}
 	switch {
 	case p.taskIDOnly:
 		refs["factory_task"] = gin.H{"id": p.taskID}

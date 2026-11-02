@@ -162,10 +162,6 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 	if err != nil {
 		return plan.Family{}, err
 	}
-	plans, err := s.api.ListPlans(ctx)
-	if err != nil {
-		return plan.Family{}, fmt.Errorf("list the plan's sub-plans: %w", err)
-	}
 	flows, err := s.api.ListFlows(ctx)
 	if err != nil {
 		return plan.Family{}, fmt.Errorf("list the plans' flows: %w", err)
@@ -175,34 +171,20 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 		return plan.Family{}, fmt.Errorf("list the plan's blockers: %w", err)
 	}
 
-	byID := make(map[string]circleci.Flow, len(flows))
-	for _, f := range flows {
-		byID[f.ID] = f
+	relative := func(f circleci.Flow) plan.Relative {
+		return plan.Relative{ID: f.ID, Title: f.Title, State: f.State, Outcome: f.Outcome}
 	}
-	// relative is plan pid, titled title when it has no flow to title it.
-	relative := func(pid, title string) plan.Relative {
-		r := plan.Relative{ID: pid, Title: title}
-		if f, ok := byID[pid]; ok {
-			r.Title, r.State = cmp.Or(f.Title, title), f.State
-			r.Outcome = f.Outcome
-		}
-		return r
-	}
-
 	var out plan.Family
 	if parent != "" {
-		var title string
-		for _, p := range plans {
-			if p.ID == parent {
-				title = p.Title
-			}
+		r := plan.Relative{ID: parent}
+		if i := slices.IndexFunc(flows, func(f circleci.Flow) bool { return f.ID == parent }); i >= 0 {
+			r = relative(flows[i])
 		}
-		r := relative(parent, title)
 		out.Parent = &r
 	}
-	for _, p := range plans {
-		if p.Parent == id {
-			out.Children = append(out.Children, relative(p.ID, p.Title))
+	for _, f := range flows {
+		if f.Parent == id && f.Phase != circleci.PhaseEnded {
+			out.Children = append(out.Children, relative(f))
 		}
 	}
 	for _, b := range blockers {

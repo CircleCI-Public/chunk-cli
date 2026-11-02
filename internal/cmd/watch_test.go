@@ -205,9 +205,9 @@ func TestPreviewPlan(t *testing.T) {
 }
 
 func TestPlanParents(t *testing.T) {
-	plans := []circleci.Plan{{ID: "p1"}, {ID: "c1", Parent: "p1"}, {ID: "c2", Parent: "p1"}}
+	flows := []circleci.Flow{{ID: "p1"}, {ID: "c1", Parent: "p1"}, {ID: "c2", Parent: "p1"}}
 
-	got := planParents(plans)
+	got := planParents(flows)
 
 	assert.Check(t, cmp.DeepEqual(got, map[string]string{"c1": "p1", "c2": "p1"}))
 }

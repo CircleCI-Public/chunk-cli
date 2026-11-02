@@ -669,14 +669,19 @@ func TestStoreFamily(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(fam, want))
 
-	// A child with no flow keeps its plan's title and has no state.
+	// A child whose flow is gone has ended: it is not listed.
 	cci.DropFactoryFlow(c2)
 	fam, err = store.Family(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.DeepEqual(fam.Children[1], plan.Relative{
-		ID:    c2,
-		Title: "child two",
-	}))
+	assert.Check(t, cmp.DeepEqual(fam.Children, want.Children[:1]))
+
+	// A parent with no flow has an empty title. The parent is read once per
+	// store, so a fresh one sees it again.
+	cci.SetFactoryParent(id, parent)
+	cci.DropFactoryFlow(parent)
+	fam, err = newStore(client, id).Family(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(fam.Parent, &plan.Relative{ID: parent}))
 }
 
 // TestStoreFamilyRereadsAFailedParent checks that a failed read of the
@@ -707,11 +712,6 @@ func TestStoreFamilyFails(t *testing.T) {
 		fail func(r *http.Request) bool
 		want string
 	}{
-		{
-			name: "plans",
-			fail: func(r *http.Request) bool { return r.URL.Path == "/api/v3/factory/plans" },
-			want: "sub-plans",
-		},
 		{
 			name: "flows",
 			fail: func(r *http.Request) bool { return r.URL.Path == "/api/v3/factory/flows" },

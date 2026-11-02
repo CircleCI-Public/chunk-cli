@@ -247,6 +247,20 @@ func TestPlans(t *testing.T) {
 		plans, err := client.ListPlans(ctx)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(parentsOf(plans), map[string]string{parent.ID: "", child.ID: parent.ID}))
+
+		flows, err := client.ListFlows(ctx)
+		assert.NilError(t, err)
+		flowParents := map[string]string{}
+		for _, f := range flows {
+			flowParents[f.ID] = f.Parent
+		}
+		assert.Check(t, cmp.DeepEqual(flowParents, map[string]string{parent.ID: "", child.ID: parent.ID}))
+		flow, err := client.GetFlow(ctx, child.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(flow.Parent, parent.ID))
+		flow, err = client.GetFlow(ctx, parent.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(flow.Parent, ""), "a top-level plan's flow has no parent")
 	})
 
 	t.Run("lists open plans across pages", func(t *testing.T) {

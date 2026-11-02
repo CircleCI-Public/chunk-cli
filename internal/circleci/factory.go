@@ -65,6 +65,9 @@ type Flow struct {
 	// Progress is how far the flow is along; nil once it ends or from an older
 	// conductor.
 	Progress *FlowProgress
+	// Parent is the ID of the plan this flow's plan is a sub-plan of, "" for
+	// a top-level plan.
+	Parent string
 }
 
 // FlowProgress is a flow's progress as factory serves it. A nil count does
@@ -247,6 +250,7 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 		ApplicableEvents: humanEvents(a.Next),
 		Outcome:          a.Outcome, PR: a.PR, Deviations: a.Deviations,
 		Next: transitions(a.Next), WaitingOn: a.WaitingOn, WaitingOnWhy: a.WaitingOnWhy,
+		Parent: planRefs{Plans: refs.Plans}.parent(),
 	}
 	if a.Progress != nil {
 		p := FlowProgress(*a.Progress)
@@ -306,8 +310,9 @@ func humanEvents(next []transitionAttrs) []FlowEvent {
 }
 
 type flowRefs struct {
-	FactorySession *v3Ref   `json:"factory_session"`
-	FactoryTask    *taskRef `json:"factory_task"`
+	FactorySession *v3Ref    `json:"factory_session"`
+	FactoryTask    *taskRef  `json:"factory_task"`
+	Plans          []planRef `json:"factory_plans"`
 }
 
 type taskRef struct {

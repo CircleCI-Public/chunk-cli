@@ -434,26 +434,26 @@ func openFlows(flows []circleci.Flow) []circleci.Flow {
 	return out
 }
 
-// listFactoryParents is each open sub-plan's parent, by plan ID, for the
-// flow list.
+// listFactoryParents is each sub-plan's parent, by plan ID, for the flow
+// list, as the flows list serves it.
 func listFactoryParents(ctx context.Context) (map[string]string, error) {
 	api, err := factoryPlanClient()
 	if err != nil {
 		return nil, fmt.Errorf("connect to factory: %w", err)
 	}
-	plans, err := api.ListPlans(ctx)
+	flows, err := api.ListFlows(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list plans: %w", err)
+		return nil, fmt.Errorf("list flows: %w", err)
 	}
-	return planParents(plans), nil
+	return planParents(flows), nil
 }
 
-// planParents is each of plans that has a parent, mapped to it.
-func planParents(plans []circleci.Plan) map[string]string {
+// planParents is the plan of each of flows that has a parent, mapped to it.
+func planParents(flows []circleci.Flow) map[string]string {
 	out := make(map[string]string)
-	for _, p := range plans {
-		if p.Parent != "" {
-			out[p.ID] = p.Parent
+	for _, f := range flows {
+		if f.Parent != "" {
+			out[f.ID] = f.Parent
 		}
 	}
 	return out
