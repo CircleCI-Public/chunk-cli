@@ -1425,6 +1425,51 @@ func TestMessageBoxSitsOnTheTerminalsBackground(t *testing.T) {
 	}
 }
 
+// The request box is six rows tall, and the chat viewport above it gives up
+// the rows.
+func TestRequestBoxIsSixRowsTall(t *testing.T) {
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithTerminal(true, false)
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if inputRows != 6 {
+		t.Fatalf("inputRows = %d, want 6", inputRows)
+	}
+	lines := strings.Split(m.Content(), "\n")
+	start, end := -1, -1
+	for i, l := range lines {
+		if start < 0 && strings.Contains(l, "Message") {
+			start = i
+		}
+		if start >= 0 && strings.Contains(l, "╰") {
+			end = i
+			break
+		}
+	}
+	if start < 0 || end < 0 {
+		t.Fatalf("no message box in %q", m.Content())
+	}
+	if got := end - start + 1; got != inputBoxRows {
+		t.Errorf("box is %d lines from title to closing border, want inputBoxRows = %d", got, inputBoxRows)
+	}
+
+	m.input.SetValue("zz1\nzz2\nzz3\nzz4\nzz5\nzz6\nzz7")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	shown := 0
+	for _, l := range strings.Split(m.Content(), "\n") {
+		if strings.Contains(l, "zz") {
+			shown++
+		}
+	}
+	if shown != 6 {
+		t.Errorf("%d lines of the seven-line message show, want 6", shown)
+	}
+
+	short := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithTerminal(true, false)
+	short = drive(t, short, tea.WindowSizeMsg{Width: 120, Height: 10})
+	if h := short.chatView.Height(); h < 1 {
+		t.Errorf("viewport height at 10 rows = %d, want at least 1", h)
+	}
+}
+
 // The developer's message bubbles are content, not focus: they get a faint
 // border, never the pane's accent.
 func TestUserBubbleIsQuiet(t *testing.T) {

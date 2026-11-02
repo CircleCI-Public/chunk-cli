@@ -402,6 +402,74 @@ func TestDaemonResume(t *testing.T) {
 	}
 }
 
+// factoryDelete deletes the plan in factory and gives factory's refusal as it
+// gives it; a client that cannot be made fails before any request.
+func TestFactoryDelete(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		wantErr string
+		noReq   bool
+	}{
+		{
+			name:   "no content",
+			status: http.StatusNoContent,
+		},
+		{
+			name:   "ok",
+			status: http.StatusOK,
+			body:   `{}`,
+		},
+		{
+			name:    "refused",
+			status:  http.StatusConflict,
+			body:    `{"message":"plan has sub-plans"}`,
+			wantErr: "plan has sub-plans",
+		},
+		{
+			name:    "no client",
+			noReq:   true,
+			wantErr: "no saved token",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var seen []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				seen = append(seen, r.Method+" "+r.URL.Path)
+				mu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+
+			client := func() (*circleci.Client, error) {
+				if tc.noReq {
+					return nil, errors.New("no saved token")
+				}
+				return circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+			}
+
+			err := factoryDelete{client: client}.Delete(t.Context(), "p1")
+			if tc.wantErr == "" {
+				assert.NilError(t, err)
+			} else {
+				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if tc.noReq {
+				assert.Check(t, cmp.Len(seen, 0))
+				return
+			}
+			assert.Check(t, cmp.DeepEqual(seen, []string{"DELETE /api/v3/factory/plans/p1"}))
+		})
+	}
+}
+
 // A blocker takes its state and outcome from its flow, which the blockers
 // endpoint does not serve, and keeps its own when it has no flow listed.
 func TestBlockerStates(t *testing.T) {

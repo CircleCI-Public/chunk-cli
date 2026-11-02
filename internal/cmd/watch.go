@@ -87,6 +87,7 @@ func newWatchCmd() *cobra.Command {
 				WithPlans(plans.ctx, root, plans.plan).
 				WithPlanBuilds(daemonPlanBuild{}).
 				WithPlanResume(daemonResume{}).
+				WithPlanDelete(factoryDelete{}).
 				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).
 					WithParents(listFactoryParents).WithBlockers(listFactoryBlockers)).
 				WithChat(newChatModel(plans.ctx, root))
@@ -353,6 +354,25 @@ func (daemonResume) Resume(ctx context.Context, root, planID string, kind planst
 		return errNothingToResume
 	}
 	return resumeProblem(err)
+}
+
+// factoryDelete deletes plans in factory. It needs no project root.
+type factoryDelete struct {
+	// client makes the factory client; factoryPlanClient when nil.
+	client func() (*circleci.Client, error)
+}
+
+// Delete deletes plan planID.
+func (d factoryDelete) Delete(ctx context.Context, planID string) error {
+	newClient := d.client
+	if newClient == nil {
+		newClient = factoryPlanClient
+	}
+	api, err := newClient()
+	if err != nil {
+		return err
+	}
+	return api.DeletePlan(ctx, planID)
 }
 
 // resumeProblem is a failed resume as the dashboard shows it: the daemon's

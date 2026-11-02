@@ -420,7 +420,7 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 	in.Prompt = ""
 	// Enter sends; a new line is shift+enter or ctrl+j.
 	in.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
-	in.SetHeight(3)
+	in.SetHeight(inputRows)
 	in.Focus()
 	inStyles := in.Styles()
 	inStyles.Focused.CursorLine = lipgloss.NewStyle()
@@ -1431,7 +1431,7 @@ const (
 	headerRows = 1
 	tabRows    = 1
 	footerRows = 3
-	inputRows  = 3
+	inputRows  = 6
 	// inputBoxRows is the input and its border, which has the input's title
 	// set into the top edge.
 	inputBoxRows = inputRows + borderSize
@@ -1477,7 +1477,7 @@ func (m *Model) layout() {
 	if m.created {
 		m.chatView.SetHeight(inner - padY)
 	} else {
-		m.chatView.SetHeight(inner - inputBoxRows - padY)
+		m.chatView.SetHeight(max(1, inner-inputBoxRows-padY))
 	}
 	m.input.SetWidth(m.chatWidth() - 2*borderSize - 2*padX)
 	m.renderPlan()

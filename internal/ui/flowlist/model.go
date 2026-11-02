@@ -32,6 +32,9 @@ type ResumeMsg struct {
 	Kind      planstate.ResumeKind
 }
 
+// DeleteMsg asks the host to delete a flow's plan, once the list has had a yes.
+type DeleteMsg struct{ ID, Title string }
+
 // QuitMsg asks the host to quit after checking for unsent workspace input.
 type QuitMsg struct{}
 
@@ -89,6 +92,10 @@ type Model struct {
 	height  int
 	dark    bool
 	styles  theme.Styles
+
+	// ask is the ID of the flow a delete question is open about, and
+	// askTitle its title as asked. deleting is the flow the host is deleting.
+	ask, askTitle, deleting string
 
 	loaded, listing bool
 	listErr         error
@@ -170,6 +177,18 @@ func (m Model) WithChatKey() Model {
 	return m
 }
 
+// WithDeleting names the flow the host is deleting, which the list does not
+// offer to delete again. An empty ID clears it.
+func (m Model) WithDeleting(id string) Model {
+	m.deleting = id
+	return m
+}
+
+func (m Model) deletable() bool {
+	f, ok := m.selected()
+	return ok && f.SessionID == "" && f.ID != m.deleting
+}
+
 // Flows is the open flows as the list last read them.
 func (m Model) Flows() []circleci.Flow { return slices.Clone(m.flows) }
 
@@ -235,6 +254,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return !slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == id })
 			})
 			m.keepSelection()
+			if m.ask != "" && !slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == m.ask }) {
+				m.ask, m.askTitle = "", ""
+			}
 			refreshPreview = true
 		}
 		cmds = append(cmds, m.poll())
@@ -382,7 +404,21 @@ func (m *Model) startPreview() tea.Cmd {
 }
 
 func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
+	// An open question takes the key first; anything but y cancels it.
+	if m.ask != "" {
+		id, title := m.ask, m.askTitle
+		m.ask, m.askTitle = "", ""
+		if msg.String() == "y" && slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == id }) {
+			return func() tea.Msg { return DeleteMsg{ID: id, Title: title} }
+		}
+		return nil
+	}
 	switch msg.String() {
+	case "X":
+		if f, ok := m.selected(); ok && m.deletable() {
+			m.ask, m.askTitle = f.ID, f.Title
+		}
+		return nil
 	case "ctrl+c", "q", "esc":
 		return func() tea.Msg { return QuitMsg{} }
 	case "enter":
