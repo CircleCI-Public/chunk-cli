@@ -57,6 +57,9 @@ type Flow struct {
 	// Next is every way the flow can move on now, in order; empty when it
 	// cannot move.
 	Next []Transition
+	// WaitingOn is who factory waits on to move the flow on, as factory
+	// names them; "" from a conductor that does not serve it.
+	WaitingOn string
 }
 
 // Transition is a way a flow can move on now, and who takes it. Actor is
@@ -197,6 +200,7 @@ type flowAttrs struct {
 	PR         string            `json:"pr"`
 	Deviations []string          `json:"deviations"`
 	Next       []transitionAttrs `json:"next"`
+	WaitingOn  string            `json:"waiting_on"`
 }
 
 func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
@@ -204,7 +208,7 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 		ID: id, Title: a.Title, State: a.State, Phase: a.Phase,
 		ApplicableEvents: humanEvents(a.Next),
 		Outcome:          a.Outcome, PR: a.PR, Deviations: a.Deviations,
-		Next: transitions(a.Next),
+		Next: transitions(a.Next), WaitingOn: a.WaitingOn,
 	}
 	if a.UpdatedAt != nil {
 		f.UpdatedAt = *a.UpdatedAt

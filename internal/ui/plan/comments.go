@@ -53,14 +53,9 @@ const (
 	answerOpenQuestions = "answer-open-questions"
 )
 
-// handOffEvent is the event that hands the queued comments to factory, as
-// the flow lists it: answer-open-questions over address-comments, or "" for
-// neither.
-func (m Model) handOffEvent() string {
-	return handOffEventOf(m.events)
-}
-
-// handOffEventOf is handOffEvent for the events a flow lists.
+// handOffEventOf is the event that hands the plan's comments to factory, as
+// a flow lists it in events: answer-open-questions over address-comments,
+// or "" for neither.
 func handOffEventOf(events []string) string {
 	for _, e := range []string{answerOpenQuestions, addressComments} {
 		if slices.Contains(events, e) {
@@ -70,11 +65,34 @@ func handOffEventOf(events []string) string {
 	return ""
 }
 
-// takesComments is whether a send hands the queued comments to factory now:
-// the flow lists an event that takes them, and no earlier event is still
-// waiting for factory to apply it.
+// waitsOnYou is whether the plan's comments and text may be written now:
+// factory waits on the developer, or offers an event that takes comments.
+func waitsOnYou(f Flow) bool {
+	return f.WaitingOn == string(ActorHuman) || handOffEventOf(f.Events) != ""
+}
+
+// commentsTaken is whether factory has an address-comments task for a
+// session in f's next, due or dispatched: it hands the plan's comments off
+// itself.
+func commentsTaken(f Flow) bool {
+	return slices.ContainsFunc(f.Next, func(s Step) bool {
+		return s.Actor == ActorSession && s.Task == addressComments
+	})
+}
+
+// takesComments is whether a send saves the queued comments now: factory
+// waits on the developer, and no earlier event is still waiting for
+// factory to apply it.
 func (m Model) takesComments() bool {
-	return m.moving == nil && m.handOffEvent() != ""
+	return m.moving == nil && waitsOnYou(m.flow)
+}
+
+// handOff sends event, answer-open-questions or address-comments.
+func handOff(ctx context.Context, s Store, event string) error {
+	if event == answerOpenQuestions {
+		return s.AnswerOpenQuestions(ctx)
+	}
+	return s.AddressComments(ctx)
 }
 
 // resolveConflicts is factory's event that has it rebase the plan's PR.
@@ -314,10 +332,11 @@ func (m *Model) widen(lo, hi int) (int, int, []int) {
 }
 
 // saveQueued saves the queued comments in order, deleting the saved comments
-// each replaces once it is saved, then has factory take them up with event,
-// answer-open-questions or address-comments; "" saves them only. It stops at
-// the first failure; saved is how many were saved, so the rest stay queued.
-func saveQueued(ctx context.Context, s Store, queued []comment, event string) tea.Cmd {
+// each replaces once it is saved, then reads the plan's flow and hands them
+// off as it shows: factory's own address-comments task if it has one, else
+// the event it offers, if any. It stops at the first failure; saved is how
+// many were saved, so the rest stay queued.
+func saveQueued(ctx context.Context, s Store, queued []comment) tea.Cmd {
 	return func() tea.Msg {
 		for i, c := range queued {
 			if _, err := s.AddComment(ctx, c.quote, c.text); err != nil {
@@ -329,17 +348,26 @@ func saveQueued(ctx context.Context, s Store, queued []comment, event string) te
 				}
 			}
 		}
+		saved := len(queued)
+		flow, err := s.Flow(ctx)
+		if err != nil {
+			return queueSavedMsg{saved: saved, handOff: true, err: fmt.Errorf("read the plan's flow: %w", err)}
+		}
+		if commentsTaken(flow) {
+			return queueSavedMsg{saved: saved, handOff: true, handedOff: true}
+		}
+		event := handOffEventOf(flow.Events)
 		if event == "" {
-			return queueSavedMsg{saved: len(queued)}
+			return queueSavedMsg{saved: saved, notOffered: true}
 		}
-		send := s.AddressComments
-		if event == answerOpenQuestions {
-			send = s.AnswerOpenQuestions
+		if err := handOff(ctx, s, event); err != nil {
+			// The daemon may have dispatched the comments in between.
+			if again, rerr := s.Flow(ctx); rerr == nil && commentsTaken(again) {
+				return queueSavedMsg{saved: saved, handOff: true, handedOff: true}
+			}
+			return queueSavedMsg{saved: saved, handOff: true, err: fmt.Errorf("hand the comments to factory: %w", err)}
 		}
-		if err := send(ctx); err != nil {
-			return queueSavedMsg{saved: len(queued), handOff: true, err: fmt.Errorf("hand the comments to factory: %w", err)}
-		}
-		return queueSavedMsg{saved: len(queued), handOff: true, handedOff: true}
+		return queueSavedMsg{saved: saved, handOff: true, handedOff: true}
 	}
 }
 

@@ -371,9 +371,10 @@ chunk
   `esc` clears a selection. Queued comments wait in the activity pane, marked
   `queued · press enter or s to send`. Sending (`enter` in the activity pane,
   or `s` in the plan) saves the queued comments
-  to factory and hands them to the session to address. Comments are sent
-  only when factory is ready to take them:
-  while factory works on the plan they stay queued, and `s` is not offered. Once comments are handed off, the
+  to factory, which hands them to the session to address. Comments are sent
+  only while factory is waiting on you or asking for comments: while factory
+  works on the plan they stay queued, and `s` is not offered. Once comments
+  are handed off, the
   action bar turns purple and says the screen is waiting for factory, until a
   refresh finds the plan has moved; comments queued meanwhile are held, and
   after 15 seconds the bar says how long it has waited. While comments

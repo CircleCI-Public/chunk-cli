@@ -177,6 +177,9 @@ type FactoryFlowStatus struct {
 	// Next, when not nil, is served as the flow's next in place of the one
 	// the fake makes from its task, state and applicable events.
 	Next []FactoryTransition
+	// WaitingOn, when not "", is served as the flow's waiting_on; "" serves
+	// none, as an older conductor.
+	WaitingOn string
 	// TaskUnit is served on the flow's task reference, when it has one.
 	TaskUnit string
 }
@@ -607,6 +610,9 @@ func flowEntity(p *factoryPlan) gin.H {
 	}
 	if p.status.Deviations == nil {
 		attrs["deviations"] = []string{}
+	}
+	if p.status.WaitingOn != "" {
+		attrs["waiting_on"] = p.status.WaitingOn
 	}
 	if o := cmp.Or(p.status.Outcome, factoryOutcome(p.state)); o != "" {
 		attrs["outcome"] = o

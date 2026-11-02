@@ -704,7 +704,8 @@ func TestFlows(t *testing.T) {
 				{Actor: "human", Action: "merge-pr"},
 				{Actor: "robot"},
 			},
-			TaskUnit: "Unit 2: parser",
+			TaskUnit:  "Unit 2: parser",
+			WaitingOn: "session",
 		})
 
 		f, err := client.GetFlow(ctx, p.ID)
@@ -724,6 +725,7 @@ func TestFlows(t *testing.T) {
 				{Actor: "human", Action: "merge-pr"},
 				{Actor: "robot"},
 			},
+			WaitingOn: "session",
 		}))
 	})
 
@@ -741,6 +743,7 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.Equal(f.PR, ""))
 		assert.Check(t, cmp.Nil(f.Deviations))
 		assert.Check(t, cmp.Nil(f.Next))
+		assert.Check(t, cmp.Equal(f.WaitingOn, ""))
 
 		fake := fakes.NewFakeCircleCI()
 		fsrv := httptest.NewServer(fake)

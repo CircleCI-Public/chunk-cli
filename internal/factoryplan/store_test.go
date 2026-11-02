@@ -490,7 +490,8 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 				IsDispatched: true,
 			},
 		},
-		TaskUnit: "Unit 2: parser",
+		TaskUnit:  "Unit 2: parser",
+		WaitingOn: "session",
 	})
 	cci.SetFactoryPlanState(store.ID(), "Building - Agent")
 	f, err = store.Flow(ctx)
@@ -512,6 +513,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Deviations: []string{"lint fails"},
 		Claimed:    true,
 		Holder:     "s-1",
+		WaitingOn:  "session",
 	}))
 
 	cci.SetFactoryTask(store.ID(), "")
