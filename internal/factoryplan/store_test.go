@@ -31,8 +31,8 @@ func testClient(t *testing.T) (*circleci.Client, *fakes.FakeCircleCI) {
 
 // newStore is NewStore with a namer that gives no name, so Create titles
 // the plan with fallbackTitle and runs no claude.
-func newStore(client *circleci.Client, id string) *Store {
-	s := NewStore(client, id)
+func newStore(client *circleci.Client, id, repo string) *Store {
+	s := NewStore(client, id, repo)
 	s.name = namedAs("", errors.New("no claude in tests"))
 	return s
 }
@@ -46,7 +46,7 @@ func namedAs(name string, err error) func(context.Context, string) (string, erro
 func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) {
 	t.Helper()
 	client, cci := testClient(t)
-	store := newStore(client, "")
+	store := newStore(client, "", "")
 	_, err := store.Create(context.Background(), "a plan")
 	assert.NilError(t, err)
 	return store, client, cci
@@ -57,7 +57,7 @@ func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) 
 // the plan exists.
 func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 	client, _ := testClient(t)
-	store := newStore(client, "")
+	store := newStore(client, "", "")
 	ctx := context.Background()
 
 	text, err := store.Text(ctx)
@@ -77,7 +77,7 @@ func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 // from factory's structured content, and is empty before the plan exists.
 func TestStoreUnitsReadsThemFromFactory(t *testing.T) {
 	client, cci := testClient(t)
-	store := newStore(client, "")
+	store := newStore(client, "", "")
 	ctx := context.Background()
 
 	units, err := store.Units(ctx)
@@ -165,7 +165,7 @@ func TestStoreCreateNamesThePlan(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, cci := testClient(t)
-			store := NewStore(client, "")
+			store := NewStore(client, "", "")
 			store.name = namedAs(tc.reply, tc.err)
 
 			title, err := store.Create(context.Background(), tc.message)
@@ -175,8 +175,54 @@ func TestStoreCreateNamesThePlan(t *testing.T) {
 			p, ok := cci.FactoryPlan(store.ID())
 			assert.Assert(t, ok)
 			assert.Check(t, cmp.Equal(p.Title, title))
-			assert.Check(t, cmp.Equal(p.Text, skeleton(tc.want)))
+			assert.Check(t, cmp.Equal(p.Text,
+				"# "+tc.want+"\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"))
 			assert.Check(t, cmp.Equal(p.State, "Unprioritized"))
+		})
+	}
+}
+
+// A new plan records the store's GitHub repository in factory, and none when
+// the store has none; a plan factory refuses for its repository is not made.
+func TestStoreCreateRecordsTheRepository(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		repo   string
+		status int
+		want   []string
+	}{
+		{
+			name: "a GitHub repository",
+			repo: "CircleCI-Public/chunk-cli",
+			want: []string{"CircleCI-Public/chunk-cli"},
+		},
+		{
+			name: "none",
+			repo: "",
+			want: nil,
+		},
+		{
+			name:   "factory refuses it",
+			repo:   "CircleCI-Public/chunk-cli",
+			status: http.StatusBadRequest,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, cci := testClient(t)
+			store := newStore(client, "", tc.repo)
+			if tc.status != 0 {
+				cci.FactoryStatusCode = tc.status
+				_, err := store.Create(context.Background(), "a plan")
+				assert.Check(t, cmp.ErrorContains(err, "create the plan in factory"))
+				assert.Check(t, cmp.Equal(store.ID(), ""))
+				return
+			}
+
+			_, err := store.Create(context.Background(), "a plan")
+			assert.NilError(t, err)
+			p, ok := cci.FactoryPlan(store.ID())
+			assert.Assert(t, ok)
+			assert.Check(t, cmp.DeepEqual(p.Repos, tc.want))
 		})
 	}
 }
@@ -186,7 +232,7 @@ func TestStoreCreateNamesThePlan(t *testing.T) {
 func TestStoreCreateWithoutClaude(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	client, cci := testClient(t)
-	store := NewStore(client, "")
+	store := NewStore(client, "", "")
 
 	title, err := store.Create(context.Background(), "add a --dry-run flag")
 	assert.NilError(t, err)
@@ -201,7 +247,7 @@ func TestStoreCreateWithoutClaude(t *testing.T) {
 func TestStoreCreateFailsWithoutATitle(t *testing.T) {
 	client, cci := testClient(t)
 	cci.FactoryStatusCode = http.StatusInternalServerError
-	store := newStore(client, "")
+	store := newStore(client, "", "")
 
 	title, err := store.Create(context.Background(), "add a --dry-run flag")
 	assert.Check(t, cmp.ErrorContains(err, "create the plan in factory"))
@@ -352,7 +398,7 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client, _ := testClient(t)
 			ctx := context.Background()
-			err := tc.call(ctx, newStore(client, ""))
+			err := tc.call(ctx, newStore(client, "", ""))
 			assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 
 			store, _, cci := createdStore(t)
@@ -440,7 +486,7 @@ func TestStoreApproveDesignRefusesWhatFactoryDoesNotOffer(t *testing.T) {
 // come back empty.
 func TestStoreWritesFailBeforeCreate(t *testing.T) {
 	client, _ := testClient(t)
-	store := newStore(client, "")
+	store := newStore(client, "", "")
 	ctx := context.Background()
 
 	_, err := store.AddComment(ctx, "quote", "body")
@@ -469,7 +515,7 @@ func TestStoreWritesFailBeforeCreate(t *testing.T) {
 // before the plan exists or has a flow.
 func TestStoreFlowReadsTheFlow(t *testing.T) {
 	client, cci := testClient(t)
-	store := newStore(client, "")
+	store := newStore(client, "", "")
 	ctx := context.Background()
 
 	f, err := store.Flow(ctx)
@@ -587,7 +633,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 // Create.
 func TestStoreFamily(t *testing.T) {
 	client, cci := testClient(t)
-	store := newStore(client, "")
+	store := newStore(client, "", "")
 	ctx := context.Background()
 
 	fam, err := store.Family(ctx)
@@ -615,7 +661,9 @@ func TestStoreFamily(t *testing.T) {
 	}
 	ended := newPlan("ended blocker", "ended")
 	cci.SetFactoryFlowStatus(ended, fakes.FactoryFlowStatus{Outcome: "canceled"})
-	cci.BlockFactoryPlan(id, blocker, ended)
+	merged := newPlan("merged blocker", "ended")
+	cci.SetFactoryFlowStatus(merged, fakes.FactoryFlowStatus{Outcome: "merged"})
+	cci.BlockFactoryPlan(id, blocker, ended, merged)
 
 	want := plan.Family{
 		Parent: &plan.Relative{
@@ -637,15 +685,23 @@ func TestStoreFamily(t *testing.T) {
 		},
 		Blockers: []plan.Relative{
 			{
-				ID:    blocker,
-				Title: "blocker",
-				State: "Integrating - Human",
+				ID:     blocker,
+				Title:  "blocker",
+				State:  "Integrating - Human",
+				Active: true,
 			},
 			{
 				ID:      ended,
 				Title:   "ended blocker",
 				State:   "ended",
 				Outcome: "canceled",
+				Active:  true,
+			},
+			{
+				ID:      merged,
+				Title:   "merged blocker",
+				State:   "ended",
+				Outcome: "merged",
 			},
 		},
 	}
@@ -659,14 +715,19 @@ func TestStoreFamily(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(fam, want))
 
-	// A child with no flow keeps its plan's title and has no state.
+	// A child whose flow is gone has ended: it is not listed.
 	cci.DropFactoryFlow(c2)
 	fam, err = store.Family(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.DeepEqual(fam.Children[1], plan.Relative{
-		ID:    c2,
-		Title: "child two",
-	}))
+	assert.Check(t, cmp.DeepEqual(fam.Children, want.Children[:1]))
+
+	// A parent with no flow has an empty title. The parent is read once per
+	// store, so a fresh one sees it again.
+	cci.SetFactoryParent(id, parent)
+	cci.DropFactoryFlow(parent)
+	fam, err = newStore(client, id, "").Family(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(fam.Parent, &plan.Relative{ID: parent}))
 }
 
 // TestStoreFamilyRereadsAFailedParent checks that a failed read of the
@@ -698,11 +759,6 @@ func TestStoreFamilyFails(t *testing.T) {
 		want string
 	}{
 		{
-			name: "plans",
-			fail: func(r *http.Request) bool { return r.URL.Path == "/api/v3/factory/plans" },
-			want: "sub-plans",
-		},
-		{
 			name: "flows",
 			fail: func(r *http.Request) bool { return r.URL.Path == "/api/v3/factory/flows" },
 			want: "flows",
@@ -725,7 +781,7 @@ func TestStoreFamilyFails(t *testing.T) {
 			t.Cleanup(srv.Close)
 			client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: srv.URL})
 			assert.NilError(t, err)
-			store := newStore(client, "")
+			store := newStore(client, "", "")
 			ctx := context.Background()
 			_, err = store.Create(ctx, "a plan")
 			assert.NilError(t, err)
@@ -754,13 +810,13 @@ func TestStoreStateReadsTheFlow(t *testing.T) {
 	assert.Check(t, cmp.Equal(st, ""))
 
 	// The fake answers 400 for an ID that is no UUID: an error that is not a 404.
-	_, err = NewStore(client, "not-a-uuid").State(ctx)
+	_, err = NewStore(client, "not-a-uuid", "").State(ctx)
 	assert.Check(t, err != nil, "a failed flow read is not read as no state")
 }
 
 func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
 	client, _ := testClient(t)
-	store := newStore(client, "")
+	store := newStore(client, "", "")
 	ctx := context.Background()
 
 	err := store.SetText(ctx, "# A plan\n")

@@ -21,6 +21,8 @@ import (
 // addressed by the plan's ID, which Create sets.
 type Store struct {
 	api *circleci.Client
+	// repo is the GitHub repository a plan Create makes records, "" for none.
+	repo string
 	// name names a new plan for the developer's first message.
 	name func(ctx context.Context, message string) (string, error)
 
@@ -33,9 +35,18 @@ type Store struct {
 }
 
 // NewStore is the store for plan id in factory, or for a plan Create makes
-// when id is "".
-func NewStore(api *circleci.Client, id string) *Store {
-	return &Store{api: api, name: factory.NamePlan, planID: id}
+// when id is "". repo is the GitHub repository, as owner/name, a plan Create
+// makes records; "" records none.
+func NewStore(api *circleci.Client, id, repo string) *Store {
+	return &Store{api: api, name: factory.NamePlan, planID: id, repo: repo}
+}
+
+// repos is repo as the repositories a new plan records: none for "".
+func repos(repo string) []string {
+	if repo == "" {
+		return nil
+	}
+	return []string{repo}
 }
 
 // ID is the plan's ID in factory, or "" before Create.
@@ -45,16 +56,11 @@ func (s *Store) ID() string {
 	return s.planID
 }
 
-// skeleton is the empty plan factory's plan_init writes. The plan tools edit
-// a plan by its sections, so a plan created without them gives the agent
-// nothing to write into.
-func skeleton(title string) string {
-	return "# " + title + "\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"
-}
-
+// Create makes the plan in factory with no text, so factory writes its
+// skeleton, recording the store's repository when it has one.
 func (s *Store) Create(ctx context.Context, message string) (string, error) {
 	title := s.title(ctx, message)
-	p, err := s.api.CreatePlan(ctx, title, skeleton(title))
+	p, err := s.api.CreatePlan(ctx, title, "", repos(s.repo)...)
 	if err != nil {
 		return "", fmt.Errorf("create the plan in factory: %w", err)
 	}
@@ -151,7 +157,8 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 }
 
 // Family is the plan's parent, open sub-plans and blockers, each with its
-// flow's title and state. The parent is read once, as it never changes.
+// flow's title and state; blockers are as the blockers endpoint serves them.
+// The parent is read once, as it never changes.
 func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 	id := s.ID()
 	if id == "" {
@@ -160,10 +167,6 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 	parent, err := s.parent(ctx, id)
 	if err != nil {
 		return plan.Family{}, err
-	}
-	plans, err := s.api.ListPlans(ctx)
-	if err != nil {
-		return plan.Family{}, fmt.Errorf("list the plan's sub-plans: %w", err)
 	}
 	flows, err := s.api.ListFlows(ctx)
 	if err != nil {
@@ -174,38 +177,24 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 		return plan.Family{}, fmt.Errorf("list the plan's blockers: %w", err)
 	}
 
-	byID := make(map[string]circleci.Flow, len(flows))
-	for _, f := range flows {
-		byID[f.ID] = f
+	relative := func(f circleci.Flow) plan.Relative {
+		return plan.Relative{ID: f.ID, Title: f.Title, State: f.State, Outcome: f.Outcome}
 	}
-	// relative is plan pid, titled title when it has no flow to title it.
-	relative := func(pid, title string) plan.Relative {
-		r := plan.Relative{ID: pid, Title: title}
-		if f, ok := byID[pid]; ok {
-			r.Title, r.State = cmp.Or(f.Title, title), f.State
-			r.Outcome = f.Outcome
-		}
-		return r
-	}
-
 	var out plan.Family
 	if parent != "" {
-		var title string
-		for _, p := range plans {
-			if p.ID == parent {
-				title = p.Title
-			}
+		r := plan.Relative{ID: parent}
+		if i := slices.IndexFunc(flows, func(f circleci.Flow) bool { return f.ID == parent }); i >= 0 {
+			r = relative(flows[i])
 		}
-		r := relative(parent, title)
 		out.Parent = &r
 	}
-	for _, p := range plans {
-		if p.Parent == id {
-			out.Children = append(out.Children, relative(p.ID, p.Title))
+	for _, f := range flows {
+		if f.Parent == id && f.Phase != circleci.PhaseEnded {
+			out.Children = append(out.Children, relative(f))
 		}
 	}
 	for _, b := range blockers {
-		out.Blockers = append(out.Blockers, relative(b.ID, b.Title))
+		out.Blockers = append(out.Blockers, plan.Relative{ID: b.ID, Title: b.Title, State: b.State, Outcome: b.Outcome, Active: b.Active})
 	}
 	return out, nil
 }

@@ -266,7 +266,7 @@ func TestStatus(t *testing.T) {
 				State: "Planning - Human",
 				Next:  []Step{{Actor: "human", Event: "approve-for-building"}},
 			},
-			family: Family{Blockers: []Relative{{Title: "retry-config"}}},
+			family: Family{Blockers: []Relative{{Title: "retry-config", Active: true}}},
 			stage:  planstate.StagePlan,
 			step:   "Planning",
 			next:   "you approve the plan · ctrl+s",
@@ -274,7 +274,7 @@ func TestStatus(t *testing.T) {
 		{
 			name:   "blocked",
 			flow:   Flow{State: "Building - Agent"},
-			family: Family{Blockers: []Relative{{Title: "retry-config"}}},
+			family: Family{Blockers: []Relative{{Title: "retry-config", Active: true}}},
 			step:   "Building",
 			next:   "Waiting on retry-config",
 		},
@@ -283,7 +283,7 @@ func TestStatus(t *testing.T) {
 			flow: Flow{State: "Building - Agent"},
 			family: Family{Blockers: []Relative{
 				{Title: "a", State: "Done"},
-				{Title: "b", State: "Building - Agent"},
+				{Title: "b", State: "Building - Agent", Active: true},
 			}},
 			step: "Building",
 			next: "Waiting on b",
@@ -306,11 +306,19 @@ func TestStatus(t *testing.T) {
 			step: "Building",
 		},
 		{
+			name: "a blocker past its until is done",
+			flow: Flow{State: "build"},
+			family: Family{Blockers: []Relative{
+				{Title: "a", State: "build"},
+			}},
+			step: "Building",
+		},
+		{
 			name: "a blocker ended abandoned still blocks",
 			flow: Flow{State: "build"},
 			family: Family{Blockers: []Relative{
 				{Title: "a", State: "Done"},
-				{Title: "b", State: "ended", Outcome: "canceled"},
+				{Title: "b", State: "ended", Outcome: "canceled", Active: true},
 			}},
 			step: "Building",
 			next: "Waiting on b",
@@ -319,7 +327,7 @@ func TestStatus(t *testing.T) {
 			name: "an old abandoned blocker still blocks",
 			flow: Flow{State: "Building - Agent"},
 			family: Family{Blockers: []Relative{
-				{Title: "a", State: "Canceled", Outcome: "canceled"},
+				{Title: "a", State: "Canceled", Outcome: "canceled", Active: true},
 			}},
 			step: "Building",
 			next: "Waiting on a",
@@ -331,7 +339,7 @@ func TestStatus(t *testing.T) {
 				Ended:   true,
 				Outcome: "merged",
 			},
-			family: Family{Blockers: []Relative{{Title: "a", State: "Building - Agent"}}},
+			family: Family{Blockers: []Relative{{Title: "a", State: "Building - Agent", Active: true}}},
 			step:   "Done · merged",
 		},
 		{

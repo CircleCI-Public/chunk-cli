@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -9,7 +11,57 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
+
+// TestPlanRepo checks that a plan records its project's origin as owner/name
+// when origin is on GitHub, and no repository otherwise.
+func TestPlanRepo(t *testing.T) {
+	tests := []struct {
+		name   string
+		origin string
+		want   string
+	}{
+		{
+			name:   "github ssh",
+			origin: "git@github.com:o/r.git",
+			want:   "o/r",
+		},
+		{
+			name:   "github https",
+			origin: "https://github.com/o/r.git",
+			want:   "o/r",
+		},
+		{
+			name:   "gitlab",
+			origin: "https://gitlab.com/o/r.git",
+			want:   "",
+		},
+		{
+			name: "no origin",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			git := func(args ...string) {
+				t.Helper()
+				cmd := exec.Command("git", args...)
+				cmd.Dir = dir
+				cmd.Env = gitrepo.GitEnv(dir)
+				out, err := cmd.CombinedOutput()
+				assert.NilError(t, err, string(out))
+			}
+			git("init")
+			if tt.origin != "" {
+				git("remote", "add", "origin", tt.origin)
+			}
+			got := planRepo(context.Background(), dir)
+			assert.Check(t, cmp.Equal(got, tt.want))
+		})
+	}
+}
 
 // TestApprovePlan checks that approving is one ApproveAndBuild call for the
 // plan in the project, and that the daemon's answers read as the screen shows

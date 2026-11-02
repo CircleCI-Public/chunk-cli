@@ -205,9 +205,9 @@ func TestPreviewPlan(t *testing.T) {
 }
 
 func TestPlanParents(t *testing.T) {
-	plans := []circleci.Plan{{ID: "p1"}, {ID: "c1", Parent: "p1"}, {ID: "c2", Parent: "p1"}}
+	flows := []circleci.Flow{{ID: "p1"}, {ID: "c1", Parent: "p1"}, {ID: "c2", Parent: "p1"}}
 
-	got := planParents(plans)
+	got := planParents(flows)
 
 	assert.Check(t, cmp.DeepEqual(got, map[string]string{"c1": "p1", "c2": "p1"}))
 }
@@ -470,34 +470,22 @@ func TestFactoryDelete(t *testing.T) {
 	}
 }
 
-// A blocker takes its state and outcome from its flow, which the blockers
-// endpoint does not serve, and keeps its own when it has no flow listed.
+// A blocker is read as the blockers endpoint serves it.
 func TestBlockerStates(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		blockers []circleci.Blocker
-		flows    []circleci.Flow
 		want     []planstate.Blocker
 	}{
 		{
-			name:     "listed",
-			blockers: []circleci.Blocker{{ID: "p-41", Title: "old title", State: "Integrating - Human"}},
-			flows: []circleci.Flow{
-				{ID: "p-40", Title: "Other", State: "Building - Agent"},
-				{ID: "p-41", Title: "Add retry config", State: "Integrating - Human", Phase: circleci.PhaseEnded, Outcome: "merged"},
-			},
-			want: []planstate.Blocker{{Title: "Add retry config", State: "Integrating - Human", Outcome: "merged"}},
+			name:     "an active blocker",
+			blockers: []circleci.Blocker{{ID: "p-41", Title: "Add retry config", State: "integrate", Active: true}},
+			want:     []planstate.Blocker{{Title: "Add retry config", State: "integrate", Active: true}},
 		},
 		{
-			name:     "listed without a title",
-			blockers: []circleci.Blocker{{ID: "p-41", Title: "Add retry config", State: "Building - Agent"}},
-			flows:    []circleci.Flow{{ID: "p-41", State: "Done"}},
-			want:     []planstate.Blocker{{Title: "Add retry config", State: "Done"}},
-		},
-		{
-			name:     "not listed",
-			blockers: []circleci.Blocker{{ID: "p-41", Title: "Add retry config", State: "Building - Agent"}},
-			want:     []planstate.Blocker{{Title: "Add retry config", State: "Building - Agent"}},
+			name:     "a merged blocker, as the endpoint serves it",
+			blockers: []circleci.Blocker{{ID: "p-41", Title: "Add retry config", State: "ended", Outcome: "merged"}},
+			want:     []planstate.Blocker{{Title: "Add retry config", State: "ended", Outcome: "merged", Active: false}},
 		},
 		{
 			name: "none",
@@ -505,7 +493,7 @@ func TestBlockerStates(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Check(t, cmp.DeepEqual(blockerStates(tc.blockers, tc.flows), tc.want))
+			assert.Check(t, cmp.DeepEqual(blockerStates(tc.blockers), tc.want))
 		})
 	}
 }

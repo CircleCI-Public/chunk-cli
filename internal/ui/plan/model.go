@@ -878,7 +878,7 @@ func (m Model) resumable() planstate.Resume {
 	}
 	blockers := make([]planstate.Blocker, len(m.family.Blockers))
 	for i, b := range m.family.Blockers {
-		blockers[i] = planstate.Blocker{Title: clean(b.Title), State: clean(b.State), Outcome: clean(b.Outcome)}
+		blockers[i] = planstate.Blocker{Title: clean(b.Title), State: clean(b.State), Outcome: clean(b.Outcome), Active: b.Active}
 	}
 	r := planstate.ResumeOf(planstate.ResumeFacts{
 		State:         clean(m.flow.State),
