@@ -19,6 +19,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/clipboard"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/textsel"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
@@ -71,10 +73,16 @@ type spinMsg struct {
 	tick tea.Msg
 }
 
+// noteFor is how long the status line says what was copied.
+const noteFor = 2 * time.Second
+
+// noteMsg ends the note of copy seq.
+type noteMsg struct{ seq int }
+
 // IsMsg is whether msg is one of the chat's own, for a host to route to it.
 func IsMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case tickMsg, polledMsg, sentMsg, spinMsg:
+	case tickMsg, polledMsg, sentMsg, spinMsg, noteMsg:
 		return true
 	}
 	return false
@@ -116,6 +124,16 @@ type Model struct {
 	// stale, so bumping it ends the chain.
 	seq int
 
+	// drag is the conversation's text selected with the mouse.
+	drag textsel.Drag
+	// note says what was last copied, for noteFor; noteSeq is that
+	// copy's, so an earlier copy's expiry leaves a later note.
+	note    string
+	noteSeq int
+	// copyText is the clipboard. It is a field so tests can swap in
+	// tea.SetClipboard rather than touch the machine's clipboard.
+	copyText func(string) tea.Cmd
+
 	input  textarea.Model
 	view   viewport.Model
 	spin   spinner.Model
@@ -152,6 +170,8 @@ func New(ctx context.Context, send func(ctx context.Context, text, context strin
 		view:  view,
 		spin:  spinner.New(spinner.WithSpinner(spinner.Dot)),
 		dark:  true,
+
+		copyText: clipboard.Copy,
 	}
 }
 
@@ -179,10 +199,13 @@ func (m Model) Open() (Model, tea.Cmd) {
 	return m, tea.Batch(m.pollFrom(0), m.spinTick())
 }
 
-// Close stops polling; the conversation shown is kept.
+// Close stops polling; the conversation shown is kept, but not what is
+// selected in it or the note of a copy.
 func (m Model) Close() Model {
 	m.seq++
 	m.input.Blur()
+	m.drag.Clear()
+	m.note = ""
 	return m
 }
 
@@ -213,6 +236,16 @@ func (m Model) pollFrom(after int) tea.Cmd {
 		u, err := poll(ctx, after)
 		return polledMsg{seq: seq, after: after, update: u, err: err}
 	}
+}
+
+func (m Model) noteExpiry() tea.Cmd {
+	seq := m.noteSeq
+	return tea.Tick(noteFor, func(time.Time) tea.Msg { return noteMsg{seq: seq} })
+}
+
+// pane is the conversation where Content draws it.
+func (m *Model) pane() textsel.Pane {
+	return textsel.Pane{View: &m.view, X: 0, Y: headerRows, Margin: padX, Framed: true}
 }
 
 func (m Model) spinTick() tea.Cmd {
@@ -271,6 +304,31 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
+	case tea.MouseClickMsg:
+		m.drag.Clear()
+		m.note = ""
+		if msg.Button == tea.MouseLeft {
+			m.drag.Press(m.pane(), msg.X, msg.Y)
+		}
+		return m, nil
+	case tea.MouseMotionMsg:
+		if msg.Button == tea.MouseLeft {
+			m.drag.Move(m.pane(), msg.X, msg.Y)
+		}
+		return m, nil
+	case tea.MouseReleaseMsg:
+		text := m.drag.Release(m.pane())
+		if text == "" {
+			return m, nil
+		}
+		m.note = textsel.Note(text)
+		m.noteSeq++
+		return m, tea.Batch(m.copyText(text), m.noteExpiry())
+	case noteMsg:
+		if msg.seq == m.noteSeq {
+			m.note = ""
+		}
+		return m, nil
 	case tea.MouseWheelMsg:
 		var cmd tea.Cmd
 		m.view, cmd = m.view.Update(msg)
@@ -312,6 +370,8 @@ func (m Model) polled(msg polledMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) key(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	m.drag.Clear()
+	m.note = ""
 	if m.reason != "" {
 		return m, nil
 	}
@@ -369,7 +429,7 @@ func (m *Model) render() {
 		parts = append(parts, st.VDim.Render(unreachable))
 	}
 	follow := m.view.AtBottom()
-	m.view.SetContent(lipgloss.NewStyle().Padding(0, padX).Render(strings.Join(parts, "\n\n")))
+	m.drag.SetContent(m.pane(), lipgloss.NewStyle().Padding(0, padX).Render(strings.Join(parts, "\n\n")))
 	if follow {
 		m.view.GotoBottom()
 	}
@@ -385,9 +445,13 @@ func (m Model) bubble(text string, w int) string {
 	return lipgloss.PlaceHorizontal(w, lipgloss.Right, b)
 }
 
-// status is the line under the conversation: the agent's activity with the
-// spinner while it works or a send waits, and blank otherwise.
+// status is the line under the conversation: what was just copied, the
+// agent's activity with the spinner while it works or a send waits, and
+// blank otherwise.
 func (m Model) status() string {
+	if m.note != "" {
+		return theme.New(m.dark).Dim.Render(ansi.Truncate(m.note, max(m.width-2*padX, 1), "…"))
+	}
 	if !m.busy && m.sending == 0 {
 		return ""
 	}
@@ -415,7 +479,7 @@ func (m Model) Content() string {
 	pad := lipgloss.NewStyle().Padding(0, padX)
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(theme.New(m.dark).VDim.GetForeground()).
 		Padding(0, padX).Width(max(m.width, 1)).Render(m.input.View())
-	return lipgloss.JoinVertical(lipgloss.Left, m.header(), m.view.View(), pad.Render(m.status()), box)
+	return lipgloss.JoinVertical(lipgloss.Left, m.header(), m.drag.Draw(m.pane()), pad.Render(m.status()), box)
 }
 
 // NewRenderer is a glamour renderer for the terminal's background that wraps

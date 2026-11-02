@@ -312,3 +312,21 @@ func TestChatKeyHints(t *testing.T) {
 	_, cmd := pressKey(plain, ctrlO)
 	assert.Check(t, cmd == nil)
 }
+
+func TestADragInTheOpenChatSelectsItsText(t *testing.T) {
+	// The conversation is there before the chat opens, so its first poll shows it.
+	c := &fakeChat{entries: []chat.Entry{{Reply: "One question is open."}}}
+	m := openChat(t, chatModel(t, &fakePlans{}, c, twoFlows...))
+	y := -1
+	for i, l := range strings.Split(screen(m), "\n") {
+		if strings.Contains(l, "One question is open.") {
+			y = i
+		}
+	}
+	assert.Assert(t, y >= 0, "the message is not shown")
+
+	next, _ := m.Update(tea.MouseClickMsg{X: 0, Y: y, Button: tea.MouseLeft})
+	next, _ = next.(Model).Update(tea.MouseMotionMsg{X: m.width - 1, Y: y, Button: tea.MouseLeft})
+
+	assert.Check(t, cmp.Contains(next.(Model).View().Content, "\x1b[7m"), "the drag did not select the chat's text")
+}

@@ -525,7 +525,11 @@ chunk
   `task_request`, `plan_block` and `plan_resolve`. It runs nothing else that
   changes anything: it does not plan, claim, edit plan text or add comments;
   for those it says what to comment or which key to press. `esc` or `ctrl+o`
-  goes back to the screen as it was. The chunk daemon runs one chat session
+  goes back to the screen as it was. Dragging the mouse over the conversation
+  selects its text and puts it on the clipboard when the button is let go, as
+  on a plan's screen, without a message's frame. The line under the
+  conversation says what was copied for 2 seconds. A key press or a click
+  clears the selection. The chunk daemon runs one chat session
   per repository, so every `chunk watch` there shares its conversation, and
   quitting `chunk watch` does not end it. The daemon stops it after 30 idle
   minutes and resumes it on the next message. Outside a repository it says it

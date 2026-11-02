@@ -99,7 +99,7 @@ func TestAClickWithoutADragCopiesNothing(t *testing.T) {
 
 	assert.Check(t, cmp.Equal(got, ""))
 	assert.Check(t, cmp.Equal(m.status, ""))
-	assert.Check(t, m.text.sel.Empty())
+	assert.Check(t, m.text.drag.Empty())
 }
 
 func TestDraggingOverTheChatCopiesTheMessageWithoutItsFrame(t *testing.T) {
@@ -133,7 +133,7 @@ func TestAKeyPressDropsTheSelectionAndItsNote(t *testing.T) {
 
 	m = drive(t, m, press("tab"))
 
-	assert.Check(t, m.text.sel.Empty())
+	assert.Check(t, m.text.drag.Empty())
 	assert.Check(t, cmp.Equal(m.status, ""))
 	assert.Check(t, !strings.Contains(m.Content(), "\x1b[7m"))
 }
@@ -146,7 +146,7 @@ func TestAClickDropsTheSelection(t *testing.T) {
 
 	m = drive(t, m, click(x, y+2))
 
-	assert.Check(t, m.text.sel.Empty())
+	assert.Check(t, m.text.drag.Empty())
 }
 
 func TestTheCopyNoteDoesNotReplaceAStatusThatWasThere(t *testing.T) {
@@ -202,27 +202,5 @@ func TestAShiftClickDoesNotBeginASelectionOfText(t *testing.T) {
 
 	m = drive(t, m, shift)
 
-	assert.Check(t, !m.text.held)
-}
-
-func TestUnframedTakesTheBubbleOffAMessage(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-		ok   bool
-	}{
-		{"   ╭──────────────╮", "", false},
-		{"   ╰──────────────╯", "", false},
-		{"   │ give me a test │", "give me a test", true},
-		{"ive me a test │", "ive me a test", true},
-		{"   │ give me", "give me", true},
-		{"    indented code", "    indented code", true},
-		{"", "", true},
-		{"────", "────", true},
-	}
-	for _, tt := range tests {
-		got, ok := unframed(tt.in)
-		assert.Check(t, cmp.Equal(got, tt.want), "unframed(%q)", tt.in)
-		assert.Check(t, cmp.Equal(ok, tt.ok), "unframed(%q)", tt.in)
-	}
+	assert.Check(t, !m.text.drag.Held())
 }

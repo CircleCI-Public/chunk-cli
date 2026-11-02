@@ -1,13 +1,8 @@
 package plan
 
 import (
-	"fmt"
-	"strings"
-	"unicode/utf8"
-
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/textsel"
 )
@@ -30,9 +25,7 @@ const (
 // textDrag is the text selected with the mouse, in the view it began in.
 type textDrag struct {
 	view textView
-	sel  textsel.Selection
-	// held is whether the button is down on a selection.
-	held bool
+	drag textsel.Drag
 	// copied is whether the status says what was copied, so that it goes
 	// when the selection does.
 	copied bool
@@ -86,31 +79,22 @@ func (m *Model) textOrigin(t textView) (x, y int) {
 	return x, m.topRows() + 1 + padY
 }
 
-// overText is whether the screen cell (x, y) is in t's view.
-func (m *Model) overText(t textView, x, y int) bool {
-	ox, oy := m.textOrigin(t)
-	v := m.viewOf(t)
-	return x >= ox && x < ox+v.Width() && y >= oy && y < oy+v.Height()
-}
-
-// cellAt is the cell of t's text drawn at the screen cell (x, y), kept to
-// the text it has.
-func (m *Model) cellAt(t textView, x, y int) textsel.Point {
-	ox, oy := m.textOrigin(t)
-	v := m.viewOf(t)
-	line := min(y-oy+v.YOffset(), v.TotalLineCount()-1)
-	return textsel.Point{Line: max(line, 0), Col: max(x-ox, 0)}
+// pane is t's view where the screen draws it.
+func (m *Model) pane(t textView) textsel.Pane {
+	x, y := m.textOrigin(t)
+	return textsel.Pane{View: m.viewOf(t), X: x, Y: y, Margin: gutterOf(t), Framed: t == textChat}
 }
 
 // beginText starts a selection where the mouse was pressed, if that is on
 // text. A shift-click is the plan's, for selecting its parts.
 func (m Model) beginText(mouse tea.Mouse) Model {
 	t := m.textViewAt(mouse.X)
-	if mouse.Mod.Contains(tea.ModShift) || !m.overText(t, mouse.X, mouse.Y) || m.viewOf(t).TotalLineCount() == 0 {
+	if mouse.Mod.Contains(tea.ModShift) {
 		return m
 	}
-	m.text.view, m.text.held = t, true
-	m.text.sel.Begin(m.cellAt(t, mouse.X, mouse.Y), gutterOf(t))
+	if m.text.drag.Press(m.pane(t), mouse.X, mouse.Y) {
+		m.text.view = t
+	}
 	return m
 }
 
@@ -118,36 +102,19 @@ func (m Model) beginText(mouse tea.Mouse) Model {
 // bottom of the pane it scrolls, a line for each move of the mouse, so that
 // text out of view can be reached.
 func (m Model) dragText(mouse tea.Mouse) Model {
-	if !m.text.held {
-		return m
-	}
-	t := m.text.view
-	v := m.viewOf(t)
-	_, top := m.textOrigin(t)
-	switch {
-	case mouse.Y < top:
-		v.ScrollUp(1)
-	case mouse.Y >= top+v.Height():
-		v.ScrollDown(1)
-	}
-	m.text.sel.Extend(m.cellAt(t, mouse.X, min(max(mouse.Y, top), top+v.Height()-1)))
+	m.text.drag.Move(m.pane(m.text.view), mouse.X, mouse.Y)
 	return m
 }
 
 // endText finishes a selection when the button is let go, and puts what it
 // holds on the clipboard. A click that did not drag has selected nothing.
 func (m Model) endText() (Model, tea.Cmd) {
-	if !m.text.held {
-		return m, nil
-	}
-	m.text.held = false
-	text := m.selectedText()
+	text := m.text.drag.Release(m.pane(m.text.view))
 	if text == "" {
-		m.text.sel.Clear()
 		return m, nil
 	}
 	if m.status == "" {
-		m.status = fmt.Sprintf("Copied %d characters", utf8.RuneCountInString(text))
+		m.status = textsel.Note(text)
 		m.text.copied = true
 	}
 	return m, m.copyText(text)
@@ -155,62 +122,30 @@ func (m Model) endText() (Model, tea.Cmd) {
 
 // clearText drops the selection, and the note of having copied it.
 func (m *Model) clearText() {
-	m.text.sel.Clear()
-	m.text.held = false
+	m.text.drag.Clear()
 	if m.text.copied {
 		m.status, m.text.copied = "", false
 	}
 }
 
 // selectedText is what is selected, as plain text.
-func (m *Model) selectedText() string {
-	t := m.text.view
-	var lines []string
-	for _, l := range m.text.sel.Lines(strings.Split(m.viewOf(t).GetContent(), "\n")) {
-		if t == textChat {
-			var ok bool
-			if l, ok = unframed(l); !ok {
-				continue
-			}
-		}
-		lines = append(lines, l)
-	}
-	return strings.Trim(strings.Join(lines, "\n"), "\n")
-}
-
-// unframed is a line of the chat without the frame of the bubble a message
-// is drawn in, which would otherwise be copied with the message. It is false
-// for a line that is only the top or bottom of a frame.
-func unframed(line string) (string, bool) {
-	t := strings.TrimLeft(line, " ")
-	if strings.ContainsAny(t, "╭╮╰╯") && strings.Trim(t, "╭╮╰╯─") == "" {
-		return "", false
-	}
-	if rest, ok := strings.CutPrefix(t, "│"); ok {
-		line = strings.TrimPrefix(rest, " ")
-	}
-	line, _ = strings.CutSuffix(line, "│")
-	return strings.TrimRight(line, " "), true
-}
+func (m *Model) selectedText() string { return m.text.drag.Text(m.pane(m.text.view)) }
 
 // shown is what t's view draws: its text, with the selection, if it is in
 // this view, set apart.
 func (m *Model) shown(t textView) string {
-	v := m.viewOf(t)
-	if m.text.view != t || m.text.sel.Empty() {
-		return v.View()
+	if m.text.view != t {
+		return m.viewOf(t).View()
 	}
-	lines := strings.Split(v.View(), "\n")
-	return strings.Join(m.text.sel.Highlight(lines, v.YOffset(), lipgloss.NewStyle().Reverse(true)), "\n")
+	return m.text.drag.Draw(m.pane(t))
 }
 
 // setContent puts content in t's view. The selection is of the text it was
 // made on, so it is dropped when that text changes.
 func (m *Model) setContent(t textView, content string) {
-	v := m.viewOf(t)
-	previous := strings.Split(v.GetContent(), "\n")
-	v.SetContent(content)
-	if m.text.view == t {
-		m.text.sel.Keep(previous, strings.Split(content, "\n"))
+	if m.text.view != t {
+		m.viewOf(t).SetContent(content)
+		return
 	}
+	m.text.drag.SetContent(m.pane(t), content)
 }

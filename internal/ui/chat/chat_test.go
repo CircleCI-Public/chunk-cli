@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -73,7 +74,10 @@ func (f *fake) polls() int {
 }
 
 func newChat(f *fake) Model {
-	return New(context.Background(), f.send, f.poll).SetSize(80, 30)
+	m := New(context.Background(), f.send, f.poll).SetSize(80, 30)
+	// The tests are not to touch the clipboard of the machine they run on.
+	m.copyText = tea.SetClipboard
+	return m
 }
 
 // step runs cmd and drives the chat with what it returns, but for the
@@ -331,4 +335,189 @@ func TestChatUnavailableTakesNoInput(t *testing.T) {
 	m, cmd = enter(m)
 	assert.Check(t, cmd == nil)
 	assert.Equal(t, m.Content(), before)
+}
+
+// clipboardOf is the text a command puts on the clipboard, or "" when it
+// puts none.
+func clipboardOf(cmd tea.Cmd) string {
+	if cmd == nil {
+		return ""
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok && len(batch) > 0 && batch[0] != nil {
+		msg = batch[0]()
+	}
+	// The message is tea's own, of an unexported type that is a string.
+	if v := reflect.ValueOf(msg); v.Kind() == reflect.String {
+		return v.String()
+	}
+	return ""
+}
+
+// rowOf is the screen row of the chat whose text contains s.
+func rowOf(t *testing.T, m Model, s string) int {
+	t.Helper()
+	for y, l := range strings.Split(content(m), "\n") {
+		if strings.Contains(l, s) {
+			return y
+		}
+	}
+	t.Fatalf("no row has %q:\n%s", s, content(m))
+	return -1
+}
+
+func press(x, y int) tea.MouseClickMsg {
+	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+func motion(x, y int) tea.MouseMotionMsg {
+	return tea.MouseMotionMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+func release(x, y int) tea.MouseReleaseMsg {
+	return tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+// dragged drags from one screen cell to another and returns the chat
+// after the release, what it copied, and the command it answered with.
+func dragged(m Model, fromX, fromY, toX, toY int) (Model, string, tea.Cmd) {
+	m, _ = m.Update(press(fromX, fromY))
+	m, _ = m.Update(motion(toX, toY))
+	m, cmd := m.Update(release(toX, toY))
+	return m, clipboardOf(cmd), cmd
+}
+
+// chatWith is an open chat showing entries.
+func chatWith(t *testing.T, entries ...Entry) Model {
+	f := &fake{}
+	f.queued(result{u: Update{LogID: "a", Next: len(entries), Entries: entries}})
+	m, _ := open(t, newChat(f))
+	return m
+}
+
+func TestDraggingOverTheChatCopiesTheText(t *testing.T) {
+	m := chatWith(t, Entry{Reply: "One question is open."})
+	y := rowOf(t, m, "One question is open.")
+	x := strings.Index(strings.Split(content(m), "\n")[y], "question")
+
+	m, got, _ := dragged(m, x, y, x+7, y)
+
+	assert.Check(t, cmp.Equal(got, "question"))
+	assert.Check(t, cmp.Contains(content(m), "Copied 8 characters"))
+}
+
+func TestAClickWithoutADragInTheChatCopiesNothing(t *testing.T) {
+	m := chatWith(t, Entry{Reply: "One question is open."})
+	y := rowOf(t, m, "One question is open.")
+
+	m, got, cmd := dragged(m, 5, y, 5, y)
+
+	assert.Check(t, cmp.Equal(got, ""))
+	assert.Check(t, cmd == nil)
+	assert.Check(t, !strings.Contains(content(m), "Copied"))
+}
+
+func TestDraggingOverTheChatCopiesAMessageWithoutItsFrame(t *testing.T) {
+	m := chatWith(t, Entry{Message: "give me a test"})
+	y := rowOf(t, m, "give me a test")
+
+	_, got, _ := dragged(m, 0, y-1, m.width-1, y+1)
+
+	assert.Check(t, cmp.Equal(got, "give me a test"))
+}
+
+func TestAPressOnTheHeaderStatusOrInputBeginsNoSelection(t *testing.T) {
+	m := chatWith(t, Entry{Reply: "One question is open."})
+	// The status line is the row under the conversation's last.
+	status := headerRows + m.view.Height()
+	for _, y := range []int{0, status, m.height - 1} {
+		_, got, _ := dragged(m, 3, y, 20, rowOf(t, m, "One question"))
+		assert.Check(t, cmp.Equal(got, ""), "a drag from row %d copied %q", y, got)
+	}
+}
+
+func TestTheChatSelectionIsDrawnAndAKeyOrClickDropsItAndTheNote(t *testing.T) {
+	for name, drop := range map[string]func(Model) Model{
+		"key":   func(m Model) Model { return typed(m, "x") },
+		"click": func(m Model) Model { m, _ = m.Update(press(2, 1)); return m },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := chatWith(t, Entry{Reply: "One question is open."})
+			y := rowOf(t, m, "One question is open.")
+			m, _, _ = dragged(m, 2, y, 8, y)
+			assert.Check(t, cmp.Contains(m.Content(), "\x1b[7m"), "the selection was not drawn in reverse")
+
+			m = drop(m)
+
+			assert.Check(t, !strings.Contains(m.Content(), "\x1b[7m"))
+			assert.Check(t, !strings.Contains(content(m), "Copied"))
+		})
+	}
+}
+
+func TestAPollKeepsTheChatSelectionUnlessItsLinesChange(t *testing.T) {
+	m := chatWith(t, Entry{Reply: "One question is open."})
+	y := rowOf(t, m, "One question is open.")
+	m, _, _ = dragged(m, 2, y, 8, y)
+
+	// A poll that adds an entry below leaves the selected lines as they were.
+	m, _ = m.Update(polledMsg{seq: m.seq, after: m.next, update: Update{LogID: m.logID, Next: m.next + 1, Entries: []Entry{{Activity: "Read the plan"}}}})
+	assert.Check(t, cmp.Contains(m.Content(), "\x1b[7m"), "a poll that added below dropped the selection")
+
+	// A read from 0 of a different conversation changes them.
+	m, _ = m.Update(polledMsg{seq: m.seq, after: 0, update: Update{LogID: m.logID, Next: 1, Entries: []Entry{{Reply: "Something else entirely."}}}})
+	assert.Check(t, !strings.Contains(m.Content(), "\x1b[7m"), "the selection outlived its text")
+}
+
+func TestResizingTheChatDropsASelectionWhoseLinesRewrap(t *testing.T) {
+	long := strings.Repeat("word ", 30)
+	m := chatWith(t, Entry{Reply: long})
+	y := rowOf(t, m, "word word")
+	m, _, _ = dragged(m, 2, y, 8, y)
+
+	m = m.SetSize(40, 30)
+
+	assert.Check(t, !strings.Contains(m.Content(), "\x1b[7m"))
+}
+
+func TestTheCopyNoteShowsOverTheSpinnerAndEndsOnItsOwn(t *testing.T) {
+	f := &fake{}
+	f.queued(result{u: Update{LogID: "a", Next: 1, Busy: true, Activity: "Reading", Entries: []Entry{{Reply: "One question is open."}}}})
+	m, _ := open(t, newChat(f))
+	y := rowOf(t, m, "One question is open.")
+	m, _, _ = dragged(m, 2, y, 8, y)
+	assert.Check(t, cmp.Contains(content(m), "Copied"), "the note did not take over the busy status line")
+
+	m, _ = m.Update(noteMsg{seq: m.noteSeq})
+
+	assert.Check(t, !strings.Contains(content(m), "Copied"))
+	assert.Check(t, cmp.Contains(content(m), "Reading"), "the spinner line did not come back")
+}
+
+func TestAnEarlierCopysExpiryDoesNotEndALaterNote(t *testing.T) {
+	assert.Check(t, IsMsg(noteMsg{}))
+	m := chatWith(t, Entry{Reply: "One question is open."})
+	y := rowOf(t, m, "One question is open.")
+	m, _, _ = dragged(m, 2, y, 8, y)
+	first := m.noteSeq
+	m = m.Close()
+	m, _ = m.Open()
+	m, _, _ = dragged(m, 2, y, 5, y)
+
+	m, _ = m.Update(noteMsg{seq: first})
+
+	assert.Check(t, cmp.Contains(content(m), "Copied 4 characters"))
+}
+
+func TestClosingTheChatDropsTheSelectionAndTheNote(t *testing.T) {
+	m := chatWith(t, Entry{Reply: "One question is open."})
+	y := rowOf(t, m, "One question is open.")
+	m, _ = m.Update(press(2, y))
+	m, _ = m.Update(motion(8, y))
+
+	m = m.Close()
+	m, cmd := m.Update(release(8, y))
+
+	assert.Check(t, cmd == nil, "a release after closing copied")
+	assert.Check(t, !strings.Contains(m.Content(), "\x1b[7m"))
 }
