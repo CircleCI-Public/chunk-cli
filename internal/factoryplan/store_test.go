@@ -460,6 +460,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Len(f.Events, 0))
 	assert.Check(t, cmp.Equal(f.Task, ""))
+	assert.Check(t, cmp.Nil(f.Progress))
 
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "abandon")
@@ -490,8 +491,14 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 				IsDispatched: true,
 			},
 		},
-		TaskUnit:  "Unit 2: parser",
-		WaitingOn: "session",
+		TaskUnit:     "Unit 2: parser",
+		WaitingOn:    "session",
+		WaitingOnWhy: "the session builds Unit 2: parser",
+		Progress: map[string]any{
+			"summary": "Building unit 2 of 3", "current_unit": "Unit 2: parser",
+			"deviation_count": 2, "binding_deviation_count": 1,
+			"fixup_count": 1, "finding_count": 3, "revision_count": 0,
+		},
 	})
 	cci.SetFactoryPlanState(store.ID(), "Building - Agent")
 	f, err = store.Flow(ctx)
@@ -509,11 +516,16 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 				Dispatched: true,
 			},
 		},
-		PR:         "https://github.com/o/r/pull/7",
-		Deviations: []string{"lint fails"},
-		Claimed:    true,
-		Holder:     "s-1",
-		WaitingOn:  "session",
+		PR:           "https://github.com/o/r/pull/7",
+		Deviations:   []string{"lint fails"},
+		Claimed:      true,
+		Holder:       "s-1",
+		WaitingOn:    "session",
+		WaitingOnWhy: "the session builds Unit 2: parser",
+		Progress: &plan.Progress{
+			Summary: "Building unit 2 of 3", CurrentUnit: "Unit 2: parser",
+			Findings: 3, Fixups: 1, Deviations: ptr(2), BindingDeviations: ptr(1),
+		},
 	}))
 
 	cci.SetFactoryTask(store.ID(), "")
@@ -739,3 +751,5 @@ func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(text, "# A plan\n\n## 1. Outcome\n\nEdited by hand.\n"))
 }
+
+func ptr[T any](v T) *T { return &v }

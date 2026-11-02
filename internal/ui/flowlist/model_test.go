@@ -1393,6 +1393,127 @@ func TestGroupsAndRows(t *testing.T) {
 	})
 }
 
+func TestProgressRows(t *testing.T) {
+	five, two, zero := 5, 2, 0
+	long := strings.Repeat("Addressing findings ", 10)
+	for _, tc := range []struct {
+		name        string
+		flow        circleci.Flow
+		wantRow     string // the second row starts with this
+		notInRow    []string
+		cut         bool // the second row is cut to one line
+		wantPreview []string
+		notPreview  []string
+		before      [2]string // in the preview, the first comes before the second
+	}{
+		{
+			name: "summary replaces the task category",
+			flow: circleci.Flow{
+				Task:     &circleci.FlowTask{ID: "t", Category: "build-unit"},
+				Progress: &circleci.FlowProgress{Summary: "Building unit 2 of 5", DoneUnits: &two, Units: &five},
+			},
+			wantRow:  "Building unit 2 of 5 · 2/5 units",
+			notInRow: []string{"build-unit"},
+		},
+		{
+			name:    "no summary, waits on blockers",
+			flow:    circleci.Flow{WaitingOn: "blockers", Progress: &circleci.FlowProgress{}},
+			wantRow: "waiting on blockers",
+		},
+		{
+			name:    "no summary, waits on sub-plans",
+			flow:    circleci.Flow{WaitingOn: "sub-plans", Progress: &circleci.FlowProgress{}},
+			wantRow: "waiting on sub-plans",
+		},
+		{
+			name: "no summary, waits on session: task category",
+			flow: circleci.Flow{
+				WaitingOn: "session", Task: &circleci.FlowTask{ID: "t", Category: "build-unit"},
+				Progress: &circleci.FlowProgress{},
+			},
+			wantRow: "build-unit",
+		},
+		{
+			name:     "older conductor: today's row",
+			flow:     circleci.Flow{Task: &circleci.FlowTask{ID: "t", Category: "build-unit"}},
+			wantRow:  "build-unit",
+			notInRow: []string{"units", "waiting on"},
+		},
+		{
+			name:     "no unit count when unit_count is 0",
+			flow:     circleci.Flow{Progress: &circleci.FlowProgress{Summary: "Writing units", Units: &zero}},
+			wantRow:  "Writing units",
+			notInRow: []string{"units ·", "/0"},
+		},
+		{
+			name:    "absent done count counts as 0",
+			flow:    circleci.Flow{Progress: &circleci.FlowProgress{Summary: "Building unit 1 of 5", Units: &five}},
+			wantRow: "Building unit 1 of 5 · 0/5 units",
+		},
+		{
+			name:    "a long summary is cut to one row",
+			flow:    circleci.Flow{Progress: &circleci.FlowProgress{Summary: long, DoneUnits: &two, Units: &five}},
+			wantRow: "Addressing findings Addressing",
+			cut:     true,
+		},
+		{
+			name:        "preview says who and why",
+			flow:        circleci.Flow{WaitingOn: "session", WaitingOnWhy: "the session builds Unit 2: lexer"},
+			wantPreview: []string{"Waiting on session", "the session builds Unit 2: lexer"},
+			before:      [2]string{"Waiting on session", "Plan"},
+		},
+		{
+			name:        "preview with no why",
+			flow:        circleci.Flow{WaitingOn: "human"},
+			wantPreview: []string{"Waiting on human"},
+		},
+		{
+			name:       "no waiting_on: no block",
+			flow:       circleci.Flow{},
+			notPreview: []string{"Waiting on"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := tc.flow
+				f.ID, f.Title, f.State = "f", "The flow", "Building - Agent"
+				if f.Next == nil {
+					f.Next = waitAgent
+				}
+				d := newDriver(t, fixed(f), preview)
+				d.load()
+				rows := listRows(d)
+				all := strings.Join(rows, "\n")
+				i := slices.IndexFunc(rows, func(r string) bool { return strings.TrimPrefix(r, "▶ ") == "The flow" })
+				assert.Assert(t, i >= 0 && i+2 < len(rows), "rows:\n%s", all)
+				row := rows[i+1]
+				if tc.wantRow != "" {
+					assert.Check(t, strings.HasPrefix(row, tc.wantRow), "row %q", row)
+				}
+				for _, not := range tc.notInRow {
+					assert.Check(t, !strings.Contains(row, not), "row %q has %q", row, not)
+				}
+				if tc.cut {
+					assert.Check(t, strings.HasSuffix(row, "…"), "row %q is not cut", row)
+					assert.Check(t, cmp.Equal(rows[i+2], ""), "the flow takes more than two rows:\n%s", all)
+				}
+				d.send(tea.WindowSizeMsg{Width: 120, Height: 40})
+				text := d.content()
+				for _, w := range tc.wantPreview {
+					assert.Check(t, cmp.Contains(text, w))
+				}
+				for _, not := range tc.notPreview {
+					assert.Check(t, !strings.Contains(text, not), "%q shows:\n%s", not, text)
+				}
+				if tc.before[0] != "" {
+					first, second := strings.Index(text, tc.before[0]), strings.Index(text, tc.before[1])
+					assert.Check(t, first >= 0 && first < second, "%q is not before %q:\n%s", tc.before[0], tc.before[1], text)
+				}
+			})
+		})
+	}
+}
+
 func TestSubHeadingCase(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		d := newDriver(t, fixed(

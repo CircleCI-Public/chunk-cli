@@ -327,8 +327,11 @@ chunk watch
 they wait on (Needs your review, With agent, Not started, Other; each heading
 shows how many flows it holds) and then by phase (Planning, Building, ...), a
 sub-plan marked `↳` with its parent (and indented under it when both are under
-the same heading), a flow whose PR factory could not rebase marked ⚠, with a
-read-only preview of the selected one's plan. Flows are yours wherever
+the same heading), a flow whose PR factory could not rebase marked ⚠, and
+each flow's second line saying what factory is doing on it now (for example
+`Building unit 2 of 5 · 1/5 units`) or that it waits on its blockers or
+sub-plans, with a read-only preview of the selected one's plan that starts
+with who the flow waits on and why. Flows are yours wherever
 `chunk watch` is run. `Enter` opens a flow's plan, `n` starts a new one,
 `R` resumes the selected flow when it waits on an agent and no session holds
 it (a build gets a fresh build session in the chunk daemon; a planner picks
@@ -358,7 +361,8 @@ conflicts after factory's rebase reads PR conflicts, and `ctrl+s` hands it
 back to factory to rebase again. The build
 keeps going when you close chunk; plan as many as you like.
 Once approved, the screen stays open on the Flow tab, which follows the
-build: each unit done, being built or to do, and the pull request.
+build: what factory is doing now and who it waits on, each unit done,
+being built or to do, and the pull request.
 The left pane then shows the builder at work. If it warns that another
 session holds the plan's claim, run the `factory daemon release` command it
 names. Once factory frees the old claim of a plan whose build stopped, after

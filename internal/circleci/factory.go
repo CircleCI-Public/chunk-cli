@@ -60,6 +60,19 @@ type Flow struct {
 	// WaitingOn is who factory waits on to move the flow on, as factory
 	// names them; "" from a conductor that does not serve it.
 	WaitingOn string
+	// WaitingOnWhy is why factory waits on WaitingOn; "" when not served.
+	WaitingOnWhy string
+	// Progress is how far the flow is along; nil once it ends or from an older
+	// conductor.
+	Progress *FlowProgress
+}
+
+// FlowProgress is a flow's progress as factory serves it. A nil count does
+// not apply.
+type FlowProgress struct {
+	Summary, CurrentUnit, DeviationSource, CurrentFixup                     string
+	DoneUnits, Units, Deviations, BindingDeviations, SubPlans, OpenSubPlans *int
+	Fixups, Findings, Revisions                                             int
 }
 
 // Transition is a way a flow can move on now, and who takes it. Actor is
@@ -192,15 +205,35 @@ func (r planRefs) parent() string {
 }
 
 type flowAttrs struct {
-	Title      string            `json:"title"`
-	UpdatedAt  *time.Time        `json:"updated_at"`
-	State      string            `json:"state"`
-	Phase      string            `json:"phase"`
-	Outcome    string            `json:"outcome"`
-	PR         string            `json:"pr"`
-	Deviations []string          `json:"deviations"`
-	Next       []transitionAttrs `json:"next"`
-	WaitingOn  string            `json:"waiting_on"`
+	Title        string            `json:"title"`
+	UpdatedAt    *time.Time        `json:"updated_at"`
+	State        string            `json:"state"`
+	Phase        string            `json:"phase"`
+	Outcome      string            `json:"outcome"`
+	PR           string            `json:"pr"`
+	Deviations   []string          `json:"deviations"`
+	Next         []transitionAttrs `json:"next"`
+	WaitingOn    string            `json:"waiting_on"`
+	WaitingOnWhy string            `json:"waiting_on_why"`
+	Progress     *progressAttrs    `json:"progress"`
+}
+
+// progressAttrs is a flow's progress as factory serves it. Its fields are
+// FlowProgress's, in order, so that one converts to the other.
+type progressAttrs struct {
+	Summary           string `json:"summary"`
+	CurrentUnit       string `json:"current_unit"`
+	DeviationSource   string `json:"deviation_source"`
+	CurrentFixup      string `json:"current_fixup"`
+	DoneUnits         *int   `json:"done_unit_count"`
+	Units             *int   `json:"unit_count"`
+	Deviations        *int   `json:"deviation_count"`
+	BindingDeviations *int   `json:"binding_deviation_count"`
+	SubPlans          *int   `json:"sub_plan_count"`
+	OpenSubPlans      *int   `json:"open_sub_plan_count"`
+	Fixups            int    `json:"fixup_count"`
+	Findings          int    `json:"finding_count"`
+	Revisions         int    `json:"revision_count"`
 }
 
 func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
@@ -208,7 +241,11 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 		ID: id, Title: a.Title, State: a.State, Phase: a.Phase,
 		ApplicableEvents: humanEvents(a.Next),
 		Outcome:          a.Outcome, PR: a.PR, Deviations: a.Deviations,
-		Next: transitions(a.Next), WaitingOn: a.WaitingOn,
+		Next: transitions(a.Next), WaitingOn: a.WaitingOn, WaitingOnWhy: a.WaitingOnWhy,
+	}
+	if a.Progress != nil {
+		p := FlowProgress(*a.Progress)
+		f.Progress = &p
 	}
 	if a.UpdatedAt != nil {
 		f.UpdatedAt = *a.UpdatedAt

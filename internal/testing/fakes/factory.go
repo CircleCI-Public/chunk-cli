@@ -180,6 +180,12 @@ type FactoryFlowStatus struct {
 	// WaitingOn, when not "", is served as the flow's waiting_on; "" serves
 	// none, as an older conductor.
 	WaitingOn string
+	// WaitingOnWhy, when not "", is served as the flow's waiting_on_why.
+	WaitingOnWhy string
+	// Progress, when not nil, is served as the flow's progress as it is, so
+	// a test can leave any count out; nil serves none, as an older conductor
+	// or an ended flow.
+	Progress map[string]any
 	// TaskUnit is served on the flow's task reference, when it has one.
 	TaskUnit string
 }
@@ -613,6 +619,12 @@ func flowEntity(p *factoryPlan) gin.H {
 	}
 	if p.status.WaitingOn != "" {
 		attrs["waiting_on"] = p.status.WaitingOn
+	}
+	if p.status.WaitingOnWhy != "" {
+		attrs["waiting_on_why"] = p.status.WaitingOnWhy
+	}
+	if p.status.Progress != nil {
+		attrs["progress"] = p.status.Progress
 	}
 	if o := cmp.Or(p.status.Outcome, factoryOutcome(p.state)); o != "" {
 		attrs["outcome"] = o

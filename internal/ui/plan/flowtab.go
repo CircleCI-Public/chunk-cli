@@ -117,12 +117,15 @@ func (m Model) flowContent(w int) string {
 	return strings.Join(lines, "\n")
 }
 
-// progress is the Progress section's rows: the plan's open sub-plans when
-// it has any, or else its units, each marked done, under way or to do.
+// progress is the Progress section's rows: what factory says of the flow,
+// then the plan's open sub-plans when it has any, or else its units, each
+// marked done, under way or to do.
 func (m Model) progress() []string {
+	head := m.progressHead()
 	if kids := m.family.Children; len(kids) > 0 {
 		n := len(kids)
-		rows := make([]string, 0, 1+n)
+		rows := make([]string, 0, len(head)+1+n)
+		rows = append(rows, head...)
 		rows = append(rows, m.style(m.dim()).Render(fmt.Sprintf("Progress · %d open %s", n, plural(n, "sub-plan", "sub-plans"))))
 		for _, c := range kids {
 			marker := m.style(m.dim()).Render("○ ")
@@ -136,15 +139,16 @@ func (m Model) progress() []string {
 	}
 	units := planstate.Units(m.plan)
 	if len(units) == 0 {
-		return []string{m.style(m.dim()).Render("No units")}
+		return append(head, m.style(m.dim()).Render("No units"))
 	}
-	rows := make([]string, len(units))
+	current := m.currentUnit()
+	rows := head
 	for i, u := range units {
 		marker := m.style(m.dim()).Render("○ ")
 		switch {
 		case u.Done:
 			marker = m.style(m.green()).Render(ui.IconOK + " ")
-		case u.Name == m.flow.Unit:
+		case u.Name == current:
 			marker = m.style(m.brand()).Render("▸ ")
 		}
 		name := unitNumRe.ReplaceAllString(u.Name, "")
@@ -152,9 +156,54 @@ func (m Model) progress() []string {
 			name = u.Name
 		}
 		num := m.style(m.faint()).Render(strconv.Itoa(i + 1))
-		rows[i] = marker + num + "  " + lipgloss.NewStyle().Bold(true).Render(name)
+		rows = append(rows, marker+num+"  "+lipgloss.NewStyle().Bold(true).Render(name))
 	}
 	return rows
+}
+
+// progressHead is the dim lines above the Progress rows: what factory says
+// is under way and the counts behind it, then who the flow waits on; each
+// only when there is something to say.
+func (m Model) progressHead() []string {
+	var rows, parts []string
+	if p := m.flow.Progress; p != nil {
+		if s := clean(p.Summary); s != "" {
+			parts = append(parts, s)
+		}
+		if p.Findings > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", p.Findings, plural(p.Findings, "review finding", "review findings")))
+		}
+		if p.Deviations != nil && *p.Deviations > 0 {
+			d := fmt.Sprintf("%d %s", *p.Deviations, plural(*p.Deviations, "deviation", "deviations"))
+			if p.BindingDeviations != nil && *p.BindingDeviations > 0 {
+				d += fmt.Sprintf(" (%d binding)", *p.BindingDeviations)
+			}
+			parts = append(parts, d)
+		}
+		if p.Fixups > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s left", p.Fixups, plural(p.Fixups, "fixup", "fixups")))
+		}
+	}
+	if len(parts) > 0 {
+		rows = append(rows, m.style(m.dim()).Render(strings.Join(parts, " · ")))
+	}
+	if w := clean(m.flow.WaitingOn); w != "" {
+		line := "Waiting on " + w
+		if why := clean(m.flow.WaitingOnWhy); why != "" {
+			line += ": " + why
+		}
+		rows = append(rows, m.style(m.dim()).Render(line))
+	}
+	return rows
+}
+
+// currentUnit is the unit under way: factory's progress.current_unit when it
+// serves one, else the unit the flow's task builds.
+func (m Model) currentUnit() string {
+	if p := m.flow.Progress; p != nil && p.CurrentUnit != "" {
+		return p.CurrentUnit
+	}
+	return m.flow.Unit
 }
 
 // sectionHeading is name as a section of the plan is headed: in capitals, in

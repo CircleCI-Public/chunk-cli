@@ -28,6 +28,11 @@ type Flow struct {
 	// WaitingOn is who factory waits on to move the flow on, as factory
 	// names them; "" from a conductor that does not serve it.
 	WaitingOn string
+	// WaitingOnWhy is why factory waits on WaitingOn; "" when not served.
+	WaitingOnWhy string
+	// Progress is how far the flow is along; nil once it ends or from a
+	// conductor that does not serve it.
+	Progress *Progress
 	// PR is the flow's pull request's URL, "" while it has none.
 	PR         string
 	Deviations []string
@@ -39,6 +44,14 @@ type Flow struct {
 	Claimed bool
 	// Holder is the session claiming the plan, "" when none does.
 	Holder string
+}
+
+// Progress is how far a flow is along, as factory reports it. A nil count
+// does not apply.
+type Progress struct {
+	Summary, CurrentUnit          string
+	Findings, Fixups              int
+	Deviations, BindingDeviations *int
 }
 
 // Actor is who takes a Step, as factory names them.
