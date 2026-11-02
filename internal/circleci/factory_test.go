@@ -625,8 +625,12 @@ func TestFlows(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		_, err := client.CreatePlan(ctx, "one", "")
 		assert.NilError(t, err)
-		_, err = client.CreatePlan(ctx, "two", "")
+		two, err := client.CreatePlan(ctx, "two", "")
 		assert.NilError(t, err)
+		fake.SetFactoryFlowStatus(two.ID, fakes.FactoryFlowStatus{
+			WaitingOn: "session", WaitingOnWhy: "the session reviews the plan",
+			Progress: map[string]any{"summary": "Reviewing the plan"},
+		})
 
 		flows, err := client.ListFlows(ctx)
 		assert.NilError(t, err)
@@ -637,6 +641,12 @@ func TestFlows(t *testing.T) {
 		}
 		assert.Check(t, cmp.DeepEqual(titles, []string{"one", "two"}))
 		assert.Check(t, cmp.DeepEqual(phases, []string{PhaseReceived, PhaseReceived}))
+		assert.Assert(t, cmp.Len(flows, 2))
+		assert.Check(t, cmp.Nil(flows[0].Progress))
+		assert.Assert(t, flows[1].Progress != nil)
+		assert.Check(t, cmp.Equal(flows[1].Progress.Summary, "Reviewing the plan"))
+		assert.Check(t, cmp.Nil(flows[1].Progress.Units))
+		assert.Check(t, cmp.Equal(flows[1].WaitingOnWhy, "the session reviews the plan"))
 	})
 
 	t.Run("reads a flow from a conductor that serves no title or phase", func(t *testing.T) {
@@ -704,8 +714,14 @@ func TestFlows(t *testing.T) {
 				{Actor: "human", Action: "merge-pr"},
 				{Actor: "robot"},
 			},
-			TaskUnit:  "Unit 2: parser",
-			WaitingOn: "session",
+			TaskUnit:     "Unit 2: parser",
+			WaitingOn:    "session",
+			WaitingOnWhy: "the session builds Unit 2: parser",
+			Progress: map[string]any{
+				"summary": "Building unit 2 of 5", "current_unit": "Unit 2: parser",
+				"done_unit_count": 1, "unit_count": 5, "deviation_count": 0,
+				"fixup_count": 0, "finding_count": 3, "revision_count": 1,
+			},
 		})
 
 		f, err := client.GetFlow(ctx, p.ID)
@@ -725,7 +741,13 @@ func TestFlows(t *testing.T) {
 				{Actor: "human", Action: "merge-pr"},
 				{Actor: "robot"},
 			},
-			WaitingOn: "session",
+			WaitingOn:    "session",
+			WaitingOnWhy: "the session builds Unit 2: parser",
+			Progress: &FlowProgress{
+				Summary: "Building unit 2 of 5", CurrentUnit: "Unit 2: parser",
+				DoneUnits: ptr(1), Units: ptr(5), Deviations: ptr(0),
+				Findings: 3, Revisions: 1,
+			},
 		}))
 	})
 
@@ -744,6 +766,8 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.Nil(f.Deviations))
 		assert.Check(t, cmp.Nil(f.Next))
 		assert.Check(t, cmp.Equal(f.WaitingOn, ""))
+		assert.Check(t, cmp.Equal(f.WaitingOnWhy, ""))
+		assert.Check(t, cmp.Nil(f.Progress))
 
 		fake := fakes.NewFakeCircleCI()
 		fsrv := httptest.NewServer(fake)
@@ -1082,3 +1106,5 @@ func TestNextCursor(t *testing.T) {
 	_, err = nextCursor("b", next("c"), maxPages)
 	assert.ErrorContains(t, err, "pages")
 }
+
+func ptr[T any](v T) *T { return &v }
