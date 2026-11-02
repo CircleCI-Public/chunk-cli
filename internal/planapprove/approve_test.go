@@ -357,6 +357,19 @@ func TestApproveRefusesAPlanWithQuestionsOpen(t *testing.T) {
 	assert.Check(t, cmp.Equal(p.Session, "s-1"))
 }
 
+// TestApproveFailsWhenTheUnitsCannotBeRead checks that a failed units read
+// fails the approval with nothing sent.
+func TestApproveFailsWhenTheUnitsCannotBeRead(t *testing.T) {
+	client, cci, id := approvablePlan(t, "s-1")
+	cci.FailFactoryStructuredContent(id)
+
+	err := Approve(context.Background(), client, noDaemon, id, "s-1", "/data/plans/"+id)
+	assert.Check(t, cmp.ErrorContains(err, "get the plan's units"))
+	p, _ := cci.FactoryPlan(id)
+	assert.Check(t, cmp.Len(p.Events, 0))
+	assert.Check(t, cmp.Equal(p.Session, "s-1"))
+}
+
 // TestApproveWaitsForUnits checks that Approve refuses a plan whose design is what waits for approval.
 func TestApproveWaitsForUnits(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n")
@@ -368,6 +381,7 @@ func TestApproveWaitsForUnits(t *testing.T) {
 		name   string
 		text   string
 		events []string
+		units  []fakes.FactoryUnit
 	}{
 		{
 			name:   "no units",
@@ -375,29 +389,22 @@ func TestApproveWaitsForUnits(t *testing.T) {
 			events: []string{"approve-for-units", "approve-for-building"},
 		},
 		{
-			name:   "a heading in another section is no unit",
-			text:   "# A plan\n\n## 2. Design\n\n### Context\n\n## 5. Units\n",
-			events: []string{"approve-for-units", "approve-for-building"},
-		},
-		{
 			name:   "factory offers only design approval",
 			text:   "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n",
 			events: []string{"address-comments", "approve-for-units", "abandon"},
-		},
-		{
-			name:   "fenced headings are no units",
-			text:   "# A plan\n\n## 5. Units\n\n```md\n### Unit 1: example\n```\n",
-			events: []string{"approve-for-units", "approve-for-building"},
+			units:  []fakes.FactoryUnit{{Name: "Unit 1: Add the flag"}},
 		},
 		{
 			name:   "only done units still count",
 			text:   "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag (done)\n",
 			events: []string{"address-comments", "approve-for-units", "abandon"},
+			units:  []fakes.FactoryUnit{{Name: "Unit 1: Add the flag", Done: true}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := client.SetPlanText(ctx, id, tc.text)
 			assert.NilError(t, err)
+			cci.SetFactoryPlanUnits(id, tc.units...)
 			cci.SetFactoryApplicableEvents(id, tc.events...)
 			err = Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
 			assert.Check(t, cmp.ErrorIs(err, ErrNoUnits))
@@ -416,6 +423,7 @@ func TestApproveCountsDoneUnits(t *testing.T) {
 	cci.SetFactoryPlanState(id, "Planning - Human")
 	err := client.SetPlanText(ctx, id, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag (done)\n")
 	assert.NilError(t, err)
+	cci.SetFactoryPlanUnits(id, fakes.FactoryUnit{Name: "Unit 1: Add the flag", Done: true})
 	cci.SetFactoryApplicableEvents(id, "approve-for-units", "approve-for-building")
 
 	err = Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)

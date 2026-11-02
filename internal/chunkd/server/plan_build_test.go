@@ -35,10 +35,13 @@ type fakePlans struct {
 	id, state      string
 	phase, outcome string
 	branch, text   string
-	getErr         error
-	noFlow         bool
-	flowErr        error
-	holder         string
+	// units are the plan's units; unitsErr fails PlanStructuredContent.
+	units    []circleci.PlanUnit
+	unitsErr error
+	getErr   error
+	noFlow   bool
+	flowErr  error
+	holder   string
 	// events are the flow's applicable events.
 	events []circleci.FlowEvent
 	// task, when set, is the task a session takes to move the flow on, such
@@ -165,6 +168,15 @@ func (f *fakePlans) PlanText(_ context.Context, id string) (string, error) {
 	defer f.mu.Unlock()
 
 	return f.text, nil
+}
+
+func (f *fakePlans) PlanStructuredContent(_ context.Context, _ string) (*circleci.PlanStructuredContent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.unitsErr != nil {
+		return nil, f.unitsErr
+	}
+	return &circleci.PlanStructuredContent{Units: append([]circleci.PlanUnit(nil), f.units...)}, nil
 }
 
 func (f *fakePlans) set(state, branch string) {

@@ -31,6 +31,9 @@ type factoryPlan struct {
 	applicable []string
 	// units are the units its structured content serves, nil until SetFactoryPlanUnits.
 	units []FactoryUnit
+	// noStructured is whether FailFactoryStructuredContent has the plan's
+	// structured content answer 404.
+	noStructured bool
 	// taskID and taskCategory are the task the flow has out, as a test sets
 	// it with SetFactoryTask; "" when none is. taskIDOnly serves its
 	// reference as an older factory did, with no attributes.
@@ -157,6 +160,15 @@ func (f *FakeCircleCI) SetFactoryPlanUnits(id string, units ...FactoryUnit) {
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.units = append([]FactoryUnit{}, units...)
+	}
+}
+
+// FailFactoryStructuredContent has plan id's structured content answer 404.
+func (f *FakeCircleCI) FailFactoryStructuredContent(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.noStructured = true
 	}
 }
 
@@ -552,6 +564,10 @@ func (f *FakeCircleCI) handleGetPlanStructuredContent(c *gin.Context) {
 	defer f.mu.RUnlock()
 	p := f.plan(c)
 	if p == nil {
+		return
+	}
+	if p.noStructured {
+		factoryError(c, http.StatusNotFound, "not found")
 		return
 	}
 	var units []gin.H

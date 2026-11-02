@@ -29,6 +29,7 @@ type PlanAPI interface {
 	GetPlan(ctx context.Context, id string) (*circleci.Plan, error)
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
 	PlanText(ctx context.Context, id string) (string, error)
+	PlanStructuredContent(ctx context.Context, id string) (*circleci.PlanStructuredContent, error)
 	ReleaseClaim(ctx context.Context, sessionID, planID string) error
 	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
 }

@@ -48,6 +48,7 @@ func newApproveDaemon(t *testing.T) *approveDaemon {
 	ad.plans.state = "Planning - Human"
 	ad.plans.events = []circleci.FlowEvent{circleci.ApproveForBuilding}
 	ad.plans.text = oneUnitPlan
+	ad.plans.units = []circleci.PlanUnit{{Name: "Unit 1: Add it"}}
 	ad.plans.mu.Unlock()
 	ad.rcfg.StartBuild = ad.builds.start
 	ad.rcfg.SessionWorktree = func(_ context.Context, session string) (string, error) {
@@ -234,6 +235,16 @@ func TestPlanApproveRefuses(t *testing.T) {
 			contains: "get the plan's flow: 503 from factory",
 		},
 		{
+			name: "factory fails the units read",
+			setup: func(ad *approveDaemon) {
+				ad.plans.mu.Lock()
+				defer ad.plans.mu.Unlock()
+				ad.plans.unitsErr = errors.New("404 from factory")
+			},
+			status:   http.StatusBadGateway,
+			contains: "get the plan's units: 404 from factory",
+		},
+		{
 			name: "no factory API",
 			setup: func(ad *approveDaemon) {
 				ad.rcfg.PlanAPI = nil
@@ -263,7 +274,7 @@ func TestPlanApproveRefuses(t *testing.T) {
 				// Put factory right, with the claim free, and resume.
 				ad.rcfg.PlanAPI = ad.plans
 				ad.plans.mu.Lock()
-				ad.plans.flowErr, ad.plans.eventErr = nil, nil
+				ad.plans.flowErr, ad.plans.eventErr, ad.plans.unitsErr = nil, nil, nil
 				ad.plans.mu.Unlock()
 				ad.plans.claim("")
 				if live {
