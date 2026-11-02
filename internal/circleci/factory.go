@@ -482,6 +482,55 @@ func (c *Client) PlanText(ctx context.Context, id string) (string, error) {
 	return attrs.Text, nil
 }
 
+// PlanStructuredContent is a plan's sections and the units of its 5. Units, as
+// factory parses its text.
+type PlanStructuredContent struct {
+	// Each section is its body, or nil when factory found none.
+	Outcome, Design, OpenQuestions, WorkedExample *string
+	// Units is nil when the plan has no 5. Units or none in it.
+	Units []PlanUnit
+}
+
+// PlanUnit is one unit of a plan's 5. Units.
+type PlanUnit struct {
+	Name string // the heading, without " (done)"
+	Done bool
+	Body string
+}
+
+type planStructuredContentAttrs struct {
+	Outcome       *string `json:"outcome"`
+	Design        *string `json:"design"`
+	OpenQuestions *string `json:"open_questions"`
+	WorkedExample *string `json:"worked_example"`
+	Units         []struct {
+		Name   string `json:"name"`
+		IsDone bool   `json:"is_done"`
+		Body   string `json:"body"`
+	} `json:"units"`
+}
+
+// PlanStructuredContent returns factory plan id's sections and units.
+func (c *Client) PlanStructuredContent(ctx context.Context, id string) (*PlanStructuredContent, error) {
+	var attrs planStructuredContentAttrs
+	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/plans/%s/structured-content",
+		hc.RouteParams(url.PathEscape(id)),
+		hc.JSONDecoder(&env),
+	))
+	if err != nil {
+		return nil, mapErr("get plan structured content", err)
+	}
+	out := &PlanStructuredContent{
+		Outcome: attrs.Outcome, Design: attrs.Design,
+		OpenQuestions: attrs.OpenQuestions, WorkedExample: attrs.WorkedExample,
+	}
+	for _, u := range attrs.Units {
+		out.Units = append(out.Units, PlanUnit{Name: u.Name, Done: u.IsDone, Body: u.Body})
+	}
+	return out, nil
+}
+
 // SetPlanText replaces factory plan id's text.
 func (c *Client) SetPlanText(ctx context.Context, id, text string) error {
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPut, "/api/v3/factory/plans/%s/text",

@@ -29,6 +29,8 @@ type factoryPlan struct {
 	// applicable are the human events the flow serves in next, as a test
 	// sets them with SetFactoryApplicableEvents.
 	applicable []string
+	// units are the units its structured content serves, nil until SetFactoryPlanUnits.
+	units []FactoryUnit
 	// taskID and taskCategory are the task the flow has out, as a test sets
 	// it with SetFactoryTask; "" when none is. taskIDOnly serves its
 	// reference as an older factory did, with no attributes.
@@ -62,6 +64,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.DELETE("/api/v3/factory/plans/:id", f.handleDeletePlan)
 	r.GET("/api/v3/factory/plans/:id/text", f.handleGetPlanText)
 	r.PUT("/api/v3/factory/plans/:id/text", f.handlePutPlanText)
+	r.GET("/api/v3/factory/plans/:id/structured-content", f.handleGetPlanStructuredContent)
 	r.POST("/api/v3/factory/comments", f.handleCreateComment)
 	r.GET("/api/v3/factory/comments", f.handleListComments)
 	r.PUT("/api/v3/factory/comments/:id/body", f.handlePutCommentBody)
@@ -136,6 +139,24 @@ func (f *FakeCircleCI) SetFactoryApplicableEvents(id string, events ...string) {
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.applicable = slices.Clone(events)
+	}
+}
+
+// FactoryUnit is a unit the fake serves in a plan's structured content.
+type FactoryUnit struct {
+	Name string
+	Done bool
+	Body string
+}
+
+// SetFactoryPlanUnits has plan id's structured content serve units, as
+// factory would parse them from its text: [] when called with none. Until it
+// is called, units is null.
+func (f *FakeCircleCI) SetFactoryPlanUnits(id string, units ...FactoryUnit) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.units = append([]FactoryUnit{}, units...)
 	}
 }
 
@@ -521,6 +542,29 @@ func (f *FakeCircleCI) handleGetPlanText(c *gin.Context) {
 	if p := f.plan(c); p != nil {
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": p.id, "attributes": gin.H{"text": p.text}}})
 	}
+}
+
+func (f *FakeCircleCI) handleGetPlanStructuredContent(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	p := f.plan(c)
+	if p == nil {
+		return
+	}
+	var units []gin.H
+	if p.units != nil {
+		units = make([]gin.H, len(p.units))
+		for i, u := range p.units {
+			units[i] = gin.H{"name": u.Name, "is_done": u.Done, "body": u.Body}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": p.id, "attributes": gin.H{
+		"outcome": nil, "design": nil, "open_questions": nil, "worked_example": nil,
+		"units": units,
+	}}})
 }
 
 func (f *FakeCircleCI) handlePutPlanText(c *gin.Context) {

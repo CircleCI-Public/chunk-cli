@@ -51,6 +51,36 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.Equal(text, "# version-quiet-flag\n\n## 1. Outcome\n"))
 	})
 
+	t.Run("reads a plan's structured content", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		p, err := client.CreatePlan(ctx, "a plan", "# a plan\n")
+		assert.NilError(t, err)
+
+		sc, err := client.PlanStructuredContent(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(sc, &PlanStructuredContent{}))
+
+		fake.SetFactoryPlanUnits(p.ID,
+			fakes.FactoryUnit{Name: "Unit 1: lexer", Done: true, Body: "\nLex.\n"},
+			fakes.FactoryUnit{Name: "Unit 2: parser"},
+		)
+		sc, err = client.PlanStructuredContent(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(sc.Units, []PlanUnit{
+			{Name: "Unit 1: lexer", Done: true, Body: "\nLex.\n"},
+			{Name: "Unit 2: parser"},
+		}))
+		assert.Check(t, sc.Outcome == nil)
+
+		fake.SetFactoryPlanUnits(p.ID) // serves "units": []
+		sc, err = client.PlanStructuredContent(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, sc.Units == nil, "[] decoded as %#v", sc.Units)
+	})
+
 	t.Run("sends the plan as a V3 entity with the token", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
@@ -82,6 +112,8 @@ func TestPlans(t *testing.T) {
 		_, err := client.GetPlan(ctx, id)
 		assertStatus(t, err, http.StatusNotFound)
 		_, err = client.PlanText(ctx, id)
+		assertStatus(t, err, http.StatusNotFound)
+		_, err = client.PlanStructuredContent(ctx, id)
 		assertStatus(t, err, http.StatusNotFound)
 		assertStatus(t, client.SetPlanText(ctx, id, "x"), http.StatusNotFound)
 		err = client.DeletePlan(ctx, id)
