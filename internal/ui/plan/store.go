@@ -25,6 +25,9 @@ type Flow struct {
 	Unit string
 	// Next is every way the flow can move on now, in order.
 	Next []Step
+	// WaitingOn is who factory waits on to move the flow on, as factory
+	// names them; "" from a conductor that does not serve it.
+	WaitingOn string
 	// PR is the flow's pull request's URL, "" while it has none.
 	PR         string
 	Deviations []string
