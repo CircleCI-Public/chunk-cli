@@ -2,7 +2,9 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -73,6 +75,21 @@ type fakeStore struct {
 	// many successes.
 	FailAddAfter int
 	addCalls     int
+
+	// OfferOnComment, when set, adds address-comments to the flow's events
+	// once a comment has been added, as factory lists it only for a plan
+	// with comments.
+	OfferOnComment bool
+	// TakeOnComment, when set, has the flow's next list a session
+	// address-comments task once a comment has been added, as factory since
+	// #324 hands a plan's comments off itself.
+	TakeOnComment bool
+	// TakeOnHandOff, when set, fails AddressComments and has the flow's
+	// next list the session address-comments task from then on, as factory
+	// would when its daemon dispatched the comments between the screen's
+	// read and its send.
+	TakeOnHandOff bool
+	taken         bool
 }
 
 func newFakeStore() *fakeStore {
@@ -114,11 +131,17 @@ func (f *fakeStore) Flow(context.Context) (Flow, error) {
 		// apart lists, so the plan's units decide which ctrl+s offers.
 		out.Events = []string{"address-comments", "approve-for-units", "approve-for-building"}
 	}
+	if f.OfferOnComment && len(f.Added) > 0 && !slices.Contains(out.Events, "address-comments") {
+		out.Events = append(slices.Clone(out.Events), "address-comments")
+	}
 	if out.Next == nil {
 		// As conductor lists the events that apply in next.
 		for _, e := range out.Events {
 			out.Next = append(out.Next, Step{Actor: "human", Event: e})
 		}
+	}
+	if (f.TakeOnComment && len(f.Added) > 0) || f.taken {
+		out.Next = append(slices.Clone(out.Next), Step{Actor: ActorSession, Task: "address-comments"})
 	}
 	return out, nil
 }
@@ -143,9 +166,20 @@ func (f *fakeStore) setEvents(events ...string) {
 	f.EventsV, f.eventsSet = events, true
 }
 
+// setWaitingOn has the plan's flow name who as who factory waits on.
+func (f *fakeStore) setWaitingOn(who string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.FlowV.WaitingOn = who
+}
+
 func (f *fakeStore) AddressComments(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.TakeOnHandOff {
+		f.taken = true
+		return errors.New("address-comments does not apply now")
+	}
 	if f.AddressErr != nil {
 		return f.AddressErr
 	}

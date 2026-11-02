@@ -151,7 +151,7 @@ func saveEditCmd(ctx context.Context, s Store, msg editedMsg, text string) tea.C
 			if err != nil {
 				return err
 			}
-			if handOffEventOf(flow.Events) == "" {
+			if !waitsOnYou(flow) {
 				return errEditNotWaiting
 			}
 			now, err := s.Text(ctx)

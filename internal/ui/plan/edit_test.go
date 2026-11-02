@@ -232,6 +232,28 @@ func TestEditIsSavedWhileFactoryWaitsOnOpenQuestions(t *testing.T) {
 	assert.Check(t, strings.HasPrefix(ansi.Strip(m.status), "Saved your edit."), "status: %q", m.status)
 }
 
+func TestEditIsSavedWhileFactoryWaitsOnYouWithNoComments(t *testing.T) {
+	m, store, _ := planInPlan(t)
+	store.setEvents("approve-for-units", "abandon")
+	store.setWaitingOn("human")
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Equal(m.cannotEdit(), ""))
+	m.editing = true
+	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
+	m = drive(t, m, msg)
+
+	assert.Check(t, cmp.Len(store.Set, 1))
+	assert.Check(t, strings.HasPrefix(ansi.Strip(m.status), "Saved your edit."), "status: %q", m.status)
+}
+
+func TestEditIsRefusedWhileFactoryWorksOnThePlan(t *testing.T) {
+	m, store, _ := planInPlan(t)
+	store.setEvents("abandon")
+	store.setWaitingOn("session")
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Contains(m.cannotEdit(), "once factory is waiting on you"))
+}
+
 func TestFailedEditorSavesNothing(t *testing.T) {
 	m, store, _ := planInPlan(t)
 	m.editing = true

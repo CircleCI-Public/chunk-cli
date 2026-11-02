@@ -1039,6 +1039,163 @@ func TestSSavesCommentsFromThePlan(t *testing.T) {
 	assert.Check(t, cmp.Contains(view, "Plan · Planning - Human → Agent"))
 }
 
+// sendOneComment is a plan screen on store, refreshed, with a comment "too
+// vague" queued on the plan's first part, and the plan pane focused.
+func sendOneComment(t *testing.T, store *fakeStore) Model {
+	t.Helper()
+	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "too vague")
+	return drive(t, m, press("enter"))
+}
+
+func TestSFollowsWhatFactoryShows(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		waitingOn      string
+		events         []string
+		offerOnComment bool
+		takeOnComment  bool
+		takeOnHandOff  bool
+		addressErr     error
+		flowErr        error
+		// want
+		offered     bool
+		saved       int
+		handedOff   int
+		waiting     bool // the screen waits for factory, as after a hand-off
+		status      string
+		retryIsOwed bool
+	}{
+		{
+			name:           "first comment, factory offers address-comments after the save",
+			waitingOn:      "human",
+			events:         []string{"approve-for-units", "abandon"},
+			offerOnComment: true,
+			offered:        true,
+			saved:          1,
+			handedOff:      1,
+			waiting:        true,
+		},
+		{
+			name:          "first comment, factory takes the comments itself",
+			waitingOn:     "human",
+			events:        []string{"approve-for-units", "abandon"},
+			takeOnComment: true,
+			offered:       true,
+			saved:         1,
+			waiting:       true,
+		},
+		{
+			name:      "waiting on a session with address-comments still offered",
+			waitingOn: "session",
+			events:    []string{"address-comments", "abandon"},
+			offered:   true,
+			saved:     1,
+			handedOff: 1,
+			waiting:   true,
+		},
+		{
+			name:      "factory works on the plan",
+			waitingOn: "session",
+			events:    []string{"abandon"},
+		},
+		{
+			name:      "factory neither takes nor asks for the comments",
+			waitingOn: "human",
+			events:    []string{"abandon"},
+			offered:   true,
+			saved:     1,
+			status:    "Comments saved.",
+		},
+		{
+			name:          "the daemon dispatches between the read and the send",
+			waitingOn:     "human",
+			events:        []string{"address-comments", "abandon"},
+			takeOnHandOff: true,
+			offered:       true,
+			saved:         1,
+			waiting:       true,
+		},
+		{
+			name:        "the hand-off is refused and factory has not taken the comments",
+			waitingOn:   "human",
+			events:      []string{"address-comments", "abandon"},
+			addressErr:  errors.New("refused"),
+			offered:     true,
+			saved:       1,
+			status:      "hand the comments to factory",
+			retryIsOwed: true,
+		},
+		{
+			name:        "the flow read after the save fails",
+			waitingOn:   "human",
+			events:      []string{"approve-for-units"},
+			flowErr:     errors.New("boom"),
+			offered:     true,
+			saved:       1,
+			status:      "read the plan's flow: boom",
+			retryIsOwed: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.TextV = twoParts
+			store.OfferOnComment, store.TakeOnComment, store.TakeOnHandOff = tc.offerOnComment, tc.takeOnComment, tc.takeOnHandOff
+			store.AddressErr = tc.addressErr // fails AddressComments, leaving next as it is
+			store.setEvents(tc.events...)
+			store.setWaitingOn(tc.waitingOn)
+			m := sendOneComment(t, store)
+
+			bar := ansi.Strip(m.actionBar())
+			assert.Check(t, cmp.Equal(strings.Contains(bar, "s Save 1 comment"), tc.offered), bar)
+			if !tc.offered {
+				assert.Check(t, cmp.Contains(bar, "1 comment held until factory is waiting on you"))
+			}
+			if tc.flowErr != nil {
+				store.mu.Lock()
+				store.FlowErr = tc.flowErr
+				store.mu.Unlock()
+			}
+			m = drive(t, m, press("s"))
+
+			assert.Check(t, cmp.Len(store.Added, tc.saved))
+			assert.Check(t, cmp.Len(store.HandedOff, tc.handedOff))
+			assert.Check(t, cmp.Equal(m.moving != nil, tc.waiting))
+			assert.Check(t, cmp.Equal(m.pendingHandOff, tc.retryIsOwed))
+			if tc.status != "" {
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), tc.status))
+			}
+		})
+	}
+}
+
+func TestASendRetriesTheHandOffOnceTheFlowReads(t *testing.T) {
+	store := newFakeStore()
+	store.TextV = twoParts
+	store.OfferOnComment = true
+	store.setEvents("approve-for-units")
+	store.setWaitingOn("human")
+	m := sendOneComment(t, store)
+	store.mu.Lock()
+	store.FlowErr = errors.New("boom")
+	store.mu.Unlock()
+	m = drive(t, m, press("s"))
+	assert.Assert(t, m.pendingHandOff)
+
+	store.mu.Lock()
+	store.FlowErr = nil
+	store.mu.Unlock()
+	m = refreshed(t, m)
+	m = drive(t, m, press("s"))
+	assert.Check(t, cmp.Len(store.Added, 1), "the comment was saved twice")
+	assert.Check(t, cmp.Len(store.HandedOff, 1))
+	assert.Check(t, !m.pendingHandOff)
+}
+
 func TestSSavesCommentsWhileChunkWorks(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = twoParts

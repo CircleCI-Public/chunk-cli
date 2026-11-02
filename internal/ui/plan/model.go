@@ -144,6 +144,9 @@ type (
 		// this round; handedOff, whether factory took the event.
 		handOff   bool
 		handedOff bool
+		// notOffered is whether the comments were saved, and factory
+		// neither took them nor offered a hand-off.
+		notOffered bool
 	}
 )
 
@@ -732,6 +735,9 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 		m.status = ""
 		tick = m.spin.Tick
 	}
+	if msg.notOffered {
+		m.status = "Comments saved."
+	}
 	if msg.err != nil {
 		m.status = ui.ErrorStyle.Render(msg.err.Error())
 	}
@@ -983,9 +989,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 // heldStatus says why a send left the queued comments unsent.
 const heldStatus = "Comments not sent: factory is working on the plan. Send them once it is waiting on you."
 
-// deliver is a send of the queued comments from the developer: from a Human
-// state it saves them to factory and hands them to it; from any other state
-// they stay queued. Nothing goes to the planning session.
+// deliver is a send of the queued comments from the developer: while factory
+// waits on the developer or asks for comments it saves them to factory and
+// hands them off as factory's flow then shows; at any other time they stay
+// queued. Nothing goes to the planning session.
 func (m Model) deliver() (Model, tea.Cmd) {
 	if m.savingComments || m.built {
 		return m, nil
@@ -1003,7 +1010,7 @@ func (m Model) deliver() (Model, tea.Cmd) {
 	}
 	m.savingComments = true
 	m.status = ""
-	return m, saveQueued(m.ctx, m.store, queued, m.handOffEvent())
+	return m, saveQueued(m.ctx, m.store, queued)
 }
 
 // answerYes does what the question in the status bar asked, now it has been
