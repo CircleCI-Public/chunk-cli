@@ -361,7 +361,8 @@ conflicts after factory's rebase reads PR conflicts, and `ctrl+s` hands it
 back to factory to rebase again. The build
 keeps going when you close chunk; plan as many as you like.
 Once approved, the screen stays open on the Flow tab, which follows the
-build: each unit done, being built or to do, and the pull request.
+build: what factory is doing now and who it waits on, each unit done,
+being built or to do, and the pull request.
 The left pane then shows the builder at work. If it warns that another
 session holds the plan's claim, run the `factory daemon release` command it
 names. Once factory frees the old claim of a plan whose build stopped, after

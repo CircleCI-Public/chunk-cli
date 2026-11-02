@@ -111,15 +111,23 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		return plan.Flow{}, fmt.Errorf("get the plan's flow: %w", err)
 	}
 	out := plan.Flow{
-		State:      f.State,
-		Events:     make([]string, len(f.ApplicableEvents)),
-		PR:         f.PR,
-		Deviations: f.Deviations,
-		Ended:      f.Phase == circleci.PhaseEnded,
-		Outcome:    f.Outcome,
-		Claimed:    f.SessionID != "",
-		Holder:     f.SessionID,
-		WaitingOn:  f.WaitingOn,
+		State:        f.State,
+		Events:       make([]string, len(f.ApplicableEvents)),
+		PR:           f.PR,
+		Deviations:   f.Deviations,
+		Ended:        f.Phase == circleci.PhaseEnded,
+		Outcome:      f.Outcome,
+		Claimed:      f.SessionID != "",
+		Holder:       f.SessionID,
+		WaitingOn:    f.WaitingOn,
+		WaitingOnWhy: f.WaitingOnWhy,
+	}
+	if p := f.Progress; p != nil {
+		out.Progress = &plan.Progress{
+			Summary: p.Summary, CurrentUnit: p.CurrentUnit,
+			Findings: p.Findings, Fixups: p.Fixups,
+			Deviations: p.Deviations, BindingDeviations: p.BindingDeviations,
+		}
 	}
 	for i, e := range f.ApplicableEvents {
 		out.Events[i] = string(e)

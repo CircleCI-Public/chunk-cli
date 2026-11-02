@@ -4325,6 +4325,7 @@ func TestFlowTabShowsProgress(t *testing.T) {
 		text    string
 		unit    string
 		family  Family
+		flow    Flow
 		want    []string
 		without []string
 	}{
@@ -4362,14 +4363,77 @@ func TestFlowTabShowsProgress(t *testing.T) {
 			family: Family{Parent: &Relative{ID: "p", Title: "Everything", State: "Building - Agent"}},
 			want:   []string{"✓ 1  lexer", "○ 2  parser"},
 		},
+		{
+			name: "summary and counts",
+			text: threeUnits,
+			unit: "Unit 2: parser",
+			flow: Flow{Progress: &Progress{Summary: "Building unit 2 of 3", Findings: 3, Fixups: 1, Deviations: ptr(2), BindingDeviations: ptr(1)}},
+			want: []string{"Building unit 2 of 3 · 3 review findings · 2 deviations (1 binding) · 1 fixup left"},
+		},
+		{
+			name: "counts without a summary",
+			text: threeUnits,
+			flow: Flow{Progress: &Progress{Findings: 1}},
+			want: []string{"1 review finding"},
+		},
+		{
+			name:    "nothing to say: no line",
+			text:    threeUnits,
+			flow:    Flow{Progress: &Progress{Deviations: ptr(0)}},
+			without: []string{"·", "deviation"},
+		},
+		{
+			name: "waiting on with why",
+			text: threeUnits,
+			flow: Flow{WaitingOn: "session", WaitingOnWhy: "the session builds Unit 2: parser"},
+			want: []string{"Waiting on session: the session builds Unit 2: parser"},
+		},
+		{
+			name:    "waiting on without why",
+			text:    threeUnits,
+			flow:    Flow{WaitingOn: "human"},
+			want:    []string{"Waiting on human"},
+			without: []string{"human:"},
+		},
+		{
+			name:    "no waiting_on: no line",
+			text:    threeUnits,
+			without: []string{"Waiting on"},
+		},
+		{
+			name: "current_unit wins over the task's unit",
+			text: threeUnits,
+			unit: "Unit 2: parser",
+			flow: Flow{Progress: &Progress{CurrentUnit: "Unit 3: printer"}},
+			want: []string{"○ 2  parser", "▸ 3  printer"},
+		},
+		{
+			name:    "a current_unit that matches none: no ▸, no fallback",
+			text:    threeUnits,
+			unit:    "Unit 2: parser",
+			flow:    Flow{Progress: &Progress{CurrentUnit: "Unit 9: nothing"}},
+			want:    []string{"○ 2  parser"},
+			without: []string{"▸"},
+		},
+		{
+			name:   "sub-plans keep the summary line",
+			text:   threeUnits,
+			family: Family{Children: []Relative{{ID: "c1", Title: "Lex it", State: "Building - Agent"}}},
+			flow:   Flow{Progress: &Progress{Summary: "Waiting on 1 sub-plan"}},
+			want:   []string{"Waiting on 1 sub-plan", "Progress · 1 open sub-plan", "▸ Lex it"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newFakeStore()
 			store.StateV, store.TextV = "Building - Agent", tc.text
+			store.FlowV.Progress = tc.flow.Progress
+			store.FlowV.WaitingOn, store.FlowV.WaitingOnWhy = tc.flow.WaitingOn, tc.flow.WaitingOnWhy
 			store.FlowV.Unit, store.FamilyV = tc.unit, tc.family
 			m := flowModel(t, store)
-			view := ansi.Strip(m.Content())
-			assert.Check(t, cmp.Contains(view, "PROGRESS"))
+			assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "PROGRESS"))
+			// The tab alone, wide enough that no line is cut: the rest of the
+			// screen has its own "·".
+			view := ansi.Strip(m.flowContent(200))
 			for _, w := range tc.want {
 				assert.Check(t, cmp.Contains(view, w))
 			}
@@ -5170,3 +5234,5 @@ func TestNoResumerOffersNoBuildResume(t *testing.T) {
 	assert.Check(t, cmp.Equal(m.status, ""))
 	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
 }
+
+func ptr[T any](v T) *T { return &v }
