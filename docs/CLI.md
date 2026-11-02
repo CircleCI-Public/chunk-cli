@@ -376,7 +376,8 @@ chunk
   works on the plan they stay queued, and `s` is not offered. Once comments
   are handed off, the
   action bar turns purple and says the screen is waiting for factory, until a
-  refresh finds the plan has moved; comments queued meanwhile are held, and
+  refresh finds the plan has moved, a task for it handed to any session, or
+  factory waiting on the developer again; comments queued meanwhile are held, and
   after 15 seconds the bar says how long it has waited. While comments
   are saved they cannot be changed. A saved comment is edited at once with
   `c`, resolved with `r` and deleted with `d` (after a `y`); resolved ones are
