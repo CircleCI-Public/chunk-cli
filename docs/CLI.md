@@ -345,7 +345,9 @@ chunk
   factory has a task for a session no one is running, the screen resumes the
   session on its own and tells it to claim the plan again, with none of the
   developer's words; it tries once per flow state, and never for a plan past
-  Planning. A new plan's request that could not start the session is kept,
+  Planning. A plan a session has claimed and let go of while init or
+  Unprioritized is not resumed again until it moves on; `R` still resumes
+  it. A new plan's request that could not start the session is kept,
   and sent in place of that claim. Closing the screen stops the session,
   which frees its claim. A plan opened again in a later screen picks up the
   conversation that planned it, rather than starting a blank one. One chunk

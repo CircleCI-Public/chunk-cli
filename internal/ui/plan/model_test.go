@@ -2270,6 +2270,11 @@ func TestResumeOwed(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "new plan in init",
+			flow: Flow{State: "init", Next: []Step{{Actor: "session", Task: "record-context"}}},
+			want: true,
+		},
+		{
 			name: "deferred",
 			flow: Flow{State: "Unprioritized", Next: []Step{{Actor: "human", Event: "prioritize"}}},
 		},
@@ -2332,6 +2337,85 @@ func TestRefreshResumesAPlannerThatIsNotThere(t *testing.T) {
 	refreshed(t, m)
 	assert.Check(t, cmp.Equal(agent.Resumes(), 2), "not resumed after a session held the claim and lost it")
 	assert.Check(t, cmp.Len(agent.Sent(), 0))
+}
+
+func TestRefreshDoesNotResumeAnUnprioritizedPlanASessionLetGo(t *testing.T) {
+	for _, state := range []string{"init", "Unprioritized"} {
+		t.Run(state, func(t *testing.T) {
+			t.Run("claimed then released", func(t *testing.T) {
+				agent := newFakeAgent()
+				m, store := resumeModel(t, agent, state, sessionStep)
+				m = refreshed(t, m)
+				assert.Check(t, cmp.Equal(agent.Resumes(), 1))
+
+				setFlow(store, state, sessionStep, true)
+				m = refreshed(t, m)
+				setFlow(store, state, sessionStep, false)
+				for range 3 {
+					m = refreshed(t, m)
+				}
+				assert.Check(t, cmp.Equal(agent.Resumes(), 1), "resumed after a session let the plan go")
+
+				setFlow(store, "Planning - Agent", sessionStep, false)
+				m = refreshed(t, m)
+				assert.Check(t, cmp.Equal(agent.Resumes(), 2), "not resumed once the state moved")
+
+				setFlow(store, state, sessionStep, false)
+				m = refreshed(t, m)
+				refreshed(t, m)
+				assert.Check(t, cmp.Equal(agent.Resumes(), 3), "not resumed exactly once on coming back")
+			})
+			t.Run("a claim the screen never saw", func(t *testing.T) {
+				agent := newFakeAgent()
+				m, _ := resumeModel(t, agent, state, sessionStep)
+				for range 3 {
+					m = refreshed(t, m)
+				}
+				assert.Check(t, cmp.Equal(agent.Resumes(), 1), "resumed twice in one state")
+			})
+			t.Run("R still resumes", func(t *testing.T) {
+				agent := newFakeAgent()
+				m, store, r, _ := resumeScreen(t, agent, state, sessionStep, nil)
+				assert.Assert(t, cmp.Equal(agent.Resumes(), 1))
+				setFlow(store, state, sessionStep, true)
+				m = refreshed(t, m)
+				setFlow(store, state, sessionStep, false)
+				m = refreshed(t, m)
+				assert.Check(t, cmp.Equal(agent.Resumes(), 1))
+
+				m, cmd := m.Update(press("R"))
+				for _, msg := range run(cmd) {
+					m = drive(t, m, msg)
+				}
+				assert.Check(t, cmp.Equal(agent.Resumes(), 2), "R did not resume")
+				assert.Check(t, cmp.Len(r.Calls(), 0))
+			})
+		})
+	}
+	t.Run("init then Unprioritized", func(t *testing.T) {
+		// claimedIn compares exact states, so a move from init to
+		// Unprioritized is a new state: one more resume, then none.
+		agent := newFakeAgent()
+		m, store := resumeModel(t, agent, "init", sessionStep)
+		m = refreshed(t, m)
+		setFlow(store, "init", sessionStep, true)
+		m = refreshed(t, m)
+		setFlow(store, "init", sessionStep, false)
+		m = refreshed(t, m)
+		assert.Check(t, cmp.Equal(agent.Resumes(), 1))
+
+		setFlow(store, "Unprioritized", sessionStep, false)
+		m = refreshed(t, m)
+		assert.Check(t, cmp.Equal(agent.Resumes(), 2), "not resumed on moving to Unprioritized")
+
+		setFlow(store, "Unprioritized", sessionStep, true)
+		m = refreshed(t, m)
+		setFlow(store, "Unprioritized", sessionStep, false)
+		for range 3 {
+			m = refreshed(t, m)
+		}
+		assert.Check(t, cmp.Equal(agent.Resumes(), 2), "resumed after a session let the plan go in Unprioritized")
+	})
 }
 
 func TestAFailedResumeIsShownOnceAndRetriedOnANewState(t *testing.T) {
