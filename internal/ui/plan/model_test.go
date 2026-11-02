@@ -4540,7 +4540,7 @@ func TestRelatedOpensARelative(t *testing.T) {
 	family := Family{
 		Parent:   &Relative{ID: "p1", Title: "Parent plan", State: "Building - Agent"},
 		Children: []Relative{{ID: "c1", Title: "Child plan", State: "Planning - Agent"}},
-		Blockers: []Relative{{ID: "b1", Title: "Blocker plan", State: "Integrating - Human"}},
+		Blockers: []Relative{{ID: "b1", Title: "Blocker plan", State: "Integrating - Human", Active: true}},
 	}
 	inbox := func(t *testing.T, fam Family) (Model, *fakeStore) {
 		t.Helper()
@@ -5151,7 +5151,7 @@ func TestFlowTabSaysWhetherItResumes(t *testing.T) {
 			state: "Building - Agent",
 			next:  sessionStep,
 			setup: func(s *fakeStore) {
-				s.FamilyV.Blockers = []Relative{{ID: "p-1", Title: "Add the flag", State: "Building - Agent"}}
+				s.FamilyV.Blockers = []Relative{{ID: "p-1", Title: "Add the flag", State: "Building - Agent", Active: true}}
 			},
 			line: "Waiting on Add the flag",
 		},

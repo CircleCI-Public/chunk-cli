@@ -518,7 +518,7 @@ func TestResume(t *testing.T) {
 		{
 			name:     "blocked",
 			flow:     building,
-			blockers: map[string][]planstate.Blocker{"a": {{Title: "Retry config", State: "Building - Agent"}}},
+			blockers: map[string][]planstate.Blocker{"a": {{Title: "Retry config", State: "Building - Agent", Active: true}}},
 			line:     "Waiting on Retry config",
 		},
 		{

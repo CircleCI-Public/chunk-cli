@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -398,26 +397,14 @@ func listFactoryBlockers(ctx context.Context, id string) ([]planstate.Blocker, e
 	if err != nil {
 		return nil, fmt.Errorf("list the plan's blockers: %w", err)
 	}
-	flows, err := api.ListFlows(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list the plans' flows: %w", err)
-	}
-	return blockerStates(blockers, flows), nil
+	return blockerStates(blockers), nil
 }
 
-// blockerStates is blockers, with state and outcome taken from their listed
-// flows. The blockers endpoint serves no outcome.
-func blockerStates(blockers []circleci.Blocker, flows []circleci.Flow) []planstate.Blocker {
-	byID := make(map[string]circleci.Flow, len(flows))
-	for _, f := range flows {
-		byID[f.ID] = f
-	}
+// blockerStates is blockers as the flow list reads them.
+func blockerStates(blockers []circleci.Blocker) []planstate.Blocker {
 	out := make([]planstate.Blocker, len(blockers))
 	for i, b := range blockers {
-		out[i] = planstate.Blocker{Title: b.Title, State: b.State}
-		if f, ok := byID[b.ID]; ok {
-			out[i] = planstate.Blocker{Title: cmp.Or(f.Title, b.Title), State: f.State, Outcome: f.Outcome}
-		}
+		out[i] = planstate.Blocker{Title: b.Title, State: b.State, Outcome: b.Outcome, Active: b.Active}
 	}
 	return out
 }

@@ -46,13 +46,11 @@ func status(f Flow, fam Family, stage planstate.Stage, inReview bool) (step, now
 		now = "factory is reviewing the plan"
 	}
 
-	// A live flow with nothing in Next waits on its first blocker that is
-	// not Done.
+	// A live flow with nothing in Next waits on its first blocker that still
+	// blocks.
 	blocker := -1
 	if !f.Ended && len(f.Next) == 0 {
-		blocker = slices.IndexFunc(fam.Blockers, func(b Relative) bool {
-			return !planstate.BlockerDone(b.State, clean(b.Outcome))
-		})
+		blocker = slices.IndexFunc(fam.Blockers, func(b Relative) bool { return b.Active })
 	}
 	switch {
 	case blocker >= 0:

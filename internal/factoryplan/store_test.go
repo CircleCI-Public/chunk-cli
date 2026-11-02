@@ -615,7 +615,9 @@ func TestStoreFamily(t *testing.T) {
 	}
 	ended := newPlan("ended blocker", "ended")
 	cci.SetFactoryFlowStatus(ended, fakes.FactoryFlowStatus{Outcome: "canceled"})
-	cci.BlockFactoryPlan(id, blocker, ended)
+	merged := newPlan("merged blocker", "ended")
+	cci.SetFactoryFlowStatus(merged, fakes.FactoryFlowStatus{Outcome: "merged"})
+	cci.BlockFactoryPlan(id, blocker, ended, merged)
 
 	want := plan.Family{
 		Parent: &plan.Relative{
@@ -637,15 +639,23 @@ func TestStoreFamily(t *testing.T) {
 		},
 		Blockers: []plan.Relative{
 			{
-				ID:    blocker,
-				Title: "blocker",
-				State: "Integrating - Human",
+				ID:     blocker,
+				Title:  "blocker",
+				State:  "Integrating - Human",
+				Active: true,
 			},
 			{
 				ID:      ended,
 				Title:   "ended blocker",
 				State:   "ended",
 				Outcome: "canceled",
+				Active:  true,
+			},
+			{
+				ID:      merged,
+				Title:   "merged blocker",
+				State:   "ended",
+				Outcome: "merged",
 			},
 		},
 	}

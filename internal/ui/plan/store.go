@@ -79,6 +79,9 @@ type Step struct {
 // blocker. Outcome is how its flow ended, "" until it ends.
 type Relative struct {
 	ID, Title, State, Outcome string
+	// Active is, for a blocker, whether it still holds the plan, as factory
+	// says; false for a parent or sub-plan.
+	Active bool
 }
 
 // Family is the plans related to the screen's plan. Children are its open

@@ -32,9 +32,11 @@ type ResumeFacts struct {
 	BlockersKnown bool
 }
 
-// Blocker is a plan blocking another: its title, and its flow's state and
-// outcome.
-type Blocker struct{ Title, State, Outcome string }
+// Blocker is a plan blocking another, as factory serves it.
+type Blocker struct {
+	Title, State, Outcome string
+	Active                bool
+}
 
 // Resume is whether chunk resumes a plan, and how; Why is why not, "" when
 // there is nothing to say.
@@ -59,7 +61,7 @@ func ResumeOf(f ResumeFacts) Resume {
 		return Resume{}
 	}
 	for _, b := range f.Blockers {
-		if !BlockerDone(b.State, b.Outcome) {
+		if b.Active {
 			return Resume{Why: "Waiting on " + b.Title}
 		}
 	}
@@ -92,14 +94,6 @@ func (r Resume) Line() string {
 	case ResumeNone:
 	}
 	return r.Why
-}
-
-// BlockerDone is whether a blocker in state, ended with outcome, no longer
-// holds the plan it blocks: its flow merged, whichever name its end state
-// has. Both are read as given, so callers strip escapes first.
-func BlockerDone(state, outcome string) bool {
-	state = strings.TrimSpace(state)
-	return state == "Done" || strings.EqualFold(state, "ended") && outcome == "merged"
 }
 
 // shortID is id cut to the length session IDs are usually shown at.

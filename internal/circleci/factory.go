@@ -100,10 +100,15 @@ type FlowTask struct {
 	Unit string
 }
 
-// Blocker is a plan blocking another, with its own flow's state; State is
-// "" for a blocker with no flow.
+// Blocker is a plan blocking another, as its flow and the block stand now;
+// State is "" for a blocker with no flow.
 type Blocker struct {
 	ID, Title, State string
+	// Outcome is how the blocker's flow ended, "" until it ends.
+	Outcome string
+	// Active is whether it still holds the plan: is_active, true when the
+	// response leaves it out.
+	Active bool
 }
 
 // The phases a plan or its flow is in, as factory serves them.
@@ -590,8 +595,10 @@ func (c *Client) ListFlowBlockers(ctx context.Context, planID string) ([]Blocker
 		Data []struct {
 			ID         string `json:"id"`
 			Attributes struct {
-				Title string `json:"title"`
-				State string `json:"state"`
+				Title    string `json:"title"`
+				State    string `json:"state"`
+				Outcome  string `json:"outcome"`
+				IsActive *bool  `json:"is_active"`
 			} `json:"attributes"`
 		} `json:"data"`
 	}
@@ -604,7 +611,11 @@ func (c *Client) ListFlowBlockers(ctx context.Context, planID string) ([]Blocker
 	}
 	out := make([]Blocker, 0, len(page.Data))
 	for _, item := range page.Data {
-		out = append(out, Blocker{ID: item.ID, Title: item.Attributes.Title, State: item.Attributes.State})
+		a := item.Attributes
+		out = append(out, Blocker{
+			ID: item.ID, Title: a.Title, State: a.State, Outcome: a.Outcome,
+			Active: a.IsActive == nil || *a.IsActive,
+		})
 	}
 	return out, nil
 }

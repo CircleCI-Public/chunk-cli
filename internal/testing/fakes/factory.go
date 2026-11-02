@@ -47,10 +47,13 @@ type factoryPlan struct {
 	// SetFactoryFlowStatus.
 	status FactoryFlowStatus
 	// blockedBy are the plans blocking this one, in the order blocked.
-	blockedBy []string
+	blockedBy []factoryBlock
 	// seq orders plans by creation, as created_at and id order conductor's.
 	seq int
 }
+
+// factoryBlock is plan id blocking another until it reaches until.
+type factoryBlock struct{ id, until string }
 
 type factoryComment struct {
 	id, quotedText, body string
@@ -246,12 +249,22 @@ func (f *FakeCircleCI) SetFactoryFlowStatus(id string, s FactoryFlowStatus) {
 }
 
 // BlockFactoryPlan has the plans by block plan id, after any already
-// blocking it, as factory's plan block would.
+// blocking it, until each has ended, as factory's plan block would.
 func (f *FakeCircleCI) BlockFactoryPlan(id string, by ...string) {
+	f.BlockFactoryPlanUntil(id, "ended", by...)
+}
+
+// BlockFactoryPlanUntil has each of by block plan id until it reaches
+// until (build, integrate or ended), as factory plan block --until does.
+func (f *FakeCircleCI) BlockFactoryPlanUntil(id, until string, by ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if p := f.factoryPlans[id]; p != nil {
-		p.blockedBy = append(p.blockedBy, by...)
+	p := f.factoryPlans[id]
+	if p == nil {
+		return
+	}
+	for _, b := range by {
+		p.blockedBy = append(p.blockedBy, factoryBlock{id: b, until: until})
 	}
 }
 
@@ -732,9 +745,9 @@ func transitionEntity(t FactoryTransition) gin.H {
 }
 
 // handleListFlowBlockers serves the plans blocking plan :id, in the order
-// blocked, each with its own flow's state and phase. A blocker with no flow
-// is served with an empty state and no phase, as
-// conductor serves it. It answers 404 for an unknown plan.
+// blocked. A blocker is active until its flow reaches the block's until in
+// fakeStateOrder (a state or until not in it never does), and an ended
+// blocker is active unless it merged; a blocker with no flow is active.
 func (f *FakeCircleCI) handleListFlowBlockers(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
@@ -751,19 +764,65 @@ func (f *FakeCircleCI) handleListFlowBlockers(c *gin.Context) {
 		return
 	}
 	items := []gin.H{}
-	for _, bid := range p.blockedBy {
-		b := f.factoryPlans[bid]
+	for _, blk := range p.blockedBy {
+		b := f.factoryPlans[blk.id]
 		if b == nil {
 			continue
 		}
-		attrs := gin.H{"title": b.title, "state": ""}
+		attrs := gin.H{
+			"title": b.title, "state": "", "at": "build", "until": blk.until,
+			"is_active": blockerActive(b, blk.until),
+		}
 		if !b.noFlow {
 			attrs["state"] = b.state
 			attrs["phase"] = factoryPhase(b.state)
+			if o := cmp.Or(b.status.Outcome, factoryOutcome(b.state)); o != "" {
+				attrs["outcome"] = o
+			}
 		}
 		items = append(items, gin.H{"id": b.id, "attributes": attrs})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": items})
+}
+
+// fakeStateOrder is the order a flow passes through its states.
+var fakeStateOrder = []string{"init", "ready", "refine-proposal", "refine-units", "stand-by", "build", "integrate", "ended"}
+
+// fakeState is the state in fakeStateOrder that name stands for, name itself
+// when it is already one or is unknown.
+func fakeState(name string) string {
+	if slices.ContainsFunc(factoryEnds, func(s string) bool { return strings.EqualFold(s, name) }) {
+		return "ended"
+	}
+	switch name {
+	case "", "Unprioritized":
+		return "init"
+	case "Agent Ready":
+		return "ready"
+	case "Planning - Agent", "Planning - Human":
+		return "refine-proposal"
+	case "standing-by":
+		return "stand-by"
+	case "Building - Agent", "Building - Human":
+		return "build"
+	case "Integrating - Agent", "Integrating - Human":
+		return "integrate"
+	}
+	return name
+}
+
+// blockerActive is whether blocker b still holds a plan blocked until
+// until, as the blockers route serves is_active.
+func blockerActive(b *factoryPlan, until string) bool {
+	if b.noFlow {
+		return true
+	}
+	state := fakeState(b.state)
+	if state == "ended" {
+		return cmp.Or(b.status.Outcome, factoryOutcome(b.state)) != "merged"
+	}
+	at, want := slices.Index(fakeStateOrder, state), slices.Index(fakeStateOrder, until)
+	return at < 0 || want < 0 || at < want
 }
 
 // handleReleaseClaim drops session :id's claim on the plan flow_id names, as

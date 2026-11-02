@@ -467,10 +467,9 @@ func (m Model) resume() planstate.Resume {
 		return planstate.Resume{}
 	}
 	next := moves(f.Next)
-	// BlockerDone reads states as given, so their escapes go first.
 	blockers := make([]planstate.Blocker, len(entry.blockers))
 	for i, b := range entry.blockers {
-		blockers[i] = planstate.Blocker{Title: oneLine(b.Title), State: oneLine(b.State), Outcome: oneLine(b.Outcome)}
+		blockers[i] = planstate.Blocker{Title: oneLine(b.Title), State: oneLine(b.State), Outcome: oneLine(b.Outcome), Active: b.Active}
 	}
 	return planstate.ResumeOf(planstate.ResumeFacts{
 		PlanID:        oneLine(f.ID),

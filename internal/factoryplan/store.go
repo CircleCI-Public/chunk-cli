@@ -151,7 +151,8 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 }
 
 // Family is the plan's parent, open sub-plans and blockers, each with its
-// flow's title and state. The parent is read once, as it never changes.
+// flow's title and state; blockers are as the blockers endpoint serves them.
+// The parent is read once, as it never changes.
 func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 	id := s.ID()
 	if id == "" {
@@ -205,7 +206,7 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 		}
 	}
 	for _, b := range blockers {
-		out.Blockers = append(out.Blockers, relative(b.ID, b.Title))
+		out.Blockers = append(out.Blockers, plan.Relative{ID: b.ID, Title: b.Title, State: b.State, Outcome: b.Outcome, Active: b.Active})
 	}
 	return out, nil
 }

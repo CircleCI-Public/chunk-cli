@@ -47,7 +47,7 @@ func TestResumeOf(t *testing.T) {
 			f: ResumeFacts{
 				State:         "Building - Agent",
 				Next:          session,
-				Blockers:      append(done, Blocker{Title: "Fix uploads", State: "Building - Agent"}),
+				Blockers:      append(done, Blocker{Title: "Fix uploads", State: "Building - Agent", Active: true}),
 				BlockersKnown: true,
 			},
 			line: "Waiting on Fix uploads",
@@ -156,10 +156,21 @@ func TestResumeOf(t *testing.T) {
 			f: ResumeFacts{
 				State:         "Building - Agent",
 				Next:          session,
-				Blockers:      []Blocker{{Title: "a", State: "ended", Outcome: "canceled"}},
+				Blockers:      []Blocker{{Title: "a", State: "ended", Outcome: "canceled", Active: true}},
 				BlockersKnown: true,
 			},
 			line: "Waiting on a",
+		},
+		{
+			name: "a blocker past its until",
+			f: ResumeFacts{
+				State:         "Building - Agent",
+				Next:          session,
+				Blockers:      []Blocker{{Title: "a", State: "build"}},
+				BlockersKnown: true,
+			},
+			kind: ResumeBuild,
+			line: build,
 		},
 		{
 			name: "blockers not loaded",
@@ -256,58 +267,6 @@ func TestResumeOf(t *testing.T) {
 			r := ResumeOf(tc.f)
 			assert.Check(t, cmp.Equal(r.Kind, tc.kind))
 			assert.Check(t, cmp.Equal(r.Line(), tc.line))
-		})
-	}
-}
-
-func TestBlockerDone(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		state   string
-		outcome string
-		want    bool
-	}{
-		{
-			name:  "done",
-			state: "Done",
-			want:  true,
-		},
-		{
-			name:  "done with spaces",
-			state: " Done ",
-			want:  true,
-		},
-		{
-			name:    "ended merged",
-			state:   "ended",
-			outcome: "merged",
-			want:    true,
-		},
-		{
-			name:    "ended canceled",
-			state:   "ended",
-			outcome: "canceled",
-			want:    false,
-		},
-		{
-			name:    "canceled",
-			state:   "Canceled",
-			outcome: "canceled",
-			want:    false,
-		},
-		{
-			name:  "building",
-			state: "Building - Agent",
-			want:  false,
-		},
-		{
-			name:  "no state",
-			state: "",
-			want:  false,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Check(t, cmp.Equal(BlockerDone(tc.state, tc.outcome), tc.want))
 		})
 	}
 }

@@ -837,13 +837,14 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(got, []Blocker{}))
 		assert.Check(t, cmp.Len(got, 0))
 
-		fake.BlockFactoryPlan(c2.ID, c1.ID, o1.ID)
+		fake.BlockFactoryPlanUntil(c2.ID, "build", c1.ID)
+		fake.BlockFactoryPlan(c2.ID, o1.ID)
 		got, err = client.ListFlowBlockers(ctx, c2.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(got, []Blocker{
-			{ID: c1.ID, Title: "retry-config", State: "Building - Agent"},
-			{ID: o1.ID, Title: "other", State: "Unprioritized"},
-		}), "in the order blocked")
+			{ID: c1.ID, Title: "retry-config", State: "Building - Agent", Active: false},
+			{ID: o1.ID, Title: "other", State: "Unprioritized", Active: true},
+		}), "in the order blocked; one past its until")
 		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
 		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/flows/"+c2.ID+"/blockers"))
 
@@ -851,12 +852,43 @@ func TestFlows(t *testing.T) {
 		got, err = client.ListFlowBlockers(ctx, c2.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(got, []Blocker{
-			{ID: c1.ID, Title: "retry-config", State: "Building - Agent"},
-			{ID: o1.ID, Title: "other", State: ""},
-		}), "a blocker with no flow has no state")
+			{ID: c1.ID, Title: "retry-config", State: "Building - Agent", Active: false},
+			{ID: o1.ID, Title: "other", State: "", Active: true},
+		}), "a blocker with no flow has no state and still blocks")
+
+		e1, err := client.CreatePlan(ctx, "canceled", "")
+		assert.NilError(t, err)
+		e2, err := client.CreatePlan(ctx, "merged", "")
+		assert.NilError(t, err)
+		e3, err := client.CreatePlan(ctx, "ended-blocked", "")
+		assert.NilError(t, err)
+		fake.SetFactoryPlanState(e1.ID, "ended")
+		fake.SetFactoryFlowStatus(e1.ID, fakes.FactoryFlowStatus{Outcome: "canceled"})
+		fake.SetFactoryPlanState(e2.ID, "ended")
+		fake.SetFactoryFlowStatus(e2.ID, fakes.FactoryFlowStatus{Outcome: "merged"})
+		fake.BlockFactoryPlan(e3.ID, e1.ID, e2.ID)
+		got, err = client.ListFlowBlockers(ctx, e3.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Blocker{
+			{ID: e1.ID, Title: "canceled", State: "ended", Outcome: "canceled", Active: true},
+			{ID: e2.ID, Title: "merged", State: "ended", Outcome: "merged", Active: false},
+		}), "an ended blocker still blocks unless it merged")
 
 		_, err = client.ListFlowBlockers(ctx, uuid.NewString())
 		assertStatus(t, err, http.StatusNotFound)
+	})
+
+	t.Run("reads a blocker from a conductor that serves no is_active", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"b1","attributes":{"title":"a","state":"build"}}]}`))
+		}))
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+
+		got, err := client.ListFlowBlockers(ctx, uuid.NewString())
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Blocker{{ID: "b1", Title: "a", State: "build", Active: true}}))
 	})
 }
 
