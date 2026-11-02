@@ -29,7 +29,9 @@ type fakeStore struct {
 	FlowV Flow
 	// FamilyV is what Family returns.
 	FamilyV Family
-	TextV   string
+	// UnitsV and UnitsErr are what Units returns.
+	UnitsV []Unit
+	TextV  string
 	// TitleV is the title Create returns.
 	TitleV string
 	// CommentsV is the comments, ordered as added.
@@ -67,10 +69,10 @@ type fakeStore struct {
 	// Set records the texts SetText was called with, in order.
 	Set []string
 
-	CreateErr, FlowErr, FamilyErr, AddressErr, TextErr, CommentsErr error
-	SetTextErr                                                      error
-	AddErr, EditErr, ResolveErr, DeleteErr                          error
-	AbandonErr, DeletePlanErr                                       error
+	CreateErr, FlowErr, FamilyErr, UnitsErr, AddressErr, TextErr, CommentsErr error
+	SetTextErr                                                                error
+	AddErr, EditErr, ResolveErr, DeleteErr                                    error
+	AbandonErr, DeletePlanErr                                                 error
 	// FailAddAfter, when > 0, fails AddComment calls numbered after this
 	// many successes.
 	FailAddAfter int
@@ -150,6 +152,12 @@ func (f *fakeStore) Family(context.Context) (Family, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.FamilyV, f.FamilyErr
+}
+
+func (f *fakeStore) Units(context.Context) ([]Unit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.UnitsV, f.UnitsErr
 }
 
 // setTask has the plan's flow have a task of category out, or none for "".

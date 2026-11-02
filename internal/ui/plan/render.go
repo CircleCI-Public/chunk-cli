@@ -8,7 +8,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -25,9 +24,40 @@ var (
 // planStats is what the walk over the plan's blocks learns on the way.
 type planStats struct {
 	section string
-	// inUnits is whether the current section is the plan's units.
-	inUnits          bool
-	units, questions int
+	// step is the index in m.units of the unit whose step the current block
+	// is, or -1.
+	step      int
+	questions int
+}
+
+// heading is the level and text of a heading block, as the walk reads them:
+// the count of leading #, and the rest trimmed. It is 0 and "" for any other
+// block.
+func heading(b block) (level int, text string) {
+	if b.kind != kindHeading {
+		return 0, ""
+	}
+	return len(b.source) - len(strings.TrimLeft(b.source, "#")), strings.TrimSpace(strings.TrimLeft(b.source, "#"))
+}
+
+// unitSteps is, for each block, the index of the unit whose step it is, or -1.
+// A unit's step is a ### heading whose text is the unit's name, or the name and
+// a space; units are matched from the end, as 5. Units is the plan's last
+// section.
+func unitSteps(blocks []block, units []Unit) []int {
+	steps := make([]int, len(blocks))
+	for i := range steps {
+		steps[i] = -1
+	}
+	j := len(units) - 1
+	for i := len(blocks) - 1; i >= 0 && j >= 0; i-- {
+		level, text := heading(blocks[i])
+		if level == 3 && (text == units[j].Name || strings.HasPrefix(text, units[j].Name+" ")) {
+			steps[i] = j
+			j--
+		}
+	}
+	return steps
 }
 
 // styled draws a heading in the screen's own style, or reports false for a
@@ -39,35 +69,32 @@ func (m Model) styled(b block, st *planStats, w int) ([]string, bool) {
 		}
 		return nil, false
 	}
-	level := len(b.source) - len(strings.TrimLeft(b.source, "#"))
-	text := strings.TrimSpace(strings.TrimLeft(b.source, "#"))
+	level, text := heading(b)
 	switch level {
 	case 1:
 		return []string{lipgloss.NewStyle().Bold(true).Foreground(m.hue("#1f2328", "#ffffff")).Render(text)}, true
 	case 2:
 		name := sectionNumRe.ReplaceAllString(text, "")
 		st.section = strings.ToLower(name)
-		st.inUnits = "## "+text == planstate.UnitsHeading
 		c := m.dim()
 		if strings.Contains(st.section, "question") {
 			c = m.amber()
 		}
 		return []string{m.sectionHeading(name, c, w)}, true
 	}
-	if level != 3 || !st.inUnits {
+	if level != 3 || st.step < 0 {
 		return nil, false
 	}
-	st.units++
-	text, done := planstate.UnitName(text)
-	name := unitNumRe.ReplaceAllString(text, "")
+	u := m.units[st.step]
+	name := unitNumRe.ReplaceAllString(u.Name, "")
 	if name == "" {
-		name = text
+		name = u.Name
 	}
 	marker := m.style(m.dim()).Render("○ ")
-	if done {
+	if u.Done {
 		marker = m.style(m.green()).Render(ui.IconOK + " ")
 	}
-	num := m.style(m.faint()).Render(strconv.Itoa(st.units))
+	num := m.style(m.faint()).Render(strconv.Itoa(st.step + 1))
 	return []string{marker + num + "  " + lipgloss.NewStyle().Bold(true).Render(name)}, true
 }
 

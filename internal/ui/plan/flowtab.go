@@ -118,8 +118,8 @@ func (m Model) flowContent(w int) string {
 }
 
 // progress is the Progress section's rows: what factory says of the flow,
-// then the plan's open sub-plans when it has any, or else its units, each
-// marked done, under way or to do.
+// then the plan's open sub-plans when it has any, or else its units as
+// factory reads them, each marked done, under way or to do.
 func (m Model) progress() []string {
 	head := m.progressHead()
 	if kids := m.family.Children; len(kids) > 0 {
@@ -137,7 +137,7 @@ func (m Model) progress() []string {
 		}
 		return rows
 	}
-	units := planstate.Units(m.plan)
+	units := m.units
 	if len(units) == 0 {
 		return append(head, m.style(m.dim()).Render("No units"))
 	}

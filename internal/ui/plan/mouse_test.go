@@ -98,7 +98,9 @@ func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
 		approved = true
 		return "build-1", nil
 	}
-	m, _ := planned(t, 140, 40, "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n", approve)
+	m, store := planned(t, 140, 40, "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n", approve)
+	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
+	m = refreshed(t, m)
 	bar := m.height - footerRows + 1
 	_, right := m.barRight()
 	m = drive(t, m, click(m.width-4, bar))

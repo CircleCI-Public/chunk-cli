@@ -20,6 +20,7 @@ import (
 type API interface {
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
 	PlanText(ctx context.Context, id string) (string, error)
+	PlanStructuredContent(ctx context.Context, id string) (*circleci.PlanStructuredContent, error)
 	ReleaseClaim(ctx context.Context, sessionID, planID string) error
 	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
 }
@@ -49,7 +50,7 @@ var ErrQuestionsOpen = errors.New("the plan has open questions: answer 3. Open Q
 // passed, first releasing a claim held by session, the plan's planning
 // session, or by one locate places outside worktree. It refuses a claim
 // held from worktree itself, or by a session factory's daemon does not know,
-// as either may be building the plan. The flow, text and claim are read
+// as either may be building the plan. The flow, text, units and claim are read
 // from factory, so a plan that moved after a screen last polled is still
 // refused.
 func Approve(ctx context.Context, api API, locate Locate, planID, session, worktree string) error {
@@ -78,7 +79,11 @@ func Approve(ctx context.Context, api API, locate Locate, planID, session, workt
 	for i, e := range f.ApplicableEvents {
 		events[i] = string(e)
 	}
-	switch planstate.StageOf(events, len(planstate.Units(text))) {
+	sc, err := api.PlanStructuredContent(ctx, planID)
+	if err != nil {
+		return fmt.Errorf("get the plan's units: %w", err)
+	}
+	switch planstate.StageOf(events, len(sc.Units)) {
 	case planstate.StageDesign:
 		return ErrNoUnits
 	case planstate.StageQuestions:

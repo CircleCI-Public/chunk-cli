@@ -89,6 +89,13 @@ type Family struct {
 	Blockers []Relative
 }
 
+// Unit is one of the plan's units, as factory reads them from its text.
+type Unit struct {
+	// Name is the unit's heading without its done suffix.
+	Name string
+	Done bool
+}
+
 // Store is where the plan and its comments are kept. Before Create, ID and
 // reads are empty and writes fail. An existing plan starts with its ID set.
 type Store interface {
@@ -103,6 +110,8 @@ type Store interface {
 	// Family is the plan's parent, open sub-plans and blockers; empty
 	// before Create.
 	Family(ctx context.Context) (Family, error)
+	// Units are the plan's units, in order; none before Create.
+	Units(ctx context.Context) ([]Unit, error)
 	// AddressComments has factory take up the plan's comments, moving it
 	// from a Human state to its phase's Agent state. Factory moves it at
 	// its next poll, not before AddressComments returns.

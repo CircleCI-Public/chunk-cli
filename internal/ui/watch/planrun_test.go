@@ -37,6 +37,8 @@ type fakePlans struct {
 	sent    bool
 	// requests is how many messages the agent was sent.
 	requests int
+	// units are the units the store serves, as factory reads them.
+	units []plan.Unit
 	// flow is the flow the store serves, when it is not the default.
 	flow *plan.Flow
 }
@@ -47,6 +49,7 @@ type fakePlans struct {
 // Its flow is flow when there is one, else a plan waiting on the developer.
 type fakePlanStore struct {
 	text, id, newID, title string
+	units                  []plan.Unit
 	flow                   *plan.Flow
 }
 
@@ -70,6 +73,7 @@ func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 	return plan.Flow{State: "Planning - Human", Events: events, Next: next}, nil
 }
 func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return plan.Family{}, nil }
+func (f *fakePlanStore) Units(context.Context) ([]plan.Unit, error)  { return f.units, nil }
 func (f *fakePlanStore) AddressComments(context.Context) error       { return nil }
 func (f *fakePlanStore) AnswerOpenQuestions(context.Context) error   { return nil }
 func (f *fakePlanStore) ResolveConflicts(context.Context) error      { return nil }
@@ -143,7 +147,7 @@ func (f *fakePlans) planner(_ context.Context, root, id string) (plan.Agent, pla
 		f.sent = true
 		return "build-1", nil
 	}
-	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id, newID: f.newID, title: f.title, flow: f.flow}, nil
+	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id, newID: f.newID, title: f.title, units: f.units, flow: f.flow}, nil
 }
 
 // fakeResumer is a plan.Resumer that records each resume as "root plan
@@ -390,6 +394,7 @@ func TestApprovingThePlanKeepsItsScreen(t *testing.T) {
 
 func testApprovingThePlanKeepsItsScreen(t *testing.T, withBuilds bool) {
 	f := &fakePlans{reply: "ok", newID: "plan-1", plan: "# The plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
+	f.units = []plan.Unit{{Name: "Unit 1: Add the flag"}}
 	builds := &fakePlanBuilds{}
 	m := planModel(t, f)
 	if withBuilds {

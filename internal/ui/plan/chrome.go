@@ -89,8 +89,8 @@ func (m Model) header() string {
 		left += m.style(m.dim()).Render(" / " + m.branch)
 	}
 	var facts []string
-	if m.units > 0 {
-		facts = append(facts, fmt.Sprintf("%d %s", m.units, plural(m.units, "unit", "units")))
+	if len(m.units) > 0 {
+		facts = append(facts, fmt.Sprintf("%d %s", len(m.units), plural(len(m.units), "unit", "units")))
 	}
 	if m.questions > 0 {
 		facts = append(facts, fmt.Sprintf("%d open %s", m.questions, plural(m.questions, "question", "questions")))
@@ -118,7 +118,7 @@ func (m Model) FlowText() string {
 	}
 	f := m.flow
 	f.State = m.state
-	step, now, next := status(f, m.family, planstate.StageOf(m.events, m.units), m.inReview())
+	step, now, next := status(f, m.family, planstate.StageOf(m.events, len(m.units)), m.inReview())
 	parts := []string{step}
 	if now != "" {
 		parts = append(parts, "Now: "+now)
@@ -137,7 +137,7 @@ const stripRows = 2
 func (m Model) strip() string {
 	f := m.flow
 	f.State = m.state
-	step, now, next := status(f, m.family, planstate.StageOf(m.events, m.units), m.inReview())
+	step, now, next := status(f, m.family, planstate.StageOf(m.events, len(m.units)), m.inReview())
 	if m.moving != nil {
 		// The developer has made the move the state asks for; factory has
 		// yet to apply it, and the header says so.
@@ -245,8 +245,8 @@ func (m Model) tabLabels() []string {
 		chat += " " + m.spin.View()
 	}
 	plan := "Plan"
-	if m.units > 0 {
-		plan += fmt.Sprintf(" · %d %s", m.units, plural(m.units, "unit", "units"))
+	if len(m.units) > 0 {
+		plan += fmt.Sprintf(" · %d %s", len(m.units), plural(len(m.units), "unit", "units"))
 	}
 	return []string{chat, "Flow", plan}
 }
@@ -372,9 +372,9 @@ func (m Model) actions() (main, side string) {
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
 	case !ReadyToApprove(m.flow):
 		return "", m.style(m.faint()).Render(approve + " · " + m.notReady())
-	case planstate.StageOf(m.events, m.units) == planstate.StageQuestions:
+	case planstate.StageOf(m.events, len(m.units)) == planstate.StageQuestions:
 		return "", m.style(m.faint()).Render("ctrl+s Approve · answer 3. Open Questions first")
-	case planstate.StageOf(m.events, m.units) == planstate.StageDesign:
+	case planstate.StageOf(m.events, len(m.units)) == planstate.StageDesign:
 		return button(m.green(), "ctrl+s Approve design"), ""
 	}
 	return button(m.green(), approve), ""

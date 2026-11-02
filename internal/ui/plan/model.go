@@ -127,6 +127,7 @@ type (
 	refreshedMsg struct {
 		flow     Flow
 		text     string
+		units    []Unit
 		comments []Comment
 		err      error
 	}
@@ -172,7 +173,9 @@ const pollEvery = 5 * time.Second
 
 func pollCmd() tea.Cmd { return tea.Tick(pollEvery, func(time.Time) tea.Msg { return pollMsg{} }) }
 
-// refreshCmd reads the plan's flow, text and comments from the store.
+// refreshCmd reads the plan's flow, text, units and comments from the store.
+// It fails as a whole when any read fails, so the text and its units always
+// arrive together.
 func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg {
 		flow, err := s.Flow(ctx)
@@ -183,8 +186,12 @@ func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 		if err != nil {
 			return refreshedMsg{err: err}
 		}
+		units, err := s.Units(ctx)
+		if err != nil {
+			return refreshedMsg{err: err}
+		}
 		cs, err := s.Comments(ctx)
-		return refreshedMsg{flow: flow, text: text, comments: cs, err: err}
+		return refreshedMsg{flow: flow, text: text, units: units, comments: cs, err: err}
 	}
 }
 
@@ -242,6 +249,8 @@ type Model struct {
 	// and familyErr why that read failed, or nil.
 	family    Family
 	familyErr error
+	// units are the plan's units, read with its text by the last good refresh.
+	units []Unit
 	// familyLoaded is whether a read of the relatives has succeeded, so the
 	// plan's blockers are known.
 	familyLoaded bool
@@ -382,8 +391,8 @@ type Model struct {
 	project string
 	// branch is the git branch the plan is for, shown in the header.
 	branch string
-	// units and questions are how many of each the plan has.
-	units, questions int
+	// questions is how many open questions the plan has.
+	questions int
 	// BuildID is the build of the plan, once it has been approved.
 	BuildID string
 	// built is whether the plan was approved and is being built while the
@@ -784,6 +793,12 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		m.status = ""
 	}
 	m.state, m.events, m.plan = msg.flow.State, msg.flow.Events, msg.text
+	if !slices.Equal(m.units, msg.units) {
+		// The steps come from the units, so the pane is drawn again even
+		// when the text is unchanged.
+		m.units = msg.units
+		m.renderedWidth = 0
+	}
 	m.flow = msg.flow
 	if m.flow.Claimed || m.state != m.resumedIn {
 		// A flow that leaves the state it was resumed in, or that a session
@@ -1112,11 +1127,11 @@ func (m Model) askToApprove() Model {
 		m.status = warn("The plan is not ready yet: wait for its review to pass.")
 	case !ReadyToApprove(m.flow):
 		m.status = warn("The plan cannot be approved while it is " + m.stateText() + ".")
-	case planstate.StageOf(m.events, m.units) == planstate.StageQuestions:
+	case planstate.StageOf(m.events, len(m.units)) == planstate.StageQuestions:
 		m.status = warn("Answer 3. Open Questions in comments first; factory offers no approval yet.")
-	case planstate.StageOf(m.events, m.units) == planstate.StageDesign && (queued > 0 || m.openComments() > 0):
+	case planstate.StageOf(m.events, len(m.units)) == planstate.StageDesign && (queued > 0 || m.openComments() > 0):
 		m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
-	case planstate.StageOf(m.events, m.units) == planstate.StageDesign:
+	case planstate.StageOf(m.events, len(m.units)) == planstate.StageDesign:
 		m.confirming, m.pendingDesign = true, true
 		m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? ") + confirmButtons
 	case queued > 0:
@@ -1530,7 +1545,7 @@ func (m *Model) renderPlan() {
 	}
 	if strings.TrimSpace(m.plan) == "" {
 		m.blocks = nil
-		m.units, m.questions = 0, 0
+		m.questions = 0
 		if m.busy {
 			m.setContent(textPlan, lipgloss.NewStyle().Padding(1, 2).Render(m.skeleton(m.planView.Width()-4)))
 			return
@@ -1558,9 +1573,11 @@ func (m *Model) renderPlan() {
 	}
 	blocks := splitBlocks(m.plan)
 	m.blocks = make([]renderedBlock, len(blocks))
+	steps := unitSteps(blocks, m.units)
 	var st planStats
 	from := 0
 	for i, b := range blocks {
+		st.step = steps[i]
 		at := -1
 		if j := strings.Index(m.plan[from:], b.source); j >= 0 {
 			at, from = from+j, from+j+len(b.source)
@@ -1574,7 +1591,7 @@ func (m *Model) renderPlan() {
 		}
 		m.blocks[i] = renderedBlock{block: b, lines: lines, at: at}
 	}
-	m.units, m.questions = st.units, st.questions
+	m.questions = st.questions
 	m.renderedFrom, m.renderedWidth = m.plan, w
 	m.reanchor()
 	// A selection is of blocks as they were split, so it goes with them.

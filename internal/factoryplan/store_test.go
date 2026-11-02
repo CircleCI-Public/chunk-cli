@@ -73,6 +73,29 @@ func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 	assert.Check(t, cmp.Equal(text, "# A plan\n"))
 }
 
+// TestStoreUnitsReadsThemFromFactory checks that Units reads the plan's units
+// from factory's structured content, and is empty before the plan exists.
+func TestStoreUnitsReadsThemFromFactory(t *testing.T) {
+	client, cci := testClient(t)
+	store := newStore(client, "")
+	ctx := context.Background()
+
+	units, err := store.Units(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Len(units, 0))
+
+	_, err = store.Create(ctx, "a plan")
+	assert.NilError(t, err)
+	cci.SetFactoryPlanUnits(store.ID(), fakes.FactoryUnit{Name: "Unit 1: lexer", Done: true, Body: "\nLex.\n"})
+	units, err = store.Units(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(units, []plan.Unit{{Name: "Unit 1: lexer", Done: true}}))
+
+	cci.FailFactoryStructuredContent(store.ID())
+	_, err = store.Units(ctx)
+	assert.Check(t, cmp.ErrorContains(err, "get the plan's units"))
+}
+
 // A new plan is titled with Claude's name for it, made a slug, or with a
 // slug of the message's first line when Claude gives none, and starts as
 // the skeleton under that title.
