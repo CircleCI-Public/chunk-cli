@@ -254,6 +254,9 @@ type Model struct {
 	// planner that cannot be started is tried once per state rather than on
 	// every poll; "" once a session claims the plan or the state moves.
 	resumedIn string
+	// claimedIn is the flow state the screen last saw a session claim the
+	// plan in, or "" once the state moves.
+	claimedIn string
 
 	// blocks is renderedFrom, the plan as last rendered, split for
 	// commenting and rendered at renderedWidth.
@@ -781,6 +784,12 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		// claims, is resumed again once it is next owed one.
 		m.resumedIn = ""
 	}
+	switch {
+	case m.flow.Claimed:
+		m.claimedIn = m.state
+	case m.state != m.claimedIn:
+		m.claimedIn = ""
+	}
 	if !m.tabChosen {
 		// The first refresh of a visit opens the right pane on what the
 		// plan's phase is about; later moves leave the tab where it is.
@@ -824,9 +833,11 @@ func resumeOwed(f Flow) bool {
 // resumeIfOwed has the planner claim the plan again when factory waits on a
 // planner that is not there, once per flow state. A request that has not
 // started a session yet goes in place of the resume, so the planner never
-// claims a new plan without it.
+// claims a new plan without it. In init or Unprioritized it never resumes a
+// state it has seen a session claim, until the state moves.
 func (m Model) resumeIfOwed() (Model, tea.Cmd) {
 	if !m.created || m.resuming || !resumeOwed(m.flow) || m.resumedIn == m.state ||
+		(planstate.IsUnprioritized(m.state) && m.claimedIn == m.state) ||
 		(m.inbox && m.project == "") {
 		return m, nil
 	}
