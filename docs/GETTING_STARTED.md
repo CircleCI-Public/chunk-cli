@@ -327,8 +327,11 @@ chunk watch
 they wait on (Needs your review, With agent, Not started, Other; each heading
 shows how many flows it holds) and then by phase (Planning, Building, ...), a
 sub-plan marked `↳` with its parent (and indented under it when both are under
-the same heading), a flow whose PR factory could not rebase marked ⚠, with a
-read-only preview of the selected one's plan. Flows are yours wherever
+the same heading), a flow whose PR factory could not rebase marked ⚠, and
+each flow's second line saying what factory is doing on it now (for example
+`Building unit 2 of 5 · 1/5 units`) or that it waits on its blockers or
+sub-plans, with a read-only preview of the selected one's plan that starts
+with who the flow waits on and why. Flows are yours wherever
 `chunk watch` is run. `Enter` opens a flow's plan, `n` starts a new one,
 `R` resumes the selected flow when it waits on an agent and no session holds
 it (a build gets a fresh build session in the chunk daemon; a planner picks

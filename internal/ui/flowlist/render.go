@@ -129,8 +129,13 @@ func (m Model) listLines(width, height int) []string {
 		if slices.Contains(f.ApplicableEvents, circleci.ResolveConflicts) {
 			detail = append(detail, st.Warning.Render("⚠"))
 		}
-		if f.Task != nil && f.Task.Category != "" {
+		if s := progressText(f); s != "" {
+			detail = append(detail, st.VDim.Render(s))
+		} else if f.Task != nil && f.Task.Category != "" {
 			detail = append(detail, st.VDim.Render(oneLine(f.Task.Category)))
+		}
+		if u := unitCount(f.Progress); u != "" {
+			detail = append(detail, st.VDim.Render(u))
 		}
 		if f.SessionID != "" {
 			detail = append(detail, st.VDim.Render("claimed"))
@@ -186,6 +191,33 @@ func stateText(f circleci.Flow) string {
 	return capitalize(strings.ToLower(phase))
 }
 
+// progressText is what the flow is doing now, as factory sums it up, or who
+// it waits on when that is its blockers or sub-plans; "" otherwise, so the
+// row falls back to its task category.
+func progressText(f circleci.Flow) string {
+	if f.Progress != nil && oneLine(f.Progress.Summary) != "" {
+		return oneLine(f.Progress.Summary)
+	}
+	switch w := oneLine(f.WaitingOn); w {
+	case "blockers", "sub-plans":
+		return "waiting on " + w
+	}
+	return ""
+}
+
+// unitCount is "D/N units" for a flow with units; "" when factory serves no
+// unit count, or 0.
+func unitCount(p *circleci.FlowProgress) string {
+	if p == nil || p.Units == nil || *p.Units == 0 {
+		return ""
+	}
+	done := 0
+	if p.DoneUnits != nil {
+		done = *p.DoneUnits
+	}
+	return fmt.Sprintf("%d/%d units", done, *p.Units)
+}
+
 // ago is how long since t, as the run list says it.
 func ago(t time.Time) string {
 	d := time.Since(t)
@@ -218,6 +250,16 @@ func (m Model) previewLines(width int) []string {
 		}
 		note += ": " + oneLine(m.previewErr.Error())
 		rows = append(rows, m.styles.Warning.Render(note))
+	}
+	// Who the flow waits on comes from the list, not the preview fetch.
+	if f, ok := m.selected(); ok && oneLine(f.WaitingOn) != "" {
+		rows = append(rows, m.styles.Emphasis.Render("Waiting on "+oneLine(f.WaitingOn)))
+		if why := clean(f.WaitingOnWhy); strings.TrimSpace(why) != "" {
+			for _, line := range strings.Split(ansi.Hardwrap(why, max(width-2, 1), true), "\n") {
+				rows = append(rows, m.styles.Dim.Render(line))
+			}
+		}
+		rows = append(rows, "")
 	}
 	entry := m.cache[m.id]
 	commentsHeading := false
