@@ -1,8 +1,10 @@
 // Package textsel is a selection of text in a block of lines, made by
-// dragging from one cell to another as in a terminal. It knows nothing of the
-// screen: a point is a line and a column of the text, so a selection holds
-// still while the text scrolls under it, and what is selected can be drawn
-// over the lines and read back out of them.
+// dragging from one cell to another as in a terminal. A Selection knows
+// nothing of the screen: a point is a line and a column of the text, so a
+// selection holds still while the text scrolls under it, and what is
+// selected can be drawn over the lines and read back out of them. A Drag is
+// the mouse gesture that makes one over a Pane, a viewport where the screen
+// draws it.
 package textsel
 
 import (
