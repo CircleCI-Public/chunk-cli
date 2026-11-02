@@ -213,7 +213,7 @@ func reportPlanLeft(streams iostream.Streams, planID, buildID string) {
 // ends with, which has the chunk daemon approve the plan in factory and
 // build it. The caller must Stop the agent.
 func planSession(ctx context.Context, root, id, model string, api *circleci.Client) (*factoryplan.Agent, plan.Approver, *factoryplan.Store) {
-	store := factoryplan.NewStore(api, id)
+	store := factoryplan.NewStore(api, id, planRepo(ctx, root))
 	agent := factoryplan.NewAgent(ctx, root, model, store)
 	approve := func(step func(string)) (string, error) {
 		// The daemon is started first, so a plan is not approved with
@@ -226,6 +226,17 @@ func planSession(ctx context.Context, root, id, model string, api *circleci.Clie
 		return approvePlan(root, store.ID(), model)
 	}
 	return agent, approve, store
+}
+
+// planRepo is the GitHub repository, as owner/name, of the project at root,
+// which a plan made there records; "" when its origin is not on GitHub or it
+// has none.
+func planRepo(ctx context.Context, root string) string {
+	org, name, err := gitremote.DetectOrgAndRepoCtx(ctx, root)
+	if err != nil {
+		return ""
+	}
+	return org + "/" + name
 }
 
 // approveAndBuild is chunkd.ApproveAndBuild but in tests.

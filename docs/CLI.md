@@ -505,7 +505,8 @@ chunk
   before it is built. `q` or `esc` quits. Opening a plan only reads it: no session claims it
   until you send a new plan's request, or the screen resumes a planner factory
   is waiting on, and then in the project the dashboard was opened
-  in, since factory does not record a plan's repository; a plan another
+  in; a plan made here records that project's GitHub repository in factory,
+  but chunk does not check a plan's repository against the project; a plan another
   session holds is refused rather than taken over. `esc` or `ctrl+c` goes back
   to the plans with the plan and its session kept; `ctrl+p` does too, to
   switch to another plan. Each opened plan keeps its own activity and

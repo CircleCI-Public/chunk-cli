@@ -41,8 +41,8 @@ type Flow struct {
 	// SessionID is the factory session claiming the plan, or "" when none
 	// does.
 	SessionID string
-	// ApplicableEvents are the events factory applies to the flow now;
-	// any other sent now is stored and ignored.
+	// ApplicableEvents are the human events in Next, in order: what a
+	// developer may send the flow now. nil when Next is.
 	ApplicableEvents []FlowEvent
 	// Task is the task factory has handed out for the plan and not yet had
 	// back, or nil when none is out.
@@ -339,8 +339,15 @@ type releaseRequest struct {
 }
 
 type createPlanAttrs struct {
-	Title string `json:"title"`
-	Text  string `json:"text,omitempty"`
+	Title string    `json:"title"`
+	Text  string    `json:"text,omitempty"`
+	VCS   []vcsRepo `json:"vcs,omitempty"`
+}
+
+// vcsRepo is a repository a plan records, as conductor takes it.
+type vcsRepo struct {
+	Provider     string `json:"provider"`
+	RepoFullName string `json:"repo_full_name"`
 }
 
 type planTextAttrs struct {
@@ -393,13 +400,18 @@ func nextCursor(cursor string, p v3Page, pages int) (string, error) {
 	return *p.Next, nil
 }
 
-// CreatePlan creates a factory plan from a title and its first text. The plan
-// starts Unprioritized, on a branch the API names for the title.
-func (c *Client) CreatePlan(ctx context.Context, title, text string) (*Plan, error) {
+// CreatePlan creates a factory plan from a title and its first text, recording
+// repos, each a GitHub repository as owner/name. For empty text factory writes
+// the plan's skeleton itself.
+func (c *Client) CreatePlan(ctx context.Context, title, text string, repos ...string) (*Plan, error) {
+	body := createPlanAttrs{Title: title, Text: text}
+	for _, r := range repos {
+		body.VCS = append(body.VCS, vcsRepo{Provider: "github", RepoFullName: r})
+	}
 	var attrs planAttrs
 	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/plans",
-		hc.Body(v3Envelope{Data: v3DataEntity{Attributes: createPlanAttrs{Title: title, Text: text}}}),
+		hc.Body(v3Envelope{Data: v3DataEntity{Attributes: body}}),
 		hc.JSONDecoder(&env),
 	))
 	if err != nil {

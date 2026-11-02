@@ -100,6 +100,23 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(body, map[string]any{
 			"data": map[string]any{"attributes": map[string]any{"title": "a plan", "text": "text"}},
 		}))
+
+		p, err := client.CreatePlan(ctx, "b plan", "", "CircleCI-Public/chunk-cli")
+		assert.NilError(t, err)
+		reqs = fake.Recorder.AllRequests()
+		last = reqs[len(reqs)-1]
+		body = nil
+		err = json.Unmarshal(last.Body, &body)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(body, map[string]any{"data": map[string]any{"attributes": map[string]any{
+			"title": "b plan",
+			"vcs":   []any{map[string]any{"provider": "github", "repo_full_name": "CircleCI-Public/chunk-cli"}},
+		}}}))
+		got, ok := fake.FactoryPlan(p.ID)
+		assert.Assert(t, ok)
+		assert.Check(t, cmp.DeepEqual(got.Repos, []string{"CircleCI-Public/chunk-cli"}))
+		assert.Check(t, cmp.Equal(got.Text,
+			"# b plan\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"))
 	})
 
 	t.Run("an unknown plan is a 404", func(t *testing.T) {

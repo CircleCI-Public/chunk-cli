@@ -21,6 +21,8 @@ import (
 // addressed by the plan's ID, which Create sets.
 type Store struct {
 	api *circleci.Client
+	// repo is the GitHub repository a plan Create makes records, "" for none.
+	repo string
 	// name names a new plan for the developer's first message.
 	name func(ctx context.Context, message string) (string, error)
 
@@ -33,9 +35,18 @@ type Store struct {
 }
 
 // NewStore is the store for plan id in factory, or for a plan Create makes
-// when id is "".
-func NewStore(api *circleci.Client, id string) *Store {
-	return &Store{api: api, name: factory.NamePlan, planID: id}
+// when id is "". repo is the GitHub repository, as owner/name, a plan Create
+// makes records; "" records none.
+func NewStore(api *circleci.Client, id, repo string) *Store {
+	return &Store{api: api, name: factory.NamePlan, planID: id, repo: repo}
+}
+
+// repos is repo as the repositories a new plan records: none for "".
+func repos(repo string) []string {
+	if repo == "" {
+		return nil
+	}
+	return []string{repo}
 }
 
 // ID is the plan's ID in factory, or "" before Create.
@@ -45,16 +56,11 @@ func (s *Store) ID() string {
 	return s.planID
 }
 
-// skeleton is the empty plan factory's plan_init writes. The plan tools edit
-// a plan by its sections, so a plan created without them gives the agent
-// nothing to write into.
-func skeleton(title string) string {
-	return "# " + title + "\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"
-}
-
+// Create makes the plan in factory with no text, so factory writes its
+// skeleton, recording the store's repository when it has one.
 func (s *Store) Create(ctx context.Context, message string) (string, error) {
 	title := s.title(ctx, message)
-	p, err := s.api.CreatePlan(ctx, title, skeleton(title))
+	p, err := s.api.CreatePlan(ctx, title, "", repos(s.repo)...)
 	if err != nil {
 		return "", fmt.Errorf("create the plan in factory: %w", err)
 	}

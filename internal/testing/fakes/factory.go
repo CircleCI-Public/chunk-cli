@@ -2,6 +2,7 @@ package fakes
 
 import (
 	"cmp"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -48,6 +49,9 @@ type factoryPlan struct {
 	status FactoryFlowStatus
 	// blockedBy are the plans blocking this one, in the order blocked.
 	blockedBy []factoryBlock
+	// repos are the GitHub repositories the plan was created with, as
+	// owner/name.
+	repos []string
 	// seq orders plans by creation, as created_at and id order conductor's.
 	seq int
 }
@@ -109,6 +113,9 @@ type FactoryPlan struct {
 	// Reasons are the reasons sent with Events, parallel to them: an
 	// abandon's reason, "" for any other event.
 	Reasons []string
+	// Repos are the GitHub repositories the plan was created with, as
+	// owner/name; nil when none.
+	Repos []string
 }
 
 // FactoryPlan returns plan id as the fake holds it, and false when there is
@@ -123,6 +130,7 @@ func (f *FakeCircleCI) FactoryPlan(id string) (FactoryPlan, bool) {
 	return FactoryPlan{
 		ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments),
 		Session: p.session, Events: slices.Clone(p.events), Reasons: slices.Clone(p.reasons),
+		Repos: slices.Clone(p.repos),
 	}, true
 }
 
@@ -399,6 +407,10 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 			Attributes struct {
 				Title string `json:"title"`
 				Text  string `json:"text"`
+				VCS   []struct {
+					Provider     string `json:"provider"`
+					RepoFullName string `json:"repo_full_name"`
+				} `json:"vcs"`
 			} `json:"attributes"`
 		} `json:"data"`
 	}
@@ -406,12 +418,29 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 		factoryError(c, http.StatusBadRequest, "a plan needs a title")
 		return
 	}
+	attrs := body.Data.Attributes
+	var repos []string
+	for i, v := range attrs.VCS {
+		if v.Provider != "github" {
+			factoryError(c, http.StatusBadRequest, fmt.Sprintf("vcs[%d]: provider is not github", i))
+			return
+		}
+		if v.RepoFullName == "" {
+			factoryError(c, http.StatusBadRequest, fmt.Sprintf("vcs[%d]: repo_full_name is required", i))
+			return
+		}
+		repos = append(repos, v.RepoFullName)
+	}
+	text := attrs.Text
+	if strings.TrimSpace(text) == "" {
+		text = fakeSkeleton(attrs.Title)
+	}
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	f.mu.Lock()
 	p := &factoryPlan{
-		id: id, title: body.Data.Attributes.Title, state: "Unprioritized",
-		branch: "factory/" + id, text: body.Data.Attributes.Text,
+		id: id, title: attrs.Title, state: "Unprioritized",
+		branch: "factory/" + id, text: text, repos: repos,
 		createdAt: now, updatedAt: now, seq: len(f.factoryPlans),
 	}
 	if f.factoryPlans == nil {
@@ -421,6 +450,17 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 	ent := planEntity(p)
 	f.mu.Unlock()
 	c.JSON(http.StatusCreated, gin.H{"data": ent})
+}
+
+// fakeSkeleton is the empty plan conductor writes for a plan created with no
+// text.
+func fakeSkeleton(title string) string {
+	var b strings.Builder
+	b.WriteString("# " + title + "\n")
+	for _, h := range []string{"1. Outcome", "2. Design", "3. Open Questions", "4. Worked example", "5. Units"} {
+		b.WriteString("\n## " + h + "\n")
+	}
+	return b.String()
 }
 
 // handleListPlans pages through the caller's open plans, oldest first,
