@@ -20,11 +20,14 @@ import (
 )
 
 // fakeBuild answers Activity with scripted answers, one per call, repeating
-// the last, and records what it was asked.
+// the last, and records what it was asked. Stop records the sessions it is
+// asked to stop, and fails with stopErr.
 type fakeBuild struct {
 	mu      sync.Mutex
 	answers []fakeBuildAnswer
 	asked   []buildAsk
+	stopped []string
+	stopErr error
 }
 
 type fakeBuildAnswer struct {
@@ -56,6 +59,27 @@ func (b *fakeBuild) Asked() []buildAsk {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]buildAsk(nil), b.asked...)
+}
+
+func (b *fakeBuild) Stop(_ context.Context, sessionID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stopped = append(b.stopped, sessionID)
+	return b.stopErr
+}
+
+// Stopped is every session asked to stop so far.
+func (b *fakeBuild) Stopped() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.stopped...)
+}
+
+// answerFrom has the fake answer with a from now on, whatever it had left.
+func (b *fakeBuild) answerFrom(a BuildActivity) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.answers = []fakeBuildAnswer{{activity: a}}
 }
 
 // answer has the fake answer with as, in order, after what it has left.

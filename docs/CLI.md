@@ -318,7 +318,11 @@ chunk
   Done. In `chunk watch`, `R`
   resumes a planner or starts a fresh build session in the chunk daemon, in
   the project `chunk watch` was opened in, and the flow list offers the same
-  `R` for the selected flow. The dashboard's header says what `R` does there
+  `R` for the selected flow.
+  While the plan's build session is running, `S` stops it, after a `y`:
+  the activity pane ends the session with `Build session stopped`, and
+  the daemon frees factory's claim if the session still holds it, so
+  `R` can start a fresh one at once. The dashboard's header says what `R` does there
   or why it can't, where it otherwise names the daemon; a daemon it can't
   reach is shown instead. On a screen opened by `chunk factory plan`, `R`
   resumes only a planner; resume a build from `chunk watch`. chunk never
@@ -452,8 +456,10 @@ chunk
   Closing chunk once the daemon has the request does not stop it. In `chunk watch`,
   the screen stays open after approval, on the Flow tab, to follow the build;
   the activity pane shows what the build session is doing.
-  Its comments can no longer be sent, because the planning session has
-  stopped. `enter` on a
+  Comments still go to factory whenever it takes them, as on any screen;
+  ones queued when you approve stay queued until then. The standalone
+  `chunk factory plan` warns first that approving loses queued comments,
+  since it closes. `enter` on a
   related plan in the Flow tab opens it. The standalone `chunk factory plan`
   closes on approval. The daemon frees the plan's claim from a session that
   is only planning it, a parent plan's included; while a build holds the claim,

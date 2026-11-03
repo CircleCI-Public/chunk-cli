@@ -296,6 +296,8 @@ func (m Model) waitingLine(w int) string {
 		text = "Comments sent · waiting for factory to hand them to chunk…"
 	case movingDesign:
 		text = "Design approved · waiting for factory to start the units…"
+	case movingApprove:
+		text = "Plan approved · waiting for factory to start the build…"
 	}
 	if m.narrow() {
 		text = "Waiting for factory…"

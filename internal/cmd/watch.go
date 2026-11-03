@@ -275,17 +275,23 @@ func (daemonPlanBuild) Activity(_ context.Context, planID string, after int) (pl
 	return planBuildFrom(a, found), nil
 }
 
+// Stop stops build session sessionID in the local chunk daemon.
+func (daemonPlanBuild) Stop(_ context.Context, sessionID string) error {
+	return resumeProblem(cancelSession(sessionID))
+}
+
 // planBuildFrom is the daemon's answer as the flow screen reads it.
 func planBuildFrom(a chunkd.PlanBuildActivity, found bool) plan.BuildActivity {
 	if !found {
 		return plan.BuildActivity{}
 	}
 	out := plan.BuildActivity{
-		Found:   true,
-		ID:      a.ID,
-		Running: a.State == chunkd.SessionRunning,
-		First:   a.First,
-		Total:   a.Total,
+		Found:     true,
+		ID:        a.ID,
+		Running:   a.State == chunkd.SessionRunning,
+		Cancelled: a.State == chunkd.SessionCancelled,
+		First:     a.First,
+		Total:     a.Total,
 	}
 	if a.State == chunkd.SessionFailed {
 		out.Failed = a.Error
@@ -321,12 +327,12 @@ func watchPlanProject(ctx context.Context, root string) error {
 	return checkPlanProject(ctx, root)
 }
 
-// checkWatchProject, resumePlanner and startPlanBuild are watchPlanProject
-// and the chunk daemon's routes but in tests.
+// The chunk daemon's routes and the project check, but in tests.
 var (
 	checkWatchProject = watchPlanProject
 	resumePlanner     = chunkd.ResumePlanner
 	startPlanBuild    = chunkd.StartPlanBuild
+	cancelSession     = chunkd.CancelSession
 )
 
 // errNothingToResume is a resume of a kind chunk does not start.

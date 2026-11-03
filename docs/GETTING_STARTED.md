@@ -364,10 +364,11 @@ build: what factory is doing now and who it waits on, each unit done,
 being built or to do, and the pull request.
 The left pane then shows the builder at work. If it warns that another
 session holds the plan's claim, run the `factory daemon release` command it
-names. Once factory frees the old claim of a plan whose build stopped, after
-the daemon restarted say, its Flow tab says that no session holds the plan and
-that `R` starts a build session; `R` starts a new build that picks up
-factory's next task. `x`
+names. A build that looks stuck can be stopped with `S` (after a `y`); the daemon
+frees its claim, and the Flow tab then says that no session holds the plan
+and that `R` starts a build session. Once factory frees the old claim of a
+plan whose build stopped some other way, after the daemon restarted say, it
+says the same. `R` starts a new build that picks up factory's next task. `x`
 abandons a plan, and stops its build with it.
 `esc` goes back to your plans with the plan kept. Quitting with a request or
 comments still unsent in any plan asks for a second `ctrl+c`.

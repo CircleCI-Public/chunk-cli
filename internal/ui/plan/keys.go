@@ -61,7 +61,9 @@ type keyMap struct {
 	// Resume starts the plan's agent again when factory waits on one that is
 	// not there.
 	Resume key.Binding
-	Quit   key.Binding
+	// StopBuild stops the plan's running build session, after a y.
+	StopBuild key.Binding
+	Quit      key.Binding
 }
 
 // keys returns the screen's bindings as they stand for the current focus and
@@ -111,6 +113,7 @@ func (m Model) keys() keyMap {
 		Chat:           key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "chat")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
 		Resume:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resume")),
+		StopBuild:      key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "stop build")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 	// The reason prompt says what these do, so they carry no hint.
@@ -163,8 +166,15 @@ func (m Model) keys() keyMap {
 	k.Focus.SetEnabled(!m.commenting)
 	k.Confirm.SetEnabled(m.confirming)
 	k.Resume.SetEnabled(m.resumeOffered())
+	k.StopBuild.SetEnabled(m.stopOffered())
 	m.endKeys(&k)
 	return k
+}
+
+// stopOffered is whether S is offered now.
+func (m Model) stopOffered() bool {
+	return m.build != nil && m.created && m.buildRunning() && !m.stoppingBuild &&
+		!m.commenting && !m.confirming && !m.askingReason
 }
 
 // resumeOffered is whether R is offered now.
@@ -186,7 +196,7 @@ func (m Model) chatKeys(k *keyMap) {
 		return
 	}
 	k.Send.SetHelp("enter", "send comments")
-	k.Send.SetEnabled(inChat && !m.built && !m.savingComments &&
+	k.Send.SetEnabled(inChat && !m.savingComments &&
 		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
 }
 
@@ -272,7 +282,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.Switch,
 		k.Send, k.Newline,
 		k.Open, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
-		k.Focus, k.SendPlan, k.Resume, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
+		k.Focus, k.SendPlan, k.Resume, k.StopBuild, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
 		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }

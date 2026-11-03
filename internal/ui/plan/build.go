@@ -14,11 +14,15 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-// Build reads what the chunk daemon's build session of a plan has done.
+// Build reads what the chunk daemon's build session of a plan has done, and
+// stops it.
 type Build interface {
 	// Activity is plan planID's build and its lines past the first after.
 	// Found is false when there is no build of the plan to read.
 	Activity(ctx context.Context, planID string, after int) (BuildActivity, error)
+	// Stop stops build session sessionID. Stopping one that has already ended
+	// is not an error.
+	Stop(ctx context.Context, sessionID string) error
 }
 
 // BuildActivity is a plan's build session and the lines of its feed past
@@ -30,6 +34,8 @@ type BuildActivity struct {
 	// ID is the build session's; a new ID starts a new section.
 	ID      string
 	Running bool
+	// Cancelled is whether the session was stopped.
+	Cancelled bool
 	// Failed is why the session failed, "" when it did not.
 	Failed string
 	// First is the number of Lines[0] in the session's feed.
@@ -87,6 +93,21 @@ func resumeBuildCmd(ctx context.Context, r Resumer, root, planID string) tea.Cmd
 	return func() tea.Msg { return buildResumedMsg{err: r.Resume(ctx, root, planID, planstate.ResumeBuild)} }
 }
 
+// buildStoppedMsg is the end of stopping the plan's build session.
+type buildStoppedMsg struct{ err error }
+
+func stopBuildCmd(ctx context.Context, b Build, sessionID string) tea.Cmd {
+	return func() tea.Msg { return buildStoppedMsg{err: b.Stop(ctx, sessionID)} }
+}
+
+// latestBuildID is the latest build session read, "" when none has been.
+func (m Model) latestBuildID() string {
+	if len(m.builds) == 0 {
+		return ""
+	}
+	return m.builds[len(m.builds)-1].id
+}
+
 // buildEvery is how often the screen reads its plan's build while one is
 // expected.
 const buildEvery = 2 * time.Second
@@ -124,9 +145,10 @@ type buildRun struct {
 	first int
 	rows  []BuildLine
 	// total is how many lines the session has written: the next read's after.
-	total   int
-	running bool
-	failed  string
+	total     int
+	running   bool
+	cancelled bool
+	failed    string
 }
 
 // expectsBuild is whether the plan has a build to follow.
@@ -148,11 +170,20 @@ func (m Model) followBuild() (Model, tea.Cmd) {
 	return m, readBuildCmd(m.ctx, m.build, m.store.ID(), m.buildAfter())
 }
 
-// updateBuild handles the build's tick and the answers to its reads. reading
-// stays true from a read until its tick fires, so a refresh in between starts
-// no second loop.
+// updateBuild handles the build's tick, the answers to its reads and the end
+// of a stop. reading stays true from a read until its tick fires, so a
+// refresh in between starts no second loop.
 func (m Model) updateBuild(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case buildStoppedMsg:
+		m.stoppingBuild = false
+		if msg.err != nil {
+			m.status = ui.ErrorStyle.Render("Could not stop the build session: " + msg.err.Error())
+			return m, nil
+		}
+		// The read loop picks up the stop; the refresh shows the freed claim.
+		m.status = ""
+		return m, refreshCmd(m.ctx, m.store)
 	case buildTickMsg:
 		m.reading = false
 		return m.followBuild()
@@ -226,7 +257,7 @@ func (m Model) applyBuildRead(msg buildReadMsg) (Model, bool) {
 		run.rows = append([]BuildLine(nil), run.rows[over:]...)
 		run.first += over
 	}
-	run.total, run.running, run.failed = a.Total, a.Running, a.Failed
+	run.total, run.running, run.cancelled, run.failed = a.Total, a.Running, a.Cancelled, a.Failed
 	m.renderChat()
 	return m, false
 }
@@ -259,6 +290,8 @@ func (m Model) buildSection(w int) string {
 		switch {
 		case run.failed != "":
 			b.WriteString(ui.ErrorStyle.Render(ansi.Truncate("Build session failed: "+run.failed, w, "…")) + "\n")
+		case run.cancelled:
+			b.WriteString(m.style(m.dim()).Render("Build session stopped") + "\n")
 		case !run.running:
 			b.WriteString(m.style(m.dim()).Render("Build session ended") + "\n")
 		}

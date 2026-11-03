@@ -434,7 +434,9 @@ GET  /factory/plans/{plan}/planner[?after=N] → {session_id, log_id, oldest, bu
                                    next, events[]}: the planner's events from cursor N (the
                                    `next` of an earlier read), and whether it is mid-turn;
                                    without after, no events
-POST /factory/{id}/cancel  → 202 (idempotent): stop a build without ending its plan
+POST /factory/{id}/cancel  → 202 (idempotent): stop a build without ending its plan, and
+                                   free factory's claim if the build still holds it, so a new
+                                   build can start at once (a daemon shutdown frees nothing)
 DELETE /factory/{id}       → 204: forget a finished session; 409 while it is still running
 POST /chat                 {root, text, context?} → 200 SessionLog, once the session has the
                            message: send a message to root's chat, starting or
