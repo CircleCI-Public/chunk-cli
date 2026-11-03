@@ -193,7 +193,7 @@ tasks:
       ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
       - mkdir -p {{.RESULTS_DIR}}
-      - go tool gotestsum --junitfile="{{.TEST_REPORT}}" -- -race -count=1 {{.ARGS}}
+      - go tool gotestsum --format testname --junitfile="{{.TEST_REPORT}}" -- -race -count=1 {{.ARGS}}
 
   ci:diff:
     desc: Check no diffs
