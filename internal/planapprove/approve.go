@@ -19,7 +19,6 @@ import (
 // API is what approving a plan needs of factory: *circleci.Client.
 type API interface {
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
-	PlanText(ctx context.Context, id string) (string, error)
 	PlanStructuredContent(ctx context.Context, id string) (*circleci.PlanStructuredContent, error)
 	ReleaseClaim(ctx context.Context, sessionID, planID string) error
 	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
@@ -50,7 +49,7 @@ var ErrQuestionsOpen = errors.New("the plan has open questions: answer 3. Open Q
 // passed, first releasing a claim held by session, the plan's planning
 // session, or by one locate places outside worktree. It refuses a claim
 // held from worktree itself, or by a session factory's daemon does not know,
-// as either may be building the plan. The flow, text, units and claim are read
+// as either may be building the plan. The flow, content, units and claim are read
 // from factory, so a plan that moved after a screen last polled is still
 // refused.
 func Approve(ctx context.Context, api API, locate Locate, planID, session, worktree string) error {
@@ -68,20 +67,16 @@ func Approve(ctx context.Context, api API, locate Locate, planID, session, workt
 	if !planstate.ReadyToApprove(f.State, next) {
 		return ErrNotReady
 	}
-	text, err := api.PlanText(ctx, planID)
+	sc, err := api.PlanStructuredContent(ctx, planID)
 	if err != nil {
-		return fmt.Errorf("get the plan's text: %w", err)
+		return fmt.Errorf("get the plan's units: %w", err)
 	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(sc.Markdown()) == "" {
 		return errors.New("the plan in factory is empty")
 	}
 	events := make([]string, len(f.ApplicableEvents))
 	for i, e := range f.ApplicableEvents {
 		events[i] = string(e)
-	}
-	sc, err := api.PlanStructuredContent(ctx, planID)
-	if err != nil {
-		return fmt.Errorf("get the plan's units: %w", err)
 	}
 	switch planstate.StageOf(events, len(sc.Units)) {
 	case planstate.StageDesign:

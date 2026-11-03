@@ -78,7 +78,24 @@ func TestPlans(t *testing.T) {
 		fake.SetFactoryPlanUnits(p.ID) // serves "units": []
 		sc, err = client.PlanStructuredContent(ctx, p.ID)
 		assert.NilError(t, err)
-		assert.Check(t, sc.Units == nil, "[] decoded as %#v", sc.Units)
+		assert.Check(t, sc.Units != nil && len(sc.Units) == 0, "[] decoded as %#v", sc.Units)
+
+		p2, err := client.CreatePlan(ctx, "parsed", "# parsed\n\n## 1. Outcome\n\nIt works.\n\n## 2. Design\n\n### Context\n\n- x\n\n## 5. Units\n\n### Unit 1: a (done)\n\nDo a.\n")
+		assert.NilError(t, err)
+		sc, err = client.PlanStructuredContent(ctx, p2.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(sc, &PlanStructuredContent{
+			Outcome: ptr("\nIt works.\n\n"),
+			Design:  ptr("\n### Context\n\n- x\n\n"),
+			Units:   []PlanUnit{{Name: "Unit 1: a", Done: true, Body: "\nDo a.\n"}},
+		}))
+
+		p3, err := client.CreatePlan(ctx, "dup", "# dup\n\n## 1. Outcome\n\nA.\n\n## 1. Outcome\n\nB.\n\n## 2. Design\n\nD.\n")
+		assert.NilError(t, err)
+		sc, err = client.PlanStructuredContent(ctx, p3.ID)
+		assert.NilError(t, err)
+		assert.Check(t, sc.Outcome == nil, "a twice-headed section was served")
+		assert.Check(t, cmp.DeepEqual(sc.Design, ptr("\nD.\n")))
 	})
 
 	t.Run("sends the plan as a V3 entity with the token", func(t *testing.T) {
@@ -1203,3 +1220,64 @@ func TestNextCursor(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestPlanStructuredContentMarkdown(t *testing.T) {
+	s := func(v string) *string { return &v }
+	for _, tc := range []struct {
+		name string
+		in   PlanStructuredContent
+		want string
+	}{
+		{
+			name: "nothing served",
+			in:   PlanStructuredContent{},
+			want: "",
+		},
+		{
+			name: "empty units section",
+			in:   PlanStructuredContent{Units: []PlanUnit{}},
+			want: "## 5. Units\n\n",
+		},
+		{
+			name: "sections in skeleton order, units with done",
+			in: PlanStructuredContent{
+				WorkedExample: s("\nEx.\n\n"),
+				Outcome:       s("\nOut.\n\n"),
+				Units: []PlanUnit{
+					{
+						Name: "Unit 1: a",
+						Done: true,
+						Body: "\nA.\n\n",
+					},
+					{
+						Name: "Unit 2: b",
+						Body: "\nB.\n",
+					},
+				},
+			},
+			want: "## 1. Outcome\n\nOut.\n\n## 4. Worked example\n\nEx.\n\n## 5. Units\n\n### Unit 1: a (done)\n\nA.\n\n### Unit 2: b\n\nB.\n",
+		},
+		{
+			name: "empty body",
+			in:   PlanStructuredContent{OpenQuestions: s("")},
+			want: "## 3. Open Questions\n",
+		},
+		{
+			name: "body without a trailing newline",
+			in: PlanStructuredContent{
+				Design: s("\nD."),
+				Units: []PlanUnit{
+					{
+						Name: "Unit 1: a",
+						Body: "\nA.",
+					},
+				},
+			},
+			want: "## 2. Design\n\nD.\n## 5. Units\n\n### Unit 1: a\n\nA.\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(tc.in.Markdown(), tc.want))
+		})
+	}
+}

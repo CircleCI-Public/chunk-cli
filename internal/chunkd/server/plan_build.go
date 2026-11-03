@@ -28,7 +28,6 @@ var planBuildPoll = 30 * time.Second
 type PlanAPI interface {
 	GetPlan(ctx context.Context, id string) (*circleci.Plan, error)
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
-	PlanText(ctx context.Context, id string) (string, error)
 	PlanStructuredContent(ctx context.Context, id string) (*circleci.PlanStructuredContent, error)
 	ReleaseClaim(ctx context.Context, sessionID, planID string) error
 	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
@@ -78,7 +77,7 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 	if f != nil {
 		state = f.State
 	}
-	text, err := api.PlanText(ctx, req.PlanID)
+	sc, err := api.PlanStructuredContent(ctx, req.PlanID)
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s from factory: %v", req.PlanID, err)
 	}
@@ -91,7 +90,7 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 		Branch:      p.Branch,
 		HeadSHA:     headRef(ps.root),
 		Factory: &chunkd.FactoryRun{
-			Prompt:     text,
+			Prompt:     sc.Markdown(),
 			SpecOrigin: "factory plan " + req.PlanID,
 			PlanID:     req.PlanID,
 			PlanState:  state,

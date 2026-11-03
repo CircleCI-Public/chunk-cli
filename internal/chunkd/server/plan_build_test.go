@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -34,9 +35,10 @@ type fakePlans struct {
 	mu             sync.Mutex
 	id, state      string
 	phase, outcome string
-	branch, text   string
-	// units are the plan's units; unitsErr fails PlanStructuredContent.
-	units    []circleci.PlanUnit
+	branch         string
+	// content is the plan's structured content; unitsErr fails
+	// PlanStructuredContent.
+	content  circleci.PlanStructuredContent
 	unitsErr error
 	getErr   error
 	noFlow   bool
@@ -163,20 +165,15 @@ func (f *fakePlans) claim(holder string) {
 	f.holder = holder
 }
 
-func (f *fakePlans) PlanText(_ context.Context, id string) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	return f.text, nil
-}
-
 func (f *fakePlans) PlanStructuredContent(_ context.Context, _ string) (*circleci.PlanStructuredContent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.unitsErr != nil {
 		return nil, f.unitsErr
 	}
-	return &circleci.PlanStructuredContent{Units: append([]circleci.PlanUnit(nil), f.units...)}, nil
+	c := f.content
+	c.Units = slices.Clone(f.content.Units)
+	return &c, nil
 }
 
 func (f *fakePlans) set(state, branch string) {
@@ -323,7 +320,8 @@ func newPlanBuildDaemon(t *testing.T) *planBuildDaemon {
 	t.Cleanup(func() { planBuildPoll = old })
 	pb := &planBuildDaemon{
 		daemon: d, root: root, build: newFakeBuild(),
-		plans: &fakePlans{id: "plan-1", state: "Planning - Human", phase: circleci.PhaseStarted, text: "# Add a flag\n\n## 5. Units\n\n### Unit 1: Add it\n"},
+		plans: &fakePlans{id: "plan-1", state: "Planning - Human", phase: circleci.PhaseStarted,
+			content: circleci.PlanStructuredContent{Units: []circleci.PlanUnit{{Name: "Unit 1: Add it"}}}},
 	}
 	d.rcfg.PlanAPI = pb.plans
 	d.rcfg.OpenPlanWorktree = func(_ context.Context, root, planID string) (string, error) {
@@ -374,7 +372,7 @@ func TestPlanBuildStartsABuildSessionInThePlansWorktree(t *testing.T) {
 	assert.Assert(t, f != nil)
 	assert.Check(t, cmp.Equal(f.PlanID, "plan-1"))
 	assert.Check(t, cmp.Equal(f.SpecOrigin, "factory plan plan-1"))
-	assert.Check(t, cmp.Equal(f.Prompt, pb.plans.text))
+	assert.Check(t, cmp.Equal(f.Prompt, "## 5. Units\n\n### Unit 1: Add it\n"))
 
 	entry := pb.sessions.get(sess.ID)
 	waitUntil(t, "the build session to start", func() bool {
@@ -393,6 +391,17 @@ func TestPlanBuildStartsABuildSessionInThePlansWorktree(t *testing.T) {
 	waitUntil(t, "the worktree to be recorded", func() bool {
 		return entry.snapshot().Factory.Worktree == "/data/plans/plan-1"
 	})
+
+	_ = pb.stopBuild(t, sess.ID)
+}
+
+func TestPlanBuildOfAnEmptyPlanStartsWithAnEmptyPrompt(t *testing.T) {
+	pb := newPlanBuildDaemon(t)
+	pb.plans.content = circleci.PlanStructuredContent{}
+	sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+	assert.NilError(t, err)
+	assert.Assert(t, sess.Factory != nil)
+	assert.Check(t, cmp.Equal(sess.Factory.Prompt, ""))
 
 	_ = pb.stopBuild(t, sess.ID)
 }
@@ -524,6 +533,19 @@ func TestPlanBuildRefusesWhenTheFlowReadFails(t *testing.T) {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 	assert.Check(t, cmp.Len(pb.cfgs, 0), "a build started on a failed flow read")
+}
+
+func TestPlanBuildRefusesWhenThePlanContentReadFails(t *testing.T) {
+	pb := newPlanBuildDaemon(t)
+	pb.plans.unitsErr = errors.New("404 from factory")
+	_, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae), "err %v", err)
+	assert.Check(t, cmp.Equal(ae.status, http.StatusBadGateway))
+	assert.Check(t, cmp.ErrorContains(err, "read plan plan-1 from factory: 404 from factory"))
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	assert.Check(t, cmp.Len(pb.cfgs, 0), "a build started on a failed content read")
 }
 
 // A plan with no flow has no flow state: its build starts, and runs until it

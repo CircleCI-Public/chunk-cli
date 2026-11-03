@@ -20,9 +20,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
 )
 
-// oneUnitPlan is a plan's text with one unit written.
-const oneUnitPlan = "# Add a flag\n\n## 5. Units\n\n### Unit 1: Add it\n"
-
 // approveDaemon is a plannerDaemon whose plan-1 is Ready with one unit, so
 // it can be approved, starting fake build sessions through builds, with
 // factory's daemon placing sessions at locate.
@@ -47,8 +44,7 @@ func newApproveDaemon(t *testing.T) *approveDaemon {
 	ad.plans.mu.Lock()
 	ad.plans.state = "Planning - Human"
 	ad.plans.events = []circleci.FlowEvent{circleci.ApproveForBuilding}
-	ad.plans.text = oneUnitPlan
-	ad.plans.units = []circleci.PlanUnit{{Name: "Unit 1: Add it"}}
+	ad.plans.content = circleci.PlanStructuredContent{Units: []circleci.PlanUnit{{Name: "Unit 1: Add it"}}}
 	ad.plans.mu.Unlock()
 	ad.rcfg.StartBuild = ad.builds.start
 	ad.rcfg.SessionWorktree = func(_ context.Context, session string) (string, error) {
@@ -180,7 +176,8 @@ func TestPlanApproveRefuses(t *testing.T) {
 			setup: func(ad *approveDaemon) {
 				ad.plans.mu.Lock()
 				defer ad.plans.mu.Unlock()
-				ad.plans.text = "# Add a flag\n\n## 2. Design\n"
+				d := "\n"
+				ad.plans.content = circleci.PlanStructuredContent{Design: &d}
 				ad.plans.events = []circleci.FlowEvent{circleci.ApproveForUnits}
 			},
 			status:   http.StatusConflict,
