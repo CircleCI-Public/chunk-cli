@@ -107,7 +107,7 @@ func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
 	m, store := planned(t, 140, 40, "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n", approve)
 	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 	m = refreshed(t, m)
-	bar := m.height - footerRows + 1
+	bar := m.height - 1
 	_, right := m.barRight()
 	m = drive(t, m, click(m.width-4, bar))
 	assert.Assert(t, m.confirming, "clicking Approve did not ask (right=%q)", ansi.Strip(right))
@@ -117,7 +117,7 @@ func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
 	text := ansi.Strip(m.status)
 	at := strings.Index(text, confirmYes)
 	assert.Assert(t, at >= 0, "the question has no yes button: %q", text)
-	x := 2 + ansi.StringWidth(text[:at])
+	x := ansi.StringWidth(text[:at])
 	m = drive(t, m, click(x+1, bar))
 	assert.Check(t, approved)
 	assert.Check(t, cmp.Equal(m.BuildID, "build-1"))
@@ -132,9 +132,9 @@ func TestClickingSaveCommentsSavesThem(t *testing.T) {
 	m = drive(t, m, press("enter"))
 	// The button is set against the bar's right edge, with a hint beside it.
 	main, right := m.barRight()
-	left := 2 + m.width - borderSize - 2 - lipgloss.Width(right)
+	left := m.width - lipgloss.Width(right)
 	assert.Assert(t, strings.Contains(ansi.Strip(main), "Save 1 comment"), "the bar offers %q", ansi.Strip(main))
-	m = drive(t, m, click(left+1, m.height-footerRows+1))
+	m = drive(t, m, click(left+1, m.height-1))
 	assert.Check(t, cmp.Len(store.Added, 1))
 	assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
 }
@@ -161,7 +161,7 @@ func TestClickingATabWordSwitchesTheTab(t *testing.T) {
 
 	// A narrow screen's tab row picks any of the three.
 	m, _ = planned(t, 70, 30, twoParts, nil)
-	y := headerRows + stripRows
+	y := headerRows + ruleRows + stripRows
 	spans := m.tabSpans()
 	assert.Assert(t, cmp.Len(spans, 3))
 	m = drive(t, m, click(spans[narrowFlow].start+1, y))

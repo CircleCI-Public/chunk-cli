@@ -411,7 +411,7 @@ type Model struct {
 	chatKey bool
 	title   string
 	project string
-	// branch is the git branch the plan is for, shown in the header.
+	// branch is the git branch the plan is for.
 	branch string
 	// questions is how many open questions the plan has.
 	questions int
@@ -536,8 +536,7 @@ func (m Model) WithTerminal(dark, disambiguates bool) Model {
 	return m
 }
 
-// WithBranch returns a copy of m that names the branch the plan is for in its
-// header.
+// WithBranch returns a copy of m that knows the branch the plan is for.
 func (m Model) WithBranch(branch string) Model {
 	m.branch = branch
 	return m
@@ -724,7 +723,7 @@ func (m Model) applyCreated(msg createdMsg) (Model, tea.Cmd) {
 	// The input is gone for good, and the activity takes its rows.
 	m.created, m.request, m.resuming = true, msg.text, true
 	// A title the host gave the screen becomes the plan's own once it is
-	// created; a screen with no title keeps showing the branch.
+	// created; a screen with no title keeps showing New flow.
 	if m.title != "" && msg.title != "" {
 		m.title = msg.title
 	}
@@ -1480,17 +1479,19 @@ func waitApproval(ch <-chan tea.Msg) tea.Cmd {
 }
 
 // Layout: the chat is on the left and the plan, which needs the room, takes
-// the right 60% of the screen. Each pane has a one-cell border with its title
-// set into the top edge; the plan has a row under it for comments, and the
-// screen a header row above the panes and a footer row below them.
+// the right 60% of the screen. Above the panes are the frame's top line and
+// its rule, then the strip; below them are the footer's rule and its row of
+// hints.
 const (
 	borderSize   = 2
 	bubbleChrome = borderSize + 2
 	// chatGutter is the cells of room left and right of the messages.
 	chatGutter = 1
 	headerRows = 1
+	// ruleRows is the rule under the frame's top line.
+	ruleRows   = 1
 	tabRows    = 1
-	footerRows = 3
+	footerRows = 2
 	inputRows  = 6
 	// inputBoxRows is the input and its border, which has the input's title
 	// set into the top edge.
@@ -1519,9 +1520,9 @@ func (m *Model) chatWidth() int {
 // topRows is what sits above the panes.
 func (m *Model) topRows() int {
 	if m.narrow() {
-		return headerRows + stripRows + tabRows
+		return headerRows + ruleRows + stripRows + tabRows
 	}
-	return headerRows + stripRows
+	return headerRows + ruleRows + stripRows
 }
 
 func (m *Model) layout() {
@@ -1825,7 +1826,7 @@ func (m Model) Content() string {
 	plan := pane(m.focus == panePlan, m.planWidth(), planTitle, body)
 
 	panes := lipgloss.JoinHorizontal(lipgloss.Top, chat, plan)
-	top := m.header() + "\n" + m.strip()
+	top := m.header() + "\n" + m.topRule() + "\n" + m.strip()
 	if m.narrow() {
 		// One pane at a time, the other a tab away.
 		panes = chat

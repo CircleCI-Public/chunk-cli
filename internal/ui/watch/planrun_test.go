@@ -556,7 +556,7 @@ func TestANewPlansHeaderTakesItsName(t *testing.T) {
 	next, cmd := m.Update(flowlist.NewMsg{})
 	m = deliver(t, next.(Model), cmd)
 	newKey := m.planKey
-	assert.Check(t, cmp.Contains(screen(m), "chunk plan / New plan"))
+	assert.Check(t, cmp.Contains(screen(m), "chunk / New plan"))
 
 	m = typeInto(m, "retry uploads")
 	m, create := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -566,13 +566,13 @@ func TestANewPlansHeaderTakesItsName(t *testing.T) {
 	next, cmd = m.Update(flowlist.OpenMsg{ID: "cache", Title: "cache-installs"})
 	m = deliver(t, next.(Model), cmd)
 	m = deliverThen(t, m, create, 0) // the create lands, for the new plan
-	assert.Check(t, cmp.Contains(screen(m), "chunk plan / cache-installs"))
+	assert.Check(t, cmp.Contains(screen(m), "chunk / cache-installs"))
 	assert.Check(t, !strings.Contains(screen(m), "retry-uploads"), screen(m))
 
 	next, _ = m.Update(flowlist.OpenMsg{ID: "", Title: "New plan"})
 	m = next.(Model)
 	assert.Check(t, cmp.Equal(m.planKey, newKey))
-	assert.Check(t, cmp.Contains(screen(m), "chunk plan / retry-uploads"))
+	assert.Check(t, cmp.Contains(screen(m), "chunk / retry-uploads"))
 }
 
 // The flow list is drawn under the dashboard's own header, and the two

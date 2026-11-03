@@ -443,7 +443,7 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 			if slices.Contains(steps, planstate.Step(shown)) {
 				row1 = "Planning › Building › Integrating › Done"
 			}
-			assert.Check(t, cmp.Contains(lines[headerRows], row1))
+			assert.Check(t, cmp.Contains(lines[headerRows+ruleRows], row1))
 			assert.Check(t, !strings.Contains(view, "Plan · "), "the pane's title names the state:\n%s", view)
 
 			m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
@@ -938,7 +938,7 @@ func TestWaitingTitleNamesTheMove(t *testing.T) {
 			assert.Check(t, !strings.Contains(raw, "\x1b[31m"), "the state's escapes were drawn")
 			lines := strings.Split(ansi.Strip(raw), "\n")
 			assert.Assert(t, len(lines) > 1)
-			assert.Check(t, cmp.Contains(lines[headerRows+stripRows], tc.want))
+			assert.Check(t, cmp.Contains(lines[m.topRows()], tc.want))
 		})
 	}
 }
@@ -981,7 +981,7 @@ func TestFocusedPlanPaneTitleHasNoPercentage(t *testing.T) {
 			}
 			assert.Assert(t, cmp.Equal(m.focus, panePlan))
 
-			top := strings.Split(ansi.Strip(m.Content()), "\n")[headerRows+stripRows]
+			top := strings.Split(ansi.Strip(m.Content()), "\n")[m.topRows()]
 			assert.Check(t, cmp.Contains(top, "Activity"))
 			assert.Check(t, cmp.Contains(top, tc.want))
 			assert.Check(t, !regexp.MustCompile(`\d+%`).MatchString(top), top)
@@ -1562,7 +1562,7 @@ func TestFocusedPaneUsesTheBrandAccent(t *testing.T) {
 		m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithTerminal(dark, false)
 		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		st := theme.New(dark)
-		top := strings.Split(m.Content(), "\n")[headerRows+stripRows]
+		top := strings.Split(m.Content(), "\n")[m.topRows()]
 		focused := lipgloss.NewStyle().Foreground(st.Brand.GetForeground()).Render("╭─ ")
 		quiet := lipgloss.NewStyle().Foreground(st.VDim.GetForeground()).Render("╭─ ")
 		if !strings.HasPrefix(top, focused) {
@@ -2512,7 +2512,7 @@ func TestActivityWithNothingSentIsAFactoryTask(t *testing.T) {
 // shows the flow's task whatever the chat labels its turn.
 func belowStrip(m Model) string {
 	lines := strings.Split(ansi.Strip(m.Content()), "\n")
-	return strings.Join(lines[headerRows+stripRows:], "\n")
+	return strings.Join(lines[m.topRows():], "\n")
 }
 
 // The flow names the task a turn is on only until the agent submits it; a
@@ -3001,8 +3001,8 @@ func TestStripShowsFlowStatus(t *testing.T) {
 		t.Errorf("strip does not say the design is ready:\n%s", view)
 	}
 	lines := strings.Split(view, "\n")
-	assert.Check(t, cmp.Contains(lines[1], "Planning › Building › Integrating › Done"))
-	assert.Check(t, cmp.Contains(lines[2], "Next: you approve the design · ctrl+s"))
+	assert.Check(t, cmp.Contains(lines[headerRows+ruleRows], "Planning › Building › Integrating › Done"))
+	assert.Check(t, cmp.Contains(lines[headerRows+ruleRows+1], "Next: you approve the design · ctrl+s"))
 
 	store.TextV += "\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
@@ -3015,8 +3015,8 @@ func TestStripShowsFlowStatus(t *testing.T) {
 		t.Errorf("strip does not say the plan is ready:\n%s", view)
 	}
 	lines = strings.Split(view, "\n")
-	assert.Check(t, cmp.Contains(lines[1], "Planning › Building › Integrating › Done"))
-	assert.Check(t, cmp.Contains(lines[2], "Next: you approve the plan · ctrl+s"))
+	assert.Check(t, cmp.Contains(lines[headerRows+ruleRows], "Planning › Building › Integrating › Done"))
+	assert.Check(t, cmp.Contains(lines[headerRows+ruleRows+1], "Next: you approve the plan · ctrl+s"))
 
 	m.comments = []comment{{block: 0, quote: "# Add a flag", text: "name it --dry"}}
 	m.renderPlan()
@@ -3063,7 +3063,7 @@ func TestPlanShowsUnitsAsSteps(t *testing.T) {
 	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it").WithBranch("hanabel/retry-429")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := ansi.Strip(m.Content())
-	for _, want := range []string{"hanabel/retry-429", "OUTCOME ─", "OPEN QUESTIONS", "✓ 1  Add RetryPolicy", "○ 2  Wire it in", "2 units", "1 open question", "ctrl+s Approve plan"} {
+	for _, want := range []string{"OUTCOME ─", "OPEN QUESTIONS", "✓ 1  Add RetryPolicy", "○ 2  Wire it in", "ctrl+s Approve plan"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
@@ -3113,7 +3113,7 @@ func TestPlanWaitsForItsUnits(t *testing.T) {
 	store.mu.Unlock()
 	m = refreshed(t, m)
 	view = ansi.Strip(m.Content())
-	for _, want := range []string{"✓ 1  Add RetryPolicy", "○ 2  Wire it in", "2 units"} {
+	for _, want := range []string{"✓ 1  Add RetryPolicy", "○ 2  Wire it in"} {
 		assert.Check(t, cmp.Contains(view, want), "view:\n%s", view)
 	}
 	assert.Check(t, !strings.Contains(view, "could not refresh the plan"), "view:\n%s", view)
@@ -3414,7 +3414,7 @@ func TestPaneRendersStoreText(t *testing.T) {
 	if !strings.Contains(view, "Done.") {
 		t.Errorf("plan text not shown:\n%s", view)
 	}
-	if lines := strings.Split(view, "\n"); !strings.Contains(lines[headerRows], "Planning › Building") {
+	if lines := strings.Split(view, "\n"); !strings.Contains(lines[headerRows+ruleRows], "Planning › Building") {
 		t.Errorf("strip does not show the step:\n%s", view)
 	}
 	if strings.Contains(view, "Plan · refine-units") {
@@ -4284,11 +4284,11 @@ func TestFailedCreateShowsInTheChatAndIsTriedAgain(t *testing.T) {
 	if got := agent.Sent(); len(got) != 1 || got[0] != "add a flag" {
 		t.Errorf("agent got %q", got)
 	}
-	assert.Check(t, cmp.Contains(ansi.Strip(m.header()), "chunk plan / add-a-flag"))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.header()), "chunk / add-a-flag"))
 }
 
 // Once factory has created the plan, the title the host gave the screen is
-// replaced with the plan's own; a screen with no title keeps the branch.
+// replaced with the plan's own; a screen with no title reads New flow.
 func TestTheHeaderNamesThePlanOnceCreated(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -4305,15 +4305,16 @@ func TestTheHeaderNamesThePlanOnceCreated(t *testing.T) {
 			host:    func(m Model) Model { return m.WithInbox("New plan", "chunk") },
 			width:   120,
 			title:   "replace-header-plan",
-			want:    "chunk plan / replace-header-plan",
+			want:    "chunk / replace-header-plan",
 			notWant: "New plan",
 		},
 		{
-			name:  "a long title is cut down",
-			host:  func(m Model) Model { return m.WithInbox("New plan", "chunk") },
-			width: 60, // narrow enough that the header cuts the title down
-			title: "a-very-long-plan-title-indeed",
-			want:  "chunk plan / a-very-long-p…",
+			name:    "a long title is cut down",
+			host:    func(m Model) Model { return m.WithInbox("New plan", "chunk") },
+			width:   60, // narrow enough that the header cuts the title down
+			title:   "a-very-long-plan-title-indeed-that-goes-on-and-on-past-the-edge",
+			want:    "chunk / a-very-long-plan",
+			notWant: "past-the-edge",
 		},
 		{
 			name:      "a failed create keeps New plan",
@@ -4321,22 +4322,22 @@ func TestTheHeaderNamesThePlanOnceCreated(t *testing.T) {
 			width:     120,
 			title:     "replace-header-plan",
 			createErr: errors.New("factory said no"),
-			want:      "chunk plan / New plan",
+			want:      "chunk / New plan",
 			notWant:   "replace-header-plan",
 		},
 		{
 			name:  "no title keeps New plan",
 			host:  func(m Model) Model { return m.WithInbox("New plan", "chunk") },
 			width: 120,
-			want:  "chunk plan / New plan",
+			want:  "chunk / New plan",
 		},
 		{
-			name:    "the standalone screen keeps its branch",
+			name:    "the standalone screen reads New flow, not its branch",
 			host:    func(m Model) Model { return m.WithBranch("main") },
 			width:   120,
 			title:   "replace-header-plan",
-			want:    "chunk plan / main",
-			notWant: "replace-header-plan",
+			want:    "chunk / New flow",
+			notWant: "main",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4358,6 +4359,73 @@ func TestTheHeaderNamesThePlanOnceCreated(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The frame's top line is chunk / and the plan's title, over a rule, and its
+// footer is a rule over one row of hints set apart by a dot.
+func TestFrameDrawsTopLineAndFooter(t *testing.T) {
+	const width, height = 132, 40
+	lines := func(m Model) []string { return strings.Split(ansi.Strip(m.Content()), "\n") }
+	rule := func(t *testing.T, l string) {
+		t.Helper()
+		assert.Check(t, l != "" && strings.Trim(l, "─") == "", "not a rule: %q", l)
+		assert.Check(t, cmp.Equal(ansi.StringWidth(l), width))
+	}
+	created := func(t *testing.T, title string) (Model, *fakeStore) {
+		t.Helper()
+		store := newFakeStore()
+		store.Created = true
+		store.TextV = twoParts
+		m := New(context.Background(), newFakeAgent(), nil, store, "").WithInbox(title, "/src/p")
+		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: height})
+		return refreshed(t, m), store
+	}
+
+	t.Run("a created plan", func(t *testing.T) {
+		m, _ := created(t, "Plan")
+		ls := lines(m)
+		assert.Check(t, strings.HasPrefix(ls[0], " chunk / Plan"), "line 0: %q", ls[0])
+		assert.Check(t, !strings.Contains(ls[0], "chunk plan"), "line 0: %q", ls[0])
+		rule(t, ls[1])
+		rule(t, ls[len(ls)-2])
+		assert.Check(t, cmp.Contains(ls[len(ls)-1], " · "))
+	})
+
+	t.Run("a new plan", func(t *testing.T) {
+		m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: height})
+		ls := lines(m)
+		assert.Check(t, strings.HasPrefix(ls[0], " chunk / New flow"), "line 0: %q", ls[0])
+	})
+
+	t.Run("a created plan with no title names no branch", func(t *testing.T) {
+		store := newFakeStore()
+		store.Created = true
+		store.TextV = twoParts
+		m := New(context.Background(), newFakeAgent(), nil, store, "").WithBranch("hanabel/retry-429")
+		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: height})
+		m = refreshed(t, m)
+		ls := lines(m)
+		assert.Check(t, strings.HasPrefix(ls[0], " chunk / New flow"), "line 0: %q", ls[0])
+		assert.Check(t, !strings.Contains(ls[0], "hanabel/retry-429"), "line 0: %q", ls[0])
+	})
+
+	t.Run("a long title is cut and the pill still shows", func(t *testing.T) {
+		m, store := created(t, strings.Repeat("t", 200))
+		store.setEvents("address-comments")
+		m = refreshed(t, m)
+		assert.Assert(t, cmp.Equal(m.focus, panePlan))
+		m = drive(t, m, press("c"))
+		m = typeText(t, m, "too vague")
+		m = drive(t, m, press("enter"))
+		assert.Assert(t, cmp.Len(queuedComments(m.comments), 1))
+
+		ls := lines(m)
+		assert.Check(t, cmp.Contains(ls[0], "…"))
+		assert.Check(t, cmp.Contains(ls[0], "● 1 comment queued"))
+		assert.Check(t, ansi.StringWidth(ls[0]) <= width, "line 0 is %d wide", ansi.StringWidth(ls[0]))
+		assert.Check(t, cmp.Contains(ls[len(ls)-1], "s Save 1 comment"), "last line: %q", ls[len(ls)-1])
+	})
 }
 
 // The plan is created off the screen's loop; a second enter meanwhile does
@@ -4957,7 +5025,7 @@ func TestFamilyErrorIsQuiet(t *testing.T) {
 	store.FamilyErr = errors.New("boom")
 	m := flowModel(t, store)
 	assert.Check(t, cmp.Equal(m.refreshErr, ""))
-	row2 := func(m Model) string { return ansi.Strip(strings.Split(m.Content(), "\n")[headerRows+1]) }
+	row2 := func(m Model) string { return ansi.Strip(strings.Split(m.Content(), "\n")[headerRows+ruleRows+1]) }
 	assert.Check(t, cmp.Contains(row2(m), "could not read related plans: boom"))
 
 	store.mu.Lock()

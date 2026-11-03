@@ -116,7 +116,7 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 	switch {
 	case mouse.Y == 0:
 		return m, nil
-	case m.narrow() && mouse.Y == headerRows+stripRows:
+	case m.narrow() && mouse.Y == headerRows+ruleRows+stripRows:
 		return m.clickTab(mouse.X)
 	case mouse.Y >= m.height-footerRows:
 		return m.clickBar(mouse)
@@ -217,17 +217,15 @@ func (m Model) stopAt(y int) int {
 
 // clickBar presses the action bar's main button when it is the one clicked.
 func (m Model) clickBar(mouse tea.Mouse) (Model, tea.Cmd) {
-	if mouse.Y != m.height-footerRows+1 {
+	if mouse.Y != m.height-1 {
 		return m, nil
 	}
 	main, right := m.barRight()
 	if main == "" {
 		return m, nil
 	}
-	inner := m.width - borderSize - 2
-	// The bar's text starts after its border and padding, and the buttons
-	// are set against its right edge.
-	left := 2 + inner - lipgloss.Width(right)
+	// The buttons are set against the footer's right edge.
+	left := m.width - lipgloss.Width(right)
 	if mouse.X < left || mouse.X >= left+lipgloss.Width(main) {
 		return m, nil
 	}
@@ -248,11 +246,11 @@ func (m Model) clickConfirm(mouse tea.Mouse) (Model, tea.Cmd) {
 	text := ansi.Strip(m.status)
 	m.status = ""
 	i := strings.Index(text, confirmYes)
-	if mouse.Y != m.height-footerRows+1 || i < 0 {
+	if mouse.Y != m.height-1 || i < 0 {
 		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan, m.pendingStop = "", false, false, ""
 		return m, nil
 	}
-	left := 2 + ansi.StringWidth(text[:i])
+	left := ansi.StringWidth(text[:i])
 	if mouse.X < left || mouse.X >= left+ansi.StringWidth(confirmYes) {
 		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan, m.pendingStop = "", false, false, ""
 		return m, nil

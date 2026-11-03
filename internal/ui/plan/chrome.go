@@ -49,9 +49,10 @@ const narrowBelow = 100
 
 func (m Model) narrow() bool { return m.width < narrowBelow }
 
-// header is the row above the panes: where the developer is, and what is
-// under way that the developer is waiting on, in colour. Where the flow is
-// and what comes next is the strip's.
+// header is the frame's top line: chunk / the plan's title, or New flow
+// before it has one, and what is under way that the developer is waiting on,
+// in colour, on the right. Where the flow is and what comes next is the
+// strip's.
 func (m Model) header() string {
 	var state string
 	switch {
@@ -78,32 +79,24 @@ func (m Model) header() string {
 		state = m.pill(m.amber(), "#fff8c5", "#2a2210", text)
 	}
 
-	left := " " + ui.TitleStyle.Render("chunk") + " " + m.style(m.dim()).Render("plan")
-	if m.title != "" {
-		left += " / " + ansi.Truncate(m.title, max(m.width/2-16, 8), "…")
-	} else if m.branch != "" {
-		left += m.style(m.dim()).Render(" / " + m.branch)
+	title := m.title
+	if title == "" {
+		title = "New flow"
 	}
-	var facts []string
-	if len(m.units) > 0 {
-		facts = append(facts, fmt.Sprintf("%d %s", len(m.units), plural(len(m.units), "unit", "units")))
-	}
-	if m.questions > 0 {
-		facts = append(facts, fmt.Sprintf("%d open %s", m.questions, plural(m.questions, "question", "questions")))
-	}
-	right := "  " + m.style(m.dim()).Render(strings.Join(facts, " · ")) + " "
-	if m.busy || len(facts) == 0 {
-		right = ""
-	}
+	room := max(m.width-lipgloss.Width(state)-len(" chunk / ")-2, 1)
+	left := " " + ui.TitleStyle.Render("chunk") + m.style(m.dim()).Render(" / ") + ansi.Truncate(title, room, "…")
 
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(state) - lipgloss.Width(right)
-	if gap < 2 {
-		right, gap = "", m.width-lipgloss.Width(left)-lipgloss.Width(state)
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(state)
+	if gap < 1 {
+		return ansi.Truncate(left+" "+state, m.width, "…")
 	}
-	if gap < 2 {
-		return ansi.Truncate(left+"  "+state, m.width, "…")
-	}
-	return left + strings.Repeat(" ", gap) + state + right
+	return left + strings.Repeat(" ", gap) + state
+}
+
+// topRule is the full-width rule under the frame's top line, and over its
+// footer's row of hints.
+func (m Model) topRule() string {
+	return m.style(m.faint()).Render(strings.Repeat("─", m.width))
 }
 
 // FlowText is where the flow stands as the status strip says it, "" until
@@ -256,23 +249,24 @@ func (m Model) rightTabSpans() (flow, plan span) {
 	return flow, plan
 }
 
-// actionBar is the box under the panes: the keys at hand on the left and, on
-// the right, the one thing the developer most likely does next, which changes
-// with the state: send comments first, and only then approve.
+// actionBar is the footer under the panes: a rule, then the keys at hand on
+// the left and, on the right, the one thing the developer most likely does
+// next, which changes with the state: send comments first, and only then
+// approve.
 func (m Model) actionBar() string {
-	inner := m.width - borderSize - 2
-	edge := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.quiet()).Padding(0, 1)
+	inner := m.width
+	rule := m.topRule()
 	if m.moving != nil {
 		// A status during the wait is a prompt or an error, so it shows
-		// over the waiting line; the border still says factory has yet to
+		// over the waiting line; the rule still says factory has yet to
 		// move the plan.
-		edge = edge.BorderForeground(m.purple())
+		rule = m.style(m.purple()).Render(strings.Repeat("─", m.width))
 		if m.status == "" {
-			return edge.Width(m.width).Render(m.waitingLine(inner))
+			return rule + "\n" + m.waitingLine(inner)
 		}
 	}
 	if m.status != "" {
-		return edge.Width(m.width).Render(ansi.Truncate(m.status, inner, "…"))
+		return rule + "\n" + ansi.Truncate(m.status, inner, "…")
 	}
 
 	_, right := m.barRight()
@@ -281,9 +275,11 @@ func (m Model) actionBar() string {
 	k.SendPlan.SetEnabled(false)
 	k.SendComments.SetEnabled(false)
 	room := max(inner-lipgloss.Width(right)-2, 0)
-	hints := ansi.Truncate(theme.Help(theme.New(m.dark), room).View(k), room, "…")
+	h := theme.Help(theme.New(m.dark), room)
+	h.ShortSeparator = " · "
+	hints := ansi.Truncate(h.View(k), room, "…")
 	gap := max(inner-lipgloss.Width(hints)-lipgloss.Width(right), 1)
-	return edge.Width(m.width).Render(hints + strings.Repeat(" ", gap) + right)
+	return rule + "\n" + hints + strings.Repeat(" ", gap) + right
 }
 
 // waitingLine is the action bar while factory has yet to apply the event
@@ -318,7 +314,7 @@ const slowWait = 15 * time.Second
 // barRight is the bar's main button and everything on its right: the button
 // with the one beside it, when there is room for both.
 func (m Model) barRight() (main, right string) {
-	inner := m.width - borderSize - 2
+	inner := m.width
 	main, side := m.actions()
 	right = main
 	if side != "" && lipgloss.Width(main)+lipgloss.Width(side)+2 < inner/2 {
