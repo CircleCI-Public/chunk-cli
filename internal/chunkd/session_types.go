@@ -125,7 +125,7 @@ type FactoryRun struct {
 	// a build session of Claude Code. PlanState is where factory has the plan.
 	PlanID    string `json:"plan_id,omitempty"`
 	PlanState string `json:"plan_state,omitempty"`
-	// Prompt is the plan's text when the build started.
+	// Prompt is the plan, rebuilt from factory's structured content, when the build started.
 	Prompt string `json:"prompt"`
 	// SpecOrigin names the plan Prompt was read from.
 	SpecOrigin string `json:"spec_origin,omitempty"`

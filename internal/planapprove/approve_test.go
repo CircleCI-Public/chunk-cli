@@ -368,6 +368,30 @@ func TestApproveFailsWhenTheUnitsCannotBeRead(t *testing.T) {
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.Len(p.Events, 0))
 	assert.Check(t, cmp.Equal(p.Session, "s-1"))
+	assertNoTextRead(t, cci)
+}
+
+// assertNoTextRead checks that the fake has had no GET of a plan's text.
+func assertNoTextRead(t *testing.T, cci *fakes.FakeCircleCI) {
+	t.Helper()
+	for _, r := range cci.Recorder.AllRequests() {
+		assert.Check(t, r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/text"), "read %s", r.URL.Path)
+	}
+}
+
+// TestApproveRefusesAnEmptyPlan checks that a plan factory finds no
+// sections or units in is refused, with nothing sent.
+func TestApproveRefusesAnEmptyPlan(t *testing.T) {
+	client, cci, id := createdPlan(t, "# A plan\n")
+	cci.ClaimFactoryPlan(id, "s-1")
+	cci.SetFactoryPlanState(id, "Planning - Human")
+	cci.SetFactoryApplicableEvents(id, "approve-for-building")
+
+	err := Approve(context.Background(), client, noDaemon, id, "s-1", "/data/plans/"+id)
+	assert.Check(t, cmp.ErrorContains(err, "the plan in factory is empty"))
+	p, _ := cci.FactoryPlan(id)
+	assert.Check(t, cmp.Len(p.Events, 0))
+	assert.Check(t, cmp.Equal(p.Session, "s-1"))
 }
 
 // TestApproveWaitsForUnits checks that Approve refuses a plan whose design is what waits for approval.
@@ -387,6 +411,11 @@ func TestApproveWaitsForUnits(t *testing.T) {
 			name:   "no units",
 			text:   "# A plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n",
 			events: []string{"approve-for-units", "approve-for-building"},
+		},
+		{
+			name:   "only an empty units section",
+			text:   "# A plan\n\n## 5. Units\n",
+			events: []string{"approve-for-units"},
 		},
 		{
 			name:   "factory offers only design approval",
@@ -429,4 +458,5 @@ func TestApproveCountsDoneUnits(t *testing.T) {
 	err = Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
 	assert.Check(t, !errors.Is(err, ErrNoUnits), "a done unit was not counted: %v", err)
 	assert.NilError(t, err)
+	assertNoTextRead(t, cci)
 }
