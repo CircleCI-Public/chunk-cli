@@ -283,7 +283,7 @@ func TestPlanBuildActivity(t *testing.T) {
 			name:  "cancelled",
 			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionCancelled, Error: "stopped", Total: 2},
 			found: true,
-			want:  plan.BuildActivity{Found: true, ID: "s1", Total: 2},
+			want:  plan.BuildActivity{Found: true, ID: "s1", Cancelled: true, Total: 2},
 		},
 		{
 			name: "not found",
@@ -314,6 +314,45 @@ func TestChatUpdate(t *testing.T) {
 		LogID: "log-1", Next: 5, Busy: true, Activity: "Reading plan",
 		Entries: []chat.Entry{{Message: "hi"}, {Activity: "Read plan"}, {Reply: "hello"}, {Problem: "claude exited"}},
 	}))
+}
+
+// daemonPlanBuild's Stop cancels the session in the daemon, and gives the
+// daemon's refusal as it gives it.
+func TestDaemonPlanBuildStop(t *testing.T) {
+	refused := &chunkd.SessionRefused{Status: 404, Message: "no such session"}
+	for _, tc := range []struct {
+		name    string
+		fails   error
+		wantErr string
+	}{
+		{
+			name: "stopped",
+		},
+		{
+			name:    "refused",
+			fails:   refused,
+			wantErr: "no such session",
+		},
+		{
+			name:    "daemon unavailable",
+			fails:   fmt.Errorf("cancel: %w", chunkd.ErrDaemonUnavailable),
+			wantErr: "the chunk daemon is not reachable",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := cancelSession
+			t.Cleanup(func() { cancelSession = saved })
+			var ids []string
+			cancelSession = func(id string) error { ids = append(ids, id); return tc.fails }
+			err := daemonPlanBuild{}.Stop(t.Context(), "sess-7")
+			if tc.wantErr == "" {
+				assert.Check(t, err)
+			} else {
+				assert.Check(t, cmp.Error(err, tc.wantErr))
+			}
+			assert.Check(t, cmp.DeepEqual(ids, []string{"sess-7"}))
+		})
+	}
 }
 
 // daemonResume checks the project, then calls the daemon's route for the

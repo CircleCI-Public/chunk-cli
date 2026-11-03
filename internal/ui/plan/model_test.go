@@ -80,7 +80,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 		}
 		wg.Wait()
 		return slices.Concat(outs...)
-	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg, buildResumedMsg:
+	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg, buildResumedMsg, buildStoppedMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -5474,6 +5474,141 @@ func TestRIsIgnoredWhileBusy(t *testing.T) {
 		run(second)
 		assert.Check(t, cmp.Len(r.Calls(), 1))
 		assert.Check(t, m.resumingBuild)
+	})
+}
+
+// offersStop is whether the footer's hints, given all the room they want,
+// offer S.
+func offersStop(m Model) bool {
+	return strings.Contains(ansi.Strip(theme.Help(theme.New(m.dark), 1000).View(m.keys())), "S stop build")
+}
+
+// stopScreen is a flow screen in build whose build session sess-7 has been
+// read running.
+func stopScreen(t *testing.T) (Model, *fakeStore, *fakeBuild) {
+	t.Helper()
+	m, store, _, b := resumeScreen(t, newFakeAgent(), "build", nil, nil)
+	b.answer(BuildActivity{Found: true, ID: "sess-7", Running: true, Total: 1, Lines: []BuildLine{{Text: "Bash go test"}}})
+	m = buildTick(t, m)
+	assert.Assert(t, m.buildRunning())
+	return m, store, b
+}
+
+// TestSStopsTheBuildSession checks that S, while the plan's build session
+// runs, asks for a y, then stops the session it was pressed on, and that the
+// Building section then says the session was stopped.
+func TestSStopsTheBuildSession(t *testing.T) {
+	m, store, b := stopScreen(t)
+	assert.Check(t, offersStop(m))
+
+	m = drive(t, m, press("S"))
+	assert.Check(t, m.confirming)
+	assert.Check(t, strings.Contains(ansi.Strip(m.status), "Stop this build session?"), "status %q", ansi.Strip(m.status))
+	assert.Check(t, cmp.Equal(m.pendingStop, "sess-7"))
+
+	m, cmd := m.Update(press("y"))
+	assert.Check(t, cmp.Equal(ansi.Strip(m.status), "Stopping the build session…"))
+	assert.Check(t, !offersStop(m))
+	assert.Check(t, m.stoppingBuild)
+	// The y stopped the build; it did not fall through to an approve.
+	assert.Check(t, !m.approving)
+	msgs := run(cmd)
+	assert.Check(t, cmp.DeepEqual(b.Stopped(), []string{"sess-7"}))
+	for _, msg := range msgs {
+		m = drive(t, m, msg)
+	}
+	assert.Check(t, !m.stoppingBuild)
+	assert.Check(t, cmp.Equal(m.status, ""))
+	assert.Check(t, !m.approving)
+	store.mu.Lock()
+	assert.Check(t, cmp.Len(store.DesignApproved, 0))
+	store.mu.Unlock()
+
+	b.answerFrom(BuildActivity{Found: true, ID: "sess-7", Cancelled: true, Total: 1})
+	m = buildTick(t, m)
+	content := ansi.Strip(m.Content())
+	assert.Check(t, strings.Contains(content, "Build session stopped"), "content %q", content)
+	assert.Check(t, !strings.Contains(content, "Build session ended"), "content %q", content)
+	assert.Check(t, !offersStop(m))
+
+	t.Run("any other key keeps it", func(t *testing.T) {
+		m, _, b := stopScreen(t)
+		m = pressAll(t, m, "S", "n")
+		assert.Check(t, !m.confirming)
+		assert.Check(t, cmp.Equal(m.pendingStop, ""))
+		assert.Check(t, cmp.Len(b.Stopped(), 0))
+		assert.Check(t, offersStop(m))
+	})
+
+	t.Run("a click on no keeps it", func(t *testing.T) {
+		m, _, b := stopScreen(t)
+		m = drive(t, m, press("S"))
+		text := ansi.Strip(m.status)
+		at := strings.Index(text, confirmNo)
+		assert.Assert(t, at >= 0, "the question has no no button: %q", text)
+		x := 2 + ansi.StringWidth(text[:at])
+		m = drive(t, m, click(x+1, m.height-footerRows+1))
+		assert.Check(t, !m.confirming)
+		assert.Check(t, cmp.Equal(m.pendingStop, ""))
+		assert.Check(t, cmp.Len(b.Stopped(), 0))
+		m = drive(t, m, press("y"))
+		assert.Check(t, cmp.Len(b.Stopped(), 0))
+		assert.Check(t, !m.stoppingBuild)
+		assert.Check(t, !m.approving)
+	})
+
+	t.Run("a failed stop says so", func(t *testing.T) {
+		m, _, b := stopScreen(t)
+		b.mu.Lock()
+		b.stopErr = errors.New("the chunk daemon is not reachable")
+		b.mu.Unlock()
+		m = pressAll(t, m, "S", "y")
+		assert.Check(t, strings.Contains(ansi.Strip(m.status), "Could not stop the build session: the chunk daemon is not reachable"),
+			"status %q", ansi.Strip(m.status))
+		assert.Check(t, !m.stoppingBuild)
+		assert.Check(t, offersStop(m))
+	})
+
+	t.Run("a newer session before y", func(t *testing.T) {
+		m, _, b := stopScreen(t)
+		m = drive(t, m, press("S"))
+		b.answerFrom(BuildActivity{Found: true, ID: "sess-8", Running: true})
+		m = buildTick(t, m)
+		assert.Check(t, cmp.Equal(m.latestBuildID(), "sess-8"))
+		m = drive(t, m, press("y"))
+		assert.Check(t, cmp.DeepEqual(b.Stopped(), []string{"sess-7"}))
+		assert.Check(t, cmp.Equal(m.latestBuildID(), "sess-8"))
+	})
+
+	t.Run("not offered", func(t *testing.T) {
+		t.Run("while commenting", func(t *testing.T) {
+			m, _, _ := stopScreen(t)
+			m = pressAll(t, m, "right", "c")
+			assert.Assert(t, m.commenting)
+			assert.Check(t, !offersStop(m))
+		})
+		t.Run("while confirming", func(t *testing.T) {
+			m, _, _ := stopScreen(t)
+			m = pressAll(t, m, "X")
+			assert.Assert(t, m.confirming)
+			assert.Check(t, !offersStop(m))
+		})
+		t.Run("when the build is not running", func(t *testing.T) {
+			m, _, _, b := resumeScreen(t, newFakeAgent(), "build", nil, nil)
+			b.answer(BuildActivity{Found: true, ID: "sess-7", Total: 1})
+			m = buildTick(t, m)
+			assert.Check(t, !offersStop(m))
+			m = drive(t, m, press("S"))
+			assert.Check(t, !m.confirming)
+			assert.Check(t, cmp.Len(b.Stopped(), 0))
+		})
+		t.Run("with no build", func(t *testing.T) {
+			m, _ := resumeModel(t, newFakeAgent(), "build", nil)
+			m = refreshed(t, m)
+			assert.Check(t, !offersStop(m))
+			m = drive(t, m, press("S"))
+			assert.Check(t, !m.confirming)
+		})
 	})
 }
 

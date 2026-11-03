@@ -432,6 +432,10 @@ type Model struct {
 	// none. resumingBuild is set from that R until the daemon answers.
 	resumer       Resumer
 	resumingBuild bool
+	// pendingStop is the build session S asked to stop, until the question
+	// is answered; stoppingBuild is set from that y until the daemon answers.
+	pendingStop   string
+	stoppingBuild bool
 
 	pending string
 	// lastClick is the plan block last clicked, to tell a double click.
@@ -624,7 +628,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m, follow = m.followBuild()
 		return m, tea.Batch(resume, follow)
 
-	case buildTickMsg, buildReadMsg:
+	case buildTickMsg, buildReadMsg, buildStoppedMsg:
 		return m.updateBuild(msg)
 
 	case buildResumedMsg:
@@ -961,7 +965,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
 			m.pendingDelete, m.pendingDesign, m.pendingStart = "", false, false
-			m.pendingDeletePlan = false
+			m.pendingDeletePlan, m.pendingStop = false, ""
 			return m, nil
 		}
 		return m.answerYes()
@@ -987,6 +991,10 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.askToApprove(), nil
 	case key.Matches(msg, k.Resume):
 		return m.resume()
+	case key.Matches(msg, k.StopBuild):
+		m.confirming, m.pendingStop = true, m.latestBuildID()
+		m.status = ui.TitleStyle.Render("Stop this build session? ") + confirmButtons
+		return m, nil
 	case key.Matches(msg, k.Abandon):
 		m.askingReason = true
 		m.status = ui.TitleStyle.Render("Abandon plan as: ") + "c canceled · w won't do · d duplicate · esc keep it"
@@ -1054,6 +1062,11 @@ func (m Model) deliver() (Model, tea.Cmd) {
 // answerYes does what the question in the status bar asked, now it has been
 // answered yes.
 func (m Model) answerYes() (Model, tea.Cmd) {
+	if id := m.pendingStop; id != "" {
+		m.pendingStop, m.stoppingBuild = "", true
+		m.status = "Stopping the build session…"
+		return m, stopBuildCmd(m.ctx, m.build, id)
+	}
 	if m.pendingDeletePlan {
 		m.pendingDeletePlan, m.deleting = false, true
 		m.status = "Deleting the plan…"

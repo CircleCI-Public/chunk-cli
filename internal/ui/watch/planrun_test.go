@@ -111,6 +111,8 @@ func (b *fakePlanBuilds) Activity(_ context.Context, planID string, _ int) (plan
 	return plan.BuildActivity{Found: true, ID: "build-1", Running: true}, nil
 }
 
+func (b *fakePlanBuilds) Stop(context.Context, string) error { return nil }
+
 func (b *fakePlanBuilds) planIDs() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()

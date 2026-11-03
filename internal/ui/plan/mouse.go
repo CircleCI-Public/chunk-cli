@@ -249,12 +249,12 @@ func (m Model) clickConfirm(mouse tea.Mouse) (Model, tea.Cmd) {
 	m.status = ""
 	i := strings.Index(text, confirmYes)
 	if mouse.Y != m.height-footerRows+1 || i < 0 {
-		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan = "", false, false
+		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan, m.pendingStop = "", false, false, ""
 		return m, nil
 	}
 	left := 2 + ansi.StringWidth(text[:i])
 	if mouse.X < left || mouse.X >= left+ansi.StringWidth(confirmYes) {
-		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan = "", false, false
+		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan, m.pendingStop = "", false, false, ""
 		return m, nil
 	}
 	return m.answerYes()

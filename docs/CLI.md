@@ -318,7 +318,11 @@ chunk
   Done. In `chunk watch`, `R`
   resumes a planner or starts a fresh build session in the chunk daemon, in
   the project `chunk watch` was opened in, and the flow list offers the same
-  `R` for the selected flow. The dashboard's header says what `R` does there
+  `R` for the selected flow.
+  While the plan's build session is running, `S` stops it, after a `y`:
+  the activity pane ends the session with `Build session stopped`, and
+  the daemon frees factory's claim if the session still holds it, so
+  `R` can start a fresh one at once. The dashboard's header says what `R` does there
   or why it can't, where it otherwise names the daemon; a daemon it can't
   reach is shown instead. On a screen opened by `chunk factory plan`, `R`
   resumes only a planner; resume a build from `chunk watch`. chunk never
