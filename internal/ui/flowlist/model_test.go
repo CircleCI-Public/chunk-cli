@@ -1261,10 +1261,9 @@ func TestGroupsAndRows(t *testing.T) {
 			{
 				ID: "human", Title: "Planned", State: "refine-proposal", UpdatedAt: now,
 				SessionID: "s1", Task: &circleci.FlowTask{ID: "t1", Category: "build-unit"},
-				ApplicableEvents: []circleci.FlowEvent{circleci.AddressComments, circleci.ResolveConflicts},
+				ApplicableEvents: []circleci.FlowEvent{circleci.AddressComments},
 				Next: []circleci.Transition{
 					{Actor: "human", Event: circleci.AddressComments},
-					{Actor: "human", Event: circleci.ResolveConflicts},
 				},
 			},
 			{ID: "zeta", Title: "Zeta", State: "Zeta - Human", Next: human},
@@ -1352,10 +1351,10 @@ func TestGroupsAndRows(t *testing.T) {
 		assert.Check(t, strings.HasSuffix(longState, "…"), "a long state is not truncated:\n%s", all)
 		notStarted := index("Not started  1")
 		assert.Check(t, cmp.DeepEqual(rows[notStarted+1:notStarted+3], []string{"New plan", ""}), "rows:\n%s", all)
-		// The row details: a conflict marker first, then task category,
-		// claimed and updated-ago, each only when there is one.
+		// The row details: task category, claimed and updated-ago, each only
+		// when there is one.
 		// The details start the row; only the sub-heading above says the phase.
-		assert.Check(t, strings.HasPrefix(rows[planned+1], "⚠ · build-unit"), "rows:\n%s", all)
+		assert.Check(t, strings.HasPrefix(rows[planned+1], "build-unit"), "rows:\n%s", all)
 		assert.Check(t, cmp.Contains(rows[planned+1], "build-unit"))
 		assert.Check(t, cmp.Contains(rows[planned+1], "claimed"))
 		assert.Check(t, cmp.Contains(rows[planned+1], "just now"))
@@ -1385,7 +1384,7 @@ func TestGroupsAndRows(t *testing.T) {
 					assert.Check(t, !strings.Contains(text, "runs"), "the help names runs:\n%s", text)
 				}
 				if size.Width >= 80 && size.Height > 2 {
-					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose", "⚠"} {
+					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose"} {
 						assert.Check(t, cmp.Contains(text, want))
 					}
 					for _, not := range []string{"RESOLVED SECRET", "# Markdown", "**Plan prose**"} {

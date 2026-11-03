@@ -65,18 +65,23 @@ func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 	if f.flow != nil {
 		return *f.flow, nil
 	}
+	// Factory requires the design's approval before the plan has units, and
+	// the plan's once it has them.
+	required := "approve-for-units"
+	if len(f.units) > 0 {
+		required = "approve-for-building"
+	}
 	events := []string{"address-comments", "approve-for-units", "approve-for-building"}
 	var next []plan.Step
 	for _, e := range events {
-		next = append(next, plan.Step{Actor: "human", Event: e})
+		next = append(next, plan.Step{Actor: "human", Event: e, Required: e == required})
 	}
-	return plan.Flow{State: "refine-proposal", Events: events, Next: next}, nil
+	return plan.Flow{State: "refine-proposal", WaitingOn: "human", Events: events, Next: next}, nil
 }
 func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return plan.Family{}, nil }
 func (f *fakePlanStore) Units(context.Context) ([]plan.Unit, error)  { return f.units, nil }
 func (f *fakePlanStore) AddressComments(context.Context) error       { return nil }
 func (f *fakePlanStore) AnswerOpenQuestions(context.Context) error   { return nil }
-func (f *fakePlanStore) ResolveConflicts(context.Context) error      { return nil }
 func (f *fakePlanStore) StartWork(context.Context) error             { return nil }
 func (f *fakePlanStore) Abandon(context.Context, string) error       { return nil }
 func (f *fakePlanStore) Delete(context.Context) error                { return nil }

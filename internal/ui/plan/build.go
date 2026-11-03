@@ -134,8 +134,8 @@ func (m Model) expectsBuild() bool {
 	if m.build == nil || m.store.ID() == "" || m.flow.Ended {
 		return false
 	}
-	phase := planstate.Parse(m.state)
-	return m.built || strings.EqualFold(phase, "Building") || strings.EqualFold(phase, "Integrating")
+	state := clean(m.state)
+	return m.built || state == planstate.Build || state == planstate.Integrate
 }
 
 // followBuild starts reading the build when one is expected and no read is

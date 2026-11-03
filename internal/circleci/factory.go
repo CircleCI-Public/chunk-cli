@@ -146,11 +146,6 @@ const ApproveForUnits FlowEvent = "approve-for-units"
 // where factory hands the session claiming the plan its build tasks.
 const ApproveForBuilding FlowEvent = "approve-for-building"
 
-// ResolveConflicts moves a flow from Integrating - Human to Integrating -
-// Agent while its PR conflicts with its base, for factory to rebase it.
-// Factory offers it only then.
-const ResolveConflicts FlowEvent = "resolve-conflicts"
-
 // Prioritize moves a flow from Unprioritized to Agent Ready, where factory
 // starts work on the plan. It applies at once when no task is out.
 const Prioritize FlowEvent = "prioritize"

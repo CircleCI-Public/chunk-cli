@@ -127,11 +127,7 @@ type Store interface {
 	// in its place. Factory moves it at its next poll, not before
 	// AnswerOpenQuestions returns.
 	AnswerOpenQuestions(ctx context.Context) error
-	// ResolveConflicts has factory rebase the plan's conflicting PR, moving
-	// it from Integrating - Human to Integrating - Agent. Factory moves it at
-	// its next poll, not before ResolveConflicts returns.
-	ResolveConflicts(ctx context.Context) error
-	// StartWork has factory start work on the Unprioritized plan. Factory
+	// StartWork has factory start work on the init plan. Factory
 	// moves it at its next poll, not before StartWork returns.
 	StartWork(ctx context.Context) error
 	// Abandon ends the plan without its PR merging, for reason: "canceled",

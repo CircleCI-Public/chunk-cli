@@ -268,19 +268,6 @@ func (s *Store) AnswerOpenQuestions(ctx context.Context) error {
 	return nil
 }
 
-// ResolveConflicts sends the plan's flow factory's resolve-conflicts event,
-// which hands a plan whose PR conflicts back to the agent to rebase.
-func (s *Store) ResolveConflicts(ctx context.Context) error {
-	id := s.ID()
-	if id == "" {
-		return errNotCreated
-	}
-	if err := s.api.CreateFlowEvent(ctx, id, circleci.ResolveConflicts); err != nil {
-		return fmt.Errorf("send the resolve-conflicts event: %w", err)
-	}
-	return nil
-}
-
 // StartWork sends the plan's flow factory's prioritize event, which moves an
 // Unprioritized plan on for factory to start work on it.
 func (s *Store) StartWork(ctx context.Context) error {

@@ -493,8 +493,6 @@ func TestStoreWritesFailBeforeCreate(t *testing.T) {
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 	err = store.AddressComments(ctx)
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
-	err = store.ResolveConflicts(ctx)
-	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 	err = store.EditComment(ctx, "comment-1", "body")
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 	err = store.ResolveComment(ctx, "comment-1")

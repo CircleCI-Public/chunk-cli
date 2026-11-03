@@ -2,7 +2,6 @@ package flowlist
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -125,9 +124,6 @@ func (m Model) listLines(width, height int) []string {
 		}
 		if p := m.parentTitle(f.ID); p != "" {
 			detail = append(detail, st.VDim.Render("↳ "+p))
-		}
-		if slices.Contains(f.ApplicableEvents, circleci.ResolveConflicts) {
-			detail = append(detail, st.Warning.Render("⚠"))
 		}
 		if s := progressText(f); s != "" {
 			detail = append(detail, st.VDim.Render(s))

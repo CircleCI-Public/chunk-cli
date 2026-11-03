@@ -20,6 +20,10 @@ type fakeStore struct {
 	// address-comments and both approvals.
 	EventsV   []string
 	eventsSet bool
+	// RequiredV, once setRequired sets it, is the events of EventsV that
+	// next marks required; until then, as Flow says.
+	RequiredV   []string
+	requiredSet bool
 	// TaskV is the category of the task the plan's flow has out, as setTask
 	// sets it; "" for none.
 	TaskV string
@@ -47,9 +51,6 @@ type fakeStore struct {
 	// Answered records the state the plan was in at each AnswerOpenQuestions
 	// call, in order. Like AddressComments, it leaves StateV as it is.
 	Answered []string
-	// ConflictsSent records the state the plan was in at each
-	// ResolveConflicts call, in order.
-	ConflictsSent []string
 	// Started records the state the plan was in at each StartWork call, in
 	// order.
 	Started []string
@@ -136,9 +137,20 @@ func (f *fakeStore) Flow(context.Context) (Flow, error) {
 		out.Events = append(slices.Clone(out.Events), "address-comments")
 	}
 	if out.Next == nil {
-		// As conductor lists the events that apply in next.
+		// As conductor lists the events that apply in next, each marked
+		// required as setRequired says, or as factory would: prioritize and
+		// answer-open-questions always, and one approval, by the plan's
+		// units: the design's with none, the plan's with any.
+		required := f.RequiredV
+		if !f.requiredSet {
+			approval := "approve-for-units"
+			if len(f.UnitsV) > 0 {
+				approval = "approve-for-building"
+			}
+			required = []string{"prioritize", answerOpenQuestions, approval}
+		}
 		for _, e := range out.Events {
-			out.Next = append(out.Next, Step{Actor: "human", Event: e})
+			out.Next = append(out.Next, Step{Actor: "human", Event: e, Required: slices.Contains(required, e)})
 		}
 	}
 	if (f.TakeOnComment && len(f.Added) > 0) || f.taken {
@@ -164,6 +176,14 @@ func (f *fakeStore) setTask(category string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.TaskV = category
+}
+
+// setRequired has the plan's flow mark events, of those it applies, as the
+// ones factory requires one of to move on, and no others.
+func (f *fakeStore) setRequired(events ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.RequiredV, f.requiredSet = events, true
 }
 
 // setEvents has the plan's flow apply events now, whatever its state.
@@ -211,16 +231,6 @@ func (f *fakeStore) ApproveDesign(context.Context) error {
 		return f.AddressErr
 	}
 	f.DesignApproved = append(f.DesignApproved, f.StateV)
-	return nil
-}
-
-func (f *fakeStore) ResolveConflicts(context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.AddressErr != nil {
-		return f.AddressErr
-	}
-	f.ConflictsSent = append(f.ConflictsSent, f.StateV)
 	return nil
 }
 

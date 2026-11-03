@@ -75,7 +75,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 			out = append(out, run(c)...)
 		}
 		return out
-	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, conflictsSentMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg, buildResumedMsg:
+	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg, buildResumedMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -184,6 +184,9 @@ func TestApprovingApprovesThePlanInFactory(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
+	store.StateV = "refine-units"
+	store.setEvents("address-comments", "approve-for-building", "abandon")
+	store.setRequired("approve-for-building")
 	agent := turnReturning("ok")
 	sent := false
 	approve := func(func(string)) (string, error) {
@@ -208,7 +211,10 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan"
 	store.StateV = "refine-units"
-	store.FlowV = Flow{Claimed: true, Next: []Step{{Actor: "session", Task: "review-plan", Dispatched: true}, {Actor: "session", Event: "request-revision"}}}
+	store.FlowV = Flow{Claimed: true, WaitingOn: "session", Next: []Step{
+		{Actor: "session", Task: "review-plan", Dispatched: true},
+		{Actor: "human", Event: "approve-for-building", Required: true},
+	}}
 	sent := false
 	approve := func(func(string)) (string, error) {
 		sent = true
@@ -233,79 +239,54 @@ func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	}
 }
 
-// ReadyToApprove lets a plan be approved only in Planning while factory
-// waits on the developer alone, whichever name the state has.
+// ReadyToApprove lets a plan be approved only while factory waits on the
+// developer and requires an approval; one it lists but does not require is
+// not offered.
 func TestReadyToApprove(t *testing.T) {
-	human := func(events ...string) []Step {
-		var next []Step
-		for _, e := range events {
-			next = append(next, Step{Actor: "human", Event: e})
-		}
-		return next
+	human := func(event string, required bool) Step {
+		return Step{Actor: "human", Event: event, Required: required}
 	}
-	review := Step{Actor: "session", Task: "review-plan", Dispatched: true}
-	rr := Step{Actor: "session", Event: "request-revision"}
-	move := Step{Actor: "daemon", Task: "move"}
 	for _, tc := range []struct {
 		name string
 		flow Flow
 		want bool
 	}{
 		{
-			name: "old name waits on you",
-			flow: Flow{State: "refine-proposal", Next: human("address-comments", "approve-for-building", "abandon")},
+			name: "human, building required",
+			flow: Flow{State: "refine-units", WaitingOn: "human", Next: []Step{
+				human("address-comments", false), human("approve-for-building", true), human("abandon", false),
+			}},
 			want: true,
 		},
 		{
-			name: "new name waits on you",
-			flow: Flow{State: "refine-units", Next: human("address-comments", "approve-for-building", "abandon")},
-			want: true,
+			name: "human, answer-open-questions required",
+			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
+				human("answer-open-questions", true), human("approve-for-units", false), human("abandon", false),
+			}},
 		},
 		{
-			name: "open questions",
-			flow: Flow{State: "refine-proposal", Next: human("answer-open-questions", "abandon")},
-			want: true,
+			name: "session, building required",
+			flow: Flow{State: "refine-units", WaitingOn: "session", Next: []Step{
+				{Actor: "session", Task: "review-plan", Dispatched: true}, human("approve-for-building", true),
+			}},
 		},
 		{
-			name: "review running",
-			flow: Flow{State: "refine-units", Next: append([]Step{review}, human("approve-for-building", "abandon")...)},
+			name: "human, units not required, nothing required",
+			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
+				human("address-comments", false), human("approve-for-units", false), human("abandon", false),
+			}},
 		},
 		{
-			name: "old review running",
-			flow: Flow{State: "refine-units", Next: append([]Step{review}, human("approve-for-units", "approve-for-building")...)},
+			name: "human, building not required, nothing required",
+			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{human("approve-for-building", false)}},
 		},
 		{
-			name: "request-revision while it waits on you",
-			flow: Flow{State: "refine-proposal", Next: append(human("address-comments", "approve-for-building"), rr, Step{Actor: "human", Event: "abandon"})},
-			want: true,
-		},
-		{
-			name: "review running beside request-revision",
-			flow: Flow{State: "refine-units", Next: append([]Step{review, rr}, human("approve-for-building")...)},
-		},
-		{
-			name: "approved, factory moving it",
-			flow: Flow{State: "refine-proposal", Next: []Step{move}},
-		},
-		{
-			name: "no next",
-			flow: Flow{State: "refine-proposal"},
-		},
-		{
-			name: "only abandon",
-			flow: Flow{State: "refine-units", Next: human("abandon")},
-		},
-		{
-			name: "building waits on you",
-			flow: Flow{State: "build", Next: human("address-comments")},
+			name: "human, no approval",
+			flow: Flow{State: "build", WaitingOn: "human", Next: []Step{human("address-comments", false)}},
 		},
 		{
 			name: "ended",
 			flow: Flow{State: "ended", Ended: true},
-		},
-		{
-			name: "not started",
-			flow: Flow{State: "init", Next: human("prioritize", "approve-for-units")},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -322,6 +303,7 @@ func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
 		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 		store.StateV = "refine-units"
 		store.setEvents("address-comments", "approve-for-building", "abandon")
+		store.setRequired("approve-for-building")
 		sent := false
 		approve := func(func(string)) (string, error) {
 			sent = true
@@ -339,9 +321,9 @@ func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
 		store := newFakeStore()
 		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 		store.StateV = "refine-proposal"
-		store.FlowV = Flow{Next: []Step{
+		store.FlowV = Flow{WaitingOn: "human", Next: []Step{
 			{Actor: "human", Event: "address-comments"},
-			{Actor: "human", Event: "approve-for-building"},
+			{Actor: "human", Event: "approve-for-building", Required: true},
 			{Actor: "session", Event: "request-revision"},
 			{Actor: "human", Event: "abandon"},
 		}}
@@ -363,9 +345,9 @@ func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
 		store := newFakeStore()
 		store.TextV = "# Plan"
 		store.StateV = "refine-units"
-		store.FlowV = Flow{Claimed: true, Next: []Step{
+		store.FlowV = Flow{Claimed: true, WaitingOn: "session", Next: []Step{
 			{Actor: "session", Task: "review-plan", Dispatched: true},
-			{Actor: "human", Event: "approve-for-building"},
+			{Actor: "human", Event: "approve-for-building", Required: true},
 		}}
 		m := New(context.Background(), turnReturning("ok"), nil, store, "do it")
 		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -385,6 +367,7 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 			store := newFakeStore()
 			store.TextV = "# Plan"
 			store.StateV = state
+			store.setEvents("abandon")
 			sent := false
 			approve := func(func(string)) (string, error) {
 				sent = true
@@ -402,7 +385,7 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 			assert.Check(t, strings.Contains(view, "the plan is "+shown), "the action bar does not name the state:\n%s", view)
 			lines := strings.Split(view, "\n")
 			row1 := shown
-			if phase := planstate.Parse(shown); slices.Contains(steps, phase) {
+			if slices.Contains(steps, planstate.Step(shown)) {
 				row1 = "Planning › Building › Integrating › Done"
 			}
 			assert.Check(t, cmp.Contains(lines[headerRows], row1))
@@ -410,7 +393,7 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 
 			m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 			assert.Check(t, !m.confirming, "ctrl+s asked to send a plan in %q", state)
-			assert.Check(t, strings.Contains(ansi.Strip(m.status), "while it is "+shown), m.status)
+			assert.Check(t, strings.Contains(ansi.Strip(m.status), "cannot be approved now: it is "+shown), m.status)
 			drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
 			assert.Check(t, !sent, "a plan in %q was sent", state)
 		})
@@ -418,12 +401,14 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 }
 
 // A plan waits ReadyToApprove after early-plan too, for its design to be
-// reviewed: with no units yet there is nothing to build, so ctrl+s approves
-// the design instead, for factory to write its units. The plan's build is not
-// started.
-func TestCtrlSApprovesTheDesignOfAPlanWithNoUnits(t *testing.T) {
+// reviewed: when factory requires approve-for-units, ctrl+s approves the
+// design, for factory to write its units, even with approve-for-building
+// listed too. The plan's build is not started.
+func TestCtrlSApprovesTheDesignWhenFactoryRequiresIt(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
+	store.setEvents("address-comments", "approve-for-units", "approve-for-building", "abandon")
+	store.setRequired("approve-for-units")
 	sent := false
 	approve := func(func(string)) (string, error) {
 		sent = true
@@ -474,6 +459,7 @@ func TestCtrlSApprovesThePlanWhenFactoryOffersOnlyBuilding(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n\n1. FNDSF-21 api: add it\n2. FNDSF-22 ui: show it\n"
 	store.setEvents("address-comments", "approve-for-building", "abandon")
+	store.setRequired("approve-for-building")
 	sent := false
 	approve := func(func(string)) (string, error) {
 		sent = true
@@ -501,7 +487,9 @@ func TestCtrlSApprovesThePlanWhenFactoryOffersOnlyBuilding(t *testing.T) {
 func TestCtrlSApprovesTheDesignWhenFactoryOffersOnlyUnits(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 	store.setEvents("address-comments", "approve-for-units", "abandon")
+	store.setRequired("approve-for-units")
 	sent := false
 	approve := func(func(string)) (string, error) {
 		sent = true
@@ -642,12 +630,14 @@ func TestCtrlSWaitsForCommentsBeforeApprovingTheDesign(t *testing.T) {
 	}
 }
 
-// A plan whose flow offers neither approval waits for its open questions to
-// be answered: ctrl+s approves nothing and says so.
+// A plan whose flow requires answer-open-questions waits for its open
+// questions to be answered, though it lists the design's approval: ctrl+s
+// approves nothing and says so.
 func TestCtrlSApprovesNothingWhileQuestionsAreOpen(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 3. Open Questions\n\n* Which store?\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
-	store.setEvents("address-comments", "abandon")
+	store.setEvents("address-comments", "answer-open-questions", "approve-for-units", "abandon")
+	store.setRequired("answer-open-questions")
 	sent := false
 	approve := func(func(string)) (string, error) {
 		sent = true
@@ -686,16 +676,6 @@ func TestAFailedDesignApprovalSaysSo(t *testing.T) {
 	}
 	assert.Check(t, m.moving == nil, "a failed event started the wait")
 	assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "waiting for factory"))
-}
-
-func TestAFailedConflictResolutionSaysSo(t *testing.T) {
-	m, store := conflictingModel(t)
-	store.AddressErr = errors.New("factory is down")
-	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-	assert.Check(t, !m.resolvingConflicts, "still sending after the send failed")
-	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Could not send resolve-conflicts: factory is down"))
-	assert.Check(t, m.moving == nil, "a failed event started the wait")
 }
 
 // TestWaitingBarYieldsToStatuses checks that a prompt or an error during the
@@ -906,94 +886,6 @@ func planModel(t *testing.T) (Model, *fakeStore) {
 	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	return m, store
-}
-
-// conflictingModel is the screen on a plan in integrate whose PR
-// factory found conflicting, so its flow takes resolve-conflicts.
-func conflictingModel(t *testing.T) (Model, *fakeStore) {
-	t.Helper()
-	store := newFakeStore()
-	store.Created = true
-	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
-	store.StateV = "integrate"
-	store.setEvents("address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
-	m := New(context.Background(), turnReturning("ok"), nil, store, "")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m = refreshed(t, m)
-	return m, store
-}
-
-// A plan whose PR factory found conflicting says so, and ctrl+s, after a y,
-// sends resolve-conflicts and waits for factory to move the plan.
-func TestCtrlSResolvesConflicts(t *testing.T) {
-	m, store := conflictingModel(t)
-	view := ansi.Strip(m.Content())
-	assert.Check(t, cmp.Contains(view, "PR conflicts"))
-	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "ctrl+s Resolve conflicts"))
-	assert.Check(t, !strings.Contains(view, "Approve plan"), view)
-
-	// A no leaves nothing pending for a later y to send.
-	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	assert.Assert(t, m.confirming)
-	m = drive(t, m, press("n"))
-	assert.Check(t, !m.confirming)
-	assert.Check(t, !m.pendingConflicts)
-	assert.Check(t, m.moving == nil)
-	store.mu.Lock()
-	assert.Check(t, cmp.Len(store.ConflictsSent, 0))
-	store.mu.Unlock()
-
-	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	assert.Assert(t, m.confirming)
-	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "rebase its PR onto its base?"))
-	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-	store.mu.Lock()
-	sent := slices.Clone(store.ConflictsSent)
-	store.mu.Unlock()
-	assert.Check(t, cmp.DeepEqual(sent, []string{"integrate"}))
-	assert.Assert(t, m.moving != nil, "no wait for factory after resolve-conflicts")
-	assert.Check(t, cmp.Equal(m.moving.kind, movingConflicts))
-	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "Conflicts sent · waiting for factory to hand the rebase to the agent…"))
-
-	store.mu.Lock()
-	store.StateV = "ended"
-	store.EventsV = []string{}
-	store.mu.Unlock()
-	m = drive(t, m, pollMsg{})
-	assert.Check(t, m.moving == nil, "the wait outlived the move to ended")
-	assert.Check(t, !strings.Contains(ansi.Strip(m.Content()), "PR conflicts"))
-}
-
-// Comments queued on a conflicting plan go first, since sending them hands it
-// to the agent too; comments already saved leave ctrl+s resolving conflicts.
-func TestConflictsWithComments(t *testing.T) {
-	t.Run("queued", func(t *testing.T) {
-		m, store := conflictingModel(t)
-		// An existing plan opens on the right pane, and an Integrating plan on
-		// its Flow tab; comments are the Plan's.
-		m = drive(t, m, press("right"))
-		m = drive(t, m, press("c"))
-		m = typeText(t, m, "too vague")
-		m = drive(t, m, press("enter"))
-		bar := ansi.Strip(m.actionBar())
-		assert.Check(t, cmp.Contains(bar, "Save 1 comment"))
-		assert.Check(t, !strings.Contains(bar, "Resolve conflicts"), bar)
-
-		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-		assert.Check(t, !m.confirming)
-		assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Send your comments first"))
-		store.mu.Lock()
-		defer store.mu.Unlock()
-		assert.Check(t, cmp.Len(store.ConflictsSent, 0))
-	})
-	t.Run("open", func(t *testing.T) {
-		m, store := conflictingModel(t)
-		store.mu.Lock()
-		store.CommentsV = []Comment{{ID: "c1", Quote: "Add the flag", Body: "why?"}}
-		store.mu.Unlock()
-		m = refreshed(t, m)
-		assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "ctrl+s Resolve conflicts"))
-	})
 }
 
 func TestSSavesCommentsFromThePlan(t *testing.T) {
@@ -1461,27 +1353,6 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 			assert.Check(t, cmp.Contains(bar, "Waiting for factory…"), "width %d", width)
 		} else {
 			assert.Check(t, cmp.Contains(bar, "Comments sent · waiting for factory to hand them to chunk…"), "width %d", width)
-		}
-
-		// A conflicting plan, its prompt, and the wait once it is sent.
-		store = newFakeStore()
-		store.Created = true
-		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
-		store.StateV = "integrate"
-		store.setEvents("address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
-		m = New(context.Background(), turnReturning("ok"), nil, store, "")
-		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
-		m = refreshed(t, m)
-		assertFits(t, m, width, 24)
-		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-		assertFits(t, m, width, 24)
-		m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-		assertFits(t, m, width, 24)
-		bar = ansi.Strip(m.actionBar())
-		if width < narrowBelow {
-			assert.Check(t, cmp.Contains(bar, "Waiting for factory…"), "width %d", width)
-		} else {
-			assert.Check(t, cmp.Contains(bar, "Conflicts sent"), "width %d", width)
 		}
 	}
 }
@@ -2442,60 +2313,62 @@ func chatText(m Model) string {
 }
 
 func TestResumeOwed(t *testing.T) {
-	session := []Step{{Actor: "session", Task: "write-units", Dispatched: true}}
-	rr := Step{Actor: "session", Event: "request-revision"}
 	for _, tc := range []struct {
 		name string
 		flow Flow
 		want bool
 	}{
 		{
-			name: "waiting on a planner",
-			flow: Flow{State: "refine-units", Next: session},
+			name: "refine-units waits on a session",
+			flow: Flow{State: "refine-units", WaitingOn: "session"},
 			want: true,
 		},
 		{
-			name: "ended",
-			flow: Flow{State: "refine-units", Next: session, Ended: true},
+			name: "refine-proposal waits on a session",
+			flow: Flow{State: "refine-proposal", WaitingOn: "session"},
+			want: true,
 		},
 		{
-			name: "claimed",
-			flow: Flow{State: "refine-units", Next: session, Claimed: true},
-		},
-		{
-			name: "building",
-			flow: Flow{State: "build", Next: session},
-		},
-		{
-			name: "waiting on the developer",
-			flow: Flow{State: "refine-proposal", Next: []Step{{Actor: "human", Event: "address-comments"}}},
-		},
-		{
-			name: "new plan",
-			flow: Flow{State: "init", Next: []Step{{Actor: "session", Task: "record-context"}}},
+			name: "ready waits on a session",
+			flow: Flow{State: "ready", WaitingOn: "session"},
 			want: true,
 		},
 		{
 			name: "new plan in init",
-			flow: Flow{State: "init", Next: []Step{{Actor: "session", Task: "record-context"}}},
+			flow: Flow{State: "init", WaitingOn: "session"},
 			want: true,
+		},
+		{
+			name: "stand-by",
+			flow: Flow{State: "stand-by", WaitingOn: "session"},
+		},
+		{
+			name: "ended",
+			flow: Flow{State: "refine-units", WaitingOn: "session", Ended: true},
+		},
+		{
+			name: "claimed",
+			flow: Flow{State: "refine-units", WaitingOn: "session", Claimed: true},
+		},
+		{
+			name: "building",
+			flow: Flow{State: "build", WaitingOn: "session"},
+		},
+		{
+			name: "waiting on the developer",
+			flow: Flow{State: "refine-proposal", WaitingOn: "human"},
 		},
 		{
 			name: "deferred",
-			flow: Flow{State: "init", Next: []Step{{Actor: "human", Event: "prioritize"}}},
+			flow: Flow{State: "init", WaitingOn: "human"},
 		},
 		{
-			name: "waiting on the developer, request-revision listed",
-			flow: Flow{State: "refine-proposal", Next: []Step{{Actor: "human", Event: "address-comments"}, rr}},
+			name: "waiting on the daemon",
+			flow: Flow{State: "refine-units", WaitingOn: "daemon"},
 		},
 		{
-			name: "deferred, request-revision listed",
-			flow: Flow{State: "init", Next: []Step{{Actor: "human", Event: "prioritize"}, rr}},
-		},
-		{
-			name: "waiting on a planner, request-revision listed",
-			flow: Flow{State: "refine-units", Next: append(slices.Clone(session), rr)},
-			want: true,
+			name: "an old name",
+			flow: Flow{State: "Planning - Agent", WaitingOn: "session"},
 		},
 		{
 			name: "no flow",
@@ -2765,6 +2638,9 @@ func TestBubbleFitsAShortMessageAndWrapsALongOne(t *testing.T) {
 
 func TestStripShowsFlowStatus(t *testing.T) {
 	store := newFakeStore()
+	store.setWaitingOn("human")
+	store.setEvents("address-comments", "approve-for-units", "approve-for-building", "abandon")
+	store.setRequired("approve-for-units")
 	m := New(context.Background(), turnReturning("Wrote a plan."), nil, store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "No plan yet") {
@@ -2784,6 +2660,9 @@ func TestStripShowsFlowStatus(t *testing.T) {
 
 	store.TextV += "\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
+	store.StateV = "refine-units"
+	store.setEvents("address-comments", "approve-for-building", "abandon")
+	store.setRequired("approve-for-building")
 	m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Wrote the units."}}))
 	view = ansi.Strip(m.Content())
 	if !strings.Contains(view, "Next: you approve the plan · ctrl+s") {
@@ -4247,11 +4126,24 @@ func TestRightPaneOpensOnTheTabForItsPhase(t *testing.T) {
 			state: "refine-proposal",
 		},
 		{
+			name:  "refine-units",
+			state: "refine-units",
+		},
+		{
+			name:  "ready",
+			state: "ready",
+		},
+		{
 			name:  "unprioritized",
 			state: "init",
 		},
 		{
 			name: "no state",
+		},
+		{
+			name:  "stand-by",
+			state: "stand-by",
+			want:  tabFlow,
 		},
 		{
 			name:  "building",
@@ -4646,8 +4538,8 @@ func TestUnitsErrorFailsTheRefresh(t *testing.T) {
 }
 
 // TestCtrlSStartsAnUnprioritizedPlan checks that ctrl+s, after a y, sends
-// prioritize for an Unprioritized plan whose flow offers it, and refuses one
-// whose flow does not.
+// prioritize for an init plan whose flow requires it of the developer, and
+// refuses one whose flow does not offer it.
 func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 	unprioritized := func(t *testing.T, events ...string) (Model, *fakeStore) {
 		t.Helper()
@@ -4655,7 +4547,9 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 		store.Created = true
 		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 		store.StateV = "init"
+		store.setWaitingOn("human")
 		store.setEvents(events...)
+		store.setRequired("prioritize")
 		m := New(context.Background(), turnReturning("ok"), nil, store, "")
 		m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 		return refreshed(t, m), store
@@ -4692,7 +4586,7 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 		assert.Check(t, !m.confirming)
 		assert.Check(t, cmp.Len(started(store), 0))
-		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "cannot be approved while it is"))
+		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "cannot be approved now: it is init"))
 	})
 
 	t.Run("a failed send says so", func(t *testing.T) {
