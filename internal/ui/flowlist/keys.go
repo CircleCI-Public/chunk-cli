@@ -26,11 +26,11 @@ func (m Model) keys() keyMap {
 		Delete: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
 	}
 	k.Chat.SetEnabled(m.chatKey)
-	k.Delete.SetEnabled(m.deletable() && m.ask == "")
+	k.Delete.SetEnabled(m.deletable() && m.ask == "" && m.takeOver == "")
 	listed := len(m.flows) > 0
 	k.Select.SetEnabled(listed)
 	k.Open.SetEnabled(listed)
-	k.Resume.SetEnabled(m.resume().Kind != planstate.ResumeNone)
+	k.Resume.SetEnabled(m.resume().Kind != planstate.ResumeNone && m.takeOver == "")
 	return k
 }
 

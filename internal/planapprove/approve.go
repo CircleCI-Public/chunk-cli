@@ -95,6 +95,12 @@ func release(ctx context.Context, api API, locate Locate, planID, holder, sessio
 		}
 		return nil
 	}
+	return ReleaseForeign(ctx, api, locate, planID, holder, worktree)
+}
+
+// ReleaseForeign releases holder's claim on planID unless factory's daemon
+// does not know holder or holder works in worktree (ErrBeingBuilt).
+func ReleaseForeign(ctx context.Context, api API, locate Locate, planID, holder, worktree string) error {
 	dir, err := locate(ctx, holder)
 	if errors.Is(err, factory.ErrUnknownSession) {
 		return fmt.Errorf("%w: plan %s is held by session %s, which factory's daemon does not know; release it with factory daemon release %[2]s", ErrBeingBuilt, planID, holder)

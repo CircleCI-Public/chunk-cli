@@ -116,13 +116,32 @@ func (s *plannerSet) stopAll() {
 
 // requestPlanner starts plan planID's planner on the plan's request.
 func (d *daemon) requestPlanner(planID string, req chunkd.PlannerRequest) (chunkd.SessionLog, error) {
-	return d.plannerSend(planID, req.ProjectRoot, req.Model, req.Text)
+	return d.plannerSend(planID, req.ProjectRoot, req.Model, req.Text, nil)
 }
 
 // resumePlanner has plan planID's planner claim the plan again when it holds
 // no claim.
 func (d *daemon) resumePlanner(planID string, req chunkd.PlannerResume) (chunkd.SessionLog, error) {
-	return d.plannerSend(planID, req.ProjectRoot, req.Model, "")
+	if req.ReleaseHolder == "" {
+		return d.plannerSend(planID, req.ProjectRoot, req.Model, "", nil)
+	}
+	released := false
+	before := func(p *planner) error {
+		var err error
+		released, err = d.takeOver(p, req.ReleaseHolder)
+		return err
+	}
+	log, err := d.plannerSend(planID, req.ProjectRoot, req.Model, "", before)
+	if err != nil && released {
+		// The claim is gone: a second resume goes as for an unclaimed plan.
+		status := http.StatusInternalServerError
+		var ae *apiError
+		if errors.As(err, &ae) {
+			status = ae.status
+		}
+		return chunkd.SessionLog{}, apiErr(status, "the claim was released, but the planner could not start: %s", apiMessage(err))
+	}
+	return log, err
 }
 
 // plannerLog is plan planID's planner's log from cursor after.
@@ -140,7 +159,11 @@ func (d *daemon) plannerLog(planID string, after int) chunkd.SessionLog {
 // it is the first since the plan was created, or the session has since lost
 // its claim: factory frees the claims of a session that ends, and a session
 // can release its plan, after which the factory daemon hands it no tasks.
-func (d *daemon) plannerSend(planID, root, model, text string) (chunkd.SessionLog, error) {
+//
+// before, when not nil, runs once with the planner's send lock held, after
+// the approval and request checks and before the session is looked at; its
+// error refuses the send.
+func (d *daemon) plannerSend(planID, root, model, text string, before func(p *planner) error) (chunkd.SessionLog, error) {
 	api := d.planAPI()
 	if api == nil {
 		return chunkd.SessionLog{}, apiErr(http.StatusServiceUnavailable, "not authenticated to CircleCI — plan builds unavailable (run: chunk auth login)")
@@ -181,6 +204,11 @@ func (d *daemon) plannerSend(planID, root, model, text string) (chunkd.SessionLo
 	defer p.sendMu.Unlock()
 	if text != "" && requested {
 		return chunkd.SessionLog{}, apiErr(http.StatusConflict, "%s", errRequested.Error())
+	}
+	if before != nil {
+		if err := before(p); err != nil {
+			return chunkd.SessionLog{}, err
+		}
 	}
 	run := p.run
 

@@ -434,9 +434,13 @@ POST /factory/plans/{plan}/planner/request {project_root, text, model?} → 200 
                                    requested, claimed by another session, or the plan being
                                    approved or approved; 503 no Claude Code, factory or factory
                                    daemon, or not authenticated to CircleCI; 404 unknown project)
-POST /factory/plans/{plan}/planner/resume  {project_root, model?} → 200 SessionLog: have the
+POST /factory/plans/{plan}/planner/resume  {project_root, model?, release_holder?} → 200 SessionLog: have the
                                    planner claim the plan again, starting or resuming it, when it
-                                   holds no claim; nothing while it does (409/503/404 as request)
+                                   holds no claim; nothing while it does (409/503/404 as request).
+                                   release_holder is the session the developer confirmed taking
+                                   over: the daemon re-reads the claim, refuses unless that same
+                                   session still holds it and it is a foreign session the
+                                   daemon may release, releases it, then resumes
 GET  /factory/plans/{plan}/planner[?after=N] → {session_id, log_id, oldest, busy, activity?,
                                    next, events[]}: the planner's events from cursor N (the
                                    `next` of an earlier read), and whether it is mid-turn;

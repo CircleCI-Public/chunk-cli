@@ -438,6 +438,11 @@ type Model struct {
 	// is answered; stoppingBuild is set from that y until the daemon answers.
 	pendingStop   string
 	stoppingBuild bool
+	// pendingTakeOver is the session the take-over question being asked is
+	// about, as when it opened. takingOver is set from its y until the
+	// daemon answers.
+	pendingTakeOver string
+	takingOver      bool
 
 	pending string
 	// lastClick is the plan block last clicked, to tell a double click.
@@ -592,6 +597,28 @@ func (m Model) Poll() tea.Cmd {
 // on. A host can use it to deliver one deterministically.
 func (m Model) Next() tea.Cmd { return waitEvent(m.ctx, m.agent) }
 
+// buildResumed is the end of starting a build session: an error in the status
+// bar, or the new session followed at once, before factory's state moves.
+func (m Model) buildResumed(msg buildResumedMsg) (Model, tea.Cmd) {
+	m.resumingBuild = false
+	if msg.err != nil {
+		m.status = ui.ErrorStyle.Render("Could not start a build session: " + msg.err.Error())
+		return m, nil
+	}
+	m.status, m.built = "", true
+	return m.followBuild()
+}
+
+// takeOverDone is the end of a take-over: an error in the status bar, as for
+// a build session.
+func (m Model) takeOverDone(msg takeOverDoneMsg) Model {
+	m.takingOver, m.status = false, ""
+	if msg.err != nil {
+		m.status = ui.ErrorStyle.Render("Could not take over the plan: " + msg.err.Error())
+	}
+	return m
+}
+
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -644,14 +671,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.updateBuild(msg)
 
 	case buildResumedMsg:
-		m.resumingBuild = false
-		if msg.err != nil {
-			m.status = ui.ErrorStyle.Render("Could not start a build session: " + msg.err.Error())
-			return m, nil
-		}
-		// The new session is followed at once, before factory's state moves.
-		m.status, m.built = "", true
-		return m.followBuild()
+		return m.buildResumed(msg)
+
+	case takeOverDoneMsg:
+		return m.takeOverDone(msg), nil
 
 	case familiedMsg:
 		m.family, m.familyErr = msg.family, msg.err
@@ -931,6 +954,9 @@ func (m Model) resumable() planstate.Resume {
 	if r.Kind == planstate.ResumeBuild && m.resumer == nil {
 		return planstate.Resume{Why: "Resume this build from chunk watch"}
 	}
+	if r.Kind == planstate.ResumeTakeOver && m.resumer == nil {
+		return planstate.Resume{Why: planstate.ClaimedWhy(r.Holder, m.store.ID())}
+	}
 	return r
 }
 
@@ -941,6 +967,11 @@ func (m Model) resume() (Model, tea.Cmd) {
 	case planstate.ResumePlanner:
 		m.resuming, m.resumedIn = true, m.state
 		return m, resumeCmd(m.ctx, m.agent)
+	case planstate.ResumeTakeOver:
+		holder := m.resumable().Holder
+		m.confirming, m.pendingTakeOver = true, holder
+		m.status = ui.TitleStyle.Render(planstate.TakeOverQuestion(holder)+" ") + confirmButtons
+		return m, nil
 	case planstate.ResumeBuild:
 		m.resumingBuild = true
 		m.status = "starting a build session…"
@@ -977,7 +1008,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
 			m.pendingDelete, m.pendingDesign, m.pendingStart = "", false, false
-			m.pendingDeletePlan, m.pendingStop = false, ""
+			m.pendingDeletePlan, m.pendingStop, m.pendingTakeOver = false, "", ""
 			return m, nil
 		}
 		return m.answerYes()
@@ -1078,6 +1109,11 @@ func (m Model) answerYes() (Model, tea.Cmd) {
 		m.pendingStop, m.stoppingBuild = "", true
 		m.status = "Stopping the build session…"
 		return m, stopBuildCmd(m.ctx, m.build, id)
+	}
+	if holder := m.pendingTakeOver; holder != "" {
+		m.pendingTakeOver, m.takingOver = "", true
+		m.status = "releasing the session and resuming the planner…"
+		return m, takeOverCmd(m.ctx, m.resumer, m.project, m.store.ID(), holder)
 	}
 	if m.pendingDeletePlan {
 		m.pendingDeletePlan, m.deleting = false, true

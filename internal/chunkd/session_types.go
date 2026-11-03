@@ -239,4 +239,7 @@ type PlannerRequest struct {
 type PlannerResume struct {
 	ProjectRoot string `json:"project_root"`
 	Model       string `json:"model,omitempty"`
+	// ReleaseHolder is the session the developer agreed to release first;
+	// empty releases nothing.
+	ReleaseHolder string `json:"release_holder,omitempty"`
 }

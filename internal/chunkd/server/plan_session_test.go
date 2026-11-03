@@ -41,6 +41,10 @@ type plannerDaemon struct {
 	checkErr    error
 	worktreeErr error
 	opened      []string
+	// where is where factory's daemon has each session working; whereErr
+	// fails the lookup.
+	where    map[string]string
+	whereErr error
 }
 
 func newPlannerDaemon(t *testing.T) *plannerDaemon {
@@ -79,6 +83,18 @@ func newPlannerDaemon(t *testing.T) *plannerDaemon {
 		pd.opened = append(pd.opened, planID)
 		return "/data/plans/" + planID, pd.worktreeErr
 	}
+	d.rcfg.SessionWorktree = func(_ context.Context, session string) (string, error) {
+		pd.mu.Lock()
+		defer pd.mu.Unlock()
+		if pd.whereErr != nil {
+			return "", pd.whereErr
+		}
+		dir, ok := pd.where[session]
+		if !ok {
+			return "", factory.ErrUnknownSession
+		}
+		return dir, nil
+	}
 	registerSessionRoutes(pd.mux, d)
 	return pd
 }
@@ -116,6 +132,20 @@ func (pd *plannerDaemon) postRequest(planID, text string) *httptest.ResponseReco
 
 func (pd *plannerDaemon) postResume(planID string) *httptest.ResponseRecorder {
 	return pd.do(http.MethodPost, "/factory/plans/"+planID+"/planner/resume", chunkd.PlannerResume{ProjectRoot: pd.root})
+}
+
+func (pd *plannerDaemon) postResumeHolder(planID, holder string) *httptest.ResponseRecorder {
+	return pd.do(http.MethodPost, "/factory/plans/"+planID+"/planner/resume", chunkd.PlannerResume{ProjectRoot: pd.root, ReleaseHolder: holder})
+}
+
+// place has factory's daemon place session in dir.
+func (pd *plannerDaemon) place(session, dir string) {
+	pd.mu.Lock()
+	defer pd.mu.Unlock()
+	if pd.where == nil {
+		pd.where = map[string]string{}
+	}
+	pd.where[session] = dir
 }
 
 // request sends plan planID's planner its request, which must be taken.

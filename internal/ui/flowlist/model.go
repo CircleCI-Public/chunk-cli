@@ -30,6 +30,8 @@ type NewMsg struct{}
 type ResumeMsg struct {
 	ID, Title string
 	Kind      planstate.ResumeKind
+	// Holder is the session a ResumeTakeOver was confirmed for.
+	Holder string
 }
 
 // DeleteMsg asks the host to delete a flow's plan, once the list has had a yes.
@@ -96,6 +98,10 @@ type Model struct {
 	// ask is the ID of the flow a delete question is open about, and
 	// askTitle its title as asked. deleting is the flow the host is deleting.
 	ask, askTitle, deleting string
+	// takeOver is the ID of the flow a take-over question is open about,
+	// takeOverTitle its title and takeOverHolder the session it asked
+	// about, all as when it opened.
+	takeOver, takeOverTitle, takeOverHolder string
 
 	loaded, listing bool
 	listErr         error
@@ -254,9 +260,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return !slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == id })
 			})
 			m.keepSelection()
-			if m.ask != "" && !slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == m.ask }) {
-				m.ask, m.askTitle = "", ""
-			}
+			m.dropGoneQuestions()
 			refreshPreview = true
 		}
 		cmds = append(cmds, m.poll())
@@ -403,6 +407,20 @@ func (m *Model) startPreview() tea.Cmd {
 	}
 }
 
+// dropGoneQuestions closes the delete and take-over questions about a flow the
+// list no longer has.
+func (m *Model) dropGoneQuestions() {
+	has := func(id string) bool {
+		return slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == id })
+	}
+	if m.ask != "" && !has(m.ask) {
+		m.ask, m.askTitle = "", ""
+	}
+	if m.takeOver != "" && !has(m.takeOver) {
+		m.takeOver, m.takeOverTitle, m.takeOverHolder = "", "", ""
+	}
+}
+
 func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	// An open question takes the key first; anything but y cancels it.
 	if m.ask != "" {
@@ -410,6 +428,16 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.ask, m.askTitle = "", ""
 		if msg.String() == "y" && slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == id }) {
 			return func() tea.Msg { return DeleteMsg{ID: id, Title: title} }
+		}
+		return nil
+	}
+	if m.takeOver != "" {
+		id, title, holder := m.takeOver, m.takeOverTitle, m.takeOverHolder
+		m.takeOver, m.takeOverTitle, m.takeOverHolder = "", "", ""
+		if msg.String() == "y" {
+			return func() tea.Msg {
+				return ResumeMsg{ID: id, Title: title, Kind: planstate.ResumeTakeOver, Holder: holder}
+			}
 		}
 		return nil
 	}
@@ -428,7 +456,12 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "R":
 		f, _ := m.selected()
-		if kind := m.resume().Kind; kind != planstate.ResumeNone {
+		r := m.resume()
+		if r.Kind == planstate.ResumeTakeOver {
+			m.takeOver, m.takeOverTitle, m.takeOverHolder = f.ID, f.Title, r.Holder
+			return nil
+		}
+		if kind := r.Kind; kind != planstate.ResumeNone {
 			return func() tea.Msg { return ResumeMsg{ID: f.ID, Title: f.Title, Kind: kind} }
 		}
 		return nil

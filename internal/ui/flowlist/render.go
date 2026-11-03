@@ -66,6 +66,9 @@ func (m Model) footerLines() []string {
 	if m.ask != "" {
 		rows[0] = "  " + m.styles.Emphasis.Render("Delete this plan, its comments and its flow? ") + "y / n"
 	}
+	if m.takeOver != "" {
+		rows[0] = "  " + m.styles.Emphasis.Render(planstate.TakeOverQuestion(m.takeOverHolder)+" ") + "y / n"
+	}
 	if m.note != "" {
 		rows = append(rows, "  "+m.styles.Muted.Render(m.note))
 	}

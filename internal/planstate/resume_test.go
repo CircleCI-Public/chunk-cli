@@ -11,12 +11,112 @@ func TestResumeOf(t *testing.T) {
 	done := []Blocker{{Title: "Add retry config", State: Ended, Outcome: "merged"}}
 	const build = "No session holds this plan · R starts a build session"
 	const planner = "No session holds this plan · R resumes its planner"
+	const holder = "1be8ec19-aaaa-bbbb-cccc-dddddddddddd"
+	claimed := func(state string, edit func(*ResumeFacts)) ResumeFacts {
+		f := ResumeFacts{PlanID: "p-42", State: state, Holder: holder, WaitingOn: Session, BlockersKnown: true}
+		if edit != nil {
+			edit(&f)
+		}
+		return f
+	}
+	const takeOver = "Claimed by session 1be8ec19 · R releases it and resumes the planner"
+	const claimedLine = "Claimed by session 1be8ec19 · factory daemon release p-42 frees it"
 	for _, tc := range []struct {
 		name string
 		f    ResumeFacts
 		kind ResumeKind
 		line string
 	}{
+		{
+			name: "claimed, planning",
+			f:    claimed(RefineProposal, nil),
+			kind: ResumeTakeOver,
+			line: takeOver,
+		},
+		{
+			name: "claimed, init",
+			f:    claimed(Init, nil),
+			kind: ResumeTakeOver,
+			line: takeOver,
+		},
+		{
+			name: "claimed, ready",
+			f:    claimed(Ready, nil),
+			kind: ResumeTakeOver,
+			line: takeOver,
+		},
+		{
+			name: "claimed, refining units",
+			f:    claimed(RefineUnits, nil),
+			kind: ResumeTakeOver,
+			line: takeOver,
+		},
+		{
+			name: "claimed, recording sub-plans",
+			f:    claimed(RecordSubPlans, nil),
+			kind: ResumeTakeOver,
+			line: takeOver,
+		},
+		{
+			name: "claimed, standing-by",
+			f:    claimed(StandBy, nil),
+			kind: ResumeTakeOver,
+			line: takeOver,
+		},
+		{
+			name: "claimed, short ID",
+			f:    claimed(Init, func(f *ResumeFacts) { f.Holder = "s-1" }),
+			kind: ResumeTakeOver,
+			line: "Claimed by session s-1 · R releases it and resumes the planner",
+		},
+		{
+			name: "claimed, ended",
+			f:    claimed(Ended, func(f *ResumeFacts) { f.Ended = true }),
+		},
+		{
+			name: "claimed, no flow",
+			f:    claimed("", nil),
+		},
+		{
+			name: "claimed, blocker active",
+			f: claimed(RefineProposal, func(f *ResumeFacts) {
+				f.Blockers = []Blocker{{Title: "Fix uploads", Active: true}}
+			}),
+			line: "Waiting on Fix uploads",
+		},
+		{
+			name: "claimed, blockers not loaded",
+			f:    claimed(RefineProposal, func(f *ResumeFacts) { f.BlockersKnown = false }),
+		},
+		{
+			name: "claimed, waiting on human",
+			f:    claimed(RefineProposal, func(f *ResumeFacts) { f.WaitingOn = Human }),
+			line: "Waiting on you",
+		},
+		{
+			name: "claimed, unknown state",
+			f:    claimed("weird", nil),
+			line: "chunk can't resume a plan in weird",
+		},
+		{
+			name: "claimed, building",
+			f:    claimed(Build, nil),
+			line: claimedLine,
+		},
+		{
+			name: "claimed, integrating",
+			f:    claimed(Integrate, nil),
+			line: claimedLine,
+		},
+		{
+			name: "claimed, waiting_on empty",
+			f:    claimed(RefineProposal, func(f *ResumeFacts) { f.WaitingOn = "" }),
+			line: claimedLine,
+		},
+		{
+			name: "unclaimed, waiting_on empty",
+			f:    ResumeFacts{PlanID: "p-42", State: RefineProposal, BlockersKnown: true},
+		},
 		{
 			name: "building, unclaimed",
 			f: ResumeFacts{
@@ -179,10 +279,11 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "claimed by a short ID",
 			f: ResumeFacts{
-				PlanID:    "p-42",
-				State:     Build,
-				Holder:    "s-1",
-				WaitingOn: Session,
+				PlanID:        "p-42",
+				State:         Build,
+				Holder:        "s-1",
+				WaitingOn:     Session,
+				BlockersKnown: true,
 			},
 			line: "Claimed by session s-1 · factory daemon release p-42 frees it",
 		},
@@ -291,4 +392,12 @@ func TestResumeOf(t *testing.T) {
 			assert.Check(t, cmp.Equal(r.Line(), tc.line))
 		})
 	}
+}
+
+func TestTakeOverQuestion(t *testing.T) {
+	assert.Check(t, cmp.Equal(TakeOverQuestion("1be8ec19-aaaa-bbbb-cccc-dddddddddddd"),
+		"Plan is claimed by session 1be8ec19, which chunk watch didn't start. Release it and resume the planner?"))
+	assert.Check(t, cmp.Equal(TakeOverQuestion("s-1"),
+		"Plan is claimed by session s-1, which chunk watch didn't start. Release it and resume the planner?"))
+	assert.Check(t, cmp.Equal(ClaimedWhy("s-1", "p-42"), "Claimed by session s-1 · factory daemon release p-42 frees it"))
 }
