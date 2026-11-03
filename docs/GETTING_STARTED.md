@@ -354,7 +354,8 @@ each open activity: what waits on you, such as Review the plan or Send
 your comments, what the planner is doing now, each plan blocking this
 one, and its sub-plans. `j`/`k` move over the boxes and
 `⏎` does what the selected one offers: review opens the plan, send saves
-your comments, and a blocker or sub-plan opens that plan. On the Plan view, `c`
+your comments, and a blocker or sub-plan opens that plan. `?` lists every
+key that works there now. On the Plan view, `c`
 writes a comment right under the highlighted part, saved to factory
 for chunk to address when you press `s`; `shift+↑/↓` selects several
 parts to comment on together. There is no chat with the planner: comments

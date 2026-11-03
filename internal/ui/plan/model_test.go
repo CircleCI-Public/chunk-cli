@@ -6433,3 +6433,77 @@ func TestAnswerAQuestionInline(t *testing.T) {
 		assert.Check(t, cmp.Equal(answered(store), 0))
 	})
 }
+
+// TestHelpListsTheKeys checks ?: it shows every enabled key with a hint for
+// the view, ? or esc closes it, and esc does not leave while it is open.
+func TestHelpListsTheKeys(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) Model {
+		t.Helper()
+		store := newFakeStore()
+		store.TextV = twoQuestions
+		store.setEvents("answer-open-questions", "abandon")
+		return flowModel(t, store)
+	}
+	view := func(m Model) string { return ansi.Strip(m.Content()) }
+	row := func(k, desc string) string { return fmt.Sprintf("%-12s %s", k, desc) }
+
+	t.Run("on the Flow view", func(t *testing.T) {
+		t.Parallel()
+		m := setup(t)
+		assert.Check(t, cmp.Contains(view(m), "? help"))
+		m = drive(t, m, press("?"))
+		assert.Check(t, m.helping)
+		v := view(m)
+		assert.Check(t, cmp.Contains(v, "KEYS"))
+		assert.Check(t, cmp.Contains(v, row("⏎", "act")), v)
+		m = drive(t, m, press("?"))
+		assert.Check(t, !m.helping)
+		assert.Check(t, !strings.Contains(view(m), "KEYS"))
+		assert.Check(t, cmp.Contains(view(m), "Answer a question"))
+	})
+
+	t.Run("on the Plan view", func(t *testing.T) {
+		t.Parallel()
+		m := drive(t, setup(t), press("right"))
+		m = drive(t, m, press("?"))
+		v := view(m)
+		assert.Check(t, cmp.Contains(v, "KEYS"))
+		assert.Check(t, cmp.Contains(v, row("c", "comment")), v)
+	})
+
+	t.Run("the tabs stay, and a click on one closes it", func(t *testing.T) {
+		t.Parallel()
+		m := drive(t, setup(t), press("?"))
+		top := strings.Split(view(m), "\n")[0]
+		i := strings.Index(top, "Flow  Plan")
+		assert.Assert(t, i >= 0, "no tabs in the help's top line: %q", top)
+		m = drive(t, m, click(ansi.StringWidth(top[:i])+7, 0))
+		assert.Check(t, !m.helping)
+		assert.Check(t, cmp.Equal(m.tab, tabPlan))
+		assert.Check(t, !strings.Contains(view(m), "KEYS"))
+	})
+
+	t.Run("esc closes it without leaving", func(t *testing.T) {
+		t.Parallel()
+		m := drive(t, setup(t), press("?"))
+		var cmd tea.Cmd
+		m, cmd = m.Update(press("esc"))
+		if cmd != nil {
+			_, closed := cmd().(ClosedMsg)
+			assert.Check(t, !closed, "esc left the screen with the help open")
+		}
+		assert.Check(t, !m.helping)
+		assert.Check(t, !strings.Contains(view(m), "KEYS"))
+	})
+
+	t.Run("the comment editor takes ?", func(t *testing.T) {
+		t.Parallel()
+		m := drive(t, setup(t), press("right"))
+		m = drive(t, m, press("c"))
+		assert.Assert(t, m.commenting)
+		m = drive(t, m, press("?"))
+		assert.Check(t, !m.helping)
+		assert.Check(t, cmp.Equal(m.commentInput.Value(), "?"))
+	})
+}

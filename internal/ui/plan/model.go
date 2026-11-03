@@ -328,6 +328,8 @@ type Model struct {
 	// while answering is set.
 	answer    textarea.Model
 	answering bool
+	// helping is whether ? has the body show the keys in place of the view.
+	helping bool
 
 	// tab is which view the body shows, Flow or Plan. Every visit opens on
 	// the Flow view.
@@ -962,8 +964,33 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// Before Quit, so esc keeps the plan rather than leaving.
 		return m.answerReason(msg, k)
 	}
+	if m.helping && (key.Matches(msg, k.Help) || msg.String() == "esc") {
+		// Before Quit, so esc closes the help rather than leaving.
+		return m.toggleHelp()
+	}
 	if key.Matches(msg, k.Quit) {
 		return m.quit(msg.String())
+	}
+	if m.helping {
+		// The arrows and page keys scroll the help; any other key closes it
+		// and does what it does, so nothing changes behind it unseen.
+		switch msg.String() {
+		case "up", "k":
+			m.flowView.ScrollUp(1)
+			return m, nil
+		case "down", "j":
+			m.flowView.ScrollDown(1)
+			return m, nil
+		case "pgup":
+			m.flowView.PageUp()
+			return m, nil
+		case "pgdown":
+			m.flowView.PageDown()
+			return m, nil
+		}
+		m.helping = false
+		m.renderFlow()
+		k = m.keys()
 	}
 	if m.quitting {
 		m.quitting, m.status = false, ""
@@ -985,6 +1012,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 
 	switch {
+	case key.Matches(msg, k.Help):
+		return m.toggleHelp()
 	case key.Matches(msg, k.SendPlan):
 		return m.askToApprove(), nil
 	case key.Matches(msg, k.Resume):
@@ -1122,6 +1151,31 @@ func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
 	return m, nil
 }
 
+// toggleHelp opens the help, which lists the keys in the Flow view's
+// viewport, or closes it.
+func (m Model) toggleHelp() (Model, tea.Cmd) {
+	m.helping = !m.helping
+	m.clearText()
+	m.renderFlow()
+	m.flowView.GotoTop()
+	return m, nil
+}
+
+// helpContent is the help's body: every key the screen answers to now that
+// has a hint, one per row, under a KEYS label.
+func (m Model) helpContent() string {
+	dim, brand := m.style(m.dim()), m.style(m.brand())
+	lines := []string{dim.Render("KEYS"), ""}
+	for _, b := range m.keys().ShortHelp() {
+		h := b.Help()
+		if !b.Enabled() || h.Key == "" {
+			continue
+		}
+		lines = append(lines, brand.Render(fmt.Sprintf("%-12s", h.Key))+" "+dim.Render(h.Desc))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // askToApprove starts approving the plan, or its design: it asks the
 // developer to confirm, or says why it cannot go yet.
 func (m Model) askToApprove() Model {
@@ -1220,7 +1274,7 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		m.input, cmd = m.input.Update(msg)
 		m.renderFlow()
-	case m.tab == tabFlow:
+	case m.showsFlow():
 		m.flowView, cmd = m.flowView.Update(msg)
 	default:
 		m.planView, cmd = m.planView.Update(msg)
@@ -1460,10 +1514,16 @@ const (
 // topRows is what sits above the view: the top line and its rule, and the
 // strip when the Plan view shows.
 func (m *Model) topRows() int {
-	if m.tab == tabPlan {
+	if !m.showsFlow() {
 		return headerRows + ruleRows + stripRows
 	}
 	return headerRows + ruleRows
+}
+
+// showsFlow is whether the body draws the Flow view's viewport: on the Flow
+// view, and on either view while the help is shown, which is drawn there.
+func (m *Model) showsFlow() bool {
+	return m.tab == tabFlow || m.helping
 }
 
 // bodyRows is the rows between the top line's rule and the footer.
@@ -1616,7 +1676,7 @@ func (m Model) Content() string {
 		return ""
 	}
 	var body string
-	if m.tab == tabFlow {
+	if m.showsFlow() {
 		body = lipgloss.NewStyle().PaddingLeft(flowMargin).Render(m.shown(textFlow))
 	} else {
 		body = m.strip() + "\n" + m.shown(textPlan) + "\n" + m.planFooter()

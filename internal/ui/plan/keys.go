@@ -65,7 +65,9 @@ type keyMap struct {
 	Resume key.Binding
 	// StopBuild stops the plan's running build session, after a y.
 	StopBuild key.Binding
-	Quit      key.Binding
+	// Help shows every key with a hint in place of the view, and closes it.
+	Help key.Binding
+	Quit key.Binding
 }
 
 // keys returns the screen's bindings as they stand for the view shown and
@@ -125,6 +127,7 @@ func (m Model) keys() keyMap {
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
 		Resume:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resume")),
 		StopBuild:      key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "stop build")),
+		Help:           key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 	// The reason prompt says what these do, so they carry no hint.
@@ -178,6 +181,11 @@ func (m Model) keys() keyMap {
 	k.Confirm.SetEnabled(m.confirming)
 	k.Resume.SetEnabled(m.resumeOffered())
 	k.StopBuild.SetEnabled(m.stopOffered())
+	// ? is typed while an input or a comment editor has the keyboard.
+	k.Help.SetEnabled(m.created && !m.commenting && !m.confirming && !m.askingReason)
+	if m.helping {
+		k.Help.SetHelp("?", "close help")
+	}
 	m.endKeys(&k)
 	return k
 }
@@ -283,7 +291,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.Switch,
 		k.Send, k.Newline,
 		first, k.Act, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, up,
-		k.SendPlan, k.Resume, k.StopBuild, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
+		k.SendPlan, k.Resume, k.StopBuild, k.Help, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
 		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp,
 	}
 }

@@ -56,7 +56,7 @@ func (m Model) wheel(msg tea.MouseWheelMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	var cmd tea.Cmd
-	if m.tab == tabFlow {
+	if m.showsFlow() {
 		m.flowView, cmd = m.flowView.Update(msg)
 		return m, cmd
 	}
@@ -98,7 +98,7 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 		return m, nil
 	}
 	var cmd tea.Cmd
-	if m.tab == tabPlan && m.created {
+	if !m.showsFlow() && m.created {
 		m, cmd = m.clickPlan(mouse)
 	}
 	// The press may also begin a selection of text, if it is dragged.
@@ -112,6 +112,8 @@ func (m Model) clickTab(mouse tea.Mouse) (Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	// The click closes the help, as a key it does not take does.
+	m.helping = false
 	return m.showTab(t)
 }
 

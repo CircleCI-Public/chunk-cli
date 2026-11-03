@@ -315,7 +315,11 @@ chunk
   offers `R` when `R` can resume. An ended flow shows how it ended. `j`/`k` select a box,
   a sub-plan's row or the plan it is part of, and `⏎` acts on it: review
   opens the Plan view, send saves the comments, start asks to start work, and
-  a blocker or sub-plan opens that plan where the host can open plans. The screen
+  a blocker or sub-plan opens that plan where the host can open plans. `?`
+  shows, in place of the view, every key that works there now with what it
+  does, one per row; `↑`/`↓` and the page keys scroll it, `?` or `esc`
+  closes it, and any other key closes it and does what it does. While the request, an answer or a comment is written,
+  `?` is typed. The screen
   always opens on the Flow view, whatever state the flow is in; while the
   plan is being planned its boxes say so, and `⏎ review` shows the plan. Once the plan
   is being built, the Flow view also shows the build session's progress from

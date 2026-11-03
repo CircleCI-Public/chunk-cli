@@ -136,10 +136,15 @@ func (m Model) sendAnswers() (Model, tea.Cmd) {
 	return m.saveAndHandOff()
 }
 
-// renderFlow draws the Flow view into its viewport.
+// renderFlow draws the Flow view into its viewport, or the help while it is
+// shown.
 func (m *Model) renderFlow() {
 	w := m.flowView.Width()
 	if w <= 0 {
+		return
+	}
+	if m.helping {
+		m.setContent(textFlow, m.helpContent())
 		return
 	}
 	m.setContent(textFlow, m.flowContent(w))

@@ -32,7 +32,7 @@ type textDrag struct {
 
 // textShown is the view the body draws.
 func (m *Model) textShown() textView {
-	if m.tab == tabFlow {
+	if m.showsFlow() {
 		return textFlow
 	}
 	return textPlan
