@@ -15,6 +15,9 @@ const (
 	ResumePlanner
 	// ResumeBuild starts a build session that claims the plan.
 	ResumeBuild
+	// ResumeTakeOver releases a claim another session holds on a plan being
+	// planned, then resumes its planner.
+	ResumeTakeOver
 )
 
 // ResumeFacts is what ResumeOf reads of a plan.
@@ -44,6 +47,8 @@ type Blocker struct {
 type Resume struct {
 	Kind ResumeKind
 	Why  string
+	// Holder is the session ResumeTakeOver releases.
+	Holder string
 }
 
 // ResumeOf is whether chunk resumes the plan f describes, and how: a plan
@@ -54,8 +59,6 @@ func ResumeOf(f ResumeFacts) Resume {
 	switch {
 	case state == "", f.Ended:
 		return Resume{}
-	case f.Holder != "":
-		return Resume{Why: fmt.Sprintf("Claimed by session %s · factory daemon release %s frees it", shortID(f.Holder), f.PlanID)}
 	case !f.BlockersKnown:
 		return Resume{}
 	}
@@ -75,15 +78,36 @@ func ResumeOf(f ResumeFacts) Resume {
 		return Resume{Why: "Waiting on sub-plans"}
 	case Session:
 	default:
+		if f.Holder != "" {
+			return Resume{Why: ClaimedWhy(f.Holder, f.PlanID)}
+		}
 		return Resume{}
 	}
 	switch state {
 	case Init, Ready, RefineProposal, RefineUnits, RecordSubPlans, StandBy:
+		if f.Holder != "" {
+			return Resume{Kind: ResumeTakeOver, Holder: f.Holder}
+		}
 		return Resume{Kind: ResumePlanner}
 	case Build, Integrate:
+		if f.Holder != "" {
+			return Resume{Why: ClaimedWhy(f.Holder, f.PlanID)}
+		}
 		return Resume{Kind: ResumeBuild}
 	}
 	return Resume{Why: "chunk can't resume a plan in " + state}
+}
+
+// ClaimedWhy is the line for a plan a session holds that chunk does not take
+// over.
+func ClaimedWhy(holder, planID string) string {
+	return fmt.Sprintf("Claimed by session %s · factory daemon release %s frees it", shortID(holder), planID)
+}
+
+// TakeOverQuestion is what chunk asks before releasing holder's claim and
+// resuming the planner, without the y/n choice.
+func TakeOverQuestion(holder string) string {
+	return fmt.Sprintf("Plan is claimed by session %s, which chunk watch didn't start. Release it and resume the planner?", shortID(holder))
 }
 
 // Line is r as one line: what resuming does when Kind offers it, else Why.
@@ -93,6 +117,8 @@ func (r Resume) Line() string {
 		return "No session holds this plan · R resumes its planner"
 	case ResumeBuild:
 		return "No session holds this plan · R starts a build session"
+	case ResumeTakeOver:
+		return fmt.Sprintf("Claimed by session %s · R releases it and resumes the planner", shortID(r.Holder))
 	case ResumeNone:
 	}
 	return r.Why

@@ -484,7 +484,9 @@ func TestResume(t *testing.T) {
 		err      error
 		// kind is what R asks the host for; ResumeNone is nothing.
 		kind planstate.ResumeKind
-		line string
+		// holder is the session a take-over asks about.
+		holder string
+		line   string
 	}{
 		{
 			name: "building, unclaimed",
@@ -515,6 +517,20 @@ func TestResume(t *testing.T) {
 				SessionID: "bb5a623b-0000",
 			},
 			line: "Claimed by session bb5a623b · factory daemon release a frees it",
+		},
+		{
+			name: "claimed, planning",
+			flow: circleci.Flow{
+				ID:        "a",
+				Title:     "Alpha",
+				State:     "refine-proposal",
+				Next:      []circleci.Transition{{Actor: "session", TaskCategory: "write-units"}},
+				WaitingOn: "session",
+				SessionID: "1be8ec19-0000",
+			},
+			kind:   planstate.ResumeTakeOver,
+			holder: "1be8ec19-0000",
+			line:   "Claimed by session 1be8ec19 · R releases it and resumes the planner",
 		},
 		{
 			name: "waiting on you",
@@ -555,7 +571,10 @@ func TestResume(t *testing.T) {
 					return
 				}
 				d.send(press('R'))
-				assert.Check(t, cmp.DeepEqual(d.next(), flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: tc.kind}))
+				if tc.kind == planstate.ResumeTakeOver {
+					d.send(press('y'))
+				}
+				assert.Check(t, cmp.DeepEqual(d.next(), flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: tc.kind, Holder: tc.holder}))
 			})
 		})
 	}
@@ -608,6 +627,135 @@ func TestResume(t *testing.T) {
 			assert.Check(t, !strings.Contains(got, "R resume"), "help bar:\n%s", got)
 		})
 	})
+}
+
+// resumeMsg is the next ResumeMsg the driver's commands return, handing any
+// other message back to the model on the way.
+func (d *driver) resumeMsg() flowlist.ResumeMsg {
+	for {
+		msg := d.next()
+		if r, ok := msg.(flowlist.ResumeMsg); ok {
+			return r
+		}
+		d.send(msg)
+	}
+}
+
+// R on a claimed planning flow asks first; only y sends the take-over, for
+// the plan and session the question was opened for.
+func TestTakeOver(t *testing.T) {
+	const holder = "1be8ec19-0000"
+	claimed := func(id, title, session string) circleci.Flow {
+		return circleci.Flow{
+			ID:        id,
+			Title:     title,
+			State:     "refine-proposal",
+			Next:      []circleci.Transition{{Actor: "session", TaskCategory: "write-units"}},
+			WaitingOn: "session",
+			SessionID: session,
+		}
+	}
+	question := planstate.TakeOverQuestion(holder)
+	loaded := func(t *testing.T, list func(context.Context) ([]circleci.Flow, error)) *driver {
+		d := newDriver(t, list, preview, blockers(nil, nil))
+		d.send(tea.WindowSizeMsg{Width: 200, Height: 30})
+		d.load()
+		return d
+	}
+	want := flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeTakeOver, Holder: holder}
+
+	t.Run("the footer asks, y sends", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			d := loaded(t, fixed(claimed("a", "Alpha", holder)))
+			d.send(press('R'))
+			got := d.content()
+			assert.Check(t, cmp.Contains(got, question+" y / n"))
+			assert.Check(t, !strings.Contains(got, "R resume"), "help bar shown while asking:\n%s", got)
+			d.send(press('y'))
+			assert.Check(t, cmp.DeepEqual(d.next(), want))
+			assert.Check(t, !strings.Contains(d.content(), question))
+		})
+	})
+
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{
+			name: "n",
+			key:  press('n'),
+		},
+		{
+			name: "x",
+			key:  press('x'),
+		},
+		{
+			name: "R",
+			key:  press('R'),
+		},
+		{
+			name: "esc",
+			key:  press(tea.KeyEscape),
+		},
+	} {
+		t.Run("cancelled by "+tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := loaded(t, fixed(claimed("a", "Alpha", holder)))
+				d.send(press('R'))
+				m, cmd := d.m.Update(tc.key)
+				d.m = m
+				assert.Check(t, cmd == nil, "the key did something")
+				assert.Check(t, !strings.Contains(d.content(), question))
+			})
+		})
+	}
+
+	t.Run("the flow goes away", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var gone atomic.Bool
+			d := loaded(t, func(context.Context) ([]circleci.Flow, error) {
+				if gone.Load() {
+					return []circleci.Flow{claimed("b", "Beta", "cc6b734c-1111")}, nil
+				}
+				return []circleci.Flow{claimed("a", "Alpha", holder), claimed("b", "Beta", "cc6b734c-1111")}, nil
+			})
+			d.send(press('R'))
+			gone.Store(true)
+			d.refresh()
+			assert.Check(t, !strings.Contains(d.content(), question), "still asking:\n%s", d.content())
+			_, cmd := d.m.Update(press('y'))
+			assert.Check(t, cmd == nil, "y sent something")
+		})
+	})
+
+	for _, tc := range []struct {
+		name    string
+		session string
+	}{
+		{
+			name:    "the claim moves",
+			session: "s-newer",
+		},
+		{
+			name:    "the claim is gone",
+			session: "",
+		},
+	} {
+		t.Run("still sends the confirmed session when "+tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var session atomic.Value
+				session.Store(holder)
+				d := loaded(t, func(context.Context) ([]circleci.Flow, error) {
+					return []circleci.Flow{claimed("a", "Alpha", session.Load().(string))}, nil
+				})
+				d.send(press('R'))
+				session.Store(tc.session)
+				d.refresh()
+				d.send(press('y'))
+				assert.Check(t, cmp.DeepEqual(d.resumeMsg(), want))
+			})
+		})
+	}
 }
 
 func TestStableRefreshAndSelect(t *testing.T) {
@@ -1388,7 +1536,7 @@ func TestGroupsAndRows(t *testing.T) {
 				// The help bar, then the host's note under it; why the
 				// claimed flow can't be resumed is the host's to show.
 				noResumeLine(t, text)
-				assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Claimed by session s1 · factory daemon release human frees it"))
+				assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Waiting on you"))
 				if size.Width == 50 {
 					for _, not := range []string{"preview", "Markdown heading", "Please clarify"} {
 						assert.Check(t, !strings.Contains(text, not), "%q shows at width 50:\n%s", not, text)

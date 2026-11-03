@@ -363,6 +363,8 @@ func TestDaemonResume(t *testing.T) {
 		name string
 		root string
 		kind planstate.ResumeKind
+		// holder is the session a take-over was confirmed for.
+		holder string
 		// fails is what the daemon answers.
 		fails       error
 		wantErr     string
@@ -386,6 +388,22 @@ func TestDaemonResume(t *testing.T) {
 			root:        "/src/app",
 			kind:        planstate.ResumePlanner,
 			wantPlanner: []string{"p /src/app"},
+		},
+		{
+			name:        "take over",
+			root:        "/src/app",
+			kind:        planstate.ResumeTakeOver,
+			holder:      "s-1",
+			wantPlanner: []string{"p /src/app release s-1"},
+		},
+		{
+			name:        "take over refused",
+			root:        "/src/app",
+			kind:        planstate.ResumeTakeOver,
+			holder:      "s-1",
+			fails:       refused,
+			wantErr:     refused.Message,
+			wantPlanner: []string{"p /src/app release s-1"},
 		},
 		{
 			name:      "build",
@@ -421,7 +439,11 @@ func TestDaemonResume(t *testing.T) {
 			var planners []string
 			var builds []chunkd.PlanBuildRequest
 			resumePlanner = func(planID string, req chunkd.PlannerResume) (chunkd.SessionLog, error) {
-				planners = append(planners, planID+" "+req.ProjectRoot)
+				call := planID + " " + req.ProjectRoot
+				if req.ReleaseHolder != "" {
+					call += " release " + req.ReleaseHolder
+				}
+				planners = append(planners, call)
 				return chunkd.SessionLog{}, tc.fails
 			}
 			startPlanBuild = func(req chunkd.PlanBuildRequest) (string, error) {
@@ -429,7 +451,7 @@ func TestDaemonResume(t *testing.T) {
 				return "s-9", tc.fails
 			}
 
-			err := daemonResume{}.Resume(t.Context(), tc.root, "p", tc.kind)
+			err := daemonResume{}.Resume(t.Context(), tc.root, "p", tc.kind, tc.holder)
 			if tc.wantErr == "" {
 				assert.Check(t, err)
 			} else {

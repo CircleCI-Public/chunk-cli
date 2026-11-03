@@ -75,7 +75,7 @@ func (m Model) WithBuild(b Build) Model {
 // Resumer starts a plan's agent again in the chunk daemon, in the project at
 // root, as kind says.
 type Resumer interface {
-	Resume(ctx context.Context, root, planID string, kind planstate.ResumeKind) error
+	Resume(ctx context.Context, root, planID string, kind planstate.ResumeKind, holder string) error
 }
 
 // WithResume returns a copy of m whose R starts a build session of its plan
@@ -90,7 +90,17 @@ func (m Model) WithResume(r Resumer) Model {
 type buildResumedMsg struct{ err error }
 
 func resumeBuildCmd(ctx context.Context, r Resumer, root, planID string) tea.Cmd {
-	return func() tea.Msg { return buildResumedMsg{err: r.Resume(ctx, root, planID, planstate.ResumeBuild)} }
+	return func() tea.Msg { return buildResumedMsg{err: r.Resume(ctx, root, planID, planstate.ResumeBuild, "")} }
+}
+
+// takeOverDoneMsg is the end of releasing the plan's holder and resuming its
+// planner.
+type takeOverDoneMsg struct{ err error }
+
+func takeOverCmd(ctx context.Context, r Resumer, root, planID, holder string) tea.Cmd {
+	return func() tea.Msg {
+		return takeOverDoneMsg{err: r.Resume(ctx, root, planID, planstate.ResumeTakeOver, holder)}
+	}
 }
 
 // buildStoppedMsg is the end of stopping the plan's build session.

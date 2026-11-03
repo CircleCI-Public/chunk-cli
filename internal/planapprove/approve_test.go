@@ -257,6 +257,99 @@ func TestApproveWithAnotherSessionsClaim(t *testing.T) {
 	}
 }
 
+// TestReleaseForeign checks what ReleaseForeign does with a claim, by where
+// the holder works.
+func TestReleaseForeign(t *testing.T) {
+	const holder = "S"
+	for _, tc := range []struct {
+		name string
+		// dir is where the holder works; "PLAN" stands for the plan's worktree.
+		dir       string
+		unknown   bool
+		lookupErr error
+		// dropClaim releases the claim during the lookup, so ReleaseClaim fails.
+		dropClaim   bool
+		wantErr     error
+		wantErrText []string
+		released    bool
+	}{
+		{
+			name:        "holder in the plan's worktree",
+			dir:         "PLAN",
+			wantErr:     ErrBeingBuilt,
+			wantErrText: []string{"already being built by session S"},
+		},
+		{
+			name:    "unknown holder",
+			unknown: true,
+			wantErr: ErrBeingBuilt,
+			wantErrText: []string{
+				"which factory's daemon does not know",
+				"factory daemon release",
+			},
+		},
+		{
+			name:        "lookup fails",
+			lookupErr:   factory.ErrNoFactoryDaemon,
+			wantErr:     factory.ErrNoFactoryDaemon,
+			wantErrText: []string{"find where session S works"},
+		},
+		{
+			name:     "holder elsewhere",
+			dir:      "/data/plans/other",
+			released: true,
+		},
+		{
+			name:        "ReleaseClaim fails",
+			dir:         "/data/plans/other",
+			dropClaim:   true,
+			wantErrText: []string{"release session S's claim"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, cci, id := approvablePlan(t, holder)
+			worktree := "/no/such/data/plans/" + id
+			dirs := map[string]string{}
+			if !tc.unknown {
+				dirs[holder] = strings.Replace(tc.dir, "PLAN", worktree, 1)
+			}
+			locate := locatedAt(dirs, tc.lookupErr)
+			if tc.dropClaim {
+				inner := locate
+				locate = func(ctx context.Context, session string) (string, error) {
+					cci.ReleaseFactoryPlan(id)
+					return inner(ctx, session)
+				}
+			}
+
+			err := ReleaseForeign(context.Background(), client, locate, id, holder, worktree)
+			p, _ := cci.FactoryPlan(id)
+			if tc.released {
+				assert.NilError(t, err)
+				assert.Check(t, cmp.Equal(p.Session, ""))
+				assert.Check(t, cmp.DeepEqual(posts(cci)[len(posts(cci))-1:], []string{
+					"/api/v3/factory/sessions/S/release",
+				}))
+				return
+			}
+			assert.Assert(t, err != nil)
+			if tc.wantErr != nil {
+				assert.Check(t, cmp.ErrorIs(err, tc.wantErr))
+			}
+			for _, text := range tc.wantErrText {
+				assert.Check(t, cmp.ErrorContains(err, text))
+			}
+			if tc.dropClaim {
+				return
+			}
+			assert.Check(t, cmp.Equal(p.Session, holder))
+			for _, path := range posts(cci) {
+				assert.Check(t, !strings.HasPrefix(path, "/api/v3/factory/sessions/"), path)
+			}
+		})
+	}
+}
+
 // TestApproveFollowsSymlinks checks that a holder whose worktree is a
 // symlink to the plan's is read as working in the plan's worktree.
 func TestApproveFollowsSymlinks(t *testing.T) {

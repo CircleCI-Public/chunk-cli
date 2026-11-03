@@ -313,9 +313,14 @@ chunk
   a Building divider: each tool call, reply and note, including a warning
   when another session holds the plan's claim. The Flow tab's first line
   says whether `R` can resume the plan. When it can't, the line says why.
-  For example, it names the session that holds the claim and the
-  `factory daemon release` command that frees it, or a blocker that isn't
-  Done. In `chunk watch`, `R`
+  For example, it names a blocker that isn't Done, or, for a claimed plan
+  in Building or Integrating, the session that holds the claim and the
+  `factory daemon release` command that frees it. For a plan being planned
+  that another session holds, `R` asks for confirmation (y/n; any key but
+  `y` cancels), then releases the claim and resumes the planner. The
+  release is refused when the holder is chunk's own planner, a session
+  working in the plan's worktree, or one factory's daemon does not know.
+  In `chunk watch`, `R`
   resumes a planner or starts a fresh build session in the chunk daemon, in
   the project `chunk watch` was opened in, and the flow list offers the same
   `R` for the selected flow.

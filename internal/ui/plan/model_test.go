@@ -80,7 +80,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 		}
 		wg.Wait()
 		return slices.Concat(outs...)
-	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg, buildResumedMsg, buildStoppedMsg:
+	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg, buildResumedMsg, buildStoppedMsg, takeOverDoneMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -5174,10 +5174,14 @@ type fakeResumer struct {
 	err   error
 }
 
-func (r *fakeResumer) Resume(_ context.Context, root, planID string, kind planstate.ResumeKind) error {
+func (r *fakeResumer) Resume(_ context.Context, root, planID string, kind planstate.ResumeKind, holder string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, fmt.Sprintf("%s %s %d", root, planID, kind))
+	call := fmt.Sprintf("%s %s %d", root, planID, kind)
+	if holder != "" {
+		call += " " + holder
+	}
+	r.calls = append(r.calls, call)
 	return r.err
 }
 
@@ -5415,6 +5419,76 @@ func TestRPlannerResumeGoesThroughTheAgent(t *testing.T) {
 	assert.Check(t, cmp.Equal(agent.Resumes(), 2))
 	assert.Check(t, !m.resuming)
 	assert.Check(t, cmp.Len(r.Calls(), 0))
+}
+
+// claimedPlanning is a resumeScreen of a planning plan the session s-1 holds.
+func claimedPlanning(t *testing.T) (Model, *fakeResumer) {
+	t.Helper()
+	m, _, r, _ := resumeScreen(t, newFakeAgent(), "refine-units", sessionStep, func(s *fakeStore) {
+		s.FlowV.Claimed = true
+		s.FlowV.Holder = "s-1"
+	})
+	return m, r
+}
+
+// TestRTakeOverAsksThenReleases checks that R on a planning plan another
+// session holds asks first, that only y sends the confirmed session to the
+// resumer, and that a refusal shows in the status bar.
+func TestRTakeOverAsksThenReleases(t *testing.T) {
+	takeOver := fmt.Sprintf("/src/app saved-plan %d s-1", planstate.ResumeTakeOver)
+	t.Run("the line and the question", func(t *testing.T) {
+		m, r := claimedPlanning(t)
+		assert.Check(t, cmp.Equal(flowLines(m)[0], "Claimed by session s-1 · R releases it and resumes the planner"))
+		assert.Assert(t, offersResume(m))
+		m, cmd := m.Update(press("R"))
+		assert.Check(t, cmd == nil)
+		assert.Check(t, m.confirming)
+		assert.Check(t, cmp.Contains(ansi.Strip(m.status), planstate.TakeOverQuestion("s-1")))
+		assert.Check(t, cmp.Len(r.Calls(), 0))
+	})
+	t.Run("y releases", func(t *testing.T) {
+		m, r := claimedPlanning(t)
+		m = drive(t, m, press("R"))
+		m, cmd := m.Update(press("y"))
+		assert.Check(t, m.takingOver)
+		assert.Check(t, !offersResume(m), "R offered while the take-over is in flight")
+		m, none := m.Update(press("R"))
+		assert.Check(t, none == nil)
+		for _, msg := range run(cmd) {
+			m = drive(t, m, msg)
+		}
+		assert.Check(t, cmp.DeepEqual(r.Calls(), []string{takeOver}))
+		assert.Check(t, !m.takingOver)
+		assert.Check(t, cmp.Equal(m.status, ""))
+	})
+	t.Run("another key cancels", func(t *testing.T) {
+		m, r := claimedPlanning(t)
+		m = drive(t, m, press("R"))
+		m, cmd := m.Update(press("x"))
+		assert.Check(t, cmd == nil)
+		assert.Check(t, !m.confirming)
+		assert.Check(t, cmp.Equal(m.pendingTakeOver, ""))
+		assert.Check(t, cmp.Len(r.Calls(), 0))
+	})
+	t.Run("a refusal shows in the status bar", func(t *testing.T) {
+		m, r := claimedPlanning(t)
+		r.fail(errors.New("the claim moved to session s-2; press R again"))
+		m = drive(t, m, press("R"))
+		m = drive(t, m, press("y"))
+		assert.Check(t, cmp.Len(r.Calls(), 1))
+		assert.Check(t, cmp.Contains(ansi.Strip(m.status), "the claim moved to session s-2; press R again"))
+		assert.Check(t, !m.takingOver)
+	})
+	t.Run("no resumer", func(t *testing.T) {
+		m, store := resumeModel(t, newFakeAgent(), "refine-units", sessionStep)
+		store.mu.Lock()
+		store.FlowV.Claimed = true
+		store.FlowV.Holder = "s-1"
+		store.mu.Unlock()
+		m = refreshed(t, m)
+		assert.Check(t, cmp.Equal(flowLines(m)[0], "Claimed by session s-1 · factory daemon release saved-plan frees it"))
+		assert.Check(t, !offersResume(m))
+	})
 }
 
 // TestRIsIgnoredWhileBusy checks that R resumes nothing while the developer

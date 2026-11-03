@@ -343,7 +343,7 @@ type daemonResume struct{}
 
 // Resume has plan planID's planner claim it again, or starts a build session
 // of it, as kind says, in the project at root.
-func (daemonResume) Resume(ctx context.Context, root, planID string, kind planstate.ResumeKind) error {
+func (daemonResume) Resume(ctx context.Context, root, planID string, kind planstate.ResumeKind, holder string) error {
 	if err := checkWatchProject(ctx, root); err != nil {
 		return err
 	}
@@ -351,6 +351,8 @@ func (daemonResume) Resume(ctx context.Context, root, planID string, kind planst
 	switch kind {
 	case planstate.ResumePlanner:
 		_, err = resumePlanner(planID, chunkd.PlannerResume{ProjectRoot: root})
+	case planstate.ResumeTakeOver:
+		_, err = resumePlanner(planID, chunkd.PlannerResume{ProjectRoot: root, ReleaseHolder: holder})
 	case planstate.ResumeBuild:
 		_, err = startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: root, PlanID: planID})
 	case planstate.ResumeNone:

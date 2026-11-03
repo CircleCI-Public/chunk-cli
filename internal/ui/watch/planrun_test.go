@@ -165,10 +165,14 @@ type fakeResumer struct {
 	err   error
 }
 
-func (r *fakeResumer) Resume(_ context.Context, root, planID string, kind planstate.ResumeKind) error {
+func (r *fakeResumer) Resume(_ context.Context, root, planID string, kind planstate.ResumeKind, holder string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, fmt.Sprintf("%s %s %d", root, planID, kind))
+	call := fmt.Sprintf("%s %s %d", root, planID, kind)
+	if holder != "" {
+		call += " " + holder
+	}
+	r.calls = append(r.calls, call)
 	return r.err
 }
 
@@ -665,6 +669,26 @@ func TestFlowListResumeCallsTheResumer(t *testing.T) {
 			assert.Check(t, cmp.Contains(screen(m), tc.want))
 		})
 	}
+}
+
+// A take-over the list confirmed reaches the resumer with the holder.
+func TestFlowListTakeOverPassesTheHolder(t *testing.T) {
+	r := &fakeResumer{}
+	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "ready"}
+	m := sized(New().WithConnection(chunkd.Connection{}).
+		WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
+		WithPlanResume(r).WithFlowList(flowList(t, flow)))
+	m = deliverThen(t, m, m.flows.Init(), 1)
+
+	next, cmd := m.Update(flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeTakeOver, Holder: "s-1"})
+	m = next.(Model)
+	assert.Check(t, cmp.Equal(m.note, "resuming Alpha…"))
+	assert.Assert(t, cmd != nil, "the take-over was not started")
+	msg := cmd()
+	assert.Check(t, cmp.DeepEqual(r.called(), []string{fmt.Sprintf("/src/chunk-cli a %d s-1", planstate.ResumeTakeOver)}))
+
+	next, _ = m.Update(msg)
+	assert.Check(t, cmp.Equal(next.(Model).note, "resumed Alpha"))
 }
 
 // Without a resumer the flow list's resume does nothing.

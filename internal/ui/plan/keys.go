@@ -180,7 +180,7 @@ func (m Model) stopOffered() bool {
 // resumeOffered is whether R is offered now.
 func (m Model) resumeOffered() bool {
 	return m.created && !m.commenting && !m.confirming && !m.askingReason &&
-		!m.resumingBuild && !m.resuming && m.resumable().Kind != planstate.ResumeNone
+		!m.resumingBuild && !m.takingOver && !m.resuming && m.resumable().Kind != planstate.ResumeNone
 }
 
 // chatKeys enables the left pane's keys: the request input's until the plan

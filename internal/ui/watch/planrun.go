@@ -96,7 +96,7 @@ func (m Model) resumePlan(msg flowlist.ResumeMsg) (Model, tea.Cmd) {
 	m.note = "resuming " + msg.Title + "…"
 	r, ctx, root := m.resumer, m.planCtx, m.root
 	return m, func() tea.Msg {
-		return planResumedMsg{title: msg.Title, err: r.Resume(ctx, root, msg.ID, msg.Kind)}
+		return planResumedMsg{title: msg.Title, err: r.Resume(ctx, root, msg.ID, msg.Kind, msg.Holder)}
 	}
 }
 
