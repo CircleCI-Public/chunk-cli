@@ -57,7 +57,13 @@ func startTestDaemonWithAuth(t *testing.T, authMessage string) {
 	// Keep the first poll hermetic: pointed at a real data dir it makes a git
 	// call per known project and can outlast the wait below.
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	runTestDaemon(t, authMessage)
+}
 
+// runTestDaemon runs RunDaemon on the current CHUNK_DAEMON_DIR until the test
+// ends, and waits for it to answer.
+func runTestDaemon(t *testing.T, authMessage string) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- RunDaemon(ctx, nil, authMessage, nil, nil) }()
@@ -565,6 +571,20 @@ func TestPingAnswersWhileTheFirstPollRuns(t *testing.T) {
 		assert.Equal(t, rec.Code, http.StatusOK)
 	case <-time.After(5 * time.Second):
 		t.Fatal("/snapshot never answered after the first poll finished")
+	}
+}
+
+// Both of the daemon's servers close a keep-alive connection left idle, so a
+// client that never closes its pool cannot pile up sockets in the daemon. They
+// set no read or write timeout, so a long /validate is not cut short.
+func TestDaemonServersCloseIdleConnections(t *testing.T) {
+	unix := newServer(newTestDaemon())
+	tcp := newTCPServer(http.NotFoundHandler(), "token")
+	for name, srv := range map[string]*http.Server{"unix": unix, "tcp": tcp} {
+		assert.Check(t, cmp.Equal(srv.IdleTimeout, idleConnTimeout), name)
+		assert.Check(t, cmp.Equal(srv.ReadHeaderTimeout, 5*time.Second), name)
+		assert.Check(t, cmp.Equal(srv.ReadTimeout, time.Duration(0)), name)
+		assert.Check(t, cmp.Equal(srv.WriteTimeout, time.Duration(0)), name)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"sort"
@@ -283,13 +282,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 
 	if tcpLn != nil {
 		log.Printf("chunk daemon started pid=%d socket=%s tcp=%s", os.Getpid(), sockPath, tcpLn.Addr())
-		// The TCP server wraps the same handler with bearer-token auth so the
-		// Unix socket (bound to the local user's filesystem) stays unauthenticated
-		// while the TCP listener enforces a shared secret.
-		tcpSrv := &http.Server{
-			Handler:           withBearerAuth(srv.Handler, chunkd.TCPToken()),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
+		tcpSrv := newTCPServer(srv.Handler, chunkd.TCPToken())
 		go func() {
 			<-ctx.Done()
 			_ = tcpSrv.Close()

@@ -56,7 +56,11 @@ func sessionCallWith(client *http.Client, method, path string, in, out any) erro
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrDaemonUnavailable, requestError(err))
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		// Read to the end, so the connection can be reused.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return ErrUnauthorized

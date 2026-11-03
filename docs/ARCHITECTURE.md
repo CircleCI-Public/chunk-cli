@@ -289,6 +289,13 @@ import `chunkd` only, so they depend on the daemon's API and never on the plan
 builds or the sidecar pool behind it. Only `cmd/daemon.go`,
 which runs the daemon, imports `server` (and tests that start a real one).
 
+Every client in a process reaches a daemon through one shared connection
+pool per socket or TCP address (`sharedTransport` in
+`internal/chunkd/transport.go`), so a long-running client such as `chunk
+watch` reuses its connections instead of opening a new one per call. New
+client code must get its transport there rather than build an
+`http.Transport` of its own. Both ends close connections left idle.
+
 Starting the daemon belongs to `chunkd` too. It is this binary re-executed as
 the hidden `chunk _daemon` (`chunkd.DaemonSubcommand`, which `cmd` registers
 under that name); callers only say when they need one, with `EnsureRunning` at

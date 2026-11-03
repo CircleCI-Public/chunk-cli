@@ -13,6 +13,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
 
+// idleConnTimeout is how long the daemon keeps a client's keep-alive
+// connection open between requests. It does not bound a request in flight,
+// so a long /validate is unaffected.
+const idleConnTimeout = 2 * time.Minute
+
 // newServer returns an http.Server whose handler serves the daemon's HTTP API.
 func newServer(d *daemon) *http.Server {
 	mux := http.NewServeMux()
@@ -109,6 +114,18 @@ func newServer(d *daemon) *http.Server {
 	return &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       idleConnTimeout,
+	}
+}
+
+// newTCPServer serves h over TCP, behind bearer-token auth, so the Unix
+// socket (bound to the local user's filesystem) stays unauthenticated while
+// the TCP listener enforces a shared secret.
+func newTCPServer(h http.Handler, token string) *http.Server {
+	return &http.Server{
+		Handler:           withBearerAuth(h, token),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       idleConnTimeout,
 	}
 }
 
