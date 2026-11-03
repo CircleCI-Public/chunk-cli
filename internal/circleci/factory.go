@@ -91,6 +91,9 @@ type Transition struct {
 	// IsDispatched is whether the task that takes it is the flow's
 	// outstanding one.
 	IsDispatched bool
+	// IsRequired is whether it is one of the transitions one of which must
+	// happen for the flow to move on.
+	IsRequired bool
 }
 
 // FlowTask is a flow's outstanding task, as its factory_task reference
@@ -143,12 +146,7 @@ const ApproveForUnits FlowEvent = "approve-for-units"
 // where factory hands the session claiming the plan its build tasks.
 const ApproveForBuilding FlowEvent = "approve-for-building"
 
-// ResolveConflicts moves a flow from Integrating - Human to Integrating -
-// Agent while its PR conflicts with its base, for factory to rebase it.
-// Factory offers it only then.
-const ResolveConflicts FlowEvent = "resolve-conflicts"
-
-// Prioritize moves a flow from Unprioritized to Agent Ready, where factory
+// Prioritize moves a flow from init to ready, where factory
 // starts work on the plan. It applies at once when no task is out.
 const Prioritize FlowEvent = "prioritize"
 
@@ -280,6 +278,7 @@ type transitionAttrs struct {
 	TaskCategory string    `json:"task_category"`
 	Action       string    `json:"action"`
 	IsDispatched bool      `json:"is_dispatched"`
+	IsRequired   bool      `json:"is_required"`
 }
 
 // transitions is next as served, every entry kept in order: nil when next
@@ -606,8 +605,9 @@ func (c *Client) SetPlanText(ctx context.Context, id, text string) error {
 	return nil
 }
 
-// GetFlow returns factory plan planID's flow. A plan made before conductor
-// gave every plan a flow has none, a 404.
+// GetFlow returns factory plan planID's flow. A 404 is a plan with no flow:
+// factory has not created it yet, or deleted it with its plan. An ended plan
+// keeps its flow.
 func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	var attrs flowAttrs
 	var refs flowRefs

@@ -83,19 +83,24 @@ func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error
 	if id != f.id || f.noFlow {
 		return nil, &circleci.StatusError{StatusCode: http.StatusNotFound}
 	}
-	// As factory lists the events that apply in next, for the developer,
-	// after any task a session takes.
+	// Serve next and waiting_on as factory does.
 	var next []circleci.Transition
+	waitingOn := ""
 	if f.task != "" {
 		next = append(next, circleci.Transition{Actor: "session", TaskCategory: f.task, IsDispatched: true})
+		waitingOn = "session"
 	}
 	for _, e := range f.events {
-		next = append(next, circleci.Transition{Actor: "human", Event: e})
+		next = append(next, circleci.Transition{Actor: "human", Event: e, IsRequired: true})
+	}
+	if waitingOn == "" && len(f.events) > 0 {
+		waitingOn = "human"
 	}
 	return &circleci.Flow{
 		ID: id, State: f.state, Phase: f.phase, Outcome: f.outcome, SessionID: f.holder,
 		ApplicableEvents: append([]circleci.FlowEvent(nil), f.events...),
 		Next:             next,
+		WaitingOn:        waitingOn,
 	}, nil
 }
 
@@ -320,7 +325,7 @@ func newPlanBuildDaemon(t *testing.T) *planBuildDaemon {
 	t.Cleanup(func() { planBuildPoll = old })
 	pb := &planBuildDaemon{
 		daemon: d, root: root, build: newFakeBuild(),
-		plans: &fakePlans{id: "plan-1", state: "Planning - Human", phase: circleci.PhaseStarted,
+		plans: &fakePlans{id: "plan-1", state: "refine-proposal", phase: circleci.PhaseStarted,
 			content: circleci.PlanStructuredContent{Units: []circleci.PlanUnit{{Name: "Unit 1: Add it"}}}},
 	}
 	d.rcfg.PlanAPI = pb.plans
@@ -457,10 +462,10 @@ func TestPlanBuildEndsWithThePlan(t *testing.T) {
 			assert.NilError(t, err)
 			entry := pb.sessions.get(sess.ID)
 
-			pb.plans.set("Building - Agent", "scott/add-a-flag")
+			pb.plans.set("build", "scott/add-a-flag")
 			waitUntil(t, "the plan's state and branch", func() bool {
 				f := entry.snapshot().Factory
-				return f.PlanState == "Building - Agent" && f.Branch == "scott/add-a-flag"
+				return f.PlanState == "build" && f.Branch == "scott/add-a-flag"
 			})
 			assert.Check(t, cmp.Equal(entry.snapshot().Branch, "scott/add-a-flag"))
 
@@ -576,12 +581,12 @@ func TestPlanBuildSkipsAFailedFlowRead(t *testing.T) {
 
 	pb.plans.mu.Lock()
 	pb.plans.flowErr = errors.New("factory is down")
-	pb.plans.state = "Done"
+	pb.plans.state = "ended"
 	pb.plans.mu.Unlock()
 	time.Sleep(10 * planBuildPoll)
 	f := entry.snapshot().Factory
 	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
-	assert.Check(t, cmp.Equal(f.PlanState, "Planning - Human"))
+	assert.Check(t, cmp.Equal(f.PlanState, "refine-proposal"))
 
 	// The end is read from the flow, so the build sees it once a read
 	// succeeds again.
@@ -645,7 +650,7 @@ func TestPlanBuildNeedsCircleCI(t *testing.T) {
 func TestPlanBuildResumesAnUnclaimedPlan(t *testing.T) {
 	pb := newPlanBuildDaemon(t)
 	pb.plans.mu.Lock()
-	pb.plans.state, pb.plans.task = "Building - Agent", "build-unit"
+	pb.plans.state, pb.plans.task = "build", "build-unit"
 	pb.plans.mu.Unlock()
 
 	id := startedID(t, pb.postBuild(t))
@@ -666,7 +671,7 @@ func TestPlanBuildResumesAnUnclaimedPlan(t *testing.T) {
 	entry := pb.sessions.get(id)
 	time.Sleep(5 * planBuildPoll)
 	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
-	assert.Check(t, cmp.Equal(entry.snapshot().Factory.PlanState, "Building - Agent"))
+	assert.Check(t, cmp.Equal(entry.snapshot().Factory.PlanState, "build"))
 	_ = pb.stopBuild(t, id)
 }
 
@@ -719,7 +724,7 @@ func TestPlanBuildRouteRefuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pb := newPlanBuildDaemon(t)
 			pb.plans.mu.Lock()
-			pb.plans.state = "Building - Agent"
+			pb.plans.state = "build"
 			tc.setup(pb)
 			pb.plans.mu.Unlock()
 

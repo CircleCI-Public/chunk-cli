@@ -42,7 +42,7 @@ func newApproveDaemon(t *testing.T) *approveDaemon {
 	// newPlannerDaemon puts it back.
 	t.Cleanup(ad.sessions.stopAll)
 	ad.plans.mu.Lock()
-	ad.plans.state = "Planning - Human"
+	ad.plans.state = "refine-proposal"
 	ad.plans.events = []circleci.FlowEvent{circleci.ApproveForBuilding}
 	ad.plans.content = circleci.PlanStructuredContent{Units: []circleci.PlanUnit{{Name: "Unit 1: Add it"}}}
 	ad.plans.mu.Unlock()
@@ -163,7 +163,7 @@ func TestPlanApproveRefuses(t *testing.T) {
 		{
 			name: "not ready",
 			setup: func(ad *approveDaemon) {
-				ad.plans.set("Planning - Agent", "")
+				ad.plans.set("refine-proposal", "")
 				ad.plans.mu.Lock()
 				defer ad.plans.mu.Unlock()
 				ad.plans.task = "review-plan"
@@ -191,7 +191,7 @@ func TestPlanApproveRefuses(t *testing.T) {
 				ad.plans.events = []circleci.FlowEvent{circleci.AnswerOpenQuestions}
 			},
 			status:   http.StatusConflict,
-			contains: planapprove.ErrQuestionsOpen.Error(),
+			contains: planapprove.ErrNoApproval.Error(),
 		},
 		{
 			name: "built from the plan's worktree",
@@ -230,16 +230,6 @@ func TestPlanApproveRefuses(t *testing.T) {
 			},
 			status:   http.StatusBadGateway,
 			contains: "get the plan's flow: 503 from factory",
-		},
-		{
-			name: "factory fails the units read",
-			setup: func(ad *approveDaemon) {
-				ad.plans.mu.Lock()
-				defer ad.plans.mu.Unlock()
-				ad.plans.unitsErr = errors.New("404 from factory")
-			},
-			status:   http.StatusBadGateway,
-			contains: "get the plan's units: 404 from factory",
 		},
 		{
 			name: "no factory API",

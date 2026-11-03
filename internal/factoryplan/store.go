@@ -14,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
+	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
@@ -103,7 +104,7 @@ func (s *Store) State(ctx context.Context) (string, error) {
 }
 
 // Flow is the plan's flow as factory has it now; empty before the plan is
-// created or has a flow.
+// created or while it has no flow (see circleci.Client.GetFlow).
 func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 	id := s.ID()
 	if id == "" {
@@ -150,6 +151,7 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 				Task:       t.TaskCategory,
 				Action:     t.Action,
 				Dispatched: t.IsDispatched,
+				Required:   t.IsRequired,
 			}
 		}
 	}
@@ -266,21 +268,8 @@ func (s *Store) AnswerOpenQuestions(ctx context.Context) error {
 	return nil
 }
 
-// ResolveConflicts sends the plan's flow factory's resolve-conflicts event,
-// which hands a plan whose PR conflicts back to the agent to rebase.
-func (s *Store) ResolveConflicts(ctx context.Context) error {
-	id := s.ID()
-	if id == "" {
-		return errNotCreated
-	}
-	if err := s.api.CreateFlowEvent(ctx, id, circleci.ResolveConflicts); err != nil {
-		return fmt.Errorf("send the resolve-conflicts event: %w", err)
-	}
-	return nil
-}
-
 // StartWork sends the plan's flow factory's prioritize event, which moves an
-// Unprioritized plan on for factory to start work on it.
+// init plan on for factory to start work on it.
 func (s *Store) StartWork(ctx context.Context) error {
 	id := s.ID()
 	if id == "" {
@@ -319,10 +308,10 @@ func (s *Store) Delete(ctx context.Context) error {
 }
 
 // ApproveDesign sends the plan's flow factory's approve-for-units event,
-// which approves its design. A flow that does not list the event now is
-// refused without sending it: with ErrDesignApproved when it lists
-// approve-for-building instead, and with planapprove.ErrQuestionsOpen when
-// it lists neither. A plan with no flow yet sends it.
+// which approves its design, when planstate.Approval offers it. Otherwise
+// it is refused without sending it: with ErrDesignApproved when
+// approve-for-building is offered instead, and with
+// planapprove.ErrNoApproval when no approval is.
 func (s *Store) ApproveDesign(ctx context.Context) error {
 	id := s.ID()
 	if id == "" {
@@ -332,12 +321,16 @@ func (s *Store) ApproveDesign(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get the flow's events: %w", err)
 	}
-	events := f.Events
-	if events != nil && !slices.Contains(events, string(circleci.ApproveForUnits)) {
-		if slices.Contains(events, string(circleci.ApproveForBuilding)) {
-			return ErrDesignApproved
-		}
-		return planapprove.ErrQuestionsOpen
+	next := make([]planstate.Move, len(f.Next))
+	for i, step := range f.Next {
+		next[i] = planstate.Move{Actor: string(step.Actor), Event: step.Event, Required: step.Required}
+	}
+	switch planstate.Approval(next) {
+	case planstate.ApproveForBuilding:
+		return ErrDesignApproved
+	case "":
+		return planapprove.ErrNoApproval
+	case planstate.ApproveForUnits:
 	}
 	if err := s.api.CreateFlowEvent(ctx, id, circleci.ApproveForUnits); err != nil {
 		return fmt.Errorf("send the approve-for-units event: %w", err)

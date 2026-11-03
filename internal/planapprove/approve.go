@@ -1,5 +1,5 @@
-// Package planapprove approves a factory plan for building: it checks the
-// plan's review has passed and its units are written, and frees its claim
+// Package planapprove approves a factory plan for building: it checks
+// factory waits on the developer to approve the plan, and frees its claim
 // from a session that is only planning it.
 package planapprove
 
@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
@@ -19,7 +18,6 @@ import (
 // API is what approving a plan needs of factory: *circleci.Client.
 type API interface {
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
-	PlanStructuredContent(ctx context.Context, id string) (*circleci.PlanStructuredContent, error)
 	ReleaseClaim(ctx context.Context, sessionID, planID string) error
 	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
 }
@@ -28,30 +26,32 @@ type API interface {
 // factory.SessionWorktree.
 type Locate func(ctx context.Context, session string) (string, error)
 
-// ErrNotReady is returned by Approve for a plan whose review has not passed:
-// factory has not made it planstate.ReadyToApprove.
+// ErrNotReady is returned by Approve for a plan whose flow does not wait on
+// the developer, such as one whose review has not passed, or that has ended.
 var ErrNotReady = errors.New("the plan is not ready yet: wait for its review to pass")
 
 // ErrBeingBuilt is returned by Approve for a plan a session that may be building it holds.
 var ErrBeingBuilt = errors.New("the plan is already being built")
 
-// ErrNoUnits is returned by Approve for a planstate.ReadyToApprove plan
-// whose design, not the plan, is what waits for approval, as
-// planstate.StageOf decides.
+// ErrNoUnits is returned by Approve for a plan whose flow requires
+// approve-for-units but not approve-for-building, as planstate.Approval
+// decides: its design, not the plan, is what waits for approval.
 var ErrNoUnits = errors.New("the plan has no units yet: approve its design with ctrl+s, so chunk writes them")
 
-// ErrQuestionsOpen is returned by Approve for a plan whose flow offers
-// neither approval, as planstate.StageOf decides: its 3. Open Questions
-// wait for answers in comments, sent before either is approved.
-var ErrQuestionsOpen = errors.New("the plan has open questions: answer 3. Open Questions in comments, then send them")
+// ErrNoApproval is returned by Approve for a plan whose flow offers no
+// approval, as planstate.Approval decides: another step, such as answering
+// 3. Open Questions, comes first.
+var ErrNoApproval = errors.New("factory offers no approval yet: " +
+	"do what the plan screen's Next says first")
 
-// Approve approves factory plan planID for building once its review has
-// passed, first releasing a claim held by session, the plan's planning
-// session, or by one locate places outside worktree. It refuses a claim
-// held from worktree itself, or by a session factory's daemon does not know,
-// as either may be building the plan. The flow, content, units and claim are read
-// from factory, so a plan that moved after a screen last polled is still
-// refused.
+// Approve approves factory plan planID for building when its flow waits on
+// the developer and factory requires approve-for-building, beside
+// approve-for-units or not, first releasing a claim held by session, the
+// plan's planning session, or by one locate places outside worktree. It
+// refuses a claim held from worktree itself, or by a session factory's
+// daemon does not know, as either may be building the plan. The flow and
+// its claim are read from factory, so a plan that moved after a screen last
+// polled is still refused.
 func Approve(ctx context.Context, api API, locate Locate, planID, session, worktree string) error {
 	f, err := api.GetFlow(ctx, planID)
 	if isNotFound(err) {
@@ -60,30 +60,19 @@ func Approve(ctx context.Context, api API, locate Locate, planID, session, workt
 	if err != nil {
 		return fmt.Errorf("get the plan's flow: %w", err)
 	}
-	next := make([]planstate.Move, len(f.Next))
-	for i, t := range f.Next {
-		next[i] = planstate.Move{Actor: t.Actor, Event: string(t.Event)}
-	}
-	if !planstate.ReadyToApprove(f.State, next) {
+	if f.WaitingOn != planstate.Human {
 		return ErrNotReady
 	}
-	sc, err := api.PlanStructuredContent(ctx, planID)
-	if err != nil {
-		return fmt.Errorf("get the plan's units: %w", err)
+	next := make([]planstate.Move, len(f.Next))
+	for i, t := range f.Next {
+		next[i] = planstate.Move{Actor: t.Actor, Event: string(t.Event), Required: t.IsRequired}
 	}
-	if strings.TrimSpace(sc.Markdown()) == "" {
-		return errors.New("the plan in factory is empty")
-	}
-	events := make([]string, len(f.ApplicableEvents))
-	for i, e := range f.ApplicableEvents {
-		events[i] = string(e)
-	}
-	switch planstate.StageOf(events, len(sc.Units)) {
-	case planstate.StageDesign:
+	switch planstate.Approval(next) {
+	case planstate.ApproveForUnits:
 		return ErrNoUnits
-	case planstate.StageQuestions:
-		return ErrQuestionsOpen
-	case planstate.StagePlan:
+	case "":
+		return ErrNoApproval
+	case planstate.ApproveForBuilding:
 		// The plan is what waits for approval: send it below.
 	}
 	if f.SessionID != "" {

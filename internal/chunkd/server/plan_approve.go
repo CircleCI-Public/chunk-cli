@@ -151,7 +151,7 @@ func (p *planner) stopSession() {
 // approveProblem is a failed planapprove.Approve as the route answers it:
 // a refusal is 409, a factory failure 502.
 func approveProblem(err error) error {
-	for _, s := range []error{planapprove.ErrNotReady, planapprove.ErrNoUnits, planapprove.ErrQuestionsOpen, planapprove.ErrBeingBuilt} {
+	for _, s := range []error{planapprove.ErrNotReady, planapprove.ErrNoUnits, planapprove.ErrNoApproval, planapprove.ErrBeingBuilt} {
 		if errors.Is(err, s) {
 			return apiErr(http.StatusConflict, "%s", err.Error())
 		}

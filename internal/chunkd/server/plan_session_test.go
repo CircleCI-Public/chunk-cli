@@ -55,7 +55,7 @@ func newPlannerDaemon(t *testing.T) *plannerDaemon {
 
 	pd := &plannerDaemon{
 		daemon: d, root: root,
-		plans:  &fakePlans{id: "plan-1", state: "Planning - Agent", phase: circleci.PhaseStarted},
+		plans:  &fakePlans{id: "plan-1", state: "refine-proposal", phase: circleci.PhaseStarted},
 		starts: &fakeStarts{},
 		rec:    &memRecord{},
 		mux:    http.NewServeMux(),
@@ -748,15 +748,17 @@ func (p prunePlans) GetFlow(ctx context.Context, id string) (*circleci.Flow, err
 		return &circleci.Flow{ID: id, Phase: circleci.PhaseEnded, Outcome: "merged"}, nil
 	case "live":
 		return &circleci.Flow{ID: id, Phase: circleci.PhaseStarted}, nil
-	case "gone":
+	case "gone", "flowless":
 		return nil, &circleci.StatusError{StatusCode: http.StatusNotFound}
+	case "failing":
+		return nil, &circleci.StatusError{StatusCode: http.StatusInternalServerError}
 	}
 	return p.fakePlans.GetFlow(ctx, id)
 }
 
 func (p prunePlans) GetPlan(ctx context.Context, id string) (*circleci.Plan, error) {
 	switch id {
-	case "ended", "live":
+	case "ended", "live", "flowless", "failing":
 		return &circleci.Plan{ID: id}, nil
 	case "gone":
 		return nil, &circleci.StatusError{StatusCode: http.StatusNotFound}
@@ -765,14 +767,16 @@ func (p prunePlans) GetPlan(ctx context.Context, id string) (*circleci.Plan, err
 }
 
 // Before it opens its plan's worktree, a planner removes those of plans that
-// have ended, never its own.
+// have ended, never its own. A plan with no flow is over only once factory
+// has no plan either; one still there is live, and a flow read that fails
+// leaves the worktree.
 func TestPlannerPrunesEndedPlansWorktrees(t *testing.T) {
 	pd := newPlannerDaemon(t)
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	git(t, pd.root, "init", "--bare", "-b", "main", origin)
 	git(t, pd.root, "remote", "add", "origin", origin)
 	git(t, pd.root, "push", "origin", "HEAD:main")
-	ids := []string{"ended", "gone", "live", "plan-1"}
+	ids := []string{"ended", "failing", "flowless", "gone", "live", "plan-1"}
 	for _, id := range ids {
 		_, err := factory.OpenPlanWorktree(t.Context(), pd.root, id)
 		assert.NilError(t, err)
@@ -789,5 +793,5 @@ func TestPlannerPrunesEndedPlansWorktrees(t *testing.T) {
 			kept = append(kept, id)
 		}
 	}
-	assert.Check(t, cmp.DeepEqual(kept, []string{"live", "plan-1"}))
+	assert.Check(t, cmp.DeepEqual(kept, []string{"failing", "flowless", "live", "plan-1"}))
 }

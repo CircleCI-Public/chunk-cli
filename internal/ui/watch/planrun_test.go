@@ -65,18 +65,23 @@ func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 	if f.flow != nil {
 		return *f.flow, nil
 	}
+	// Factory requires the design's approval before the plan has units, and
+	// the plan's once it has them.
+	required := "approve-for-units"
+	if len(f.units) > 0 {
+		required = "approve-for-building"
+	}
 	events := []string{"address-comments", "approve-for-units", "approve-for-building"}
 	var next []plan.Step
 	for _, e := range events {
-		next = append(next, plan.Step{Actor: "human", Event: e})
+		next = append(next, plan.Step{Actor: "human", Event: e, Required: e == required})
 	}
-	return plan.Flow{State: "Planning - Human", Events: events, Next: next}, nil
+	return plan.Flow{State: "refine-proposal", WaitingOn: "human", Events: events, Next: next}, nil
 }
 func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return plan.Family{}, nil }
 func (f *fakePlanStore) Units(context.Context) ([]plan.Unit, error)  { return f.units, nil }
 func (f *fakePlanStore) AddressComments(context.Context) error       { return nil }
 func (f *fakePlanStore) AnswerOpenQuestions(context.Context) error   { return nil }
-func (f *fakePlanStore) ResolveConflicts(context.Context) error      { return nil }
 func (f *fakePlanStore) StartWork(context.Context) error             { return nil }
 func (f *fakePlanStore) Abandon(context.Context, string) error       { return nil }
 func (f *fakePlanStore) Delete(context.Context) error                { return nil }
@@ -636,7 +641,7 @@ func TestFlowListResumeCallsTheResumer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &fakeResumer{err: tc.err}
-			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Building - Agent",
+			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "build",
 				Next: []circleci.Transition{{Actor: "session", TaskCategory: "build-unit"}}}
 			m := sized(New().WithConnection(chunkd.Connection{}).
 				WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
@@ -673,8 +678,9 @@ func TestFlowListResumeWithoutAResumer(t *testing.T) {
 func TestOpenedScreensGetTheResumer(t *testing.T) {
 	r := &fakeResumer{}
 	f := &fakePlans{plan: "# Retry uploads", flow: &plan.Flow{
-		State: "Building - Agent",
-		Next:  []plan.Step{{Actor: "session", Task: "build-unit"}},
+		State:     "build",
+		Next:      []plan.Step{{Actor: "session", Task: "build-unit"}},
+		WaitingOn: "session",
 	}}
 	m := planModel(t, f).WithPlanResume(r)
 	next, cmd := m.Update(flowlist.OpenMsg{ID: "p1", Title: "Retry uploads"})
@@ -708,7 +714,7 @@ func TestFlowListDeleteCallsTheDeleter(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &fakeDeleter{err: tc.err}
-			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal"}
 			m := sized(New().WithConnection(chunkd.Connection{}).
 				WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
 				WithPlanDelete(d).WithFlowList(flowList(t, flow)))
@@ -735,7 +741,7 @@ func TestFlowListDeleteCallsTheDeleter(t *testing.T) {
 // selected flow through the deleter.
 func TestDeleteKeysReachTheListThroughTheDashboard(t *testing.T) {
 	d := &fakeDeleter{}
-	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal"}
 	m := sized(New().WithConnection(chunkd.Connection{}).
 		WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
 		WithPlanDelete(d).WithFlowList(flowList(t, flow)))
@@ -768,7 +774,7 @@ func TestFlowListDeleteWithoutADeleter(t *testing.T) {
 // the result arrives.
 func TestDeleteInFlight(t *testing.T) {
 	d := &fakeDeleter{gate: make(chan struct{})}
-	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal"}
 	m := sized(New().WithConnection(chunkd.Connection{}).
 		WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
 		WithPlanDelete(d).WithFlowList(flowList(t, flow)))

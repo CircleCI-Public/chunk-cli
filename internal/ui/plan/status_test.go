@@ -6,8 +6,6 @@ import (
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
-
-	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 )
 
 // FlowText is the status strip's step, now and next, as a line, from the
@@ -21,24 +19,30 @@ func TestFlowText(t *testing.T) {
 	}{
 		{
 			name:  "not started",
-			state: "Unprioritized",
-			want:  "Not started",
+			state: "init",
+			flow:  Flow{WaitingOn: "daemon"},
+			want:  "Not started › Next: waiting on factory",
 		},
 		{
 			name:  "in review",
-			state: "Planning - Agent",
-			flow:  Flow{Next: []Step{{Actor: "session", Task: "review-plan", Dispatched: true}}},
-			want:  "Planning › Now: factory is reviewing the plan › Next: chunk: review-plan",
+			state: "refine-units",
+			flow: Flow{
+				WaitingOn: "session",
+				Next:      []Step{{Actor: "session", Task: "review-plan", Dispatched: true}},
+			},
+			want: "Planning › Now: factory is reviewing the plan › Next: waiting on chunk",
 		},
 		{
 			name:  "building a unit",
-			state: "Building - Agent",
+			state: "build",
 			task:  "build-unit",
 			flow: Flow{
-				Unit: "Unit 2: parser",
-				Next: []Step{{Actor: "session", Task: "build-unit", Dispatched: true}},
+				Unit:         "Unit 2: parser",
+				WaitingOn:    "session",
+				WaitingOnWhy: "chunk is building Unit 2: parser",
+				Next:         []Step{{Actor: "session", Task: "build-unit", Dispatched: true}},
 			},
-			want: "Building › Now: Build unit · Unit 2: parser › Next: chunk: build-unit",
+			want: "Building › Now: Build unit · Unit 2: parser › Next: chunk is building Unit 2: parser",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,172 +58,241 @@ func TestFlowText(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
+	human := func(event string, required bool) Step {
+		return Step{Actor: "human", Event: event, Required: required}
+	}
 	for _, tc := range []struct {
 		name            string
 		flow            Flow
 		family          Family
-		stage           planstate.Stage
 		inReview        bool
 		step, now, next string
 	}{
 		{
-			name: "not started",
-			flow: Flow{State: "Unprioritized"},
+			name: "not started, waiting on factory",
+			flow: Flow{State: "init", WaitingOn: "daemon"},
 			step: "Not started",
-		},
-		{
-			name: "in review",
-			flow: Flow{
-				State: "Planning - Agent",
-				Next:  []Step{{Actor: "session", Task: "review-plan", Dispatched: true}},
-			},
-			inReview: true,
-			step:     "Planning",
-			now:      "factory is reviewing the plan",
-			next:     "chunk: review-plan",
-		},
-		{
-			name:  "design waits",
-			flow:  Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
-			stage: planstate.StageDesign,
-			step:  "Planning",
-			next:  "you approve the design · ctrl+s",
-		},
-		{
-			name:  "plan waits",
-			flow:  Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
-			stage: planstate.StagePlan,
-			step:  "Planning",
-			next:  "you approve the plan · ctrl+s",
-		},
-		{
-			name:  "questions",
-			flow:  Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
-			stage: planstate.StageQuestions,
-			step:  "Planning",
-			next:  "you answer 3. Open Questions in comments",
-		},
-		{
-			name: "building a unit",
-			flow: Flow{
-				State: "Building - Agent",
-				Task:  "build-unit",
-				Unit:  "Unit 2: parser",
-				Next:  []Step{{Actor: "session", Task: "build-unit", Dispatched: true}},
-			},
-			step: "Building",
-			now:  "Build unit · Unit 2: parser",
-			next: "chunk: build-unit",
-		},
-		{
-			name: "conflicts",
-			flow: Flow{
-				State: "Integrating - Human",
-				Next:  []Step{{Actor: "human", Event: "resolve-conflicts"}},
-			},
-			step: "Integrating",
-			next: "you resolve conflicts · ctrl+s",
-		},
-		{
-			name: "merge",
-			flow: Flow{
-				State: "Integrating - Human",
-				Next:  []Step{{Actor: "human", Action: "merge-pr"}},
-			},
-			step: "Integrating",
-			next: "you merge the PR",
-		},
-		{
-			name: "daemon task",
-			flow: Flow{
-				State: "Integrating - Agent",
-				Next:  []Step{{Actor: "daemon", Task: "pr-state"}},
-			},
-			step: "Integrating",
-			next: "factory: pr-state",
-		},
-		{
-			name: "unknown actor and event",
-			flow: Flow{
-				State: "Building - Agent",
-				Next:  []Step{{Actor: "robot", Event: "poke"}},
-			},
-			step: "Building",
-			next: "robot: poke",
-		},
-		{
-			name: "transition with nothing set",
-			flow: Flow{
-				State: "Building - Agent",
-				Next:  []Step{{Actor: "session"}},
-			},
-			step: "Building",
-			next: "chunk",
+			next: "waiting on factory",
 		},
 		{
 			name: "start work",
-			flow: Flow{
-				State: "Unprioritized",
-				Next: []Step{
-					{Actor: "human", Event: "prioritize"},
-					{Actor: "human", Event: "abandon"},
-				},
-			},
+			flow: Flow{State: "init", WaitingOn: "human", Next: []Step{
+				human("prioritize", true), human("abandon", false),
+			}},
 			step: "Not started",
 			next: "you start work · ctrl+s",
 		},
 		{
-			name: "only request-revision and abandon",
-			flow: Flow{State: "Building - Human", Next: []Step{{Actor: "session", Event: "request-revision"}, {Actor: "human", Event: "abandon"}}},
-			step: "Building",
-			next: "",
-		},
-		{
-			name: "comments beside request-revision",
-			flow: Flow{State: "Building - Human", Next: []Step{{Actor: "session", Event: "request-revision"}, {Actor: "human", Event: "address-comments"}}},
-			step: "Building",
-			next: "you send your comments",
-		},
-		{
-			name: "stuck with no blockers",
-			flow: Flow{State: "Building - Agent"},
-			step: "Building",
-		},
-		{
-			name: "merged",
+			name: "in review",
 			flow: Flow{
-				State:   "Done",
-				Ended:   true,
-				Outcome: "merged",
+				State:     "refine-units",
+				WaitingOn: "session",
+				Next:      []Step{{Actor: "session", Task: "review-plan", Dispatched: true}},
 			},
+			inReview: true,
+			step:     "Planning",
+			now:      "factory is reviewing the plan",
+			next:     "waiting on chunk",
+		},
+		{
+			name: "waits on you to approve the design",
+			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
+				human("address-comments", false), human("approve-for-units", true), human("abandon", false),
+			}},
+			step: "Planning",
+			next: "you approve the design · ctrl+s",
+		},
+		{
+			name: "the plan is approved when both are required",
+			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
+				human("approve-for-units", true), human("approve-for-building", true),
+			}},
+			step: "Planning",
+			next: "you approve the plan · ctrl+s",
+		},
+		{
+			name: "waits on you to approve the plan",
+			flow: Flow{State: "refine-units", WaitingOn: "human", Next: []Step{
+				human("address-comments", false), human("approve-for-building", true), human("abandon", false),
+			}},
+			step: "Planning",
+			next: "you approve the plan · ctrl+s",
+		},
+		{
+			name: "no approval when nothing is required",
+			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
+				human("address-comments", false), human("approve-for-units", false),
+			}},
+			step: "Planning",
+			next: "you",
+		},
+		{
+			name: "open questions",
+			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
+				human("address-comments", false), human("approve-for-units", false),
+				human("answer-open-questions", true), human("abandon", false),
+			}},
+			step: "Planning",
+			next: "you answer 3. Open Questions in comments",
+		},
+		{
+			name: "building a unit",
+			flow: Flow{
+				State:     "build",
+				Task:      "build-unit",
+				Unit:      "Unit 2: parser",
+				WaitingOn: "session",
+				Next:      []Step{{Actor: "session", Task: "build-unit", Dispatched: true}},
+			},
+			step: "Building",
+			now:  "Build unit · Unit 2: parser",
+			next: "waiting on chunk",
+		},
+		{
+			name: "merge the PR",
+			flow: Flow{State: "integrate", WaitingOn: "human", Next: []Step{
+				human("address-comments", false),
+				{Actor: "human", Action: "merge-pr", Required: true},
+				human("abandon-integrate", false),
+			}},
+			step: "Integrating",
+			next: "you merge the PR",
+		},
+		{
+			name: "an unknown human action",
+			flow: Flow{State: "integrate", WaitingOn: "human", Next: []Step{
+				{Actor: "human", Action: "squash", Required: true},
+			}},
+			step: "Integrating",
+			next: "you squash",
+		},
+		{
+			name: "a human entry not required is not next",
+			flow: Flow{State: "build", WaitingOn: "human", Next: []Step{
+				human("address-comments", false), human("abandon", false),
+			}},
+			step: "Building",
+			next: "you",
+		},
+		{
+			name: "the developer, with why",
+			flow: Flow{State: "build", WaitingOn: "human", WaitingOnWhy: "review the PR", Next: []Step{
+				human("abandon", false),
+			}},
+			step: "Building",
+			next: "review the PR",
+		},
+		{
+			name: "a session at work, with why",
+			flow: Flow{State: "build", WaitingOn: "session", WaitingOnWhy: "chunk is building Unit 2"},
+			step: "Building",
+			next: "chunk is building Unit 2",
+		},
+		{
+			name: "a session, no why",
+			flow: Flow{State: "build", WaitingOn: "session"},
+			step: "Building",
+			next: "waiting on chunk",
+		},
+		{
+			name: "the daemon, no why",
+			flow: Flow{State: "integrate", WaitingOn: "daemon", Next: []Step{{Actor: "daemon", Task: "pr-state"}}},
+			step: "Integrating",
+			next: "waiting on factory",
+		},
+		{
+			name: "the daemon, with why",
+			flow: Flow{State: "integrate", WaitingOn: "daemon", WaitingOnWhy: "CI is running"},
+			step: "Integrating",
+			next: "CI is running",
+		},
+		{
+			name: "sub-plans, no why",
+			flow: Flow{State: "build", WaitingOn: "sub-plans"},
+			step: "Building",
+			next: "waiting on sub-plans",
+		},
+		{
+			name:   "blocked",
+			flow:   Flow{State: "build", WaitingOn: "blockers"},
+			family: Family{Blockers: []Relative{{Title: "retry-config", Active: true}}},
+			step:   "Building",
+			next:   "Waiting on retry-config",
+		},
+		{
+			name: "waits on the first blocker active",
+			flow: Flow{State: "build", WaitingOn: "blockers"},
+			family: Family{Blockers: []Relative{
+				{Title: "a", State: "ended", Outcome: "merged"},
+				{Title: "b", State: "build", Active: true},
+			}},
+			step: "Building",
+			next: "Waiting on b",
+		},
+		{
+			name: "no blocker active, with why",
+			flow: Flow{State: "build", WaitingOn: "blockers", WaitingOnWhy: "a blocker is integrating"},
+			family: Family{Blockers: []Relative{
+				{Title: "a", State: "integrate"},
+			}},
+			step: "Building",
+			next: "a blocker is integrating",
+		},
+		{
+			name: "blockers not loaded",
+			flow: Flow{State: "build", WaitingOn: "blockers"},
+			step: "Building",
+			next: "waiting on blockers",
+		},
+		{
+			name:   "a blocker active, waiting on someone else",
+			flow:   Flow{State: "build", WaitingOn: "session"},
+			family: Family{Blockers: []Relative{{Title: "a", Active: true}}},
+			step:   "Building",
+			next:   "waiting on chunk",
+		},
+		{
+			name: "an unknown actor",
+			flow: Flow{State: "build", WaitingOn: "robot"},
+			step: "Building",
+		},
+		{
+			name: "waiting on nobody",
+			flow: Flow{State: "ended", Ended: true, Outcome: "merged"},
 			step: "Done · merged",
 		},
 		{
-			name: "canceled",
-			flow: Flow{
-				State:   "Canceled",
-				Ended:   true,
-				Outcome: "canceled",
-			},
-			step: "Done · canceled",
-		},
-		{
 			name: "ended canceled",
-			flow: Flow{
-				State:   "ended",
-				Ended:   true,
-				Outcome: "canceled",
-			},
+			flow: Flow{State: "ended", Ended: true, Outcome: "canceled"},
 			step: "Done · canceled",
 		},
 		{
-			name: "new name for a phase",
-			flow: Flow{
-				State: "build",
-				Next:  []Step{{Actor: "session", Task: "build-unit", Dispatched: true}},
-			},
-			step: "Building",
-			next: "chunk: build-unit",
+			name:   "ended with a blocker",
+			flow:   Flow{State: "ended", Ended: true, Outcome: "merged"},
+			family: Family{Blockers: []Relative{{Title: "a", State: "build", Active: true}}},
+			step:   "Done · merged",
+		},
+		{
+			name: "an ended plan with no state",
+			flow: Flow{Ended: true},
+			step: "Done",
+		},
+		{
+			name: "ready reads Planning",
+			flow: Flow{State: "ready", WaitingOn: "session"},
+			step: "Planning",
+			next: "waiting on chunk",
+		},
+		{
+			name: "stand-by",
+			flow: Flow{State: "stand-by", WaitingOn: "human"},
+			step: "Standing by",
+			next: "you",
+		},
+		{
+			name: "an old name is shown as given",
+			flow: Flow{State: "Planning - Human"},
+			step: "Planning - Human",
 		},
 		{
 			name: "unknown state",
@@ -227,176 +300,14 @@ func TestStatus(t *testing.T) {
 			step: "Paused now",
 		},
 		{
-			name: "address comments",
-			flow: Flow{
-				State: "Building - Human",
-				Next:  []Step{{Actor: "human", Event: "address-comments"}},
-			},
+			name: "why is cleaned",
+			flow: Flow{State: "build", WaitingOn: "daemon", WaitingOnWhy: "Paused\x1b[31m now\n"},
 			step: "Building",
-			next: "you send your comments",
-		},
-		{
-			name: "building waits on open questions",
-			flow: Flow{
-				State: "Building - Human",
-				Next: []Step{
-					{Actor: "human", Event: "answer-open-questions"},
-					{Actor: "human", Event: "abandon"},
-				},
-			},
-			step: "Building",
-			next: "you answer 3. Open Questions in comments",
-		},
-		{
-			name: "integrating waits on open questions",
-			flow: Flow{
-				State: "Integrating - Human",
-				Next: []Step{
-					{Actor: "human", Event: "answer-open-questions"},
-					{Actor: "human", Event: "abandon-integrate"},
-					{Actor: "human", Event: "abandon"},
-				},
-			},
-			step: "Integrating",
-			next: "you answer 3. Open Questions in comments",
-		},
-		{
-			name: "blockers wait only while next is empty",
-			flow: Flow{
-				State: "Planning - Human",
-				Next:  []Step{{Actor: "human", Event: "approve-for-building"}},
-			},
-			family: Family{Blockers: []Relative{{Title: "retry-config", Active: true}}},
-			stage:  planstate.StagePlan,
-			step:   "Planning",
-			next:   "you approve the plan · ctrl+s",
-		},
-		{
-			name:   "blocked",
-			flow:   Flow{State: "Building - Agent"},
-			family: Family{Blockers: []Relative{{Title: "retry-config", Active: true}}},
-			step:   "Building",
-			next:   "Waiting on retry-config",
-		},
-		{
-			name: "waits on the first blocker not done",
-			flow: Flow{State: "Building - Agent"},
-			family: Family{Blockers: []Relative{
-				{Title: "a", State: "Done"},
-				{Title: "b", State: "Building - Agent", Active: true},
-			}},
-			step: "Building",
-			next: "Waiting on b",
-		},
-		{
-			name: "every blocker done",
-			flow: Flow{State: "Building - Agent"},
-			family: Family{Blockers: []Relative{
-				{Title: "a", State: "Done"},
-				{Title: "b", State: " Done "},
-			}},
-			step: "Building",
-		},
-		{
-			name: "a blocker ended merged is done",
-			flow: Flow{State: "build"},
-			family: Family{Blockers: []Relative{
-				{Title: "a", State: "ended", Outcome: "merged"},
-			}},
-			step: "Building",
-		},
-		{
-			name: "a blocker past its until is done",
-			flow: Flow{State: "build"},
-			family: Family{Blockers: []Relative{
-				{Title: "a", State: "build"},
-			}},
-			step: "Building",
-		},
-		{
-			name: "a blocker ended abandoned still blocks",
-			flow: Flow{State: "build"},
-			family: Family{Blockers: []Relative{
-				{Title: "a", State: "Done"},
-				{Title: "b", State: "ended", Outcome: "canceled", Active: true},
-			}},
-			step: "Building",
-			next: "Waiting on b",
-		},
-		{
-			name: "an old abandoned blocker still blocks",
-			flow: Flow{State: "Building - Agent"},
-			family: Family{Blockers: []Relative{
-				{Title: "a", State: "Canceled", Outcome: "canceled", Active: true},
-			}},
-			step: "Building",
-			next: "Waiting on a",
-		},
-		{
-			name: "ended with a blocker",
-			flow: Flow{
-				State:   "Done",
-				Ended:   true,
-				Outcome: "merged",
-			},
-			family: Family{Blockers: []Relative{{Title: "a", State: "Building - Agent", Active: true}}},
-			step:   "Done · merged",
-		},
-		{
-			name: "conflicts outrank merge",
-			flow: Flow{
-				State: "Integrating - Human",
-				Next: []Step{
-					{Actor: "human", Action: "merge-pr"},
-					{Actor: "human", Event: "address-comments"},
-					{Actor: "human", Event: "resolve-conflicts"},
-					{Actor: "human", Event: "abandon-integrate"},
-					{Actor: "human", Event: "abandon"},
-				},
-			},
-			step: "Integrating",
-			next: "you resolve conflicts · ctrl+s",
-		},
-		{
-			name: "merge before comments",
-			flow: Flow{
-				State: "Integrating - Human",
-				Next: []Step{
-					{Actor: "human", Action: "merge-pr"},
-					{Actor: "human", Event: "address-comments"},
-					{Actor: "human", Event: "abandon-integrate"},
-					{Actor: "human", Event: "abandon"},
-				},
-			},
-			step: "Integrating",
-			next: "you merge the PR",
-		},
-		{
-			name: "escape hatches are not next",
-			flow: Flow{
-				State: "Integrating - Agent",
-				Next: []Step{
-					{Actor: "human", Event: "abandon-integrate"},
-					{Actor: "human", Event: "abandon"},
-				},
-			},
-			step: "Integrating",
-		},
-		{
-			name: "comments before abandon",
-			flow: Flow{
-				State: "Building - Human",
-				Next: []Step{
-					{Actor: "human", Event: "address-comments"},
-					{Actor: "human", Event: "abandon"},
-				},
-			},
-			step: "Building",
-			next: "you send your comments",
+			next: "Paused now",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			step, now, next := status(tc.flow, tc.family, tc.stage, tc.inReview)
+			step, now, next := status(tc.flow, tc.family, tc.inReview)
 			assert.Check(t, cmp.Equal(step, tc.step))
 			assert.Check(t, cmp.Equal(now, tc.now))
 			assert.Check(t, cmp.Equal(next, tc.next))

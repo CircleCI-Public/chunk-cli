@@ -1,7 +1,6 @@
 package fakes
 
 import (
-	"cmp"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -31,6 +30,9 @@ type factoryPlan struct {
 	// applicable are the human events the flow serves in next, as a test
 	// sets them with SetFactoryApplicableEvents.
 	applicable []string
+	// required are the human events the flow serves in next with
+	// is_required, as a test sets them with SetFactoryRequiredEvents.
+	required []string
 	// units replace the units its structured content parses from text; nil
 	// until SetFactoryPlanUnits.
 	units []FactoryUnit
@@ -91,7 +93,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 
 // factoryEvents are the events a human may send a flow (flow.EventName in
 // circleci/factory).
-var factoryEvents = []string{"prioritize", "address-comments", "answer-open-questions", "resolve-conflicts", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
+var factoryEvents = []string{"prioritize", "address-comments", "answer-open-questions", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon"}
 
 // abandonReasons are the reasons an abandon takes, and only an abandon
 // (api/conductorapi/events.go in circleci/factory).
@@ -99,7 +101,7 @@ var abandonReasons = []string{"canceled", "wont-do", "duplicate"}
 
 // factoryEnds are the states a plan ends in, which the plan list leaves out
 // (conductor.Ends in circleci/factory).
-var factoryEnds = []string{"Done", "Canceled", "Won't Do", "Duplicate", "ended"}
+var factoryEnds = []string{"ended"}
 
 // FactoryPlan is a plan as the fake holds it, for a test to inspect.
 type FactoryPlan struct {
@@ -147,14 +149,25 @@ func (f *FakeCircleCI) SetFactoryPlanState(id, state string) {
 	}
 }
 
-// SetFactoryApplicableEvents has plan id's flow serve events as the human
-// events of its next, the ones factory applies now, as conductor would for
-// its state.
+// SetFactoryApplicableEvents has plan id's flow serve events as human events
+// of its next that factory applies now but does not require, after any
+// required ones, as conductor serves an approval it would accept early, or
+// abandon.
 func (f *FakeCircleCI) SetFactoryApplicableEvents(id string, events ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.applicable = slices.Clone(events)
+	}
+}
+
+// SetFactoryRequiredEvents has plan id's flow serve events as required human
+// entries of its next, after its task entry and in the order given.
+func (f *FakeCircleCI) SetFactoryRequiredEvents(id string, events ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.required = slices.Clone(events)
 	}
 }
 
@@ -214,6 +227,10 @@ func (f *FakeCircleCI) SetFactoryTaskIDOnly(id string) {
 type FactoryTransition struct {
 	Actor, Event, TaskCategory, Action string
 	IsDispatched                       bool
+
+	// IsRequired is whether the entry is one of those one of which must
+	// happen for the flow to move on.
+	IsRequired bool
 }
 
 // FactoryFlowStatus is the part of a flow a test sets beyond its state.
@@ -356,22 +373,26 @@ func addPlanRefs(ent gin.H, p *factoryPlan) {
 
 // factoryPhase is the phase factory serves for a plan or flow in state.
 func factoryPhase(state string) string {
-	switch {
-	case strings.EqualFold(state, "Unprioritized"), strings.EqualFold(state, "init"):
+	switch state {
+	case "init":
 		return "received"
-	case slices.ContainsFunc(factoryEnds, func(s string) bool { return strings.EqualFold(s, state) }):
+	case "ended":
 		return "ended"
 	}
 	return "started"
 }
 
-// factoryOutcomes are how a plan in each end state ended, as factory names it.
-var factoryOutcomes = map[string]string{
-	"Done": "merged", "Canceled": "canceled", "Won't Do": "rejected", "Duplicate": "duplicated",
+// endOutcome is how p ended: the outcome a test set with
+// SetFactoryFlowStatus, else "merged" once p is ended; "" before it ends.
+func endOutcome(p *factoryPlan) string {
+	if p.status.Outcome != "" {
+		return p.status.Outcome
+	}
+	if p.state == "ended" {
+		return "merged"
+	}
+	return ""
 }
-
-// factoryOutcome is how a plan in state ended, "" before it ends.
-func factoryOutcome(state string) string { return factoryOutcomes[state] }
 
 // planListAttrs are a plan's attributes as the plan list serves them, which
 // leaves out its branch.
@@ -441,7 +462,7 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 	now := time.Now().UTC()
 	f.mu.Lock()
 	p := &factoryPlan{
-		id: id, title: attrs.Title, state: "Unprioritized",
+		id: id, title: attrs.Title, state: "init",
 		branch: "factory/" + id, text: text, repos: repos,
 		createdAt: now, updatedAt: now, seq: len(f.factoryPlans),
 	}
@@ -850,7 +871,7 @@ func flowEntity(p *factoryPlan) gin.H {
 	if p.status.Progress != nil {
 		attrs["progress"] = p.status.Progress
 	}
-	if o := cmp.Or(p.status.Outcome, factoryOutcome(p.state)); o != "" {
+	if o := endOutcome(p); o != "" {
 		attrs["outcome"] = o
 	}
 	return gin.H{"id": p.id, "attributes": attrs, "references": refs}
@@ -869,7 +890,10 @@ func flowNext(p *factoryPlan) []gin.H {
 	if p.taskCategory != "" {
 		next = append(next, gin.H{"actor": "session", "task_category": p.taskCategory, "is_dispatched": true})
 	}
-	if strings.EqualFold(p.state, "Integrating - Human") {
+	for _, e := range p.required {
+		next = append(next, gin.H{"actor": "human", "event": e, "is_required": true})
+	}
+	if p.state == "integrate" && p.status.WaitingOn == "human" {
 		next = append(next, gin.H{"actor": "human", "action": "merge-pr"})
 	}
 	for _, e := range p.applicable {
@@ -891,6 +915,9 @@ func transitionEntity(t FactoryTransition) gin.H {
 	}
 	if t.IsDispatched {
 		ent["is_dispatched"] = true
+	}
+	if t.IsRequired {
+		ent["is_required"] = true
 	}
 	return ent
 }
@@ -927,7 +954,7 @@ func (f *FakeCircleCI) handleListFlowBlockers(c *gin.Context) {
 		if !b.noFlow {
 			attrs["state"] = b.state
 			attrs["phase"] = factoryPhase(b.state)
-			if o := cmp.Or(b.status.Outcome, factoryOutcome(b.state)); o != "" {
+			if o := endOutcome(b); o != "" {
 				attrs["outcome"] = o
 			}
 		}
@@ -937,30 +964,7 @@ func (f *FakeCircleCI) handleListFlowBlockers(c *gin.Context) {
 }
 
 // fakeStateOrder is the order a flow passes through its states.
-var fakeStateOrder = []string{"init", "ready", "refine-proposal", "refine-units", "stand-by", "build", "integrate", "ended"}
-
-// fakeState is the state in fakeStateOrder that name stands for, name itself
-// when it is already one or is unknown.
-func fakeState(name string) string {
-	if slices.ContainsFunc(factoryEnds, func(s string) bool { return strings.EqualFold(s, name) }) {
-		return "ended"
-	}
-	switch name {
-	case "", "Unprioritized":
-		return "init"
-	case "Agent Ready":
-		return "ready"
-	case "Planning - Agent", "Planning - Human":
-		return "refine-proposal"
-	case "standing-by":
-		return "stand-by"
-	case "Building - Agent", "Building - Human":
-		return "build"
-	case "Integrating - Agent", "Integrating - Human":
-		return "integrate"
-	}
-	return name
-}
+var fakeStateOrder = []string{"init", "ready", "refine-proposal", "refine-units", "record-sub-plans", "stand-by", "build", "integrate", "ended"}
 
 // blockerActive is whether blocker b still holds a plan blocked until
 // until, as the blockers route serves is_active.
@@ -968,11 +972,10 @@ func blockerActive(b *factoryPlan, until string) bool {
 	if b.noFlow {
 		return true
 	}
-	state := fakeState(b.state)
-	if state == "ended" {
-		return cmp.Or(b.status.Outcome, factoryOutcome(b.state)) != "merged"
+	if b.state == "ended" {
+		return endOutcome(b) != "merged"
 	}
-	at, want := slices.Index(fakeStateOrder, state), slices.Index(fakeStateOrder, until)
+	at, want := slices.Index(fakeStateOrder, b.state), slices.Index(fakeStateOrder, until)
 	return at < 0 || want < 0 || at < want
 }
 

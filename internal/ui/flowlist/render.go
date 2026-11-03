@@ -2,7 +2,6 @@ package flowlist
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -126,9 +125,6 @@ func (m Model) listLines(width, height int) []string {
 		if p := m.parentTitle(f.ID); p != "" {
 			detail = append(detail, st.VDim.Render("↳ "+p))
 		}
-		if slices.Contains(f.ApplicableEvents, circleci.ResolveConflicts) {
-			detail = append(detail, st.Warning.Render("⚠"))
-		}
 		if s := progressText(f); s != "" {
 			detail = append(detail, st.VDim.Render(s))
 		} else if f.Task != nil && f.Task.Category != "" {
@@ -184,11 +180,11 @@ func stateText(f circleci.Flow) string {
 	if o := strings.ToLower(oneLine(f.Outcome)); f.Phase == circleci.PhaseEnded && o != "" && o != "merged" {
 		return capitalize(o)
 	}
-	phase, _ := planstate.Parse(oneLine(f.State))
-	if phase == "" {
+	step := planstate.Step(oneLine(f.State))
+	if step == "" {
 		return "Unknown"
 	}
-	return capitalize(strings.ToLower(phase))
+	return capitalize(strings.ToLower(step))
 }
 
 // progressText is what the flow is doing now, as factory sums it up, or who

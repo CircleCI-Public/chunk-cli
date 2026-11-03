@@ -346,8 +346,8 @@ func (d *daemon) plannerWorktree(p *planner) (string, error) {
 }
 
 // planEnded is whether factory plan planID is over, so its worktree can go.
-// A plan with no flow is over only once it is gone: one that is still there
-// is a live plan made before plans had flows.
+// A plan with no flow is over only once the plan is gone too: one that is
+// still there is live, its flow not created yet.
 func planEnded(ctx context.Context, api PlanAPI, planID string) (bool, error) {
 	f, err := planFlow(ctx, api, planID)
 	if err != nil {

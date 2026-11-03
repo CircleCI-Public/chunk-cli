@@ -40,25 +40,28 @@ import (
 // it starts, as a line for the screen to show while it works.
 type Approver func(step func(string)) (string, error)
 
-// ReadyToApprove is whether f waits for the developer to approve it, as
-// planstate.ReadyToApprove decides.
+// ReadyToApprove is whether f waits for the developer to approve it:
+// factory waits on the developer and requires an approval of them.
 func ReadyToApprove(f Flow) bool {
-	return planstate.ReadyToApprove(clean(f.State), moves(f.Next))
+	return clean(f.WaitingOn) == planstate.Human && approval(f) != ""
 }
 
-// agentActs is whether next has a transition a session or the daemon
-// takes.
-func agentActs(next []Step) bool {
-	return planstate.AgentActs(moves(next))
+// questionsOpen is whether f waits on the developer to answer 3. Open
+// Questions: factory requires answer-open-questions of them.
+func questionsOpen(f Flow) bool {
+	return clean(f.WaitingOn) == planstate.Human && slices.ContainsFunc(f.Next, func(s Step) bool {
+		return Actor(clean(string(s.Actor))) == ActorHuman && s.Required && clean(s.Event) == answerOpenQuestions
+	})
 }
 
-// moves is next as planstate reads it, stripped of escapes.
-func moves(next []Step) []planstate.Move {
-	out := make([]planstate.Move, len(next))
-	for i, s := range next {
-		out[i] = planstate.Move{Actor: clean(string(s.Actor)), Event: clean(s.Event)}
+// approval is the approval ctrl+s offers for f, as planstate.Approval
+// decides from its next; "" for none.
+func approval(f Flow) string {
+	next := make([]planstate.Move, len(f.Next))
+	for i, s := range f.Next {
+		next[i] = planstate.Move{Actor: clean(string(s.Actor)), Event: clean(s.Event), Required: s.Required}
 	}
-	return out
+	return planstate.Approval(next)
 }
 
 // pane is which side of the screen the keyboard goes to.
@@ -109,8 +112,6 @@ type (
 	}
 	// designApprovedMsg is the end of approving the plan's design.
 	designApprovedMsg struct{ err error }
-	// conflictsSentMsg is the end of sending resolve-conflicts.
-	conflictsSentMsg struct{ err error }
 	// startedMsg is the end of sending prioritize.
 	startedMsg struct{ err error }
 	// abandonedMsg is the end of sending abandon.
@@ -164,7 +165,6 @@ type transitionKind int
 const (
 	movingComments transitionKind = iota
 	movingDesign
-	movingConflicts
 )
 
 // pollEvery is how often the plan pane polls the store for the plan's text,
@@ -350,12 +350,8 @@ type Model struct {
 	// has the event that approves it; pendingDesign is whether the y being
 	// asked for approves the design rather than the plan.
 	approvingDesign, pendingDesign bool
-	// resolvingConflicts is set from the developer's y to resolving the PR's
-	// conflicts until factory has the event; pendingConflicts is whether the
-	// y being asked for resolves them.
-	resolvingConflicts, pendingConflicts bool
 	// startingWork is set from the developer's y to starting work on an
-	// Unprioritized plan until factory has the event; pendingStart is
+	// init plan until factory has the event; pendingStart is
 	// whether the y being asked for starts it.
 	startingWork, pendingStart bool
 	// askingReason is whether the status bar asks why the plan is
@@ -657,7 +653,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, waitApproval(msg.next)
 
-	case designApprovedMsg, approvedMsg, conflictsSentMsg, startedMsg, abandonedMsg, planDeletedMsg:
+	case designApprovedMsg, approvedMsg, startedMsg, abandonedMsg, planDeletedMsg:
 		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
@@ -756,14 +752,14 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 // spinning is whether something the spinner shows is under way: the agent's
 // turn, an approval or event not yet answered, or the wait for factory.
 func (m Model) spinning() bool {
-	return m.busy || m.approving || m.approvingDesign || m.resolvingConflicts || m.moving != nil || m.buildRunning()
+	return m.busy || m.approving || m.approvingDesign || m.moving != nil || m.buildRunning()
 }
 
 // awaitingStatus is whether the status bar holds something still under way
 // or waiting on the developer: a question to answer, the quit prompt, or an
 // approval or save factory has not answered yet.
 func (m Model) awaitingStatus() bool {
-	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.resolvingConflicts || m.savingComments ||
+	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.savingComments ||
 		m.askingReason || m.abandoning || m.deleting
 }
 
@@ -841,24 +837,27 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 }
 
 // resumeOwed is whether f is waiting on a planner that is not there, so the
-// screen should have its planner claim the plan again. Factory starts a new
-// plan's flow in Unprioritized with a task for a session, so that counts as
+// screen should have its planner claim the plan again: it is being planned,
+// or not started, and factory waits on a session. Factory starts a new
+// plan's flow in init with a task for a session, so that counts as
 // planning; a plan deferred there waits on the developer instead.
 func resumeOwed(f Flow) bool {
-	phase, _ := planstate.Parse(f.State)
-	planning := strings.EqualFold(phase, "Planning") || planstate.IsUnprioritized(f.State)
-	return !f.Ended && !f.Claimed && planning &&
-		planstate.SessionActs(moves(f.Next))
+	switch clean(f.State) {
+	case planstate.Init, planstate.Ready, planstate.RefineProposal, planstate.RefineUnits:
+	default:
+		return false
+	}
+	return !f.Ended && !f.Claimed && clean(f.WaitingOn) == planstate.Session
 }
 
 // resumeIfOwed has the planner claim the plan again when factory waits on a
 // planner that is not there, once per flow state. A request that has not
 // started a session yet goes in place of the resume, so the planner never
-// claims a new plan without it. In init or Unprioritized it never resumes a
-// state it has seen a session claim, until the state moves.
+// claims a new plan without it. In init it never resumes a state it has
+// seen a session claim, until the state moves.
 func (m Model) resumeIfOwed() (Model, tea.Cmd) {
 	if !m.created || m.resuming || !resumeOwed(m.flow) || m.resumedIn == m.state ||
-		(planstate.IsUnprioritized(m.state) && m.claimedIn == m.state) ||
+		(m.state == planstate.Init && m.claimedIn == m.state) ||
 		(m.inbox && m.project == "") {
 		return m, nil
 	}
@@ -885,7 +884,7 @@ func (m Model) resumable() planstate.Resume {
 		Ended:         m.flow.Ended,
 		PlanID:        m.store.ID(),
 		Holder:        clean(m.flow.Holder),
-		Next:          moves(m.flow.Next),
+		WaitingOn:     clean(m.flow.WaitingOn),
 		Blockers:      blockers,
 		BlockersKnown: m.familyLoaded,
 	})
@@ -914,8 +913,8 @@ func (m Model) resume() (Model, tea.Cmd) {
 // tabFor is the tab the right pane opens on for a plan in state: the plan
 // while it is being planned, or has not started, and its flow after.
 func tabFor(state string) rightTab {
-	phase, _ := planstate.Parse(state)
-	if strings.TrimSpace(state) == "" || planstate.IsUnprioritized(state) || strings.EqualFold(phase, "Planning") {
+	switch strings.TrimSpace(state) {
+	case "", planstate.Init, planstate.Ready, planstate.RefineProposal, planstate.RefineUnits:
 		return tabPlan
 	}
 	return tabFlow
@@ -937,7 +936,7 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.confirming {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
-			m.pendingDelete, m.pendingDesign, m.pendingConflicts, m.pendingStart = "", false, false, false
+			m.pendingDelete, m.pendingDesign, m.pendingStart = "", false, false
 			m.pendingDeletePlan = false
 			return m, nil
 		}
@@ -1036,11 +1035,6 @@ func (m Model) answerYes() (Model, tea.Cmd) {
 		m.status = "Deleting the plan…"
 		return m, deletePlanCmd(m.ctx, m.store)
 	}
-	if m.pendingConflicts {
-		m.pendingConflicts, m.resolvingConflicts = false, true
-		m.status = "Sending resolve-conflicts…"
-		return m, tea.Batch(resolveConflictsCmd(m.ctx, m.store), m.spin.Tick)
-	}
 	if m.pendingStart {
 		m.pendingStart, m.startingWork = false, true
 		m.status = "Starting work…"
@@ -1110,28 +1104,23 @@ func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.built, m.approving, m.approvingDesign, m.resolvingConflicts, m.startingWork, m.abandoning, m.deleting, m.moving != nil:
+	case m.built, m.approving, m.approvingDesign, m.startingWork, m.abandoning, m.deleting, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
-	case m.conflicting() && queued > 0:
-		m.status = warn("Send your comments first: they hand the plan to the agent, which rebases it too.")
-	case m.conflicting():
-		m.confirming, m.pendingConflicts = true, true
-		m.status = ui.TitleStyle.Render("Hand the plan back to the agent to rebase its PR onto its base? ") + confirmButtons
-	case planstate.IsUnprioritized(m.state) && slices.Contains(m.events, prioritize):
+	case slices.Contains(m.events, prioritize):
 		m.confirming, m.pendingStart = true, true
 		m.status = ui.TitleStyle.Render("Start work on the plan? ") + confirmButtons
 	case strings.TrimSpace(m.plan) == "":
 		m.status = warn("There is no plan to approve yet.")
 	case !ReadyToApprove(m.flow) && m.inReview():
 		m.status = warn("The plan is not ready yet: wait for its review to pass.")
-	case !ReadyToApprove(m.flow):
-		m.status = warn("The plan cannot be approved while it is " + m.stateText() + ".")
-	case planstate.StageOf(m.events, len(m.units)) == planstate.StageQuestions:
+	case !ReadyToApprove(m.flow) && questionsOpen(m.flow):
 		m.status = warn("Answer 3. Open Questions in comments first; factory offers no approval yet.")
-	case planstate.StageOf(m.events, len(m.units)) == planstate.StageDesign && (queued > 0 || m.openComments() > 0):
+	case !ReadyToApprove(m.flow):
+		m.status = warn("The plan cannot be approved now: " + m.notReadyWhy() + ".")
+	case approval(m.flow) == planstate.ApproveForUnits && (queued > 0 || m.openComments() > 0):
 		m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
-	case planstate.StageOf(m.events, len(m.units)) == planstate.StageDesign:
+	case approval(m.flow) == planstate.ApproveForUnits:
 		m.confirming, m.pendingDesign = true, true
 		m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? ") + confirmButtons
 	case queued > 0:
@@ -1314,7 +1303,7 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 }
 
 // applyApproval is the end of approving the plan's design, or the plan, of
-// sending resolve-conflicts, prioritize or abandon, or of deleting the plan.
+// sending prioritize or abandon, or of deleting the plan.
 func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case designApprovedMsg:
@@ -1324,15 +1313,6 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.moving = &transition{kind: movingDesign, from: m.state, since: time.Now()}
-		m.status = ""
-		return m, tea.Batch(refreshCmd(m.ctx, m.store), m.spin.Tick)
-	case conflictsSentMsg:
-		m.resolvingConflicts = false
-		if msg.err != nil {
-			m.status = ui.ErrorStyle.Render("Could not send resolve-conflicts: " + msg.err.Error())
-			return m, nil
-		}
-		m.moving = &transition{kind: movingConflicts, from: m.state, since: time.Now()}
 		m.status = ""
 		return m, tea.Batch(refreshCmd(m.ctx, m.store), m.spin.Tick)
 	case startedMsg:
@@ -1390,12 +1370,7 @@ func approveDesignCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg { return designApprovedMsg{err: s.ApproveDesign(ctx)} }
 }
 
-// resolveConflictsCmd has factory rebase the plan's conflicting PR.
-func resolveConflictsCmd(ctx context.Context, s Store) tea.Cmd {
-	return func() tea.Msg { return conflictsSentMsg{err: s.ResolveConflicts(ctx)} }
-}
-
-// startWorkCmd has factory start work on the Unprioritized plan.
+// startWorkCmd has factory start work on the plan nobody has started.
 func startWorkCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg { return startedMsg{err: s.StartWork(ctx)} }
 }

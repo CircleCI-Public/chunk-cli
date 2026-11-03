@@ -76,6 +76,7 @@ func TestEExplainsWhyItCannotEditWhileFactoryWorks(t *testing.T) {
 	dir := editorFiles(t)
 	m, store, _ := planInPlan(t)
 	store.setEvents()
+	store.setWaitingOn(string(ActorSession))
 	m = refreshed(t, m)
 	m = drive(t, m, press("e"))
 
@@ -149,7 +150,7 @@ func TestReReadNoteGoesWithTheQueuedCommentsOnS(t *testing.T) {
 		m = drive(t, m, press("s"))
 
 		assert.Check(t, cmp.DeepEqual(store.Added, [][2]string{{"The flag exists and is documented.", rereadNote}}))
-		assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Human"}))
+		assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"refine-proposal"}))
 		assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
 		assert.Check(t, cmp.Len(agent.Sent(), 0), "nothing goes to the session")
 	})
@@ -214,6 +215,7 @@ func TestEditIsRefusedOnceFactoryStopsWaiting(t *testing.T) {
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
 	store.setEvents()
+	store.setWaitingOn(string(ActorSession))
 	m = drive(t, m, msg)
 
 	assert.Check(t, cmp.Len(store.Set, 0))

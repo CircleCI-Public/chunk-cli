@@ -13,27 +13,21 @@ import (
 // done is the last step, and the state of a flow that ended merged.
 const done = "Done"
 
-// steps are the phases a flow goes through, in order, as the strip draws them.
+// steps are the phases a flow goes through, in order, as the strip draws
+// them: the labels planstate.Step gives factory's states.
 var steps = []string{"Planning", "Building", "Integrating", done}
 
 // status is the strip's text for flow and its family: the step it is at,
-// what is happening now, and what comes next. stage is what ctrl+s approves
-// for a plan ReadyToApprove, and inReview whether factory is working on the
-// plan. Text from factory is stripped of escapes and kept to one line.
-func status(f Flow, fam Family, stage planstate.Stage, inReview bool) (step, now, next string) {
-	state := clean(f.State)
-	switch phase, _ := planstate.Parse(state); {
-	case planstate.IsUnprioritized(state):
-		step = "Not started"
-	case f.Ended:
+// what is happening now, and what comes next, by who factory waits on.
+// inReview is whether factory is working on the plan. Text from factory is
+// stripped of escapes and kept to one line.
+func status(f Flow, fam Family, inReview bool) (step, now, next string) {
+	step = planstate.Step(clean(f.State))
+	if f.Ended {
 		step = done
 		if o := clean(f.Outcome); o != "" {
 			step += " · " + o
 		}
-	case slices.Contains(steps, phase):
-		step = phase
-	default:
-		step = state
 	}
 
 	switch {
@@ -46,52 +40,54 @@ func status(f Flow, fam Family, stage planstate.Stage, inReview bool) (step, now
 		now = "factory is reviewing the plan"
 	}
 
-	// A live flow with nothing in Next waits on its first blocker that still
-	// blocks.
-	blocker := -1
-	if !f.Ended && len(f.Next) == 0 {
-		blocker = slices.IndexFunc(fam.Blockers, func(b Relative) bool { return b.Active })
-	}
-	switch {
-	case blocker >= 0:
-		next = "Waiting on " + clean(fam.Blockers[blocker].Title)
-	case ReadyToApprove(f):
-		next = stageText(stage)
-	default:
-		if s, ok := forward(f.Next); ok {
-			next = stepText(s)
+	return step, now, nextText(f, fam)
+}
+
+// nextText is the strip's Next for f: what the developer does, or who
+// factory waits on, in factory's words when it gives them. A flow that
+// waits on nobody has none.
+func nextText(f Flow, fam Family) string {
+	why := clean(f.WaitingOnWhy)
+	orWhy := func(fallback string) string {
+		if why != "" {
+			return why
 		}
+		return fallback
 	}
-	return step, now, next
+	switch clean(f.WaitingOn) {
+	case planstate.Human:
+		if ReadyToApprove(f) {
+			return stageText(approval(f))
+		}
+		if i := slices.IndexFunc(f.Next, func(s Step) bool {
+			return Actor(clean(string(s.Actor))) == ActorHuman && s.Required
+		}); i >= 0 {
+			return stepText(f.Next[i])
+		}
+		return orWhy("you")
+	case planstate.Blockers:
+		if i := slices.IndexFunc(fam.Blockers, func(b Relative) bool { return b.Active }); i >= 0 {
+			return "Waiting on " + clean(fam.Blockers[i].Title)
+		}
+		return orWhy("waiting on blockers")
+	case planstate.Session:
+		return orWhy("waiting on chunk")
+	case planstate.Daemon:
+		return orWhy("waiting on factory")
+	case planstate.SubPlans:
+		return orWhy("waiting on sub-plans")
+	}
+	return ""
 }
 
-// forward is the transition in next that moves the flow on: resolve-conflicts
-// when it is offered, and otherwise the first that is not abandon,
-// abandon-integrate or planstate.RequestRevision, which factory offers in
-// every live state but never waits on.
-func forward(next []Step) (Step, bool) {
-	if i := slices.IndexFunc(next, func(s Step) bool { return clean(s.Event) == resolveConflicts }); i >= 0 {
-		return next[i], true
-	}
-	i := slices.IndexFunc(next, func(s Step) bool {
-		e := clean(s.Event)
-		return e != "abandon" && e != "abandon-integrate" && e != planstate.RequestRevision
-	})
-	if i < 0 {
-		return Step{}, false
-	}
-	return next[i], true
-}
-
-// stageText is what the developer does next for a plan ReadyToApprove.
-func stageText(stage planstate.Stage) string {
-	switch stage {
-	case planstate.StageDesign:
+// stageText is what the developer does next for a plan ReadyToApprove
+// whose approval is event.
+func stageText(event string) string {
+	switch event {
+	case planstate.ApproveForUnits:
 		return "you approve the design · ctrl+s"
-	case planstate.StagePlan:
+	case planstate.ApproveForBuilding:
 		return "you approve the plan · ctrl+s"
-	case planstate.StageQuestions:
-		return "you answer 3. Open Questions in comments"
 	}
 	return ""
 }
@@ -111,8 +107,6 @@ func stepText(s Step) string {
 	switch actor {
 	case ActorHuman:
 		switch what {
-		case "resolve-conflicts":
-			what = "resolve conflicts · ctrl+s"
 		case "prioritize":
 			what = "start work · ctrl+s"
 		case "address-comments":

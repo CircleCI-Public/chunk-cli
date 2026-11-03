@@ -104,7 +104,7 @@ func say(t *testing.T, m Model, text string) Model {
 
 var twoFlows = []circleci.Flow{
 	{ID: "a1", Title: "Alpha", State: "Review - Human"},
-	{ID: "b2", Title: "Retry\nuploads", State: "Planning - Agent"},
+	{ID: "b2", Title: "Retry\nuploads", State: "refine-proposal"},
 }
 
 func TestCtrlOOpensTheChatFromEachScreen(t *testing.T) {
@@ -169,7 +169,7 @@ func TestChatContextFromEachScreen(t *testing.T) {
 		c := &fakeChat{}
 		m := chatModel(t, &fakePlans{}, c, twoFlows...)
 		say(t, openChat(t, m), "hi")
-		assert.Check(t, cmp.Equal(c.lastContext(t), "[flows]\na1 Review - Human Alpha\nb2 Planning - Agent Retry uploads"))
+		assert.Check(t, cmp.Equal(c.lastContext(t), "[flows]\na1 Review - Human Alpha\nb2 refine-proposal Retry uploads"))
 	})
 	t.Run("Flows with none read", func(t *testing.T) {
 		c := &fakeChat{}

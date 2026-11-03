@@ -73,6 +73,9 @@ type Step struct {
 	Event, Task, Action string
 	// Dispatched is whether Task is the flow's outstanding task.
 	Dispatched bool
+	// Required is whether factory needs this entry, or another required
+	// one, to move the flow on.
+	Required bool
 }
 
 // Relative is a plan related to the screen's: its parent, a sub-plan or a
@@ -124,11 +127,7 @@ type Store interface {
 	// in its place. Factory moves it at its next poll, not before
 	// AnswerOpenQuestions returns.
 	AnswerOpenQuestions(ctx context.Context) error
-	// ResolveConflicts has factory rebase the plan's conflicting PR, moving
-	// it from Integrating - Human to Integrating - Agent. Factory moves it at
-	// its next poll, not before ResolveConflicts returns.
-	ResolveConflicts(ctx context.Context) error
-	// StartWork has factory start work on the Unprioritized plan. Factory
+	// StartWork has factory start work on the init plan. Factory
 	// moves it at its next poll, not before StartWork returns.
 	StartWork(ctx context.Context) error
 	// Abandon ends the plan without its PR merging, for reason: "canceled",

@@ -59,8 +59,6 @@ func (m Model) header() string {
 		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Approving")
 	case m.approvingDesign:
 		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Approving design")
-	case m.resolvingConflicts:
-		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Sending")
 	case m.busy:
 		text := "✦ chunk is drafting"
 		if m.narrow() {
@@ -78,8 +76,6 @@ func (m Model) header() string {
 			text = fmt.Sprintf("● %d %s", n, plural(n, "comment", "comments"))
 		}
 		state = m.pill(m.amber(), "#fff8c5", "#2a2210", text)
-	case m.conflicting():
-		state = m.pill(m.amber(), "#fff8c5", "#2a2210", "⚠ PR conflicts")
 	}
 
 	left := " " + ui.TitleStyle.Render("chunk") + " " + m.style(m.dim()).Render("plan")
@@ -118,7 +114,7 @@ func (m Model) FlowText() string {
 	}
 	f := m.flow
 	f.State = m.state
-	step, now, next := status(f, m.family, planstate.StageOf(m.events, len(m.units)), m.inReview())
+	step, now, next := status(f, m.family, m.inReview())
 	parts := []string{step}
 	if now != "" {
 		parts = append(parts, "Now: "+now)
@@ -137,7 +133,7 @@ const stripRows = 2
 func (m Model) strip() string {
 	f := m.flow
 	f.State = m.state
-	step, now, next := status(f, m.family, planstate.StageOf(m.events, len(m.units)), m.inReview())
+	step, now, next := status(f, m.family, m.inReview())
 	if m.moving != nil {
 		// The developer has made the move the state asks for; factory has
 		// yet to apply it, and the header says so.
@@ -300,8 +296,6 @@ func (m Model) waitingLine(w int) string {
 		text = "Comments sent · waiting for factory to hand them to chunk…"
 	case movingDesign:
 		text = "Design approved · waiting for factory to start the units…"
-	case movingConflicts:
-		text = "Conflicts sent · waiting for factory to hand the rebase to the agent…"
 	}
 	if m.narrow() {
 		text = "Waiting for factory…"
@@ -351,7 +345,7 @@ func (m Model) actions() (main, side string) {
 	switch {
 	// While a comment is written enter saves it and ctrl+s does nothing, so
 	// neither button is on offer: the hints name the keys that work.
-	case m.approving, m.approvingDesign, m.resolvingConflicts, m.commenting, m.moving != nil:
+	case m.approving, m.approvingDesign, m.commenting, m.moving != nil:
 		return "", ""
 	case m.busy:
 		return outline(m.purple(), "chunk is working"), m.style(m.faint()).Render(approve)
@@ -366,36 +360,53 @@ func (m Model) actions() (main, side string) {
 			save = "s " + strings.TrimPrefix(save, "enter ")
 		}
 		return button(m.brand(), save), m.style(m.faint()).Render(approve + " · resolve comments first")
-	case m.conflicting():
-		return button(m.amber(), "ctrl+s Resolve conflicts"), ""
 	case open > 0:
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
+	case !ReadyToApprove(m.flow) && questionsOpen(m.flow):
+		return "", m.style(m.faint()).Render("ctrl+s Approve · answer 3. Open Questions first")
 	case !ReadyToApprove(m.flow):
 		return "", m.style(m.faint()).Render(approve + " · " + m.notReady())
-	case planstate.StageOf(m.events, len(m.units)) == planstate.StageQuestions:
-		return "", m.style(m.faint()).Render("ctrl+s Approve · answer 3. Open Questions first")
-	case planstate.StageOf(m.events, len(m.units)) == planstate.StageDesign:
+	case approval(m.flow) == planstate.ApproveForUnits:
 		return button(m.green(), "ctrl+s Approve design"), ""
 	}
 	return button(m.green(), approve), ""
 }
 
-// inReview is whether factory is working on the plan while it is planned,
-// such as reviewing it, so it will be ready to approve once that is done.
-// No state yet counts: the plan has just been made.
+// inReview is whether factory is still reviewing the plan, so the developer
+// waits for that review before the plan can be approved. A plan just made,
+// with no state yet, is in review too.
 func (m Model) inReview() bool {
-	phase, _ := planstate.Parse(m.state)
-	return strings.TrimSpace(m.state) == "" || strings.EqualFold(phase, "Planning") && agentActs(m.flow.Next)
+	state := clean(m.state)
+	if state == "" {
+		return !m.flow.Ended
+	}
+	if state != planstate.RefineProposal && state != planstate.RefineUnits {
+		return false
+	}
+	w := clean(m.flow.WaitingOn)
+	return w == planstate.Session || w == planstate.Daemon
 }
 
 // notReady says why a plan not ReadyToApprove cannot be approved yet: its
-// review is running, or factory has it in some other state, which is named
-// as factory gives it, since chunk may not know it.
+// review is running, or factory's reason, or the state factory has it in,
+// named as factory gives it, since chunk may not know it.
 func (m Model) notReady() string {
 	if m.inReview() {
 		return "wait for the review"
 	}
+	if why := clean(m.flow.WaitingOnWhy); why != "" {
+		return why
+	}
 	return "the plan is " + m.stateText()
+}
+
+// notReadyWhy is why ctrl+s cannot approve a plan not ReadyToApprove and
+// not in review: factory's reason, or the state it has the plan in.
+func (m Model) notReadyWhy() string {
+	if why := clean(m.flow.WaitingOnWhy); why != "" {
+		return why
+	}
+	return "it is " + m.stateText()
 }
 
 // stateText is the plan's state as factory names it, safe to draw on one
@@ -404,8 +415,5 @@ func (m Model) stateText() string { return clean(m.state) }
 
 // movingText is the move factory has yet to make, for the plan's title.
 func (m Model) movingText() string {
-	if phase, actor := planstate.Parse(m.stateText()); actor == planstate.Human {
-		return phase + " - Human → Agent"
-	}
 	return m.stateText() + " → …"
 }
