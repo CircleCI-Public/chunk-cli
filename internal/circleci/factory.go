@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
@@ -509,8 +510,45 @@ func (c *Client) PlanText(ctx context.Context, id string) (string, error) {
 type PlanStructuredContent struct {
 	// Each section is its body, or nil when factory found none.
 	Outcome, Design, OpenQuestions, WorkedExample *string
-	// Units is nil when the plan has no 5. Units or none in it.
+	// Units is nil when the plan has no 5. Units, and empty when it has none in it.
 	Units []PlanUnit
+}
+
+// planSections are the skeleton headings of the sections
+// PlanStructuredContent serves, in plan order; 5. Units follows them.
+var planSections = [...]string{"1. Outcome", "2. Design", "3. Open Questions", "4. Worked example"}
+
+// Markdown is the plan rebuilt from its sections and units, each under
+// its skeleton heading, or "" when factory found none of them. A done
+// unit's heading gets back its " (done)", and a body that does not end
+// in a newline gets one, so no heading is glued onto it.
+func (c *PlanStructuredContent) Markdown() string {
+	var b strings.Builder
+	body := func(s string) {
+		b.WriteString(s)
+		if s != "" && !strings.HasSuffix(s, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	for i, s := range []*string{c.Outcome, c.Design, c.OpenQuestions, c.WorkedExample} {
+		if s == nil {
+			continue
+		}
+		b.WriteString("## " + planSections[i] + "\n")
+		body(*s)
+	}
+	if c.Units != nil {
+		b.WriteString("## 5. Units\n\n")
+		for _, u := range c.Units {
+			h := "### " + u.Name
+			if u.Done {
+				h += " (done)"
+			}
+			b.WriteString(h + "\n")
+			body(u.Body)
+		}
+	}
+	return b.String()
 }
 
 // PlanUnit is one unit of a plan's 5. Units.
@@ -546,6 +584,9 @@ func (c *Client) PlanStructuredContent(ctx context.Context, id string) (*PlanStr
 	out := &PlanStructuredContent{
 		Outcome: attrs.Outcome, Design: attrs.Design,
 		OpenQuestions: attrs.OpenQuestions, WorkedExample: attrs.WorkedExample,
+	}
+	if attrs.Units != nil {
+		out.Units = make([]PlanUnit, 0, len(attrs.Units))
 	}
 	for _, u := range attrs.Units {
 		out.Units = append(out.Units, PlanUnit{Name: u.Name, Done: u.IsDone, Body: u.Body})
