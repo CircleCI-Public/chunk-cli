@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -31,16 +34,29 @@ func fgSeq(c color.Color) string {
 	return before
 }
 
+// quiet stops m's timers, which never settle: its cursors no longer blink,
+// and its poll and build timers never fire.
+func quiet(m Model) Model {
+	for _, in := range []*textarea.Model{&m.input, &m.commentInput} {
+		s := in.Styles()
+		s.Cursor.Blink = false
+		in.SetStyles(s)
+	}
+	m.tick = func(time.Duration, func(time.Time) tea.Msg) tea.Cmd { return nil }
+	return m
+}
+
 // drive feeds msg to m, then runs each command it returns and feeds back
-// what they produce, until the screen settles. Ticks and blinks are skipped:
-// they never settle.
+// what they produce, until the screen settles. It quiets m first, so the
+// screen settles without waiting on its timers.
 func drive(t *testing.T, m Model, msg tea.Msg) Model {
 	t.Helper()
+	m = quiet(m)
 	queue := []tea.Msg{msg}
 	for len(queue) > 0 {
 		var cmd tea.Cmd
 		m, cmd = m.Update(queue[0])
-		queue = append(queue[1:], run(cmd)...)
+		queue = append(queue[1:], run(t, cmd)...)
 		if len(queue) == 0 {
 			// What a fake agent says is handed over once the screen has
 			// settled, as the agent would answer after the send.
@@ -54,18 +70,23 @@ func drive(t *testing.T, m Model, msg tea.Msg) Model {
 	return m
 }
 
-func run(cmd tea.Cmd) []tea.Msg {
+// cmdWait bounds how long run waits on one command. Nothing the screen
+// does in a test should come near it once quiet has stopped the timers.
+const cmdWait = 10 * time.Second
+
+func run(t *testing.T, cmd tea.Cmd) []tea.Msg {
+	t.Helper()
 	if cmd == nil {
 		return nil
 	}
-	// Timers (the cursor's blink, the spinner, the poll) are dropped rather
-	// than waited for; everything else the screen does answers at once.
 	done := make(chan tea.Msg, 1)
 	go func() { done <- cmd() }()
 	var got tea.Msg
 	select {
 	case got = <-done:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(cmdWait):
+		name := runtime.FuncForPC(reflect.ValueOf(cmd).Pointer()).Name()
+		t.Errorf("%s did not answer in %s: is a timer still running?", name, cmdWait)
 		return nil
 	}
 	switch msg := got.(type) {
@@ -76,7 +97,7 @@ func run(cmd tea.Cmd) []tea.Msg {
 		outs := make([][]tea.Msg, len(msg))
 		var wg sync.WaitGroup
 		for i, c := range msg {
-			wg.Go(func() { outs[i] = run(c) })
+			wg.Go(func() { outs[i] = run(t, c) })
 		}
 		wg.Wait()
 		return slices.Concat(outs...)
@@ -99,10 +120,25 @@ func turnReturning(reply string) *fakeAgent {
 // result through m, deterministically rather than waiting on the timer.
 func refreshed(t *testing.T, m Model) Model {
 	t.Helper()
-	for _, msg := range run(m.Poll()) {
+	m = quiet(m)
+	for _, msg := range run(t, m.Poll()) {
 		m = drive(t, m, msg)
 	}
 	return m
+}
+
+// The chat and comment cursors blink on a screen from New; only the tests'
+// quiet stops them.
+func TestScreenCursorsBlink(t *testing.T) {
+	t.Parallel()
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+	assert.Check(t, m.input.Styles().Cursor.Blink)
+	assert.Check(t, m.commentInput.Styles().Cursor.Blink)
+	blink := m.commentInput.Focus()
+	assert.Check(t, blink != nil, "a focused comment editor should blink")
+	q := quiet(m)
+	blink = q.commentInput.Focus()
+	assert.Check(t, blink == nil, "quiet should stop the blink")
 }
 
 func TestFirstMessageRendersPlanAndReply(t *testing.T) {
@@ -2681,7 +2717,7 @@ func TestRefreshDoesNotResumeAnUnprioritizedPlanASessionLetGo(t *testing.T) {
 				assert.Check(t, cmp.Equal(agent.Resumes(), 1))
 
 				m, cmd := m.Update(press("R"))
-				for _, msg := range run(cmd) {
+				for _, msg := range run(t, cmd) {
 					m = drive(t, m, msg)
 				}
 				assert.Check(t, cmp.Equal(agent.Resumes(), 2), "R did not resume")
@@ -2764,9 +2800,10 @@ func TestAFailedRequestIsSentAgainNotResumed(t *testing.T) {
 	agent := newFakeAgent()
 	agent.err = errors.New("no Claude Code")
 	m := New(context.Background(), agent, nil, store, "add a flag")
+	m = quiet(m)
 	m, cmd := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	var request tea.Cmd
-	for _, msg := range run(cmd) {
+	for _, msg := range run(t, cmd) {
 		if created, ok := msg.(createdMsg); ok {
 			m, request = m.Update(created)
 		}
@@ -2780,7 +2817,7 @@ func TestAFailedRequestIsSentAgainNotResumed(t *testing.T) {
 	assert.Check(t, cmp.Len(agent.Sent(), 0))
 	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
 
-	for _, msg := range run(request) {
+	for _, msg := range run(t, request) {
 		m = drive(t, m, msg)
 	}
 	assert.Check(t, cmp.Contains(chatText(m), "Could not start the planning session: no Claude Code"))
@@ -3854,7 +3891,7 @@ func TestEditFailureKeepsEditorOpen(t *testing.T) {
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "Saving…") {
 		t.Errorf("view does not show Saving…:\n%s", view)
 	}
-	for _, msg := range run(cmd) {
+	for _, msg := range run(t, cmd) {
 		m = drive(t, m, msg)
 	}
 
@@ -4164,7 +4201,7 @@ func TestTheHeaderNamesThePlanOnceCreated(t *testing.T) {
 			m = drive(t, m, tea.WindowSizeMsg{Width: tc.width, Height: 40})
 			m = typeText(t, m, "replace the header")
 			m, create := m.Update(press("enter"))
-			for _, msg := range run(create) {
+			for _, msg := range run(t, create) {
 				m = drive(t, m, msg)
 			}
 
@@ -4193,7 +4230,7 @@ func TestMessageWhileThePlanIsCreatedWaitsInTheInput(t *testing.T) {
 	m, cmd := m.Update(press("enter"))
 	assert.Check(t, cmd == nil, "a second enter while the plan is created did something")
 
-	for _, msg := range run(create) {
+	for _, msg := range run(t, create) {
 		m = drive(t, m, msg)
 	}
 	if got := agent.Sent(); len(got) != 1 || got[0] != "first" {
@@ -4226,7 +4263,7 @@ func TestQueuedCommentsStayAsTheyAreWhileSaved(t *testing.T) {
 		t.Errorf("%d queued while saving, want 1", n)
 	}
 
-	for _, msg := range run(save) {
+	for _, msg := range run(t, save) {
 		m = drive(t, m, msg)
 	}
 	if len(store.Added) != 1 || len(queuedComments(m.comments)) != 0 {
@@ -5340,7 +5377,7 @@ func TestRBuildResumeStartsABuildSession(t *testing.T) {
 	assert.Check(t, m.resumingBuild)
 	assert.Check(t, cmp.Contains(ansi.Strip(m.status), "starting a build session…"))
 	assert.Check(t, !offersResume(m), "R offered while the build session starts")
-	msgs := run(cmd)
+	msgs := run(t, cmd)
 	assert.Check(t, cmp.DeepEqual(r.Calls(), []string{"/src/app saved-plan 2"}))
 	assert.Assert(t, cmp.Len(msgs, 1))
 
@@ -5349,7 +5386,7 @@ func TestRBuildResumeStartsABuildSession(t *testing.T) {
 	assert.Check(t, !m.resumingBuild)
 	assert.Check(t, cmp.Equal(m.status, ""))
 	assert.Check(t, cmp.Len(b.Asked(), 0))
-	run(cmd)
+	run(t, cmd)
 	askedFor(t, b, 0)
 	assert.Check(t, cmp.Equal(m.state, "build"))
 }
@@ -5440,7 +5477,7 @@ func TestRPlannerResumeGoesThroughTheAgent(t *testing.T) {
 
 	m, cmd := m.Update(press("R"))
 	assert.Check(t, m.resuming)
-	for _, msg := range run(cmd) {
+	for _, msg := range run(t, cmd) {
 		m = drive(t, m, msg)
 	}
 	assert.Check(t, cmp.Equal(agent.Resumes(), 2))
@@ -5501,8 +5538,8 @@ func TestRIsIgnoredWhileBusy(t *testing.T) {
 		m, _, r, _ := resumeScreen(t, newFakeAgent(), "build", sessionStep, nil)
 		m, first := m.Update(press("R"))
 		m, second := m.Update(press("R"))
-		run(first)
-		run(second)
+		run(t, first)
+		run(t, second)
 		assert.Check(t, cmp.Len(r.Calls(), 1))
 		assert.Check(t, m.resumingBuild)
 	})
@@ -5543,7 +5580,7 @@ func TestSStopsTheBuildSession(t *testing.T) {
 	assert.Check(t, m.stoppingBuild)
 	// The y stopped the build; it did not fall through to an approve.
 	assert.Check(t, !m.approving)
-	msgs := run(cmd)
+	msgs := run(t, cmd)
 	assert.Check(t, cmp.DeepEqual(b.Stopped(), []string{"sess-7"}))
 	for _, msg := range msgs {
 		m = drive(t, m, msg)

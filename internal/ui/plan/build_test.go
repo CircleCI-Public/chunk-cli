@@ -488,13 +488,54 @@ func TestBuildSectionFollowsTheBottom(t *testing.T) {
 	assert.Check(t, !m.chatView.AtBottom())
 }
 
-func TestBuildReadsEveryTwoSeconds(t *testing.T) {
-	assert.Check(t, cmp.Equal(buildEvery, 2*time.Second))
-	synctest.Test(t, func(t *testing.T) {
-		start := time.Now()
-		msg := buildTickCmd()() // blocks on the fake clock
-		_, ok := msg.(buildTickMsg)
-		assert.Check(t, ok)
-		assert.Check(t, cmp.Equal(time.Since(start), buildEvery))
-	})
+// The screen's timers run on the real clock unless a test stops them.
+func TestTimersRunOnTheRealClock(t *testing.T) {
+	t.Parallel()
+	fromNew := func() Model { return New(context.Background(), newFakeAgent(), nil, newFakeStore(), "") }
+	for _, tc := range []struct {
+		name  string
+		model func() Model
+		every time.Duration
+		want  time.Duration
+		cmd   func(Model) tea.Cmd
+		msg   tea.Msg
+	}{
+		{
+			name:  "build read",
+			model: fromNew,
+			every: buildEvery,
+			want:  2 * time.Second,
+			cmd:   Model.buildTickCmd,
+			msg:   buildTickMsg{},
+		},
+		{
+			name:  "poll",
+			model: fromNew,
+			every: pollEvery,
+			want:  5 * time.Second,
+			cmd:   Model.pollCmd,
+			msg:   pollMsg{},
+		},
+		{
+			// A Model not built by New has a nil tick, which is the real clock.
+			name:  "zero Model build read",
+			model: func() Model { return Model{} },
+			every: buildEvery,
+			want:  2 * time.Second,
+			cmd:   Model.buildTickCmd,
+			msg:   buildTickMsg{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Check(t, cmp.Equal(tc.every, tc.want))
+			synctest.Test(t, func(t *testing.T) {
+				m := tc.model()
+				start := time.Now()
+				got := tc.cmd(m)() // blocks on the fake clock
+				assert.Check(t, cmp.DeepEqual(got, tc.msg))
+				assert.Check(t, cmp.Equal(time.Since(start), tc.every))
+			})
+		})
+	}
 }

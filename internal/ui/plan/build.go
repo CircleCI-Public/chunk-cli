@@ -124,8 +124,8 @@ type (
 	}
 )
 
-func buildTickCmd() tea.Cmd {
-	return tea.Tick(buildEvery, func(time.Time) tea.Msg { return buildTickMsg{} })
+func (m Model) buildTickCmd() tea.Cmd {
+	return m.after(buildEvery, func(time.Time) tea.Msg { return buildTickMsg{} })
 }
 
 func readBuildCmd(ctx context.Context, b Build, planID string, after int) tea.Cmd {
@@ -203,7 +203,7 @@ func (m Model) updateBuild(msg tea.Msg) (Model, tea.Cmd) {
 		if !wasSpinning && m.spinning() {
 			spin = m.spin.Tick
 		}
-		return m, tea.Batch(buildTickCmd(), spin)
+		return m, tea.Batch(m.buildTickCmd(), spin)
 	}
 	return m, nil
 }
