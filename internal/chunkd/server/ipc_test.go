@@ -574,6 +574,20 @@ func TestPingAnswersWhileTheFirstPollRuns(t *testing.T) {
 	}
 }
 
+// Both of the daemon's servers close a keep-alive connection left idle, so a
+// client that never closes its pool cannot pile up sockets in the daemon. They
+// set no read or write timeout, so a long /validate is not cut short.
+func TestDaemonServersCloseIdleConnections(t *testing.T) {
+	unix := newServer(newTestDaemon())
+	tcp := newTCPServer(http.NotFoundHandler(), "token")
+	for name, srv := range map[string]*http.Server{"unix": unix, "tcp": tcp} {
+		assert.Check(t, cmp.Equal(srv.IdleTimeout, idleConnTimeout), name)
+		assert.Check(t, cmp.Equal(srv.ReadHeaderTimeout, 5*time.Second), name)
+		assert.Check(t, cmp.Equal(srv.ReadTimeout, time.Duration(0)), name)
+		assert.Check(t, cmp.Equal(srv.WriteTimeout, time.Duration(0)), name)
+	}
+}
+
 // A client that gives up on /snapshot during the first poll is told the daemon
 // is starting rather than being held until the poll ends.
 func TestSnapshotGivesUpWithItsCaller(t *testing.T) {
