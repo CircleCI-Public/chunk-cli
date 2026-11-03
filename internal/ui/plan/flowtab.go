@@ -90,8 +90,11 @@ func (m Model) flowContent(w int) string {
 	lines = append(lines, m.progress()...)
 
 	if pr := clean(m.flow.PR); pr != "" {
-		lines = append(lines, "", m.sectionHeading("Pull request", m.dim(), w),
-			lipgloss.NewStyle().Underline(true).Foreground(m.brand()).Render(pr))
+		st := lipgloss.NewStyle().Underline(true).Foreground(m.brand())
+		if linkable(pr) {
+			st = st.Hyperlink(pr)
+		}
+		lines = append(lines, "", m.sectionHeading("Pull request", m.dim(), w), st.Render(pr))
 		for _, d := range m.flow.Deviations {
 			lines = append(lines, m.style(m.dim()).Render("• ")+clean(d))
 		}

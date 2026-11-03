@@ -4614,6 +4614,37 @@ func TestFlowTabShowsProgress(t *testing.T) {
 	}
 }
 
+// TestFlowTabPRIsAHyperlink checks that the pull request's URL is sent as a
+// terminal hyperlink when it is http(s), and as plain text when it is not.
+func TestFlowTabPRIsAHyperlink(t *testing.T) {
+	for _, tc := range []struct {
+		name, url string
+		link      bool
+	}{
+		{"https", "https://github.com/o/r/pull/7", true},
+		{"not http", "javascript:alert(1)", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.StateV, store.UnitsV = "Integrating - Agent", threeUnitsRead
+			store.FlowV.PR = tc.url
+			raw := flowModel(t, store).flowContent(200)
+			if tc.link {
+				assert.Check(t, cmp.Contains(raw, ansi.SetHyperlink(tc.url)))
+				return
+			}
+			noHyperlink(t, raw)
+		})
+	}
+	t.Run("control character", func(t *testing.T) {
+		store := newFakeStore()
+		store.StateV, store.UnitsV = "Integrating - Agent", threeUnitsRead
+		store.FlowV.PR = "https://github.com/o/r\x1b]0;x\x07"
+		raw := flowModel(t, store).flowContent(200)
+		assert.Check(t, !strings.Contains(raw, "\x1b]0;"), "no injected escape")
+	})
+}
+
 func TestFlowTabShowsThePR(t *testing.T) {
 	const url = "https://github.com/o/r/pull/7"
 	store := newFakeStore()
@@ -5628,3 +5659,111 @@ func TestNoResumerOffersNoBuildResume(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func linesWith(raw string, words ...string) []string {
+	var out []string
+	for _, l := range strings.Split(raw, "\n") {
+		for _, w := range words {
+			if strings.Contains(ansi.Strip(l), w) {
+				out = append(out, l)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func noHyperlink(t *testing.T, raw string) {
+	t.Helper()
+	assert.Check(t, !strings.Contains(raw, "\x1b]8;;"), "no hyperlink is drawn")
+	assert.Check(t, !strings.Contains(raw, "\x1b]0;"), "no injected escape")
+}
+
+func TestPlanLinks(t *testing.T) {
+	const planUUID = "164a2947-74a7-44d9-9708-c8ea7284dcba"
+	const planURL = "https://app.circleci.com/factory/github/circleci/flows/" + planUUID
+
+	cases := []struct {
+		name  string
+		text  string
+		width int
+		check func(t *testing.T, raw string)
+	}{
+		{
+			name:  "link",
+			text:  "Builds after [plan-id-links](" + planURL + ").",
+			width: 140,
+			check: func(t *testing.T, raw string) {
+				assert.Check(t, cmp.Contains(raw, ansi.SetHyperlink(planURL)))
+				assert.Check(t, cmp.Contains(ansi.Strip(raw), "Builds after plan-id-links."))
+				assert.Check(t, !strings.Contains(ansi.Strip(raw), planURL), "the URL is not drawn")
+			},
+		},
+		{
+			name:  "other",
+			text:  "See [docs](https://example.com/x).",
+			width: 140,
+			check: func(t *testing.T, raw string) {
+				assert.Check(t, cmp.Contains(raw, ansi.SetHyperlink("https://example.com/x")))
+			},
+		},
+		{
+			name:  "wrapped",
+			text:  "[a very long plan name that wraps over lines because it is longer than the plan pane is wide](" + planURL + ")",
+			width: 100,
+			check: func(t *testing.T, raw string) {
+				ls := linesWith(raw, "very long", "because it", "pane is wide")
+				assert.Check(t, len(ls) >= 2, "the link text wraps over more than one line")
+				for _, l := range ls {
+					assert.Check(t, cmp.Contains(l, ansi.SetHyperlink(planURL)))
+					assert.Check(t, cmp.Contains(l, ansi.ResetHyperlink()))
+				}
+			},
+		},
+		{
+			name:  "uuid-text",
+			text:  "[" + planUUID + "](" + planURL + ") " + planUUID,
+			width: 140,
+			check: func(t *testing.T, raw string) {
+				assert.Check(t, cmp.Equal(strings.Count(ansi.Strip(raw), planUUID), 2))
+				assert.Check(t, cmp.Equal(strings.Count(raw, ansi.SetHyperlink(planURL)), 1))
+			},
+		},
+		{
+			name:  "escape",
+			text:  "[x](https://a.test/\x1b]0;pwned\x07)",
+			width: 140,
+			check: noHyperlink,
+		},
+		{
+			name:  "scheme",
+			text:  "[x](file:///etc/passwd)",
+			width: 140,
+			check: noHyperlink,
+		},
+		{
+			name:  "fence",
+			text:  "```\n[x](" + planURL + ")\n```",
+			width: 140,
+			check: noHyperlink,
+		},
+		{
+			name:  "heading",
+			text:  "## [x](" + planURL + ")",
+			width: 140,
+			check: noHyperlink,
+		},
+		{
+			name:  "bare",
+			text:  "see " + planUUID,
+			width: 140,
+			check: noHyperlink,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m, _ := planned(t, c.width, 40, c.text, nil)
+			c.check(t, m.Content())
+		})
+	}
+}

@@ -301,7 +301,9 @@ chunk
   (`Next: you approve the plan · ctrl+s`, `Next: chunk: build-unit`,
   `Waiting on <blocker>`). The left pane is the planning session's activity.
   The right has two tabs:
-  **Plan**, the plan rendered as markdown, and **Flow**, which shows progress
+  **Plan**, the plan rendered as markdown (a markdown link is underlined and
+  opens its URL in terminals that support hyperlinks; only `http` and `https`
+  links do), and **Flow**, which shows progress
   (each unit ✓ done, ▸ being built, ○ to do, or for a plan with sub-plans its
   open sub-plans), the pull request and its deviations, and related plans
   (parent, sub-plans, blockers). With the right pane focused, `←` and `→`
