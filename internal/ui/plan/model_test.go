@@ -37,7 +37,7 @@ func fgSeq(c color.Color) string {
 // quiet stops m's timers, which never settle: its cursors no longer blink,
 // and its poll and build timers never fire.
 func quiet(m Model) Model {
-	for _, in := range []*textarea.Model{&m.input, &m.commentInput} {
+	for _, in := range []*textarea.Model{&m.input, &m.commentInput, &m.answer} {
 		s := in.Styles()
 		s.Cursor.Blink = false
 		in.SetStyles(s)
@@ -6277,4 +6277,159 @@ func TestPlanLinks(t *testing.T) {
 			c.check(t, m.Content())
 		})
 	}
+}
+
+// twoQuestions is a plan with two open questions.
+const twoQuestions = "# Lint PR descriptions\n\n## 1. Outcome\n\nDescriptions are linted.\n\n" +
+	"## 3. Open Questions\n\n* Lint draft PRs too?\n* Fail the check, or only warn?\n\n## 5. Units\n\n### Unit 1: Lint\n"
+
+// TestAnswerAQuestionInline checks the Answer a question box: each answer is
+// queued as a comment on its question, the last sends them all with
+// answer-open-questions, and the input keeps the keyboard while it is open.
+func TestAnswerAQuestionInline(t *testing.T) {
+	t.Parallel()
+	const first, second = "* Lint draft PRs too?", "* Fail the check, or only warn?"
+	setup := func(t *testing.T, text string) (Model, *fakeStore) {
+		t.Helper()
+		store := newFakeStore()
+		store.TextV = text
+		store.setEvents("answer-open-questions", "abandon")
+		m := flowModel(t, store)
+		return drive(t, m, press("left")), store
+	}
+	view := func(m Model) string { return ansi.Strip(m.Content()) }
+	added := func(store *fakeStore) [][2]string {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return slices.Clone(store.Added)
+	}
+	answered := func(store *fakeStore) int {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return len(store.Answered)
+	}
+
+	t.Run("each answer moves to the next question, and the last sends them", func(t *testing.T) {
+		t.Parallel()
+		m, store := setup(t, twoQuestions)
+		v := view(m)
+		assert.Check(t, cmp.Contains(v, "◐ Answer a question"))
+		assert.Check(t, cmp.Contains(v, "Lint draft PRs too?"))
+		assert.Check(t, cmp.Contains(v, "1 of 2"))
+		assert.Check(t, cmp.Contains(v, "______"))
+
+		m = drive(t, m, press("enter"))
+		assert.Check(t, m.answering)
+		assert.Check(t, cmp.Contains(view(m), "⏎ save answer · esc leave input"))
+		m = typeText(t, m, "Yes")
+		m = drive(t, m, press("enter"))
+		q := queuedComments(m.comments)
+		assert.Assert(t, cmp.Len(q, 1))
+		assert.Check(t, cmp.Equal(q[0].quote, first))
+		assert.Check(t, cmp.Equal(q[0].text, "Yes"))
+		v = view(m)
+		assert.Check(t, cmp.Contains(v, "Fail the check, or only warn?"))
+		assert.Check(t, cmp.Contains(v, "2 of 2"))
+		assert.Check(t, cmp.Len(added(store), 0), "an answer was saved before the last one")
+
+		m = typeText(t, m, "Warn")
+		m = drive(t, m, press("enter"))
+		assert.Check(t, cmp.DeepEqual(added(store), [][2]string{{first, "Yes"}, {second, "Warn"}}))
+		assert.Check(t, cmp.Equal(answered(store), 1))
+		assert.Check(t, !m.answering)
+		assert.Check(t, !strings.Contains(view(m), "Answer a question"), view(m))
+	})
+
+	t.Run("keys while answering are typed", func(t *testing.T) {
+		t.Parallel()
+		m, _ := setup(t, twoQuestions)
+		m = drive(t, m, press("enter"))
+		m = pressAll(t, m, "j", "k", "?", "x", "X", "right")
+		assert.Check(t, cmp.Equal(m.answer.Value(), "jk?xX"))
+		assert.Check(t, cmp.Equal(m.tab, tabFlow))
+		assert.Check(t, !m.askingReason)
+		assert.Check(t, !m.confirming)
+		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		assert.Check(t, !m.confirming)
+		assert.Check(t, m.answering)
+	})
+
+	t.Run("esc keeps the text", func(t *testing.T) {
+		t.Parallel()
+		m, _ := setup(t, twoQuestions)
+		m = drive(t, m, press("enter"))
+		m = typeText(t, m, "Ye")
+		m = drive(t, m, press("esc"))
+		assert.Check(t, !m.answering)
+		assert.Check(t, cmp.Contains(view(m), "> Ye"))
+		m = drive(t, m, press("enter"))
+		assert.Check(t, m.answering)
+		assert.Check(t, cmp.Equal(m.answer.Value(), "Ye"))
+	})
+
+	t.Run("an empty answer queues nothing", func(t *testing.T) {
+		t.Parallel()
+		m, _ := setup(t, twoQuestions)
+		m = pressAll(t, m, "enter", " ", "enter")
+		assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
+		assert.Check(t, cmp.Contains(view(m), "1 of 2"))
+	})
+
+	t.Run("a refresh that removes the question keeps the text", func(t *testing.T) {
+		t.Parallel()
+		m, store := setup(t, twoQuestions)
+		m = drive(t, m, press("enter"))
+		m = typeText(t, m, "Ye")
+		store.mu.Lock()
+		store.TextV = strings.Replace(twoQuestions, first+"\n", "", 1)
+		store.mu.Unlock()
+		m = refreshed(t, m)
+		v := view(m)
+		assert.Check(t, cmp.Contains(v, "Fail the check, or only warn?"))
+		assert.Check(t, cmp.Contains(v, "1 of 1"))
+		assert.Check(t, !strings.Contains(v, "Lint draft PRs too?"), v)
+		assert.Check(t, cmp.Equal(m.answer.Value(), "Ye"))
+		m = drive(t, m, press("enter"))
+		assert.Check(t, cmp.DeepEqual(added(store), [][2]string{{second, "Ye"}}))
+		assert.Check(t, cmp.Equal(answered(store), 1))
+	})
+
+	t.Run("with no questions the box sends the hand-off", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeStore()
+		store.TextV = "# Lint PR descriptions\n\n## 1. Outcome\n\nDescriptions are linted.\n"
+		store.setEvents("answer-open-questions", "abandon")
+		store.FlowV.Next = []Step{
+			{Actor: ActorHuman, Event: "answer-open-questions", Required: true, Reason: "2 open questions"},
+			{Actor: ActorHuman, Event: "abandon"},
+		}
+		m := drive(t, flowModel(t, store), press("left"))
+		v := view(m)
+		assert.Check(t, cmp.Contains(v, "◐ Answer a question"))
+		assert.Check(t, cmp.Contains(v, "2 open questions"))
+		assert.Check(t, cmp.Contains(v, "⏎ send"))
+		assert.Check(t, !strings.Contains(v, "______"), v)
+		m = drive(t, m, press("enter"))
+		assert.Check(t, !m.answering)
+		assert.Check(t, cmp.Equal(answered(store), 1))
+		assert.Check(t, cmp.Len(added(store), 0))
+	})
+
+	t.Run("a failed send keeps the answers", func(t *testing.T) {
+		t.Parallel()
+		m, store := setup(t, twoQuestions)
+		store.mu.Lock()
+		store.AddErr = errors.New("factory is down")
+		store.mu.Unlock()
+		m = drive(t, m, press("enter"))
+		m = typeText(t, m, "Yes")
+		m = drive(t, m, press("enter"))
+		m = typeText(t, m, "Warn")
+		m = drive(t, m, press("enter"))
+		assert.Check(t, cmp.Len(queuedComments(m.comments), 2))
+		v := view(m)
+		assert.Check(t, cmp.Contains(v, "Send your answers"))
+		assert.Check(t, cmp.Contains(v, "factory is down"))
+		assert.Check(t, cmp.Equal(answered(store), 0))
+	})
 }

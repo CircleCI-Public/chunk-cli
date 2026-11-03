@@ -41,6 +41,11 @@ type keyMap struct {
 	FlowTab, PlanTab key.Binding
 	// Act does the Flow view's selected item.
 	Act key.Binding
+	// While the Answer a question box's input has the keyboard: every other
+	// key but ctrl+c is typed into it.
+	SaveAnswer, LeaveAnswer key.Binding
+	// answering is whether the footer shows the answer's keys alone.
+	answering bool
 	// While approving the plan, or its design, is confirmed. Any other key,
 	// enter too, says no: approving moves the plan on in factory, so it
 	// takes a y.
@@ -66,6 +71,18 @@ type keyMap struct {
 // keys returns the screen's bindings as they stand for the view shown and
 // the state.
 func (m Model) keys() keyMap {
+	if m.answering {
+		// The answer has the keyboard: j/k, ←/→, x and the rest are typed.
+		k := keyMap{
+			answering:   true,
+			SaveAnswer:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "save answer")),
+			LeaveAnswer: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "leave input")),
+			Quit:        key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
+		}
+		// While the queued comments are saved they stay as they are.
+		k.SaveAnswer.SetEnabled(!m.savingComments)
+		return k
+	}
 	newline := "ctrl+j"
 	// A terminal that does not tell shift+enter from enter sends the
 	// message on shift+enter, so it is only offered where it works.
@@ -247,6 +264,9 @@ func (m Model) commentKeys(k *keyMap, inPlan bool) {
 // ShortHelp is the footer's hints, most useful first: the footer drops hints
 // from the end until it fits.
 func (k keyMap) ShortHelp() []key.Binding {
+	if k.answering {
+		return []key.Binding{k.SaveAnswer, k.LeaveAnswer}
+	}
 	prev := k.Prev
 	if k.prevUnlisted {
 		prev.SetEnabled(false)

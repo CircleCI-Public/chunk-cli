@@ -358,7 +358,11 @@ your comments, and a blocker or sub-plan opens that plan. On the Plan view, `c`
 writes a comment right under the highlighted part, saved to factory
 for chunk to address when you press `s`; `shift+↑/↓` selects several
 parts to comment on together. There is no chat with the planner: comments
-are how you change the plan, and questions go in comments too. Once factory's review of the design has
+are how you change the plan, and questions go in comments too. When factory
+waits on your answers to 3. Open Questions, the Flow view's Answer a question
+box does it inline: `⏎` opens its input, `⏎` again saves the answer as a
+comment on that question and moves to the next, and the last answer sends
+them all to factory; `esc` leaves the input. Once factory's review of the design has
 passed, `ctrl+s` approves the design, and chunk writes the units; once those
 pass review too, `ctrl+s` approves the finished plan in factory, and the
 chunk daemon builds it through to a pull request. The strip says which of

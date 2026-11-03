@@ -324,6 +324,10 @@ type Model struct {
 	flowView viewport.Model
 	input    textarea.Model
 	spin     spinner.Model
+	// answer is the Answer a question box's input, which has the keyboard
+	// while answering is set.
+	answer    textarea.Model
+	answering bool
 
 	// tab is which view the body shows, Flow or Plan. Every visit opens on
 	// the Flow view.
@@ -467,6 +471,17 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 	ciStyles.Focused.CursorLine = lipgloss.NewStyle()
 	ci.SetStyles(ciStyles)
 
+	// An answer is one line: enter saves it.
+	ai := textarea.New()
+	ai.ShowLineNumbers = false
+	ai.Prompt = "> "
+	ai.Placeholder = "______"
+	ai.KeyMap.InsertNewline.SetEnabled(false)
+	ai.SetHeight(1)
+	aiStyles := ai.Styles()
+	aiStyles.Focused.CursorLine = lipgloss.NewStyle()
+	ai.SetStyles(aiStyles)
+
 	// The plan's keys are the screen's own, which move the cursor with the
 	// view; the viewport's would scroll one without the other, and its d
 	// and u would scroll where d deletes a comment.
@@ -493,6 +508,7 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 		flowView:     flowView,
 		input:        in,
 		commentInput: ci,
+		answer:       ai,
 		spin:         spinner.New(spinner.WithSpinner(spinner.Dot)),
 		pending:      strings.TrimSpace(first),
 		dark:         true,
@@ -855,6 +871,12 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		}
 	}
 	m.reselect(prevSel, hadSel)
+	if _, _, open := m.openQuestion(); m.answering &&
+		(!open || m.moving != nil || !slices.Contains(m.events, answerOpenQuestions)) {
+		// The box has no question left to answer; what was typed is kept.
+		m.answering = false
+		m.answer.Blur()
+	}
 	m.renderFlow()
 	return m
 }
@@ -958,6 +980,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.commenting {
 		return m.updateCommentKey(msg)
 	}
+	if m.answering {
+		return m.updateAnswerKey(msg)
+	}
 
 	switch {
 	case key.Matches(msg, k.SendPlan):
@@ -1011,6 +1036,16 @@ func (m Model) deliver() (Model, tea.Cmd) {
 	if len(queued) == 0 && !m.pendingHandOff {
 		return m, nil
 	}
+	return m.saveAndHandOff()
+}
+
+// saveAndHandOff saves the queued comments, none or more, and hands them to
+// factory, while it takes comments; at any other time they stay queued.
+func (m Model) saveAndHandOff() (Model, tea.Cmd) {
+	if m.savingComments {
+		return m, nil
+	}
+	queued := queuedComments(m.comments)
 	if !m.takesComments() {
 		if m.moving == nil {
 			m.status = heldStatus
@@ -1447,6 +1482,7 @@ func (m *Model) layout() {
 	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 6)
 	// The request is written inside the Describe the change box's border.
 	m.input.SetWidth(max(w-4, 1))
+	m.answer.SetWidth(max(w-4, 1))
 	m.renderPlan()
 	m.renderFlow()
 }

@@ -40,6 +40,7 @@ const (
 	boxSubPlans
 	boxDescribe
 	boxFailure
+	boxAnswer
 )
 
 // box is one open activity of the Flow view.
@@ -137,6 +138,9 @@ func (m Model) boxes() []box {
 		return b
 	}
 
+	if b, ok := m.answerBox(reason(answerOpenQuestions)); ok {
+		out = append(out, b)
+	}
 	switch approval(m.flow) {
 	case planstate.ApproveForBuilding:
 		n := len(m.units)
@@ -145,7 +149,10 @@ func (m Model) boxes() []box {
 	case planstate.ApproveForUnits:
 		out = append(out, withReason(heavy(boxReview, "Review the design", " ⏎ review ", "design ready"), planstate.ApproveForUnits))
 	}
-	if slices.Contains(m.events, addressComments) && len(queuedComments(m.comments)) > 0 {
+	// The Answer a question box sends the comments where factory asks for
+	// answers, so it stands in for this one.
+	if slices.Contains(m.events, addressComments) && !slices.Contains(m.events, answerOpenQuestions) &&
+		len(queuedComments(m.comments)) > 0 {
 		out = append(out, withReason(heavy(boxSend, "Send your comments", " ⏎ send "), addressComments))
 	}
 	if slices.Contains(m.events, prioritize) {
@@ -165,7 +172,7 @@ func (m Model) boxes() []box {
 			out = append(out, withReason(b, action))
 		case slices.Contains(forwardEvents, event),
 			event == planstate.ApproveForBuilding, event == planstate.ApproveForUnits,
-			event == addressComments, event == prioritize:
+			event == addressComments, event == prioritize, event == answerOpenQuestions:
 		default:
 			b := heavy(boxStep, stepText(s), "")
 			if r := clean(s.Reason); r != "" {
@@ -195,6 +202,75 @@ func (m Model) boxes() []box {
 		out = append(out, b)
 	}
 	return out
+}
+
+// answerBox is the Answer a question box for the first unanswered open
+// question and its input; false unless factory offers answer-open-questions
+// and no event is being sent.
+func (m Model) answerBox(why string) (box, bool) {
+	if !slices.Contains(m.events, answerOpenQuestions) || m.moving != nil {
+		return box{}, false
+	}
+	b := box{kind: boxAnswer, mark: "◐", name: "Answer a question", actor: actorName(ActorHuman), status: "waiting", heavy: true, hint: " ⏎ send "}
+	qs := m.questionBlocks()
+	at, nth, open := m.openQuestion()
+	if !open {
+		if len(qs) > 0 {
+			b.name = "Send your answers"
+		}
+		if why != "" {
+			b.lines = append(b.lines, why)
+		}
+		return b, true
+	}
+	inner := max(m.flowView.Width()-4, 1)
+	count := m.style(m.dim()).Render(fmt.Sprintf("%d of %d", nth+1, len(qs)))
+	text := strings.Split(ansi.Wrap(questionText(m.blocks[at].source), inner, ""), "\n")
+	if last := len(text) - 1; lipgloss.Width(text[last])+2+lipgloss.Width(count) <= inner {
+		text[last] += "  " + count
+	} else {
+		text = append(text, count)
+	}
+	b.first = text
+	b.input = strings.Split(m.answer.View(), "\n")
+	if why != "" {
+		b.tail = append(b.tail, why)
+	}
+	return b, true
+}
+
+// questionBlocks are the indexes in m.blocks of the plan's open questions:
+// the list items under a section whose name contains "question".
+func (m Model) questionBlocks() []int {
+	var out []int
+	section := ""
+	for i, b := range m.blocks {
+		if level, text := heading(b.block); level == 2 {
+			section = strings.ToLower(sectionNumRe.ReplaceAllString(text, ""))
+			continue
+		}
+		if b.kind == kindListItem && strings.Contains(section, "question") {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// openQuestion is the first question with no comment on it: its block, and
+// which of the questions it is; false when every one has a comment.
+func (m Model) openQuestion() (block, nth int, ok bool) {
+	for i, at := range m.questionBlocks() {
+		if m.commentAt(at) >= 0 {
+			continue
+		}
+		return at, i, true
+	}
+	return 0, 0, false
+}
+
+// questionText is a question's block as one line, without its bullet.
+func questionText(source string) string {
+	return clean(listItemRe.ReplaceAllString(source, ""))
 }
 
 // failureBox is the box of the latest create, start, resume or agent

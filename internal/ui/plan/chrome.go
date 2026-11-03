@@ -313,9 +313,9 @@ func (m Model) actions() (main, side string) {
 	}
 	approve := "ctrl+s Approve plan"
 	switch {
-	// While a comment is written enter saves it and ctrl+s does nothing, so
-	// neither button is on offer: the hints name the keys that work.
-	case m.approving, m.approvingDesign, m.commenting, m.moving != nil:
+	// While a comment or an answer is written enter saves it and ctrl+s does
+	// nothing, so neither button is on offer: the hints name the keys that work.
+	case m.approving, m.approvingDesign, m.commenting, m.answering, m.moving != nil:
 		return "", ""
 	case m.busy:
 		return outline(m.purple(), "chunk is working"), m.style(m.faint()).Render(approve)

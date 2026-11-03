@@ -74,10 +74,66 @@ func (m Model) act(s selectable) (Model, tea.Cmd) {
 		}
 	case boxDescribe:
 		return m.send(m.input.Value())
+	case boxAnswer:
+		if _, _, open := m.openQuestion(); open {
+			m.answering = true
+			cmd := m.answer.Focus()
+			m.renderFlow()
+			return m, cmd
+		}
+		return m.sendAnswers()
 	case boxMerge, boxStep, boxRunning, boxSubPlans:
 		// These say what is under way and offer nothing to do.
 	}
 	return m, nil
+}
+
+// updateAnswerKey handles a key while the Answer a question box's input has
+// the keyboard: enter queues the answer as a comment on the question, as c
+// on its block does, and sends every answer once none is left; esc leaves
+// the input with what was typed; every other key is typed.
+func (m Model) updateAnswerKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	k := m.keys()
+	switch {
+	case key.Matches(msg, k.LeaveAnswer):
+		m.answering = false
+		m.answer.Blur()
+		m.renderFlow()
+		return m, nil
+	case key.Matches(msg, k.SaveAnswer):
+		text := strings.TrimSpace(m.answer.Value())
+		at, _, open := m.openQuestion()
+		if text == "" || !open {
+			return m, nil
+		}
+		m.comments = append(m.comments, comment{block: at, span: 1, quote: m.quoteOf(at, at), text: text})
+		m.answer.Reset()
+		m.drawPlan()
+		if _, _, more := m.openQuestion(); more {
+			m.renderFlow()
+			return m, nil
+		}
+		m.answering = false
+		m.answer.Blur()
+		var cmd tea.Cmd
+		m, cmd = m.sendAnswers()
+		m.renderFlow()
+		return m, cmd
+	}
+	var cmd tea.Cmd
+	m.answer, cmd = m.answer.Update(msg)
+	m.renderFlow()
+	return m, cmd
+}
+
+// sendAnswers saves the queued comments and hands them to factory, as s
+// does; with no comment queued it still hands off, so factory takes the
+// answers already saved, or learns there were no questions to answer.
+func (m Model) sendAnswers() (Model, tea.Cmd) {
+	if len(queuedComments(m.comments)) > 0 || m.pendingHandOff {
+		return m.deliver()
+	}
+	return m.saveAndHandOff()
 }
 
 // renderFlow draws the Flow view into its viewport.
