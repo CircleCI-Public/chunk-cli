@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -137,10 +138,23 @@ func (m Model) inline(s string) string {
 			return lipgloss.NewStyle().Bold(true).Render(strings.Trim(t, "*"))
 		}
 		if l := linkRe.FindStringSubmatch(t); l != nil {
-			return lipgloss.NewStyle().Underline(true).Foreground(m.brand()).Render(l[1])
+			st := lipgloss.NewStyle().Underline(true).Foreground(m.brand())
+			if linkable(l[2]) {
+				st = st.Hyperlink(l[2])
+			}
+			return st.Render(l[1])
 		}
 		return t
 	})
+}
+
+// linkable is whether u may be sent to the terminal as a hyperlink: http or
+// https, and no control character that could end the escape early.
+func linkable(u string) bool {
+	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+		return false
+	}
+	return !strings.ContainsFunc(u, unicode.IsControl)
 }
 
 // wrapped is s inline-styled and wrapped to w, as lines.
