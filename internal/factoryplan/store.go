@@ -128,6 +128,10 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		Holder:       f.SessionID,
 		WaitingOn:    f.WaitingOn,
 		WaitingOnWhy: f.WaitingOnWhy,
+		UpdatedAt:    f.UpdatedAt,
+
+		ApprovedForUnits:    f.ApprovedForUnits,
+		ApprovedForBuilding: f.ApprovedForBuilding,
 	}
 	if p := f.Progress; p != nil {
 		out.Progress = &plan.Progress{
@@ -152,14 +156,16 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 				Action:     t.Action,
 				Dispatched: t.IsDispatched,
 				Required:   t.IsRequired,
+				Reason:     t.Reason,
 			}
 		}
 	}
 	return out, nil
 }
 
-// Family is the plan's parent, open sub-plans and blockers, each with its
-// flow's title and state; blockers are as the blockers endpoint serves them.
+// Family is the plan's parent, sub-plans (ended ones included) and blockers,
+// each with its flow's title and state; blockers are as the blockers
+// endpoint serves them.
 // The parent is read once, as it never changes.
 func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 	id := s.ID()
@@ -180,7 +186,7 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 	}
 
 	relative := func(f circleci.Flow) plan.Relative {
-		return plan.Relative{ID: f.ID, Title: f.Title, State: f.State, Outcome: f.Outcome}
+		return plan.Relative{ID: f.ID, Title: f.Title, State: f.State, Outcome: f.Outcome, Blocked: f.ActiveBlockers > 0}
 	}
 	var out plan.Family
 	if parent != "" {
@@ -191,7 +197,7 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 		out.Parent = &r
 	}
 	for _, f := range flows {
-		if f.Parent == id && f.Phase != circleci.PhaseEnded {
+		if f.Parent == id {
 			out.Children = append(out.Children, relative(f))
 		}
 	}

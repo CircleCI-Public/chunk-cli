@@ -1,6 +1,9 @@
 package plan
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Comment is a comment on the plan as factory keeps it.
 type Comment struct {
@@ -44,6 +47,11 @@ type Flow struct {
 	Claimed bool
 	// Holder is the session claiming the plan, "" when none does.
 	Holder string
+	// ApprovedForUnits and ApprovedForBuilding are whether the design and
+	// the plan have been approved, as factory serves them.
+	ApprovedForUnits, ApprovedForBuilding bool
+	// UpdatedAt is when the flow last changed; zero when not served.
+	UpdatedAt time.Time
 }
 
 // Progress is how far a flow is along, as factory reports it. A nil count
@@ -76,6 +84,8 @@ type Step struct {
 	// Required is whether factory needs this entry, or another required
 	// one, to move the flow on.
 	Required bool
+	// Reason is factory's why for the step, "" when not served.
+	Reason string
 }
 
 // Relative is a plan related to the screen's: its parent, a sub-plan or a
@@ -85,12 +95,14 @@ type Relative struct {
 	// Active is, for a blocker, whether it still holds the plan, as factory
 	// says; false for a parent or sub-plan.
 	Active bool
+	// Blocked is, for a sub-plan, whether one of its own blockers still holds it.
+	Blocked bool
 }
 
-// Family is the plans related to the screen's plan. Children are its open
-// sub-plans only: factory does not list one that has ended.
+// Family is the plans related to the screen's plan.
 type Family struct {
-	Parent   *Relative
+	Parent *Relative
+	// Children are all its sub-plans, ended ones included with their Outcome.
 	Children []Relative
 	Blockers []Relative
 }
@@ -113,8 +125,8 @@ type Store interface {
 	// Flow is the plan's flow as factory has it now; empty before the plan
 	// is created or has a flow.
 	Flow(ctx context.Context) (Flow, error)
-	// Family is the plan's parent, open sub-plans and blockers; empty
-	// before Create.
+	// Family is the plan's parent, sub-plans and blockers; empty before
+	// Create.
 	Family(ctx context.Context) (Family, error)
 	// Units are the plan's units, in order; none before Create.
 	Units(ctx context.Context) ([]Unit, error)

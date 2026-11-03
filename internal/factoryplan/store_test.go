@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
@@ -556,11 +557,14 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 				Actor:        "chunk",
 				TaskCategory: "build-unit",
 				IsDispatched: true,
+				Reason:       "builds the unit",
 			},
 		},
-		TaskUnit:     "Unit 2: parser",
-		WaitingOn:    "session",
-		WaitingOnWhy: "the session builds Unit 2: parser",
+		ApprovedForUnits:    true,
+		ApprovedForBuilding: true,
+		TaskUnit:            "Unit 2: parser",
+		WaitingOn:           "session",
+		WaitingOnWhy:        "the session builds Unit 2: parser",
 		Progress: map[string]any{
 			"summary": "Building unit 2 of 3", "current_unit": "Unit 2: parser",
 			"deviation_count": 2, "binding_deviation_count": 1,
@@ -570,6 +574,12 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	cci.SetFactoryPlanState(store.ID(), "build")
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
+	assert.Assert(t, cmp.Len(f.Next, 1))
+	assert.Check(t, cmp.Equal(f.Next[0].Reason, "builds the unit"))
+	assert.Check(t, f.ApprovedForUnits, "the design is approved")
+	assert.Check(t, f.ApprovedForBuilding, "the plan is approved")
+	assert.Check(t, !f.UpdatedAt.IsZero(), "the flow's updated_at is not read")
+	f.UpdatedAt = time.Time{}
 	// Its events are the human events of its next, which has none.
 	assert.Check(t, cmp.DeepEqual(f, plan.Flow{
 		State:  "build",
@@ -581,6 +591,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 				Actor:      "chunk",
 				Task:       "build-unit",
 				Dispatched: true,
+				Reason:     "builds the unit",
 			},
 		},
 		PR:           "https://github.com/o/r/pull/7",
@@ -589,6 +600,9 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Holder:       "s-1",
 		WaitingOn:    "session",
 		WaitingOnWhy: "the session builds Unit 2: parser",
+
+		ApprovedForUnits:    true,
+		ApprovedForBuilding: true,
 		Progress: &plan.Progress{
 			Summary: "Building unit 2 of 3", CurrentUnit: "Unit 2: parser",
 			Findings: 3, Fixups: 1, Deviations: ptr(2), BindingDeviations: ptr(1),
@@ -603,6 +617,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	cci.SetFactoryPlanState(store.ID(), "ended")
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
+	f.UpdatedAt = time.Time{}
 	assert.Check(t, cmp.DeepEqual(f, plan.Flow{
 		State:      "ended",
 		Events:     []string{},
@@ -649,7 +664,7 @@ func TestStoreFlowFailure(t *testing.T) {
 	assert.Check(t, !f.Ended, "a failed read is read as ended")
 }
 
-// TestStoreFamily checks that Family is the plan's parent, open sub-plans and
+// TestStoreFamily checks that Family is the plan's parent, sub-plans and
 // blockers, each titled and in the state its flow names, and empty before
 // Create.
 func TestStoreFamily(t *testing.T) {
@@ -685,6 +700,7 @@ func TestStoreFamily(t *testing.T) {
 	merged := newPlan("merged blocker", "ended")
 	cci.SetFactoryFlowStatus(merged, fakes.FactoryFlowStatus{Outcome: "merged"})
 	cci.BlockFactoryPlan(id, blocker, ended, merged)
+	cci.SetFactoryFlowStatus(c1, fakes.FactoryFlowStatus{ActiveBlockers: 1})
 
 	want := plan.Family{
 		Parent: &plan.Relative{
@@ -694,9 +710,16 @@ func TestStoreFamily(t *testing.T) {
 		},
 		Children: []plan.Relative{
 			{
-				ID:    c1,
-				Title: "child one",
-				State: "refine-proposal",
+				ID:      c1,
+				Title:   "child one",
+				State:   "refine-proposal",
+				Blocked: true,
+			},
+			{
+				ID:      done,
+				Title:   "child done",
+				State:   "ended",
+				Outcome: "merged",
 			},
 			{
 				ID:    c2,
@@ -736,11 +759,11 @@ func TestStoreFamily(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(fam, want))
 
-	// A child whose flow is gone has ended: it is not listed.
+	// A child with no flow is not listed.
 	cci.DropFactoryFlow(c2)
 	fam, err = store.Family(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.DeepEqual(fam.Children, want.Children[:1]))
+	assert.Check(t, cmp.DeepEqual(fam.Children, want.Children[:2]))
 
 	// A parent with no flow has an empty title. The parent is read once per
 	// store, so a fresh one sees it again.

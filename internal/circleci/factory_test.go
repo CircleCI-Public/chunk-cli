@@ -709,7 +709,9 @@ func TestFlows(t *testing.T) {
 		assert.NilError(t, err)
 		fake.SetFactoryFlowStatus(two.ID, fakes.FactoryFlowStatus{
 			WaitingOn: "session", WaitingOnWhy: "the session reviews the plan",
-			Progress: map[string]any{"summary": "Reviewing the plan"},
+			Progress:       map[string]any{"summary": "Reviewing the plan"},
+			Next:           []fakes.FactoryTransition{{Actor: "session", TaskCategory: "review-plan", Reason: "why"}},
+			ActiveBlockers: 2, ApprovedForUnits: true,
 		})
 
 		flows, err := client.ListFlows(ctx)
@@ -727,12 +729,17 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.Equal(flows[1].Progress.Summary, "Reviewing the plan"))
 		assert.Check(t, cmp.Nil(flows[1].Progress.Units))
 		assert.Check(t, cmp.Equal(flows[1].WaitingOnWhy, "the session reviews the plan"))
+		assert.Check(t, cmp.Equal(flows[1].ActiveBlockers, 2))
+		assert.Check(t, cmp.Equal(flows[1].ApprovedForUnits, true))
+		assert.Check(t, cmp.Equal(flows[1].ApprovedForBuilding, false))
+		assert.Assert(t, cmp.Len(flows[1].Next, 1))
+		assert.Check(t, cmp.Equal(flows[1].Next[0].Reason, "why"))
 	})
 
 	t.Run("reads a flow from a conductor that serves no title or phase", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":[{"id":"a","attributes":{"state":"ended"}}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"a","attributes":{"state":"ended","next":[{"actor":"human","event":"abandon"}]}}]}`))
 		}))
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
@@ -743,6 +750,11 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.Equal(flows[0].Title, ""))
 		assert.Check(t, flows[0].UpdatedAt.IsZero())
 		assert.Check(t, cmp.Equal(flows[0].Phase, ""))
+		assert.Check(t, cmp.Equal(flows[0].ActiveBlockers, 0))
+		assert.Check(t, cmp.Equal(flows[0].ApprovedForUnits, false))
+		assert.Check(t, cmp.Equal(flows[0].ApprovedForBuilding, false))
+		assert.Assert(t, cmp.Len(flows[0].Next, 1))
+		assert.Check(t, cmp.Equal(flows[0].Next[0].Reason, ""))
 	})
 
 	t.Run("reads a flow's events from next alone", func(t *testing.T) {

@@ -69,6 +69,11 @@ type Flow struct {
 	// Parent is the ID of the plan this flow's plan is a sub-plan of, "" for
 	// a top-level plan.
 	Parent string
+	// ActiveBlockers is how many of its blockers still hold it.
+	ActiveBlockers int
+	// ApprovedForUnits and ApprovedForBuilding are whether the design and the
+	// plan have been approved, as factory serves them.
+	ApprovedForUnits, ApprovedForBuilding bool
 }
 
 // FlowProgress is a flow's progress as factory serves it. A nil count does
@@ -94,6 +99,8 @@ type Transition struct {
 	// IsRequired is whether it is one of the transitions one of which must
 	// happen for the flow to move on.
 	IsRequired bool
+	// Reason is factory's one-line why for the transition; "" when not served.
+	Reason string
 }
 
 // FlowTask is a flow's outstanding task, as its factory_task reference
@@ -223,6 +230,10 @@ type flowAttrs struct {
 	WaitingOn    string            `json:"waiting_on"`
 	WaitingOnWhy string            `json:"waiting_on_why"`
 	Progress     *progressAttrs    `json:"progress"`
+
+	ActiveBlockerCount  int  `json:"active_blocker_count"`
+	ApprovedForUnits    bool `json:"is_approved_for_units"`
+	ApprovedForBuilding bool `json:"is_approved_for_building"`
 }
 
 // progressAttrs is a flow's progress as factory serves it. Its fields are
@@ -249,7 +260,9 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 		ApplicableEvents: humanEvents(a.Next),
 		Outcome:          a.Outcome, PR: a.PR, Deviations: a.Deviations,
 		Next: transitions(a.Next), WaitingOn: a.WaitingOn, WaitingOnWhy: a.WaitingOnWhy,
-		Parent: planRefs{Plans: refs.Plans}.parent(),
+		Parent:           planRefs{Plans: refs.Plans}.parent(),
+		ActiveBlockers:   a.ActiveBlockerCount,
+		ApprovedForUnits: a.ApprovedForUnits, ApprovedForBuilding: a.ApprovedForBuilding,
 	}
 	if a.Progress != nil {
 		p := FlowProgress(*a.Progress)
@@ -279,6 +292,7 @@ type transitionAttrs struct {
 	Action       string    `json:"action"`
 	IsDispatched bool      `json:"is_dispatched"`
 	IsRequired   bool      `json:"is_required"`
+	Reason       string    `json:"reason"`
 }
 
 // transitions is next as served, every entry kept in order: nil when next

@@ -231,6 +231,8 @@ type FactoryTransition struct {
 	// IsRequired is whether the entry is one of those one of which must
 	// happen for the flow to move on.
 	IsRequired bool
+	// Reason is served as the entry's reason when not "".
+	Reason string
 }
 
 // FactoryFlowStatus is the part of a flow a test sets beyond its state.
@@ -251,6 +253,10 @@ type FactoryFlowStatus struct {
 	Progress map[string]any
 	// TaskUnit is served on the flow's task reference, when it has one.
 	TaskUnit string
+
+	ActiveBlockers      int
+	ApprovedForUnits    bool
+	ApprovedForBuilding bool
 }
 
 // SetFactoryParent makes plan id a sub-plan of plan parent, or of none when
@@ -858,6 +864,9 @@ func flowEntity(p *factoryPlan) gin.H {
 		"title": p.title, "updated_at": p.updatedAt.Format(time.RFC3339Nano),
 		"state": p.state, "phase": factoryPhase(p.state), "next": flowNext(p),
 		"pr": p.status.PR, "deviations": p.status.Deviations,
+		"active_blocker_count":     p.status.ActiveBlockers,
+		"is_approved_for_units":    p.status.ApprovedForUnits,
+		"is_approved_for_building": p.status.ApprovedForBuilding,
 	}
 	if p.status.Deviations == nil {
 		attrs["deviations"] = []string{}
@@ -918,6 +927,9 @@ func transitionEntity(t FactoryTransition) gin.H {
 	}
 	if t.IsRequired {
 		ent["is_required"] = true
+	}
+	if t.Reason != "" {
+		ent["reason"] = t.Reason
 	}
 	return ent
 }
