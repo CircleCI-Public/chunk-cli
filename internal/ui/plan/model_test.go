@@ -70,11 +70,16 @@ func run(cmd tea.Cmd) []tea.Msg {
 	}
 	switch msg := got.(type) {
 	case tea.BatchMsg:
-		var out []tea.Msg
-		for _, c := range msg {
-			out = append(out, run(c)...)
+		// A batch's commands run at once, as bubbletea runs them, so its
+		// timers cost one wait between them rather than one each. What they
+		// produce comes back in the batch's order.
+		outs := make([][]tea.Msg, len(msg))
+		var wg sync.WaitGroup
+		for i, c := range msg {
+			wg.Go(func() { outs[i] = run(c) })
 		}
-		return out
+		wg.Wait()
+		return slices.Concat(outs...)
 	case eventMsg, sentMsg, resumedMsg, approveStepMsg, approvedMsg, designApprovedMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, buildReadMsg, buildResumedMsg:
 		return []tea.Msg{msg}
 	}
@@ -514,52 +519,161 @@ func TestCtrlSApprovesTheDesignWhenFactoryOffersOnlyUnits(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(store.DesignApproved, []string{"refine-proposal"}))
 }
 
-// TestWaitingForFactoryEndsWhenTheStateMoves checks that the wait a design
-// approval starts lasts until a refresh finds the plan in another state,
-// however factory names it.
-func TestWaitingForFactoryEndsWhenTheStateMoves(t *testing.T) {
+// TestWaitingForFactoryEndsOnceFactoryActs checks that the wait a design
+// approval or a send of comments starts lasts until a refresh finds factory
+// has acted: the plan moved, a task for it is out to any session, or factory
+// waits on the developer again after waiting on someone else.
+func TestWaitingForFactoryEndsOnceFactoryActs(t *testing.T) {
+	// poll is what one refresh reads, and whether the screen still waits
+	// for factory after it. state "" is "refine-proposal". resolved is
+	// whether the planner has resolved the plan's comments by then, as an
+	// address-comments task does.
+	type poll struct {
+		state, waitingOn, task string
+		resolved, waiting      bool
+	}
 	tests := []struct {
 		name string
-		to   string
+		// send is what starts the wait: "design" approves the design,
+		// "comments" sends one comment.
+		send  string
+		polls []poll
+		// approves is whether ctrl+s asks to approve once the wait is over.
+		approves bool
 	}{
 		{
 			name: "agent",
-			to:   "refine-units",
+			send: "design",
+			polls: []poll{
+				{waiting: true},
+				{state: "refine-units"},
+			},
 		},
 		{
 			name: "a state chunk does not know",
-			to:   "Blocked",
+			send: "design",
+			polls: []poll{
+				{waiting: true},
+				{state: "Blocked"},
+			},
+		},
+		{
+			name: "comments: the task goes to another session",
+			send: "comments",
+			polls: []poll{
+				{waitingOn: "session", waiting: true},
+				{waitingOn: "session", task: "address-comments"},
+			},
+		},
+		{
+			name: "comments: the task goes out and back between two polls",
+			send: "comments",
+			polls: []poll{
+				{waitingOn: "session", waiting: true},
+				{waitingOn: "human", resolved: true},
+			},
+			approves: true,
+		},
+		{
+			name: "comments: factory has not applied the event yet",
+			send: "comments",
+			polls: []poll{
+				{waitingOn: "human", waiting: true},
+				{waitingOn: "human", waiting: true},
+			},
+		},
+		{
+			name: "comments: the task is due and no session takes it",
+			send: "comments",
+			polls: []poll{
+				{waitingOn: "session", waiting: true},
+				{waitingOn: "session", waiting: true},
+			},
+		},
+		{
+			name: "comments: a conductor that does not serve waiting_on",
+			send: "comments",
+			polls: []poll{
+				{waiting: true},
+				{task: "address-comments"},
+			},
+		},
+		{
+			name: "comments: a task of another category was already out",
+			send: "comments",
+			polls: []poll{
+				{waitingOn: "session", task: "early-plan"},
+			},
+		},
+		{
+			name: "design: write-units goes to another session",
+			send: "design",
+			polls: []poll{
+				{waitingOn: "session", waiting: true},
+				{waitingOn: "session", task: "write-units"},
+			},
+		},
+		{
+			name: "design: write-units goes out and back between two polls",
+			send: "design",
+			polls: []poll{
+				{waitingOn: "session", waiting: true},
+				{waitingOn: "human"},
+			},
+			approves: true,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			to := tc.to
 			store := newFakeStore()
-			store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
-			m := New(context.Background(), turnReturning("ok"), func(func(string)) (string, error) { return "build-1", nil }, store, "do it")
-			m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
-			m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-			m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-			assert.Assert(t, m.moving != nil)
+			store.setWaitingOn("human") // factory waits on the developer when they send
+			var m Model
+			switch tc.send {
+			case "design":
+				store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
+				m = New(context.Background(), turnReturning("ok"), func(func(string)) (string, error) { return "build-1", nil }, store, "do it")
+				m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+				m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+				m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+			case "comments":
+				store.TextV = twoParts
+				m = sendOneComment(t, store)
+				m = drive(t, m, press("s"))
+			}
+			assert.Assert(t, m.moving != nil, "the send started no wait")
 
-			// A refresh in the same state keeps the wait.
-			m = drive(t, m, pollMsg{})
-			assert.Check(t, m.moving != nil, "the wait ended with the plan still in refine-proposal")
-			assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "waiting for factory"))
-
-			store.mu.Lock()
-			store.StateV = to
-			store.mu.Unlock()
-			m = drive(t, m, pollMsg{})
-			assert.Check(t, m.moving == nil, "the wait outlived the plan moving to %q", to)
+			for i, p := range tc.polls {
+				state := p.state
+				if state == "" {
+					state = "refine-proposal"
+				}
+				store.mu.Lock()
+				store.StateV, store.TaskV, store.FlowV.WaitingOn = state, p.task, p.waitingOn
+				if p.resolved {
+					for j := range store.CommentsV {
+						store.CommentsV[j].Resolved = true
+					}
+				}
+				store.mu.Unlock()
+				m = drive(t, m, pollMsg{})
+				assert.Check(t, cmp.Equal(m.moving != nil, p.waiting), "after poll %d", i+1)
+			}
+			if m.moving != nil {
+				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "waiting for factory"))
+				return
+			}
 			assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "waiting for factory"), m.actionBar())
 			assert.Check(t, !strings.Contains(m.actionBar(), fgSeq(m.purple())), "the bar's border stayed purple after the wait")
+			if tc.approves {
+				m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+				assert.Check(t, m.confirming, "ctrl+s did not ask to approve once the wait was over: %q", ansi.Strip(m.status))
+			}
 
-			if to != "refine-units" {
+			if tc.name != "agent" {
 				return
 			}
 			store.mu.Lock()
-			store.StateV = "refine-units"
+			store.StateV, store.FlowV.WaitingOn = "refine-units", string(ActorHuman)
 			store.TextV += "\n### Unit 1: add the flag\n\nParse it in main.go.\n"
 			store.UnitsV = []Unit{{Name: "Unit 1: add the flag"}}
 			store.mu.Unlock()
@@ -942,7 +1056,9 @@ func sendOneComment(t *testing.T, store *fakeStore) Model {
 	m = refreshed(t, m)
 	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("c"))
-	m = typeText(t, m, "too vague")
+	// Set rather than typed: each key press leaves a blink timer that run
+	// waits out.
+	m.commentInput.SetValue("too vague")
 	return drive(t, m, press("enter"))
 }
 
@@ -3390,6 +3506,27 @@ func TestCommentsHeldWhileFactoryPicksUpTheHandOff(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"refine-proposal"}))
 	assert.Check(t, cmp.Len(queuedComments(m.comments), 1))
 	assert.Check(t, cmp.Equal(m.status, ""), "the held note covers the wait: %q", m.status)
+
+	// Factory hands the comments to a session: the wait is over, but factory
+	// takes no answer while a task is out, so s stays off.
+	store.setTask("address-comments")
+	store.setWaitingOn("session")
+	store.setEvents("abandon")
+	m = drive(t, m, pollMsg{})
+	m = drive(t, m, press("tab")) // back to the plan pane, where s works
+	assert.Check(t, m.moving == nil, "the wait outlived the task going out")
+	assert.Check(t, !m.keys().SendComments.Enabled(), "s offered while a task is out")
+
+	// The task is submitted: factory waits on the developer, and the held
+	// comment goes out.
+	store.setTask("")
+	store.setWaitingOn("human")
+	store.setEvents("address-comments", "approve-for-units", "abandon")
+	m = drive(t, m, pollMsg{})
+	assert.Check(t, m.keys().SendComments.Enabled(), "s not offered once factory waits on the developer")
+	m = drive(t, m, press("s"))
+	assert.Check(t, cmp.Len(store.Added, 2))
+	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"refine-proposal", "refine-proposal"}))
 }
 
 // TestCommentsFollowTheFlowsEventsNotItsState checks that whether a send

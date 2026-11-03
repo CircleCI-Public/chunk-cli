@@ -153,11 +153,14 @@ type (
 )
 
 // transition is a flow event factory has taken but not yet applied: the
-// plan is still in from until factory's next poll moves it.
+// plan is still in from, and no task for it is out, until factory acts on it.
 type transition struct {
 	kind  transitionKind
 	from  string // m.state when the event was sent
 	since time.Time
+	// left is whether a refresh since the event was sent found factory
+	// waiting on someone other than the developer.
+	left bool
 }
 
 type transitionKind int
@@ -166,6 +169,24 @@ const (
 	movingComments transitionKind = iota
 	movingDesign
 )
+
+// over is whether factory has acted on t, as a refresh that read state and
+// f finds. A return to waiting on the developer counts only after a refresh
+// found factory waiting on someone else, for a task that went out and came
+// back between two polls.
+func (t *transition) over(state string, f Flow) bool {
+	if state != t.from || f.Task != "" {
+		return true
+	}
+	switch f.WaitingOn {
+	case "":
+		return false
+	case string(ActorHuman):
+		return t.left
+	}
+	t.left = true
+	return false
+}
 
 // pollEvery is how often the plan pane polls the store for the plan's text,
 // state and comments while the screen is open.
@@ -817,7 +838,7 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		// by its end the agent may have submitted it and the flow moved on.
 		m.task = msg.flow.Task
 	}
-	if m.moving != nil && m.state != m.moving.from {
+	if m.moving != nil && m.moving.over(m.state, m.flow) {
 		m.moving = nil
 	}
 	m.applyComments(msg.comments)
@@ -1275,7 +1296,7 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 		if !m.busy {
 			// Nothing was sent, so a factory task started this turn.
 			m.busy, m.byTask, m.log = true, true, nil
-			// Factory hands out a task only once it has moved the plan.
+			// A task for this screen's planner means factory has acted.
 			m.moving = nil
 			tick = m.spin.Tick
 			// The flow names the task; read it now rather than at the next poll.
