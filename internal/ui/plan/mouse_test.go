@@ -40,6 +40,7 @@ func rowOf(t *testing.T, m Model, s string) int {
 }
 
 func TestClickingAPaneGivesItTheKeyboard(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	assert.Assert(t, cmp.Equal(m.focus, paneChat), "the chat should start with the keyboard")
 	m = drive(t, m, click(m.planLeft()+10, 10+stripRows))
@@ -49,6 +50,7 @@ func TestClickingAPaneGivesItTheKeyboard(t *testing.T) {
 }
 
 func TestClickingABlockMovesTheCursorToIt(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "SPEC")))
 	assert.Check(t, cmp.Equal(m.focus, panePlan))
@@ -56,6 +58,7 @@ func TestClickingABlockMovesTheCursorToIt(t *testing.T) {
 }
 
 func TestShiftClickSelectsFromTheCursor(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "OUTCOME")))
 	shift := click(m.planLeft()+10, rowOf(t, m, "SPEC"))
@@ -68,6 +71,7 @@ func TestShiftClickSelectsFromTheCursor(t *testing.T) {
 }
 
 func TestDoubleClickOpensTheComment(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "The flag exists.")
 	m = drive(t, m, click(m.planLeft()+10, y))
@@ -82,6 +86,7 @@ func TestDoubleClickOpensTheComment(t *testing.T) {
 }
 
 func TestClickingTheTabsSwitchesPanes(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 70, 30, twoParts, nil)
 	y := rowOf(t, m, "Activity")
 	m = drive(t, m, click(5, y))
@@ -93,6 +98,7 @@ func TestClickingTheTabsSwitchesPanes(t *testing.T) {
 }
 
 func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
+	t.Parallel()
 	approved := false
 	approve := func(func(string)) (string, error) {
 		approved = true
@@ -118,6 +124,7 @@ func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
 }
 
 func TestClickingSaveCommentsSavesThem(t *testing.T) {
+	t.Parallel()
 	m, store := planned(t, 140, 40, twoParts, nil)
 	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("c"))
@@ -133,6 +140,7 @@ func TestClickingSaveCommentsSavesThem(t *testing.T) {
 }
 
 func TestWheelScrollsThePaneUnderThePointer(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 20, longPlan(), nil)
 	// The chat has the keyboard, but the pointer is over the plan.
 	m = drive(t, m, tea.MouseWheelMsg{X: m.planLeft() + 10, Y: 8 + stripRows, Button: tea.MouseWheelDown})
@@ -141,6 +149,7 @@ func TestWheelScrollsThePaneUnderThePointer(t *testing.T) {
 }
 
 func TestClickingATabWordSwitchesTheTab(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	flow, plan := m.rightTabSpans()
 	m = drive(t, m, click(flow.start+1, m.topRows()))

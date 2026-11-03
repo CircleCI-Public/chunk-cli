@@ -11,6 +11,7 @@ import (
 // FlowText is the status strip's step, now and next, as a line, from the
 // screen's last read of the flow.
 func TestFlowText(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		state, task string
@@ -46,6 +47,7 @@ func TestFlowText(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			m, store := planModel(t)
 			store.FlowV, store.StateV, store.TaskV = tc.flow, tc.state, tc.task
 			m = refreshed(t, m)
@@ -58,6 +60,7 @@ func TestFlowText(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
+	t.Parallel()
 	human := func(event string, required bool) Step {
 		return Step{Actor: "human", Event: event, Required: required}
 	}
@@ -307,6 +310,7 @@ func TestStatus(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			step, now, next := status(tc.flow, tc.family, tc.inReview)
 			assert.Check(t, cmp.Equal(step, tc.step))
 			assert.Check(t, cmp.Equal(now, tc.now))

@@ -195,7 +195,9 @@ func (t *transition) over(state string, f Flow) bool {
 // state and comments while the screen is open.
 const pollEvery = 5 * time.Second
 
-func pollCmd() tea.Cmd { return tea.Tick(pollEvery, func(time.Time) tea.Msg { return pollMsg{} }) }
+func (m Model) pollCmd() tea.Cmd {
+	return m.after(pollEvery, func(time.Time) tea.Msg { return pollMsg{} })
+}
 
 // refreshCmd reads the plan's flow, text, units and comments from the store.
 // It fails as a whole when any read fails, so the text and its units always
@@ -444,6 +446,16 @@ type Model struct {
 	text textDrag
 	// copyText puts text on the clipboard.
 	copyText func(string) tea.Cmd
+	// tick is the clock the screen's timers run on; nil is tea.Tick.
+	tick func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
+}
+
+// after is tea.Tick on the screen's clock.
+func (m Model) after(d time.Duration, fn func(time.Time) tea.Msg) tea.Cmd {
+	if m.tick == nil {
+		return tea.Tick(d, fn)
+	}
+	return m.tick(d, fn)
 }
 
 // chatPlaceholder is the request input's, the only input the left pane has.
@@ -566,7 +578,7 @@ func (m Model) ID() string { return m.store.ID() }
 func (m Model) Unsent() string { return m.unsent() }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.Poll(), pollCmd(), waitEvent(m.ctx, m.agent))
+	return tea.Batch(textarea.Blink, m.Poll(), m.pollCmd(), waitEvent(m.ctx, m.agent))
 }
 
 // Poll reads the plan's state, text, comments and relatives from the store,
@@ -619,7 +631,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.applySent(msg), nil
 
 	case pollMsg:
-		return m, tea.Batch(m.Poll(), pollCmd())
+		return m, tea.Batch(m.Poll(), m.pollCmd())
 
 	case refreshedMsg:
 		m = m.applyRefresh(msg)

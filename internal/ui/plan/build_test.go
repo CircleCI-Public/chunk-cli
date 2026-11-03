@@ -163,8 +163,10 @@ func sectionRows(m Model) []string {
 }
 
 func TestBuildIsNotReadWhilePlanning(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"refine-proposal", "refine-units", "init"} {
 		t.Run(state, func(t *testing.T) {
+			t.Parallel()
 			b := &fakeBuild{}
 			m := buildScreen(t, state, b)
 			m = buildTick(t, m)
@@ -175,8 +177,10 @@ func TestBuildIsNotReadWhilePlanning(t *testing.T) {
 }
 
 func TestBuildIsReadOnceBuilding(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"build", "integrate"} {
 		t.Run(state, func(t *testing.T) {
+			t.Parallel()
 			b := &fakeBuild{}
 			b.answer(BuildActivity{Found: true, ID: "s-1", Running: true, Total: 3, Lines: lines(3, 0)})
 			m := buildScreen(t, state, b)
@@ -188,6 +192,7 @@ func TestBuildIsReadOnceBuilding(t *testing.T) {
 }
 
 func TestBuildIsReadAfterApprovingHere(t *testing.T) {
+	t.Parallel()
 	b := &fakeBuild{}
 	m := buildScreen(t, "refine-proposal", b)
 	assert.Check(t, cmp.Len(b.Asked(), 0))
@@ -197,7 +202,9 @@ func TestBuildIsReadAfterApprovingHere(t *testing.T) {
 }
 
 func TestBuildIsNotReadOnAnEndedFlow(t *testing.T) {
+	t.Parallel()
 	t.Run("ended at open", func(t *testing.T) {
+		t.Parallel()
 		b := &fakeBuild{}
 		store := buildStore("ended")
 		store.FlowV.Ended = true
@@ -207,6 +214,7 @@ func TestBuildIsNotReadOnAnEndedFlow(t *testing.T) {
 		assert.Check(t, !strings.Contains(ansi.Strip(m.Content()), "── Building"))
 	})
 	t.Run("ends while open", func(t *testing.T) {
+		t.Parallel()
 		b := &fakeBuild{}
 		b.answer(BuildActivity{Found: true, ID: "s-1", Total: 1, Lines: lines(1, 0)})
 		store := buildStore("build")
@@ -224,12 +232,14 @@ func TestBuildIsNotReadOnAnEndedFlow(t *testing.T) {
 }
 
 func TestBuildIsNotReadWithoutABuild(t *testing.T) {
+	t.Parallel()
 	m := buildScreenOn(t, buildStore("build"), nil, 40)
 	m = buildTick(t, m)
 	assert.Check(t, !strings.Contains(paneView(m), "Building"), paneView(m))
 }
 
 func TestBuildSectionFollowsThePlanner(t *testing.T) {
+	t.Parallel()
 	b := &fakeBuild{}
 	m := buildScreen(t, "build", b)
 	m = drive(t, m, eventMsg{agent: m.agent, Event: Event{Reply: &Reply{Text: "Wrote the units."}}})
@@ -250,6 +260,7 @@ func TestBuildSectionFollowsThePlanner(t *testing.T) {
 }
 
 func TestBuildSectionStylesByLevel(t *testing.T) {
+	t.Parallel()
 	warn := "Plan plan-1 is claimed by session x"
 	bad := "Could not tell the build session"
 	b := &fakeBuild{}
@@ -263,6 +274,7 @@ func TestBuildSectionStylesByLevel(t *testing.T) {
 }
 
 func TestBuildSectionTruncatesRows(t *testing.T) {
+	t.Parallel()
 	b := &fakeBuild{}
 	b.answer(BuildActivity{Found: true, ID: "s-1", Total: 1, Lines: []BuildLine{{Text: strings.Repeat("x", 300)}}})
 	m := buildScreen(t, "build", b)
@@ -281,7 +293,9 @@ func TestBuildSectionTruncatesRows(t *testing.T) {
 }
 
 func TestBuildSectionSpinsWhileRunning(t *testing.T) {
+	t.Parallel()
 	t.Run("running", func(t *testing.T) {
+		t.Parallel()
 		b := &fakeBuild{}
 		b.answer(BuildActivity{Found: true, ID: "s-1", Running: true, Total: 2, Lines: lines(2, 0)})
 		m := buildScreen(t, "build", b)
@@ -290,6 +304,7 @@ func TestBuildSectionSpinsWhileRunning(t *testing.T) {
 		assert.Check(t, m.spinning())
 	})
 	t.Run("ended", func(t *testing.T) {
+		t.Parallel()
 		b := &fakeBuild{}
 		b.answer(BuildActivity{Found: true, ID: "s-1", Total: 2, Lines: lines(2, 0)})
 		m := buildScreen(t, "build", b)
@@ -299,6 +314,7 @@ func TestBuildSectionSpinsWhileRunning(t *testing.T) {
 		assert.Check(t, !m.spinning())
 	})
 	t.Run("failed", func(t *testing.T) {
+		t.Parallel()
 		b := &fakeBuild{}
 		b.answer(BuildActivity{Found: true, ID: "s-1", Failed: "boom", Total: 2, Lines: lines(2, 0)})
 		m := buildScreen(t, "build", b)
@@ -310,6 +326,7 @@ func TestBuildSectionSpinsWhileRunning(t *testing.T) {
 }
 
 func TestBuildSectionNotesDroppedLines(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		answers     []BuildActivity
@@ -352,6 +369,7 @@ func TestBuildSectionNotesDroppedLines(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			b := &fakeBuild{}
 			for _, a := range tc.answers {
 				a.Found, a.ID = true, "s-1"
@@ -379,6 +397,7 @@ func TestBuildSectionNotesDroppedLines(t *testing.T) {
 }
 
 func TestBuildSectionWithNoBuild(t *testing.T) {
+	t.Parallel()
 	b := &fakeBuild{}
 	b.answer(BuildActivity{}, BuildActivity{Found: true, ID: "s-1", Running: true, Total: 1, Lines: lines(1, 0)})
 	m := buildScreen(t, "build", b)
@@ -399,7 +418,9 @@ func TestBuildSectionWithNoBuild(t *testing.T) {
 }
 
 func TestBuildSectionNewSession(t *testing.T) {
+	t.Parallel()
 	t.Run("the new session is still short", func(t *testing.T) {
+		t.Parallel()
 		b := &fakeBuild{}
 		b.answer(
 			BuildActivity{Found: true, ID: "s-1", Total: 1, Lines: []BuildLine{{Text: "a"}}},
@@ -423,6 +444,7 @@ func TestBuildSectionNewSession(t *testing.T) {
 		assert.Check(t, cmp.Equal(asked[len(asked)-1].after, 1))
 	})
 	t.Run("the new session has passed the old one's total", func(t *testing.T) {
+		t.Parallel()
 		b := &fakeBuild{}
 		b.answer(
 			BuildActivity{Found: true, ID: "s-1", Total: 5, Lines: lines(5, 0)},
@@ -451,6 +473,7 @@ func TestBuildSectionNewSession(t *testing.T) {
 }
 
 func TestBuildSectionShowsAReadErrorOnce(t *testing.T) {
+	t.Parallel()
 	b := &fakeBuild{answers: []fakeBuildAnswer{
 		{err: errors.New("daemon down")},
 		{err: errors.New("daemon down")},
@@ -469,6 +492,7 @@ func TestBuildSectionShowsAReadErrorOnce(t *testing.T) {
 }
 
 func TestBuildSectionFollowsTheBottom(t *testing.T) {
+	t.Parallel()
 	b := &fakeBuild{}
 	b.answer(
 		BuildActivity{Found: true, ID: "s-1", Running: true, Total: 20, Lines: lines(20, 0)},
@@ -488,13 +512,54 @@ func TestBuildSectionFollowsTheBottom(t *testing.T) {
 	assert.Check(t, !m.chatView.AtBottom())
 }
 
-func TestBuildReadsEveryTwoSeconds(t *testing.T) {
-	assert.Check(t, cmp.Equal(buildEvery, 2*time.Second))
-	synctest.Test(t, func(t *testing.T) {
-		start := time.Now()
-		msg := buildTickCmd()() // blocks on the fake clock
-		_, ok := msg.(buildTickMsg)
-		assert.Check(t, ok)
-		assert.Check(t, cmp.Equal(time.Since(start), buildEvery))
-	})
+// The screen's timers run on the real clock unless a test stops them.
+func TestTimersRunOnTheRealClock(t *testing.T) {
+	t.Parallel()
+	fromNew := func() Model { return New(context.Background(), newFakeAgent(), nil, newFakeStore(), "") }
+	for _, tc := range []struct {
+		name  string
+		model func() Model
+		every time.Duration
+		want  time.Duration
+		cmd   func(Model) tea.Cmd
+		msg   tea.Msg
+	}{
+		{
+			name:  "build read",
+			model: fromNew,
+			every: buildEvery,
+			want:  2 * time.Second,
+			cmd:   Model.buildTickCmd,
+			msg:   buildTickMsg{},
+		},
+		{
+			name:  "poll",
+			model: fromNew,
+			every: pollEvery,
+			want:  5 * time.Second,
+			cmd:   Model.pollCmd,
+			msg:   pollMsg{},
+		},
+		{
+			// A Model not built by New has a nil tick, which is the real clock.
+			name:  "zero Model build read",
+			model: func() Model { return Model{} },
+			every: buildEvery,
+			want:  2 * time.Second,
+			cmd:   Model.buildTickCmd,
+			msg:   buildTickMsg{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Check(t, cmp.Equal(tc.every, tc.want))
+			synctest.Test(t, func(t *testing.T) {
+				m := tc.model()
+				start := time.Now()
+				got := tc.cmd(m)() // blocks on the fake clock
+				assert.Check(t, cmp.DeepEqual(got, tc.msg))
+				assert.Check(t, cmp.Equal(time.Since(start), tc.every))
+			})
+		})
+	}
 }
