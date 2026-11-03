@@ -57,7 +57,13 @@ func startTestDaemonWithAuth(t *testing.T, authMessage string) {
 	// Keep the first poll hermetic: pointed at a real data dir it makes a git
 	// call per known project and can outlast the wait below.
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	runTestDaemon(t, authMessage)
+}
 
+// runTestDaemon runs RunDaemon on the current CHUNK_DAEMON_DIR until the test
+// ends, and waits for it to answer.
+func runTestDaemon(t *testing.T, authMessage string) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- RunDaemon(ctx, nil, authMessage, nil, nil) }()

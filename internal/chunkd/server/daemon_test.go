@@ -137,11 +137,17 @@ func TestStopForCredentialChangeStopsARunningDaemon(t *testing.T) {
 	assert.NilError(t, err)
 	reachable, _ := ping(sockPath)
 	assert.Assert(t, reachable, "daemon should be answering before the stop")
+	_, err = chunkd.FetchSnapshot(nil) // pools a connection to this daemon
+	assert.NilError(t, err)
 
 	chunkd.StopForCredentialChange()
 
 	reachable, _ = ping(sockPath)
 	assert.Check(t, !reachable, "daemon still answering after StopForCredentialChange")
+
+	runTestDaemon(t, "")
+	_, err = chunkd.FetchSnapshot(nil)
+	assert.Check(t, err == nil, "call after a restart on the same socket: %v", err)
 }
 
 // The duplicate rows this guards against were found by hand: one project drawn

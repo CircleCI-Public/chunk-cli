@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -458,16 +460,162 @@ func TestHasRunningSessions(t *testing.T) {
 	})
 }
 
-// fakeSessionDaemon serves h on the daemon socket for the test.
-func fakeSessionDaemon(t *testing.T, h http.Handler) {
+// serveSessionHandler serves h on the unix socket at path until the test
+// ends, and counts the connections clients open to it.
+func serveSessionHandler(t *testing.T, path string, h http.Handler) (srv *http.Server, opened *atomic.Int32) {
+	t.Helper()
+	ln, err := net.Listen("unix", path)
+	assert.NilError(t, err)
+	opened = new(atomic.Int32)
+	srv = &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: time.Second,
+		ConnState: func(_ net.Conn, s http.ConnState) {
+			if s == http.StateNew {
+				opened.Add(1)
+			}
+		},
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return srv, opened
+}
+
+// fakeSessionDaemon serves h on the daemon socket for the test, and
+// returns the count of connections opened to it.
+func fakeSessionDaemon(t *testing.T, h http.Handler) *atomic.Int32 {
 	t.Helper()
 	dir := socketDir(t)
 	t.Setenv("CHUNK_DAEMON_DIR", dir)
-	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
+	_, opened := serveSessionHandler(t, filepath.Join(dir, "daemon.sock"), h)
+	return opened
+}
+
+// answerJSON answers every request with an empty JSON object, chunked (the
+// flush stops the server setting Content-Length), as a large daemon answer is.
+var answerJSON = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	_, _ = io.WriteString(w, `{}`)
+	w.(http.Flusher).Flush()
+})
+
+func TestDaemonCallsReuseOneConnection(t *testing.T) {
+	opened := fakeSessionDaemon(t, answerJSON)
+	for range 20 {
+		_, err := FetchChat("/repo", 0)
+		assert.NilError(t, err)
+	}
+	assert.Check(t, cmp.Equal(opened.Load(), int32(1)))
+}
+
+func TestShortAndLongDaemonCallsShareAConnection(t *testing.T) {
+	opened := fakeSessionDaemon(t, answerJSON)
+	for range 5 {
+		_, _, err := FetchPlanBuild("p", 0)
+		assert.NilError(t, err)
+		_, err = SendChat(ChatMessage{Root: "/repo", Text: "hi"})
+		assert.NilError(t, err)
+	}
+	assert.Check(t, cmp.Equal(opened.Load(), int32(1)))
+}
+
+func TestDaemonCallsReachADaemonRestartedOnTheSameSocket(t *testing.T) {
+	dir := socketDir(t)
+	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	sock := filepath.Join(dir, "daemon.sock")
+
+	old, _ := serveSessionHandler(t, sock, answerJSON)
+	_, err := FetchChat("/repo", 0)
 	assert.NilError(t, err)
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: time.Second}
+	err = old.Close()
+	assert.NilError(t, err)
+
+	_, opened := serveSessionHandler(t, sock, answerJSON)
+	_, err = FetchChat("/repo", 0)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(opened.Load(), int32(1)))
+}
+
+func TestDaemonCallsToDifferentSocketsUseSeparatePools(t *testing.T) {
+	dirA, dirB := socketDir(t), socketDir(t)
+	_, openedA := serveSessionHandler(t, filepath.Join(dirA, "daemon.sock"), answerJSON)
+	_, openedB := serveSessionHandler(t, filepath.Join(dirB, "daemon.sock"), answerJSON)
+	for range 3 {
+		for _, dir := range []string{dirA, dirB} {
+			t.Setenv("CHUNK_DAEMON_DIR", dir)
+			_, err := FetchChat("/repo", 0)
+			assert.NilError(t, err)
+		}
+	}
+	assert.Check(t, cmp.Equal(openedA.Load(), int32(1)))
+	assert.Check(t, cmp.Equal(openedB.Load(), int32(1)))
+}
+
+func TestConcurrentDaemonCallsDoNotGrowConnections(t *testing.T) {
+	const burst = 8
+	var arrived sync.WaitGroup
+	arrived.Add(burst)
+	var holding atomic.Bool
+	holding.Store(true)
+	opened := fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if holding.Load() {
+			// Hold the burst until all of it has arrived, so each call
+			// needs its own connection.
+			arrived.Done()
+			arrived.Wait()
+		}
+		answerJSON(w, r)
+	}))
+
+	var calls sync.WaitGroup
+	for range burst {
+		calls.Go(func() {
+			_, err := FetchChat("/repo", 0)
+			assert.Check(t, err == nil, "got %v", err)
+		})
+	}
+	calls.Wait()
+	holding.Store(false)
+	afterBurst := opened.Load()
+	assert.Check(t, cmp.Equal(afterBurst, int32(burst)))
+
+	for range 20 {
+		_, err := FetchChat("/repo", 0)
+		assert.NilError(t, err)
+	}
+	assert.Check(t, cmp.Equal(opened.Load(), afterBurst), "sequential calls after a burst open no new connections")
+}
+
+func TestTCPCallsSendTheCurrentTokenOverASharedConnection(t *testing.T) {
+	auth := make(chan string, 2)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NilError(t, err)
+	var opened atomic.Int32
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auth <- r.Header.Get("Authorization")
+			_, _ = io.WriteString(w, `{}`)
+		}),
+		ReadHeaderTimeout: time.Second,
+		ConnState: func(_ net.Conn, s http.ConnState) {
+			if s == http.StateNew {
+				opened.Add(1)
+			}
+		},
+	}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
+	addr := ln.Addr().String()
+
+	for _, token := range []string{"first", "second"} {
+		t.Setenv(EnvTCPToken, token)
+		resp, err := tcpClient(addr).Get("http://chunkd/ping")
+		assert.NilError(t, err)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		got := <-auth
+		assert.Check(t, cmp.Equal(got, "Bearer "+token))
+	}
+	assert.Check(t, cmp.Equal(opened.Load(), int32(1)))
 }
 
 func TestFetchPlanBuild(t *testing.T) {

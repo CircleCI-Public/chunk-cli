@@ -342,6 +342,7 @@ func stopDaemon(pid int, sockPath string) error {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if reachable, _ := ping(sockPath); !reachable {
+			closeIdle("unix", sockPath)
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
