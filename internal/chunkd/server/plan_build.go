@@ -290,6 +290,12 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 			return
 		case <-ctx.Done():
 			stopBuild(agent, ended, req.PlanID)
+			entry.mu.Lock()
+			stopped := entry.cancelled // a developer's stop, not a daemon shutdown
+			entry.mu.Unlock()
+			if stopped {
+				releaseBuildClaim(api, cfg.SessionID, req.PlanID, note)
+			}
 			d.settleSession(entry, nil)
 			return
 		case <-tick.C:
@@ -364,6 +370,26 @@ func clip(s string, n int) string {
 		return string(r[:n-1]) + "…"
 	}
 	return s
+}
+
+// releaseBuildClaim frees factory's claim on planID if build session
+// sessionID still holds it, so a stopped build can be resumed at once rather
+// than once factory times the claim out. A failure is noted in the feed: the
+// build is stopped either way.
+func releaseBuildClaim(api PlanAPI, sessionID, planID string, note func(iostream.Level, string)) {
+	// The session's own context is cancelled already.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	f, err := planFlow(ctx, api, planID)
+	if err == nil && (f == nil || f.SessionID != sessionID) {
+		return
+	}
+	if err == nil {
+		err = api.ReleaseClaim(ctx, sessionID, planID)
+	}
+	if err != nil {
+		note(iostream.LevelWarn, fmt.Sprintf("Could not free plan %s's claim: %v; free it with factory daemon release %[1]s", planID, err))
+	}
 }
 
 // stopBuild stops a plan's build session and waits for its events to end,

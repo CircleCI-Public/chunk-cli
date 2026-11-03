@@ -478,14 +478,104 @@ func TestPlanBuildEndsWithThePlan(t *testing.T) {
 	}
 }
 
+// buildSessionID waits for the build session to start, and is its factory
+// session ID.
+func (pb *planBuildDaemon) buildSessionID(t *testing.T) string {
+	t.Helper()
+	waitUntil(t, "the build session to start", func() bool {
+		pb.mu.Lock()
+		defer pb.mu.Unlock()
+		return len(pb.cfgs) == 1
+	})
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	return pb.cfgs[0].SessionID
+}
+
+// Cancelling a build stops its session and frees factory's claim, if the
+// build still holds it, so the plan can be resumed at once.
 func TestPlanBuildCancelStopsTheSession(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// holder is who claims the plan before the stop: "self" for the
+		// build session, else that session ID.
+		holder string
+		// releaseErr and flowErr fail ReleaseClaim and GetFlow from just
+		// before the stop.
+		releaseErr   error
+		flowErr      error
+		wantReleased bool
+		wantWarn     string
+	}{
+		{
+			name: "unclaimed",
+		},
+		{
+			name:         "claimed by the build",
+			holder:       "self",
+			wantReleased: true,
+		},
+		{
+			name:   "claimed by another session",
+			holder: "other-session",
+		},
+		{
+			name:       "release fails",
+			holder:     "self",
+			releaseErr: errors.New("factory is down"),
+			wantWarn:   "Could not free plan plan-1's claim: factory is down; free it with factory daemon release plan-1",
+		},
+		{
+			name:     "flow read fails",
+			holder:   "self",
+			flowErr:  errors.New("factory is down"),
+			wantWarn: "Could not free plan plan-1's claim: factory is down; free it with factory daemon release plan-1",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pb := newPlanBuildDaemon(t)
+			sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+			assert.NilError(t, err)
+			id := pb.buildSessionID(t)
+			holder := tc.holder
+			if holder == "self" {
+				holder = id
+			}
+			pb.plans.mu.Lock()
+			pb.plans.holder, pb.plans.releaseErr, pb.plans.flowErr = holder, tc.releaseErr, tc.flowErr
+			pb.plans.mu.Unlock()
+
+			detail := pb.stopBuild(t, sess.ID)
+			assert.Check(t, cmp.Equal(detail.State, chunkd.SessionCancelled))
+			assert.Check(t, pb.build.wasStopped(), "the build session was left running")
+			released := pb.plans.releasedSessions()
+			if tc.wantReleased {
+				assert.Check(t, cmp.DeepEqual(released, []string{id}))
+			} else {
+				assert.Check(t, cmp.Len(released, 0))
+			}
+			if tc.wantWarn != "" {
+				assert.Check(t, slices.ContainsFunc(detail.Factory.Progress.Lines, func(l chunkd.FeedLine) bool {
+					return l.Level == chunkd.FeedWarn && l.Text == tc.wantWarn
+				}), "no warning in %+v", detail.Factory.Progress.Lines)
+			}
+		})
+	}
+}
+
+// A daemon shutdown stops the build but leaves factory's claim alone, so
+// shutting down makes no factory call.
+func TestPlanBuildShutdownKeepsTheClaim(t *testing.T) {
 	pb := newPlanBuildDaemon(t)
 	sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
 	assert.NilError(t, err)
+	pb.plans.claim(pb.buildSessionID(t))
 
-	detail := pb.stopBuild(t, sess.ID)
-	assert.Check(t, cmp.Equal(detail.State, chunkd.SessionCancelled))
+	pb.sessions.stopAll()
+	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
+	assert.Check(t, detail.State != chunkd.SessionCancelled, "a shutdown read as a developer's stop")
 	assert.Check(t, pb.build.wasStopped(), "the build session was left running")
+	assert.Check(t, cmp.Len(pb.plans.releasedSessions(), 0))
 }
 
 // A build session that exits by itself, before its plan is over, fails the
