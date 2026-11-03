@@ -20,14 +20,14 @@ func editorFiles(t *testing.T) string {
 	return dir
 }
 
-// planInPlan is planModel with the plan pane focused, and the agent's first
-// exchange forgotten.
+// planInPlan is planModel on the Plan view, and the agent's first exchange
+// forgotten.
 func planInPlan(t *testing.T) (Model, *fakeStore, *fakeAgent) {
 	t.Helper()
 	m, store := planModel(t)
 	agent := m.agent.(*fakeAgent)
 	agent.reset()
-	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("right"))
 	return m, store, agent
 }
 

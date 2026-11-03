@@ -16,20 +16,17 @@ import (
 )
 
 // The screen's palette: what each colour means is the same everywhere it is
-// used, so the header, the plan, the chat and the action bar read as one.
+// used, so the header, the plan, the Flow view and the footer read as one.
 // Each has a darker twin for a light terminal.
 func (m Model) hue(light, dark string) color.Color {
 	return lipgloss.LightDark(m.dark)(lipgloss.Color(light), lipgloss.Color(dark))
 }
 
-// brand is chunk's accent, for what is focused or selected: the focused
-// pane's edge, the active tab, the cursor gutter, the send button. quiet is
-// the border of the pane without the keyboard. dim is one step down from
-// brand, for the active input inside the focused pane; faint is a further
-// step down, for the developer's past messages. amber is the developer's comments; purple is Claude at work;
-// green is a plan that is ready.
+// brand is chunk's accent: it marks what is focused or selected. dim is one
+// step down from brand, for quiet text; faint is a further step down, for
+// rules and edges. amber is the developer's comments; purple is Claude at
+// work; green is a plan that is ready.
 func (m Model) brand() color.Color  { return theme.New(m.dark).Brand.GetForeground() }
-func (m Model) quiet() color.Color  { return theme.New(m.dark).VDim.GetForeground() }
 func (m Model) amber() color.Color  { return m.hue("#9a6700", "#f0c16a") }
 func (m Model) purple() color.Color { return m.hue("#8250df", "#c792ea") }
 func (m Model) green() color.Color  { return m.hue("#1a7f37", "#7ee08a") }
@@ -43,17 +40,68 @@ func (m Model) pill(fg color.Color, bgLight, bgDark, text string) string {
 	return lipgloss.NewStyle().Foreground(fg).Background(m.hue(bgLight, bgDark)).Padding(0, 1).Render(text)
 }
 
-// narrowBelow is the width under which the panes take turns on the screen
-// instead of sharing it.
+// narrowBelow is the width under which the top line and the footer say less.
 const narrowBelow = 100
 
 func (m Model) narrow() bool { return m.width < narrowBelow }
 
 // header is the frame's top line: chunk / the plan's title, or New flow
-// before it has one, and what is under way that the developer is waiting on,
-// in colour, on the right. Where the flow is and what comes next is the
-// strip's.
+// before it has one, then the Flow and Plan tabs, and what is under way that
+// the developer is waiting on, in colour, on the right. Where the flow is and
+// what comes next is the strip's.
 func (m Model) header() string {
+	line, _ := m.headerLine()
+	return line
+}
+
+// tabNames are the labels of the view tabs in the top line.
+var tabNames = [...]string{tabFlow: "Flow", tabPlan: "Plan"}
+
+// tabOrder is the order the tabs are drawn in.
+var tabOrder = [...]rightTab{tabFlow, tabPlan}
+
+// tabSpan is where a view's tab is drawn in the top line: cells [from, to).
+type tabSpan struct {
+	tab      rightTab
+	from, to int
+}
+
+// tabs is the top line's view tabs, the one shown highlighted as the state
+// pill is and the other dim, and where each is drawn from x on. Before the
+// plan exists the Plan tab cannot be picked, so it has no span.
+func (m Model) tabs(x int) (string, []tabSpan) {
+	var b strings.Builder
+	var spans []tabSpan
+	for _, t := range tabOrder {
+		var s string
+		if t == m.tab {
+			s = m.pill(m.brand(), "#ddf4ff", "#10222a", tabNames[t])
+		} else {
+			s = m.style(m.dim()).Padding(0, 1).Render(tabNames[t])
+		}
+		w := lipgloss.Width(s)
+		if t != tabPlan || m.created {
+			spans = append(spans, tabSpan{tab: t, from: x, to: x + w})
+		}
+		b.WriteString(s)
+		x += w
+	}
+	return b.String(), spans
+}
+
+// tabAt is the view whose tab is drawn at cell x of the top line.
+func (m Model) tabAt(x int) (rightTab, bool) {
+	_, spans := m.headerLine()
+	for _, s := range spans {
+		if x >= s.from && x < s.to && x < m.width {
+			return s.tab, true
+		}
+	}
+	return 0, false
+}
+
+// headerLine is the top line and where its tabs are drawn.
+func (m Model) headerLine() (string, []tabSpan) {
 	var state string
 	switch {
 	case m.approving:
@@ -83,14 +131,19 @@ func (m Model) header() string {
 	if title == "" {
 		title = "New flow"
 	}
-	room := max(m.width-lipgloss.Width(state)-len(" chunk / ")-2, 1)
-	left := " " + ui.TitleStyle.Render("chunk") + m.style(m.dim()).Render(" / ") + ansi.Truncate(title, room, "…")
+	tabsWidth := lipgloss.Width(tabNames[tabFlow]) + lipgloss.Width(tabNames[tabPlan]) + 4
+	// The title gives way to the tabs and the pill, with two cells before
+	// the tabs and at least one before the pill.
+	room := max(m.width-len(" chunk / ")-2-tabsWidth-1-lipgloss.Width(state), 1)
+	left := " " + ui.TitleStyle.Render("chunk") + m.style(m.dim()).Render(" / ") + ansi.Truncate(title, room, "…") + "  "
+	tabs, spans := m.tabs(lipgloss.Width(left))
+	left += tabs
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(state)
 	if gap < 1 {
-		return ansi.Truncate(left+" "+state, m.width, "…")
+		return ansi.Truncate(left+" "+state, m.width, "…"), spans
 	}
-	return left + strings.Repeat(" ", gap) + state
+	return left + strings.Repeat(" ", gap) + state, spans
 }
 
 // topRule is the full-width rule under the frame's top line, and over its
@@ -168,88 +221,7 @@ func (m Model) strip() string {
 	return ansi.Truncate(line1, m.width, "…") + "\n" + ansi.Truncate(line2, m.width, "…")
 }
 
-// tabs is the row that stands in for the right pane on a screen too narrow
-// for both: which of chat, Flow and Plan is showing, and what the plan has.
-func (m Model) tabs() string {
-	labels := m.tabLabels()
-	tab := func(on bool, text string) string {
-		s := lipgloss.NewStyle().Padding(0, tabPad)
-		if on {
-			return s.Bold(true).Foreground(m.brand()).Background(m.hue("#ddf4ff", "#16222a")).Render(text)
-		}
-		return s.Foreground(m.dim()).Render(text)
-	}
-	on := m.narrowTab()
-	row := ""
-	for i, l := range labels {
-		row += " " + tab(i == on, l)
-	}
-	return ansi.Truncate(row, m.width, "…")
-}
-
-// tabPad is the cells either side of a tab's text.
-const tabPad = 2
-
-// span is the columns something is drawn in, from start up to end.
-type span struct{ start, end int }
-
-func (s span) has(x int) bool { return x >= s.start && x < s.end }
-
-// The narrow screen's tabs, in the order tabs draws them.
-const (
-	narrowChat = iota
-	narrowFlow
-	narrowPlan
-)
-
-// narrowTab is the narrow screen's tab that is showing.
-func (m Model) narrowTab() int {
-	switch {
-	case m.focus == paneChat:
-		return narrowChat
-	case m.tab == tabFlow:
-		return narrowFlow
-	}
-	return narrowPlan
-}
-
-// tabSpans is the columns each of the narrow screen's tabs takes, as tabs
-// draws them.
-func (m Model) tabSpans() []span {
-	labels := m.tabLabels()
-	spans := make([]span, 0, len(labels))
-	x := 0
-	for _, l := range labels {
-		start := x + 1
-		x = start + lipgloss.Width(l) + 2*tabPad
-		spans = append(spans, span{start, x})
-	}
-	return spans
-}
-
-// tabLabels is the text of the narrow screen's three tabs.
-func (m Model) tabLabels() []string {
-	chat := activityTitle
-	if m.busy {
-		chat += " " + m.spin.View()
-	}
-	plan := "Plan"
-	if len(m.units) > 0 {
-		plan += fmt.Sprintf(" · %d %s", len(m.units), plural(len(m.units), "unit", "units"))
-	}
-	return []string{chat, "Flow", plan}
-}
-
-// rightTabSpans is the columns the words Flow and Plan take in the right
-// pane's title, which titled sets after "╭─ ".
-func (m Model) rightTabSpans() (flow, plan span) {
-	start := m.planLeft() + 3
-	flow = span{start, start + len("Flow")}
-	plan = span{flow.end + 2, flow.end + 2 + len("Plan")}
-	return flow, plan
-}
-
-// actionBar is the footer under the panes: a rule, then the keys at hand on
+// actionBar is the footer under the view: a rule, then the keys at hand on
 // the left and, on the right, the one thing the developer most likely does
 // next, which changes with the state: send comments first, and only then
 // approve.
@@ -353,10 +325,7 @@ func (m Model) actions() (main, side string) {
 		held := fmt.Sprintf("%d %s held until factory is waiting on you", queued, plural(queued, "comment", "comments"))
 		return "", m.style(m.faint()).Render(held)
 	case queued > 0:
-		save := fmt.Sprintf("enter Save %d %s", queued, plural(queued, "comment", "comments"))
-		if m.focus == panePlan {
-			save = "s " + strings.TrimPrefix(save, "enter ")
-		}
+		save := fmt.Sprintf("s Save %d %s", queued, plural(queued, "comment", "comments"))
 		return button(m.brand(), save), m.style(m.faint()).Render(approve + " · resolve comments first")
 	case open > 0:
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")
@@ -410,8 +379,3 @@ func (m Model) notReadyWhy() string {
 // stateText is the plan's state as factory names it, safe to draw on one
 // line.
 func (m Model) stateText() string { return clean(m.state) }
-
-// movingText is the move factory has yet to make, for the plan's title.
-func (m Model) movingText() string {
-	return m.stateText() + " → …"
-}

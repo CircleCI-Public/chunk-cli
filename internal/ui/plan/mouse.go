@@ -27,8 +27,8 @@ type lastClick struct {
 	at   time.Time
 }
 
-// updateMouse handles the mouse: the wheel scrolls the pane under it, a left
-// click moves the keyboard to what was clicked, and dragging selects text to
+// updateMouse handles the mouse: the wheel scrolls the view shown, a left
+// click on the plan moves its cursor there, and dragging selects text to
 // copy.
 func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -50,41 +50,17 @@ func (m Model) updateMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// planLeft is the column the plan pane starts at.
-func (m Model) planLeft() int {
-	if m.narrow() {
-		return 0
-	}
-	return m.chatWidth()
-}
-
-// inPane is which pane is drawn at column x, when a row of the panes is
-// clicked.
-func (m Model) inPane(x int) pane {
-	if m.narrow() {
-		return m.focus
-	}
-	if x >= m.chatWidth() {
-		return panePlan
-	}
-	return paneChat
-}
-
-// wheel scrolls the pane the pointer is over, whichever has the keyboard.
+// wheel scrolls the view shown, when the pointer is over it.
 func (m Model) wheel(msg tea.MouseWheelMsg) (Model, tea.Cmd) {
 	if msg.Y < m.topRows() || msg.Y >= m.height-footerRows {
 		return m, nil
 	}
 	var cmd tea.Cmd
-	if m.inPane(msg.X) == panePlan && m.tab == tabFlow {
+	if m.tab == tabFlow {
 		m.flowView, cmd = m.flowView.Update(msg)
 		return m, cmd
 	}
-	if m.inPane(msg.X) == panePlan {
-		m.planView, cmd = m.planView.Update(msg)
-		return m, cmd
-	}
-	m.chatView, cmd = m.chatView.Update(msg)
+	m.planView, cmd = m.planView.Update(msg)
 	return m, cmd
 }
 
@@ -114,61 +90,36 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 		return m, nil
 	}
 	switch {
-	case mouse.Y == 0:
-		return m, nil
-	case m.narrow() && mouse.Y == headerRows+ruleRows+stripRows:
-		return m.clickTab(mouse.X)
 	case mouse.Y >= m.height-footerRows:
 		return m.clickBar(mouse)
+	case mouse.Y == 0:
+		return m.clickTab(mouse)
 	case mouse.Y < m.topRows():
 		return m, nil
 	}
-	if mouse.Y == m.topRows() && m.inPane(mouse.X) == panePlan {
-		// The right pane's title is its tabs.
-		switch flow, plan := m.rightTabSpans(); {
-		case flow.has(mouse.X):
-			return m.showTab(tabFlow)
-		case plan.has(mouse.X):
-			return m.showTab(tabPlan)
-		}
-	}
 	var cmd tea.Cmd
-	switch {
-	case m.inPane(mouse.X) == panePlan && m.tab == tabFlow:
-		m, cmd = m.focusOn(panePlan)
-	case m.inPane(mouse.X) == panePlan:
+	if m.tab == tabPlan && m.created {
 		m, cmd = m.clickPlan(mouse)
-	case m.focus != paneChat:
-		m, cmd = m.focusOn(paneChat)
 	}
 	// The press may also begin a selection of text, if it is dragged.
 	return m.beginText(mouse), cmd
 }
 
-// clickTab picks chat, Flow or Plan from the tabs of a narrow screen.
-func (m Model) clickTab(x int) (Model, tea.Cmd) {
-	for i, s := range m.tabSpans() {
-		switch {
-		case !s.has(x) || i == m.narrowTab():
-		case i == narrowChat:
-			return m.focusOn(paneChat)
-		case i == narrowFlow:
-			return m.showTab(tabFlow)
-		default:
-			return m.showTab(tabPlan)
-		}
+// clickTab shows the view whose tab in the top line is clicked. The Plan
+// tab cannot be picked before the plan exists.
+func (m Model) clickTab(mouse tea.Mouse) (Model, tea.Cmd) {
+	t, ok := m.tabAt(mouse.X)
+	if !ok {
+		return m, nil
 	}
-	return m, nil
+	return m.showTab(t)
 }
 
-// clickPlan focuses the plan and puts the cursor on the block clicked. A
-// shift-click selects from the cursor to the block, and a second click on a
-// block opens its comment.
+// clickPlan puts the plan's cursor on the block clicked. A shift-click
+// selects from the cursor to the block, and a second click on a block opens
+// its comment.
 func (m Model) clickPlan(mouse tea.Mouse) (Model, tea.Cmd) {
 	var cmd tea.Cmd
-	if m.focus != panePlan {
-		m, cmd = m.focusOn(panePlan)
-	}
 	stop := m.stopAt(mouse.Y)
 	if stop < 0 {
 		return m, cmd
@@ -201,7 +152,7 @@ func (m Model) clickPlan(mouse tea.Mouse) (Model, tea.Cmd) {
 // stopAt is the plan's stop drawn at screen row y, or -1 when that row is not
 // in the plan's view. The rows between two blocks belong to the block above.
 func (m Model) stopAt(y int) int {
-	top := m.topRows() + 1 + padY
+	top := m.topRows()
 	if y < top || y >= top+m.planView.Height() || len(m.blockTop) == 0 {
 		return -1
 	}

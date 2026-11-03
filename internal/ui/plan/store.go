@@ -97,6 +97,9 @@ type Relative struct {
 	Active bool
 	// Blocked is, for a sub-plan, whether one of its own blockers still holds it.
 	Blocked bool
+	// Waiting is, for a sub-plan or parent, whether factory waits on a human
+	// to move its flow on.
+	Waiting bool
 }
 
 // Family is the plans related to the screen's plan.

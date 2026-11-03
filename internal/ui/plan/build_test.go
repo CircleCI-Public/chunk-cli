@@ -146,13 +146,13 @@ func lines(n, from int) []BuildLine {
 	return out
 }
 
-// paneView is the Activity pane as it shows, without styles.
-func paneView(m Model) string { return ansi.Strip(m.chatView.View()) }
+// paneView is the Flow view, all of it, without styles.
+func paneView(m Model) string { return ansi.Strip(m.flowView.GetContent()) }
 
 // sectionRows is the Building section's rows without styles, blank ones left
-// out, as renderChat appends it whole.
+// out, as the Flow view appends it whole under the activity.
 func sectionRows(m Model) []string {
-	w := m.chatView.Width() - 2*chatGutter
+	w := m.flowView.Width()
 	var rows []string
 	for _, r := range strings.Split(ansi.Strip(m.buildSection(w)), "\n") {
 		if strings.TrimSpace(r) != "" {
@@ -250,11 +250,11 @@ func TestBuildSectionFollowsThePlanner(t *testing.T) {
 	m = buildTick(t, m)
 
 	view := paneView(m)
-	reply := strings.Index(view, "Wrote the units.")
+	activity := strings.Index(view, "ACTIVITY")
 	divider := strings.Index(view, "── Building")
 	step := strings.Index(view, "Building plan plan-1 in /w")
 	info := strings.Index(view, "Bash go test ./...")
-	assert.Check(t, reply >= 0 && divider > reply, view)
+	assert.Check(t, activity >= 0 && divider > activity, view)
 	assert.Check(t, step > divider, view)
 	assert.Check(t, info > step, view)
 }
@@ -288,7 +288,7 @@ func TestBuildSectionTruncatesRows(t *testing.T) {
 	}
 	assert.Check(t, strings.HasSuffix(row, "…"), row)
 	for _, l := range strings.Split(paneView(m), "\n") {
-		assert.Check(t, ansi.StringWidth(l) <= m.chatWidth(), "%q is wider than the pane", l)
+		assert.Check(t, ansi.StringWidth(l) <= m.flowView.Width(), "%q is wider than the view", l)
 	}
 }
 
@@ -489,27 +489,6 @@ func TestBuildSectionShowsAReadErrorOnce(t *testing.T) {
 	m = buildTick(t, m)
 	assert.Check(t, !strings.Contains(paneView(m), "daemon down"), paneView(m))
 	assert.Check(t, cmp.Contains(paneView(m), "line 0"))
-}
-
-func TestBuildSectionFollowsTheBottom(t *testing.T) {
-	t.Parallel()
-	b := &fakeBuild{}
-	b.answer(
-		BuildActivity{Found: true, ID: "s-1", Running: true, Total: 20, Lines: lines(20, 0)},
-		BuildActivity{Found: true, ID: "s-1", Running: true, First: 20, Total: 40, Lines: lines(20, 20)},
-		BuildActivity{Found: true, ID: "s-1", Running: true, First: 40, Total: 45, Lines: lines(5, 40)},
-	)
-	m := buildScreenOn(t, buildStore("build"), b, 16)
-	assert.Check(t, m.chatView.AtBottom())
-	m = buildTick(t, m)
-	assert.Check(t, m.chatView.AtBottom())
-
-	m = drive(t, m, press("tab"))
-	assert.Assert(t, cmp.Equal(m.focus, paneChat))
-	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
-	m = buildTick(t, m)
-	assert.Check(t, cmp.Contains(m.buildSection(m.chatView.Width()-2*chatGutter), "line 44"))
-	assert.Check(t, !m.chatView.AtBottom())
 }
 
 // The screen's timers run on the real clock unless a test stops them.

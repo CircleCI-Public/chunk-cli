@@ -13,10 +13,9 @@ import (
 // cannot name a key that does nothing: a binding the current state has no use
 // for is disabled, which both stops it matching and drops it from the footer.
 type keyMap struct {
-	// Chat keys. Newline is the textarea's own; it is here for its hint.
+	// The request input's keys, before the plan exists. Newline is the
+	// textarea's own; it is here for its hint.
 	Send, Newline key.Binding
-	// ChatPageUp carries the hint for both; the input has no use for them.
-	ChatPageUp, ChatPageDown key.Binding
 	// Plan keys. The page keys move the highlight a page or half a page at a
 	// time, as well as the view; PageUp carries the hint for all four.
 	Up, Down, Top, Bottom key.Binding
@@ -33,16 +32,15 @@ type keyMap struct {
 	Next, Prev key.Binding
 	// prevUnlisted is set when Next's hint already names Prev.
 	prevUnlisted bool
-	// SendComments saves the queued comments to factory from the plan,
-	// without a trip to the Activity pane; enter does it there.
+	// SendComments saves the queued comments to factory from the plan.
 	SendComments key.Binding
 	// While a comment is written.
 	SaveComment, CancelComment key.Binding
-	// FlowTab and PlanTab pick the right pane's tab; FlowTab carries the hint
-	// for both.
+	// FlowTab and PlanTab pick the view the body shows; FlowTab carries the
+	// hint for both.
 	FlowTab, PlanTab key.Binding
-	// Open opens the Related row under the Flow tab's cursor.
-	Open key.Binding
+	// Act does the Flow view's selected item.
+	Act key.Binding
 	// While approving the plan, or its design, is confirmed. Any other key,
 	// enter too, says no: approving moves the plan on in factory, so it
 	// takes a y.
@@ -53,7 +51,6 @@ type keyMap struct {
 	Abandon, DeletePlan                              key.Binding
 	AbandonCanceled, AbandonWontDo, AbandonDuplicate key.Binding
 
-	Focus  key.Binding
 	Switch key.Binding
 	// Chat is the host's; it is here for its hint.
 	Chat     key.Binding
@@ -66,8 +63,8 @@ type keyMap struct {
 	Quit      key.Binding
 }
 
-// keys returns the screen's bindings as they stand for the current focus and
-// state.
+// keys returns the screen's bindings as they stand for the view shown and
+// the state.
 func (m Model) keys() keyMap {
 	newline := "ctrl+j"
 	// A terminal that does not tell shift+enter from enter sends the
@@ -78,8 +75,6 @@ func (m Model) keys() keyMap {
 	k := keyMap{
 		Send:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send")),
 		Newline:        key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"), key.WithHelp(newline, "new line")),
-		ChatPageUp:     key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup/pgdn", "scroll activity")),
-		ChatPageDown:   key.NewBinding(key.WithKeys("pgdown")),
 		Up:             key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/↓", "move")),
 		Down:           key.NewBinding(key.WithKeys("down", "j")),
 		ExtendUp:       key.NewBinding(key.WithKeys("shift+up", "K"), key.WithHelp("shift+↑/↓", "select")),
@@ -104,11 +99,10 @@ func (m Model) keys() keyMap {
 		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		FlowTab:        key.NewBinding(key.WithKeys("left"), key.WithHelp("←/→", "flow/plan")),
 		PlanTab:        key.NewBinding(key.WithKeys("right")),
-		Open:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open plan")),
+		Act:            key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "act")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
 		Abandon:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "abandon plan")),
 		DeletePlan:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
-		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", m.focusHelp())),
 		Switch:         key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
 		Chat:           key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "chat")),
 		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
@@ -137,16 +131,17 @@ func (m Model) keys() keyMap {
 	k.Quit = key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", quit))
 	if !m.commenting && !m.confirming && !m.askingReason && !m.selecting() {
 		keys := []string{"esc", "ctrl+c"}
-		if m.focus == panePlan || m.created {
+		if m.created {
 			keys = append(keys, "q")
 		}
 		k.Quit = key.NewBinding(key.WithKeys(keys...), key.WithHelp("esc", quit))
 	}
 
-	// The plan's keys act on the Plan tab only; the Flow tab has its own.
-	inPlan := m.focus == panePlan && !m.commenting && m.tab == tabPlan
-	inFlow := m.focus == panePlan && !m.commenting && m.tab == tabFlow
-	m.chatKeys(&k)
+	// The plan's keys act on the Plan view only; the Flow view has its own.
+	// Before the plan exists the request input has the keyboard.
+	inPlan := m.created && !m.commenting && m.tab == tabPlan
+	inFlow := m.created && !m.commenting && m.tab == tabFlow
+	m.requestKeys(&k)
 	for _, b := range []*key.Binding{&k.ExtendUp, &k.ExtendDown, &k.Up, &k.Down, &k.Top, &k.Bottom, &k.PageUp, &k.PageDown, &k.HalfUp, &k.HalfDown, &k.SectionBack, &k.SectionNext, &k.Comment} {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
@@ -163,7 +158,6 @@ func (m Model) keys() keyMap {
 		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
 	k.SaveComment.SetEnabled(m.commenting)
 	k.CancelComment.SetEnabled(m.commenting)
-	k.Focus.SetEnabled(!m.commenting)
 	k.Confirm.SetEnabled(m.confirming)
 	k.Resume.SetEnabled(m.resumeOffered())
 	k.StopBuild.SetEnabled(m.stopOffered())
@@ -183,27 +177,19 @@ func (m Model) resumeOffered() bool {
 		!m.resumingBuild && !m.resuming && m.resumable().Kind != planstate.ResumeNone
 }
 
-// chatKeys enables the left pane's keys: the request input's until the plan
-// exists, and the Activity pane's after, where enter sends the queued
-// comments and there is no input to type a new line in.
-func (m Model) chatKeys(k *keyMap) {
-	inChat := m.focus == paneChat && !m.commenting
-	for _, b := range []*key.Binding{&k.Send, &k.ChatPageUp, &k.ChatPageDown} {
-		b.SetEnabled(inChat)
-	}
-	k.Newline.SetEnabled((inChat && !m.created) || m.commenting)
-	if !m.created {
-		return
-	}
-	k.Send.SetHelp("enter", "send comments")
-	k.Send.SetEnabled(inChat && !m.savingComments &&
-		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
+// requestKeys enables the Describe the change box's keys, which work until
+// the plan exists: enter sends the request, and the newline key adds a line,
+// as it does in a comment being written.
+func (m Model) requestKeys(k *keyMap) {
+	inRequest := !m.created && !m.commenting
+	k.Send.SetEnabled(inRequest)
+	k.Newline.SetEnabled(inRequest || m.commenting)
 }
 
 // endKeys enables the keys that end the plan: abandon, its reasons, and
 // delete.
 func (m Model) endKeys(k *keyMap) {
-	idle := m.focus == panePlan && !m.commenting && !m.confirming && !m.askingReason && !m.abandoning && !m.deleting
+	idle := !m.commenting && !m.confirming && !m.askingReason && !m.abandoning && !m.deleting
 	k.Abandon.SetEnabled(idle && m.created && slices.Contains(m.events, abandon))
 	k.DeletePlan.SetEnabled(idle && m.created && !m.flow.Claimed)
 	for _, b := range []*key.Binding{&k.AbandonCanceled, &k.AbandonWontDo, &k.AbandonDuplicate} {
@@ -212,37 +198,25 @@ func (m Model) endKeys(k *keyMap) {
 	k.Chat.SetEnabled(m.chatKey && !m.commenting)
 }
 
-// focusHelp is where tab goes: to the right pane, or on a narrow screen
-// round Activity, Flow and Plan.
-func (m Model) focusHelp() string {
-	switch {
-	case m.focus == panePlan && m.narrow() && m.tab == tabFlow:
-		return "plan"
-	case m.focus == panePlan:
-		return "activity"
-	case m.narrow() || m.tab == tabFlow:
-		return "flow"
-	}
-	return "plan"
-}
-
-// flowKeys enables the keys of the right pane's tabs, inFlow being whether
-// the Flow tab has the keyboard.
+// flowKeys enables the keys that switch views and the Flow view's own,
+// inFlow being whether the Flow view has the keyboard. Before the plan
+// exists the body stays on the Flow view.
 func (m Model) flowKeys(k *keyMap, inFlow bool) {
-	k.FlowTab.SetEnabled(m.focus == panePlan && !m.commenting)
-	k.PlanTab.SetEnabled(m.focus == panePlan && !m.commenting)
-	k.Open.SetEnabled(false)
+	k.FlowTab.SetEnabled(m.created && !m.commenting)
+	k.PlanTab.SetEnabled(m.created && !m.commenting)
+	k.Act.SetEnabled(false)
 	if !inFlow {
 		return
 	}
-	// ↑/↓ move over the Related rows, which open only in a host that can
-	// open another plan; the page keys scroll the tab.
-	related := m.inbox && len(m.relatedRows()) > 0
-	k.Up.SetEnabled(related)
-	k.Down.SetEnabled(related)
+	// j/k move over the boxes and the rows that open a plan, and enter does the
+	// selected one's action; the page keys scroll the view.
+	some := len(m.selectables()) > 0
+	k.Up.SetHelp("j/k", "activity")
+	k.Up.SetEnabled(some)
+	k.Down.SetEnabled(some)
 	k.PageUp.SetEnabled(true)
 	k.PageDown.SetEnabled(true)
-	k.Open.SetEnabled(related)
+	k.Act.SetEnabled(some)
 }
 
 // commentKeys enables the keys that act on the plan's comments, inPlan being
@@ -277,13 +251,20 @@ func (k keyMap) ShortHelp() []key.Binding {
 	if k.prevUnlisted {
 		prev.SetEnabled(false)
 	}
+	// On the Flow view j/k lead, with the enter they choose for.
+	first, up := k.Up, k.Up
+	if k.Act.Enabled() {
+		up.SetEnabled(false)
+	} else {
+		first.SetEnabled(false)
+	}
 	return []key.Binding{
 		k.SaveComment, k.CancelComment,
 		k.Switch,
 		k.Send, k.Newline,
-		k.Open, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
-		k.Focus, k.SendPlan, k.Resume, k.StopBuild, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
-		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
+		first, k.Act, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, up,
+		k.SendPlan, k.Resume, k.StopBuild, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
+		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp,
 	}
 }
 

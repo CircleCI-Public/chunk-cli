@@ -1,8 +1,9 @@
-// Package plan is the planning screen: a new plan's request, then its
-// planning session's activity, beside the plan factory is writing, rendered
-// as markdown. The developer can comment on any part of the plan; comments
-// are queued locally and saved to factory when the developer sends. When the
-// developer approves the plan, chunk builds it through factory.
+// Package plan is the planning screen: one view at a time, the Flow view of
+// what is under way on the plan (a new plan's request first), or the Plan
+// view of the plan factory is writing, rendered as markdown. The developer
+// can comment on any part of the plan; comments are queued locally and saved
+// to factory when the developer sends. When the developer approves the plan,
+// chunk builds it through factory.
 //
 // The screen is a component: its host passes it messages and draws what
 // Content returns, and it reports that it is done with a ClosedMsg. Screen
@@ -64,37 +65,13 @@ func approval(f Flow) string {
 	return planstate.Approval(next)
 }
 
-// pane is which side of the screen the keyboard goes to.
-type pane int
-
-const (
-	paneChat pane = iota
-	panePlan
-)
-
-// rightTab is what the right pane shows.
+// rightTab is which view the body shows, Flow or Plan.
 type rightTab int
 
 const (
 	tabPlan rightTab = iota
 	tabFlow
 )
-
-// message is one entry in the chat.
-type message struct {
-	fromUser bool
-	text     string
-	failed   bool
-	// byTask is a reply to a factory task rather than to the developer.
-	byTask bool
-	// task is the category of the factory task the reply is to, when byTask
-	// and the screen knew it.
-	task string
-	// rendered is a reply's markdown as rendered at renderedWidth, kept so
-	// the chat is not rendered again on every tick of the spinner.
-	rendered      string
-	renderedWidth int
-}
 
 // renderedBlock is a block of the plan and its lines as glamour renders it.
 type renderedBlock struct {
@@ -280,7 +257,9 @@ type Model struct {
 	// familyLoaded is whether a read of the relatives has succeeded, so the
 	// plan's blockers are known.
 	familyLoaded bool
-	messages     []message
+	// failure is the latest create, start, resume or agent failure, until
+	// the next one of those succeeds.
+	failure string
 	// created is whether the plan has been made in factory with store.Create,
 	// and creating whether that is under way.
 	created, creating bool
@@ -340,22 +319,19 @@ type Model struct {
 	moving *transition
 
 	planView viewport.Model
-	// flowView is the Flow tab, which the right pane shows in place of the
-	// plan while tab is tabFlow.
+	// flowView is the Flow view, which the body shows in place of the plan
+	// while tab is tabFlow.
 	flowView viewport.Model
-	chatView viewport.Model
 	input    textarea.Model
 	spin     spinner.Model
 
-	focus pane
-	// tab is what the right pane shows; tabChosen is whether the first
-	// refresh, or the developer, has picked it yet.
-	tab       rightTab
-	tabChosen bool
-	// related is the Flow tab's cursor over its Related rows.
-	related int
-	width   int
-	height  int
+	// tab is which view the body shows, Flow or Plan. Every visit opens on
+	// the Flow view.
+	tab rightTab
+	// selected is the Flow view's selection, an index into m.selectables().
+	selected int
+	width    int
+	height   int
 
 	// busy is whether the agent is working: from a send, or from the first
 	// thing it does on a factory task, until its reply.
@@ -367,8 +343,7 @@ type Model struct {
 	// the turn's first refresh found it on the flow; "" until then, and
 	// when the flow named none.
 	task string
-	// log is what the agent has done this turn, oldest first.
-	log      []string
+	// activity is what the agent is doing now, for the running box.
 	activity string
 
 	confirming bool
@@ -458,12 +433,12 @@ func (m Model) after(d time.Duration, fn func(time.Time) tea.Msg) tea.Cmd {
 	return m.tick(d, fn)
 }
 
-// chatPlaceholder is the request input's, the only input the left pane has.
+// chatPlaceholder is the request input's, in the Describe the change box.
 const chatPlaceholder = "Describe the change you want planned…"
 
 // New returns the planning screen. A non-empty first request is sent as soon
-// as the screen opens. Once the plan exists the left pane takes no typing, so
-// a plan that exists opens on the plan pane.
+// as the screen opens. Until the plan exists the Flow view's Describe the
+// change box has the keyboard.
 func New(ctx context.Context, agent Agent, approve Approver, store Store, first string) Model {
 	in := textarea.New()
 	in.Placeholder = chatPlaceholder
@@ -503,9 +478,7 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 	flowView.KeyMap = viewport.KeyMap{}
 
 	created := store.ID() != ""
-	focus := paneChat
 	if created {
-		focus = panePlan
 		in.Blur()
 	}
 	return Model{
@@ -514,11 +487,10 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 		approve:      approve,
 		store:        store,
 		created:      created,
-		focus:        focus,
+		tab:          tabFlow,
 		copyText:     clipboard.Copy,
 		planView:     planView,
 		flowView:     flowView,
-		chatView:     viewport.New(),
 		input:        in,
 		commentInput: ci,
 		spin:         spinner.New(spinner.WithSpinner(spinner.Dot)),
@@ -599,6 +571,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if m.pending != "" {
 			first := m.pending
 			m.pending = ""
+			// The request goes in the input as if typed, so a failure to make
+			// the plan gives it back there.
+			m.input.SetValue(first)
 			return m.send(first)
 		}
 		return m, nil
@@ -649,18 +624,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		// The new session is followed at once, before factory's state moves.
-		m.status, m.built = "", true
+		m.status, m.built, m.failure = "", true, ""
+		m.renderFlow()
 		return m.followBuild()
 
 	case familiedMsg:
+		prev, had := m.selectedKey()
 		m.family, m.familyErr = msg.family, msg.err
 		if msg.err != nil {
 			m.family = Family{}
 		} else {
 			m.familyLoaded = true
 		}
-		// The cursor stays on a row that is still there.
-		m.related = max(min(m.related, len(m.relatedRows())-1), 0)
+		// The selection stays on the item it was on, or one still there.
+		m.reselect(prev, had)
 		m.renderFlow()
 		return m, nil
 
@@ -701,27 +678,36 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
-		m.renderChat()
+		m.renderFlow()
 		return m, cmd
 	}
 
 	return m.forward(msg)
 }
 
+// fail says what failed on the status line, and keeps it as the Flow view's
+// failure box until the next create, start, resume or agent turn succeeds.
+func (m *Model) fail(text string) {
+	m.failure = text
+	m.status = ui.ErrorStyle.Render(text)
+	m.renderFlow()
+}
+
 // applyCreated handles the end of creating the plan in factory: on success
-// it starts the planning session on the request, and on failure it says so
-// in the Activity pane.
+// it starts the planning session on the request, and on failure it says so,
+// with the request still in the Describe the change box.
 func (m Model) applyCreated(msg createdMsg) (Model, tea.Cmd) {
 	m.creating = false
 	if msg.err != nil {
-		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
+		m.busy, m.byTask, m.task, m.activity = false, false, "", ""
 		m.renderPlan()
-		m.renderChat()
-		return m, nil
+		m.fail("Could not create the plan: " + msg.err.Error())
+		return m, m.input.Focus()
 	}
-	// The input is gone for good, and the activity takes its rows.
+	// The input is gone for good.
 	m.created, m.request, m.resuming = true, msg.text, true
+	m.failure = ""
+	m.input.Reset()
 	// A title the host gave the screen becomes the plan's own once it is
 	// created; a screen with no title keeps showing New flow.
 	if m.title != "" && msg.title != "" {
@@ -742,24 +728,26 @@ func (m Model) applySent(msg tea.Msg) Model {
 		}
 		m.resuming = false
 		if msg.err == nil {
-			m.request = ""
+			m.request, m.failure = "", ""
+			m.renderFlow()
 			return m
 		}
 		// The request is kept, and sent again once factory next waits on the
 		// planner: it is in no plan yet.
-		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.messages = append(m.messages, message{text: "Could not start the planning session: " + msg.err.Error(), failed: true})
+		m.busy, m.byTask, m.task, m.activity = false, false, "", ""
 		m.renderPlan()
-		m.renderChat()
+		m.fail("Could not start the planning session: " + msg.err.Error())
 	case resumedMsg:
 		if msg.agent != m.agent {
 			return m
 		}
 		m.resuming = false
 		if msg.err != nil {
-			m.messages = append(m.messages, message{text: "Could not resume the planning session: " + msg.err.Error(), failed: true})
-			m.renderChat()
+			m.fail("Could not resume the planning session: " + msg.err.Error())
+			return m
 		}
+		m.failure = ""
+		m.renderFlow()
 	}
 	return m
 }
@@ -810,6 +798,7 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		return m
 	}
 	m.refreshErr = ""
+	prevSel, hadSel := m.selectedKey()
 
 	// The cursor stays on a comment on a rewritten part, wherever it now
 	// sits, rather than drifting to whatever ends up at its old stop.
@@ -846,11 +835,6 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 	case m.state != m.claimedIn:
 		m.claimedIn = ""
 	}
-	if !m.tabChosen {
-		// The first refresh of a visit opens the right pane on what the
-		// plan's phase is about; later moves leave the tab where it is.
-		m.tab, m.tabChosen = tabFor(m.state), true
-	}
 	if m.byTask && m.task == "" {
 		// The first task the flow names in a turn is the one the turn is on:
 		// by its end the agent may have submitted it and the flow moved on.
@@ -870,7 +854,7 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 			}
 		}
 	}
-	m.renderChat()
+	m.reselect(prevSel, hadSel)
 	m.renderFlow()
 	return m
 }
@@ -949,16 +933,6 @@ func (m Model) resume() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// tabFor is the tab the right pane opens on for a plan in state: the plan
-// while it is being planned, or has not started, and its flow after.
-func tabFor(state string) rightTab {
-	switch strings.TrimSpace(state) {
-	case "", planstate.Init, planstate.Ready, planstate.RefineProposal, planstate.RefineUnits:
-		return tabPlan
-	}
-	return tabFlow
-}
-
 func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	m.clearText()
 	k := m.keys()
@@ -986,18 +960,6 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(msg, k.Focus):
-		// A narrow screen shows one of chat, Flow and Plan at a time, so tab
-		// goes round all three.
-		switch {
-		case m.focus == paneChat && m.narrow():
-			return m.showTab(tabFlow)
-		case m.focus == paneChat:
-			return m.focusOn(panePlan)
-		case m.narrow() && m.tab == tabFlow:
-			return m.showTab(tabPlan)
-		}
-		return m.focusOn(paneChat)
 	case key.Matches(msg, k.SendPlan):
 		return m.askToApprove(), nil
 	case key.Matches(msg, k.Resume):
@@ -1020,27 +982,17 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.showTab(tabPlan)
 	}
 
-	if m.focus == panePlan && m.tab == tabFlow {
-		return m.updateFlowKey(msg)
-	}
-	if m.focus == panePlan {
-		return m.updatePlanKey(msg)
-	}
-	switch {
-	case key.Matches(msg, k.ChatPageUp):
-		m.chatView.PageUp()
-		return m, nil
-	case key.Matches(msg, k.ChatPageDown):
-		m.chatView.PageDown()
-		return m, nil
-	}
-	if key.Matches(msg, k.Send) {
-		if !m.created {
+	if !m.created {
+		// The Describe the change box's input has the keyboard.
+		if key.Matches(msg, k.Send) {
 			return m.send(m.input.Value())
 		}
-		return m.deliver()
+		return m.forward(msg)
 	}
-	return m.forward(msg)
+	if m.tab == tabFlow {
+		return m.updateFlowKey(msg)
+	}
+	return m.updatePlanKey(msg)
 }
 
 // heldStatus says why a send left the queued comments unsent.
@@ -1122,29 +1074,17 @@ func (m Model) answerReason(msg tea.KeyPressMsg, k keyMap) (Model, tea.Cmd) {
 	return m, abandonCmd(m.ctx, m.store, reason)
 }
 
-// focusOn gives the keyboard to pane p, dropping any selection.
-func (m Model) focusOn(p pane) (Model, tea.Cmd) {
-	m.anchor = -1
-	if p == panePlan {
-		m.focus = panePlan
-		m.input.Blur()
-		m.drawPlan()
-		m.renderFlow()
+// showTab shows view t in the body, dropping any selection of the plan.
+// Before the plan exists the body stays on the Flow view.
+func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
+	if !m.created {
 		return m, nil
 	}
-	m.focus = paneChat
+	m.tab = t
+	m.anchor = -1
 	m.drawPlan()
 	m.renderFlow()
-	if m.created {
-		return m, nil
-	}
-	return m, m.input.Focus()
-}
-
-// showTab gives the keyboard to the right pane, showing tab t there.
-func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
-	m.tab, m.tabChosen = t, true
-	return m.focusOn(panePlan)
+	return m, nil
 }
 
 // askToApprove starts approving the plan, or its design: it asks the
@@ -1220,7 +1160,7 @@ func (m Model) unsent() string {
 	if n > 0 {
 		parts = append(parts, fmt.Sprintf("%d unsent %s", n, plural(n, "comment", "comments")))
 	}
-	if !m.created && strings.TrimSpace(m.input.Value()) != "" {
+	if !m.created && !m.creating && strings.TrimSpace(m.input.Value()) != "" {
 		parts = append(parts, "unsent request")
 	}
 	return strings.Join(parts, " and ")
@@ -1228,59 +1168,51 @@ func (m Model) unsent() string {
 
 func warn(s string) string { return ui.WarningStyle.Render(s) }
 
-// forward hands msg to the focused pane's component.
+// forward hands msg to the component that has the keyboard: the comment
+// editor, the request input before the plan exists, or the view shown.
 func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
-	if m.commenting {
+	var cmd tea.Cmd
+	switch {
+	case m.commenting:
 		if m.savingEdit {
 			return m, nil
 		}
-		var cmd tea.Cmd
 		m.commentInput, cmd = m.commentInput.Update(msg)
 		m.moveCursor(m.cursor)
-		return m, cmd
-	}
-	var cmd tea.Cmd
-	if m.focus == panePlan && m.tab == tabFlow {
-		m.flowView, cmd = m.flowView.Update(msg)
-		return m, cmd
-	}
-	if m.focus == panePlan {
-		m.planView, cmd = m.planView.Update(msg)
-		return m, cmd
-	}
-	var cmds []tea.Cmd
-	if !m.created {
+	case !m.created:
+		if m.creating {
+			return m, nil
+		}
 		m.input, cmd = m.input.Update(msg)
-		cmds = append(cmds, cmd)
+		m.renderFlow()
+	case m.tab == tabFlow:
+		m.flowView, cmd = m.flowView.Update(msg)
+	default:
+		m.planView, cmd = m.planView.Update(msg)
 	}
-	// The chat scrolls with the mouse wheel while typing.
-	if _, ok := msg.(tea.KeyPressMsg); !ok {
-		m.chatView, cmd = m.chatView.Update(msg)
-		cmds = append(cmds, cmd)
-	}
-	return m, tea.Batch(cmds...)
+	return m, cmd
 }
 
 // send is a new plan's request: it creates the plan in factory, then starts
 // the planning session on text once it is made. Once the plan exists, or
 // while it is being created, it does nothing, as it does for an empty text.
+// The request stays in the input until the plan is made, so a failure to
+// make it gives it back.
 func (m Model) send(text string) (Model, tea.Cmd) {
 	text = strings.TrimSpace(text)
 	if m.created || m.creating || text == "" {
 		return m, nil
 	}
-	m.input.Reset()
-	m.messages = append(m.messages, message{fromUser: true, text: text})
 	m.status = ""
 	var tick tea.Cmd
 	if !m.busy {
-		m.busy, m.byTask, m.task, m.log = true, false, "", nil
+		m.busy, m.byTask, m.task = true, false, ""
 		tick = m.spin.Tick
 	}
-	m.renderPlan()
-	m.renderChat()
-	m.chatView.GotoBottom()
 	m.creating = true
+	m.input.Blur()
+	m.renderPlan()
+	m.renderFlow()
 	return m, tea.Batch(createCmd(m.ctx, m.store, text), tick)
 }
 
@@ -1324,31 +1256,29 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 		var refresh tea.Cmd
 		if !m.busy {
 			// Nothing was sent, so a factory task started this turn.
-			m.busy, m.byTask, m.log = true, true, nil
+			m.busy, m.byTask = true, true
 			// A task for this screen's planner means factory has acted.
 			m.moving = nil
 			tick = m.spin.Tick
 			// The flow names the task; read it now rather than at the next poll.
 			refresh = refreshCmd(m.ctx, m.store)
 		}
+		// The turn is under way, so the last failure is behind it.
+		m.failure = ""
 		m.activity = ev.Activity
-		m.log = append(m.log, m.activity)
-		if len(m.log) > 5 {
-			m.log = m.log[len(m.log)-5:]
-		}
 		m.renderPlan()
-		m.renderChat()
+		m.renderFlow()
 		return m, tea.Batch(next, tick, refresh)
 	case ev.Reply != nil:
-		task := m.task
-		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.messages = append(m.messages, message{text: ev.Reply.Text, byTask: ev.Reply.ByTask, task: task})
+		// The reply is chunk's own, not the flow's: the running box showed
+		// what the agent was doing, and the refresh shows what came of it.
+		m.busy, m.byTask, m.task, m.activity = false, false, "", ""
 	case ev.Problem != nil:
-		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.messages = append(m.messages, message{text: ev.Problem.Error(), failed: true})
+		m.busy, m.byTask, m.task, m.activity = false, false, "", ""
+		m.fail("chunk hit a problem: " + ev.Problem.Error())
 	}
 	m.renderPlan()
-	m.renderChat()
+	m.renderFlow()
 	return m, tea.Batch(next, refreshCmd(m.ctx, m.store))
 }
 
@@ -1401,7 +1331,7 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 		if !m.back {
 			return m, closed(msg.buildID)
 		}
-		m.built, m.tab, m.tabChosen = true, tabFlow, true
+		m.built, m.tab = true, tabFlow
 		m.moving = &transition{kind: movingApprove, from: m.state, since: time.Now()}
 		m.status = "Approved · building as run " + msg.buildID
 		var follow tea.Cmd
@@ -1478,71 +1408,46 @@ func waitApproval(ch <-chan tea.Msg) tea.Cmd {
 	}
 }
 
-// Layout: the chat is on the left and the plan, which needs the room, takes
-// the right 60% of the screen. Above the panes are the frame's top line and
-// its rule, then the strip; below them are the footer's rule and its row of
-// hints.
+// Layout: the frame's top line and its rule, then one full-width view, the
+// Flow view or the Plan view (the strip, the plan, and its row for comments),
+// then the footer's rule and its row of hints.
 const (
-	borderSize   = 2
-	bubbleChrome = borderSize + 2
-	// chatGutter is the cells of room left and right of the messages.
-	chatGutter = 1
 	headerRows = 1
 	// ruleRows is the rule under the frame's top line.
 	ruleRows   = 1
-	tabRows    = 1
 	footerRows = 2
 	inputRows  = 6
-	// inputBoxRows is the input and its border, which has the input's title
-	// set into the top edge.
-	inputBoxRows = inputRows + borderSize
-	// padX and padY are the room between a pane's border and its content.
-	padX           = 1
-	padY           = 1
+	// flowMargin is the cells left of the Flow view.
+	flowMargin     = 1
 	planFooterRows = 1
-	planPercent    = 60
 )
 
-func (m *Model) planWidth() int {
-	if m.narrow() {
-		return m.width
-	}
-	return m.width * planPercent / 100
-}
-
-func (m *Model) chatWidth() int {
-	if m.narrow() {
-		return m.width
-	}
-	return m.width - m.planWidth()
-}
-
-// topRows is what sits above the panes.
+// topRows is what sits above the view: the top line and its rule, and the
+// strip when the Plan view shows.
 func (m *Model) topRows() int {
-	if m.narrow() {
-		return headerRows + ruleRows + stripRows + tabRows
+	if m.tab == tabPlan {
+		return headerRows + ruleRows + stripRows
 	}
-	return headerRows + ruleRows + stripRows
+	return headerRows + ruleRows
+}
+
+// bodyRows is the rows between the top line's rule and the footer.
+func (m *Model) bodyRows() int {
+	return max(m.height-headerRows-ruleRows-footerRows, 1)
 }
 
 func (m *Model) layout() {
-	inner := m.height - m.topRows() - footerRows - borderSize
-	m.planView.SetWidth(m.planWidth() - borderSize - 2*padX)
-	m.planView.SetHeight(inner - planFooterRows - padY)
-	m.flowView.SetWidth(m.planView.Width())
-	m.flowView.SetHeight(m.planView.Height())
+	w := max(m.width-flowMargin, 1)
+	m.planView.SetWidth(w)
+	m.planView.SetHeight(max(m.bodyRows()-stripRows-planFooterRows, 1))
+	m.flowView.SetWidth(w)
+	m.flowView.SetHeight(m.bodyRows())
 	// The editor is the text of a comment's card, which sits past the gutter
 	// on a rail, indented, with a cell either side.
 	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 6)
-	m.chatView.SetWidth(m.chatWidth() - borderSize - 2*padX)
-	if m.created {
-		m.chatView.SetHeight(inner - padY)
-	} else {
-		m.chatView.SetHeight(max(1, inner-inputBoxRows-padY))
-	}
-	m.input.SetWidth(m.chatWidth() - 2*borderSize - 2*padX)
+	// The request is written inside the Describe the change box's border.
+	m.input.SetWidth(max(w-4, 1))
 	m.renderPlan()
-	m.renderChat()
 	m.renderFlow()
 }
 
@@ -1638,125 +1543,19 @@ func (m *Model) renderPlan() {
 	m.moveCursor(m.cursor)
 }
 
-// userBubble is text as a bubble against the right edge of the chat, so it
-// reads as the developer's side of the conversation.
-func (m *Model) userBubble(text string, w int) string {
-	// The bubble leaves room on its left, so that it reads as a side of the
-	// conversation, and has a border and a cell of padding each side.
-	inner := max(w*85/100-bubbleChrome, 1)
-	fit := min(lipgloss.Width(text), inner)
-	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.faint()).
-		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
-	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
+// activityLine is the running box's first line while the agent works: what
+// it is doing now, with the spinner.
+func (m Model) activityLine() string {
+	a := m.activity
+	if a == "" {
+		a = "chunk is thinking…"
+	}
+	// The spinner's frames carry their own space after the dot.
+	return m.style(m.purple()).Render(m.spin.View() + a)
 }
 
-// queuedBubble is the queued comments waiting to be saved, shown like the
-// message they will go with when the developer sends.
-func (m *Model) queuedBubble(cs []comment, w int) string {
-	inner := max(w*85/100-bubbleChrome, 1)
-	parts := make([]string, 0, 2*len(cs))
-	for _, c := range cs {
-		parts = append(parts, m.style(m.faint()).Render("┃ "+excerpt(c.quote, inner-2)), m.style(m.amber()).Render("┃ "+c.text))
-	}
-	text := strings.Join(parts, "\n")
-	fit := min(lipgloss.Width(text), inner)
-	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.faint()).
-		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
-	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
-}
-
-func (m *Model) renderChat() {
-	// A cell of room each side keeps the messages off the pane's border.
-	w := m.chatView.Width() - 2*chatGutter
-	if w <= 0 {
-		return
-	}
-	var b strings.Builder
-	if m.inbox {
-		note := "Reading this plan does not start an agent."
-		if m.project == "" {
-			note += " Open chunk watch in its repository to plan it."
-		} else {
-			note += " Its planning session resumes here in " + m.project + " when factory is waiting on it."
-		}
-		b.WriteString(m.style(m.dim()).Width(w).Render(note) + "\n\n")
-	}
-	for i := range m.messages {
-		msg := &m.messages[i]
-		switch {
-		case msg.fromUser:
-			b.WriteString(m.userBubble(msg.text, w))
-		case msg.failed:
-			b.WriteString(chunkStyle.Render("chunk") + "\n")
-			b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text))
-		default:
-			b.WriteString(chunkStyle.Render("chunk"))
-			if msg.byTask {
-				mark := " · factory task"
-				if msg.task != "" {
-					mark = " · " + taskLabel(msg.task)
-				}
-				b.WriteString(m.style(m.faint()).Render(mark))
-			}
-			b.WriteString("\n")
-			if msg.renderedWidth != w {
-				msg.rendered, msg.renderedWidth = chat.RenderMarkdown(msg.text, m.dark, w-2), w
-			}
-			b.WriteString(msg.rendered)
-		}
-		b.WriteString("\n\n")
-	}
-	if q := queuedComments(m.comments); len(q) > 0 && !m.savingComments {
-		// The comments wait in a bubble like the message they will go in.
-		b.WriteString(m.queuedBubble(q, w) + "\n")
-		b.WriteString(m.style(m.faint()).Render("queued · press enter or s to send") + "\n\n")
-	}
-	if m.savingComments {
-		b.WriteString(m.style(m.purple()).Render(m.spin.View()+"Saving your comments…") + "\n\n")
-	}
-	if m.busy {
-		b.WriteString(m.activityLog(w))
-	}
-	if m.showsBuild() {
-		b.WriteString(m.buildSection(w))
-	}
-	// The chat follows what is added to it unless the developer has
-	// scrolled up to read, when it stays where they are.
-	follow := m.chatView.AtBottom()
-	m.setContent(textChat, lipgloss.NewStyle().PaddingLeft(chatGutter).Render(b.String()))
-	if follow {
-		m.chatView.GotoBottom()
-	}
-}
-
-// activityLog is what the agent has been doing this turn: each thing it has
-// finished with a tick, and the one in hand with the spinner.
-func (m Model) activityLog(w int) string {
-	if len(m.log) == 0 {
-		// The spinner's frames carry their own space after the dot.
-		return m.style(m.purple()).Render(m.spin.View() + "chunk is thinking…")
-	}
-	var lines []string
-	if m.byTask {
-		label := "working on a factory task"
-		if m.task != "" {
-			label = taskLabel(m.task)
-		}
-		lines = append(lines, m.style(m.faint()).Render(label))
-	}
-	for i, a := range m.log {
-		a = ansi.Truncate(a, w-2, "…")
-		if i == len(m.log)-1 {
-			lines = append(lines, m.style(m.purple()).Render(m.spin.View()+a))
-			continue
-		}
-		lines = append(lines, m.style(m.green()).Render("✓ ")+m.style(m.dim()).Render(a))
-	}
-	return strings.Join(lines, "\n")
-}
-
-// taskLabel is a factory task's category as the chat shows it: in sentence
-// case, with spaces for hyphens, so "early-plan" reads "Early plan".
+// taskLabel is a factory task's category as the screen shows it: in
+// sentence case, with spaces for hyphens, so "early-plan" reads "Early plan".
 func taskLabel(category string) string {
 	if category == "" {
 		return ""
@@ -1766,106 +1565,27 @@ func taskLabel(category string) string {
 	return string(unicode.ToUpper(r)) + s[n:]
 }
 
-// restyle renders the plan and the chat again for a change of background.
+// restyle renders the plan and the Flow view again for a change of
+// background.
 func (m *Model) restyle() {
 	m.renderedWidth = 0
-	for i := range m.messages {
-		m.messages[i].renderedWidth = 0
-	}
 	m.renderPlan()
-	m.renderChat()
 	m.renderFlow()
 }
 
-var chunkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
-
-// Content is the screen as its host draws it: the panes and the footer,
-// filling the size it was last sent.
+// Content is the screen as its host draws it: the top line and its rule, the
+// view shown, and the footer, filling the size it was last sent.
 func (m Model) Content() string {
 	if m.width == 0 {
 		return ""
 	}
-	pane := func(focused bool, w int, title, content string) string {
-		edge := m.quiet()
-		if focused {
-			edge = m.brand()
-		}
-		s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-			Padding(padY, padX, 0, padX).
-			Width(w).Height(m.height - m.topRows() - footerRows)
-		return titled(s.Render(content), title, lipgloss.NewStyle().Foreground(edge).Render)
-	}
-	// The pane without the keyboard has a dim title as well as a dim border.
-	title := func(focused bool, name string) string {
-		if focused {
-			return ui.TitleStyle.Render(name)
-		}
-		return ui.HelperStyle.Faint(true).Render(name)
-	}
-
-	// The right pane's title is its tabs, the one showing drawn as a title.
-	tabWord := func(t rightTab, name string) string {
-		if m.tab == t {
-			return title(m.focus == panePlan, name)
-		}
-		return ui.HelperStyle.Faint(true).Render(name)
-	}
-	planTitle := tabWord(tabFlow, "Flow") + "  " + tabWord(tabPlan, "Plan")
-	if m.moving != nil {
-		planTitle += title(m.focus == panePlan, " · "+m.movingText())
-	}
-	body := m.shown(textPlan) + "\n" + m.planFooter()
+	var body string
 	if m.tab == tabFlow {
-		body = m.shown(textFlow)
+		body = lipgloss.NewStyle().PaddingLeft(flowMargin).Render(m.shown(textFlow))
+	} else {
+		body = m.strip() + "\n" + m.shown(textPlan) + "\n" + m.planFooter()
 	}
-	chatBody := m.shown(textChat) + "\n" + m.inputBox()
-	if m.created {
-		chatBody = m.shown(textChat)
-	}
-	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, activityTitle), chatBody)
-	plan := pane(m.focus == panePlan, m.planWidth(), planTitle, body)
-
-	panes := lipgloss.JoinHorizontal(lipgloss.Top, chat, plan)
-	top := m.header() + "\n" + m.topRule() + "\n" + m.strip()
-	if m.narrow() {
-		// One pane at a time, the other a tab away.
-		panes = chat
-		if m.focus == panePlan {
-			panes = plan
-		}
-		top += "\n" + m.tabs()
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, top, panes, m.actionBar())
-}
-
-// activityTitle is the left pane's title, before the plan exists, when the
-// pane holds the request input, as after.
-const activityTitle = "Activity"
-
-// inputBox is the request being written, in a box of its own under the chat.
-// Its border stays a step below the pane's accent, so the accent shows once
-// per pane.
-func (m Model) inputBox() string {
-	edge := m.quiet()
-	if m.focus == paneChat && !m.commenting {
-		edge = m.dim()
-	}
-	w := m.chatWidth() - borderSize - 2*padX
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-		Width(w).Render(m.input.View())
-	return titled(box, ui.TitleStyle.Render("Message"), lipgloss.NewStyle().Foreground(edge).Render)
-}
-
-// titled sets title into the top edge of box, a pane drawn with a rounded
-// border, as in "╭─ Plan ─────╮", cut to leave at least one cell of edge
-// after it. line draws the edge in the border's colour.
-func titled(box, title string, line func(...string) string) string {
-	top, rest, _ := strings.Cut(box, "\n")
-	n := lipgloss.Width(top) - 2
-	if n < 5 {
-		return box
-	}
-	title = ansi.Truncate(title, n-4, "…")
-	edge := line("╭─ ") + title + line(" "+strings.Repeat("─", max(n-3-lipgloss.Width(title), 0))+"╮")
-	return edge + "\n" + rest
+	rows := m.bodyRows()
+	body = lipgloss.NewStyle().Height(rows).MaxHeight(rows).Render(body)
+	return lipgloss.JoinVertical(lipgloss.Left, m.header(), m.topRule(), body, m.actionBar())
 }

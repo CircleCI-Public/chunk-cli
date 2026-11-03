@@ -300,7 +300,10 @@ func TestNOpensANewPlanInTheProject(t *testing.T) {
 	assert.Equal(t, f.root, "/src/chunk-cli")
 	assert.Assert(t, m.planOpen)
 	out := screen(m)
-	assert.Assert(t, strings.Contains(out, "Activity") && strings.Contains(out, "No plan yet"), "the planning screen is shown:\n%s", out)
+	// The host names a new plan New plan, which the top line shows until
+	// factory names it.
+	assert.Assert(t, strings.Contains(out, "chunk / New plan") && strings.Contains(out, "Describe the change"), "the planning screen is shown:\n%s", out)
+	assert.Check(t, !strings.Contains(out, "Activity"), out)
 	assert.Check(t, cmp.Contains(out, "back to plans"), "the way back is in the footer")
 	assert.Check(t, !strings.Contains(out, "runs"), "the footer names runs:\n%s", out)
 	assert.Assert(t, m.View().MouseMode == tea.MouseModeCellMotion, "the plan and chat scroll with the mouse")
@@ -371,22 +374,28 @@ func TestThePlanIsKeptBehindFlows(t *testing.T) {
 	next, _ := m.Update(flowlist.OpenMsg{ID: m.planWorkspaces[key].store.ID()})
 	m = next.(Model)
 	assert.Assert(t, m.planOpen)
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyRight})
 	out := screen(m)
-	assert.Assert(t, strings.Contains(out, "Wrote a plan.") && strings.Contains(out, "The flag exists."), "the reply that came while away is shown:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "The flag exists."), "the plan written while away is shown:\n%s", out)
+	assert.Check(t, !strings.Contains(out, "Wrote a plan."), "chunk's reply is shown:\n%s", out)
 }
 
-// The open flow screen gets the arrows.
+// The open flow screen gets the arrows, once its plan exists.
 func TestArrowsReachTheOpenFlowScreen(t *testing.T) {
-	m := openPlanScreen(t, planModel(t, &fakePlans{}))
-	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
+	f := &fakePlans{plan: "## 1. Outcome\n\nThe flag exists."}
+	m := openPlanScreen(t, planModel(t, f))
+	m = typeInto(m, "add a flag")
+	m, turn := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = deliverThen(t, m, turn, 1)
+	s := screen(m)
+	assert.Check(t, cmp.Contains(s, "ACTIVITY"))
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	assert.Assert(t, m.planOpen, "→ left the flow screen")
+	s = screen(m)
+	assert.Check(t, !strings.Contains(s, "ACTIVITY"), "→ did not show the Plan view:\n%s", s)
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyLeft})
 	assert.Assert(t, m.planOpen, "← left the flow screen")
-	s := screen(m)
-	assert.Check(t, cmp.Contains(s, "PROGRESS"))
-	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyRight})
-	assert.Assert(t, m.planOpen)
-	s = screen(m)
-	assert.Check(t, !strings.Contains(s, "PROGRESS"), "→ did not show the Plan tab:\n%s", s)
+	assert.Check(t, cmp.Contains(screen(m), "ACTIVITY"))
 }
 
 // Approving keeps the plan screen open on its Flow tab, which follows the
@@ -489,10 +498,11 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 			m = deliver(t, m, cmd)
 		}
 	}
-	// comment queues a comment on the open plan's first part, which an
-	// existing plan opens on.
+	// comment queues a comment on the open plan's first part, from the Plan
+	// view: the screen opens on the Flow view.
 	comment := func(text string) {
 		t.Helper()
+		m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyRight})
 		m, _ = pressKey(m, tea.KeyPressMsg{Code: 'c', Text: "c"})
 		m = typeInto(m, text)
 		m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})

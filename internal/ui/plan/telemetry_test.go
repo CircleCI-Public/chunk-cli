@@ -86,7 +86,7 @@ func TestFeedbackIsTrackedWithThePlanID(t *testing.T) {
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	agent.reset()
 
-	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("right"))
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "too vague")
 	m = drive(t, m, press("enter"))

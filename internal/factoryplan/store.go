@@ -186,7 +186,11 @@ func (s *Store) Family(ctx context.Context) (plan.Family, error) {
 	}
 
 	relative := func(f circleci.Flow) plan.Relative {
-		return plan.Relative{ID: f.ID, Title: f.Title, State: f.State, Outcome: f.Outcome, Blocked: f.ActiveBlockers > 0}
+		return plan.Relative{
+			ID: f.ID, Title: f.Title, State: f.State, Outcome: f.Outcome,
+			Blocked: f.ActiveBlockers > 0,
+			Waiting: f.WaitingOn == planstate.Human,
+		}
 	}
 	var out plan.Family
 	if parent != "" {

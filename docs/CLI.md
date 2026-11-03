@@ -295,30 +295,33 @@ chunk
   log file, a pipe), so none of those changes anything already being parsed.
   Chunk never opens `watch` for you.
 - **`factory plan` makes a plan with a factory planning session, then
-  approves it in factory and builds it.** It opens a flow screen. Its top
-  line reads `chunk / <title>` (`chunk / New flow` for a new plan, or one
-  with no title yet), with a state pill such as `● 1 comment queued` on the
-  right and a rule under it. Its footer is a rule, then one row of key hints
-  set apart by ` · `, with the main button on the right; a status or a
-  prompt takes the hints' place. A two-row
-  strip under the top line shows the plan's step (`Planning › Building › Integrating › Done`), what is
-  happening now (the factory task and its unit) and what comes next
-  (`Next: you approve the plan · ctrl+s`, `Next: chunk: build-unit`,
-  `Waiting on <blocker>`). The left pane is the planning session's activity.
-  The right has two tabs:
-  **Plan**, the plan rendered as markdown (a markdown link is underlined and
-  opens its URL in terminals that support hyperlinks; only `http` and `https`
-  links do), and **Flow**, which shows progress
-  (each unit ✓ done, ▸ being built, ○ to do, or for a plan with sub-plans its
-  open sub-plans), the pull request and its deviations, and related plans
-  (parent, sub-plans, blockers). With the right pane focused, `←` and `→`
-  switch tabs. The screen opens on Plan while the plan is being planned and on
-  Flow once it is building. The left pane is always titled Activity: for a
-  new plan it holds the request input until the plan is created, then it is
-  read-only activity. Once the plan is being built, the activity pane also
-  shows the build session's progress from this machine's chunk daemon, under
-  a Building divider: each tool call, reply and note, including a warning
-  when another session holds the plan's claim. The Flow tab's first line
+  approves it in factory and builds it.** It opens a flow screen that shows
+  one of two full-width views, **Flow** or **Plan**. The tabs, `←`/`→` and
+  `⏎ review` on the Flow view switch between them; the Plan view can't be
+  opened until the plan exists. **Plan** is the plan rendered as markdown,
+  with the plan's step, what is happening now and what comes next above
+  it. A markdown link in it opens its URL in terminals that support
+  hyperlinks; only `http` and `https` links do. **Flow** is an activity
+  feed, with who the flow waits on, whether the plan is approved, its PR
+  and the plan it is part of above it. For a new plan the feed holds only
+  the **Describe the change** box, where the request is written (`enter`
+  sends it, `shift+enter`/`ctrl+j` adds a line). After that it has a box
+  for each open activity: the steps that wait on the developer (Review the
+  plan or design, Send your comments, Start work, Merge the PR), the
+  running task with what the session is doing now and a checklist of the
+  units, each active blocker, and the sub-plans. A failure to create,
+  start or resume the plan, or a problem in the session, is said on the
+  status line and kept as a box until the next of those succeeds; the box
+  offers `R` when `R` can resume. An ended flow shows how it ended. `j`/`k` select a box,
+  a sub-plan's row or the plan it is part of, and `⏎` acts on it: review
+  opens the Plan view, send saves the comments, start asks to start work, and
+  a blocker or sub-plan opens that plan where the host can open plans. The screen
+  always opens on the Flow view, whatever state the flow is in; while the
+  plan is being planned its boxes say so, and `⏎ review` shows the plan. Once the plan
+  is being built, the Flow view also shows the build session's progress from
+  this machine's chunk daemon under its activity, under a Building divider:
+  each tool call, reply and note, including a warning when another session
+  holds the plan's claim. The Flow view's first line
   says whether `R` can resume the plan. When it can't, the line says why.
   For example, it names the session that holds the claim and the
   `factory daemon release` command that frees it, or a blocker that isn't
@@ -327,7 +330,7 @@ chunk
   the project `chunk watch` was opened in, and the flow list offers the same
   `R` for the selected flow.
   While the plan's build session is running, `S` stops it, after a `y`:
-  the activity pane ends the session with `Build session stopped`, and
+  the Flow view's Building section ends the session with `Build session stopped`, and
   the daemon frees factory's claim if the session still holds it, so
   `R` can start a fresh one at once. The dashboard's header says what `R` does there
   or why it can't, where it otherwise names the daemon; a daemon it can't
@@ -347,13 +350,13 @@ chunk
   plan shows the same session's activity. A screen opened while it is working
   shows it working. The screen refreshes the plan's text, state and comments every 5s;
   the plan's state is in the status strip. Nothing typed after the request
-  reaches the session; it works through factory's tasks. The activity pane
-  names the task each turn is on, as the plan's flow in factory names it,
-  in sentence case (`Early plan` for `early-plan`), and the reply is marked
-  with it (`chunk · Early plan`). It needs factory, the f plugin, and the
+  reaches the session; it works through factory's tasks. The running box
+  names the task the session is on, as the plan's flow in factory names it,
+  in sentence case (`Early plan` for `early-plan`); the session's replies are
+  not shown. It needs factory, the f plugin, and the
   factory daemon running with `FACTORY_PLAN_STORE=circleci` as the CircleCI
-  user chunk is signed in as; it checks the daemon before it opens, and says in
-  the activity pane if the session could not claim the plan. While the plan
+  user chunk is signed in as; it checks the daemon before it opens, and says on
+  the status line and in a `⚠` box if the session could not claim the plan. While the plan
   is being planned (factory's `init`, `ready`, `refine-proposal` or
   `refine-units`) and factory waits on a session no one is running, the
   screen resumes the session on its own and tells it to claim the plan
@@ -374,14 +377,14 @@ chunk
   uncommitted `.chunk/config.json`, which is copied in. It is removed once
   the plan has ended, unless it has changes in it.
 
-  `tab` moves to the plan, where `c` writes a comment right under the
+  On the Plan view (`→`), `c` writes a comment right under the
   highlighted part (a heading, paragraph, list item or code block); `enter`
   queues it and `shift+enter`/`ctrl+j` adds a line. `shift+↑/↓` (or `K`/`J`)
   selects a run of parts for one comment, which hangs under the last of them;
   a selection that touches a comment takes in all of it, and its text, and
-  `esc` clears a selection. Queued comments wait in the activity pane, marked
-  `queued · press enter or s to send`. Sending (`enter` in the activity pane,
-  or `s` in the plan) saves the queued comments
+  `esc` clears a selection. Queued comments are counted under the plan and in
+  the top line's pill. Sending (`s` on the Plan view, or `⏎` on the Flow
+  view's Send your comments box) saves the queued comments
   to factory, which hands them to the session to address. Comments are sent
   only while factory is waiting on you or asking for comments: while factory
   works on the plan they stay queued, and `s` is not offered. Once comments
@@ -395,13 +398,13 @@ chunk
   listed last. A comment on a part since rewritten is listed after the plan,
   naming the part it was on.
 
-  Dragging the mouse over the text of the Activity pane, the plan or the Flow tab
+  Dragging the mouse over the text of the view shown, Flow or Plan,
   selects it and puts it on the clipboard when the button is let go, which
   the status bar says. The screen takes the mouse from the terminal, so the
   terminal's own selection does not work on it; this one does the same, a
   line at a time, and keeps to the text: the plan's cursor and comment bars
-  and the frame of a message are not copied. Dragging past the top or bottom
-  of the pane scrolls it, so more than is in view can be selected, and the
+  are not copied. Dragging past the top or bottom
+  of the view scrolls it, so more than is in view can be selected, and the
   wheel scrolls while the selection stays on its text. A key press or a click
   clears it, as does a change to the text it is on. It copies with the
   terminal's clipboard escape sequence, which many terminals block, and also
@@ -461,19 +464,19 @@ chunk
   approves it in factory, stops its planning session and starts its build, in
   a Claude Code session in the plan's worktree, through to a pull request.
   Closing chunk once the daemon has the request does not stop it. In `chunk watch`,
-  the screen stays open after approval, on the Flow tab, to follow the build;
-  the activity pane shows what the build session is doing.
+  the screen stays open after approval, on the Flow view, to follow the build;
+  its Building section shows what the build session is doing.
   Comments still go to factory whenever it takes them, as on any screen;
   ones queued when you approve stay queued until then. The standalone
   `chunk factory plan` warns first that approving loses queued comments,
-  since it closes. `enter` on a
-  related plan in the Flow tab opens it. The standalone `chunk factory plan`
+  since it closes. `⏎` on a
+  Blocked by box, a sub-plan's row or the parent plan in the Flow view opens it. The standalone `chunk factory plan`
   closes on approval. The daemon frees the plan's claim from a session that
   is only planning it, a parent plan's included; while a build holds the claim,
   approving is refused and names its session. A build whose plan another
   session holds says so in `chunk watch`, and picks the plan up once the claim
   is released. Builds outlive the screen and the terminal, and any number go at
-  once; the plan's Flow tab follows each, from factory. A build ends with its
+  once; the plan's Flow view follows each, from factory. A build ends with its
   plan, so abandoning the plan (`x`) stops it at its next poll. A
   stopped one leaves the plan approved in factory, and `/f:resume <ID>` in
   Claude Code carries it on. A plan not approved stays in factory, and its ID
@@ -521,8 +524,8 @@ chunk
   session holds is refused rather than taken over. `esc` or `ctrl+c` goes back
   to the plans with the plan and its session kept; `ctrl+p` does too, to
   switch to another plan. Each opened plan keeps its own activity and
-  session. An approved plan's screen stays open on its Flow tab, which
-  follows the build from factory. Quitting with a request or comments unsent
+  session. An approved plan's screen stays open on its Flow view, which
+  follows the build from factory in its running box and facts strip. Quitting with a request or comments unsent
   in any plan asks for a second `ctrl+c`; plans and saved comments stay in
   factory, and each plan's session keeps planning in the chunk daemon, with
   its conversation, for the next time the plan is opened, but the activity

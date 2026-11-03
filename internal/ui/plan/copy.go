@@ -7,18 +7,17 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/textsel"
 )
 
-// Text in either pane is selected by dragging the mouse over it, and what is
-// selected is put on the clipboard when the button is let go. The screen
+// Text in the view shown is selected by dragging the mouse over it, and what
+// is selected is put on the clipboard when the button is let go. The screen
 // asks the terminal to report the mouse, which is why the terminal's own
 // selection does not work on it; this is the one the screen has in its place.
 
-// textView is a view of text that can be selected: the chat, or the plan or
-// the flow, whichever the right pane shows.
+// textView is a view of text that can be selected: the plan or the flow,
+// whichever the body shows.
 type textView int
 
 const (
-	textChat textView = iota
-	textPlan
+	textPlan textView = iota
 	textFlow
 )
 
@@ -31,12 +30,9 @@ type textDrag struct {
 	copied bool
 }
 
-// textViewAt is the view drawn at screen column x.
-func (m *Model) textViewAt(x int) textView {
-	switch {
-	case m.inPane(x) == paneChat:
-		return textChat
-	case m.tab == tabFlow:
+// textShown is the view the body draws.
+func (m *Model) textShown() textView {
+	if m.tab == tabFlow {
 		return textFlow
 	}
 	return textPlan
@@ -44,51 +40,40 @@ func (m *Model) textViewAt(x int) textView {
 
 // viewOf is the scrolling view t draws its text in.
 func (m *Model) viewOf(t textView) *viewport.Model {
-	switch t {
-	case textPlan:
-		return &m.planView
-	case textFlow:
+	if t == textFlow {
 		return &m.flowView
-	case textChat:
-		return &m.chatView
 	}
-	return &m.chatView
+	return &m.planView
 }
 
 // gutterOf is the cells at the left of t's text that are not part of it: the
-// plan's cursor and comment bars, and the room each side of the chat.
+// plan's cursor and comment bars.
 func gutterOf(t textView) int {
-	switch t {
-	case textPlan:
+	if t == textPlan {
 		return gutterWidth
-	case textChat:
-		return chatGutter
-	case textFlow:
-		return 0
 	}
 	return 0
 }
 
-// textOrigin is the screen cell t's view is drawn from: inside its pane's
-// border and padding.
+// textOrigin is the screen cell t's view is drawn from: under the top line
+// and its rule, and for the plan the strip; the Flow view has its margin.
 func (m *Model) textOrigin(t textView) (x, y int) {
-	x = 1 + padX
-	if t != textChat {
-		x += m.planLeft()
+	if t == textFlow {
+		return flowMargin, headerRows + ruleRows
 	}
-	return x, m.topRows() + 1 + padY
+	return 0, headerRows + ruleRows + stripRows
 }
 
 // pane is t's view where the screen draws it.
 func (m *Model) pane(t textView) textsel.Pane {
 	x, y := m.textOrigin(t)
-	return textsel.Pane{View: m.viewOf(t), X: x, Y: y, Margin: gutterOf(t), Framed: t == textChat}
+	return textsel.Pane{View: m.viewOf(t), X: x, Y: y, Margin: gutterOf(t)}
 }
 
 // beginText starts a selection where the mouse was pressed, if that is on
 // text. A shift-click is the plan's, for selecting its parts.
 func (m Model) beginText(mouse tea.Mouse) Model {
-	t := m.textViewAt(mouse.X)
+	t := m.textShown()
 	if mouse.Mod.Contains(tea.ModShift) {
 		return m
 	}

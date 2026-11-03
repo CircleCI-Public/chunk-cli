@@ -193,6 +193,7 @@ func TestCtrlOKeepsWhatIsBeingTyped(t *testing.T) {
 	m := chatModel(t, p, &fakeChat{})
 	m = openFlow(t, m, "p1", "Retry uploads")
 	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyRight})
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'c', Text: "c"})
 	m = typeInto(m, "half a comment")
 	before := screen(m)

@@ -2,6 +2,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -16,7 +17,8 @@ func click(x, y int) tea.MouseClickMsg {
 	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
 }
 
-// planned is a screen of the given size showing text, approved by approve.
+// planned is a screen of the given size showing text, approved by approve,
+// on the Plan view.
 func planned(t *testing.T, width, height int, text string, approve Approver) (Model, *fakeStore) {
 	t.Helper()
 	store := newFakeStore()
@@ -24,7 +26,8 @@ func planned(t *testing.T, width, height int, text string, approve Approver) (Mo
 	m := New(context.Background(), turnReturning("ok"), approve, store, "plan it")
 	// The tests are not to touch the clipboard of the machine they run on.
 	m.copyText = tea.SetClipboard
-	return drive(t, m, tea.WindowSizeMsg{Width: width, Height: height}), store
+	m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: height})
+	return drive(t, m, press("right")), store
 }
 
 // rowOf is the screen row whose text contains s.
@@ -39,29 +42,18 @@ func rowOf(t *testing.T, m Model, s string) int {
 	return -1
 }
 
-func TestClickingAPaneGivesItTheKeyboard(t *testing.T) {
-	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
-	assert.Assert(t, cmp.Equal(m.focus, paneChat), "the chat should start with the keyboard")
-	m = drive(t, m, click(m.planLeft()+10, 10+stripRows))
-	assert.Check(t, cmp.Equal(m.focus, panePlan), "clicking the plan did not focus it")
-	m = drive(t, m, click(5, 10+stripRows))
-	assert.Check(t, cmp.Equal(m.focus, paneChat), "clicking the chat did not focus it")
-}
-
 func TestClickingABlockMovesTheCursorToIt(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
-	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "SPEC")))
-	assert.Check(t, cmp.Equal(m.focus, panePlan))
+	m = drive(t, m, click(10, rowOf(t, m, "SPEC")))
 	assert.Check(t, cmp.Equal(m.cursor, 2))
 }
 
 func TestShiftClickSelectsFromTheCursor(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
-	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "OUTCOME")))
-	shift := click(m.planLeft()+10, rowOf(t, m, "SPEC"))
+	m = drive(t, m, click(10, rowOf(t, m, "OUTCOME")))
+	shift := click(10, rowOf(t, m, "SPEC"))
 	shift.Mod = tea.ModShift
 	m = drive(t, m, shift)
 	lo, hi := m.selection()
@@ -74,27 +66,25 @@ func TestDoubleClickOpensTheComment(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "The flag exists.")
-	m = drive(t, m, click(m.planLeft()+10, y))
+	m = drive(t, m, click(10, y))
 	assert.Assert(t, !m.commenting, "one click opened the editor")
-	m = drive(t, m, click(m.planLeft()+10, y))
+	m = drive(t, m, click(10, y))
 	assert.Assert(t, m.commenting, "a double click did not open the editor")
 	assert.Check(t, cmp.Equal(m.cursor, 1))
 	// Clicks are ignored while the comment is written.
 	m = drive(t, m, click(5, 10+stripRows))
 	assert.Check(t, m.commenting, "a click left the comment being written")
-	assert.Check(t, cmp.Equal(m.focus, panePlan))
 }
 
-func TestClickingTheTabsSwitchesPanes(t *testing.T) {
+// A click on the Flow view moves no plan cursor: the plan is not drawn there.
+func TestClickingTheFlowViewLeavesThePlan(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 70, 30, twoParts, nil)
-	y := rowOf(t, m, "Activity")
-	m = drive(t, m, click(5, y))
-	assert.Assert(t, cmp.Equal(m.focus, paneChat), "clicking the activity tab left the activity")
-	m = drive(t, m, click(18, y))
-	assert.Assert(t, cmp.Equal(m.focus, panePlan), "clicking the plan tab did not open the plan")
-	m = drive(t, m, click(3, y))
-	assert.Check(t, cmp.Equal(m.focus, paneChat), "clicking the chat tab did not bring the chat back")
+	m, _ := planned(t, 140, 40, twoParts, nil)
+	m = drive(t, m, press("left"))
+	m = drive(t, m, click(10, m.topRows()+2))
+	assert.Check(t, cmp.Equal(m.tab, tabFlow))
+	assert.Check(t, cmp.Equal(m.cursor, 0))
+	assert.Check(t, !m.commenting)
 }
 
 func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
@@ -126,7 +116,6 @@ func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
 func TestClickingSaveCommentsSavesThem(t *testing.T) {
 	t.Parallel()
 	m, store := planned(t, 140, 40, twoParts, nil)
-	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "tighten this")
 	m = drive(t, m, press("enter"))
@@ -139,36 +128,22 @@ func TestClickingSaveCommentsSavesThem(t *testing.T) {
 	assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
 }
 
-func TestWheelScrollsThePaneUnderThePointer(t *testing.T) {
+func TestWheelScrollsTheViewShown(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 20, longPlan(), nil)
-	// The chat has the keyboard, but the pointer is over the plan.
-	m = drive(t, m, tea.MouseWheelMsg{X: m.planLeft() + 10, Y: 8 + stripRows, Button: tea.MouseWheelDown})
+	m = drive(t, m, tea.MouseWheelMsg{X: 10, Y: 8 + stripRows, Button: tea.MouseWheelDown})
 	assert.Check(t, m.planView.YOffset() != 0, "the wheel over the plan did not scroll it")
-	assert.Check(t, cmp.Equal(m.focus, paneChat), "scrolling took the keyboard")
-}
 
-func TestClickingATabWordSwitchesTheTab(t *testing.T) {
-	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
-	flow, plan := m.rightTabSpans()
-	m = drive(t, m, click(flow.start+1, m.topRows()))
-	assert.Check(t, cmp.Equal(m.tab, tabFlow), "a click on Flow did not switch")
-	assert.Check(t, cmp.Equal(m.focus, panePlan))
-	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "PROGRESS"))
-	m = drive(t, m, click(plan.start+1, m.topRows()))
-	assert.Check(t, cmp.Equal(m.tab, tabPlan), "a click on Plan did not switch back")
-
-	// A narrow screen's tab row picks any of the three.
-	m, _ = planned(t, 70, 30, twoParts, nil)
-	y := headerRows + ruleRows + stripRows
-	spans := m.tabSpans()
-	assert.Assert(t, cmp.Len(spans, 3))
-	m = drive(t, m, click(spans[narrowFlow].start+1, y))
-	assert.Check(t, cmp.Equal(m.focus, panePlan))
-	assert.Check(t, cmp.Equal(m.tab, tabFlow))
-	m = drive(t, m, click(m.tabSpans()[narrowPlan].start+1, y))
-	assert.Check(t, cmp.Equal(m.tab, tabPlan))
-	m = drive(t, m, click(m.tabSpans()[narrowChat].start+1, y))
-	assert.Check(t, cmp.Equal(m.focus, paneChat))
+	// A Flow view taller than the screen scrolls under the wheel too.
+	store := newFakeStore()
+	store.Created, store.StateV = true, "build"
+	for i := range 20 {
+		store.FamilyV.Children = append(store.FamilyV.Children, Relative{ID: fmt.Sprintf("c%d", i), Title: fmt.Sprintf("Part %d", i+1), State: "build"})
+	}
+	f := New(context.Background(), newFakeAgent(), nil, store, "")
+	f = drive(t, f, tea.WindowSizeMsg{Width: 132, Height: 20})
+	f = refreshed(t, f)
+	assert.Assert(t, cmp.Equal(f.tab, tabFlow))
+	f = drive(t, f, tea.MouseWheelMsg{X: 10, Y: f.topRows() + 2, Button: tea.MouseWheelDown})
+	assert.Check(t, f.flowView.YOffset() > 0, "the wheel over the Flow view did not scroll it")
 }

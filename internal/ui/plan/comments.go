@@ -290,8 +290,8 @@ func (m *Model) selection() (lo, hi int) {
 	return min(m.anchor, m.cursor), max(m.anchor, m.cursor)
 }
 
-// selected is whether stop i is in the selection.
-func (m *Model) selected(i int) bool {
+// inSelection is whether stop i is in the selection.
+func (m *Model) inSelection(i int) bool {
 	lo, hi := m.selection()
 	return lo <= i && i <= hi
 }
@@ -482,7 +482,7 @@ func (m *Model) deleteAtCursor() {
 	if m.comments[i].id == "" {
 		m.comments = append(m.comments[:i], m.comments[i+1:]...)
 		m.moveCursor(m.cursor)
-		m.renderChat()
+		m.renderFlow()
 		return
 	}
 	m.confirming, m.pendingDelete = true, m.comments[i].id
@@ -567,7 +567,7 @@ func (m Model) updateCommentKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.commenting, m.anchor = false, -1
 		m.commentInput.Blur()
 		m.moveCursor(m.cursor)
-		m.renderChat()
+		m.renderFlow()
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -753,17 +753,17 @@ func (m *Model) drawPlan() {
 		ci := m.commentAt(i)
 		// While a comment is written its blocks are the selection, and the
 		// editor is drawn in place of the comments it takes in.
-		editing := m.commenting && m.selected(i)
+		editing := m.commenting && m.inSelection(i)
 		if editing {
 			ci = -1
 		}
-		marked := m.selected(i) && m.focus == panePlan
+		marked := m.inSelection(i)
 		g := m.gutter(marked, ci >= 0 || editing)
 		if i > 0 && !joinsPrevious(m.blocks[i-1].block, b.block) {
 			// The blank line between two blocks of one comment or one
 			// selection carries their bars, so they read as one.
 			sep := ""
-			if (ci >= 0 && ci == m.commentAt(i-1)) || (m.selected(i-1) && m.selected(i) && (editing || marked)) {
+			if (ci >= 0 && ci == m.commentAt(i-1)) || (m.inSelection(i-1) && m.inSelection(i) && (editing || marked)) {
 				sep = g
 			}
 			lines = append(lines, sep)
@@ -801,7 +801,7 @@ func (m *Model) drawOrphans(lines []string, w int) []string {
 	for k, ci := range orphans {
 		s := len(m.blocks) + k
 		editing := m.commenting && m.cursor == s
-		g := m.gutter(s == m.cursor && m.focus == panePlan, true)
+		g := m.gutter(s == m.cursor, true)
 		m.blockTop[s] = len(lines)
 		lines = append(lines, g+"  "+ui.HelperStyle.Render(excerpt(m.comments[ci].quote, w-2)))
 		for _, l := range m.commentLines(ci, editing, w-4) {
@@ -822,7 +822,7 @@ func (m *Model) drawResolved(lines []string, w int) []string {
 	base := len(m.blocks) + len(m.orphans())
 	for k, c := range m.resolved {
 		s := base + k
-		g := m.gutter(s == m.cursor && m.focus == panePlan, true)
+		g := m.gutter(s == m.cursor, true)
 		m.blockTop[s] = len(lines)
 		lines = append(lines, g+"  "+m.style(m.dim()).Render(excerpt(c.quote, w-2)))
 		for _, l := range m.dimCard("resolved", c.text, w-4) {
@@ -856,7 +856,7 @@ func (m *Model) planFooter() string {
 	case m.selecting() && !m.commenting:
 		lo, hi := m.selection()
 		return "  " + ui.HelperStyle.Render(fmt.Sprintf("%d parts selected · c to comment on them", hi-lo+1))
-	case queued == 0 && open == 0 && m.focus == panePlan && !m.commenting:
+	case queued == 0 && open == 0 && !m.commenting:
 		return "  " + ui.HelperStyle.Render("c to comment on the highlighted part")
 	case queued == 0 && open == 0:
 		return ""

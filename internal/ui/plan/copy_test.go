@@ -42,8 +42,9 @@ func dragged(t *testing.T, m Model, fromX, fromY, toX, toY int) (held Model, cop
 	return held, clipboardOf(cmd)
 }
 
-// planText is the screen column of the first character of the plan's text.
-func planText(m Model) int { return m.planLeft() + 2 + gutterWidth }
+// planText is the screen column of the first character of the plan's text:
+// the Plan view is full width, with its gutter first.
+func planText(Model) int { return gutterWidth }
 
 func TestDraggingOverThePlanCopiesTheText(t *testing.T) {
 	t.Parallel()
@@ -89,7 +90,7 @@ func TestDraggingDoesNotCopyThePlansGutter(t *testing.T) {
 	y := rowOf(t, m, "The flag exists.")
 
 	// The drag starts on the cursor's gutter, left of the text.
-	_, got := dragged(t, m, m.planLeft()+2, y, planText(m)+2, y)
+	_, got := dragged(t, m, 0, y, planText(m)+2, y)
 
 	assert.Check(t, cmp.Equal(got, "The"))
 }
@@ -107,16 +108,16 @@ func TestAClickWithoutADragCopiesNothing(t *testing.T) {
 	assert.Check(t, m.text.drag.Empty())
 }
 
-func TestDraggingOverTheChatCopiesTheMessageWithoutItsFrame(t *testing.T) {
+func TestDraggingOverTheFlowViewCopiesItsText(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
-	y := rowOf(t, m, "plan it")
+	m = drive(t, m, press("left"))
+	y := rowOf(t, m, "ACTIVITY")
 
-	// From above the bubble to below it, across its border and padding.
-	_, got := dragged(t, m, 2, y-1, m.chatWidth()-3, y+1)
+	// The Flow view is a cell in from the screen's edge.
+	_, got := dragged(t, m, flowMargin, y, flowMargin+7, y)
 
-	assert.Check(t, cmp.Contains(got, "plan it"))
-	assert.Check(t, !strings.ContainsAny(got, "╭╮╰╯│─"), "the bubble's frame was copied: %q", got)
+	assert.Check(t, cmp.Equal(got, "ACTIVITY"))
 }
 
 func TestTheSelectionIsDrawnOverTheText(t *testing.T) {

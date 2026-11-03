@@ -227,21 +227,21 @@ func (m Model) buildRunning() bool {
 func (m Model) applyBuildRead(msg buildReadMsg) (Model, bool) {
 	if msg.err != nil {
 		m.buildErr = msg.err.Error()
-		m.renderChat()
+		m.renderFlow()
 		return m, false
 	}
 	m.buildErr = ""
 	a := msg.activity
 	m.buildMissing = !a.Found
 	if !a.Found {
-		m.renderChat()
+		m.renderFlow()
 		return m, false
 	}
 	newRun := len(m.builds) == 0 || m.builds[len(m.builds)-1].id != a.ID
 	if newRun && msg.after > 0 {
 		// This answer may have skipped the new session's first lines.
 		m.builds = append(m.builds, buildRun{id: a.ID})
-		m.renderChat()
+		m.renderFlow()
 		return m, true
 	}
 	if newRun {
@@ -258,11 +258,12 @@ func (m Model) applyBuildRead(msg buildReadMsg) (Model, bool) {
 		run.first += over
 	}
 	run.total, run.running, run.cancelled, run.failed = a.Total, a.Running, a.Cancelled, a.Failed
-	m.renderChat()
+	m.renderFlow()
 	return m, false
 }
 
-// showsBuild is whether the Activity pane has a Building section.
+// showsBuild is whether the Flow view has a Building section, under its
+// activity.
 func (m Model) showsBuild() bool {
 	return len(m.builds) > 0 || m.buildMissing || m.buildErr != ""
 }

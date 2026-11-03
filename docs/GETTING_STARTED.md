@@ -346,12 +346,16 @@ the screen resumes a planner factory is waiting on, in the project
 `chunk watch` was opened in. `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its activity while another is shown,
 and its session keeps planning in the chunk daemon even once chunk is closed.
-The screen's top line reads `chunk / <title>` (`chunk / New flow` for a new
-plan), over a rule; its ruled footer holds the key hints and the main button.
-The planner's activity is on the left and the plan is on the right, under a strip that says
-where the flow is and what comes next; with the plan focused, `←` shows the
-Flow tab (progress, PR, related plans) and `→` the plan again. `tab` moves to
-the plan, where `c` writes a comment right under the highlighted part, saved to factory
+The screen shows one view at a time: the Flow view, which it always opens
+on, or the Plan view. The tabs in the top line, `←`/`→`, or `⏎ review`
+switch between them. For a new plan, the Flow view's Describe the change
+box is where you write the request. After that the Flow view has a box for
+each open activity: what waits on you, such as Review the plan or Send
+your comments, what the planner is doing now, each plan blocking this
+one, and its sub-plans. `j`/`k` move over the boxes and
+`⏎` does what the selected one offers: review opens the plan, send saves
+your comments, and a blocker or sub-plan opens that plan. On the Plan view, `c`
+writes a comment right under the highlighted part, saved to factory
 for chunk to address when you press `s`; `shift+↑/↓` selects several
 parts to comment on together. There is no chat with the planner: comments
 are how you change the plan, and questions go in comments too. Once factory's review of the design has
@@ -361,13 +365,13 @@ chunk daemon builds it through to a pull request. The strip says which of
 the two factory is waiting for: `Next: you approve the design · ctrl+s` or
 `Next: you approve the plan · ctrl+s`. The build keeps going when you close
 chunk; plan as many as you like.
-Once approved, the screen stays open on the Flow tab, which follows the
-build: what factory is doing now and who it waits on, each unit done,
-being built or to do, and the pull request.
-The left pane then shows the builder at work. If it warns that another
+Once approved, the screen stays open on the Flow view, which follows the
+build: the running task's box with its progress and which units are done,
+under way and still to do, who factory waits on, the pull request, and
+the builder at work. If it warns that another
 session holds the plan's claim, run the `factory daemon release` command it
 names. A build that looks stuck can be stopped with `S` (after a `y`); the daemon
-frees its claim, and the Flow tab then says that no session holds the plan
+frees its claim, and the Flow view then says that no session holds the plan
 and that `R` starts a build session. Once factory frees the old claim of a
 plan whose build stopped some other way, after the daemon restarted say, it
 says the same. `R` starts a new build that picks up factory's next task. `x`
