@@ -129,7 +129,7 @@ func (m Model) progress() []string {
 		rows = append(rows, m.style(m.dim()).Render(fmt.Sprintf("Progress · %d open %s", n, plural(n, "sub-plan", "sub-plans"))))
 		for _, c := range kids {
 			marker := m.style(m.dim()).Render("○ ")
-			if phase, _ := planstate.Parse(clean(c.State)); strings.EqualFold(phase, "Building") || strings.EqualFold(phase, "Integrating") {
+			if phase := planstate.Parse(clean(c.State)); strings.EqualFold(phase, "Building") || strings.EqualFold(phase, "Integrating") {
 				marker = m.style(m.brand()).Render("▸ ")
 			}
 			rows = append(rows, marker+lipgloss.NewStyle().Bold(true).Render(clean(c.Title))+

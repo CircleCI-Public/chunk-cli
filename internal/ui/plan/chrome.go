@@ -384,7 +384,7 @@ func (m Model) actions() (main, side string) {
 // such as reviewing it, so it will be ready to approve once that is done.
 // No state yet counts: the plan has just been made.
 func (m Model) inReview() bool {
-	phase, _ := planstate.Parse(m.state)
+	phase := planstate.Parse(m.state)
 	return strings.TrimSpace(m.state) == "" || strings.EqualFold(phase, "Planning") && agentActs(m.flow.Next)
 }
 
@@ -404,8 +404,5 @@ func (m Model) stateText() string { return clean(m.state) }
 
 // movingText is the move factory has yet to make, for the plan's title.
 func (m Model) movingText() string {
-	if phase, actor := planstate.Parse(m.stateText()); actor == planstate.Human {
-		return phase + " - Human → Agent"
-	}
 	return m.stateText() + " → …"
 }

@@ -11,109 +11,168 @@ func TestParse(t *testing.T) {
 	cases := []struct {
 		state string
 		phase string
-		actor Actor
 	}{
-		{
-			state: "Planning - Human",
-			phase: "Planning",
-			actor: Human,
-		},
-		{
-			state: "Building - Agent",
-			phase: "Building",
-			actor: Agent,
-		},
-		{
-			state: " integrating - agent ",
-			phase: "integrating",
-			actor: Agent,
-		},
-		{
-			state: "Review - HUMAN",
-			phase: "Review",
-			actor: Human,
-		},
-		{
-			state: "Unprioritized",
-			phase: "Unprioritized",
-			actor: Unknown,
-		},
-		{
-			state: "Blocked",
-			phase: "Blocked",
-			actor: Unknown,
-		},
-		{
-			state: "Integrating - Bot",
-			phase: "Integrating - Bot",
-			actor: Unknown,
-		},
-		{
-			state: "Waiting - On - Human",
-			phase: "Waiting - On",
-			actor: Human,
-		},
-		{
-			state: "",
-			phase: "",
-			actor: Unknown,
-		},
-		{
-			state: " - Human",
-			phase: "- Human",
-			actor: Unknown,
-		},
-		{
-			state: "refine-units",
-			phase: "Planning",
-			actor: Unknown,
-		},
-		{
-			state: "Refine-Proposal",
-			phase: "Planning",
-			actor: Unknown,
-		},
-		{
-			state: " build ",
-			phase: "Building",
-			actor: Unknown,
-		},
-		{
-			state: "integrate",
-			phase: "Integrating",
-			actor: Unknown,
-		},
-		{
-			state: "ready",
-			phase: "Agent Ready",
-			actor: Unknown,
-		},
-		{
-			state: "init",
-			phase: "Unprioritized",
-			actor: Unknown,
-		},
-		{
-			state: "stand-by",
-			phase: "standing-by",
-			actor: Unknown,
-		},
-		{
-			state: "ended",
-			phase: "Done",
-			actor: Unknown,
-		},
-		{
-			state: "build - Human",
-			phase: "build",
-			actor: Human,
-		},
+		{state: "Planning - Human", phase: "Planning"},
+		{state: "Building - Agent", phase: "Building"},
+		{state: " integrating - agent ", phase: "integrating"},
+		{state: "Review - HUMAN", phase: "Review"},
+		{state: "Unprioritized", phase: "Unprioritized"},
+		{state: "Blocked", phase: "Blocked"},
+		{state: "Integrating - Bot", phase: "Integrating - Bot"},
+		{state: "Waiting - On - Human", phase: "Waiting - On"},
+		{state: "", phase: ""},
+		{state: " - Human", phase: "- Human"},
+		{state: "refine-units", phase: "Planning"},
+		{state: "Refine-Proposal", phase: "Planning"},
+		{state: " build ", phase: "Building"},
+		{state: "integrate", phase: "Integrating"},
+		{state: "ready", phase: "Agent Ready"},
+		{state: "init", phase: "Unprioritized"},
+		{state: "stand-by", phase: "standing-by"},
+		{state: "ended", phase: "Done"},
+		{state: "build - Human", phase: "build"},
 	}
 	for _, c := range cases {
 		t.Run(c.state, func(t *testing.T) {
-			phase, actor := Parse(c.state)
-			assert.Check(t, cmp.Equal(phase, c.phase))
-			assert.Check(t, cmp.Equal(actor, c.actor))
+			assert.Check(t, cmp.Equal(Parse(c.state), c.phase))
+		})
+	}
+}
+
+func TestApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		next []Move
+		want string
+	}{
+		{
+			name: "units required",
+			next: []Move{
+				{Actor: Human, Event: ApproveForUnits, Required: true},
+				{Actor: Human, Event: ApproveForBuilding},
+			},
+			want: ApproveForUnits,
+		},
+		{
+			name: "both required, building listed first",
+			next: []Move{
+				{Actor: Human, Event: ApproveForBuilding, Required: true},
+				{Actor: Human, Event: ApproveForUnits, Required: true},
+			},
+			want: ApproveForBuilding,
+		},
+		{
+			name: "both required, units listed first",
+			next: []Move{
+				{Actor: Human, Event: ApproveForUnits, Required: true},
+				{Actor: Human, Event: ApproveForBuilding, Required: true},
+			},
+			want: ApproveForBuilding,
+		},
+		{
+			name: "building required",
+			next: []Move{
+				{Actor: Human, Event: ApproveForBuilding, Required: true},
+				{Actor: Human, Event: "request-revision"},
+				{Actor: Human, Event: "abandon"},
+			},
+			want: ApproveForBuilding,
+		},
+		{
+			name: "none required, nothing else required",
+			next: []Move{
+				{Actor: Human, Event: ApproveForUnits},
+				{Actor: Human, Event: ApproveForBuilding},
+			},
+		},
+		{
+			name: "open questions",
+			next: []Move{
+				{Actor: Human, Event: "answer-open-questions", Required: true},
+				{Actor: Human, Event: ApproveForUnits},
+				{Actor: Human, Event: ApproveForBuilding},
+			},
+		},
+		{
+			name: "prioritize required",
+			next: []Move{
+				{Actor: Human, Event: "prioritize", Required: true},
+			},
+		},
+		{
+			name: "only building, unrequired",
+			next: []Move{
+				{Actor: Human, Event: ApproveForBuilding},
+			},
+		},
+		{
+			name: "a session's entry is not the developer's",
+			next: []Move{
+				{Actor: Session, Event: ApproveForUnits, Required: true},
+			},
+		},
+		{
+			name: "nothing",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(Approval(tc.next), tc.want))
+		})
+	}
+}
+
+func TestStep(t *testing.T) {
+	for _, tc := range []struct {
+		state string
+		want  string
+	}{
+		{
+			state: Init,
+			want:  "Not started",
+		},
+		{
+			state: Ready,
+			want:  "Planning",
+		},
+		{
+			state: RefineProposal,
+			want:  "Planning",
+		},
+		{
+			state: RefineUnits,
+			want:  "Planning",
+		},
+		{
+			state: RecordSubPlans,
+			want:  "Standing by",
+		},
+		{
+			state: StandBy,
+			want:  "Standing by",
+		},
+		{
+			state: Build,
+			want:  "Building",
+		},
+		{
+			state: Integrate,
+			want:  "Integrating",
+		},
+		{
+			state: Ended,
+			want:  "Done",
+		},
+		{
+			state: "Planning - Human",
+			want:  "Planning - Human",
+		},
+		{
+			state: "",
+			want:  "",
+		},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(Step(tc.state), tc.want))
 		})
 	}
 }

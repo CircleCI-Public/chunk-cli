@@ -184,7 +184,7 @@ func stateText(f circleci.Flow) string {
 	if o := strings.ToLower(oneLine(f.Outcome)); f.Phase == circleci.PhaseEnded && o != "" && o != "merged" {
 		return capitalize(o)
 	}
-	phase, _ := planstate.Parse(oneLine(f.State))
+	phase := planstate.Parse(oneLine(f.State))
 	if phase == "" {
 		return "Unknown"
 	}

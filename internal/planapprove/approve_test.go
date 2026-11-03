@@ -60,16 +60,16 @@ func createdPlan(t *testing.T, text string) (*circleci.Client, *fakes.FakeCircle
 	return client, cci, p.ID
 }
 
-// TestApproveWaitsForTheReview checks that a plan is approved only once
-// its review has passed: a plan whose session still has a review task out
-// may have findings unfixed.
+// TestApproveWaitsForTheReview checks that a plan is approved only while
+// its flow waits on the developer: a plan whose review is still running may
+// have findings unfixed.
 func TestApproveWaitsForTheReview(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
 
 	cci.SetFactoryPlanState(id, "refine-proposal")
-	cci.SetFactoryTask(id, "review-plan")
+	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "daemon"})
 	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
 	p, _ := cci.FactoryPlan(id)
@@ -79,6 +79,7 @@ func TestApproveWaitsForTheReview(t *testing.T) {
 	cci.SetFactoryPlanState(id, "refine-units")
 	cci.SetFactoryApplicableEvents(id, "approve-for-building")
 	cci.SetFactoryTask(id, "review-plan")
+	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "session"})
 	err = Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady), "a review running")
 	p, _ = cci.FactoryPlan(id)
@@ -116,7 +117,8 @@ func TestApproveReleasesThePlanningSession(t *testing.T) {
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
 	cci.SetFactoryPlanState(id, "refine-proposal")
-	cci.SetFactoryApplicableEvents(id, "approve-for-building")
+	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human"})
+	cci.SetFactoryRequiredEvents(id, "approve-for-building")
 
 	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
 	assert.NilError(t, err)
@@ -156,7 +158,8 @@ func approvablePlan(t *testing.T, holder string) (*circleci.Client, *fakes.FakeC
 		cci.ClaimFactoryPlan(id, holder)
 	}
 	cci.SetFactoryPlanState(id, "refine-proposal")
-	cci.SetFactoryApplicableEvents(id, "approve-for-building")
+	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human"})
+	cci.SetFactoryRequiredEvents(id, "approve-for-building")
 	return client, cci, id
 }
 
@@ -304,15 +307,16 @@ func TestApproveStopsWhenTheReleaseFails(t *testing.T) {
 	assert.Check(t, cmp.Len(p.Events, 0))
 }
 
-// TestApproveSendsBuildingWhenFactoryOffersIt checks that a plan
-// whose flow offers only building approval is approved even when its units
-// are a list rather than headings, as a parent plan's sub-plans are.
+// TestApproveSendsBuildingWhenFactoryOffersIt checks that a plan whose flow
+// waits on the developer and requires approve-for-building is approved.
 func TestApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n1. FNDSF-21 api: add it\n")
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
-	cci.SetFactoryPlanState(id, "refine-proposal")
-	cci.SetFactoryApplicableEvents(id, "address-comments", "approve-for-building", "abandon")
+	cci.SetFactoryPlanState(id, "refine-units")
+	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human"})
+	cci.SetFactoryRequiredEvents(id, "approve-for-building")
+	cci.SetFactoryApplicableEvents(id, "request-revision", "abandon")
 
 	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
 	assert.Check(t, err)
@@ -320,17 +324,33 @@ func TestApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
 }
 
-// TestApproveIgnoresRequestRevision checks that a plan in refine-proposal is
-// approved though its next lists request-revision for a session, as factory
-// lists it in every live state without waiting on it.
-func TestApproveIgnoresRequestRevision(t *testing.T) {
+// TestApproveSendsBuildingWhenBothAreRequired checks that a flow requiring
+// both approvals is sent approve-for-building, not refused with ErrNoUnits.
+func TestApproveSendsBuildingWhenBothAreRequired(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
 	cci.SetFactoryPlanState(id, "refine-proposal")
-	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{Next: []fakes.FactoryTransition{
-		{Actor: "human", Event: "address-comments"},
-		{Actor: "human", Event: "approve-for-building"},
+	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human"})
+	cci.SetFactoryRequiredEvents(id, "approve-for-units", "approve-for-building")
+	cci.SetFactoryApplicableEvents(id, "address-comments", "abandon")
+
+	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+	assert.Check(t, err)
+	p, _ := cci.FactoryPlan(id)
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+}
+
+// TestApproveIgnoresRequestRevision checks that a listed request-revision
+// changes nothing: a plan whose flow requires approve-for-building is
+// approved beside it.
+func TestApproveIgnoresRequestRevision(t *testing.T) {
+	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
+	ctx := context.Background()
+	cci.ClaimFactoryPlan(id, "s-1")
+	cci.SetFactoryPlanState(id, "refine-units")
+	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human", Next: []fakes.FactoryTransition{
+		{Actor: "human", Event: "approve-for-building", IsRequired: true},
 		{Actor: "session", Event: "request-revision"},
 		{Actor: "human", Event: "abandon"},
 	}})
@@ -341,123 +361,47 @@ func TestApproveIgnoresRequestRevision(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
 }
 
-// TestApproveRefusesAPlanWithQuestionsOpen checks that Approve sends
-// nothing for a plan whose flow offers neither approval, and keeps the
-// planning session's claim.
-func TestApproveRefusesAPlanWithQuestionsOpen(t *testing.T) {
-	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
-	ctx := context.Background()
-	cci.ClaimFactoryPlan(id, "s-1")
-	cci.SetFactoryPlanState(id, "refine-proposal")
-	cci.SetFactoryApplicableEvents(id, "address-comments", "abandon")
-
-	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
-	assert.Check(t, cmp.ErrorIs(err, ErrQuestionsOpen))
-	p, _ := cci.FactoryPlan(id)
-	assert.Check(t, cmp.Len(p.Events, 0))
-	assert.Check(t, cmp.Equal(p.Session, "s-1"))
-}
-
-// TestApproveFailsWhenTheUnitsCannotBeRead checks that a failed units read
-// fails the approval with nothing sent.
-func TestApproveFailsWhenTheUnitsCannotBeRead(t *testing.T) {
-	client, cci, id := approvablePlan(t, "s-1")
-	cci.FailFactoryStructuredContent(id)
-
-	err := Approve(context.Background(), client, noDaemon, id, "s-1", "/data/plans/"+id)
-	assert.Check(t, cmp.ErrorContains(err, "get the plan's units"))
-	p, _ := cci.FactoryPlan(id)
-	assert.Check(t, cmp.Len(p.Events, 0))
-	assert.Check(t, cmp.Equal(p.Session, "s-1"))
-	assertNoTextRead(t, cci)
-}
-
-// assertNoTextRead checks that the fake has had no GET of a plan's text.
-func assertNoTextRead(t *testing.T, cci *fakes.FakeCircleCI) {
-	t.Helper()
-	for _, r := range cci.Recorder.AllRequests() {
-		assert.Check(t, r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/text"), "read %s", r.URL.Path)
-	}
-}
-
-// TestApproveRefusesAnEmptyPlan checks that a plan factory finds no
-// sections or units in is refused, with nothing sent.
-func TestApproveRefusesAnEmptyPlan(t *testing.T) {
-	client, cci, id := createdPlan(t, "# A plan\n")
-	cci.ClaimFactoryPlan(id, "s-1")
-	cci.SetFactoryPlanState(id, "Planning - Human")
-	cci.SetFactoryApplicableEvents(id, "approve-for-building")
-
-	err := Approve(context.Background(), client, noDaemon, id, "s-1", "/data/plans/"+id)
-	assert.Check(t, cmp.ErrorContains(err, "the plan in factory is empty"))
-	p, _ := cci.FactoryPlan(id)
-	assert.Check(t, cmp.Len(p.Events, 0))
-	assert.Check(t, cmp.Equal(p.Session, "s-1"))
-}
-
-// TestApproveWaitsForUnits checks that Approve refuses a plan whose design is what waits for approval.
-func TestApproveWaitsForUnits(t *testing.T) {
-	client, cci, id := createdPlan(t, "# A plan\n")
-	ctx := context.Background()
-	cci.ClaimFactoryPlan(id, "s-1")
-	cci.SetFactoryPlanState(id, "refine-proposal")
-
+// TestApproveRefusesWhatFactoryDoesNotRequire checks that Approve sends
+// nothing, and keeps the planning session's claim, for a plan waiting on the
+// developer whose flow does not require approve-for-building.
+func TestApproveRefusesWhatFactoryDoesNotRequire(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		text   string
-		events []string
-		units  []fakes.FactoryUnit
+		name       string
+		required   []string
+		applicable []string
+		want       error
 	}{
 		{
-			name:   "no units",
-			text:   "# A plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n",
-			events: []string{"approve-for-units", "approve-for-building"},
+			name:       "open questions",
+			required:   []string{"answer-open-questions"},
+			applicable: []string{"approve-for-units", "approve-for-building", "abandon"},
+			want:       ErrNoApproval,
 		},
 		{
-			name:   "only an empty units section",
-			text:   "# A plan\n\n## 5. Units\n",
-			events: []string{"approve-for-units"},
+			name: "nothing listed",
+			want: ErrNoApproval,
 		},
 		{
-			name:   "factory offers only design approval",
-			text:   "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n",
-			events: []string{"address-comments", "approve-for-units", "abandon"},
-			units:  []fakes.FactoryUnit{{Name: "Unit 1: Add the flag"}},
-		},
-		{
-			name:   "only done units still count",
-			text:   "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag (done)\n",
-			events: []string{"address-comments", "approve-for-units", "abandon"},
-			units:  []fakes.FactoryUnit{{Name: "Unit 1: Add the flag", Done: true}},
+			name:       "the design is required",
+			required:   []string{"approve-for-units"},
+			applicable: []string{"approve-for-building", "abandon"},
+			want:       ErrNoUnits,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := client.SetPlanText(ctx, id, tc.text)
-			assert.NilError(t, err)
-			cci.SetFactoryPlanUnits(id, tc.units...)
-			cci.SetFactoryApplicableEvents(id, tc.events...)
-			err = Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
-			assert.Check(t, cmp.ErrorIs(err, ErrNoUnits))
+			client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
+			ctx := context.Background()
+			cci.ClaimFactoryPlan(id, "s-1")
+			cci.SetFactoryPlanState(id, "refine-proposal")
+			cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human"})
+			cci.SetFactoryRequiredEvents(id, tc.required...)
+			cci.SetFactoryApplicableEvents(id, tc.applicable...)
+
+			err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+			assert.Check(t, cmp.ErrorIs(err, tc.want))
+			p, _ := cci.FactoryPlan(id)
+			assert.Check(t, cmp.Len(p.Events, 0))
+			assert.Check(t, cmp.Equal(p.Session, "s-1"))
 		})
 	}
-	p, _ := cci.FactoryPlan(id)
-	assert.Check(t, cmp.Len(p.Events, 0))
-}
-
-// TestApproveCountsDoneUnits checks that a plan whose only unit is done
-// has units: with both approvals offered, Approve sends the plan rather than
-// refusing it with ErrNoUnits.
-func TestApproveCountsDoneUnits(t *testing.T) {
-	client, cci, id := createdPlan(t, "# A plan\n")
-	ctx := context.Background()
-	cci.SetFactoryPlanState(id, "refine-proposal")
-	err := client.SetPlanText(ctx, id, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag (done)\n")
-	assert.NilError(t, err)
-	cci.SetFactoryPlanUnits(id, fakes.FactoryUnit{Name: "Unit 1: Add the flag", Done: true})
-	cci.SetFactoryApplicableEvents(id, "approve-for-units", "approve-for-building")
-
-	err = Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
-	assert.Check(t, !errors.Is(err, ErrNoUnits), "a done unit was not counted: %v", err)
-	assert.NilError(t, err)
-	assertNoTextRead(t, cci)
 }

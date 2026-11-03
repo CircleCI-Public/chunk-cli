@@ -191,7 +191,7 @@ func TestPlanApproveRefuses(t *testing.T) {
 				ad.plans.events = []circleci.FlowEvent{circleci.AnswerOpenQuestions}
 			},
 			status:   http.StatusConflict,
-			contains: planapprove.ErrQuestionsOpen.Error(),
+			contains: planapprove.ErrNoApproval.Error(),
 		},
 		{
 			name: "built from the plan's worktree",
@@ -230,16 +230,6 @@ func TestPlanApproveRefuses(t *testing.T) {
 			},
 			status:   http.StatusBadGateway,
 			contains: "get the plan's flow: 503 from factory",
-		},
-		{
-			name: "factory fails the units read",
-			setup: func(ad *approveDaemon) {
-				ad.plans.mu.Lock()
-				defer ad.plans.mu.Unlock()
-				ad.plans.unitsErr = errors.New("404 from factory")
-			},
-			status:   http.StatusBadGateway,
-			contains: "get the plan's units: 404 from factory",
 		},
 		{
 			name: "no factory API",

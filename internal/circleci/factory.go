@@ -610,8 +610,9 @@ func (c *Client) SetPlanText(ctx context.Context, id, text string) error {
 	return nil
 }
 
-// GetFlow returns factory plan planID's flow. A plan made before conductor
-// gave every plan a flow has none, a 404.
+// GetFlow returns factory plan planID's flow. A 404 is a plan with no flow:
+// factory has not created it yet, or deleted it with its plan. An ended plan
+// keeps its flow.
 func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	var attrs flowAttrs
 	var refs flowRefs

@@ -134,7 +134,7 @@ func (m Model) expectsBuild() bool {
 	if m.build == nil || m.store.ID() == "" || m.flow.Ended {
 		return false
 	}
-	phase, _ := planstate.Parse(m.state)
+	phase := planstate.Parse(m.state)
 	return m.built || strings.EqualFold(phase, "Building") || strings.EqualFold(phase, "Integrating")
 }
 

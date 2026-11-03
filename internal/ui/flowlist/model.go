@@ -466,7 +466,6 @@ func (m Model) resume() planstate.Resume {
 	if !ok || !entry.blockersOK {
 		return planstate.Resume{}
 	}
-	next := moves(f.Next)
 	blockers := make([]planstate.Blocker, len(entry.blockers))
 	for i, b := range entry.blockers {
 		blockers[i] = planstate.Blocker{Title: oneLine(b.Title), State: oneLine(b.State), Outcome: oneLine(b.Outcome), Active: b.Active}
@@ -476,7 +475,7 @@ func (m Model) resume() planstate.Resume {
 		State:         oneLine(f.State),
 		Ended:         f.Phase == circleci.PhaseEnded,
 		Holder:        oneLine(f.SessionID),
-		Next:          next,
+		WaitingOn:     oneLine(f.WaitingOn),
 		Blockers:      blockers,
 		BlockersKnown: true,
 	})
@@ -540,8 +539,7 @@ func phase(f circleci.Flow) string {
 	if g := group(f); g != 0 && g != 1 {
 		return ""
 	}
-	p, _ := planstate.Parse(f.State)
-	return p
+	return planstate.Parse(f.State)
 }
 
 // samePhase is whether a and b are one sub-group.

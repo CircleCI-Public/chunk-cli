@@ -402,7 +402,7 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 			assert.Check(t, strings.Contains(view, "the plan is "+shown), "the action bar does not name the state:\n%s", view)
 			lines := strings.Split(view, "\n")
 			row1 := shown
-			if phase, _ := planstate.Parse(shown); slices.Contains(steps, phase) {
+			if phase := planstate.Parse(shown); slices.Contains(steps, phase) {
 				row1 = "Planning › Building › Integrating › Done"
 			}
 			assert.Check(t, cmp.Contains(lines[headerRows], row1))
@@ -763,7 +763,7 @@ func TestWaitingTitleNamesTheMove(t *testing.T) {
 		{
 			name: "escapes and a newline",
 			from: "\x1b[31mPlanning\n - Human",
-			want: "Plan · Planning - Human → Agent",
+			want: "Plan · Planning - Human → …",
 		},
 	}
 	for _, tc := range tests {
@@ -2517,6 +2517,7 @@ func resumeModel(t *testing.T, agent *fakeAgent, state string, next []Step) (Mod
 	store := newFakeStore()
 	store.Created, store.TextV, store.StateV = true, twoParts, state
 	store.FlowV.Next = next
+	store.FlowV.WaitingOn = waitingOn(next)
 	m := New(context.Background(), agent, nil, store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	return m, store
@@ -2527,6 +2528,16 @@ func setFlow(store *fakeStore, state string, next []Step, claimed bool) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.StateV, store.FlowV.Next, store.FlowV.Claimed = state, next, claimed
+	store.FlowV.WaitingOn = waitingOn(next)
+}
+
+// waitingOn is who factory waits on for a flow with next: a session when
+// next has a session's entry, else the developer, as the fake store starts.
+func waitingOn(next []Step) string {
+	if slices.ContainsFunc(next, func(s Step) bool { return s.Actor == ActorSession }) {
+		return string(ActorSession)
+	}
+	return string(ActorHuman)
 }
 
 func TestRefreshResumesAPlannerThatIsNotThere(t *testing.T) {
@@ -5135,7 +5146,6 @@ func TestFlowTabSaysWhetherItResumes(t *testing.T) {
 		{
 			name:  "no flow",
 			state: "",
-			line:  "No flow: factory hands this plan no tasks",
 		},
 		{
 			name:  "blockers not read",

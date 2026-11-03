@@ -673,8 +673,9 @@ func TestFlowListResumeWithoutAResumer(t *testing.T) {
 func TestOpenedScreensGetTheResumer(t *testing.T) {
 	r := &fakeResumer{}
 	f := &fakePlans{plan: "# Retry uploads", flow: &plan.Flow{
-		State: "build",
-		Next:  []plan.Step{{Actor: "session", Task: "build-unit"}},
+		State:     "build",
+		Next:      []plan.Step{{Actor: "session", Task: "build-unit"}},
+		WaitingOn: "session",
 	}}
 	m := planModel(t, f).WithPlanResume(r)
 	next, cmd := m.Update(flowlist.OpenMsg{ID: "p1", Title: "Retry uploads"})

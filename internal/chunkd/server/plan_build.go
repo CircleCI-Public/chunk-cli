@@ -193,8 +193,8 @@ func planEnd(f *circleci.Flow) string {
 	return "ended"
 }
 
-// planFlow is plan id's flow, nil when it has no flow (a 404), as a plan made
-// before plans had flows has none.
+// planFlow is plan id's flow, nil when it has no flow (a 404, see
+// circleci.Client.GetFlow).
 func planFlow(ctx context.Context, api PlanAPI, id string) (*circleci.Flow, error) {
 	f, err := api.GetFlow(ctx, id)
 	var se *circleci.StatusError

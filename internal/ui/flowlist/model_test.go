@@ -286,8 +286,12 @@ func TestHostMessages(t *testing.T) {
 }
 
 // resumeLines are every line ResumeLine can say, so a test can check the
-// list itself shows none: the host shows it, in its header.
-var resumeLines = []string{"No session holds", "Claimed by", "Waiting on", "chunk can't resume", "No flow"}
+// list itself shows none: the host shows it, in its header. The preview's
+// own "Waiting on" names factory's actor, as waiting_on serves it.
+var resumeLines = []string{
+	"No session holds", "Claimed by", "chunk can't resume",
+	"Waiting on you", "Waiting on factory", "Waiting on blockers", "Waiting on sub-plans", "Waiting on Retry config",
+}
 
 // noResumeLine checks the list's own view says nothing about resuming.
 func noResumeLine(t *testing.T, got string) {
@@ -472,7 +476,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestResume(t *testing.T) {
-	building := circleci.Flow{ID: "a", Title: "Alpha", State: "build", Next: waitAgent}
+	building := circleci.Flow{ID: "a", Title: "Alpha", State: "build", Next: waitAgent, WaitingOn: "session"}
 	for _, tc := range []struct {
 		name     string
 		flow     circleci.Flow
@@ -491,10 +495,11 @@ func TestResume(t *testing.T) {
 		{
 			name: "planning",
 			flow: circleci.Flow{
-				ID:    "a",
-				Title: "Alpha",
-				State: "refine-proposal",
-				Next:  []circleci.Transition{{Actor: "session", TaskCategory: "write-units"}},
+				ID:        "a",
+				Title:     "Alpha",
+				State:     "refine-proposal",
+				Next:      []circleci.Transition{{Actor: "session", TaskCategory: "write-units"}},
+				WaitingOn: "session",
 			},
 			kind: planstate.ResumePlanner,
 			line: "No session holds this plan · R resumes its planner",
@@ -506,13 +511,14 @@ func TestResume(t *testing.T) {
 				Title:     "Alpha",
 				State:     "build",
 				Next:      waitAgent,
+				WaitingOn: "session",
 				SessionID: "bb5a623b-0000",
 			},
 			line: "Claimed by session bb5a623b · factory daemon release a frees it",
 		},
 		{
 			name: "waiting on you",
-			flow: circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal", Next: waitHuman},
+			flow: circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal", Next: waitHuman, WaitingOn: "human"},
 			line: "Waiting on you",
 		},
 		{

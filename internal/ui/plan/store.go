@@ -73,6 +73,9 @@ type Step struct {
 	Event, Task, Action string
 	// Dispatched is whether Task is the flow's outstanding task.
 	Dispatched bool
+	// Required is whether factory needs this entry, or another required
+	// one, to move the flow on.
+	Required bool
 }
 
 // Relative is a plan related to the screen's: its parent, a sub-plan or a

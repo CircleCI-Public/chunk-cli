@@ -83,19 +83,24 @@ func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error
 	if id != f.id || f.noFlow {
 		return nil, &circleci.StatusError{StatusCode: http.StatusNotFound}
 	}
-	// As factory lists the events that apply in next, for the developer,
-	// after any task a session takes.
+	// Serve next and waiting_on as factory does.
 	var next []circleci.Transition
+	waitingOn := ""
 	if f.task != "" {
 		next = append(next, circleci.Transition{Actor: "session", TaskCategory: f.task, IsDispatched: true})
+		waitingOn = "session"
 	}
 	for _, e := range f.events {
-		next = append(next, circleci.Transition{Actor: "human", Event: e})
+		next = append(next, circleci.Transition{Actor: "human", Event: e, IsRequired: true})
+	}
+	if waitingOn == "" && len(f.events) > 0 {
+		waitingOn = "human"
 	}
 	return &circleci.Flow{
 		ID: id, State: f.state, Phase: f.phase, Outcome: f.outcome, SessionID: f.holder,
 		ApplicableEvents: append([]circleci.FlowEvent(nil), f.events...),
 		Next:             next,
+		WaitingOn:        waitingOn,
 	}, nil
 }
 

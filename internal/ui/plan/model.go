@@ -845,7 +845,7 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 // plan's flow in Unprioritized with a task for a session, so that counts as
 // planning; a plan deferred there waits on the developer instead.
 func resumeOwed(f Flow) bool {
-	phase, _ := planstate.Parse(f.State)
+	phase := planstate.Parse(f.State)
 	planning := strings.EqualFold(phase, "Planning") || planstate.IsUnprioritized(f.State)
 	return !f.Ended && !f.Claimed && planning &&
 		planstate.SessionActs(moves(f.Next))
@@ -885,7 +885,7 @@ func (m Model) resumable() planstate.Resume {
 		Ended:         m.flow.Ended,
 		PlanID:        m.store.ID(),
 		Holder:        clean(m.flow.Holder),
-		Next:          moves(m.flow.Next),
+		WaitingOn:     clean(m.flow.WaitingOn),
 		Blockers:      blockers,
 		BlockersKnown: m.familyLoaded,
 	})
@@ -914,7 +914,7 @@ func (m Model) resume() (Model, tea.Cmd) {
 // tabFor is the tab the right pane opens on for a plan in state: the plan
 // while it is being planned, or has not started, and its flow after.
 func tabFor(state string) rightTab {
-	phase, _ := planstate.Parse(state)
+	phase := planstate.Parse(state)
 	if strings.TrimSpace(state) == "" || planstate.IsUnprioritized(state) || strings.EqualFold(phase, "Planning") {
 		return tabPlan
 	}

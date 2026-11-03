@@ -25,7 +25,8 @@ type ResumeFacts struct {
 	// PlanID is the plan's, and Holder the session claiming it, "" when
 	// none does.
 	PlanID, Holder string
-	Next           []Move
+	// WaitingOn is who factory waits on to move the flow on, "" for nobody.
+	WaitingOn string
 	// Blockers are the plan's blockers; BlockersKnown is false until they
 	// have loaded.
 	Blockers      []Blocker
@@ -47,13 +48,11 @@ type Resume struct {
 
 // ResumeOf is whether chunk resumes the plan f describes, and how: a plan
 // with a live flow nobody claims, whose blockers are all done, which factory
-// waits on a session to move on, in a phase chunk knows how to resume.
+// waits on a session to move on, in a state chunk knows how to resume.
 func ResumeOf(f ResumeFacts) Resume {
 	state := strings.TrimSpace(f.State)
 	switch {
-	case state == "":
-		return Resume{Why: "No flow: factory hands this plan no tasks"}
-	case f.Ended:
+	case state == "", f.Ended:
 		return Resume{}
 	case f.Holder != "":
 		return Resume{Why: fmt.Sprintf("Claimed by session %s · factory daemon release %s frees it", shortID(f.Holder), f.PlanID)}
@@ -65,20 +64,23 @@ func ResumeOf(f ResumeFacts) Resume {
 			return Resume{Why: "Waiting on " + b.Title}
 		}
 	}
-	if !SessionActs(f.Next) {
-		switch {
-		case WaitsOnHuman(f.Next):
-			return Resume{Why: "Waiting on you"}
-		case AgentActs(f.Next):
-			return Resume{Why: "Waiting on factory"}
-		}
+	switch strings.TrimSpace(f.WaitingOn) {
+	case Human:
+		return Resume{Why: "Waiting on you"}
+	case Daemon:
+		return Resume{Why: "Waiting on factory"}
+	case Blockers:
+		return Resume{Why: "Waiting on blockers"}
+	case SubPlans:
+		return Resume{Why: "Waiting on sub-plans"}
+	case Session:
+	default:
 		return Resume{}
 	}
-	phase, _ := Parse(state)
-	switch {
-	case IsUnprioritized(state), strings.EqualFold(phase, "Planning"), strings.EqualFold(phase, "standing-by"):
+	switch state {
+	case Init, Ready, RefineProposal, RefineUnits, RecordSubPlans, StandBy:
 		return Resume{Kind: ResumePlanner}
-	case strings.EqualFold(phase, "Building"), strings.EqualFold(phase, "Integrating"):
+	case Build, Integrate:
 		return Resume{Kind: ResumeBuild}
 	}
 	return Resume{Why: "chunk can't resume a plan in " + state}

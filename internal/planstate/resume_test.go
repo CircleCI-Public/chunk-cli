@@ -1,7 +1,6 @@
 package planstate
 
 import (
-	"slices"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -9,9 +8,7 @@ import (
 )
 
 func TestResumeOf(t *testing.T) {
-	session := []Move{{Actor: "session"}}
-	rr := Move{Actor: "session", Event: RequestRevision}
-	done := []Blocker{{Title: "Add retry config", State: "Done"}}
+	done := []Blocker{{Title: "Add retry config", State: Ended, Outcome: "merged"}}
 	const build = "No session holds this plan · R starts a build session"
 	const planner = "No session holds this plan · R resumes its planner"
 	for _, tc := range []struct {
@@ -24,8 +21,8 @@ func TestResumeOf(t *testing.T) {
 			name: "building, unclaimed",
 			f: ResumeFacts{
 				PlanID:        "p-42",
-				State:         "Building - Agent",
-				Next:          session,
+				State:         Build,
+				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
 			kind: ResumeBuild,
@@ -35,9 +32,9 @@ func TestResumeOf(t *testing.T) {
 			name: "claimed",
 			f: ResumeFacts{
 				PlanID:        "p-42",
-				State:         "Building - Agent",
+				State:         Build,
 				Holder:        "bb5a623b-8dd3-4ae8-9c91-48b4eaaf6d62",
-				Next:          session,
+				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
 			line: "Claimed by session bb5a623b · factory daemon release p-42 frees it",
@@ -45,9 +42,9 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "blocked",
 			f: ResumeFacts{
-				State:         "Building - Agent",
-				Next:          session,
-				Blockers:      append(done, Blocker{Title: "Fix uploads", State: "Building - Agent", Active: true}),
+				State:         Build,
+				WaitingOn:     Blockers,
+				Blockers:      append(done, Blocker{Title: "Fix uploads", State: Build, Active: true}),
 				BlockersKnown: true,
 			},
 			line: "Waiting on Fix uploads",
@@ -55,8 +52,8 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "integrating",
 			f: ResumeFacts{
-				State:         "Integrating - Agent",
-				Next:          session,
+				State:         Integrate,
+				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
 			kind: ResumeBuild,
@@ -65,8 +62,8 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "new name build",
 			f: ResumeFacts{
-				State:         "build",
-				Next:          session,
+				State:         Build,
+				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
 			kind: ResumeBuild,
@@ -75,8 +72,28 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "planning",
 			f: ResumeFacts{
-				State:         "Planning - Agent",
-				Next:          session,
+				State:         RefineProposal,
+				WaitingOn:     Session,
+				BlockersKnown: true,
+			},
+			kind: ResumePlanner,
+			line: planner,
+		},
+		{
+			name: "refining units",
+			f: ResumeFacts{
+				State:         RefineUnits,
+				WaitingOn:     Session,
+				BlockersKnown: true,
+			},
+			kind: ResumePlanner,
+			line: planner,
+		},
+		{
+			name: "ready",
+			f: ResumeFacts{
+				State:         Ready,
+				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
 			kind: ResumePlanner,
@@ -85,18 +102,37 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "unprioritized",
 			f: ResumeFacts{
-				State:         "Unprioritized",
-				Next:          session,
+				State:         Init,
+				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
 			kind: ResumePlanner,
 			line: planner,
 		},
 		{
+			name: "recording sub-plans",
+			f: ResumeFacts{
+				State:         RecordSubPlans,
+				WaitingOn:     Session,
+				BlockersKnown: true,
+			},
+			kind: ResumePlanner,
+			line: planner,
+		},
+		{
+			name: "recording sub-plans, waiting on you",
+			f: ResumeFacts{
+				State:         RecordSubPlans,
+				WaitingOn:     Human,
+				BlockersKnown: true,
+			},
+			line: "Waiting on you",
+		},
+		{
 			name: "standing-by",
 			f: ResumeFacts{
-				State:         "standing-by",
-				Next:          session,
+				State:         StandBy,
+				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
 			kind: ResumePlanner,
@@ -105,8 +141,8 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "every blocker done",
 			f: ResumeFacts{
-				State:         "Building - Agent",
-				Next:          session,
+				State:         Build,
+				WaitingOn:     Session,
 				Blockers:      done,
 				BlockersKnown: true,
 			},
@@ -116,9 +152,9 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "a blocker merged",
 			f: ResumeFacts{
-				State:         "Building - Agent",
-				Next:          session,
-				Blockers:      []Blocker{{Title: "a", State: "ended", Outcome: "merged"}},
+				State:         Build,
+				WaitingOn:     Session,
+				Blockers:      []Blocker{{Title: "a", State: Ended, Outcome: "merged"}},
 				BlockersKnown: true,
 			},
 			kind: ResumeBuild,
@@ -129,14 +165,13 @@ func TestResumeOf(t *testing.T) {
 			f: ResumeFacts{
 				PlanID: "p-1",
 			},
-			line: "No flow: factory hands this plan no tasks",
 		},
 		{
 			name: "ended",
 			f: ResumeFacts{
-				State:         "Done",
+				State:         Ended,
 				Ended:         true,
-				Next:          session,
+				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
 			line: "",
@@ -144,19 +179,19 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "claimed by a short ID",
 			f: ResumeFacts{
-				PlanID: "p-42",
-				State:  "Building - Agent",
-				Holder: "s-1",
-				Next:   session,
+				PlanID:    "p-42",
+				State:     Build,
+				Holder:    "s-1",
+				WaitingOn: Session,
 			},
 			line: "Claimed by session s-1 · factory daemon release p-42 frees it",
 		},
 		{
 			name: "a canceled blocker still blocks",
 			f: ResumeFacts{
-				State:         "Building - Agent",
-				Next:          session,
-				Blockers:      []Blocker{{Title: "a", State: "ended", Outcome: "canceled", Active: true}},
+				State:         Build,
+				WaitingOn:     Blockers,
+				Blockers:      []Blocker{{Title: "a", State: Ended, Outcome: "canceled", Active: true}},
 				BlockersKnown: true,
 			},
 			line: "Waiting on a",
@@ -164,9 +199,9 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "a blocker past its until",
 			f: ResumeFacts{
-				State:         "Building - Agent",
-				Next:          session,
-				Blockers:      []Blocker{{Title: "a", State: "build"}},
+				State:         Build,
+				WaitingOn:     Session,
+				Blockers:      []Blocker{{Title: "a", State: Build}},
 				BlockersKnown: true,
 			},
 			kind: ResumeBuild,
@@ -175,16 +210,16 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "blockers not loaded",
 			f: ResumeFacts{
-				State: "Building - Agent",
-				Next:  session,
+				State:     Build,
+				WaitingOn: Session,
 			},
 			line: "",
 		},
 		{
 			name: "waiting on you",
 			f: ResumeFacts{
-				State:         "Integrating - Human",
-				Next:          []Move{{Actor: "human", Event: "merge-pr"}, {Actor: "human", Event: "abandon"}},
+				State:         Integrate,
+				WaitingOn:     Human,
 				BlockersKnown: true,
 			},
 			line: "Waiting on you",
@@ -192,8 +227,8 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "waiting on factory",
 			f: ResumeFacts{
-				State:         "Integrating - Agent",
-				Next:          []Move{{Actor: "daemon"}},
+				State:         Integrate,
+				WaitingOn:     Daemon,
 				BlockersKnown: true,
 			},
 			line: "Waiting on factory",
@@ -201,66 +236,53 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "nothing next",
 			f: ResumeFacts{
-				State:         "Building - Agent",
+				State:         Integrate,
 				BlockersKnown: true,
 			},
 			line: "",
 		},
 		{
-			name: "only escape hatches",
+			name: "waiting on blockers",
+			f: ResumeFacts{
+				State:         Build,
+				WaitingOn:     Blockers,
+				BlockersKnown: true,
+			},
+			line: "Waiting on blockers",
+		},
+		{
+			name: "waiting on sub-plans",
+			f: ResumeFacts{
+				State:         Build,
+				WaitingOn:     SubPlans,
+				BlockersKnown: true,
+			},
+			line: "Waiting on sub-plans",
+		},
+		{
+			name: "waiting on nobody",
+			f: ResumeFacts{
+				State:         Build,
+				BlockersKnown: true,
+			},
+		},
+		{
+			name: "unknown state",
+			f: ResumeFacts{
+				State:         "paused",
+				WaitingOn:     Session,
+				BlockersKnown: true,
+			},
+			line: "chunk can't resume a plan in paused",
+		},
+		{
+			name: "an old name is unknown",
 			f: ResumeFacts{
 				State:         "Planning - Human",
-				Next:          []Move{{Actor: "human", Event: "abandon"}},
+				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			line: "",
-		},
-		{
-			name: "request-revision while waiting on you",
-			f: ResumeFacts{
-				State:         "Planning - Human",
-				Next:          []Move{{Actor: "human", Event: "address-comments"}, {Actor: "human", Event: "approve-for-building"}, rr, {Actor: "human", Event: "abandon"}},
-				BlockersKnown: true,
-			},
-			line: "Waiting on you",
-		},
-		{
-			name: "building beside request-revision",
-			f: ResumeFacts{
-				State:         "Building - Agent",
-				Next:          append(slices.Clone(session), rr),
-				BlockersKnown: true,
-			},
-			kind: ResumeBuild,
-			line: build,
-		},
-		{
-			name: "planning beside request-revision",
-			f: ResumeFacts{
-				State:         "Planning - Agent",
-				Next:          append(slices.Clone(session), rr),
-				BlockersKnown: true,
-			},
-			kind: ResumePlanner,
-			line: planner,
-		},
-		{
-			name: "only request-revision and abandon",
-			f: ResumeFacts{
-				State:         "Planning - Human",
-				Next:          []Move{rr, {Actor: "human", Event: "abandon"}},
-				BlockersKnown: true,
-			},
-			line: "",
-		},
-		{
-			name: "unknown phase",
-			f: ResumeFacts{
-				State:         "Agent Ready",
-				Next:          session,
-				BlockersKnown: true,
-			},
-			line: "chunk can't resume a plan in Agent Ready",
+			line: "chunk can't resume a plan in Planning - Human",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

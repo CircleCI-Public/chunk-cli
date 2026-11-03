@@ -22,7 +22,7 @@ var steps = []string{"Planning", "Building", "Integrating", done}
 // plan. Text from factory is stripped of escapes and kept to one line.
 func status(f Flow, fam Family, stage planstate.Stage, inReview bool) (step, now, next string) {
 	state := clean(f.State)
-	switch phase, _ := planstate.Parse(state); {
+	switch phase := planstate.Parse(state); {
 	case planstate.IsUnprioritized(state):
 		step = "Not started"
 	case f.Ended:
