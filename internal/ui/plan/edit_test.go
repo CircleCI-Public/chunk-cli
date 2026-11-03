@@ -87,6 +87,7 @@ func TestEExplainsWhyItCannotEditWhileFactoryWorks(t *testing.T) {
 }
 
 func TestEditedPartIsSavedInPlaceWithAReReadNoteQueued(t *testing.T) {
+	t.Parallel()
 	m, store, agent := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
@@ -116,6 +117,7 @@ func saveEdit(t *testing.T, m Model, i int, text string) Model {
 }
 
 func TestEditsQueueOneReReadNotePerPart(t *testing.T) {
+	t.Parallel()
 	m, store, _ := planInPlan(t)
 	m = saveEdit(t, m, 1, "The flag exists and is documented.\n")
 	m = saveEdit(t, m, 3, "* [AGENT] parse it in main.go and cmd.go\n")
@@ -144,7 +146,9 @@ func TestEditsQueueOneReReadNotePerPart(t *testing.T) {
 }
 
 func TestReReadNoteGoesWithTheQueuedCommentsOnS(t *testing.T) {
+	t.Parallel()
 	t.Run("sent", func(t *testing.T) {
+		t.Parallel()
 		m, store, agent := planInPlan(t)
 		m = saveEdit(t, m, 1, "The flag exists and is documented.\n")
 		m = drive(t, m, press("s"))
@@ -155,6 +159,7 @@ func TestReReadNoteGoesWithTheQueuedCommentsOnS(t *testing.T) {
 		assert.Check(t, cmp.Len(agent.Sent(), 0), "nothing goes to the session")
 	})
 	t.Run("dropped", func(t *testing.T) {
+		t.Parallel()
 		m, store, agent := planInPlan(t)
 		m = saveEdit(t, m, 1, "The flag exists and is documented.\n")
 		m.moveCursor(1)
@@ -170,6 +175,7 @@ func TestReReadNoteGoesWithTheQueuedCommentsOnS(t *testing.T) {
 }
 
 func TestEditedPartIsNotSavedWhenNothingChanged(t *testing.T) {
+	t.Parallel()
 	m, store, agent := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists.\n")
@@ -183,6 +189,7 @@ func TestEditedPartIsNotSavedWhenNothingChanged(t *testing.T) {
 }
 
 func TestEditedPartLeftEmptyIsNotSaved(t *testing.T) {
+	t.Parallel()
 	m, store, _ := planInPlan(t)
 	m.editing = true
 	m = drive(t, m, editedFrom(t, m, 1, 1, "\n\n"))
@@ -193,6 +200,7 @@ func TestEditedPartLeftEmptyIsNotSaved(t *testing.T) {
 }
 
 func TestEditIsRefusedWhenAnotherWriterChangedThePlan(t *testing.T) {
+	t.Parallel()
 	m, store, agent := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
@@ -211,6 +219,7 @@ func TestEditIsRefusedWhenAnotherWriterChangedThePlan(t *testing.T) {
 }
 
 func TestEditIsRefusedOnceFactoryStopsWaiting(t *testing.T) {
+	t.Parallel()
 	m, store, _ := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
@@ -223,6 +232,7 @@ func TestEditIsRefusedOnceFactoryStopsWaiting(t *testing.T) {
 }
 
 func TestEditIsSavedWhileFactoryWaitsOnOpenQuestions(t *testing.T) {
+	t.Parallel()
 	m, store, _ := planInPlan(t)
 	store.setEvents("answer-open-questions", "abandon")
 	m = refreshed(t, m)
@@ -235,6 +245,7 @@ func TestEditIsSavedWhileFactoryWaitsOnOpenQuestions(t *testing.T) {
 }
 
 func TestEditIsSavedWhileFactoryWaitsOnYouWithNoComments(t *testing.T) {
+	t.Parallel()
 	m, store, _ := planInPlan(t)
 	store.setEvents("approve-for-units", "abandon")
 	store.setWaitingOn("human")
@@ -249,6 +260,7 @@ func TestEditIsSavedWhileFactoryWaitsOnYouWithNoComments(t *testing.T) {
 }
 
 func TestEditIsRefusedWhileFactoryWorksOnThePlan(t *testing.T) {
+	t.Parallel()
 	m, store, _ := planInPlan(t)
 	store.setEvents("abandon")
 	store.setWaitingOn("session")
@@ -257,6 +269,7 @@ func TestEditIsRefusedWhileFactoryWorksOnThePlan(t *testing.T) {
 }
 
 func TestFailedEditorSavesNothing(t *testing.T) {
+	t.Parallel()
 	m, store, _ := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "x")

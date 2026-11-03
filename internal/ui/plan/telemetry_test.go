@@ -23,6 +23,7 @@ func tracking(t *testing.T) (context.Context, *fakes.Events) {
 // started. A declined confirmation, or an approval factory refuses, started
 // no run and is not counted.
 func TestApprovalIsTrackedOnceFactoryTakesIt(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		answer  rune
@@ -48,6 +49,7 @@ func TestApprovalIsTrackedOnceFactoryTakesIt(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, ev := tracking(t)
 			store := newFakeStore()
 			store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
@@ -75,6 +77,7 @@ func TestApprovalIsTrackedOnceFactoryTakesIt(t *testing.T) {
 // request that creates the plan is not feedback. Nothing the developer wrote
 // is sent.
 func TestFeedbackIsTrackedWithThePlanID(t *testing.T) {
+	t.Parallel()
 	ctx, ev := tracking(t)
 	store := newFakeStore()
 	store.TextV = twoParts

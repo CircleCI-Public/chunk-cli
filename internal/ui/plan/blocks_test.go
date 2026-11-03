@@ -6,6 +6,7 @@ import (
 )
 
 func TestSplitBlocks(t *testing.T) {
+	t.Parallel()
 	md := `# Add a flag
 
 ## 1. Outcome

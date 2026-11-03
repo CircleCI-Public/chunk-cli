@@ -46,6 +46,7 @@ func dragged(t *testing.T, m Model, fromX, fromY, toX, toY int) (held Model, cop
 func planText(m Model) int { return m.planLeft() + 2 + gutterWidth }
 
 func TestDraggingOverThePlanCopiesTheText(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
@@ -58,6 +59,7 @@ func TestDraggingOverThePlanCopiesTheText(t *testing.T) {
 }
 
 func TestDraggingBackwardsCopiesTheSameText(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
@@ -68,6 +70,7 @@ func TestDraggingBackwardsCopiesTheSameText(t *testing.T) {
 }
 
 func TestDraggingAcrossPlanPartsCopiesEachLine(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	from, to := rowOf(t, m, "The flag exists."), rowOf(t, m, "SPEC")
 	x := planText(m)
@@ -81,6 +84,7 @@ func TestDraggingAcrossPlanPartsCopiesEachLine(t *testing.T) {
 }
 
 func TestDraggingDoesNotCopyThePlansGutter(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "The flag exists.")
 
@@ -91,6 +95,7 @@ func TestDraggingDoesNotCopyThePlansGutter(t *testing.T) {
 }
 
 func TestAClickWithoutADragCopiesNothing(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m) + 4
@@ -103,6 +108,7 @@ func TestAClickWithoutADragCopiesNothing(t *testing.T) {
 }
 
 func TestDraggingOverTheChatCopiesTheMessageWithoutItsFrame(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "plan it")
 
@@ -114,6 +120,7 @@ func TestDraggingOverTheChatCopiesTheMessageWithoutItsFrame(t *testing.T) {
 }
 
 func TestTheSelectionIsDrawnOverTheText(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
@@ -125,6 +132,7 @@ func TestTheSelectionIsDrawnOverTheText(t *testing.T) {
 }
 
 func TestAKeyPressDropsTheSelectionAndItsNote(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
@@ -139,6 +147,7 @@ func TestAKeyPressDropsTheSelectionAndItsNote(t *testing.T) {
 }
 
 func TestAClickDropsTheSelection(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
@@ -150,6 +159,7 @@ func TestAClickDropsTheSelection(t *testing.T) {
 }
 
 func TestTheCopyNoteDoesNotReplaceAStatusThatWasThere(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	m.status = warn("Wait for chunk to finish.")
 	y := rowOf(t, m, "The flag exists.")
@@ -166,6 +176,7 @@ func TestTheCopyNoteDoesNotReplaceAStatusThatWasThere(t *testing.T) {
 }
 
 func TestDraggingPastTheEdgeScrollsAndCopiesWhatCameInto(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 20, longPlan(), nil)
 	x := planText(m)
 	top := rowOf(t, m, "OUTCOME")
@@ -185,6 +196,7 @@ func TestDraggingPastTheEdgeScrollsAndCopiesWhatCameInto(t *testing.T) {
 }
 
 func TestTheSelectionStaysOnItsTextWhileThePlanScrolls(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 20, longPlan(), nil)
 	x := planText(m)
 	y := rowOf(t, m, "Paragraph 0 of the plan.")
@@ -196,6 +208,7 @@ func TestTheSelectionStaysOnItsTextWhileThePlanScrolls(t *testing.T) {
 }
 
 func TestAShiftClickDoesNotBeginASelectionOfText(t *testing.T) {
+	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	shift := click(planText(m), rowOf(t, m, "The flag exists."))
 	shift.Mod = tea.ModShift
