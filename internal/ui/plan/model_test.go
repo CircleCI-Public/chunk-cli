@@ -4506,6 +4506,37 @@ func TestFlowTabShowsProgress(t *testing.T) {
 	}
 }
 
+// TestFlowTabPRIsAHyperlink checks that the pull request's URL is sent as a
+// terminal hyperlink when it is http(s), and as plain text when it is not.
+func TestFlowTabPRIsAHyperlink(t *testing.T) {
+	for _, tc := range []struct {
+		name, url string
+		link      bool
+	}{
+		{"https", "https://github.com/o/r/pull/7", true},
+		{"not http", "javascript:alert(1)", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.StateV, store.UnitsV = "Integrating - Agent", threeUnitsRead
+			store.FlowV.PR = tc.url
+			raw := flowModel(t, store).flowContent(200)
+			if tc.link {
+				assert.Check(t, cmp.Contains(raw, ansi.SetHyperlink(tc.url)))
+				return
+			}
+			noHyperlink(t, raw)
+		})
+	}
+	t.Run("control character", func(t *testing.T) {
+		store := newFakeStore()
+		store.StateV, store.UnitsV = "Integrating - Agent", threeUnitsRead
+		store.FlowV.PR = "https://github.com/o/r\x1b]0;x\x07"
+		raw := flowModel(t, store).flowContent(200)
+		assert.Check(t, !strings.Contains(raw, "\x1b]0;"), "no injected escape")
+	})
+}
+
 func TestFlowTabShowsThePR(t *testing.T) {
 	const url = "https://github.com/o/r/pull/7"
 	store := newFakeStore()
