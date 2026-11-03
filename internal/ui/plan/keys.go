@@ -186,7 +186,7 @@ func (m Model) chatKeys(k *keyMap) {
 		return
 	}
 	k.Send.SetHelp("enter", "send comments")
-	k.Send.SetEnabled(inChat && !m.built && !m.savingComments &&
+	k.Send.SetEnabled(inChat && !m.savingComments &&
 		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
 }
 

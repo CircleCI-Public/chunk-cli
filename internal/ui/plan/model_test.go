@@ -1782,7 +1782,9 @@ func messagesOf(cmd tea.Cmd) []tea.Msg {
 }
 
 // A host that keeps the screen keeps it after the approval, on the Flow tab,
-// with nothing sent from its Activity pane: the planning session has stopped.
+// with nothing sent from its Activity pane to the agent: the planning session
+// has stopped. A comment queued before the approve stays queued, and is saved
+// once factory has acted on the approve and takes comments again.
 func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 	store := newFakeStore()
 	store.Created = true
@@ -1797,6 +1799,12 @@ func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 	m := New(context.Background(), agent, approve, store, "").WithBack()
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = refreshed(t, m)
+	m, _ = m.focusOn(panePlan)
+	assert.Assert(t, m.focus == panePlan && m.tab == tabPlan, "focus %v, tab %v", m.focus, m.tab)
+	m = drive(t, m, press("c"))
+	m = typeText(t, m, "before")
+	m = drive(t, m, press("enter"))
+	assert.Assert(t, cmp.Len(queuedComments(m.comments), 1))
 	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m, cmd := m.Update(press("y"))
 	batch, ok := cmd().(tea.BatchMsg)
@@ -1826,6 +1834,89 @@ func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 	assert.Check(t, !m.confirming, "ctrl+s asks to approve a plan already building")
 	m = drive(t, m, press("y"))
 	assert.Check(t, cmp.Equal(approvals, 1), "the plan was approved again")
+
+	// The comment queued before the approve is kept, and held while factory
+	// has yet to act on the approve, though the flow read still waits on you.
+	assert.Assert(t, cmp.Len(queuedComments(m.comments), 1))
+	m = refreshed(t, m) // the fake store's flow has not moved
+	assert.Check(t, m.moving != nil && m.moving.kind == movingApprove)
+	m, _ = m.focusOn(panePlan)
+	m = drive(t, m, press("right")) // to the Plan tab
+	assert.Assert(t, m.focus == panePlan && m.tab == tabPlan, "focus %v, tab %v", m.focus, m.tab)
+	assert.Check(t, !m.keys().SendComments.Enabled(), "s offered before factory acted on the approve")
+	// The approve's status shows over the waiting line, as any status does.
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "Approved · building as run build-1"))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.waitingLine(200)), "Plan approved · waiting for factory to start the build"))
+	m = drive(t, m, press("s"))
+	m, _ = m.focusOn(paneChat)
+	m = drive(t, m, press("enter")) // the Activity pane's send, held too
+	assert.Check(t, cmp.Len(store.Added, 0))
+	assert.Check(t, cmp.Len(store.HandedOff, 0))
+	assert.Check(t, cmp.Len(queuedComments(m.comments), 1))
+	m, _ = m.focusOn(panePlan)
+
+	// Factory moves the plan on; it waits on you again, so comments go out.
+	store.mu.Lock()
+	store.StateV = "build"
+	store.mu.Unlock()
+	m = refreshed(t, m)
+	assert.Check(t, m.moving == nil)
+	assert.Assert(t, m.takesComments())
+	if m.tab != tabPlan {
+		m = drive(t, m, press("right")) // back to the Plan tab
+	}
+	assert.Assert(t, m.focus == panePlan && m.tab == tabPlan, "focus %v, tab %v", m.focus, m.tab)
+	assert.Check(t, m.keys().SendComments.Enabled(), "s not offered after the approve")
+	m = drive(t, m, press("s"))
+	assert.Check(t, cmp.DeepEqual(store.Added, [][2]string{{"# Plan", "before"}}))
+	assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
+}
+
+// TestApprovingWithQueuedCommentsSaysWhatHappensToThem checks the approve
+// prompt with a comment queued: a screen that closes on approval warns that
+// it is lost, and one that stays open keeps it and asks as usual.
+func TestApprovingWithQueuedCommentsSaysWhatHappensToThem(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		back bool
+	}{
+		{
+			name: "closes on approval",
+		},
+		{
+			name: "stays open",
+			back: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
+			store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
+			store.setEvents("address-comments", "approve-for-building")
+			store.setRequired("approve-for-building")
+			approve := func(func(string)) (string, error) { return "build-1", nil }
+			m := New(context.Background(), turnReturning("ok"), approve, store, "plan it")
+			if tc.back {
+				m = m.WithBack()
+			}
+			m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+			m = drive(t, m, press("tab"))
+			m = drive(t, m, press("c"))
+			m = typeText(t, m, "too vague")
+			m = drive(t, m, press("enter"))
+			assert.Assert(t, cmp.Len(queuedComments(m.comments), 1))
+
+			m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+			assert.Check(t, m.confirming)
+			status := ansi.Strip(m.status)
+			if !tc.back {
+				assert.Check(t, cmp.Contains(status, "Your 1 unsent comment will be lost when this screen closes. Approve this plan and build it?"))
+				return
+			}
+			assert.Check(t, cmp.Contains(status, "Approve this plan and build it?"))
+			assert.Check(t, !strings.Contains(status, "lost"), "status %q", status)
+		})
+	}
 }
 
 // While the plan is approved and its build started, the screen says which
@@ -5230,6 +5321,66 @@ func TestRBuildResumeStartsABuildSession(t *testing.T) {
 	run(cmd)
 	askedFor(t, b, 0)
 	assert.Check(t, cmp.Equal(m.state, "build"))
+}
+
+// TestCommentsAfterABuildResumeFollowFactory checks that once R has started a
+// build session, a queued comment is offered for saving exactly when factory
+// takes comments, as on a screen opened fresh.
+func TestCommentsAfterABuildResumeFollowFactory(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		after func(*fakeStore) // the flow factory serves after the resume
+		takes bool
+	}{
+		{
+			name: "factory asks for comments",
+			after: func(s *fakeStore) {
+				s.FlowV.Next, s.FlowV.WaitingOn = nil, string(ActorHuman)
+				s.EventsV, s.eventsSet = []string{"address-comments"}, true
+			},
+			takes: true,
+		},
+		{
+			name: "factory works on the build",
+			after: func(s *fakeStore) {
+				s.FlowV.Next = []Step{{Actor: "session", Task: "build-unit", Dispatched: true}}
+				s.FlowV.WaitingOn = string(ActorSession)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, store, _, _ := resumeScreen(t, newFakeAgent(), "build", sessionStep, nil)
+			m = drive(t, m, press("R"))
+			assert.Assert(t, m.built)
+			store.mu.Lock()
+			tc.after(store)
+			store.mu.Unlock()
+			m = refreshed(t, m)
+			m = pressAll(t, m, "right", "c")
+			m = typeText(t, m, "x")
+			m = drive(t, m, press("enter"))
+			assert.Check(t, cmp.Equal(m.keys().SendComments.Enabled(), tc.takes))
+			bar := ansi.Strip(m.actionBar())
+			if tc.takes {
+				assert.Check(t, cmp.Contains(bar, "s Save 1 comment"))
+				m, _ = m.focusOn(paneChat)
+				assert.Check(t, m.keys().Send.Enabled(), "enter not offered after the resume")
+				m, _ = m.focusOn(panePlan)
+				m = drive(t, m, press("s"))
+				assert.Check(t, cmp.Len(store.Added, 1))
+				return
+			}
+			assert.Check(t, cmp.Contains(bar, "1 comment held until factory is waiting on you"))
+			m = drive(t, m, press("s"))
+			assert.Check(t, cmp.Len(store.Added, 0))
+			// enter in the Activity pane says why, and sends nothing either.
+			m, _ = m.focusOn(paneChat)
+			m = drive(t, m, press("enter"))
+			assert.Check(t, cmp.Len(store.Added, 0))
+			assert.Check(t, cmp.Len(store.HandedOff, 0))
+			assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Comments not sent"))
+		})
+	}
 }
 
 // TestRBuildResumeFailureShowsInTheStatusBar checks that the daemon's refusal

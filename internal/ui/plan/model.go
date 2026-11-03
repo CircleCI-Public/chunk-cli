@@ -168,6 +168,9 @@ type transitionKind int
 const (
 	movingComments transitionKind = iota
 	movingDesign
+	// movingApprove is the plan approved on a screen that stays open: until
+	// factory acts on it, the flow last read may still take comments.
+	movingApprove
 )
 
 // over is whether factory has acted on t, as a refresh that read state and
@@ -412,8 +415,8 @@ type Model struct {
 	questions int
 	// BuildID is the build of the plan, once it has been approved.
 	BuildID string
-	// built is whether the plan was approved and is being built while the
-	// screen stays open; its comments are no longer sent.
+	// built is whether the plan was approved, or its build started, while the
+	// screen stays open: its build is followed before factory's state moves.
 	built bool
 
 	// build reads the plan's build from the daemon; nil when the host has none.
@@ -1029,7 +1032,7 @@ const heldStatus = "Comments not sent: factory is working on the plan. Send them
 // hands them off as factory's flow then shows; at any other time they stay
 // queued. Nothing goes to the planning session.
 func (m Model) deliver() (Model, tea.Cmd) {
-	if m.savingComments || m.built {
+	if m.savingComments {
 		return m, nil
 	}
 	queued := queuedComments(m.comments)
@@ -1144,9 +1147,11 @@ func (m Model) askToApprove() Model {
 	case approval(m.flow) == planstate.ApproveForUnits:
 		m.confirming, m.pendingDesign = true, true
 		m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? ") + confirmButtons
-	case queued > 0:
+	// Only a screen that closes on approval loses its queued comments: one
+	// that stays open keeps them for the next time factory takes comments.
+	case queued > 0 && !m.back:
 		m.confirming = true
-		m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d queued %s will not be saved. Approve the plan and build it anyway? ",
+		m.status = ui.TitleStyle.Render(fmt.Sprintf("Your %d unsent %s will be lost when this screen closes. Approve this plan and build it? ",
 			queued, plural(queued, "comment", "comments"))) + confirmButtons
 	default:
 		m.confirming = true
@@ -1373,6 +1378,7 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, closed(msg.buildID)
 		}
 		m.built, m.tab, m.tabChosen = true, tabFlow, true
+		m.moving = &transition{kind: movingApprove, from: m.state, since: time.Now()}
 		m.status = "Approved · building as run " + msg.buildID
 		var follow tea.Cmd
 		m, follow = m.followBuild()

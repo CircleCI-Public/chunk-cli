@@ -452,8 +452,10 @@ chunk
   Closing chunk once the daemon has the request does not stop it. In `chunk watch`,
   the screen stays open after approval, on the Flow tab, to follow the build;
   the activity pane shows what the build session is doing.
-  Its comments can no longer be sent, because the planning session has
-  stopped. `enter` on a
+  Comments still go to factory whenever it takes them, as on any screen;
+  ones queued when you approve stay queued until then. The standalone
+  `chunk factory plan` warns first that approving loses queued comments,
+  since it closes. `enter` on a
   related plan in the Flow tab opens it. The standalone `chunk factory plan`
   closes on approval. The daemon frees the plan's claim from a session that
   is only planning it, a parent plan's included; while a build holds the claim,
