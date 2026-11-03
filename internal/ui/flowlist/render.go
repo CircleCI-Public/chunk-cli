@@ -180,11 +180,11 @@ func stateText(f circleci.Flow) string {
 	if o := strings.ToLower(oneLine(f.Outcome)); f.Phase == circleci.PhaseEnded && o != "" && o != "merged" {
 		return capitalize(o)
 	}
-	phase := planstate.Parse(oneLine(f.State))
-	if phase == "" {
+	step := planstate.Step(oneLine(f.State))
+	if step == "" {
 		return "Unknown"
 	}
-	return capitalize(strings.ToLower(phase))
+	return capitalize(strings.ToLower(step))
 }
 
 // progressText is what the flow is doing now, as factory sums it up, or who

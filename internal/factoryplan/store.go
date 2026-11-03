@@ -269,7 +269,7 @@ func (s *Store) AnswerOpenQuestions(ctx context.Context) error {
 }
 
 // StartWork sends the plan's flow factory's prioritize event, which moves an
-// Unprioritized plan on for factory to start work on it.
+// init plan on for factory to start work on it.
 func (s *Store) StartWork(ctx context.Context) error {
 	id := s.ID()
 	if id == "" {

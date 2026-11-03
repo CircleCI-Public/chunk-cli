@@ -324,11 +324,12 @@ chunk watch
 ```
 
 `chunk watch` opens on **Flows**, your open flows in factory grouped by who
-they wait on (Needs your review, With agent, Not started, Other; each heading
-shows how many flows it holds) and then by phase (Planning, Building, ...), a
+factory waits on: Needs your review (you), With agent (a session or
+factory), Not started (a new plan not waiting on you), Other (blockers,
+sub-plans, or nobody); each heading shows how many flows it holds. Within
+the first two they are grouped by step (Planning, Building, ...), a
 sub-plan marked `↳` with its parent (and indented under it when both are under
-the same heading), a flow whose PR factory could not rebase marked ⚠, and
-each flow's second line saying what factory is doing on it now (for example
+the same heading), and each flow's second line saying what factory is doing on it now (for example
 `Building unit 2 of 5 · 1/5 units`) or that it waits on its blockers or
 sub-plans, with a read-only preview of the selected one's plan that starts
 with who the flow waits on and why. Flows are yours wherever
@@ -356,10 +357,8 @@ passed, `ctrl+s` approves the design, and chunk writes the units; once those
 pass review too, `ctrl+s` approves the finished plan in factory, and the
 chunk daemon builds it through to a pull request. The strip says which of
 the two factory is waiting for: `Next: you approve the design · ctrl+s` or
-`Next: you approve the plan · ctrl+s`. A plan whose PR
-conflicts after factory's rebase reads PR conflicts, and `ctrl+s` hands it
-back to factory to rebase again. The build
-keeps going when you close chunk; plan as many as you like.
+`Next: you approve the plan · ctrl+s`. The build keeps going when you close
+chunk; plan as many as you like.
 Once approved, the screen stays open on the Flow tab, which follows the
 build: what factory is doing now and who it waits on, each unit done,
 being built or to do, and the pull request.

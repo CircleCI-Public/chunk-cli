@@ -146,7 +146,7 @@ const ApproveForUnits FlowEvent = "approve-for-units"
 // where factory hands the session claiming the plan its build tasks.
 const ApproveForBuilding FlowEvent = "approve-for-building"
 
-// Prioritize moves a flow from Unprioritized to Agent Ready, where factory
+// Prioritize moves a flow from init to ready, where factory
 // starts work on the plan. It applies at once when no task is out.
 const Prioritize FlowEvent = "prioritize"
 

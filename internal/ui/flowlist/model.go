@@ -504,42 +504,33 @@ func (m *Model) keepSelection() {
 	}
 }
 
-// group is where flow f goes in the list: by who its next waits on, after
-// Not started. A flow whose next is empty, such as one its blockers hold,
-// goes in the last group.
+// group is where flow f goes in the list: flows are grouped by who factory
+// waits on, so whatever waits on the developer, even a plan not yet
+// started, is found in one place.
 func group(f circleci.Flow) int {
-	next := moves(f.Next)
+	waitingOn := oneLine(f.WaitingOn)
 	switch {
-	case planstate.IsUnprioritized(f.State):
-		return 2
-	case planstate.WaitsOnHuman(next):
+	case waitingOn == planstate.Human:
 		return 0
-	case planstate.AgentActs(next):
+	case oneLine(f.State) == planstate.Init:
+		return 2
+	case waitingOn == planstate.Session, waitingOn == planstate.Daemon:
 		return 1
 	}
 	return 3
 }
 
-// moves is next as planstate reads it, each field kept to one line.
-func moves(next []circleci.Transition) []planstate.Move {
-	out := make([]planstate.Move, len(next))
-	for i, t := range next {
-		out[i] = planstate.Move{Actor: oneLine(t.Actor), Event: oneLine(string(t.Event))}
-	}
-	return out
-}
-
-// phaseOrder is how the phases chunk knows sort within a group;
+// phaseOrder is how the steps chunk knows sort within a group;
 // others follow in the order they first appear.
 var phaseOrder = []string{"Planning", "Building"}
 
-// phase is the sub-group flow f goes in within the first two groups: its
-// state's phase, or "" in the others.
+// phase is the sub-group flow f goes in within the first two groups: the
+// label of its state, or "" in the others.
 func phase(f circleci.Flow) string {
 	if g := group(f); g != 0 && g != 1 {
 		return ""
 	}
-	return planstate.Parse(f.State)
+	return planstate.Step(oneLine(f.State))
 }
 
 // samePhase is whether a and b are one sub-group.

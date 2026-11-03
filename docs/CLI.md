@@ -343,12 +343,12 @@ chunk
   factory daemon running with `FACTORY_PLAN_STORE=circleci` as the CircleCI
   user chunk is signed in as; it checks the daemon before it opens, and says in
   the activity pane if the session could not claim the plan. While the plan
-  is in Planning (or Unprioritized, where factory starts a new plan) and
-  factory has a task for a session no one is running, the screen resumes the
-  session on its own and tells it to claim the plan again, with none of the
-  developer's words; it tries once per flow state, and never for a plan past
-  Planning. A plan a session has claimed and let go of while init or
-  Unprioritized is not resumed again until it moves on; `R` still resumes
+  is being planned (factory's `init`, `ready`, `refine-proposal` or
+  `refine-units`) and factory waits on a session no one is running, the
+  screen resumes the session on its own and tells it to claim the plan
+  again, with none of the developer's words; it tries once per flow state,
+  and never for a plan past planning. A plan a session has claimed and let
+  go of while in init is not resumed again until it moves on; `R` still resumes
   it. A new plan's request that could not start the session is kept,
   and sent in place of that claim. Closing the screen stops the session,
   which frees its claim. A plan opened again in a later screen picks up the
@@ -409,33 +409,30 @@ chunk
   the other comments, and can be deleted before then. Comments on an edited part follow
   it, or are listed after the plan as for any part rewritten.
 
-  `ctrl+s` approves the plan, after a `y`, once factory's review of it has
-  passed and factory waits on you, when the status strip under the
-  header reads `Next: you approve the plan · ctrl+s`; until then it reads
-  `Now: factory is reviewing the plan`. A plan waits there after its design
-  is written too: while factory waits for the design to be approved rather
-  than the plan, the strip reads `Next: you approve the design · ctrl+s`, and
-  `ctrl+s` approves the design, so the session writes the units, once its
-  comments are sent and resolved; the action bar then waits for factory, as
-  it does after a hand-off. While factory waits for the plan's 3. Open
-  Questions to be answered, the strip reads
-  `Next: you answer 3. Open Questions in comments`, and `ctrl+s` offers no
-  approval until they are answered in comments and sent. Approving reads the plan as factory has it, not the screen's copy.
+  `ctrl+s` sends the approval factory requires of you. It approves the plan,
+  after a `y`, when factory waits on you and requires the plan's approval,
+  even if it requires the design's too. The status strip under the header
+  then reads `Next: you approve the plan · ctrl+s`. While factory reviews the
+  plan, the strip reads `Now: factory is reviewing the plan`. `ctrl+s` then
+  says to wait for the review.
 
-  A plan in Integrating - Human whose PR still conflicts with its base, after
-  factory's own rebase of that head, reads PR conflicts in the header.
-  `ctrl+s` then hands it back to factory's agent to rebase, after a `y`, by
-  sending factory's `resolve-conflicts` event, and the action bar waits for
-  factory to move it. While comments are queued on it, `ctrl+s` does not
-  hand it back: the comments must be saved first, and saving them hands the
-  plan to the agent too, which rebases it.
+  The design's approval is next when factory waits on you and requires it
+  but not the plan's. The strip then reads `Next: you approve the design ·
+  ctrl+s`. `ctrl+s` approves the design. Once its comments are sent and
+  resolved, the session then writes the units. The action bar waits for
+  factory, as it does after a hand-off.
 
-  A plan not yet started (Unprioritized) reads
-  `Next: you start work · ctrl+s` in the strip, and `ctrl+s` starts it, after
-  a `y`, by sending factory's `prioritize` event. The strip's Next follows
-  factory's order: `resolve-conflicts` comes first when offered, and the
-  `abandon` events factory offers in every live state are never Next. A plan
-  with nothing to do next waits on its first blocker that is not Done.
+  Factory may require another step of you. The strip then names that step,
+  and `ctrl+s` approves nothing. Until the Open Questions are answered in
+  comments and sent, it reads `Next: you answer 3. Open Questions in
+  comments`. Once the plan is built, it reads `Next: you merge the PR`. At
+  any other time, `ctrl+s` says why it cannot approve.
+
+  A plan may not be started yet (init) and factory waits on you to start it.
+  The strip then reads `Next: you start work · ctrl+s`. `ctrl+s` starts it,
+  after a `y`. The strip's Next is who factory waits on: your step when it
+  waits on you, else factory's reason it is waiting; a plan waiting on its
+  blockers names the first that still blocks.
 
   `x` abandons the plan, while factory offers `abandon` (in every live
   state): the strip asks `Abandon plan as: c canceled · w won't do ·
