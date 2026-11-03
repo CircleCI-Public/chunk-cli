@@ -55,7 +55,7 @@ func newPlannerDaemon(t *testing.T) *plannerDaemon {
 
 	pd := &plannerDaemon{
 		daemon: d, root: root,
-		plans:  &fakePlans{id: "plan-1", state: "Planning - Agent", phase: circleci.PhaseStarted},
+		plans:  &fakePlans{id: "plan-1", state: "refine-proposal", phase: circleci.PhaseStarted},
 		starts: &fakeStarts{},
 		rec:    &memRecord{},
 		mux:    http.NewServeMux(),

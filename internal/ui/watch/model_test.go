@@ -69,7 +69,7 @@ func TestRenderHeader_namesAnUpdate(t *testing.T) {
 // waits 5 seconds, so it runs in a synctest bubble.
 func claimedModel(t *testing.T) Model {
 	t.Helper()
-	flow := circleci.Flow{ID: "b", Title: "Beta", State: "Building - Agent", SessionID: "cc6b734c-1111",
+	flow := circleci.Flow{ID: "b", Title: "Beta", State: "build", SessionID: "cc6b734c-1111",
 		Next: []circleci.Transition{{Actor: "session", TaskCategory: "build-unit", IsDispatched: true}}}
 	list := flowList(t, flow).WithBlockers(func(context.Context, string) ([]planstate.Blocker, error) { return nil, nil })
 	m := sized(New().WithConnection(chunkd.Connection{}).WithFlowList(list))

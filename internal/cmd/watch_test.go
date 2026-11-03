@@ -119,8 +119,8 @@ func TestOpenFlows(t *testing.T) {
 	flows := []circleci.Flow{
 		{ID: "a", Phase: circleci.PhaseStarted, SessionID: "s1", Task: &circleci.FlowTask{ID: "t", Category: "build-unit"}},
 		{ID: "b", Phase: circleci.PhaseReceived},
-		{ID: "ended", State: "Done", Phase: circleci.PhaseEnded},
-		{ID: "old", State: "Done"}, // a conductor that serves no phase
+		{ID: "ended", State: "ended", Phase: circleci.PhaseEnded},
+		{ID: "old", State: "ended"}, // a conductor that serves no phase
 	}
 
 	got := openFlows(flows)

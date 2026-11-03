@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 )
 
@@ -17,8 +16,8 @@ type fakeStore struct {
 	Message string
 	StateV  string
 	// EventsV, once setEvents sets it, is the events the plan's flow
-	// applies now; until then they follow StateV, as factory's would for
-	// address-comments and, in a Human state, both approvals.
+	// applies now; until then, while FlowV waits on the developer, they are
+	// address-comments and both approvals.
 	EventsV   []string
 	eventsSet bool
 	// TaskV is the category of the task the plan's flow has out, as setTask
@@ -95,7 +94,7 @@ type fakeStore struct {
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{StateV: "Planning - Human", Edited: map[string]string{}}
+	return &fakeStore{StateV: "refine-proposal", FlowV: Flow{WaitingOn: string(ActorHuman)}, Edited: map[string]string{}}
 }
 
 func (f *fakeStore) ID() string {
@@ -128,7 +127,7 @@ func (f *fakeStore) Flow(context.Context) (Flow, error) {
 	switch {
 	case f.eventsSet:
 		out.Events = f.EventsV
-	case strings.HasSuffix(f.StateV, " - Human"):
+	case f.FlowV.WaitingOn == string(ActorHuman):
 		// Both approvals, as a flow factory stored before it told them
 		// apart lists, so the plan's units decide which ctrl+s offers.
 		out.Events = []string{"address-comments", "approve-for-units", "approve-for-building"}

@@ -177,7 +177,7 @@ func TestStoreCreateNamesThePlan(t *testing.T) {
 			assert.Check(t, cmp.Equal(p.Title, title))
 			assert.Check(t, cmp.Equal(p.Text,
 				"# "+tc.want+"\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"))
-			assert.Check(t, cmp.Equal(p.State, "Unprioritized"))
+			assert.Check(t, cmp.Equal(p.State, "init"))
 		})
 	}
 }
@@ -307,32 +307,11 @@ func TestStoreAddressCommentsSendsTheEvent(t *testing.T) {
 
 	store, _, cci = createdStore(t)
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
+	cci.SetFactoryPlanState(store.ID(), "refine-proposal")
 	err = store.AddressComments(ctx)
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"address-comments"}))
-}
-
-// TestStoreResolveConflictsSendsTheEvent checks that ResolveConflicts sends
-// the plan's flow factory's resolve-conflicts event, and fails for a plan
-// with no flow to send it.
-func TestStoreResolveConflictsSendsTheEvent(t *testing.T) {
-	store, _, cci := createdStore(t)
-	ctx := context.Background()
-	cci.DropFactoryFlow(store.ID())
-
-	err := store.ResolveConflicts(ctx)
-	assert.Check(t, cmp.ErrorContains(err, "send the resolve-conflicts event"))
-
-	store, _, cci = createdStore(t)
-	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryPlanState(store.ID(), "Integrating - Human")
-	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
-	err = store.ResolveConflicts(ctx)
-	assert.Check(t, err)
-	p, _ := cci.FactoryPlan(store.ID())
-	assert.Check(t, cmp.DeepEqual(p.Events, []string{"resolve-conflicts"}))
 }
 
 // TestStoreAnswerOpenQuestionsSendsTheEvent checks that AnswerOpenQuestions
@@ -348,7 +327,7 @@ func TestStoreAnswerOpenQuestionsSendsTheEvent(t *testing.T) {
 
 	store, _, cci = createdStore(t)
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryPlanState(store.ID(), "Building - Human")
+	cci.SetFactoryPlanState(store.ID(), "build")
 	cci.SetFactoryApplicableEvents(store.ID(), "answer-open-questions", "abandon")
 	err = store.AnswerOpenQuestions(ctx)
 	assert.NilError(t, err)
@@ -368,7 +347,7 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 	}{
 		{
 			name:  "StartWork sends prioritize",
-			state: "Unprioritized",
+			state: "init",
 			call:  func(ctx context.Context, s *Store) error { return s.StartWork(ctx) },
 			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
 				p, _ := cci.FactoryPlan(id)
@@ -377,7 +356,7 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 		},
 		{
 			name:  "Abandon sends abandon with its reason",
-			state: "Planning - Human",
+			state: "refine-proposal",
 			call:  func(ctx context.Context, s *Store) error { return s.Abandon(ctx, "wont-do") },
 			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
 				p, _ := cci.FactoryPlan(id)
@@ -387,7 +366,7 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 		},
 		{
 			name:  "Delete deletes the plan",
-			state: "Done",
+			state: "ended",
 			call:  func(ctx context.Context, s *Store) error { return s.Delete(ctx) },
 			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
 				_, ok := cci.FactoryPlan(id)
@@ -436,7 +415,7 @@ func TestStoreApproveDesignSendsTheEvent(t *testing.T) {
 	store, _, cci := createdStore(t)
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
+	cci.SetFactoryPlanState(store.ID(), "refine-proposal")
 	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "approve-for-units", "abandon")
 
 	err := store.ApproveDesign(ctx)
@@ -469,7 +448,7 @@ func TestStoreApproveDesignRefusesWhatFactoryDoesNotOffer(t *testing.T) {
 			store, _, cci := createdStore(t)
 			ctx := context.Background()
 			cci.ClaimFactoryPlan(store.ID(), "s-1")
-			cci.SetFactoryPlanState(store.ID(), "Planning - Human")
+			cci.SetFactoryPlanState(store.ID(), "refine-proposal")
 			cci.SetFactoryApplicableEvents(store.ID(), tc.events...)
 
 			err := store.ApproveDesign(ctx)
@@ -569,12 +548,12 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 			"fixup_count": 1, "finding_count": 3, "revision_count": 0,
 		},
 	})
-	cci.SetFactoryPlanState(store.ID(), "Building - Agent")
+	cci.SetFactoryPlanState(store.ID(), "build")
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
 	// Its events are the human events of its next, which has none.
 	assert.Check(t, cmp.DeepEqual(f, plan.Flow{
-		State:  "Building - Agent",
+		State:  "build",
 		Events: []string{},
 		Task:   "build-unit",
 		Unit:   "Unit 2: parser",
@@ -602,11 +581,11 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Outcome: "merged",
 		Next:    []fakes.FactoryTransition{},
 	})
-	cci.SetFactoryPlanState(store.ID(), "Done")
+	cci.SetFactoryPlanState(store.ID(), "ended")
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(f, plan.Flow{
-		State:      "Done",
+		State:      "ended",
 		Events:     []string{},
 		Deviations: []string{},
 		Ended:      true,
@@ -650,11 +629,11 @@ func TestStoreFamily(t *testing.T) {
 		cci.SetFactoryPlanState(p.ID, state)
 		return p.ID
 	}
-	parent := newPlan("parent", "Building - Agent")
-	c1 := newPlan("child one", "Planning - Human")
-	done := newPlan("child done", "Done")
-	c2 := newPlan("child two", "Building - Agent")
-	blocker := newPlan("blocker", "Integrating - Human")
+	parent := newPlan("parent", "build")
+	c1 := newPlan("child one", "refine-proposal")
+	done := newPlan("child done", "ended")
+	c2 := newPlan("child two", "build")
+	blocker := newPlan("blocker", "integrate")
 	cci.SetFactoryParent(id, parent)
 	for _, c := range []string{c1, done, c2} {
 		cci.SetFactoryParent(c, id)
@@ -669,25 +648,25 @@ func TestStoreFamily(t *testing.T) {
 		Parent: &plan.Relative{
 			ID:    parent,
 			Title: "parent",
-			State: "Building - Agent",
+			State: "build",
 		},
 		Children: []plan.Relative{
 			{
 				ID:    c1,
 				Title: "child one",
-				State: "Planning - Human",
+				State: "refine-proposal",
 			},
 			{
 				ID:    c2,
 				Title: "child two",
-				State: "Building - Agent",
+				State: "build",
 			},
 		},
 		Blockers: []plan.Relative{
 			{
 				ID:     blocker,
 				Title:  "blocker",
-				State:  "Integrating - Human",
+				State:  "integrate",
 				Active: true,
 			},
 			{
@@ -799,10 +778,10 @@ func TestStoreStateReadsTheFlow(t *testing.T) {
 	store, client, cci := createdStore(t)
 	ctx := context.Background()
 
-	cci.SetFactoryPlanState(store.ID(), "Planning - Human")
+	cci.SetFactoryPlanState(store.ID(), "refine-proposal")
 	st, err := store.State(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(st, "Planning - Human"))
+	assert.Check(t, cmp.Equal(st, "refine-proposal"))
 
 	cci.DropFactoryFlow(store.ID())
 	st, err = store.State(ctx)

@@ -61,14 +61,15 @@ func createdPlan(t *testing.T, text string) (*circleci.Client, *fakes.FakeCircle
 }
 
 // TestApproveWaitsForTheReview checks that a plan is approved only once
-// its review has passed: a plan still in Planning - Agent may have a review
-// running, or findings unfixed.
+// its review has passed: a plan whose session still has a review task out
+// may have findings unfixed.
 func TestApproveWaitsForTheReview(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
 
-	cci.SetFactoryPlanState(id, "Planning - Agent")
+	cci.SetFactoryPlanState(id, "refine-proposal")
+	cci.SetFactoryTask(id, "review-plan")
 	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
 	p, _ := cci.FactoryPlan(id)
@@ -114,7 +115,7 @@ func TestApproveReleasesThePlanningSession(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
-	cci.SetFactoryPlanState(id, "Planning - Human")
+	cci.SetFactoryPlanState(id, "refine-proposal")
 	cci.SetFactoryApplicableEvents(id, "approve-for-building")
 
 	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
@@ -136,7 +137,7 @@ func TestApproveReleasesThePlanningSession(t *testing.T) {
 }
 
 // TestApproveReadsTheNewName checks that a plan in refine-units, waiting
-// on the developer, is approved as one in Planning - Human is.
+// on the developer, is approved as one in refine-proposal is.
 func TestApproveReadsTheNewName(t *testing.T) {
 	client, cci, id := approvablePlan(t, "s-1")
 	cci.SetFactoryPlanState(id, "refine-units")
@@ -154,7 +155,7 @@ func approvablePlan(t *testing.T, holder string) (*circleci.Client, *fakes.FakeC
 	if holder != "" {
 		cci.ClaimFactoryPlan(id, holder)
 	}
-	cci.SetFactoryPlanState(id, "Planning - Human")
+	cci.SetFactoryPlanState(id, "refine-proposal")
 	cci.SetFactoryApplicableEvents(id, "approve-for-building")
 	return client, cci, id
 }
@@ -310,7 +311,7 @@ func TestApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n1. FNDSF-21 api: add it\n")
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
-	cci.SetFactoryPlanState(id, "Planning - Human")
+	cci.SetFactoryPlanState(id, "refine-proposal")
 	cci.SetFactoryApplicableEvents(id, "address-comments", "approve-for-building", "abandon")
 
 	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
@@ -319,14 +320,14 @@ func TestApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
 }
 
-// TestApproveIgnoresRequestRevision checks that a plan in Planning - Human is
+// TestApproveIgnoresRequestRevision checks that a plan in refine-proposal is
 // approved though its next lists request-revision for a session, as factory
 // lists it in every live state without waiting on it.
 func TestApproveIgnoresRequestRevision(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
-	cci.SetFactoryPlanState(id, "Planning - Human")
+	cci.SetFactoryPlanState(id, "refine-proposal")
 	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{Next: []fakes.FactoryTransition{
 		{Actor: "human", Event: "address-comments"},
 		{Actor: "human", Event: "approve-for-building"},
@@ -347,7 +348,7 @@ func TestApproveRefusesAPlanWithQuestionsOpen(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
-	cci.SetFactoryPlanState(id, "Planning - Human")
+	cci.SetFactoryPlanState(id, "refine-proposal")
 	cci.SetFactoryApplicableEvents(id, "address-comments", "abandon")
 
 	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
@@ -399,7 +400,7 @@ func TestApproveWaitsForUnits(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n")
 	ctx := context.Background()
 	cci.ClaimFactoryPlan(id, "s-1")
-	cci.SetFactoryPlanState(id, "Planning - Human")
+	cci.SetFactoryPlanState(id, "refine-proposal")
 
 	for _, tc := range []struct {
 		name   string
@@ -449,7 +450,7 @@ func TestApproveWaitsForUnits(t *testing.T) {
 func TestApproveCountsDoneUnits(t *testing.T) {
 	client, cci, id := createdPlan(t, "# A plan\n")
 	ctx := context.Background()
-	cci.SetFactoryPlanState(id, "Planning - Human")
+	cci.SetFactoryPlanState(id, "refine-proposal")
 	err := client.SetPlanText(ctx, id, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag (done)\n")
 	assert.NilError(t, err)
 	cci.SetFactoryPlanUnits(id, fakes.FactoryUnit{Name: "Unit 1: Add the flag", Done: true})

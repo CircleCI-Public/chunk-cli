@@ -207,7 +207,7 @@ func TestApprovingApprovesThePlanInFactory(t *testing.T) {
 func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan"
-	store.StateV = "Planning - Agent"
+	store.StateV = "refine-units"
 	store.FlowV = Flow{Claimed: true, Next: []Step{{Actor: "session", Task: "review-plan", Dispatched: true}, {Actor: "session", Event: "request-revision"}}}
 	sent := false
 	approve := func(func(string)) (string, error) {
@@ -253,7 +253,7 @@ func TestReadyToApprove(t *testing.T) {
 	}{
 		{
 			name: "old name waits on you",
-			flow: Flow{State: "Planning - Human", Next: human("address-comments", "approve-for-building", "abandon")},
+			flow: Flow{State: "refine-proposal", Next: human("address-comments", "approve-for-building", "abandon")},
 			want: true,
 		},
 		{
@@ -272,11 +272,11 @@ func TestReadyToApprove(t *testing.T) {
 		},
 		{
 			name: "old review running",
-			flow: Flow{State: "Planning - Agent", Next: append([]Step{review}, human("approve-for-units", "approve-for-building")...)},
+			flow: Flow{State: "refine-units", Next: append([]Step{review}, human("approve-for-units", "approve-for-building")...)},
 		},
 		{
 			name: "request-revision while it waits on you",
-			flow: Flow{State: "Planning - Human", Next: append(human("address-comments", "approve-for-building"), rr, Step{Actor: "human", Event: "abandon"})},
+			flow: Flow{State: "refine-proposal", Next: append(human("address-comments", "approve-for-building"), rr, Step{Actor: "human", Event: "abandon"})},
 			want: true,
 		},
 		{
@@ -285,11 +285,11 @@ func TestReadyToApprove(t *testing.T) {
 		},
 		{
 			name: "approved, factory moving it",
-			flow: Flow{State: "Planning - Human", Next: []Step{move}},
+			flow: Flow{State: "refine-proposal", Next: []Step{move}},
 		},
 		{
 			name: "no next",
-			flow: Flow{State: "Planning - Human"},
+			flow: Flow{State: "refine-proposal"},
 		},
 		{
 			name: "only abandon",
@@ -338,7 +338,7 @@ func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
 	t.Run("request-revision listed", func(t *testing.T) {
 		store := newFakeStore()
 		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
-		store.StateV = "Planning - Human"
+		store.StateV = "refine-proposal"
 		store.FlowV = Flow{Next: []Step{
 			{Actor: "human", Event: "address-comments"},
 			{Actor: "human", Event: "approve-for-building"},
@@ -376,11 +376,11 @@ func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
 }
 
 // A plan in a state chunk does not know, as factory may add before chunk is
-// updated, or one chunk offers no action for, such as Integrating - Human
-// with no conflict, is shown in that state, is not said to be in review, and
+// updated, or one chunk offers no action for, such as integrate with no
+// conflict, is shown in that state, is not said to be in review, and
 // is not sent.
 func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
-	for _, state := range []string{"Blocked", "Building - Agent", "Integrating - Bot", "Integrating - Human", "Paused\x1b[31m", "build", "ended"} {
+	for _, state := range []string{"Blocked", "Reviewing - Bot", "integrate", "Paused\x1b[31m", "build", "ended"} {
 		t.Run(state, func(t *testing.T) {
 			store := newFakeStore()
 			store.TextV = "# Plan"
@@ -450,8 +450,8 @@ func TestCtrlSApprovesTheDesignOfAPlanWithNoUnits(t *testing.T) {
 	store.mu.Lock()
 	approved, handedOff := slices.Clone(store.DesignApproved), slices.Clone(store.HandedOff)
 	store.mu.Unlock()
-	if len(approved) != 1 || approved[0] != "Planning - Human" {
-		t.Fatalf("the design was not approved from Planning - Human once: %v", approved)
+	if len(approved) != 1 || approved[0] != "refine-proposal" {
+		t.Fatalf("the design was not approved from refine-proposal once: %v", approved)
 	}
 	if len(handedOff) != 0 {
 		t.Errorf("approving the design handed factory comments: %v", handedOff)
@@ -523,7 +523,7 @@ func TestCtrlSApprovesTheDesignWhenFactoryOffersOnlyUnits(t *testing.T) {
 	assert.Check(t, cmp.Equal(m.moving.kind, movingDesign))
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	assert.Check(t, cmp.DeepEqual(store.DesignApproved, []string{"Planning - Human"}))
+	assert.Check(t, cmp.DeepEqual(store.DesignApproved, []string{"refine-proposal"}))
 }
 
 // TestWaitingForFactoryEndsWhenTheStateMoves checks that the wait a design
@@ -536,7 +536,7 @@ func TestWaitingForFactoryEndsWhenTheStateMoves(t *testing.T) {
 	}{
 		{
 			name: "agent",
-			to:   "Planning - Agent",
+			to:   "refine-units",
 		},
 		{
 			name: "a state chunk does not know",
@@ -556,7 +556,7 @@ func TestWaitingForFactoryEndsWhenTheStateMoves(t *testing.T) {
 
 			// A refresh in the same state keeps the wait.
 			m = drive(t, m, pollMsg{})
-			assert.Check(t, m.moving != nil, "the wait ended with the plan still in Planning - Human")
+			assert.Check(t, m.moving != nil, "the wait ended with the plan still in refine-proposal")
 			assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "waiting for factory"))
 
 			store.mu.Lock()
@@ -567,11 +567,11 @@ func TestWaitingForFactoryEndsWhenTheStateMoves(t *testing.T) {
 			assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "waiting for factory"), m.actionBar())
 			assert.Check(t, !strings.Contains(m.actionBar(), fgSeq(m.purple())), "the bar's border stayed purple after the wait")
 
-			if to != "Planning - Agent" {
+			if to != "refine-units" {
 				return
 			}
 			store.mu.Lock()
-			store.StateV = "Planning - Human"
+			store.StateV = "refine-units"
 			store.TextV += "\n### Unit 1: add the flag\n\nParse it in main.go.\n"
 			store.UnitsV = []Unit{{Name: "Unit 1: add the flag"}}
 			store.mu.Unlock()
@@ -593,7 +593,7 @@ func TestQuestionInTheStatusBarOutlivesAChangeOfState(t *testing.T) {
 	assert.Assert(t, m.confirming)
 
 	store.mu.Lock()
-	store.StateV = "Planning - Agent"
+	store.StateV = "refine-units"
 	store.mu.Unlock()
 	m = drive(t, m, pollMsg{})
 	assert.Check(t, m.confirming)
@@ -730,7 +730,7 @@ func TestWaitingBarYieldsToStatuses(t *testing.T) {
 
 	// The refresh that ends the wait clears the error with it.
 	store.mu.Lock()
-	store.StateV = "Planning - Agent"
+	store.StateV = "refine-units"
 	store.mu.Unlock()
 	m = drive(t, m, pollMsg{})
 	assert.Check(t, m.moving == nil, "the wait outlived the plan moving")
@@ -747,13 +747,13 @@ func TestWaitingTitleNamesTheMove(t *testing.T) {
 	}{
 		{
 			name: "planning",
-			from: "Planning - Human",
-			want: "Plan · Planning - Human → Agent",
+			from: "refine-proposal",
+			want: "Plan · refine-proposal → …",
 		},
 		{
 			name: "building",
-			from: "Building - Human",
-			want: "Plan · Building - Human → Agent",
+			from: "build",
+			want: "Plan · build → …",
 		},
 		{
 			name: "unknown state",
@@ -908,14 +908,14 @@ func planModel(t *testing.T) (Model, *fakeStore) {
 	return m, store
 }
 
-// conflictingModel is the screen on a plan in Integrating - Human whose PR
+// conflictingModel is the screen on a plan in integrate whose PR
 // factory found conflicting, so its flow takes resolve-conflicts.
 func conflictingModel(t *testing.T) (Model, *fakeStore) {
 	t.Helper()
 	store := newFakeStore()
 	store.Created = true
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
-	store.StateV = "Integrating - Human"
+	store.StateV = "integrate"
 	store.setEvents("address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
 	m := New(context.Background(), turnReturning("ok"), nil, store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
@@ -950,17 +950,17 @@ func TestCtrlSResolvesConflicts(t *testing.T) {
 	store.mu.Lock()
 	sent := slices.Clone(store.ConflictsSent)
 	store.mu.Unlock()
-	assert.Check(t, cmp.DeepEqual(sent, []string{"Integrating - Human"}))
+	assert.Check(t, cmp.DeepEqual(sent, []string{"integrate"}))
 	assert.Assert(t, m.moving != nil, "no wait for factory after resolve-conflicts")
 	assert.Check(t, cmp.Equal(m.moving.kind, movingConflicts))
 	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "Conflicts sent · waiting for factory to hand the rebase to the agent…"))
 
 	store.mu.Lock()
-	store.StateV = "Integrating - Agent"
+	store.StateV = "ended"
 	store.EventsV = []string{}
 	store.mu.Unlock()
 	m = drive(t, m, pollMsg{})
-	assert.Check(t, m.moving == nil, "the wait outlived the move to Integrating - Agent")
+	assert.Check(t, m.moving == nil, "the wait outlived the move to ended")
 	assert.Check(t, !strings.Contains(ansi.Strip(m.Content()), "PR conflicts"))
 }
 
@@ -1018,7 +1018,7 @@ func TestSSavesCommentsFromThePlan(t *testing.T) {
 	if len(store.Added) != 1 || store.Added[0][1] != "too vague" {
 		t.Fatalf("comments saved: %+v", store.Added)
 	}
-	if len(store.HandedOff) != 1 || store.HandedOff[0] != "Planning - Human" {
+	if len(store.HandedOff) != 1 || store.HandedOff[0] != "refine-proposal" {
 		t.Errorf("handed off: %+v", store.HandedOff)
 	}
 	if got := agent.Sent(); len(got) != 0 {
@@ -1029,7 +1029,7 @@ func TestSSavesCommentsFromThePlan(t *testing.T) {
 	}
 	assert.Assert(t, m.moving != nil, "no wait for factory after the hand-off")
 	assert.Check(t, cmp.Equal(m.moving.kind, movingComments))
-	assert.Check(t, cmp.Equal(m.moving.from, "Planning - Human"))
+	assert.Check(t, cmp.Equal(m.moving.from, "refine-proposal"))
 
 	bar := ansi.Strip(m.actionBar())
 	assert.Check(t, cmp.Contains(bar, "Comments sent · waiting for factory to hand them to chunk…"))
@@ -1038,7 +1038,7 @@ func TestSSavesCommentsFromThePlan(t *testing.T) {
 	view := ansi.Strip(m.Content())
 	assert.Check(t, cmp.Contains(view, "Waiting for factory"))
 	assert.Check(t, !strings.Contains(view, "Next: you approve the design · ctrl+s") && !strings.Contains(view, "Next: you approve the plan · ctrl+s"), view)
-	assert.Check(t, cmp.Contains(view, "Plan · Planning - Human → Agent"))
+	assert.Check(t, cmp.Contains(view, "Plan · refine-proposal → …"))
 }
 
 // sendOneComment is a plan screen on store, refreshed, with a comment "too
@@ -1467,7 +1467,7 @@ func TestScreenFitsTheTerminal(t *testing.T) {
 		store = newFakeStore()
 		store.Created = true
 		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
-		store.StateV = "Integrating - Human"
+		store.StateV = "integrate"
 		store.setEvents("address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
 		m = New(context.Background(), turnReturning("ok"), nil, store, "")
 		m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
@@ -2296,7 +2296,7 @@ func TestActivityWithNothingSentIsAFactoryTask(t *testing.T) {
 
 			// Factory hands out the task, then claude starts on it.
 			store.setTask(tc.task)
-			m.moving = &transition{kind: movingComments, from: "Planning - Human", since: time.Now()}
+			m.moving = &transition{kind: movingComments, from: "refine-proposal", since: time.Now()}
 			m = drive(t, m, eventFor(m, Event{Activity: "reading main.go"}))
 			assert.Assert(t, m.busy && m.byTask, "busy %v, byTask %v; want a factory task's turn", m.busy, m.byTask)
 			assert.Check(t, m.moving == nil, "a factory task started and the screen still waits for factory")
@@ -2451,28 +2451,28 @@ func TestResumeOwed(t *testing.T) {
 	}{
 		{
 			name: "waiting on a planner",
-			flow: Flow{State: "Planning - Agent", Next: session},
+			flow: Flow{State: "refine-units", Next: session},
 			want: true,
 		},
 		{
 			name: "ended",
-			flow: Flow{State: "Planning - Agent", Next: session, Ended: true},
+			flow: Flow{State: "refine-units", Next: session, Ended: true},
 		},
 		{
 			name: "claimed",
-			flow: Flow{State: "Planning - Agent", Next: session, Claimed: true},
+			flow: Flow{State: "refine-units", Next: session, Claimed: true},
 		},
 		{
 			name: "building",
-			flow: Flow{State: "Building - Agent", Next: session},
+			flow: Flow{State: "build", Next: session},
 		},
 		{
 			name: "waiting on the developer",
-			flow: Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}}},
+			flow: Flow{State: "refine-proposal", Next: []Step{{Actor: "human", Event: "address-comments"}}},
 		},
 		{
 			name: "new plan",
-			flow: Flow{State: "Unprioritized", Next: []Step{{Actor: "session", Task: "record-context"}}},
+			flow: Flow{State: "init", Next: []Step{{Actor: "session", Task: "record-context"}}},
 			want: true,
 		},
 		{
@@ -2482,19 +2482,19 @@ func TestResumeOwed(t *testing.T) {
 		},
 		{
 			name: "deferred",
-			flow: Flow{State: "Unprioritized", Next: []Step{{Actor: "human", Event: "prioritize"}}},
+			flow: Flow{State: "init", Next: []Step{{Actor: "human", Event: "prioritize"}}},
 		},
 		{
 			name: "waiting on the developer, request-revision listed",
-			flow: Flow{State: "Planning - Human", Next: []Step{{Actor: "human", Event: "address-comments"}, rr}},
+			flow: Flow{State: "refine-proposal", Next: []Step{{Actor: "human", Event: "address-comments"}, rr}},
 		},
 		{
 			name: "deferred, request-revision listed",
-			flow: Flow{State: "Unprioritized", Next: []Step{{Actor: "human", Event: "prioritize"}, rr}},
+			flow: Flow{State: "init", Next: []Step{{Actor: "human", Event: "prioritize"}, rr}},
 		},
 		{
 			name: "waiting on a planner, request-revision listed",
-			flow: Flow{State: "Planning - Agent", Next: append(slices.Clone(session), rr)},
+			flow: Flow{State: "refine-units", Next: append(slices.Clone(session), rr)},
 			want: true,
 		},
 		{
@@ -2531,22 +2531,22 @@ func setFlow(store *fakeStore, state string, next []Step, claimed bool) {
 
 func TestRefreshResumesAPlannerThatIsNotThere(t *testing.T) {
 	agent := newFakeAgent()
-	m, store := resumeModel(t, agent, "Planning - Agent", sessionStep)
+	m, store := resumeModel(t, agent, "refine-units", sessionStep)
 	m = refreshed(t, m)
 	assert.Check(t, cmp.Equal(agent.Resumes(), 1))
 	m = refreshed(t, m)
 	assert.Check(t, cmp.Equal(agent.Resumes(), 1), "resumed twice in one state")
 
-	setFlow(store, "Planning - Agent", sessionStep, true)
+	setFlow(store, "refine-units", sessionStep, true)
 	m = refreshed(t, m)
-	setFlow(store, "Planning - Agent", sessionStep, false)
+	setFlow(store, "refine-units", sessionStep, false)
 	refreshed(t, m)
 	assert.Check(t, cmp.Equal(agent.Resumes(), 2), "not resumed after a session held the claim and lost it")
 	assert.Check(t, cmp.Len(agent.Sent(), 0))
 }
 
 func TestRefreshDoesNotResumeAnUnprioritizedPlanASessionLetGo(t *testing.T) {
-	for _, state := range []string{"init", "Unprioritized"} {
+	for _, state := range []string{"init"} {
 		t.Run(state, func(t *testing.T) {
 			t.Run("claimed then released", func(t *testing.T) {
 				agent := newFakeAgent()
@@ -2562,7 +2562,7 @@ func TestRefreshDoesNotResumeAnUnprioritizedPlanASessionLetGo(t *testing.T) {
 				}
 				assert.Check(t, cmp.Equal(agent.Resumes(), 1), "resumed after a session let the plan go")
 
-				setFlow(store, "Planning - Agent", sessionStep, false)
+				setFlow(store, "refine-units", sessionStep, false)
 				m = refreshed(t, m)
 				assert.Check(t, cmp.Equal(agent.Resumes(), 2), "not resumed once the state moved")
 
@@ -2598,36 +2598,12 @@ func TestRefreshDoesNotResumeAnUnprioritizedPlanASessionLetGo(t *testing.T) {
 			})
 		})
 	}
-	t.Run("init then Unprioritized", func(t *testing.T) {
-		// claimedIn compares exact states, so a move from init to
-		// Unprioritized is a new state: one more resume, then none.
-		agent := newFakeAgent()
-		m, store := resumeModel(t, agent, "init", sessionStep)
-		m = refreshed(t, m)
-		setFlow(store, "init", sessionStep, true)
-		m = refreshed(t, m)
-		setFlow(store, "init", sessionStep, false)
-		m = refreshed(t, m)
-		assert.Check(t, cmp.Equal(agent.Resumes(), 1))
-
-		setFlow(store, "Unprioritized", sessionStep, false)
-		m = refreshed(t, m)
-		assert.Check(t, cmp.Equal(agent.Resumes(), 2), "not resumed on moving to Unprioritized")
-
-		setFlow(store, "Unprioritized", sessionStep, true)
-		m = refreshed(t, m)
-		setFlow(store, "Unprioritized", sessionStep, false)
-		for range 3 {
-			m = refreshed(t, m)
-		}
-		assert.Check(t, cmp.Equal(agent.Resumes(), 2), "resumed after a session let the plan go in Unprioritized")
-	})
 }
 
 func TestAFailedResumeIsShownOnceAndRetriedOnANewState(t *testing.T) {
 	agent := newFakeAgent()
 	agent.resumeErr = errors.New("no Claude Code")
-	m, store := resumeModel(t, agent, "Planning - Agent", sessionStep)
+	m, store := resumeModel(t, agent, "refine-units", sessionStep)
 	for range 3 {
 		m = refreshed(t, m)
 	}
@@ -2641,18 +2617,18 @@ func TestAFailedResumeIsShownOnceAndRetriedOnANewState(t *testing.T) {
 	assert.Check(t, cmp.Equal(failures, 1))
 	assert.Check(t, cmp.Contains(chatText(m), "Could not resume the planning session: no Claude Code"))
 
-	setFlow(store, "Planning - Human", []Step{{Actor: "human", Event: "address-comments"}}, false)
+	setFlow(store, "refine-proposal", []Step{{Actor: "human", Event: "address-comments"}}, false)
 	m = refreshed(t, m)
 	assert.Check(t, cmp.Equal(agent.Resumes(), 1), "resumed while factory waits on the developer")
 
-	setFlow(store, "Planning - Agent", sessionStep, false)
+	setFlow(store, "refine-units", sessionStep, false)
 	refreshed(t, m)
 	assert.Check(t, cmp.Equal(agent.Resumes(), 2), "not retried once the state changed")
 }
 
 func TestAPlanBeingBuiltIsNeverResumed(t *testing.T) {
 	agent := newFakeAgent()
-	m, _ := resumeModel(t, agent, "Building - Agent", sessionStep)
+	m, _ := resumeModel(t, agent, "build", sessionStep)
 	for range 3 {
 		m = refreshed(t, m)
 	}
@@ -2682,7 +2658,7 @@ func TestNoProjectNoResume(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := newFakeAgent()
-			m, _ := resumeModel(t, agent, "Planning - Agent", sessionStep)
+			m, _ := resumeModel(t, agent, "refine-units", sessionStep)
 			m = m.WithInbox("plan", tc.project)
 			refreshed(t, m)
 			assert.Check(t, cmp.Equal(agent.Resumes(), tc.want))
@@ -2708,7 +2684,7 @@ func TestAFailedRequestIsSentAgainNotResumed(t *testing.T) {
 
 	// Factory has the new plan, with a task for its planner; the request is
 	// still in flight, so a refresh starts nothing more.
-	setFlow(store, "Unprioritized", []Step{{Actor: "session", Task: "record-context"}}, false)
+	setFlow(store, "init", []Step{{Actor: "session", Task: "record-context"}}, false)
 	m = refreshed(t, m)
 	assert.Check(t, cmp.Len(agent.Sent(), 0))
 	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
@@ -3178,7 +3154,7 @@ func TestCommentOnSeveralBlocksFollowsThemWhenThePlanChanges(t *testing.T) {
 func TestPaneRendersStoreText(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 1. Outcome\n\nDone."
-	store.StateV = "Planning - Agent"
+	store.StateV = "refine-units"
 	m := New(context.Background(), newFakeAgent(), nil, store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = refreshed(t, m)
@@ -3190,7 +3166,7 @@ func TestPaneRendersStoreText(t *testing.T) {
 	if lines := strings.Split(view, "\n"); !strings.Contains(lines[headerRows], "Planning › Building") {
 		t.Errorf("strip does not show the step:\n%s", view)
 	}
-	if strings.Contains(view, "Plan · Planning - Agent") {
+	if strings.Contains(view, "Plan · refine-units") {
 		t.Errorf("title still shows the state:\n%s", view)
 	}
 }
@@ -3338,7 +3314,7 @@ func TestRefreshErrorKeepsPane(t *testing.T) {
 	m = refreshed(t, m)
 	before := m.plan
 
-	m.moving = &transition{kind: movingComments, from: "Planning - Human", since: time.Now()}
+	m.moving = &transition{kind: movingComments, from: "refine-proposal", since: time.Now()}
 	store.FlowErr = errors.New("network blip")
 	m = refreshed(t, m)
 	if m.plan != before {
@@ -3387,7 +3363,7 @@ func TestQueuedCommentsSavedOnSend(t *testing.T) {
 		store.Added[1] != [2]string{"* [AGENT] parse it in main.go", "second"} {
 		t.Fatalf("added: %+v", store.Added)
 	}
-	if len(store.HandedOff) != 1 || store.HandedOff[0] != "Planning - Human" {
+	if len(store.HandedOff) != 1 || store.HandedOff[0] != "refine-proposal" {
 		t.Fatalf("handed off: %+v", store.HandedOff)
 	}
 	assert.Check(t, cmp.DeepEqual(agent.Sent(), []string{"plan it"}))
@@ -3441,7 +3417,7 @@ func TestSendWithOnlyCommentsStartsNoTurn(t *testing.T) {
 func TestCommentsHeldOutsideHumanStates(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = twoParts
-	store.StateV = "Planning - Agent"
+	store.StateV, store.FlowV.WaitingOn = "refine-units", string(ActorSession)
 	agent := turnReturning("ok")
 	m := New(context.Background(), agent, nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
@@ -3475,7 +3451,7 @@ func TestCommentsHeldOutsideHumanStates(t *testing.T) {
 func TestHeldCommentsSendOnceThePlanWaitsOnTheDeveloper(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = twoParts
-	store.StateV = "Planning - Agent"
+	store.StateV, store.FlowV.WaitingOn = "refine-units", string(ActorSession)
 	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 
@@ -3488,14 +3464,14 @@ func TestHeldCommentsSendOnceThePlanWaitsOnTheDeveloper(t *testing.T) {
 	assert.Assert(t, cmp.Len(store.Added, 0), "s saved comments outside a Human state")
 
 	store.mu.Lock()
-	store.StateV = "Planning - Human"
+	store.StateV, store.FlowV.WaitingOn = "refine-proposal", string(ActorHuman)
 	store.mu.Unlock()
 	m = drive(t, m, pollMsg{})
 	assert.Assert(t, m.keys().SendComments.Enabled(), "s does not send comments from a Human state")
 	drive(t, m, press("s"))
 
 	assert.Check(t, cmp.Len(store.Added, 1))
-	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Human"}))
+	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"refine-proposal"}))
 }
 
 // TestCommentsHeldWhileFactoryPicksUpTheHandOff checks that comments queued
@@ -3509,7 +3485,7 @@ func TestCommentsHeldWhileFactoryPicksUpTheHandOff(t *testing.T) {
 	m = typeText(t, m, "first")
 	m = drive(t, m, press("enter"))
 	m = drive(t, m, press("s"))
-	assert.Assert(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Human"}))
+	assert.Assert(t, cmp.DeepEqual(store.HandedOff, []string{"refine-proposal"}))
 
 	m = drive(t, m, press("down"))
 	m = drive(t, m, press("c"))
@@ -3521,7 +3497,7 @@ func TestCommentsHeldWhileFactoryPicksUpTheHandOff(t *testing.T) {
 	m = drive(t, m, press("enter"))
 
 	assert.Check(t, cmp.Len(store.Added, 1))
-	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Human"}))
+	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"refine-proposal"}))
 	assert.Check(t, cmp.Len(queuedComments(m.comments), 1))
 	assert.Check(t, cmp.Equal(m.status, ""), "the held note covers the wait: %q", m.status)
 }
@@ -3532,6 +3508,7 @@ func TestCommentsHeldWhileFactoryPicksUpTheHandOff(t *testing.T) {
 func TestCommentsFollowTheFlowsEventsNotItsState(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = twoParts
+	store.FlowV.WaitingOn = string(ActorSession)
 	store.setEvents("approve-for-building")
 	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
@@ -3546,7 +3523,7 @@ func TestCommentsFollowTheFlowsEventsNotItsState(t *testing.T) {
 	assert.Assert(t, cmp.Len(store.Added, 0), "comments saved with address-comments not applicable")
 
 	store.mu.Lock()
-	store.StateV = "Planning - Agent"
+	store.StateV = "refine-units"
 	store.mu.Unlock()
 	store.setEvents("address-comments")
 	m = drive(t, m, pollMsg{})
@@ -3554,7 +3531,7 @@ func TestCommentsFollowTheFlowsEventsNotItsState(t *testing.T) {
 	drive(t, m, press("s"))
 
 	assert.Check(t, cmp.Len(store.Added, 1))
-	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"Planning - Agent"}))
+	assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"refine-units"}))
 }
 
 // TestHandOffRetriedOnNextSendWithNothingQueued checks that a hand-off event
@@ -3573,19 +3550,19 @@ func TestHandOffRetriedOnNextSendWithNothingQueued(t *testing.T) {
 			name:      "address-comments",
 			first:     []string{"address-comments"},
 			retry:     []string{"address-comments"},
-			handedOff: []string{"Planning - Human"},
+			handedOff: []string{"refine-proposal"},
 		},
 		{
 			name:     "to answer-open-questions",
 			first:    []string{"address-comments"},
 			retry:    []string{"answer-open-questions"},
-			answered: []string{"Planning - Human"},
+			answered: []string{"refine-proposal"},
 		},
 		{
 			name:      "to address-comments",
 			first:     []string{"answer-open-questions"},
 			retry:     []string{"address-comments"},
-			handedOff: []string{"Planning - Human"},
+			handedOff: []string{"refine-proposal"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3901,7 +3878,7 @@ func TestDeleteSavedCommentAsksFirst(t *testing.T) {
 // flow lists: answer-open-questions for a plan with open questions, over
 // address-comments when both are listed, and address-comments otherwise.
 func TestSendHandsOffWithTheEventTheFlowLists(t *testing.T) {
-	for _, state := range []string{"Building - Human", "Integrating - Human"} {
+	for _, state := range []string{"build", "integrate"} {
 		for _, tc := range []struct {
 			name      string
 			events    []string
@@ -4256,18 +4233,18 @@ func TestRightPaneOpensOnTheTabForItsPhase(t *testing.T) {
 	}{
 		{
 			name:  "planning",
-			state: "Planning - Human",
+			state: "refine-proposal",
 		},
 		{
 			name:  "unprioritized",
-			state: "Unprioritized",
+			state: "init",
 		},
 		{
 			name: "no state",
 		},
 		{
 			name:  "building",
-			state: "Building - Agent",
+			state: "build",
 			want:  tabFlow,
 		},
 	} {
@@ -4279,9 +4256,9 @@ func TestRightPaneOpensOnTheTabForItsPhase(t *testing.T) {
 
 			// A later move leaves the tab where it is.
 			store.mu.Lock()
-			store.StateV = "Integrating - Agent"
+			store.StateV = "integrate"
 			if tc.want == tabFlow {
-				store.StateV = "Planning - Human"
+				store.StateV = "refine-proposal"
 			}
 			store.mu.Unlock()
 			m = refreshed(t, m)
@@ -4412,16 +4389,16 @@ func TestFlowTabShowsProgress(t *testing.T) {
 			name:  "open sub-plans",
 			units: threeUnitsRead,
 			family: Family{Children: []Relative{
-				{ID: "c1", Title: "Lex it", State: "Building - Agent"},
-				{ID: "c2", Title: "Print it", State: "Planning - Human"},
+				{ID: "c1", Title: "Lex it", State: "build"},
+				{ID: "c2", Title: "Print it", State: "refine-proposal"},
 			}},
-			want:    []string{"Progress · 2 open sub-plans", "▸ Lex it  Building - Agent", "○ Print it  Planning - Human"},
+			want:    []string{"Progress · 2 open sub-plans", "▸ Lex it  build", "○ Print it  refine-proposal"},
 			without: []string{"lexer"},
 		},
 		{
 			name:   "a family without sub-plans",
 			units:  threeUnitsRead,
-			family: Family{Parent: &Relative{ID: "p", Title: "Everything", State: "Building - Agent"}},
+			family: Family{Parent: &Relative{ID: "p", Title: "Everything", State: "build"}},
 			want:   []string{"✓ 1  lexer", "○ 2  parser"},
 		},
 		{
@@ -4479,14 +4456,14 @@ func TestFlowTabShowsProgress(t *testing.T) {
 		{
 			name:   "sub-plans keep the summary line",
 			units:  threeUnitsRead,
-			family: Family{Children: []Relative{{ID: "c1", Title: "Lex it", State: "Building - Agent"}}},
+			family: Family{Children: []Relative{{ID: "c1", Title: "Lex it", State: "build"}}},
 			flow:   Flow{Progress: &Progress{Summary: "Waiting on 1 sub-plan"}},
 			want:   []string{"Waiting on 1 sub-plan", "Progress · 1 open sub-plan", "▸ Lex it"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newFakeStore()
-			store.StateV, store.UnitsV = "Building - Agent", tc.units
+			store.StateV, store.UnitsV = "build", tc.units
 			store.FlowV.Progress = tc.flow.Progress
 			store.FlowV.WaitingOn, store.FlowV.WaitingOnWhy = tc.flow.WaitingOn, tc.flow.WaitingOnWhy
 			store.FlowV.Unit, store.FamilyV = tc.unit, tc.family
@@ -4509,7 +4486,7 @@ func TestFlowTabShowsProgress(t *testing.T) {
 func TestFlowTabShowsThePR(t *testing.T) {
 	const url = "https://github.com/o/r/pull/7"
 	store := newFakeStore()
-	store.StateV, store.UnitsV = "Integrating - Agent", threeUnitsRead
+	store.StateV, store.UnitsV = "integrate", threeUnitsRead
 	store.FlowV.PR = url
 	view := ansi.Strip(flowModel(t, store).Content())
 	assert.Check(t, cmp.Contains(view, "PULL REQUEST"))
@@ -4538,15 +4515,15 @@ func enterOn(m Model) (Model, tea.Msg) {
 
 func TestRelatedOpensARelative(t *testing.T) {
 	family := Family{
-		Parent:   &Relative{ID: "p1", Title: "Parent plan", State: "Building - Agent"},
-		Children: []Relative{{ID: "c1", Title: "Child plan", State: "Planning - Agent"}},
-		Blockers: []Relative{{ID: "b1", Title: "Blocker plan", State: "Integrating - Human", Active: true}},
+		Parent:   &Relative{ID: "p1", Title: "Parent plan", State: "build"},
+		Children: []Relative{{ID: "c1", Title: "Child plan", State: "refine-units"}},
+		Blockers: []Relative{{ID: "b1", Title: "Blocker plan", State: "integrate", Active: true}},
 	}
 	inbox := func(t *testing.T, fam Family) (Model, *fakeStore) {
 		t.Helper()
 		store := newFakeStore()
 		store.Created = true
-		store.StateV, store.UnitsV, store.FamilyV = "Building - Agent", threeUnitsRead, fam
+		store.StateV, store.UnitsV, store.FamilyV = "build", threeUnitsRead, fam
 		m := New(context.Background(), newFakeAgent(), nil, store, "").WithInbox("Plan", "/src/p")
 		m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 		// An existing plan opens on the right pane.
@@ -4556,7 +4533,7 @@ func TestRelatedOpensARelative(t *testing.T) {
 	t.Run("enter opens the row under the cursor", func(t *testing.T) {
 		m, _ := inbox(t, family)
 		view := ansi.Strip(m.Content())
-		for _, w := range []string{"RELATED", "Part of", "Parent plan", "Sub-plan", "Child plan", "Blocked by", "Blocker plan", "Integrating - Human"} {
+		for _, w := range []string{"RELATED", "Part of", "Parent plan", "Sub-plan", "Child plan", "Blocked by", "Blocker plan", "integrate"} {
 			assert.Check(t, cmp.Contains(view, w))
 		}
 		assert.Check(t, cmp.Contains(view, "▶ Part of"))
@@ -4597,7 +4574,7 @@ func TestRelatedOpensARelative(t *testing.T) {
 
 	t.Run("without an inbox", func(t *testing.T) {
 		store := newFakeStore()
-		store.StateV, store.UnitsV, store.FamilyV = "Building - Agent", threeUnitsRead, family
+		store.StateV, store.UnitsV, store.FamilyV = "build", threeUnitsRead, family
 		m := drive(t, flowModel(t, store), press("tab"))
 		view := ansi.Strip(m.Content())
 		assert.Check(t, cmp.Contains(view, "Parent plan"))
@@ -4635,7 +4612,7 @@ func TestFamilyErrorIsQuiet(t *testing.T) {
 // and units, and the next good refresh clears the note.
 func TestUnitsErrorFailsTheRefresh(t *testing.T) {
 	store := newFakeStore()
-	store.StateV, store.TextV, store.UnitsV = "Building - Agent", twoParts, []Unit{{Name: "Unit 1: lexer"}}
+	store.StateV, store.TextV, store.UnitsV = "build", twoParts, []Unit{{Name: "Unit 1: lexer"}}
 	m := flowModel(t, store)
 	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "1  lexer"))
 	assert.Check(t, cmp.Equal(m.refreshErr, ""))
@@ -4666,7 +4643,7 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 		store := newFakeStore()
 		store.Created = true
 		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
-		store.StateV = "Unprioritized"
+		store.StateV = "init"
 		store.setEvents(events...)
 		m := New(context.Background(), turnReturning("ok"), nil, store, "")
 		m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
@@ -4684,7 +4661,7 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 		assert.Assert(t, m.confirming)
 		assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "Start work on the plan?"))
 		m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
-		assert.Check(t, cmp.DeepEqual(started(store), []string{"Unprioritized"}))
+		assert.Check(t, cmp.DeepEqual(started(store), []string{"init"}))
 		assert.Check(t, !m.startingWork)
 		assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Starting work…"))
 	})
@@ -4760,7 +4737,7 @@ func TestAbandonThePlan(t *testing.T) {
 	}{
 		{
 			name:   "not offered without abandon",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: []string{"address-comments"},
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "abandon plan"))
@@ -4771,7 +4748,7 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:   "c abandons as canceled",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "x abandon plan"))
@@ -4784,7 +4761,7 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:   "w abandons as won't do",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "w")
@@ -4794,7 +4771,7 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:   "d abandons as duplicate",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "d")
@@ -4804,7 +4781,7 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:   "esc keeps the plan",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x")
@@ -4818,7 +4795,7 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:   "q keeps the plan",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x")
@@ -4832,7 +4809,7 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:   "a failed abandon says so",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: live,
 			err:    errors.New("factory is down"),
 			check: func(t *testing.T, m Model, store *fakeStore) {
@@ -4846,7 +4823,7 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:  "not offered once the flow has ended",
-			state: "Done",
+			state: "ended",
 			ended: true,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "abandon plan"))
@@ -4856,12 +4833,12 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:   "a refresh keeps the prompt",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x")
 				store.mu.Lock()
-				store.StateV = "Planning - Agent"
+				store.StateV = "refine-units"
 				store.mu.Unlock()
 				m = refreshed(t, m)
 				assert.Check(t, m.askingReason)
@@ -4872,7 +4849,7 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:   "x while abandoning asks nothing",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "w")
@@ -4884,7 +4861,7 @@ func TestAbandonThePlan(t *testing.T) {
 		},
 		{
 			name:   "an abandon sent refreshes the plan",
-			state:  "Planning - Human",
+			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "w")
@@ -4932,7 +4909,7 @@ func TestDeleteThePlan(t *testing.T) {
 	}{
 		{
 			name:    "not offered while claimed",
-			state:   "Planning - Human",
+			state:   "refine-proposal",
 			claimed: true,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "delete plan"))
@@ -4949,7 +4926,7 @@ func TestDeleteThePlan(t *testing.T) {
 		},
 		{
 			name:  "n keeps the plan",
-			state: "Done",
+			state: "ended",
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "X")
 				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Delete this plan, its comments and its flow?"))
@@ -4960,11 +4937,11 @@ func TestDeleteThePlan(t *testing.T) {
 		},
 		{
 			name:  "a refresh keeps the question",
-			state: "Done",
+			state: "ended",
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "X")
 				store.mu.Lock()
-				store.StateV = "Canceled"
+				store.StateV, store.FlowV.Outcome = "ended", "canceled"
 				store.mu.Unlock()
 				m = refreshed(t, m)
 				assert.Check(t, m.pendingDeletePlan)
@@ -4974,7 +4951,7 @@ func TestDeleteThePlan(t *testing.T) {
 		},
 		{
 			name:  "X while deleting asks nothing",
-			state: "Done",
+			state: "ended",
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "X", "y")
 				assert.Assert(t, m.deleting)
@@ -4984,7 +4961,7 @@ func TestDeleteThePlan(t *testing.T) {
 		},
 		{
 			name:  "y deletes and closes a screen with no host",
-			state: "Done",
+			state: "ended",
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m, cmd := deletes(t, m)
 				assert.Check(t, deleted(store))
@@ -4995,7 +4972,7 @@ func TestDeleteThePlan(t *testing.T) {
 		},
 		{
 			name:  "y deletes and goes back",
-			state: "Done",
+			state: "ended",
 			host:  Model.WithBack,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				_, cmd := deletes(t, m)
@@ -5006,7 +4983,7 @@ func TestDeleteThePlan(t *testing.T) {
 		},
 		{
 			name:  "y deletes and goes back to plans",
-			state: "Done",
+			state: "ended",
 			host:  func(m Model) Model { return m.WithInbox("A plan", "chunk") },
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				_, cmd := deletes(t, m)
@@ -5017,7 +4994,7 @@ func TestDeleteThePlan(t *testing.T) {
 		},
 		{
 			name:  "a conflict says so and stays",
-			state: "Done",
+			state: "ended",
 			err: &circleci.StatusError{
 				Op:            "delete plan",
 				StatusCode:    409,
@@ -5034,7 +5011,7 @@ func TestDeleteThePlan(t *testing.T) {
 		},
 		{
 			name:  "a refusal says so and stays",
-			state: "Done",
+			state: "ended",
 			err:   errors.New("plan has sub-plans"),
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m, cmd := deletes(t, m)
@@ -5126,14 +5103,14 @@ func TestFlowTabSaysWhetherItResumes(t *testing.T) {
 	}{
 		{
 			name:    "a build nobody holds",
-			state:   "Building - Agent",
+			state:   "build",
 			next:    sessionStep,
 			line:    "No session holds this plan · R starts a build session",
 			offered: true,
 		},
 		{
 			name:  "claimed",
-			state: "Building - Agent",
+			state: "build",
 			next:  sessionStep,
 			setup: func(s *fakeStore) {
 				s.FlowV.Claimed = true
@@ -5143,15 +5120,15 @@ func TestFlowTabSaysWhetherItResumes(t *testing.T) {
 		},
 		{
 			name:  "waiting on the developer",
-			state: "Integrating - Human",
+			state: "integrate",
 			line:  "Waiting on you",
 		},
 		{
 			name:  "blocked",
-			state: "Building - Agent",
+			state: "build",
 			next:  sessionStep,
 			setup: func(s *fakeStore) {
-				s.FamilyV.Blockers = []Relative{{ID: "p-1", Title: "Add the flag", State: "Building - Agent", Active: true}}
+				s.FamilyV.Blockers = []Relative{{ID: "p-1", Title: "Add the flag", State: "build", Active: true}}
 			},
 			line: "Waiting on Add the flag",
 		},
@@ -5162,7 +5139,7 @@ func TestFlowTabSaysWhetherItResumes(t *testing.T) {
 		},
 		{
 			name:  "blockers not read",
-			state: "Building - Agent",
+			state: "build",
 			next:  sessionStep,
 			setup: func(s *fakeStore) {
 				s.FamilyErr = errors.New("factory is down")
@@ -5189,7 +5166,7 @@ func TestFlowTabSaysWhetherItResumes(t *testing.T) {
 // starts a build session in the host's project, then follows it at once,
 // before factory's state moves.
 func TestRBuildResumeStartsABuildSession(t *testing.T) {
-	m, _ := resumeModel(t, newFakeAgent(), "Building - Agent", sessionStep)
+	m, _ := resumeModel(t, newFakeAgent(), "build", sessionStep)
 	r, b := &fakeResumer{}, &fakeBuild{}
 	// The build is read from after the first refresh, so the only read is
 	// the one the resume starts.
@@ -5211,13 +5188,13 @@ func TestRBuildResumeStartsABuildSession(t *testing.T) {
 	assert.Check(t, cmp.Len(b.Asked(), 0))
 	run(cmd)
 	askedFor(t, b, 0)
-	assert.Check(t, cmp.Equal(m.state, "Building - Agent"))
+	assert.Check(t, cmp.Equal(m.state, "build"))
 }
 
 // TestRBuildResumeFailureShowsInTheStatusBar checks that the daemon's refusal
 // is shown as it is, and R is offered again.
 func TestRBuildResumeFailureShowsInTheStatusBar(t *testing.T) {
-	m, _, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, nil)
+	m, _, r, _ := resumeScreen(t, newFakeAgent(), "build", sessionStep, nil)
 	r.fail(errors.New("plan p is claimed by session s"))
 	m = drive(t, m, press("R"))
 	assert.Check(t, cmp.Len(r.Calls(), 1))
@@ -5231,7 +5208,7 @@ func TestRBuildResumeFailureShowsInTheStatusBar(t *testing.T) {
 // nobody holds has the screen's own planner claim it again, not the Resumer.
 func TestRPlannerResumeGoesThroughTheAgent(t *testing.T) {
 	agent := newFakeAgent()
-	m, _, r, _ := resumeScreen(t, agent, "Planning - Agent", sessionStep, nil)
+	m, _, r, _ := resumeScreen(t, agent, "refine-units", sessionStep, nil)
 	// The refresh resumed the planner on its own, once.
 	assert.Assert(t, cmp.Equal(agent.Resumes(), 1))
 	assert.Assert(t, !m.resuming)
@@ -5253,7 +5230,7 @@ func TestRPlannerResumeGoesThroughTheAgent(t *testing.T) {
 // build resume under way is not started twice.
 func TestRIsIgnoredWhileBusy(t *testing.T) {
 	t.Run("writing a comment", func(t *testing.T) {
-		m, _, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, nil)
+		m, _, r, _ := resumeScreen(t, newFakeAgent(), "build", sessionStep, nil)
 		m = pressAll(t, m, "right", "c")
 		assert.Assert(t, m.commenting)
 		assert.Check(t, !offersResume(m))
@@ -5263,7 +5240,7 @@ func TestRIsIgnoredWhileBusy(t *testing.T) {
 		assert.Check(t, cmp.Equal(m.commentInput.Value(), "R"))
 	})
 	t.Run("asked why the plan is abandoned", func(t *testing.T) {
-		m, _, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, func(s *fakeStore) {
+		m, _, r, _ := resumeScreen(t, newFakeAgent(), "build", sessionStep, func(s *fakeStore) {
 			s.EventsV, s.eventsSet = []string{"abandon"}, true
 		})
 		m = pressAll(t, m, "x")
@@ -5274,7 +5251,7 @@ func TestRIsIgnoredWhileBusy(t *testing.T) {
 		assert.Check(t, !m.resumingBuild)
 	})
 	t.Run("asked for a y", func(t *testing.T) {
-		m, store, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, nil)
+		m, store, r, _ := resumeScreen(t, newFakeAgent(), "build", sessionStep, nil)
 		m = pressAll(t, m, "X")
 		assert.Assert(t, m.confirming)
 		assert.Check(t, !offersResume(m))
@@ -5298,7 +5275,7 @@ func TestRIsIgnoredWhileBusy(t *testing.T) {
 		assert.Check(t, !m.resumingBuild)
 	})
 	t.Run("build resume under way", func(t *testing.T) {
-		m, _, r, _ := resumeScreen(t, newFakeAgent(), "Building - Agent", sessionStep, nil)
+		m, _, r, _ := resumeScreen(t, newFakeAgent(), "build", sessionStep, nil)
 		m, first := m.Update(press("R"))
 		m, second := m.Update(press("R"))
 		run(first)
@@ -5312,7 +5289,7 @@ func TestRIsIgnoredWhileBusy(t *testing.T) {
 // Resumer says where a build can be resumed from, and R does nothing.
 func TestNoResumerOffersNoBuildResume(t *testing.T) {
 	agent := newFakeAgent()
-	m, _ := resumeModel(t, agent, "Building - Agent", sessionStep)
+	m, _ := resumeModel(t, agent, "build", sessionStep)
 	m = refreshed(t, m.WithInbox("Alpha", "/src/app").WithBuild(&fakeBuild{}))
 	assert.Check(t, cmp.Equal(flowLines(m)[0], "Resume this build from chunk watch"))
 	assert.Check(t, !offersResume(m))

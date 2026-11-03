@@ -70,7 +70,7 @@ func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 	for _, e := range events {
 		next = append(next, plan.Step{Actor: "human", Event: e})
 	}
-	return plan.Flow{State: "Planning - Human", Events: events, Next: next}, nil
+	return plan.Flow{State: "refine-proposal", Events: events, Next: next}, nil
 }
 func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return plan.Family{}, nil }
 func (f *fakePlanStore) Units(context.Context) ([]plan.Unit, error)  { return f.units, nil }
@@ -636,7 +636,7 @@ func TestFlowListResumeCallsTheResumer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &fakeResumer{err: tc.err}
-			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Building - Agent",
+			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "build",
 				Next: []circleci.Transition{{Actor: "session", TaskCategory: "build-unit"}}}
 			m := sized(New().WithConnection(chunkd.Connection{}).
 				WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
@@ -673,7 +673,7 @@ func TestFlowListResumeWithoutAResumer(t *testing.T) {
 func TestOpenedScreensGetTheResumer(t *testing.T) {
 	r := &fakeResumer{}
 	f := &fakePlans{plan: "# Retry uploads", flow: &plan.Flow{
-		State: "Building - Agent",
+		State: "build",
 		Next:  []plan.Step{{Actor: "session", Task: "build-unit"}},
 	}}
 	m := planModel(t, f).WithPlanResume(r)
@@ -708,7 +708,7 @@ func TestFlowListDeleteCallsTheDeleter(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &fakeDeleter{err: tc.err}
-			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal"}
 			m := sized(New().WithConnection(chunkd.Connection{}).
 				WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
 				WithPlanDelete(d).WithFlowList(flowList(t, flow)))
@@ -735,7 +735,7 @@ func TestFlowListDeleteCallsTheDeleter(t *testing.T) {
 // selected flow through the deleter.
 func TestDeleteKeysReachTheListThroughTheDashboard(t *testing.T) {
 	d := &fakeDeleter{}
-	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal"}
 	m := sized(New().WithConnection(chunkd.Connection{}).
 		WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
 		WithPlanDelete(d).WithFlowList(flowList(t, flow)))
@@ -768,7 +768,7 @@ func TestFlowListDeleteWithoutADeleter(t *testing.T) {
 // the result arrives.
 func TestDeleteInFlight(t *testing.T) {
 	d := &fakeDeleter{gate: make(chan struct{})}
-	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "Planning - Human"}
+	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal"}
 	m := sized(New().WithConnection(chunkd.Connection{}).
 		WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
 		WithPlanDelete(d).WithFlowList(flowList(t, flow)))

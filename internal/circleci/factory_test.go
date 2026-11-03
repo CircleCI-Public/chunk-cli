@@ -35,7 +35,7 @@ func TestPlans(t *testing.T) {
 
 		f, err := client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.Equal(f.State, "Unprioritized"))
+		assert.Check(t, cmp.Equal(f.State, "init"))
 
 		got, err := client.GetPlan(ctx, p.ID)
 		assert.NilError(t, err)
@@ -307,13 +307,13 @@ func TestPlans(t *testing.T) {
 			p, err := client.CreatePlan(ctx, title, "")
 			assert.NilError(t, err)
 			if title == "c" {
-				fake.SetFactoryPlanState(p.ID, "Done")
+				fake.SetFactoryPlanState(p.ID, "ended")
 			}
 		}
 
 		plans, err := client.ListPlans(ctx)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(titles(plans), []string{"a", "b", "d", "e"}), "oldest first, Done left out")
+		assert.Check(t, cmp.DeepEqual(titles(plans), []string{"a", "b", "d", "e"}), "oldest first, ended left out")
 		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
 		assert.Check(t, cmp.Equal(last.URL.Query().Get("filter[user_id]"), "me"))
 	})
@@ -384,18 +384,18 @@ func TestFlows(t *testing.T) {
 		f, err := client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.Equal(f.ID, p.ID))
-		assert.Check(t, cmp.Equal(f.State, "Unprioritized"))
+		assert.Check(t, cmp.Equal(f.State, "init"))
 		assert.Check(t, cmp.Equal(f.SessionID, ""))
 		assert.Check(t, cmp.Equal(f.Title, "a plan"))
 		assert.Check(t, !f.UpdatedAt.IsZero())
 		assert.Check(t, cmp.Equal(f.Phase, PhaseReceived))
 
-		fake.SetFactoryPlanState(p.ID, "Planning - Human")
+		fake.SetFactoryPlanState(p.ID, "refine-proposal")
 		f, err = client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.Equal(f.Phase, PhaseStarted))
 
-		fake.SetFactoryPlanState(p.ID, "Done")
+		fake.SetFactoryPlanState(p.ID, "ended")
 		f, err = client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.Equal(f.Phase, PhaseEnded))
@@ -419,7 +419,8 @@ func TestFlows(t *testing.T) {
 		p, err := client.CreatePlan(ctx, "a plan", "")
 		assert.NilError(t, err)
 
-		fake.SetFactoryPlanState(p.ID, "Won't Do")
+		fake.SetFactoryPlanState(p.ID, "ended")
+		fake.SetFactoryFlowStatus(p.ID, fakes.FactoryFlowStatus{Outcome: "rejected"})
 		f, err := client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.Equal(f.Phase, PhaseEnded))
@@ -445,12 +446,14 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(f.ApplicableEvents, []FlowEvent{AddressComments, "abandon"}))
 
 		fake.SetFactoryTask(p.ID, "rebase")
-		fake.SetFactoryPlanState(p.ID, "Integrating - Human")
-		fake.SetFactoryApplicableEvents(p.ID, "address-comments", "resolve-conflicts", "abandon-integrate", "abandon")
+		fake.SetFactoryPlanState(p.ID, "integrate")
+		fake.SetFactoryRequiredEvents(p.ID, "answer-open-questions")
+		fake.SetFactoryApplicableEvents(p.ID, "address-comments", "abandon-integrate", "abandon")
 		f, err = client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(f.ApplicableEvents,
-			[]FlowEvent{AddressComments, ResolveConflicts, "abandon-integrate", "abandon"}))
+			[]FlowEvent{AnswerOpenQuestions, AddressComments, "abandon-integrate", "abandon"}),
+			"required events first, after the task")
 	})
 
 	t.Run("reads the task the flow has out", func(t *testing.T) {
@@ -515,22 +518,18 @@ func TestFlows(t *testing.T) {
 	t.Run("abandons a flow for each reason", func(t *testing.T) {
 		for _, tc := range []struct {
 			reason  AbandonReason
-			end     string
 			outcome string
 		}{
 			{
 				reason:  AbandonCanceled,
-				end:     "Canceled",
 				outcome: "canceled",
 			},
 			{
 				reason:  AbandonWontDo,
-				end:     "Won't Do",
 				outcome: "rejected",
 			},
 			{
 				reason:  AbandonDuplicate,
-				end:     "Duplicate",
 				outcome: "duplicated",
 			},
 		} {
@@ -541,7 +540,7 @@ func TestFlows(t *testing.T) {
 				client := newTestClient(t, srv.URL)
 				p, err := client.CreatePlan(ctx, "a plan", "")
 				assert.NilError(t, err)
-				fake.SetFactoryPlanState(p.ID, "Planning - Human")
+				fake.SetFactoryPlanState(p.ID, "refine-proposal")
 
 				err = client.AbandonFlow(ctx, p.ID, tc.reason)
 				assert.NilError(t, err)
@@ -561,7 +560,8 @@ func TestFlows(t *testing.T) {
 				assert.Assert(t, cmp.Len(got.Reasons, len(got.Events)))
 				assert.Check(t, cmp.Equal(got.Reasons[len(got.Reasons)-1], string(tc.reason)))
 
-				fake.SetFactoryPlanState(p.ID, tc.end)
+				fake.SetFactoryPlanState(p.ID, "ended")
+				fake.SetFactoryFlowStatus(p.ID, fakes.FactoryFlowStatus{Outcome: tc.outcome})
 				f, err := client.GetFlow(ctx, p.ID)
 				assert.NilError(t, err)
 				assert.Check(t, cmp.Equal(f.Phase, PhaseEnded))
@@ -672,7 +672,7 @@ func TestFlows(t *testing.T) {
 		assert.NilError(t, err)
 		gone, err := client.CreatePlan(ctx, "gone", "")
 		assert.NilError(t, err)
-		fake.SetFactoryPlanState(b.ID, "Done")
+		fake.SetFactoryPlanState(b.ID, "ended")
 		fake.ClaimFactoryPlan(a.ID, "session-1")
 		fake.DropFactoryFlow(gone.ID)
 
@@ -684,12 +684,12 @@ func TestFlows(t *testing.T) {
 		}
 		assert.Check(t, cmp.DeepEqual(flows, []Flow{
 			{
-				ID: a.ID, Title: "a", State: "Unprioritized", Phase: PhaseReceived,
+				ID: a.ID, Title: "a", State: "init", Phase: PhaseReceived,
 				SessionID: "session-1", ApplicableEvents: []FlowEvent{},
 				Deviations: []string{}, Next: []Transition{},
 			},
 			{
-				ID: b.ID, Title: "b", State: "Done", Phase: PhaseEnded, Outcome: "merged", ApplicableEvents: []FlowEvent{},
+				ID: b.ID, Title: "b", State: "ended", Phase: PhaseEnded, Outcome: "merged", ApplicableEvents: []FlowEvent{},
 				Deviations: []string{}, Next: []Transition{},
 			},
 		}))
@@ -732,7 +732,7 @@ func TestFlows(t *testing.T) {
 	t.Run("reads a flow from a conductor that serves no title or phase", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":[{"id":"a","attributes":{"state":"Done"}}]}`))
+			_, _ = w.Write([]byte(`{"data":[{"id":"a","attributes":{"state":"ended"}}]}`))
 		}))
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
@@ -765,7 +765,7 @@ func TestFlows(t *testing.T) {
 				id := uuid.NewString()
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(`{"data":{"id":"` + id + `","attributes":{"state":"Planning - Human",` + tc.attrs + `}}}`))
+					_, _ = w.Write([]byte(`{"data":{"id":"` + id + `","attributes":{"state":"refine-proposal",` + tc.attrs + `}}}`))
 				}))
 				t.Cleanup(srv.Close)
 				client := newTestClient(t, srv.URL)
@@ -784,13 +784,13 @@ func TestFlows(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		p, err := client.CreatePlan(ctx, "a plan", "")
 		assert.NilError(t, err)
-		fake.SetFactoryPlanState(p.ID, "Building - Agent")
+		fake.SetFactoryPlanState(p.ID, "build")
 		fake.SetFactoryTask(p.ID, "build-unit")
 		fake.SetFactoryFlowStatus(p.ID, fakes.FactoryFlowStatus{
 			PR: "https://github.com/o/r/pull/1", Deviations: []string{"lint"}, Outcome: "merged",
 			Next: []fakes.FactoryTransition{
 				{Actor: "session", TaskCategory: "build-unit", IsDispatched: true},
-				{Actor: "human", Event: "resolve-conflicts"},
+				{Actor: "human", Event: "answer-open-questions", IsRequired: true},
 				{Actor: "human", Action: "merge-pr"},
 				{Actor: "robot"},
 			},
@@ -810,14 +810,14 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, f.Task.ID != "")
 		f.UpdatedAt = time.Time{}
 		assert.Check(t, cmp.DeepEqual(f, &Flow{
-			ID: p.ID, Title: "a plan", State: "Building - Agent", Phase: PhaseStarted,
-			ApplicableEvents: []FlowEvent{ResolveConflicts},
+			ID: p.ID, Title: "a plan", State: "build", Phase: PhaseStarted,
+			ApplicableEvents: []FlowEvent{AnswerOpenQuestions},
 			Task:             &FlowTask{ID: f.Task.ID, Category: "build-unit", Unit: "Unit 2: parser"},
 			Outcome:          "merged", PR: "https://github.com/o/r/pull/1",
 			Deviations: []string{"lint"},
 			Next: []Transition{
 				{Actor: "session", TaskCategory: "build-unit", IsDispatched: true},
-				{Actor: "human", Event: ResolveConflicts},
+				{Actor: "human", Event: AnswerOpenQuestions, IsRequired: true},
 				{Actor: "human", Action: "merge-pr"},
 				{Actor: "robot"},
 			},
@@ -835,7 +835,7 @@ func TestFlows(t *testing.T) {
 		id := uuid.NewString()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":{"id":"` + id + `","attributes":{"state":"Planning - Human","applicable_events":["abandon"]}}}`))
+			_, _ = w.Write([]byte(`{"data":{"id":"` + id + `","attributes":{"state":"refine-proposal","applicable_events":["abandon"]}}}`))
 		}))
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
@@ -878,7 +878,7 @@ func TestFlows(t *testing.T) {
 		assert.NilError(t, err)
 		o1, err := client.CreatePlan(ctx, "other", "")
 		assert.NilError(t, err)
-		fake.SetFactoryPlanState(c1.ID, "Building - Agent")
+		fake.SetFactoryPlanState(c1.ID, "build")
 
 		got, err := client.ListFlowBlockers(ctx, c2.ID)
 		assert.NilError(t, err)
@@ -890,8 +890,8 @@ func TestFlows(t *testing.T) {
 		got, err = client.ListFlowBlockers(ctx, c2.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(got, []Blocker{
-			{ID: c1.ID, Title: "retry-config", State: "Building - Agent", Active: false},
-			{ID: o1.ID, Title: "other", State: "Unprioritized", Active: true},
+			{ID: c1.ID, Title: "retry-config", State: "build", Active: false},
+			{ID: o1.ID, Title: "other", State: "init", Active: true},
 		}), "in the order blocked; one past its until")
 		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
 		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/flows/"+c2.ID+"/blockers"))
@@ -900,7 +900,7 @@ func TestFlows(t *testing.T) {
 		got, err = client.ListFlowBlockers(ctx, c2.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(got, []Blocker{
-			{ID: c1.ID, Title: "retry-config", State: "Building - Agent", Active: false},
+			{ID: c1.ID, Title: "retry-config", State: "build", Active: false},
 			{ID: o1.ID, Title: "other", State: "", Active: true},
 		}), "a blocker with no flow has no state and still blocks")
 

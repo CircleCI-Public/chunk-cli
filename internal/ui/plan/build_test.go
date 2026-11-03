@@ -139,7 +139,7 @@ func sectionRows(m Model) []string {
 }
 
 func TestBuildIsNotReadWhilePlanning(t *testing.T) {
-	for _, state := range []string{"Planning - Agent", "Planning - Human", "Unprioritized"} {
+	for _, state := range []string{"refine-proposal", "refine-units", "init"} {
 		t.Run(state, func(t *testing.T) {
 			b := &fakeBuild{}
 			m := buildScreen(t, state, b)
@@ -151,7 +151,7 @@ func TestBuildIsNotReadWhilePlanning(t *testing.T) {
 }
 
 func TestBuildIsReadOnceBuilding(t *testing.T) {
-	for _, state := range []string{"Building - Agent", "Building - Human", "Integrating - Agent"} {
+	for _, state := range []string{"build", "integrate"} {
 		t.Run(state, func(t *testing.T) {
 			b := &fakeBuild{}
 			b.answer(BuildActivity{Found: true, ID: "s-1", Running: true, Total: 3, Lines: lines(3, 0)})
@@ -165,7 +165,7 @@ func TestBuildIsReadOnceBuilding(t *testing.T) {
 
 func TestBuildIsReadAfterApprovingHere(t *testing.T) {
 	b := &fakeBuild{}
-	m := buildScreen(t, "Planning - Human", b)
+	m := buildScreen(t, "refine-proposal", b)
 	assert.Check(t, cmp.Len(b.Asked(), 0))
 	drive(t, m, approvedMsg{buildID: "s-1"})
 	// The approval's own followBuild and its refresh's start one loop.
@@ -175,7 +175,7 @@ func TestBuildIsReadAfterApprovingHere(t *testing.T) {
 func TestBuildIsNotReadOnAnEndedFlow(t *testing.T) {
 	t.Run("ended at open", func(t *testing.T) {
 		b := &fakeBuild{}
-		store := buildStore("Done")
+		store := buildStore("ended")
 		store.FlowV.Ended = true
 		m := buildScreenOn(t, store, b, 40)
 		m = buildTick(t, m)
@@ -185,11 +185,11 @@ func TestBuildIsNotReadOnAnEndedFlow(t *testing.T) {
 	t.Run("ends while open", func(t *testing.T) {
 		b := &fakeBuild{}
 		b.answer(BuildActivity{Found: true, ID: "s-1", Total: 1, Lines: lines(1, 0)})
-		store := buildStore("Building - Agent")
+		store := buildStore("build")
 		m := buildScreenOn(t, store, b, 40)
 		assert.Check(t, cmp.Len(b.Asked(), 1))
 		store.mu.Lock()
-		store.FlowV.Ended, store.StateV = true, "Done"
+		store.FlowV.Ended, store.StateV = true, "ended"
 		store.mu.Unlock()
 		m = refreshed(t, m)
 		m = buildTick(t, m)
@@ -200,14 +200,14 @@ func TestBuildIsNotReadOnAnEndedFlow(t *testing.T) {
 }
 
 func TestBuildIsNotReadWithoutABuild(t *testing.T) {
-	m := buildScreenOn(t, buildStore("Building - Agent"), nil, 40)
+	m := buildScreenOn(t, buildStore("build"), nil, 40)
 	m = buildTick(t, m)
 	assert.Check(t, !strings.Contains(paneView(m), "Building"), paneView(m))
 }
 
 func TestBuildSectionFollowsThePlanner(t *testing.T) {
 	b := &fakeBuild{}
-	m := buildScreen(t, "Building - Agent", b)
+	m := buildScreen(t, "build", b)
 	m = drive(t, m, eventMsg{agent: m.agent, Event: Event{Reply: &Reply{Text: "Wrote the units."}}})
 	b.answer(BuildActivity{Found: true, ID: "s-1", Running: true, Total: 2, Lines: []BuildLine{
 		{Level: BuildStep, Text: "Building plan plan-1 in /w"},
@@ -233,7 +233,7 @@ func TestBuildSectionStylesByLevel(t *testing.T) {
 		{Level: BuildWarn, Text: warn},
 		{Level: BuildError, Text: bad},
 	}})
-	m := buildScreen(t, "Building - Agent", b)
+	m := buildScreen(t, "build", b)
 	assert.Check(t, cmp.Contains(m.Content(), ui.WarningStyle.Render(warn)))
 	assert.Check(t, cmp.Contains(m.Content(), ui.ErrorStyle.Render(bad)))
 }
@@ -241,7 +241,7 @@ func TestBuildSectionStylesByLevel(t *testing.T) {
 func TestBuildSectionTruncatesRows(t *testing.T) {
 	b := &fakeBuild{}
 	b.answer(BuildActivity{Found: true, ID: "s-1", Total: 1, Lines: []BuildLine{{Text: strings.Repeat("x", 300)}}})
-	m := buildScreen(t, "Building - Agent", b)
+	m := buildScreen(t, "build", b)
 
 	var row string
 	for _, r := range sectionRows(m) {
@@ -260,7 +260,7 @@ func TestBuildSectionSpinsWhileRunning(t *testing.T) {
 	t.Run("running", func(t *testing.T) {
 		b := &fakeBuild{}
 		b.answer(BuildActivity{Found: true, ID: "s-1", Running: true, Total: 2, Lines: lines(2, 0)})
-		m := buildScreen(t, "Building - Agent", b)
+		m := buildScreen(t, "build", b)
 		rows := sectionRows(m)
 		assert.Check(t, cmp.Equal(rows[len(rows)-1], ansi.Strip(m.spin.View())+"line 1"))
 		assert.Check(t, m.spinning())
@@ -268,7 +268,7 @@ func TestBuildSectionSpinsWhileRunning(t *testing.T) {
 	t.Run("ended", func(t *testing.T) {
 		b := &fakeBuild{}
 		b.answer(BuildActivity{Found: true, ID: "s-1", Total: 2, Lines: lines(2, 0)})
-		m := buildScreen(t, "Building - Agent", b)
+		m := buildScreen(t, "build", b)
 		rows := sectionRows(m)
 		assert.Check(t, cmp.Equal(rows[len(rows)-1], "Build session ended"))
 		assert.Check(t, cmp.Equal(rows[len(rows)-2], "line 1"))
@@ -277,7 +277,7 @@ func TestBuildSectionSpinsWhileRunning(t *testing.T) {
 	t.Run("failed", func(t *testing.T) {
 		b := &fakeBuild{}
 		b.answer(BuildActivity{Found: true, ID: "s-1", Failed: "boom", Total: 2, Lines: lines(2, 0)})
-		m := buildScreen(t, "Building - Agent", b)
+		m := buildScreen(t, "build", b)
 		rows := sectionRows(m)
 		assert.Check(t, cmp.Equal(rows[len(rows)-1], "Build session failed: boom"))
 		assert.Check(t, cmp.Contains(m.Content(), ui.ErrorStyle.Render("Build session failed: boom")))
@@ -333,7 +333,7 @@ func TestBuildSectionNotesDroppedLines(t *testing.T) {
 				a.Found, a.ID = true, "s-1"
 				b.answer(a)
 			}
-			m := buildScreen(t, "Building - Agent", b)
+			m := buildScreen(t, "build", b)
 			for range tc.answers[1:] {
 				m = buildTick(t, m)
 			}
@@ -357,7 +357,7 @@ func TestBuildSectionNotesDroppedLines(t *testing.T) {
 func TestBuildSectionWithNoBuild(t *testing.T) {
 	b := &fakeBuild{}
 	b.answer(BuildActivity{}, BuildActivity{Found: true, ID: "s-1", Running: true, Total: 1, Lines: lines(1, 0)})
-	m := buildScreen(t, "Building - Agent", b)
+	m := buildScreen(t, "build", b)
 	// The pane is narrow, so the row is truncated to it.
 	missing := "No build of this plan in this machine"
 	rows := sectionRows(m)
@@ -382,7 +382,7 @@ func TestBuildSectionNewSession(t *testing.T) {
 			// The daemon reads after=1 as 0, so the answer starts at 0.
 			BuildActivity{Found: true, ID: "s-2", Running: true, First: 0, Total: 1, Lines: []BuildLine{{Text: "b"}}},
 		)
-		m := buildScreen(t, "Building - Agent", b)
+		m := buildScreen(t, "build", b)
 		m = buildTick(t, m)
 		asked := b.Asked()
 		assert.Check(t, cmp.Equal(asked[1].after, 1))
@@ -405,7 +405,7 @@ func TestBuildSectionNewSession(t *testing.T) {
 			BuildActivity{Found: true, ID: "s-2", Running: true, First: 5, Total: 8, Lines: lines(3, 5)},
 			BuildActivity{Found: true, ID: "s-2", Running: true, First: 0, Total: 8, Lines: lines(8, 0)},
 		)
-		m := buildScreen(t, "Building - Agent", b)
+		m := buildScreen(t, "build", b)
 		m = buildTick(t, m)
 		// The third read comes at once, without a tick.
 		askedFor(t, b, 0, 5, 0)
@@ -433,7 +433,7 @@ func TestBuildSectionShowsAReadErrorOnce(t *testing.T) {
 		{err: errors.New("daemon down")},
 		{activity: BuildActivity{Found: true, ID: "s-1", Running: true, Total: 1, Lines: lines(1, 0)}},
 	}}
-	m := buildScreen(t, "Building - Agent", b)
+	m := buildScreen(t, "build", b)
 	m = buildTick(t, m)
 	m = buildTick(t, m)
 	assert.Check(t, cmp.Len(b.Asked(), 3))
@@ -451,7 +451,7 @@ func TestBuildSectionFollowsTheBottom(t *testing.T) {
 		BuildActivity{Found: true, ID: "s-1", Running: true, First: 20, Total: 40, Lines: lines(20, 20)},
 		BuildActivity{Found: true, ID: "s-1", Running: true, First: 40, Total: 45, Lines: lines(5, 40)},
 	)
-	m := buildScreenOn(t, buildStore("Building - Agent"), b, 16)
+	m := buildScreenOn(t, buildStore("build"), b, 16)
 	assert.Check(t, m.chatView.AtBottom())
 	m = buildTick(t, m)
 	assert.Check(t, m.chatView.AtBottom())

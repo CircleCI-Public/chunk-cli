@@ -91,6 +91,9 @@ type Transition struct {
 	// IsDispatched is whether the task that takes it is the flow's
 	// outstanding one.
 	IsDispatched bool
+	// IsRequired is whether it is one of the transitions one of which must
+	// happen for the flow to move on.
+	IsRequired bool
 }
 
 // FlowTask is a flow's outstanding task, as its factory_task reference
@@ -280,6 +283,7 @@ type transitionAttrs struct {
 	TaskCategory string    `json:"task_category"`
 	Action       string    `json:"action"`
 	IsDispatched bool      `json:"is_dispatched"`
+	IsRequired   bool      `json:"is_required"`
 }
 
 // transitions is next as served, every entry kept in order: nil when next
