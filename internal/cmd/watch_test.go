@@ -131,27 +131,27 @@ func TestOpenFlows(t *testing.T) {
 // previewPlan sends both requests at once, and fails when either does.
 func TestPreviewPlan(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		textStatus   int
-		commentsCode int
-		wantErr      string
+		name          string
+		contentStatus int
+		commentsCode  int
+		wantErr       string
 	}{
 		{
-			name:         "both in parallel",
-			textStatus:   http.StatusOK,
-			commentsCode: http.StatusOK,
+			name:          "both in parallel",
+			contentStatus: http.StatusOK,
+			commentsCode:  http.StatusOK,
 		},
 		{
-			name:         "text fails",
-			textStatus:   http.StatusNotFound,
-			commentsCode: http.StatusOK,
-			wantErr:      "plan text",
+			name:          "content fails",
+			contentStatus: http.StatusNotFound,
+			commentsCode:  http.StatusOK,
+			wantErr:       "plan structured content",
 		},
 		{
-			name:         "comments fail",
-			textStatus:   http.StatusOK,
-			commentsCode: http.StatusNotFound,
-			wantErr:      "list comments",
+			name:          "comments fail",
+			contentStatus: http.StatusOK,
+			commentsCode:  http.StatusNotFound,
+			wantErr:       "list comments",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -179,9 +179,9 @@ func TestPreviewPlan(t *testing.T) {
 				_, _ = w.Write([]byte(`{"message":"not found"}`))
 			}
 			mux := http.NewServeMux()
-			mux.HandleFunc("GET /api/v3/factory/plans/{id}/text", func(w http.ResponseWriter, _ *http.Request) {
+			mux.HandleFunc("GET /api/v3/factory/plans/{id}/structured-content", func(w http.ResponseWriter, _ *http.Request) {
 				wait()
-				reply(w, tc.textStatus, `{"data":{"attributes":{"text":"# plan"}}}`)
+				reply(w, tc.contentStatus, `{"data":{"attributes":{"outcome":"\nIt works.\n","design":null,"open_questions":null,"worked_example":null,"units":null}}}`)
 			})
 			mux.HandleFunc("GET /api/v3/factory/comments", func(w http.ResponseWriter, _ *http.Request) {
 				wait()
@@ -198,7 +198,7 @@ func TestPreviewPlan(t *testing.T) {
 				return
 			}
 			assert.NilError(t, err)
-			assert.Check(t, cmp.Equal(text, "# plan"))
+			assert.Check(t, cmp.Equal(text, "## 1. Outcome\n\nIt works.\n"))
 			assert.Check(t, cmp.Len(comments, 1))
 		})
 	}

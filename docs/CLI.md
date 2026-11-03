@@ -495,8 +495,8 @@ chunk
   `sidecar_image` (empty when no image was recorded).
 - **`watch` is Flows and the plans opened from it.** The dashboard opens on
   Flows: your open flows in factory, grouped by who they wait on, then by
-  phase, with the selected flow's plan text and open comments previewed beside
-  it. A sub-plan stays in its own group and is marked `↳` with its parent's
+  phase, with the selected flow's plan sections, units and open comments
+  previewed beside it. A sub-plan stays in its own group and is marked `↳` with its parent's
   title; one listed under the same heading as its parent (same group, same
   phase) is indented under it. Sub-plans that have ended are not shown. When
   chunk cannot read the plans' parents the list is shown flat, with `sub-plans

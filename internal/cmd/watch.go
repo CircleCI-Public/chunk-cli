@@ -467,16 +467,18 @@ func previewFactoryPlan(ctx context.Context, id string) (string, []circleci.Plan
 	return previewPlan(ctx, api, id)
 }
 
-// previewPlan is plan id's text and open comments, fetched at the same time.
+// previewPlan is plan id, rebuilt from factory's structured content, and its
+// open comments, fetched at the same time.
 func previewPlan(ctx context.Context, api *circleci.Client, id string) (string, []circleci.PlanComment, error) {
 	g, ctx := errgroup.WithContext(ctx)
 	var text string
 	var comments []circleci.PlanComment
 	g.Go(func() error {
-		var err error
-		if text, err = api.PlanText(ctx, id); err != nil {
-			return fmt.Errorf("plan text: %w", err)
+		sc, err := api.PlanStructuredContent(ctx, id)
+		if err != nil {
+			return fmt.Errorf("plan structured content: %w", err)
 		}
+		text = sc.Markdown()
 		return nil
 	})
 	g.Go(func() error {
