@@ -15,9 +15,12 @@ import (
 // and replaced on its own, with PlanText and SetPlanText. Its phase and
 // outcome are read from its flow, with GetFlow.
 type Plan struct {
-	ID           string
-	Title        string
-	Branch       string
+	ID     string
+	Title  string
+	Branch string
+	// Repos are the GitHub repositories the plan is built in, as
+	// OWNER/NAME; nil when it records none.
+	Repos        []string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	OpenComments int
@@ -187,16 +190,21 @@ type PlanComment struct {
 type planAttrs struct {
 	Title        string    `json:"title"`
 	Branch       string    `json:"branch"`
+	VCS          []vcsRepo `json:"vcs"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	OpenComments int       `json:"open_comment_count"`
 }
 
 func (a planAttrs) plan(id string) *Plan {
-	return &Plan{
+	p := &Plan{
 		ID: id, Title: a.Title, Branch: a.Branch,
 		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt, OpenComments: a.OpenComments,
 	}
+	for _, v := range a.VCS {
+		p.Repos = append(p.Repos, v.RepoFullName)
+	}
+	return p
 }
 
 type planRefs struct {

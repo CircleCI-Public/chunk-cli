@@ -31,6 +31,9 @@ type fakePlans struct {
 	reply string
 	plan  string
 	title string
+	// resolved is the root the opener answers with, when it is not the one
+	// it was given.
+	resolved string
 	// newID is the ID factory gives a new plan as it is created; "" leaves
 	// it with none.
 	newID   string
@@ -170,16 +173,24 @@ func (a *fakePlanAgent) Request(ctx context.Context, _ string) error {
 
 func (a *fakePlanAgent) Events() <-chan plan.Event { return a.events }
 
-func (f *fakePlans) planner(_ context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
+func (f *fakePlans) planner(_ context.Context, root, id string) (OpenedPlan, error) {
 	f.root = root
 	if f.err != nil {
-		return nil, nil, nil, f.err
+		return OpenedPlan{}, f.err
 	}
 	approve := func(func(string)) (string, error) {
 		f.sent = true
 		return "build-1", nil
 	}
-	return &fakePlanAgent{f: f, events: make(chan plan.Event, 8)}, approve, &fakePlanStore{text: f.plan, id: id, newID: f.newID, title: f.title, units: f.units, flow: f.flow}, nil
+	if f.resolved != "" {
+		root = f.resolved
+	}
+	return OpenedPlan{
+		Agent:   &fakePlanAgent{f: f, events: make(chan plan.Event, 8)},
+		Approve: approve,
+		Store:   &fakePlanStore{text: f.plan, id: id, newID: f.newID, title: f.title, units: f.units, flow: f.flow},
+		Root:    root,
+	}, nil
 }
 
 // fakeResumer is a plan.Resumer that records each resume as "root plan
@@ -503,7 +514,7 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 	a := &fakePlans{plan: "# Upload retries\n\n## 1. Outcome\n\nRetry transient failures."}
 	b := &fakePlans{plan: "# Cache installs\n\n## 1. Outcome\n\nCache dependencies."}
 	opened := map[string]int{}
-	planner := func(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
+	planner := func(ctx context.Context, root, id string) (OpenedPlan, error) {
 		opened[id]++
 		if id == "uploads" {
 			return a.planner(ctx, root, id)
@@ -572,7 +583,7 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 func TestANewPlansHeaderTakesItsName(t *testing.T) {
 	fresh := &fakePlans{title: "retry-uploads"}
 	other := &fakePlans{plan: "# Cache installs"}
-	planner := func(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
+	planner := func(ctx context.Context, root, id string) (OpenedPlan, error) {
 		if id == "" {
 			return fresh.planner(ctx, root, id)
 		}
@@ -628,7 +639,7 @@ func TestFlowListSharesTheDashboardHeader(t *testing.T) {
 func TestOpenMsgOpensOrReusesAWorkspace(t *testing.T) {
 	f := &fakePlans{plan: "# A plan"}
 	calls := 0
-	planner := func(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
+	planner := func(ctx context.Context, root, id string) (OpenedPlan, error) {
 		calls++
 		return f.planner(ctx, root, id)
 	}
@@ -729,22 +740,43 @@ func TestFlowListResumeWithoutAResumer(t *testing.T) {
 // A flow screen the dashboard opens resumes its build through the
 // dashboard's resumer.
 func TestOpenedScreensGetTheResumer(t *testing.T) {
-	r := &fakeResumer{}
-	f := &fakePlans{plan: "# Retry uploads", flow: &plan.Flow{
-		State:     "build",
-		Next:      []plan.Step{{Actor: "session", Task: "build-unit"}},
-		WaitingOn: "session",
-	}}
-	m := planModel(t, f).WithPlanResume(r)
-	next, cmd := m.Update(flowlist.OpenMsg{ID: "p1", Title: "Retry uploads"})
-	m = deliverThen(t, next.(Model), cmd, 0)
-	assert.Assert(t, m.planOpen)
-	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
+	for _, tc := range []struct {
+		name string
+		// resolved is the root the opener resolves the plan to; "" keeps
+		// the dashboard's.
+		resolved string
+		want     string
+	}{
+		{
+			name: "the opened-in project",
+			want: "/src/chunk-cli",
+		},
+		{
+			name:     "a checkout of the plan's repo",
+			resolved: "/src/factory",
+			want:     "/src/factory",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &fakeResumer{}
+			f := &fakePlans{plan: "# Retry uploads", resolved: tc.resolved, flow: &plan.Flow{
+				State:     "build",
+				Next:      []plan.Step{{Actor: "session", Task: "build-unit"}},
+				WaitingOn: "session",
+			}}
+			m := planModel(t, f).WithPlanResume(r)
+			next, cmd := m.Update(flowlist.OpenMsg{ID: "p1", Title: "Retry uploads"})
+			m = deliverThen(t, next.(Model), cmd, 0)
+			assert.Assert(t, m.planOpen)
+			m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
 
-	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'R', Text: "R"})
-	assert.Assert(t, cmd != nil, "R did nothing:\n%s", screen(m))
-	_ = deliver(t, m, cmd)
-	assert.Check(t, cmp.DeepEqual(r.called(), []string{fmt.Sprintf("/src/chunk-cli p1 %d", planstate.ResumeBuild)}))
+			m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'R', Text: "R"})
+			assert.Assert(t, cmd != nil, "R did nothing:\n%s", screen(m))
+			_ = deliver(t, m, cmd)
+			want := []string{fmt.Sprintf("%s p1 %d", tc.want, planstate.ResumeBuild)}
+			assert.Check(t, cmp.DeepEqual(r.called(), want))
+		})
+	}
 }
 
 // X on the flow list asks, and the confirmed delete goes through the deleter;

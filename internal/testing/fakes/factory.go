@@ -481,8 +481,13 @@ func planListAttrs(p *factoryPlan) gin.H {
 			open++
 		}
 	}
+	vcs := make([]gin.H, len(p.repos))
+	for i, r := range p.repos {
+		vcs[i] = gin.H{"provider": "github", "repo_full_name": r}
+	}
 	return gin.H{
 		"title":      p.title,
+		"vcs":        vcs,
 		"created_at": p.createdAt.Format(time.RFC3339Nano), "updated_at": p.updatedAt.Format(time.RFC3339Nano),
 		"open_comment_count": open,
 	}

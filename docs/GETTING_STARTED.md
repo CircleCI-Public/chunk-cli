@@ -342,8 +342,8 @@ command that frees it, or a blocker that isn't Done. `X` deletes the selected
 plan, its comments and its flow after a y/n question (any key but `y` cancels);
 it isn't offered on a plan a session holds. `q` or `esc` quits. Opening or
 reading a plan never claims it; the request you type for a new plan does, and
-the screen resumes a planner factory is waiting on, in the project
-`chunk watch` was opened in. `ctrl+p` goes back to the list to
+the screen resumes a planner factory is waiting on, in a checkout of the
+plan's repo (the project `chunk watch` was opened in when it is one). `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its activity while another is shown,
 and its session keeps planning in the chunk daemon even once chunk is closed.
 The planner's activity is on the left and the plan is on the right, under a strip that says

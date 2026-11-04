@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
+	"github.com/CircleCI-Public/chunk-cli/internal/planrepo"
 )
 
 // planBuildPoll is how often a plan build reads its plan and flow from
@@ -65,6 +66,9 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s from factory: %v", req.PlanID, err)
 	}
+	if err := checkPlanRepo(ctx, ps.root, p); err != nil {
+		return chunkd.Session{}, err
+	}
 	f, err := planFlow(ctx, api, req.PlanID)
 	if err != nil {
 		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s's flow from factory: %v", req.PlanID, err)
@@ -93,6 +97,24 @@ func (d *daemon) startPlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, er
 	})
 	go d.executePlanBuild(sctx, entry, api, ps.root, req)
 	return entry.snapshot(), nil
+}
+
+// checkPlanRepo refuses to work on plan p in root when p records repos and
+// root is a checkout of none of them.
+func checkPlanRepo(ctx context.Context, root string, p *circleci.Plan) error {
+	if len(p.Repos) == 0 {
+		return nil
+	}
+	ok, own := planrepo.Matches(ctx, root, p.Repos)
+	if ok {
+		return nil
+	}
+	what := "has no GitHub origin"
+	if own != "" {
+		what = "is a checkout of " + own
+	}
+	return apiErr(http.StatusConflict, "plan %s builds in %s, but %s %s",
+		p.ID, strings.Join(p.Repos, ", "), root, what)
 }
 
 // resumePlanBuild starts a build of plan req.PlanID for a client resuming

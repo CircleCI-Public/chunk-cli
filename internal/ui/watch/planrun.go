@@ -14,11 +14,23 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
+// OpenedPlan is a plan workspace an opener made. Root is the project it is
+// planned and built in, "" when there is none and the plan is read-only.
+type OpenedPlan struct {
+	Agent   plan.Agent
+	Approve plan.Approver
+	Store   plan.Store
+	Root    string
+}
+
 // PlanOpener opens a workspace without starting an agent: the agent the
 // planning screen talks to, the store its plan and comments are kept in, and
 // the approval of the plan in factory. An empty id creates a plan on the
-// first message; otherwise the store addresses the existing plan.
-type PlanOpener func(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error)
+// first message; otherwise the store addresses the existing plan. root is
+// the project the dashboard was opened in, where a new plan is made; an
+// existing plan may resolve to a checkout of another repo, which the opened
+// plan's Root names.
+type PlanOpener func(ctx context.Context, root, id string) (OpenedPlan, error)
 
 type planReadyMsg struct {
 	// id is the plan's, or "" for a new plan.
@@ -59,8 +71,9 @@ func workspaceCmd(key uint64, cmd tea.Cmd) tea.Cmd {
 	}
 }
 
-// WithPlans returns a copy of m that opens plans with open, in root's
-// project: the one the dashboard was opened in, or "" outside one.
+// WithPlans returns a copy of m that opens plans with open. root is the
+// project the dashboard was opened in, or "" outside one, where new plans
+// are made.
 func (m Model) WithPlans(ctx context.Context, root string, open PlanOpener) Model {
 	m.planCtx, m.root, m.planner = ctx, root, open
 	m.planWorkspaces = make(map[uint64]*planWorkspace)
@@ -87,8 +100,8 @@ type planResumedMsg struct {
 	err   error
 }
 
-// resumePlan starts the agent of the flow the list asks for, in the project
-// the dashboard was opened in.
+// resumePlan starts the agent of the flow the list asks for, passing the
+// resumer the project the dashboard was opened in.
 func (m Model) resumePlan(msg flowlist.ResumeMsg) (Model, tea.Cmd) {
 	if m.resumer == nil {
 		return m, nil
@@ -206,13 +219,16 @@ func (m Model) openPlanID(id, title string) (tea.Model, tea.Cmd) {
 	if m.planner == nil {
 		return m, nil
 	}
-	// The API has no repository association, so an existing plan is in the
-	// project the dashboard was opened in, as a new one is.
+	// A new plan is made in the project the dashboard was opened in; the
+	// opener says where an existing one goes.
 	root, planner, ctx := m.root, m.planner, m.planCtx
 	m.planOpening, m.note = true, "opening the plan…"
 	return m, func() tea.Msg {
-		agent, approve, store, err := planner(ctx, root, id)
-		return planReadyMsg{id: id, root: root, title: title, agent: agent, approve: approve, store: store, err: err}
+		opened, err := planner(ctx, root, id)
+		return planReadyMsg{
+			id: id, root: opened.Root, title: title,
+			agent: opened.Agent, approve: opened.Approve, store: opened.Store, err: err,
+		}
 	}
 }
 

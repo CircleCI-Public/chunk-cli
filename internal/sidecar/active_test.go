@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -511,4 +513,25 @@ func TestProjectRootRegistrationCanonicalisesTheRoot(t *testing.T) {
 	roots, err = AllProjectRoots()
 	assert.NilError(t, err)
 	assert.DeepEqual(t, roots, []string{want})
+}
+
+func TestRecentProjectRootsListsTheLastRegisteredFirst(t *testing.T) {
+	setupXDGData(t)
+	var roots []string
+	for i := range 3 {
+		dir, err := filepath.EvalSymlinks(t.TempDir())
+		assert.NilError(t, err)
+		dataDir, err := config.ProjectDataDir(dir)
+		assert.NilError(t, err)
+		err = RegisterProjectRoot(dataDir, dir)
+		assert.NilError(t, err)
+		// Distinct mtimes, oldest first.
+		at := time.Now().Add(time.Duration(i-3) * time.Hour)
+		err = os.Chtimes(ProjectRootPath(dataDir), at, at)
+		assert.NilError(t, err)
+		roots = append(roots, dir)
+	}
+	got, err := RecentProjectRoots()
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(got, []string{roots[2], roots[1], roots[0]}))
 }
