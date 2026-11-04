@@ -74,6 +74,13 @@ func TestPlans(t *testing.T) {
 			{Name: "Unit 2: parser"},
 		}))
 		assert.Check(t, sc.Outcome == nil)
+		assert.Check(t, sc.Items.OpenQuestions == nil, "unset decoded as %#v", sc.Items.OpenQuestions)
+
+		fake.SetFactoryPlanOpenQuestions(p.ID, "Which store?", "Which TTL?")
+		sc, err = client.PlanStructuredContent(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(sc.Items.OpenQuestions, []string{"Which store?", "Which TTL?"}))
+		assert.Check(t, cmp.Len(sc.Units, 2), "setting the questions kept the units")
 
 		fake.SetFactoryPlanUnits(p.ID) // serves "units": []
 		sc, err = client.PlanStructuredContent(ctx, p.ID)

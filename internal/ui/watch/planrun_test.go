@@ -79,15 +79,17 @@ func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 	return plan.Flow{State: "refine-proposal", WaitingOn: "human", Events: events, Next: next}, nil
 }
 func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return plan.Family{}, nil }
-func (f *fakePlanStore) Units(context.Context) ([]plan.Unit, error)  { return f.units, nil }
-func (f *fakePlanStore) AddressComments(context.Context) error       { return nil }
-func (f *fakePlanStore) AnswerOpenQuestions(context.Context) error   { return nil }
-func (f *fakePlanStore) StartWork(context.Context) error             { return nil }
-func (f *fakePlanStore) Abandon(context.Context, string) error       { return nil }
-func (f *fakePlanStore) Delete(context.Context) error                { return nil }
-func (f *fakePlanStore) ApproveDesign(context.Context) error         { return nil }
-func (f *fakePlanStore) Text(context.Context) (string, error)        { return f.text, nil }
-func (f *fakePlanStore) SetText(context.Context, string) error       { return nil }
+func (f *fakePlanStore) Structure(context.Context) (plan.Structure, error) {
+	return plan.Structure{Units: f.units}, nil
+}
+func (f *fakePlanStore) AddressComments(context.Context) error     { return nil }
+func (f *fakePlanStore) AnswerOpenQuestions(context.Context) error { return nil }
+func (f *fakePlanStore) StartWork(context.Context) error           { return nil }
+func (f *fakePlanStore) Abandon(context.Context, string) error     { return nil }
+func (f *fakePlanStore) Delete(context.Context) error              { return nil }
+func (f *fakePlanStore) ApproveDesign(context.Context) error       { return nil }
+func (f *fakePlanStore) Text(context.Context) (string, error)      { return f.text, nil }
+func (f *fakePlanStore) SetText(context.Context, string) error     { return nil }
 
 func (f *fakePlanStore) Comments(context.Context) ([]plan.Comment, error) { return nil, nil }
 func (f *fakePlanStore) AddComment(context.Context, string, string) (plan.Comment, error) {

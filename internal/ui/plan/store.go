@@ -95,6 +95,14 @@ type Family struct {
 	Blockers []Relative
 }
 
+// Structure is what factory parses out of the plan's text: its units and its
+// open questions.
+type Structure struct {
+	Units []Unit
+	// OpenQuestions are the items of 3. Open Questions, in order.
+	OpenQuestions []string
+}
+
 // Unit is one of the plan's units, as factory reads them from its text.
 type Unit struct {
 	// Name is the unit's heading without its done suffix.
@@ -116,8 +124,8 @@ type Store interface {
 	// Family is the plan's parent, open sub-plans and blockers; empty
 	// before Create.
 	Family(ctx context.Context) (Family, error)
-	// Units are the plan's units, in order; none before Create.
-	Units(ctx context.Context) ([]Unit, error)
+	// Structure is the plan's units and open questions; empty before Create.
+	Structure(ctx context.Context) (Structure, error)
 	// AddressComments has factory take up the plan's comments, moving it
 	// from a Human state to its phase's Agent state. Factory moves it at
 	// its next poll, not before AddressComments returns.

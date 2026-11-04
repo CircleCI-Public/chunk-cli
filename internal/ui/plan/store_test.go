@@ -32,9 +32,10 @@ type fakeStore struct {
 	FlowV Flow
 	// FamilyV is what Family returns.
 	FamilyV Family
-	// UnitsV and UnitsErr are what Units returns.
-	UnitsV []Unit
-	TextV  string
+	// UnitsV, OpenQuestionsV and UnitsErr are what Structure returns.
+	UnitsV         []Unit
+	OpenQuestionsV []string
+	TextV          string
 	// TitleV is the title Create returns.
 	TitleV string
 	// CommentsV is the comments, ordered as added.
@@ -165,10 +166,10 @@ func (f *fakeStore) Family(context.Context) (Family, error) {
 	return f.FamilyV, f.FamilyErr
 }
 
-func (f *fakeStore) Units(context.Context) ([]Unit, error) {
+func (f *fakeStore) Structure(context.Context) (Structure, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.UnitsV, f.UnitsErr
+	return Structure{Units: f.UnitsV, OpenQuestions: f.OpenQuestionsV}, f.UnitsErr
 }
 
 // setTask has the plan's flow have a task of category out, or none for "".

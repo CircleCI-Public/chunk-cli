@@ -27,8 +27,7 @@ type planStats struct {
 	section string
 	// step is the index in m.units of the unit whose step the current block
 	// is, or -1.
-	step      int
-	questions int
+	step int
 }
 
 // heading is the level and text of a heading block, as the walk reads them:
@@ -65,9 +64,6 @@ func unitSteps(blocks []block, units []Unit) []int {
 // block that is left to glamour.
 func (m Model) styled(b block, st *planStats, w int) ([]string, bool) {
 	if b.kind != kindHeading {
-		if b.kind == kindListItem && strings.Contains(st.section, "question") {
-			st.questions++
-		}
 		return nil, false
 	}
 	level, text := heading(b)
