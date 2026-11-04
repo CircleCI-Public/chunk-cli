@@ -5707,7 +5707,7 @@ func TestRTakeOverAsksThenReleases(t *testing.T) {
 		assert.Check(t, !offersResume(m), "R offered while the take-over is in flight")
 		m, none := m.Update(press("R"))
 		assert.Check(t, none == nil)
-		for _, msg := range run(cmd) {
+		for _, msg := range run(t, cmd) {
 			m = drive(t, m, msg)
 		}
 		assert.Check(t, cmp.DeepEqual(r.Calls(), []string{takeOver}))
