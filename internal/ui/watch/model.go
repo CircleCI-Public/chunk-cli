@@ -84,12 +84,17 @@ type Model struct {
 	flows                      *flowlist.Model
 	flowsOpen, confirmPlanQuit bool
 
-	// chatView is the chat newChat made on the first ctrl+o, nil
-	// before it, or when the host offers none. While chatOpen it is
-	// shown over the screen it was opened from, and has the keyboard.
-	chatView *chat.Model
-	chatOpen bool
-	newChat  func() chat.Model
+	// chatView is the chat newChat made on the first ctrl+o, nil before it,
+	// or when the host offers none. chatShown is whether it polls and is
+	// drawn: beside the screen showing, or over it below sideBySideFrom
+	// columns. chatFocused is whether it has the keyboard; it is never set
+	// without chatShown, and always is while the chat covers the screen.
+	chatView               *chat.Model
+	chatShown, chatFocused bool
+	// drag is the pane the mouse button press being dragged began in,
+	// which has the motion and release that follow it.
+	drag    dragPane
+	newChat func() chat.Model
 
 	// bottomMargin is how many of the terminal's last rows are left blank, for
 	// a terminal that reports more rows than it shows.
@@ -140,7 +145,15 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	return m.updateWithPlan(msg)
+	next, cmd := m.updateWithPlan(msg)
+	m = next.(Model)
+	// The screen beside the chat can change under it: Flows, another plan,
+	// a plan's status read. Its header and the next message follow.
+	if m.chatShown && m.chatView != nil {
+		place, ctx := m.chatPlace()
+		*m.chatView = m.chatView.WithPlace(place, ctx)
+	}
+	return m, cmd
 }
 
 // update handles what is the dashboard's own, rather than the flow list's or
@@ -175,7 +188,7 @@ func (m Model) pingDaemon() tea.Msg {
 }
 
 func (m Model) View() tea.View {
-	if m.chatOpen {
+	if m.chatShown && !m.sideBySide() {
 		v := tea.NewView(m.chatView.Content())
 		v.AltScreen = true
 		// The conversation scrolls with the wheel.
@@ -183,6 +196,16 @@ func (m Model) View() tea.View {
 		v.WindowTitle = "chunk watch — chat"
 		return v
 	}
+	v := m.screenView()
+	if m.chatShown {
+		v.Content = beside(v.Content, m.mainWidth(), m.chatView.Content(), m.sidebarWidth(), m.height, m.styles().dim("│"))
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
+}
+
+// screenView is the plan screen or the flow list, whichever is showing.
+func (m Model) screenView() tea.View {
 	if m.planOpen {
 		v := tea.NewView(m.planScreen.Content())
 		v.AltScreen = true
@@ -214,10 +237,11 @@ func (m Model) renderHeader(st watchStyles) string {
 	}
 	title := st.brand("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(fmt.Sprintf("%d flow%s", n, plural(n)))
 	right := m.updateTag(st) + m.statusTag(st)
-	gap := max(m.width-lipgloss.Width(title)-lipgloss.Width(right), 1)
+	w := m.mainWidth()
+	gap := max(w-lipgloss.Width(title)-lipgloss.Width(right), 1)
 	// Clipped like every other line: one that wraps costs a row the fixed-height
 	// layout never budgeted for.
-	return clip(title+strings.Repeat(" ", gap)+right, m.width) + "\n"
+	return clip(title+strings.Repeat(" ", gap)+right, w) + "\n"
 }
 
 // updateTag names a newer release and the command that installs it.

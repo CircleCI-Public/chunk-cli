@@ -201,6 +201,29 @@ func TestChatOpenPollsFromZeroAndCloseStops(t *testing.T) {
 	})
 }
 
+func TestChatBlurKeepsPollingAndFocusTakesInputAgain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fake{}
+		m, cmd := open(t, newChat(f))
+		m = m.Blur()
+		assert.Check(t, !m.input.Focused(), "Blur left the input focused")
+		n := f.polls()
+		m, _ = round(t, m, cmd)
+		assert.Check(t, cmp.Equal(f.polls(), n+1), "a blurred chat stopped polling")
+
+		m, _ = m.Focus()
+		assert.Check(t, m.input.Focused(), "Focus did not focus the input")
+		m = typed(m, "hi")
+		assert.Check(t, cmp.Equal(m.input.Value(), "hi"))
+	})
+}
+
+func TestUnavailableChatFocusDoesNothing(t *testing.T) {
+	m, cmd := Unavailable("no repo").Focus()
+	assert.Check(t, cmd == nil)
+	assert.Check(t, !m.input.Focused())
+}
+
 func TestChatShowsEntriesFromAnotherWindow(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &fake{}

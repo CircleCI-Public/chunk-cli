@@ -189,7 +189,9 @@ func (m Model) WithPlace(place, context string) Model {
 }
 
 // Open starts polling from 0, so the whole conversation shows, and focuses
-// the input. A host calls it each time the chat is shown.
+// the input. A host calls it each time the chat is shown, and Close when it
+// is hidden; Focus and Blur move only the keyboard, and leave polling as it
+// is.
 func (m Model) Open() (Model, tea.Cmd) {
 	if m.reason != "" {
 		return m, nil
@@ -206,6 +208,21 @@ func (m Model) Close() Model {
 	m.input.Blur()
 	m.drag.Clear()
 	m.note = ""
+	return m
+}
+
+// Focus gives the input the keyboard, and leaves polling as it is. It does
+// nothing on an Unavailable chat.
+func (m Model) Focus() (Model, tea.Cmd) {
+	if m.reason != "" {
+		return m, nil
+	}
+	return m, m.input.Focus()
+}
+
+// Blur takes the keyboard from the input, and leaves polling as it is.
+func (m Model) Blur() Model {
+	m.input.Blur()
 	return m
 }
 
@@ -474,7 +491,12 @@ func (m Model) header() string {
 
 func (m Model) Content() string {
 	if m.reason != "" {
-		return m.header() + "\n\n" + theme.New(m.dark).Dim.Render(m.reason)
+		reason := theme.New(m.dark).Dim
+		if m.width > 0 {
+			// Wrapped, for a chat in a sidebar narrower than the reason.
+			reason = reason.Width(m.width)
+		}
+		return m.header() + "\n\n" + reason.Render(m.reason)
 	}
 	pad := lipgloss.NewStyle().Padding(0, padX)
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(theme.New(m.dark).VDim.GetForeground()).

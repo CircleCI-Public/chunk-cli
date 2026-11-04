@@ -235,7 +235,7 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	if m.newChat != nil {
 		screen = screen.WithChatKey()
 	}
-	screen, cmd := screen.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+	screen, cmd := screen.Update(tea.WindowSizeMsg{Width: m.mainWidth(), Height: m.height})
 	m.planSeq++
 	ws := &planWorkspace{screen: screen, store: msg.store, root: msg.root}
 	m.planWorkspaces[m.planSeq] = ws
@@ -311,27 +311,18 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.update(msg)
 		m = next.(Model)
 		if _, ok := msg.(tea.WindowSizeMsg); ok {
-			msg = tea.WindowSizeMsg{Width: m.width, Height: m.height}
+			next, size := m.resize()
+			return next, tea.Batch(cmd, size)
 		}
 		cmds := []tea.Cmd{cmd}
-		if m.chatView != nil {
-			switch msg := msg.(type) {
-			case tea.WindowSizeMsg:
-				*m.chatView = m.chatView.SetSize(m.width, m.height)
-			case tea.BackgroundColorMsg:
-				*m.chatView, _ = m.chatView.Update(msg)
-			}
+		if bg, ok := msg.(tea.BackgroundColorMsg); ok && m.chatView != nil {
+			*m.chatView, _ = m.chatView.Update(bg)
 		}
 		for key := range m.planWorkspaces {
 			m, cmd = m.updateWorkspace(key, msg)
 			cmds = append(cmds, cmd)
 		}
 		if m.flows != nil {
-			// The flow list draws under the dashboard's header.
-			if size, ok := msg.(tea.WindowSizeMsg); ok {
-				size.Height = max(size.Height-1, 0)
-				msg = size
-			}
 			*m.flows, cmd = m.flows.Update(msg)
 			cmds = append(cmds, cmd)
 		}

@@ -11,8 +11,11 @@ type keyMap struct {
 	Flows key.Binding
 	// ForceQuit confirms quitting when plans have unsent input.
 	ForceQuit key.Binding
-	// Chat opens or closes the chat, which CloseChat also closes.
-	Chat, CloseChat key.Binding
+	// Chat shows the chat with the keyboard, gives it the keyboard back
+	// when the screen beside it has it, and hides it when it has it.
+	// Unfocus, in the chat, gives the keyboard to the screen beside it, or
+	// hides a chat that covers the screen.
+	Chat, Unfocus key.Binding
 }
 
 func (m Model) keys() keyMap {
@@ -20,7 +23,7 @@ func (m Model) keys() keyMap {
 		Flows:     key.NewBinding(key.WithKeys("ctrl+p")),
 		ForceQuit: key.NewBinding(key.WithKeys("ctrl+c")),
 
-		Chat:      key.NewBinding(key.WithKeys("ctrl+o")),
-		CloseChat: key.NewBinding(key.WithKeys("esc")),
+		Chat:    key.NewBinding(key.WithKeys("ctrl+o")),
+		Unfocus: key.NewBinding(key.WithKeys("esc")),
 	}
 }
