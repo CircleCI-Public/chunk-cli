@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
@@ -243,6 +244,54 @@ func RegisterProjectRoot(dataDir, root string) error {
 // canonicalised and de-duplicated on the way out, so breadcrumbs written before
 // RegisterProjectRoot canonicalised them cannot list one project twice.
 func AllProjectRoots() ([]string, error) {
+	known, err := projectRoots()
+	if err != nil {
+		return nil, err
+	}
+	return rootsOf(known), nil
+}
+
+// RecentProjectRoots is AllProjectRoots, most recently registered first, by
+// the modification time of each project's breadcrumb. Ties keep
+// AllProjectRoots' order.
+//
+// RegisterProjectRoot rewrites the breadcrumb each time it registers the
+// project, so its modification time is when the project was last used.
+func RecentProjectRoots() ([]string, error) {
+	known, err := projectRoots()
+	if err != nil {
+		return nil, err
+	}
+	slices.SortStableFunc(known, func(a, b knownRoot) int {
+		return b.registered.Compare(a.registered)
+	})
+	return rootsOf(known), nil
+}
+
+// knownRoot is a project root read from a breadcrumb, with when it was last
+// registered.
+type knownRoot struct {
+	root       string
+	registered time.Time
+}
+
+func rootsOf(known []knownRoot) []string {
+	if len(known) == 0 {
+		return nil
+	}
+	roots := make([]string, len(known))
+	for i, k := range known {
+		roots[i] = k.root
+	}
+	return roots
+}
+
+// projectRoots reads the breadcrumb files written by RegisterProjectRoot, in
+// directory order. Roots are canonicalised and de-duplicated, so breadcrumbs
+// written before RegisterProjectRoot canonicalised them cannot list one
+// project twice; a root listed by several breadcrumbs keeps its first place
+// and the newest of their modification times.
+func projectRoots() ([]knownRoot, error) {
 	base, err := config.AppData()
 	if err != nil {
 		return nil, err
@@ -254,29 +303,39 @@ func AllProjectRoots() ([]string, error) {
 		}
 		return nil, err
 	}
-	var roots []string
-	seen := map[string]bool{}
+	var known []knownRoot
+	seen := map[string]int{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		crumb := ProjectRootPath(filepath.Join(base, e.Name()))
+		info, statErr := os.Stat(crumb)
+		if statErr != nil {
+			continue
+		}
 		data, readErr := os.ReadFile(crumb)
 		if readErr != nil {
 			continue
 		}
 		root := config.CanonicalProjectRoot(strings.TrimSpace(string(data)))
-		if root == "" || seen[root] {
+		if root == "" {
+			continue
+		}
+		if i, ok := seen[root]; ok {
+			if info.ModTime().After(known[i].registered) {
+				known[i].registered = info.ModTime()
+			}
 			continue
 		}
 		// Only include projects where the root still exists.
 		if _, statErr := os.Stat(root); statErr != nil {
 			continue
 		}
-		seen[root] = true
-		roots = append(roots, root)
+		seen[root] = len(known)
+		known = append(known, knownRoot{root: root, registered: info.ModTime()})
 	}
-	return roots, nil
+	return known, nil
 }
 
 // saveDir returns the XDG_DATA_HOME directory for the current project.
