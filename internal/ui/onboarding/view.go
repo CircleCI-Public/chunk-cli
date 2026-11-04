@@ -34,7 +34,18 @@ type activity struct {
 	extra                []string
 }
 
-const keyEnter = "enter"
+const (
+	keyEnter = "enter"
+	keyEsc   = "esc"
+)
+
+// The plan's activities' titles.
+const (
+	titlePlan   = "Plan"
+	titleBuild  = "Build"
+	titleReview = "Review"
+	titleMerge  = "Merge"
+)
 
 const (
 	ownerAgent = "agent"
@@ -56,28 +67,11 @@ type row struct {
 	lines []string
 }
 
-func (m Model) mark(s actState) string {
-	switch s {
-	case actRunning:
-		return m.styles.Running.Render("●")
-	case actYou:
-		return m.styles.Warning.Render("◐")
-	case actBlocked:
-		return m.styles.Warning.Render("⚠")
-	case actDone:
-		return m.styles.Success.Render("✓")
-	case actNext:
-	}
-	return m.styles.Dim.Render("○")
-}
+func (m Model) mark(s actState) string { return mark(m.styles, s) }
 
 func (m Model) activityLines(a activity) []string {
-	head := m.mark(a.state) + " " + m.styles.Emphasis.Render(a.title) + m.styles.Dim.Render(" · "+a.owner)
-	if a.detail != "" {
-		head += m.styles.Dim.Render(" · " + a.detail)
-	}
 	lines := make([]string, 0, 1+len(a.extra))
-	lines = append(lines, head)
+	lines = append(lines, head(m.styles, a.state, a.title, a.owner, a.detail))
 	for _, e := range a.extra {
 		lines = append(lines, "  "+e)
 	}
@@ -108,7 +102,7 @@ func (m Model) rows() []row {
 	if m.store == nil {
 		rows = append(rows, m.changeRows()...)
 		if m.accountDone && m.org != "" {
-			rows = append(rows, row{lines: m.upNextLines(activity{title: "Plan", owner: ownerAgent}, "you choose a change")})
+			rows = append(rows, row{lines: m.upNextLines(activity{title: titlePlan, owner: ownerAgent}, "you choose a change")})
 		}
 		return rows
 	}
@@ -116,14 +110,36 @@ func (m Model) rows() []row {
 	acts := m.planActivities()
 	after := "setup"
 	for _, a := range acts {
+		// Review and Merge are their cards while they wait on the developer.
+		if i := m.cardIndex(strings.ToLower(a.title)); i >= 0 && (a.title == titleReview || a.title == titleMerge) {
+			rows = append(rows, m.cardRow(m.cards[i]))
+			after = a.title
+			continue
+		}
 		if a.state == actNext {
-			rows = append(rows, row{lines: m.upNextLines(a, strings.ToLower(after))})
+			rows = append(rows, row{lines: m.upNextLines(a, m.upNextAfter(a, after))})
 			break
 		}
 		rows = append(rows, row{lines: m.activityLines(a)})
 		after = a.title
+		if a.title == titlePlan {
+			rows = append(rows, m.planCardRows()...)
+		}
 	}
 	return rows
+}
+
+// upNextAfter is what the next activity a waits for, after the activity
+// named after: Build waits for the developer's approval, and for Setup while
+// it is not done.
+func (m Model) upNextAfter(a activity, after string) string {
+	if a.title != titleBuild || !m.hasCard("build") {
+		return strings.ToLower(after)
+	}
+	if !m.found || polled(m.setup.State) {
+		return "setup and your approval"
+	}
+	return "your approval"
 }
 
 func (m Model) accountRows() []row {
@@ -228,14 +244,14 @@ func (m Model) planActivities() []activity {
 	merged := f.Ended && f.Outcome == outcomeMerged
 	integrating := f.State == planstate.Integrate || merged
 
-	r := activity{state: actNext, owner: ownerYou, title: "Review"}
+	r := activity{state: actNext, owner: ownerYou, title: titleReview}
 	switch {
 	case merged:
 		r.state = actDone
 	case integrating && f.WaitingOn == planstate.Human:
 		r.state, r.detail = actYou, f.PR
 	}
-	mg := activity{state: actNext, owner: ownerYou, title: "Merge"}
+	mg := activity{state: actNext, owner: ownerYou, title: titleMerge}
 	if merged {
 		mg.state = actDone
 	}
@@ -250,13 +266,15 @@ func (m Model) merged() bool { return m.flow.Ended && m.flow.Outcome == outcomeM
 
 func (m Model) planActivity() activity {
 	f := m.flow
-	p := activity{state: actRunning, owner: ownerAgent, title: "Plan", detail: cmp.Or(m.activity, "starting")}
+	p := activity{state: actRunning, owner: ownerAgent, title: titlePlan, detail: cmp.Or(m.activity, "starting")}
 	switch {
 	case f.State == planstate.Build || f.State == planstate.Integrate || m.merged():
 		p.state, p.detail = actDone, ""
 		return p
-	case len(m.structure.OpenQuestions) > 0 && f.WaitingOn == planstate.Human:
+	case len(m.questionCards()) > 0 || (len(m.structure.OpenQuestions) > 0 && f.WaitingOn == planstate.Human):
 		p.state, p.detail = actBlocked, "waits for your answers"
+	case m.hasCard("design") || m.hasCard("build"):
+		p.state, p.detail = actBlocked, "waits for your approval"
 	case f.WaitingOn == planstate.Human:
 		p.state, p.detail = actBlocked, "waits for you"
 	}
@@ -266,7 +284,7 @@ func (m Model) planActivity() activity {
 
 func (m Model) buildActivity() activity {
 	f := m.flow
-	b := activity{state: actNext, owner: ownerAgent, title: "Build"}
+	b := activity{state: actNext, owner: ownerAgent, title: titleBuild}
 	switch {
 	case f.State == planstate.Integrate || m.merged():
 		b.state = actDone
@@ -407,6 +425,7 @@ func (m *Model) settle(moved bool) {
 	rows := m.rows()
 	ids := focusable(rows)
 	needs := map[string]bool{}
+	jumped := false
 	for _, r := range rows {
 		if r.card == "" {
 			continue
@@ -415,11 +434,15 @@ func (m *Model) settle(moved bool) {
 		if m.needs[r.card] {
 			continue
 		}
-		if m.focus == focusInput && m.Unsent() != "" {
-			m.marked[r.card] = true
+		// Focus moves to the first new card only, and not off an input
+		// holding text: then the card is only marked.
+		if jumped || m.focusedTyped() {
+			if !jumped {
+				m.marked[r.card] = true
+			}
 			continue
 		}
-		m.focus, moved = r.id, true
+		m.focus, moved, jumped = r.id, true, true
 	}
 	m.needs = needs
 	for c := range m.marked {
@@ -443,6 +466,11 @@ func (m *Model) settle(moved bool) {
 	} else {
 		m.input.Blur()
 	}
+	cards := slices.Clone(m.cards)
+	for i, c := range cards {
+		cards[i], _ = c.Update(focusMsg{focused: c.ID() == m.focus})
+	}
+	m.cards = cards
 	if moved {
 		m.scrollToFocus()
 	}
@@ -479,6 +507,34 @@ func (m *Model) wheel(msg tea.MouseWheelMsg) {
 	m.offset = min(max(m.offset, 0), max(len(lines)-m.bodyHeight(), 0))
 }
 
+// keyCapture hands a key to the focused card while it captures keys, as a
+// comment being written does: all but ↑/↓.
+func (m *Model) keyCapture(k string, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	c, i := m.focusedCard()
+	if ic, ok := c.(inputCard); !ok || !ic.capturing() || k == "up" || k == "down" {
+		return nil, false
+	}
+	return m.updateCard(i, msg), true
+}
+
+// keyCard handles a key on a card or Send answers: ctrl+enter sends the
+// answers from a question, and the focused card takes the rest.
+func (m *Model) keyCard(k string, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if k == "ctrl+enter" && len(m.questionCards()) > 0 && (m.focus == focusAnswers || strings.HasPrefix(m.focus, questionIDPrefix)) {
+		return m.sendAnswers(), true
+	}
+	if m.focus == focusAnswers {
+		if k == keyEnter {
+			return m.sendAnswers(), true
+		}
+		return nil, true
+	}
+	if _, i := m.focusedCard(); i >= 0 {
+		return m.updateCard(i, msg), true
+	}
+	return nil, false
+}
+
 // key handles a key press, and reports whether it moved focus.
 func (m *Model) key(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	k := msg.String()
@@ -489,13 +545,16 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			m.state.Left = true
 			m.save()
 			return func() tea.Msg { return LeaveMsg{} }, false
-		case "esc", "n":
+		case keyEsc, "n":
 			m.leaving = false
 		}
 		return nil, false
 	}
+	if cmd, ok := m.keyCapture(k, msg); ok {
+		return cmd, false
+	}
 	switch k {
-	case "esc", "ctrl+p":
+	case keyEsc, "ctrl+p":
 		m.leaving = true
 		return nil, false
 	case "up":
@@ -504,6 +563,9 @@ func (m *Model) key(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case "down":
 		m.move(1)
 		return nil, true
+	}
+	if cmd, ok := m.keyCard(k, msg); ok {
+		return cmd, false
 	}
 	if m.focus == focusInput {
 		if k != keyEnter {

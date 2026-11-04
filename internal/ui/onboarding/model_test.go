@@ -169,6 +169,7 @@ type world struct {
 	store   *onboardingtest.Store
 	opener  *onboardingtest.Opener
 	checks  onboarding.PRChecks
+	browser onboarding.Browser
 }
 
 func newWorld(st onboarding.State, fetches ...onboardingtest.Fetched) *world {
@@ -187,7 +188,7 @@ func newWorld(st onboarding.State, fetches ...onboardingtest.Fetched) *world {
 func (w *world) deps() onboarding.Deps {
 	return onboarding.Deps{
 		Root: "/src/app", Setup: w.setup, Account: w.account, Open: w.opener.Open,
-		Checks: w.checks, State: w.state,
+		Checks: w.checks, Browser: w.browser, State: w.state,
 	}
 }
 
@@ -491,17 +492,50 @@ func TestUnsent(t *testing.T) {
 	tests := []struct {
 		name  string
 		typed string
+		// card, when set, is the card typed into, on a reopened plan whose
+		// flow waits on that card's step.
+		card string
 	}{
-		{name: "own change", typed: "Add a CSV export"},
-		{name: "nothing typed"},
+		{
+			name:  "own change",
+			typed: "Add a CSV export",
+		},
+		{
+			name: "nothing typed",
+		},
+		{
+			name:  "question answer",
+			typed: "Postgres",
+			card:  "question",
+		},
+		{
+			name:  "design comment",
+			typed: "Say why",
+			card:  "design",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				w := newWorld(onboarding.State{}, onboardingtest.Found(running(-1)))
+				if tt.card == "" {
+					w := newWorld(onboarding.State{}, onboardingtest.Found(running(-1)))
+					d := newDriver(t.Context(), t, w.deps())
+					d.until("shows setup", d.shows("● Setup"))
+					d.focusOn("describe your own")
+					d.typeText(tt.typed)
+					assert.Check(t, cmp.Equal(d.m.Unsent(), tt.typed))
+					return
+				}
+				event, want := answerOpenQuestions, "Which store?"
+				if tt.card == "design" {
+					event, want = approveForUnits, "Approve the design"
+				}
+				w := planWorld(steps(event), questions)
 				d := newDriver(t.Context(), t, w.deps())
-				d.until("shows setup", d.shows("● Setup"))
-				d.focusOn("describe your own")
+				d.until("shows the card", d.shows(want))
+				if tt.card == "design" {
+					d.press('c')
+				}
 				d.typeText(tt.typed)
 				assert.Check(t, cmp.Equal(d.m.Unsent(), tt.typed))
 			})

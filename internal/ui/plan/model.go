@@ -41,6 +41,10 @@ import (
 // it starts, as a line for the screen to show while it works.
 type Approver func(step func(string)) (string, error)
 
+// CommentsFirst is why a design is not approved while comments on the plan
+// are unsent or unresolved; each screen adds its own key.
+const CommentsFirst = "Send or resolve your comments first"
+
 // ReadyToApprove is whether f waits for the developer to approve it:
 // factory waits on the developer and requires an approval of them.
 func ReadyToApprove(f Flow) bool {
@@ -1208,7 +1212,7 @@ func (m Model) askToApprove() Model {
 	case !ReadyToApprove(m.flow):
 		m.status = warn("The plan cannot be approved now: " + m.notReadyWhy() + ".")
 	case approval(m.flow) == planstate.ApproveForUnits && (queued > 0 || m.openComments() > 0):
-		m.status = warn("Send or resolve your comments first; then ctrl+s approves the design.")
+		m.status = warn(CommentsFirst + "; then ctrl+s approves the design.")
 	case approval(m.flow) == planstate.ApproveForUnits:
 		m.confirming, m.pendingDesign = true, true
 		m.status = ui.TitleStyle.Render("Approve the design, so chunk writes the units? ") + confirmButtons

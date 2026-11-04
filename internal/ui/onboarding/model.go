@@ -76,10 +76,14 @@ type (
 		flow  plan.Flow
 		err   error
 	}
-	flowTickMsg  struct{ store plan.Store }
+	flowTickMsg struct{ store plan.Store }
+	// structureMsg is a read of the plan: its structure, text and
+	// comments, as the cards read them.
 	structureMsg struct {
 		store     plan.Store
 		structure plan.Structure
+		text      string
+		comments  []plan.Comment
 		err       error
 	}
 	eventMsg struct {
@@ -172,6 +176,14 @@ type Model struct {
 	// ended is how the last plan's flow ended unmerged, for the timeline.
 	ended string
 
+	// The plan's text and comments as last read, the cards they make, and
+	// Send answers while it runs and how it failed.
+	text     string
+	comments []plan.Comment
+	cards    []card
+	sending  bool
+	sendErr  error
+
 	// focus is the focused row's ID, needs the ◐ cards drawn at the last
 	// update, and marked the ones that appeared while focus stayed in an
 	// input with text.
@@ -217,12 +229,32 @@ func (m Model) Init() tea.Cmd {
 // Width is the width of the last WindowSizeMsg.
 func (m Model) Width() int { return m.width }
 
-// Unsent is any typed text not yet saved.
+// Unsent is any typed text not yet saved: the own change, then each card's
+// input, a line apart.
 func (m Model) Unsent() string {
-	if strings.TrimSpace(m.input.Value()) == "" {
-		return ""
+	var parts []string
+	if t := typedText(m.input); t != "" {
+		parts = append(parts, t)
 	}
-	return m.input.Value()
+	for _, c := range m.cards {
+		if ic, ok := c.(inputCard); ok && ic.typed() != "" {
+			parts = append(parts, ic.typed())
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// focusedTyped is whether the focused row's input holds unsaved text.
+func (m Model) focusedTyped() bool {
+	if m.focus == focusInput {
+		return typedText(m.input) != ""
+	}
+	if c, _ := m.focusedCard(); c != nil {
+		if ic, ok := c.(inputCard); ok {
+			return ic.typed() != ""
+		}
+	}
+	return false
 }
 
 // Place names onboarding for the chat: "Set up", and Setup's state, with the
@@ -253,9 +285,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(msg.Width, 0), max(msg.Height, 0)
 		m.input.SetWidth(max(m.width-8, 1))
+		m.syncCards()
 	case tea.BackgroundColorMsg:
 		m.dark = msg.IsDark()
 		m.styles = theme.New(m.dark)
+		m.syncCards()
 	case tea.MouseWheelMsg:
 		m.wheel(msg)
 	case tea.KeyPressMsg:
@@ -263,6 +297,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.PasteMsg:
 		if m.focus == focusInput {
 			m.input, cmd = m.input.Update(msg)
+		} else if _, i := m.focusedCard(); i >= 0 {
+			cmd = m.updateCard(i, msg)
 		}
 	case accountMsg:
 		cmd = m.applyAccount(msg)
@@ -303,8 +339,13 @@ func (m *Model) updatePlan(msg tea.Msg) tea.Cmd {
 		return m.applyFlow(msg)
 	case structureMsg:
 		if msg.store == m.store && msg.err == nil {
-			m.structure = msg.structure
+			m.structure, m.text, m.comments = msg.structure, msg.text, msg.comments
+			m.syncCards()
 		}
+	case cardMsg:
+		return m.applyCardMsg(msg)
+	case answersMsg:
+		return m.applyAnswers(msg)
 	case checksTickMsg:
 		if msg.store != m.store {
 			return nil
@@ -316,6 +357,7 @@ func (m *Model) updatePlan(msg tea.Msg) tea.Cmd {
 	case checksMsg:
 		if msg.store == m.store {
 			m.checks, m.checksErr = msg.checks, msg.err
+			m.syncCards()
 			return tick(m.ctx, checksPoll, checksTickMsg{store: msg.store})
 		}
 	}
@@ -589,6 +631,7 @@ func (m *Model) follow(o opened) tea.Cmd {
 	m.flow, m.flowLoaded, m.structure = plan.Flow{}, false, plan.Structure{}
 	m.activity, m.planErr, m.flowErr = "", nil, nil
 	m.checks, m.checksErr, m.checking = nil, nil, false
+	m.text, m.comments, m.cards, m.sending, m.sendErr = "", nil, nil, false, nil
 	return tea.Batch(waitEvent(m.ctx, m.agent), flowCmd(m.ctx, m.store))
 }
 
@@ -632,8 +675,15 @@ func flowCmd(ctx context.Context, s plan.Store) tea.Cmd {
 
 func structureCmd(ctx context.Context, s plan.Store) tea.Cmd {
 	return func() tea.Msg {
-		st, err := s.Structure(ctx)
-		return structureMsg{store: s, structure: st, err: err}
+		msg := structureMsg{store: s}
+		if msg.structure, msg.err = s.Structure(ctx); msg.err != nil {
+			return msg
+		}
+		if msg.text, msg.err = s.Text(ctx); msg.err != nil {
+			return msg
+		}
+		msg.comments, msg.err = s.Comments(ctx)
+		return msg
 	}
 }
 
@@ -662,6 +712,7 @@ func (m *Model) applyFlow(msg flowMsg) tea.Cmd {
 	m.flowErr = nil
 	changed := !m.flowLoaded || msg.flow.State != m.flow.State
 	m.flow, m.flowLoaded = msg.flow, true
+	m.syncCards()
 	var cmds []tea.Cmd
 	if m.needsResume {
 		m.needsResume = false
@@ -669,7 +720,9 @@ func (m *Model) applyFlow(msg flowMsg) tea.Cmd {
 			cmds = append(cmds, resumeCmd(m.ctx, m.agent, m.store))
 		}
 	}
-	if changed {
+	// While the developer has a step, the plan is read at every poll, so
+	// the cards see a reworded question or an answer made elsewhere.
+	if changed || waitsOnHuman(m.flow) || len(m.cards) > 0 {
 		cmds = append(cmds, structureCmd(m.ctx, m.store))
 	}
 	if m.flow.PR != "" && !m.checking && !m.flow.Ended {
@@ -698,6 +751,7 @@ func (m *Model) end() tea.Cmd {
 	m.save()
 	m.ended = "ended: " + cmp.Or(m.flow.Outcome, "unknown")
 	m.agent, m.approver, m.store, m.root = nil, nil, nil, ""
+	m.cards = nil
 	return nil
 }
 
