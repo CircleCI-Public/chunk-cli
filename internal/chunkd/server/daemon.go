@@ -95,6 +95,8 @@ type daemon struct {
 	planners *plannerSet
 	// chats holds each repository's chat.
 	chats *chats
+	// setups holds each project's Setup run.
+	setups *setups
 	// polled is closed once the first poll has finished, so /snapshot can wait
 	// for data while /ping answers straight away. Nil in daemons built without
 	// one, which have nothing to wait for.
@@ -241,6 +243,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	// it concluded is remembered here and blocks the run after it.
 	d.tasks.onFinish = d.risk.record
 	d.chats = newChats(ctx, &d.rcfg)
+	d.setups = newSetups(ctx)
 	// Still cancelled explicitly: this returns before the process exits in tests
 	// and any embedded caller, and it is what stops streamers promptly rather
 	// than whenever the parent context happens to be torn down.
@@ -250,6 +253,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	defer d.sessions.stopAll()
 	defer d.planners.stopAll()
 	defer d.chats.stopAll()
+	defer d.setups.stopAll()
 	if prov != nil {
 		defer prov.stopAll(context.Background())
 	}

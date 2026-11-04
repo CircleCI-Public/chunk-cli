@@ -137,6 +137,40 @@ func FetchPlanBuild(planID string, after int) (activity PlanBuildActivity, found
 	return activity, true, nil
 }
 
+// StartSetup starts the project's Setup run, or returns the one under way;
+// on a stuck or failed run it deletes that run's sidecar and starts again
+// (Retry). It uses the long client, as the other starts do.
+func StartSetup(req SetupRequest) (SetupActivity, error) {
+	client, err := longDaemonClient()
+	if err != nil {
+		return SetupActivity{}, err
+	}
+	var act SetupActivity
+	err = sessionCallWith(client, http.MethodPost, "/factory/setup", req, &act)
+	return act, err
+}
+
+// FetchSetup reads the project's Setup run with its feed lines past the first
+// after; found is false when the project has none.
+func FetchSetup(root string, after int) (act SetupActivity, found bool, err error) {
+	path := "/factory/setup?root=" + neturl.QueryEscape(root) + "&after=" + strconv.Itoa(after)
+	err = sessionCall(http.MethodGet, path, nil, &act)
+	var refused *SessionRefused
+	if errors.As(err, &refused) && refused.Status == http.StatusNotFound {
+		return SetupActivity{}, false, nil
+	}
+	if err != nil {
+		return SetupActivity{}, false, err
+	}
+	return act, true, nil
+}
+
+// ContinueSetup records Continue without an image on the project's stuck
+// Setup run.
+func ContinueSetup(root string) error {
+	return sessionCall(http.MethodPost, "/factory/setup/continue", SetupRequest{ProjectRoot: root}, nil)
+}
+
 // ApproveAndBuild has the daemon approve factory plan planID, stop its
 // planner and start its build, and returns the build's session ID. It uses
 // the long client: stopping and starting can outlast the short client's

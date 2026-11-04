@@ -663,3 +663,58 @@ func TestFetchPlanBuild(t *testing.T) {
 		assert.Check(t, !found)
 	})
 }
+
+func TestFetchSetup(t *testing.T) {
+	t.Run("a run", func(t *testing.T) {
+		uris := make(chan string, 1)
+		fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			uris <- r.URL.RequestURI()
+			_, _ = io.WriteString(w, `{"state":"stuck","step":"environment","summary":"environment: npm ci failed","checks":2,"first":2,"total":3,"lines":[{"level":"error","text":"npm ci failed"}]}`)
+		}))
+		got, found, err := FetchSetup("/r", 2)
+		assert.NilError(t, err)
+		assert.Check(t, found)
+		assert.Check(t, cmp.DeepEqual(got, SetupActivity{
+			State:   SetupStuck,
+			Step:    "environment",
+			Summary: "environment: npm ci failed",
+			Checks:  2,
+			First:   2,
+			Total:   3,
+			Lines: []FeedLine{{
+				Level: FeedError,
+				Text:  "npm ci failed",
+			}},
+		}))
+		uri := <-uris
+		assert.Check(t, cmp.Equal(uri, "/factory/setup?root=%2Fr&after=2"))
+	})
+
+	t.Run("no run", func(t *testing.T) {
+		fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "no setup for this project", http.StatusNotFound)
+		}))
+		_, found, err := FetchSetup("/r", 0)
+		assert.NilError(t, err)
+		assert.Check(t, !found)
+	})
+
+	t.Run("a daemon without the route", func(t *testing.T) {
+		fakeSessionDaemon(t, http.NotFoundHandler())
+		_, found, err := FetchSetup("/r", 0)
+		assert.Check(t, cmp.ErrorIs(err, ErrDaemonUnavailable))
+		assert.Check(t, !found)
+	})
+
+	t.Run("a daemon error", func(t *testing.T) {
+		fakeSessionDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "broken", http.StatusInternalServerError)
+		}))
+		_, found, err := FetchSetup("/r", 0)
+		var refused *SessionRefused
+		isRefused := errors.As(err, &refused)
+		assert.Assert(t, isRefused, "got %v", err)
+		assert.Check(t, cmp.Equal(refused.Status, http.StatusInternalServerError))
+		assert.Check(t, !found)
+	})
+}

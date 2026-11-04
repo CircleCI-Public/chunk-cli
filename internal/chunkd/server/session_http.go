@@ -32,6 +32,9 @@ const maxRequestBytes = 64 * 1024
 //	DELETE /factory/{id}                        forget a finished session (409 while it is running)
 //	POST /chat                                  send a message to a repository's chat, starting or resuming it
 //	GET  /chat                                  a repository's chat's log (?root=<path>&after=N)
+//	POST /factory/setup                         start a project's Setup run, or retry a stuck or failed one
+//	GET  /factory/setup                         a project's Setup run and its feed (?root=<path>&after=N)
+//	POST /factory/setup/continue                continue a stuck Setup run without an image
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /factory/plans", d.handlePlanBuild)
 	mux.HandleFunc("GET /factory/plans/{plan}/build", d.handlePlanBuildActivity)
@@ -43,6 +46,9 @@ func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("DELETE /factory/{id}", d.handleSessionDelete)
 	mux.HandleFunc("POST /chat", d.handleChatSend)
 	mux.HandleFunc("GET /chat", d.handleChatLog)
+	mux.HandleFunc("POST /factory/setup", d.handleSetupStart)
+	mux.HandleFunc("GET /factory/setup", d.handleSetupActivity)
+	mux.HandleFunc("POST /factory/setup/continue", d.handleSetupContinue)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -249,4 +255,90 @@ func (d *daemon) handleChatLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c.run.view(after))
+}
+
+// handleSetupStart starts a project's Setup run, or answers with the one
+// already under way; a stuck or failed run starts again.
+func (d *daemon) handleSetupStart(w http.ResponseWriter, r *http.Request) {
+	var req chunkd.SetupRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	root, err := chatRoot(req.ProjectRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Setup writes root's config and syncs root to a sidecar, so root must be
+	// a repository on this machine, spelled as its top level.
+	top := gitutil.TopLevelCtx(r.Context(), root)
+	if top == "" || config.CanonicalProjectRoot(top) != root {
+		http.Error(w, fmt.Sprintf("%q is not the top of a git repository", req.ProjectRoot), http.StatusBadRequest)
+		return
+	}
+	if req.OrgID == "" {
+		http.Error(w, "org_id required", http.StatusBadRequest)
+		return
+	}
+	if d.client == nil {
+		msg := d.factoryAuthError()
+		if msg == "" {
+			msg = "not authenticated to CircleCI (run: chunk auth login)"
+		}
+		http.Error(w, msg, http.StatusServiceUnavailable)
+		return
+	}
+	run, err := d.setups.start(root, req.OrgID, d.client)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, run.view(0))
+}
+
+// handleSetupActivity answers a project's Setup run and its feed lines past
+// ?after=N, parsed as handleChatLog parses it.
+func (d *daemon) handleSetupActivity(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	root, err := chatRoot(q.Get("root"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	after := -1
+	if s := q.Get("after"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			http.Error(w, "after must be an integer", http.StatusBadRequest)
+			return
+		}
+		after = n
+	}
+	run := d.setups.get(root)
+	if run == nil {
+		http.Error(w, "no setup for this project", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, run.view(after))
+}
+
+// handleSetupContinue records Continue without an image on a project's stuck
+// Setup run; any other run is a 409.
+func (d *daemon) handleSetupContinue(w http.ResponseWriter, r *http.Request) {
+	var req chunkd.SetupRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	root, err := chatRoot(req.ProjectRoot)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := d.setups.cont(root); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d.setups.get(root).view(0))
 }
