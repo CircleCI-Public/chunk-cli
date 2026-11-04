@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -35,10 +36,13 @@ type PlanOpener func(ctx context.Context, root, id string) (OpenedPlan, error)
 type planReadyMsg struct {
 	// id is the plan's, or "" for a new plan.
 	id, root, title string
-	agent           plan.Agent
-	approve         plan.Approver
-	store           plan.Store
-	err             error
+	// request is a new plan's first request, sent once its screen opens;
+	// "" sends none.
+	request string
+	agent   plan.Agent
+	approve plan.Approver
+	store   plan.Store
+	err     error
 }
 
 type planWorkspace struct {
@@ -206,11 +210,24 @@ func (m Model) WithFlowList(flows flowlist.Model) Model {
 func (m Model) HasPlan() bool { return len(m.planWorkspaces) > 0 }
 
 func (m Model) openPlanID(id, title string) (tea.Model, tea.Cmd) {
+	return m.openPlan(id, title, "")
+}
+
+// openPlanRequest opens a new plan whose first request is request, or, when
+// request is empty, goes to the new plan's workspace as n does.
+func (m Model) openPlanRequest(request string) (tea.Model, tea.Cmd) {
+	return m.openPlan("", "New plan", strings.TrimSpace(request))
+}
+
+// openPlan goes to plan id's workspace, opening it when none is open. A
+// request always opens a new workspace, so it is never dropped on one
+// already open.
+func (m Model) openPlan(id, title, request string) (tea.Model, tea.Cmd) {
 	if m.planOpening {
 		return m, nil
 	}
 	for key, ws := range m.planWorkspaces {
-		if ws.store.ID() == id {
+		if request == "" && ws.store.ID() == id {
 			m.planKey, m.planScreen = key, &ws.screen
 			m.planOpen, m.flowsOpen = true, false
 			return m, nil
@@ -226,7 +243,7 @@ func (m Model) openPlanID(id, title string) (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		opened, err := planner(ctx, root, id)
 		return planReadyMsg{
-			id: id, root: opened.Root, title: title,
+			id: id, root: opened.Root, title: title, request: request,
 			agent: opened.Agent, approve: opened.Approve, store: opened.Store, err: err,
 		}
 	}
@@ -245,7 +262,7 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	telemetry.Track(m.planCtx, "plan_opened", props)
 	m.note = ""
 	branch, _ := gitutil.CurrentBranchIn(msg.root)
-	screen := plan.New(m.planCtx, msg.agent, msg.approve, msg.store, "").
+	screen := plan.New(m.planCtx, msg.agent, msg.approve, msg.store, msg.request).
 		WithTerminal(m.hasDarkBG, m.superEnter).WithBranch(branch).WithInbox(msg.title, msg.root).
 		WithBuild(m.builds).WithResume(m.resumer)
 	if m.newChat != nil {
@@ -295,7 +312,7 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case planDeletedMsg:
 		return m.planDeleted(msg)
 	case flowlist.NewMsg:
-		return m.openPlanID("", "New plan")
+		return m.openPlanRequest(msg.Request)
 	case flowlist.QuitMsg:
 		return m.quitWithPlans()
 	case tea.KeyPressMsg:

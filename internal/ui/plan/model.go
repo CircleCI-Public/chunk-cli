@@ -1640,13 +1640,13 @@ func (m *Model) renderPlan() {
 	}
 	m.blocks = make([]renderedBlock, len(blocks))
 	var st planStats
-	from := 0
+	sources := make([]string, len(blocks))
 	for i, b := range blocks {
-		at := -1
-		if j := strings.Index(m.plan[from:], b.source); j >= 0 {
-			at, from = from+j, from+j+len(b.source)
-		}
-		m.blocks[i] = renderedBlock{block: b, lines: m.drawBlock(r, b, steps[i], &st, w), at: at}
+		sources[i] = b.source
+	}
+	at := locate(m.plan, sources)
+	for i, b := range blocks {
+		m.blocks[i] = renderedBlock{block: b, lines: m.drawBlock(r, b, steps[i], &st, w), at: at[i]}
 	}
 	m.renderedFrom, m.renderedWidth = m.plan, w
 	m.reanchor()
