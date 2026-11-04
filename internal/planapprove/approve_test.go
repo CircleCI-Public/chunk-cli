@@ -70,7 +70,7 @@ func TestApproveWaitsForTheReview(t *testing.T) {
 
 	cci.SetFactoryPlanState(id, "refine-proposal")
 	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "daemon"})
-	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err := Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.Len(p.Events, 0))
@@ -80,13 +80,13 @@ func TestApproveWaitsForTheReview(t *testing.T) {
 	cci.SetFactoryApplicableEvents(id, "approve-for-building")
 	cci.SetFactoryTask(id, "review-plan")
 	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "session"})
-	err = Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err = Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady), "a review running")
 	p, _ = cci.FactoryPlan(id)
 	assert.Check(t, cmp.Len(p.Events, 0))
 
 	cci.DropFactoryFlow(id)
-	err = Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err = Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
 	p, _ = cci.FactoryPlan(id)
 	assert.Check(t, cmp.Len(p.Events, 0))
@@ -100,7 +100,7 @@ func TestApproveRefusesAPlanWithNoFlow(t *testing.T) {
 	cci.DropFactoryFlow(id)
 	before := len(posts(cci))
 
-	err := Approve(context.Background(), client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err := Approve(context.Background(), client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.Check(t, cmp.ErrorIs(err, ErrNotReady))
 	assert.Check(t, cmp.Len(posts(cci), before))
 	p, _ := cci.FactoryPlan(id)
@@ -120,7 +120,7 @@ func TestApproveReleasesThePlanningSession(t *testing.T) {
 	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human"})
 	cci.SetFactoryRequiredEvents(id, "approve-for-building")
 
-	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err := Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
@@ -133,9 +133,72 @@ func TestApproveReleasesThePlanningSession(t *testing.T) {
 		}
 	}
 	assert.Check(t, cmp.DeepEqual(paths[len(paths)-2:], []string{
-		"/api/v3/factory/sessions/s-1/release",
+		"/api/v3/factory/flows/" + id + "/release",
 		"/api/v3/factory/events",
 	}))
+}
+
+// TestApproveHoldsAWorkerOnlyClaim checks that a plan a worker claims with
+// no session working it is refused, unless it is the worker the planning
+// session was last read working it under.
+func TestApproveHoldsAWorkerOnlyClaim(t *testing.T) {
+	t.Run("another worker is refused", func(t *testing.T) {
+		client, cci, id := approvablePlan(t, "")
+		cci.ClaimFactoryPlanForWorker(id, "w-2")
+		err := Approve(context.Background(), client, noDaemon, id, "s-1", "w-1", "/data/plans/"+id)
+		assert.Check(t, cmp.ErrorIs(err, ErrBeingBuilt))
+		assert.Check(t, cmp.ErrorContains(err, "held by factory worker w-2 with no session"))
+		p, _ := cci.FactoryPlan(id)
+		assert.Check(t, cmp.Equal(p.Worker, "w-2"))
+		assert.Check(t, cmp.Len(p.Events, 0))
+	})
+	t.Run("an unknown worker is refused", func(t *testing.T) {
+		client, cci, id := approvablePlan(t, "")
+		cci.ClaimFactoryPlanForWorker(id, "w-2")
+		err := Approve(context.Background(), client, noDaemon, id, "s-1", "", "/data/plans/"+id)
+		assert.Check(t, cmp.ErrorIs(err, ErrBeingBuilt))
+		p, _ := cci.FactoryPlan(id)
+		assert.Check(t, cmp.Equal(p.Worker, "w-2"))
+		assert.Check(t, cmp.Len(p.Events, 0))
+	})
+	t.Run("the planning session's worker is released", func(t *testing.T) {
+		client, cci, id := approvablePlan(t, "")
+		cci.ClaimFactoryPlanForWorker(id, "w-1")
+		err := Approve(context.Background(), client, noDaemon, id, "s-1", "w-1", "/data/plans/"+id)
+		assert.NilError(t, err)
+		p, _ := cci.FactoryPlan(id)
+		assert.Check(t, cmp.Equal(p.Worker, ""))
+		assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+	})
+	t.Run("the worker's session listing the plan is the planning session", func(t *testing.T) {
+		client, cci, id := approvablePlan(t, "")
+		cci.ClaimFactoryPlanForWorker(id, "w-1")
+		cci.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-1", FlowIDs: []string{id}})
+		err := Approve(context.Background(), client, noDaemon, id, "s-1", "", "/data/plans/"+id)
+		assert.NilError(t, err)
+		p, _ := cci.FactoryPlan(id)
+		assert.Check(t, cmp.Equal(p.Worker, ""))
+		assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+	})
+	t.Run("a failed worker sessions read stops approve", func(t *testing.T) {
+		client, cci, id := approvablePlan(t, "")
+		cci.ClaimFactoryPlanForWorker(id, "w-1")
+		cci.DropFactoryWorker("w-1")
+		err := Approve(context.Background(), client, noDaemon, id, "s-1", "w-1", "/data/plans/"+id)
+		assert.Check(t, err != nil)
+		p, _ := cci.FactoryPlan(id)
+		assert.Check(t, cmp.Equal(p.Worker, "w-1"))
+		assert.Check(t, cmp.Len(p.Events, 0))
+	})
+	t.Run("a release answering 409 is reported", func(t *testing.T) {
+		client, cci, id := approvablePlan(t, "")
+		cci.ClaimFactoryPlanForWorker(id, "w-1")
+		cci.FailFactoryRelease(id, http.StatusConflict)
+		err := Approve(context.Background(), client, noDaemon, id, "s-1", "w-1", "/data/plans/"+id)
+		assert.Check(t, cmp.ErrorContains(err, "release the planning session's claim"))
+		p, _ := cci.FactoryPlan(id)
+		assert.Check(t, cmp.Len(p.Events, 0))
+	})
 }
 
 // TestApproveReadsTheNewName checks that a plan in refine-units, waiting
@@ -143,7 +206,7 @@ func TestApproveReleasesThePlanningSession(t *testing.T) {
 func TestApproveReadsTheNewName(t *testing.T) {
 	client, cci, id := approvablePlan(t, "s-1")
 	cci.SetFactoryPlanState(id, "refine-units")
-	err := Approve(context.Background(), client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err := Approve(context.Background(), client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
@@ -231,7 +294,7 @@ func TestApproveWithAnotherSessionsClaim(t *testing.T) {
 				dirs[holder] = strings.Replace(tc.dir, "PLAN", worktree, 1)
 			}
 
-			err := Approve(ctx, client, locatedAt(dirs, tc.lookupErr), id, "s-1", worktree)
+			err := Approve(ctx, client, locatedAt(dirs, tc.lookupErr), id, "s-1", "", worktree)
 			p, _ := cci.FactoryPlan(id)
 			if tc.released {
 				assert.NilError(t, err)
@@ -239,7 +302,7 @@ func TestApproveWithAnotherSessionsClaim(t *testing.T) {
 				assert.Check(t, cmp.Equal(p.Session, ""))
 				paths := posts(cci)
 				assert.Check(t, cmp.DeepEqual(paths[len(paths)-2:], []string{
-					"/api/v3/factory/sessions/parent/release",
+					"/api/v3/factory/flows/" + id + "/release",
 					"/api/v3/factory/events",
 				}))
 				return
@@ -251,7 +314,7 @@ func TestApproveWithAnotherSessionsClaim(t *testing.T) {
 			assert.Check(t, cmp.Len(p.Events, 0))
 			assert.Check(t, cmp.Equal(p.Session, holder))
 			for _, path := range posts(cci) {
-				assert.Check(t, !strings.HasPrefix(path, "/api/v3/factory/sessions/"), path)
+				assert.Check(t, !strings.HasSuffix(path, "/release"), path)
 			}
 		})
 	}
@@ -267,7 +330,7 @@ func TestReleaseForeign(t *testing.T) {
 		dir       string
 		unknown   bool
 		lookupErr error
-		// dropClaim releases the claim during the lookup, so ReleaseClaim fails.
+		// dropClaim has the release answer 404 from the lookup on, as for a flow that moved, so ReleaseClaim fails.
 		dropClaim   bool
 		wantErr     error
 		wantErrText []string
@@ -317,7 +380,7 @@ func TestReleaseForeign(t *testing.T) {
 			if tc.dropClaim {
 				inner := locate
 				locate = func(ctx context.Context, session string) (string, error) {
-					cci.ReleaseFactoryPlan(id)
+					cci.FailFactoryRelease(id, http.StatusNotFound)
 					return inner(ctx, session)
 				}
 			}
@@ -328,7 +391,7 @@ func TestReleaseForeign(t *testing.T) {
 				assert.NilError(t, err)
 				assert.Check(t, cmp.Equal(p.Session, ""))
 				assert.Check(t, cmp.DeepEqual(posts(cci)[len(posts(cci))-1:], []string{
-					"/api/v3/factory/sessions/S/release",
+					"/api/v3/factory/flows/" + id + "/release",
 				}))
 				return
 			}
@@ -344,7 +407,7 @@ func TestReleaseForeign(t *testing.T) {
 			}
 			assert.Check(t, cmp.Equal(p.Session, holder))
 			for _, path := range posts(cci) {
-				assert.Check(t, !strings.HasPrefix(path, "/api/v3/factory/sessions/"), path)
+				assert.Check(t, !strings.HasSuffix(path, "/release"), path)
 			}
 		})
 	}
@@ -359,7 +422,7 @@ func TestApproveFollowsSymlinks(t *testing.T) {
 	err := os.Symlink(worktree, link)
 	assert.NilError(t, err)
 
-	err = Approve(context.Background(), client, locatedAt(map[string]string{"builder": link}, nil), id, "s-1", worktree)
+	err = Approve(context.Background(), client, locatedAt(map[string]string{"builder": link}, nil), id, "s-1", "", worktree)
 	assert.Check(t, cmp.ErrorIs(err, ErrBeingBuilt))
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.Len(p.Events, 0))
@@ -371,12 +434,12 @@ func TestApproveFollowsSymlinks(t *testing.T) {
 func TestApproveWithNoClaim(t *testing.T) {
 	client, cci, id := approvablePlan(t, "")
 
-	err := Approve(context.Background(), client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err := Approve(context.Background(), client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
 	for _, path := range posts(cci) {
-		assert.Check(t, !strings.HasPrefix(path, "/api/v3/factory/sessions/"), path)
+		assert.Check(t, !strings.HasSuffix(path, "/release"), path)
 	}
 }
 
@@ -386,11 +449,11 @@ func TestApproveWithNoClaim(t *testing.T) {
 func TestApproveStopsWhenTheReleaseFails(t *testing.T) {
 	client, cci, id := approvablePlan(t, "parent")
 	locate := func(context.Context, string) (string, error) {
-		cci.ReleaseFactoryPlan(id)
+		cci.FailFactoryRelease(id, http.StatusNotFound)
 		return "/data/plans/parent-1", nil
 	}
 
-	err := Approve(context.Background(), client, locate, id, "s-1", "/data/plans/"+id)
+	err := Approve(context.Background(), client, locate, id, "s-1", "", "/data/plans/"+id)
 	var se *circleci.StatusError
 	isStatus := errors.As(err, &se)
 	assert.Assert(t, isStatus)
@@ -411,7 +474,7 @@ func TestApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
 	cci.SetFactoryRequiredEvents(id, "approve-for-building")
 	cci.SetFactoryApplicableEvents(id, "request-revision", "abandon")
 
-	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err := Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.Check(t, err)
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
@@ -428,7 +491,7 @@ func TestApproveSendsBuildingWhenBothAreRequired(t *testing.T) {
 	cci.SetFactoryRequiredEvents(id, "approve-for-units", "approve-for-building")
 	cci.SetFactoryApplicableEvents(id, "address-comments", "abandon")
 
-	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err := Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.Check(t, err)
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
@@ -448,7 +511,7 @@ func TestApproveIgnoresRequestRevision(t *testing.T) {
 		{Actor: "human", Event: "abandon"},
 	}})
 
-	err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+	err := Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.Check(t, err)
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
@@ -490,7 +553,7 @@ func TestApproveRefusesWhatFactoryDoesNotRequire(t *testing.T) {
 			cci.SetFactoryRequiredEvents(id, tc.required...)
 			cci.SetFactoryApplicableEvents(id, tc.applicable...)
 
-			err := Approve(ctx, client, noDaemon, id, "s-1", "/data/plans/"+id)
+			err := Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 			assert.Check(t, cmp.ErrorIs(err, tc.want))
 			p, _ := cci.FactoryPlan(id)
 			assert.Check(t, cmp.Len(p.Events, 0))

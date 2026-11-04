@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
@@ -38,9 +39,13 @@ type Flow struct {
 	// Phase is PhaseReceived until the plan is prioritized, PhaseStarted
 	// while its flow runs and PhaseEnded once it ends.
 	Phase string
-	// SessionID is the factory session claiming the plan, or "" when none
-	// does.
+	// SessionID is the factory session holding the flow's claim: the one its
+	// worker's sessions list it under, else its factory_session; "" when none
+	// does. ListFlows reads no worker's sessions, so names only factory_session.
 	SessionID string
+	// WorkerID is the factory worker claiming the flow, "" when none does or
+	// it is not registered.
+	WorkerID string
 	// ApplicableEvents are the human events in Next, in order: what a
 	// developer may send the flow now. nil when Next is.
 	ApplicableEvents []FlowEvent
@@ -69,6 +74,9 @@ type Flow struct {
 	// a top-level plan.
 	Parent string
 }
+
+// Claimed is whether a factory session or worker holds the flow's claim.
+func (f Flow) Claimed() bool { return f.SessionID != "" || f.WorkerID != "" }
 
 // FlowProgress is a flow's progress as factory serves it. A nil count does
 // not apply.
@@ -260,6 +268,9 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 	if refs.FactorySession != nil {
 		f.SessionID = refs.FactorySession.ID
 	}
+	if refs.FactoryWorker != nil {
+		f.WorkerID = refs.FactoryWorker.ID
+	}
 	if refs.FactoryTask != nil {
 		f.Task = &FlowTask{
 			ID: refs.FactoryTask.ID, Category: refs.FactoryTask.Attributes.Category,
@@ -310,6 +321,7 @@ func humanEvents(next []transitionAttrs) []FlowEvent {
 
 type flowRefs struct {
 	FactorySession *v3Ref    `json:"factory_session"`
+	FactoryWorker  *v3Ref    `json:"factory_worker"`
 	FactoryTask    *taskRef  `json:"factory_task"`
 	Plans          []planRef `json:"factory_plans"`
 }
@@ -329,12 +341,6 @@ type eventAttrs struct {
 
 type eventRefs struct {
 	FactoryFlow v3Ref `json:"factory_flow"`
-}
-
-// releaseRequest is the body of a release, which conductor takes bare rather
-// than in a data envelope.
-type releaseRequest struct {
-	FlowID string `json:"flow_id"`
 }
 
 type createPlanAttrs struct {
@@ -613,7 +619,48 @@ func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	if err != nil {
 		return nil, mapErr("get flow", err)
 	}
-	return attrs.flow(env.Data.ID, refs), nil
+	f := attrs.flow(env.Data.ID, refs)
+	if f.WorkerID == "" {
+		return f, nil
+	}
+	s, err := c.workerSessionFor(ctx, f.WorkerID, f.ID)
+	if err != nil {
+		return nil, err
+	}
+	if s != "" {
+		f.SessionID = s
+	}
+	return f, nil
+}
+
+// workerSessionFor names the session worker workerID lists as working
+// planID, "" when none does.
+func (c *Client) workerSessionFor(ctx context.Context, workerID, planID string) (string, error) {
+	var body struct {
+		Data struct {
+			Attributes struct {
+				Sessions []struct {
+					ID         string `json:"id"`
+					References struct {
+						Flows []v3Ref `json:"factory_flows"`
+					} `json:"references"`
+				} `json:"sessions"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/workers/%s/sessions",
+		hc.RouteParams(url.PathEscape(workerID)),
+		hc.JSONDecoder(&body),
+	))
+	if err != nil {
+		return "", mapErr("get worker sessions", err)
+	}
+	for _, s := range body.Data.Attributes.Sessions {
+		if slices.ContainsFunc(s.References.Flows, func(r v3Ref) bool { return r.ID == planID }) {
+			return s.ID, nil
+		}
+	}
+	return "", nil
 }
 
 // ListFlows returns the caller's flows, ended ones included.
@@ -702,13 +749,12 @@ func (c *Client) createEvent(ctx context.Context, planID string, attrs eventAttr
 	return nil
 }
 
-// ReleaseClaim has factory session sessionID release its claim on plan
-// planID, as the session itself would. The plan keeps its flow, and waits
-// for a session to claim it again.
-func (c *Client) ReleaseClaim(ctx context.Context, sessionID, planID string) error {
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/sessions/%s/release",
-		hc.RouteParams(url.PathEscape(sessionID)),
-		hc.Body(releaseRequest{FlowID: planID}),
+// ReleaseClaim frees whatever claim plan planID's flow has, a worker's or a
+// session's. The plan keeps its flow. A flow already unclaimed (204) is no
+// error.
+func (c *Client) ReleaseClaim(ctx context.Context, planID string) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/flows/%s/release",
+		hc.RouteParams(url.PathEscape(planID)),
 	))
 	if err != nil {
 		return mapErr("release claim", err)

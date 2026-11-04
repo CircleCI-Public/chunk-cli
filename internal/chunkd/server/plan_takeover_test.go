@@ -25,7 +25,7 @@ func TestPlannerTakesOverAForeignClaim(t *testing.T) {
 		holder   func(pd *plannerDaemon) string
 		code     int
 		body     string
-		released []string
+		releases int
 		// retried is whether the planner is sent the retry message.
 		retried bool
 	}{
@@ -36,7 +36,7 @@ func TestPlannerTakesOverAForeignClaim(t *testing.T) {
 				pd.place("s-other", pd.root)
 			},
 			code:     http.StatusOK,
-			released: []string{"s-other"},
+			releases: 1,
 			retried:  true,
 		},
 		{
@@ -81,6 +81,12 @@ func TestPlannerTakesOverAForeignClaim(t *testing.T) {
 			holder: func(pd *plannerDaemon) string { return pd.started(0).SessionID },
 			code:   http.StatusConflict,
 			body:   "this plan is held by chunk's own planner",
+		},
+		{
+			name: "held by a worker with no session",
+			prep: func(_ *testing.T, pd *plannerDaemon) { pd.plans.claimWorker("", "w-1") },
+			code: http.StatusConflict,
+			body: "held by factory worker w-1",
 		},
 		{
 			name: "the plan has ended",
@@ -145,7 +151,7 @@ func TestPlannerTakesOverAForeignClaim(t *testing.T) {
 				pd.place("s-other", pd.root)
 			},
 			code:     http.StatusOK,
-			released: []string{"s-other"},
+			releases: 1,
 			retried:  true,
 		},
 		{
@@ -191,7 +197,7 @@ func TestPlannerTakesOverAForeignClaim(t *testing.T) {
 
 			assert.Check(t, cmp.Equal(w.Code, tt.code), "body: %s", w.Body.String())
 			assert.Check(t, cmp.Contains(w.Body.String(), tt.body))
-			assert.Check(t, cmp.DeepEqual(pd.plans.releasedSessions(), tt.released))
+			assert.Check(t, cmp.Equal(pd.plans.releases(), tt.releases))
 			var sent []string
 			switch {
 			case tt.first:
@@ -224,13 +230,13 @@ func TestPlannerTakeOverReleasesBeforeAFailedStart(t *testing.T) {
 
 	assert.Check(t, cmp.Equal(w.Code, http.StatusBadGateway), "body: %s", w.Body.String())
 	assert.Check(t, strings.HasPrefix(w.Body.String(), "the claim was released, but the planner could not start: "), "body: %s", w.Body.String())
-	assert.Check(t, cmp.DeepEqual(pd.plans.releasedSessions(), []string{"s-other"}))
+	assert.Check(t, cmp.Equal(pd.plans.releases(), 1))
 
 	// A second R resumes as for an unclaimed plan.
 	pd.starts.setErrs(nil, nil)
 	pd.resume(t, "plan-1")
 	assert.Check(t, cmp.Equal(pd.starts.first(0), factory.PlanRetryMessage("plan-1")))
-	assert.Check(t, cmp.DeepEqual(pd.plans.releasedSessions(), []string{"s-other"}))
+	assert.Check(t, cmp.Equal(pd.plans.releases(), 1))
 }
 
 // Two take-overs together release once and send one retry message.
@@ -247,7 +253,7 @@ func TestPlannerTakeOversTogetherReleaseOnce(t *testing.T) {
 	wg.Wait()
 
 	assert.Check(t, cmp.DeepEqual(codes, []int{http.StatusOK, http.StatusOK}))
-	assert.Check(t, cmp.DeepEqual(pd.plans.releasedSessions(), []string{"s-other"}))
+	assert.Check(t, cmp.Equal(pd.plans.releases(), 1))
 	assert.Assert(t, cmp.Equal(pd.starts.sessions(), 1))
 	assert.Check(t, cmp.Equal(pd.starts.first(0), factory.PlanRetryMessage("plan-1")))
 	assert.Check(t, cmp.Len(pd.session(0).messages(), 0))

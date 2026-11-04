@@ -124,8 +124,9 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		Deviations:   f.Deviations,
 		Ended:        f.Phase == circleci.PhaseEnded,
 		Outcome:      f.Outcome,
-		Claimed:      f.SessionID != "",
+		Claimed:      f.Claimed(),
 		Holder:       f.SessionID,
+		Worker:       f.WorkerID,
 		WaitingOn:    f.WaitingOn,
 		WaitingOnWhy: f.WaitingOnWhy,
 	}

@@ -431,6 +431,19 @@ func TestStoreFlowClaimed(t *testing.T) {
 	assert.Check(t, cmp.Equal(f.Holder, ""))
 }
 
+// TestStoreFlowClaimedByAWorker checks that a flow a worker claims with no
+// session working it is claimed, with no holder and the worker named.
+func TestStoreFlowClaimedByAWorker(t *testing.T) {
+	store, _, cci := createdStore(t)
+
+	cci.ClaimFactoryPlanForWorker(store.ID(), "w-1")
+	f, err := store.Flow(context.Background())
+	assert.NilError(t, err)
+	assert.Check(t, f.Claimed, "a worker-claimed plan's flow is not claimed")
+	assert.Check(t, cmp.Equal(f.Holder, ""))
+	assert.Check(t, cmp.Equal(f.Worker, "w-1"))
+}
+
 // TestStoreApproveDesignSendsTheEvent checks that ApproveDesign sends the
 // plan's flow factory's approve-for-units event.
 func TestStoreApproveDesignSendsTheEvent(t *testing.T) {

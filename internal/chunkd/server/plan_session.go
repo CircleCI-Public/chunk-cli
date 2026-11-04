@@ -44,6 +44,9 @@ type planner struct {
 	// since it last held no claim; checkClaim, that the reply to it is owed
 	// a check.
 	claimed, checkClaim bool
+	// worker is the factory_worker the planner last read its own session
+	// holding the plan under, "" when it has not.
+	worker string
 	// approval is "", approving or approved: see approvePlan.
 	approval string
 	watching bool               // the watch goroutine has started
@@ -329,7 +332,7 @@ func (d *daemon) plannerCanStart(p *planner, request bool) error {
 		}
 	}
 
-	if h, err := p.holder(); err == nil && h != "" && h != p.run.sessionID() {
+	if f, err := p.holder(); err == nil && p.heldByAnother(f) {
 		return apiErr(http.StatusConflict, "this plan is claimed by another factory session; you can read and comment without taking its claim")
 	}
 	return nil
@@ -408,24 +411,51 @@ func planMessage(claimed bool, planID, text string) (string, bool) {
 	return factory.PlanMessage(planID, text), true
 }
 
-// holder is the session holding p's plan's claim in factory, "" when none
-// does.
-func (p *planner) holder() (string, error) {
+// holder is p's plan's flow in factory, nil when it has none. When p's
+// session holds the claim, it records the worker the flow reads under, as
+// worker.
+func (p *planner) holder() (*circleci.Flow, error) {
 	ctx, cancel := context.WithTimeout(p.ctx, plannerReadTimeout)
 	defer cancel()
 	f, err := planFlow(ctx, p.api, p.planID)
 	if err != nil || f == nil {
-		return "", err
+		return nil, err
 	}
-	return f.SessionID, nil
+	if f.SessionID != "" && p.run != nil && f.SessionID == p.run.sessionID() {
+		p.mu.Lock()
+		p.worker = f.WorkerID
+		p.mu.Unlock()
+	}
+	return f, nil
+}
+
+// workerID is the worker p last read its own session holding the plan
+// under, "" when it has not.
+func (p *planner) workerID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.worker
+}
+
+// ownWorker is whether f is held by p's own worker with no session, as it
+// is once p's session has exited and its worker keeps the claim.
+func (p *planner) ownWorker(f *circleci.Flow) bool {
+	w := p.workerID()
+	return f.SessionID == "" && w != "" && f.WorkerID == w
+}
+
+// heldByAnother is whether f is claimed by neither p's session nor p's own
+// worker.
+func (p *planner) heldByAnother(f *circleci.Flow) bool {
+	return f != nil && f.Claimed() && f.SessionID != p.run.sessionID() && !p.ownWorker(f)
 }
 
 // holds is whether p's session holds the plan's claim in factory. A failed
 // read counts as holding it, so a blip in the API does not have the planner
 // claim a plan it has.
 func (p *planner) holds() bool {
-	h, err := p.holder()
-	return err != nil || h == p.run.sessionID()
+	f, err := p.holder()
+	return err != nil || f != nil && f.SessionID == p.run.sessionID()
 }
 
 // claim records whether the message about to be sent leaves the plan
@@ -460,13 +490,17 @@ func (p *planner) onReply(byTask bool) {
 // reply to the message telling it to claim it. Without the claim the factory
 // daemon hands it no planning tasks, and the plan never moves.
 func (p *planner) checkClaimed() error {
-	h, err := p.holder()
+	f, err := p.holder()
 	switch {
 	case err != nil:
 		return fmt.Errorf("could not check chunk's claim on the plan: %w", err)
-	case h == p.run.sessionID():
+	case f != nil && f.SessionID == p.run.sessionID():
 		return nil
-	case h != "":
+	case f != nil && p.ownWorker(f):
+		return nil
+	case f != nil && f.SessionID == "" && f.WorkerID != "":
+		return fmt.Errorf("plan %s is claimed by factory worker %s with no session, so no planning tasks will come to chunk", p.planID, f.WorkerID)
+	case f != nil && f.Claimed():
 		return fmt.Errorf("plan %s is claimed by another factory session, so no planning tasks will come to chunk", p.planID)
 	}
 	return fmt.Errorf("chunk could not claim plan %s in factory, so no planning tasks will come. "+

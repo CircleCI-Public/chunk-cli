@@ -1008,45 +1008,173 @@ func TestFlows(t *testing.T) {
 	})
 }
 
+// newFlowClient is a client of a fresh fake conductor, for a test of flow
+// claims.
+func newFlowClient(t *testing.T) (*fakes.FakeCircleCI, *Client) {
+	t.Helper()
+	fake := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	return fake, newTestClient(t, srv.URL)
+}
+
 func TestReleaseClaim(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("releases the session's claim and keeps the flow", func(t *testing.T) {
-		fake := fakes.NewFakeCircleCI()
-		srv := httptest.NewServer(fake)
-		t.Cleanup(srv.Close)
-		client := newTestClient(t, srv.URL)
+	t.Run("frees the flow's claim with an empty body and keeps the flow", func(t *testing.T) {
+		fake, client := newFlowClient(t)
 		p, err := client.CreatePlan(ctx, "a plan", "")
 		assert.NilError(t, err)
-		fake.ClaimFactoryPlan(p.ID, "session-1")
+		fake.ClaimFactoryPlanForWorker(p.ID, "worker-1")
 
-		err = client.ReleaseClaim(ctx, "session-1", p.ID)
+		err = client.ReleaseClaim(ctx, p.ID)
 		assert.NilError(t, err)
 
 		reqs := fake.Recorder.AllRequests()
 		last := reqs[len(reqs)-1]
-		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/sessions/session-1/release"))
-		var body map[string]any
-		err = json.Unmarshal(last.Body, &body)
-		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(body, map[string]any{"flow_id": p.ID}))
+		assert.Check(t, cmp.Equal(last.Method, http.MethodPost))
+		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/flows/"+p.ID+"/release"))
+		assert.Check(t, cmp.Len(last.Body, 0))
 		f, err := client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.Equal(f.SessionID, ""))
+		assert.Check(t, !f.Claimed(), "flow %+v", f)
 	})
 
-	t.Run("a claim the session does not hold is a 404", func(t *testing.T) {
-		fake := fakes.NewFakeCircleCI()
-		srv := httptest.NewServer(fake)
-		t.Cleanup(srv.Close)
-		client := newTestClient(t, srv.URL)
+	t.Run("an unclaimed flow (204) is no error", func(t *testing.T) {
+		_, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+
+		err = client.ReleaseClaim(ctx, p.ID)
+		assert.NilError(t, err)
+	})
+
+	t.Run("a top-level session's claim is freed too", func(t *testing.T) {
+		fake, client := newFlowClient(t)
 		p, err := client.CreatePlan(ctx, "a plan", "")
 		assert.NilError(t, err)
 		fake.ClaimFactoryPlan(p.ID, "session-1")
 
-		assertStatus(t, client.ReleaseClaim(ctx, "session-2", p.ID), http.StatusNotFound)
+		err = client.ReleaseClaim(ctx, p.ID)
+		assert.NilError(t, err)
+
 		got, _ := fake.FactoryPlan(p.ID)
-		assert.Check(t, cmp.Equal(got.Session, "session-1"))
+		assert.Check(t, cmp.Equal(got.Session, ""))
+	})
+
+	t.Run("a plan with no flow is a 404", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.DropFactoryFlow(p.ID)
+
+		assertStatus(t, client.ReleaseClaim(ctx, p.ID), http.StatusNotFound)
+	})
+
+	t.Run("a 409 is reported", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.ClaimFactoryPlanForWorker(p.ID, "worker-1")
+		fake.FailFactoryRelease(p.ID, http.StatusConflict)
+
+		assertStatus(t, client.ReleaseClaim(ctx, p.ID), http.StatusConflict)
+	})
+}
+
+func TestGetFlowHolder(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name                    string
+		claim                   func(fake *fakes.FakeCircleCI, id string)
+		wantSession, wantWorker string
+	}{
+		{
+			name:  "unclaimed",
+			claim: func(*fakes.FakeCircleCI, string) {},
+		},
+		{
+			name:        "a top-level session",
+			claim:       func(f *fakes.FakeCircleCI, id string) { f.ClaimFactoryPlan(id, "s-1") },
+			wantSession: "s-1",
+		},
+		{
+			name:       "a worker with no session working it",
+			claim:      func(f *fakes.FakeCircleCI, id string) { f.ClaimFactoryPlanForWorker(id, "w-1") },
+			wantWorker: "w-1",
+		},
+		{
+			name: "the worker's session listing the flow",
+			claim: func(f *fakes.FakeCircleCI, id string) {
+				f.ClaimFactoryPlanForWorker(id, "w-1")
+				f.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-2", FlowIDs: []string{id}})
+			},
+			wantSession: "s-2",
+			wantWorker:  "w-1",
+		},
+		{
+			name: "the worker's sessions list no flow: factory_session",
+			claim: func(f *fakes.FakeCircleCI, id string) {
+				f.ClaimFactoryPlanForWorker(id, "w-1")
+				f.ClaimFactoryPlan(id, "s-1")
+				f.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-3", FlowIDs: []string{"another"}})
+			},
+			wantSession: "s-1",
+			wantWorker:  "w-1",
+		},
+		{
+			name: "the worker's listing wins over factory_session",
+			claim: func(f *fakes.FakeCircleCI, id string) {
+				f.ClaimFactoryPlanForWorker(id, "w-1")
+				f.ClaimFactoryPlan(id, "s-1")
+				f.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-2", FlowIDs: []string{id}})
+			},
+			wantSession: "s-2",
+			wantWorker:  "w-1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake, client := newFlowClient(t)
+			p, err := client.CreatePlan(ctx, "a plan", "")
+			assert.NilError(t, err)
+			tc.claim(fake, p.ID)
+
+			f, err := client.GetFlow(ctx, p.ID)
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(f.SessionID, tc.wantSession))
+			assert.Check(t, cmp.Equal(f.WorkerID, tc.wantWorker))
+			assert.Check(t, cmp.Equal(f.Claimed(), tc.wantSession != "" || tc.wantWorker != ""))
+		})
+	}
+
+	t.Run("a failed sessions read fails the flow read", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.ClaimFactoryPlanForWorker(p.ID, "w-1")
+		fake.DropFactoryWorker("w-1")
+
+		_, err = client.GetFlow(ctx, p.ID)
+		assertStatus(t, err, http.StatusNotFound)
+	})
+
+	t.Run("ListFlows names the worker, and reads no sessions", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.ClaimFactoryPlanForWorker(p.ID, "w-1")
+		fake.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-2", FlowIDs: []string{p.ID}})
+
+		flows, err := client.ListFlows(ctx)
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(flows, 1))
+		assert.Check(t, cmp.Equal(flows[0].WorkerID, "w-1"))
+		assert.Check(t, cmp.Equal(flows[0].SessionID, ""))
+		assert.Check(t, flows[0].Claimed())
+		for _, r := range fake.Recorder.AllRequests() {
+			assert.Check(t, !strings.HasPrefix(r.URL.Path, "/api/v3/factory/workers/"), "read %s", r.URL.Path)
+		}
 	})
 }
 

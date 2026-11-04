@@ -950,6 +950,7 @@ func (m Model) resumable() planstate.Resume {
 		Ended:         m.flow.Ended,
 		PlanID:        m.store.ID(),
 		Holder:        clean(m.flow.Holder),
+		Worker:        clean(m.flow.Worker),
 		WaitingOn:     clean(m.flow.WaitingOn),
 		Blockers:      blockers,
 		BlockersKnown: m.familyLoaded,

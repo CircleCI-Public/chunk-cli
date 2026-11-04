@@ -40,16 +40,17 @@ type fakePlans struct {
 	noFlow         bool
 	flowErr        error
 	holder         string
+	// worker is the factory worker claiming the flow, with or without holder.
+	worker string
 	// events are the flow's applicable events.
 	events []circleci.FlowEvent
 	// task, when set, is the task a session takes to move the flow on, such
 	// as a review running.
 	task string
-	// released are the sessions whose claim ReleaseClaim released, and sent
-	// the events CreateFlowEvent sent; calls is both, in order.
-	released []string
-	sent     []circleci.FlowEvent
-	calls    []string
+	// sent are the events CreateFlowEvent sent; calls is those and the
+	// releases ReleaseClaim made, in order.
+	sent  []circleci.FlowEvent
+	calls []string
 	// releaseErr and eventErr fail ReleaseClaim and CreateFlowEvent.
 	releaseErr, eventErr error
 	// onRelease, when set, runs as ReleaseClaim is reached.
@@ -93,16 +94,15 @@ func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error
 		waitingOn = "human"
 	}
 	return &circleci.Flow{
-		ID: id, State: f.state, Phase: f.phase, Outcome: f.outcome, SessionID: f.holder,
+		ID: id, State: f.state, Phase: f.phase, Outcome: f.outcome, SessionID: f.holder, WorkerID: f.worker,
 		ApplicableEvents: append([]circleci.FlowEvent(nil), f.events...),
 		Next:             next,
 		WaitingOn:        waitingOn,
 	}, nil
 }
 
-// ReleaseClaim releases sessionID's claim on the plan, as factory does:
-// only the holder's release frees it.
-func (f *fakePlans) ReleaseClaim(_ context.Context, sessionID, _ string) error {
+// ReleaseClaim frees whatever holds the flow, as factory does.
+func (f *fakePlans) ReleaseClaim(_ context.Context, _ string) error {
 	f.mu.Lock()
 	hook := f.onRelease
 	f.mu.Unlock()
@@ -114,11 +114,8 @@ func (f *fakePlans) ReleaseClaim(_ context.Context, sessionID, _ string) error {
 	if f.releaseErr != nil {
 		return f.releaseErr
 	}
-	f.released = append(f.released, sessionID)
-	f.calls = append(f.calls, "release "+sessionID)
-	if f.holder == sessionID {
-		f.holder = ""
-	}
+	f.calls = append(f.calls, "release")
+	f.holder, f.worker = "", ""
 	return nil
 }
 
@@ -140,10 +137,17 @@ func (f *fakePlans) CreateFlowEvent(_ context.Context, _ string, event circleci.
 	return nil
 }
 
-func (f *fakePlans) releasedSessions() []string {
+// releases is how many times ReleaseClaim freed the flow.
+func (f *fakePlans) releases() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]string(nil), f.released...)
+	n := 0
+	for _, c := range f.calls {
+		if c == "release" {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakePlans) sentEvents() []circleci.FlowEvent {
@@ -158,12 +162,27 @@ func (f *fakePlans) callLog() []string {
 	return append([]string(nil), f.calls...)
 }
 
+// currentHolder is whoever holds the flow now, "" when none does.
+func (f *fakePlans) currentHolder() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.holder
+}
+
 // claim has holder claim the plan, as factory plan claim would; "" releases
 // it.
 func (f *fakePlans) claim(holder string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.holder = holder
+}
+
+// claimWorker has worker claim the plan, with session holder working it, or
+// none when holder is "".
+func (f *fakePlans) claimWorker(holder, worker string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.holder, f.worker = holder, worker
 }
 
 func (f *fakePlans) set(state, branch string) {
@@ -520,17 +539,63 @@ func TestPlanBuildCancelStopsTheSession(t *testing.T) {
 			detail := pb.stopBuild(t, sess.ID)
 			assert.Check(t, cmp.Equal(detail.State, chunkd.SessionCancelled))
 			assert.Check(t, pb.build.wasStopped(), "the build session was left running")
-			released := pb.plans.releasedSessions()
 			if tc.wantReleased {
-				assert.Check(t, cmp.DeepEqual(released, []string{id}))
+				assert.Check(t, cmp.Equal(pb.plans.releases(), 1))
+				assert.Check(t, cmp.Equal(pb.plans.currentHolder(), ""))
 			} else {
-				assert.Check(t, cmp.Len(released, 0))
+				assert.Check(t, cmp.Equal(pb.plans.releases(), 0))
 			}
 			if tc.wantWarn != "" {
 				assert.Check(t, slices.ContainsFunc(detail.Factory.Progress.Lines, func(l chunkd.FeedLine) bool {
 					return l.Level == chunkd.FeedWarn && l.Text == tc.wantWarn
 				}), "no warning in %+v", detail.Factory.Progress.Lines)
 			}
+		})
+	}
+}
+
+// A stopped build frees the claim its worker keeps once its session is gone,
+// when the worker is the one the build was last read holding the plan under.
+func TestPlanBuildCancelFreesItsWorkersClaim(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// worker holds the plan with no session when the build is stopped.
+		worker       string
+		wantReleased bool
+	}{
+		{
+			name:         "its own worker",
+			worker:       "w-1",
+			wantReleased: true,
+		},
+		{
+			name:   "another worker",
+			worker: "w-2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				pb := newPlanBuildDaemon(t)
+				sess, err := pb.startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: pb.root, PlanID: "plan-1"})
+				assert.NilError(t, err)
+				synctest.Wait()
+				id := pb.buildSessionID(t)
+
+				// The build is read holding the plan under w-1, then its
+				// session is dropped and the worker keeps the claim.
+				pb.plans.claimWorker(id, "w-1")
+				ticks()
+				pb.plans.claimWorker("", tc.worker)
+
+				detail := pb.stopBuild(t, sess.ID)
+				assert.Check(t, cmp.Equal(detail.State, chunkd.SessionCancelled))
+				if tc.wantReleased {
+					assert.Check(t, cmp.DeepEqual(pb.plans.callLog(), []string{"release"}))
+					assert.Check(t, cmp.Equal(pb.plans.currentHolder(), ""))
+					return
+				}
+				assert.Check(t, cmp.Equal(pb.plans.releases(), 0))
+			})
 		})
 	}
 }
@@ -547,7 +612,7 @@ func TestPlanBuildShutdownKeepsTheClaim(t *testing.T) {
 	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
 	assert.Check(t, detail.State != chunkd.SessionCancelled, "a shutdown read as a developer's stop")
 	assert.Check(t, pb.build.wasStopped(), "the build session was left running")
-	assert.Check(t, cmp.Len(pb.plans.releasedSessions(), 0))
+	assert.Check(t, cmp.Equal(pb.plans.releases(), 0))
 }
 
 // A build session that exits by itself, before its plan is over, fails the
@@ -722,6 +787,20 @@ func TestPlanBuildResumesAnUnclaimedPlan(t *testing.T) {
 	assert.Check(t, cmp.Equal(entry.snapshot().State, chunkd.SessionRunning))
 	assert.Check(t, cmp.Equal(entry.snapshot().Factory.PlanState, "build"))
 	_ = pb.stopBuild(t, id)
+
+	t.Run("a worker with no session holds it", func(t *testing.T) {
+		pb := newPlanBuildDaemon(t)
+		pb.plans.mu.Lock()
+		pb.plans.state, pb.plans.worker = "build", "w-1"
+		pb.plans.mu.Unlock()
+
+		w := pb.postBuild(t)
+		assert.Check(t, cmp.Equal(w.Code, http.StatusConflict))
+		assert.Check(t, cmp.Contains(w.Body.String(), "claimed by factory worker w-1"))
+		pb.mu.Lock()
+		defer pb.mu.Unlock()
+		assert.Check(t, cmp.Len(pb.cfgs, 0), "a build session started")
+	})
 }
 
 func TestPlanBuildRouteRefuses(t *testing.T) {
@@ -860,6 +939,10 @@ func claimedLine(holder string) string {
 	return "Plan plan-1 is claimed by session " + holder + "; release it with factory daemon release plan-1 and the build picks it up"
 }
 
+func workerClaimedLine(worker string) string {
+	return "Plan plan-1 is claimed by factory worker " + worker + "; release it with factory daemon release plan-1 and the build picks it up"
+}
+
 const releasedLine = "Plan plan-1's claim was released; telling the build session to claim it"
 
 // A build session that could not claim its plan, because another session
@@ -985,6 +1068,19 @@ func TestPlanBuildNudgesOnceTheClaimIsReleased(t *testing.T) {
 				ticks()
 			},
 			lines: []string{claimedLine("parent"), releasedLine},
+			sent:  1,
+		},
+		{
+			name: "claimed by a worker with no session",
+			run: func(n *nudge) {
+				n.idle()
+				n.pb.plans.claimWorker("", "w-1")
+				ticks()
+				ticks()
+				n.pb.plans.claimWorker("", "")
+				ticks()
+			},
+			lines: []string{workerClaimedLine("w-1"), releasedLine},
 			sent:  1,
 		},
 		{

@@ -41,6 +41,7 @@ func (d *daemon) approvePlan(ctx context.Context, planID string, req chunkd.Plan
 	// later ones see the mark.
 	p.sendMu.Lock()
 	session, err := p.sessionID()
+	worker := p.workerID()
 	p.sendMu.Unlock()
 	if err != nil {
 		done(false)
@@ -51,7 +52,7 @@ func (d *daemon) approvePlan(ctx context.Context, planID string, req chunkd.Plan
 		done(false)
 		return chunkd.Session{}, apiErr(http.StatusInternalServerError, "find the plan's worktree: %v", err)
 	}
-	if err := planapprove.Approve(ctx, api, d.sessionWorktree(), planID, session, wt); err != nil {
+	if err := planapprove.Approve(ctx, api, d.sessionWorktree(), planID, session, worker, wt); err != nil {
 		done(false) // clears the mark; the planner takes resumes again
 		return chunkd.Session{}, approveProblem(err)
 	}

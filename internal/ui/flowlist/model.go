@@ -197,7 +197,7 @@ func (m Model) WithDeleting(id string) Model {
 
 func (m Model) deletable() bool {
 	f, ok := m.selected()
-	return ok && f.SessionID == "" && f.ID != m.deleting
+	return ok && !f.Claimed() && f.ID != m.deleting
 }
 
 // Flows is the open flows as the list last read them.
@@ -529,6 +529,7 @@ func (m Model) resume() planstate.Resume {
 		State:         oneLine(f.State),
 		Ended:         f.Phase == circleci.PhaseEnded,
 		Holder:        oneLine(f.SessionID),
+		Worker:        oneLine(f.WorkerID),
 		WaitingOn:     oneLine(f.WaitingOn),
 		Blockers:      blockers,
 		BlockersKnown: true,

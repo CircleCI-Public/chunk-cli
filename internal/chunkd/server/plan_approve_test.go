@@ -120,10 +120,10 @@ func approveResponse(t *testing.T, w *httptest.ResponseRecorder) chunkd.SessionS
 
 func TestPlanApproveApprovesStopsThePlannerAndBuilds(t *testing.T) {
 	ad := newApproveDaemon(t)
-	id := ad.livePlanner(t)
+	ad.livePlanner(t)
 
 	resp := approveResponse(t, ad.approve(t, "plan-1"))
-	assert.Check(t, cmp.DeepEqual(ad.plans.callLog(), []string{"release " + id, "event approve-for-building"}))
+	assert.Check(t, cmp.DeepEqual(ad.plans.callLog(), []string{"release", "event approve-for-building"}))
 	assert.Check(t, cmp.DeepEqual(ad.buildsStarted(), []string{resp.ID}))
 	waitUntil(t, "the planner to stop", ad.session(0).wasStopped)
 	waitUntil(t, "the plan's session record to close", ad.rec.wasClosed)
@@ -144,10 +144,25 @@ func TestPlanApproveReleasesARecordedSessionsClaim(t *testing.T) {
 
 	rec := ad.approve(t, "plan-1")
 	assert.Check(t, cmp.Equal(rec.Code, http.StatusAccepted), "body: %s", rec.Body.String())
-	assert.Check(t, cmp.DeepEqual(ad.plans.releasedSessions(), []string{"s-old"}))
+	assert.Check(t, cmp.Equal(ad.plans.releases(), 1))
 	assert.Check(t, cmp.DeepEqual(ad.plans.sentEvents(), []circleci.FlowEvent{circleci.ApproveForBuilding}))
 	assert.Check(t, cmp.Len(ad.buildsStarted(), 1))
 	assert.Check(t, cmp.Equal(ad.starts.sessions(), 0), "approval started a planner")
+}
+
+// A planning session that left the flow while its worker keeps the claim is
+// released by approve: the worker is the one the planner last read it under.
+func TestPlanApproveReleasesThePlannersWorkerClaim(t *testing.T) {
+	ad := newApproveDaemon(t)
+	ad.request(t, "plan-1", "add a flag")
+	id := ad.started(0).SessionID
+	ad.plans.claimWorker(id, "w-1")
+	ad.replied(t, ad.session(0), "Claimed.")
+	ad.plans.claimWorker("", "w-1")
+
+	resp := approveResponse(t, ad.approve(t, "plan-1"))
+	assert.Check(t, cmp.DeepEqual(ad.plans.callLog(), []string{"release", "event approve-for-building"}))
+	assert.Check(t, cmp.DeepEqual(ad.buildsStarted(), []string{resp.ID}))
 }
 
 // A refused or failed approval changes nothing: the planner, live or not,

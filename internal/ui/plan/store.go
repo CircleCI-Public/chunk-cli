@@ -44,6 +44,9 @@ type Flow struct {
 	Claimed bool
 	// Holder is the session claiming the plan, "" when none does.
 	Holder string
+	// Worker is the factory worker claiming the plan, "" when none does. It
+	// is set whether or not a session works the plan.
+	Worker string
 }
 
 // Progress is how far a flow is along, as factory reports it. A nil count

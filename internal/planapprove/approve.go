@@ -18,7 +18,7 @@ import (
 // API is what approving a plan needs of factory: *circleci.Client.
 type API interface {
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
-	ReleaseClaim(ctx context.Context, sessionID, planID string) error
+	ReleaseClaim(ctx context.Context, planID string) error
 	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
 }
 
@@ -46,13 +46,22 @@ var ErrNoApproval = errors.New("factory offers no approval yet: " +
 
 // Approve approves factory plan planID for building when its flow waits on
 // the developer and factory requires approve-for-building, beside
-// approve-for-units or not, first releasing a claim held by session, the
-// plan's planning session, or by one locate places outside worktree. It
-// refuses a claim held from worktree itself, or by a session factory's
-// daemon does not know, as either may be building the plan. The flow and
-// its claim are read from factory, so a plan that moved after a screen last
-// polled is still refused.
-func Approve(ctx context.Context, api API, locate Locate, planID, session, worktree string) error {
+// approve-for-units or not.
+//
+// It first releases a claim held by:
+//   - session, the plan's planning session;
+//   - worker, when no session holds the plan: the worker session was last
+//     read under, "" if unknown;
+//   - a session that locate places outside worktree.
+//
+// It refuses a claim held by:
+//   - a session in worktree itself;
+//   - a session factory's daemon does not know;
+//   - any other worker, when no session holds the plan.
+//
+// The flow and its claim are read fresh from factory, so a plan that moved
+// after a screen last polled is still refused.
+func Approve(ctx context.Context, api API, locate Locate, planID, session, worker, worktree string) error {
 	f, err := api.GetFlow(ctx, planID)
 	if isNotFound(err) {
 		return ErrNotReady
@@ -75,8 +84,8 @@ func Approve(ctx context.Context, api API, locate Locate, planID, session, workt
 	case planstate.ApproveForBuilding:
 		// The plan is what waits for approval: send it below.
 	}
-	if f.SessionID != "" {
-		if err := release(ctx, api, locate, planID, f.SessionID, session, worktree); err != nil {
+	if f.Claimed() {
+		if err := release(ctx, api, locate, f, session, worker, worktree); err != nil {
 			return err
 		}
 	}
@@ -86,16 +95,25 @@ func Approve(ctx context.Context, api API, locate Locate, planID, session, workt
 	return nil
 }
 
-// release releases holder's claim on plan planID, or refuses, as Approve
-// describes.
-func release(ctx context.Context, api API, locate Locate, planID, holder, session, worktree string) error {
-	if holder == session {
-		if err := api.ReleaseClaim(ctx, session, planID); err != nil {
+// release releases f's claim, or refuses, as Approve describes.
+func release(ctx context.Context, api API, locate Locate, f *circleci.Flow, session, worker, worktree string) error {
+	switch {
+	case f.SessionID != "" && f.SessionID == session,
+		f.SessionID == "" && worker != "" && f.WorkerID == worker:
+		if err := api.ReleaseClaim(ctx, f.ID); err != nil {
 			return fmt.Errorf("release the planning session's claim: %w", err)
 		}
 		return nil
+	case f.SessionID == "":
+		return fmt.Errorf("%w: %s", ErrBeingBuilt, WorkerHeldWhy(f.ID, f.WorkerID))
 	}
-	return ReleaseForeign(ctx, api, locate, planID, holder, worktree)
+	return ReleaseForeign(ctx, api, locate, f.ID, f.SessionID, worktree)
+}
+
+// WorkerHeldWhy says plan planID is held by worker workerID with no session
+// working it, and how to free it.
+func WorkerHeldWhy(planID, workerID string) string {
+	return fmt.Sprintf("plan %s is held by factory worker %s with no session; release it with factory daemon release %[1]s", planID, workerID)
 }
 
 // ReleaseForeign releases holder's claim on planID unless factory's daemon
@@ -111,7 +129,7 @@ func ReleaseForeign(ctx context.Context, api API, locate Locate, planID, holder,
 	if samePath(dir, worktree) {
 		return fmt.Errorf("%w: plan %s is already being built by session %s; stop it, or release it with factory daemon release %[2]s", ErrBeingBuilt, planID, holder)
 	}
-	if err := api.ReleaseClaim(ctx, holder, planID); err != nil {
+	if err := api.ReleaseClaim(ctx, planID); err != nil {
 		return fmt.Errorf("release session %s's claim: %w", holder, err)
 	}
 	return nil
