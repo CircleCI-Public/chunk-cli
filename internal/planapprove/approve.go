@@ -18,7 +18,7 @@ import (
 // API is what approving a plan needs of factory: *circleci.Client.
 type API interface {
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
-	ReleaseClaim(ctx context.Context, sessionID, planID string) error
+	ReleaseClaim(ctx context.Context, planID string) error
 	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
 }
 
@@ -90,7 +90,7 @@ func Approve(ctx context.Context, api API, locate Locate, planID, session, workt
 // describes.
 func release(ctx context.Context, api API, locate Locate, planID, holder, session, worktree string) error {
 	if holder == session {
-		if err := api.ReleaseClaim(ctx, session, planID); err != nil {
+		if err := api.ReleaseClaim(ctx, planID); err != nil {
 			return fmt.Errorf("release the planning session's claim: %w", err)
 		}
 		return nil
@@ -111,7 +111,7 @@ func ReleaseForeign(ctx context.Context, api API, locate Locate, planID, holder,
 	if samePath(dir, worktree) {
 		return fmt.Errorf("%w: plan %s is already being built by session %s; stop it, or release it with factory daemon release %[2]s", ErrBeingBuilt, planID, holder)
 	}
-	if err := api.ReleaseClaim(ctx, holder, planID); err != nil {
+	if err := api.ReleaseClaim(ctx, planID); err != nil {
 		return fmt.Errorf("release session %s's claim: %w", holder, err)
 	}
 	return nil

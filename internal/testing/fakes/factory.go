@@ -22,7 +22,9 @@ type factoryPlan struct {
 	// claiming the plan now, "" when none does.
 	noFlow  bool
 	session string
-	events  []string
+	// worker is the factory worker claiming the plan, "" when none does.
+	worker string
+	events []string
 	// reasons are the reasons sent with events, parallel to them: an
 	// abandon's reason, "" for any other event.
 	reasons []string
@@ -90,7 +92,8 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.GET("/api/v3/factory/flows/:id", f.handleGetFlow)
 	r.GET("/api/v3/factory/flows/:id/blockers", f.handleListFlowBlockers)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
-	r.POST("/api/v3/factory/sessions/:id/release", f.handleReleaseClaim)
+	r.POST("/api/v3/factory/flows/:id/release", f.handleReleaseFlow)
+	r.GET("/api/v3/factory/workers/:id/sessions", f.handleGetWorkerSessions)
 }
 
 // factoryEvents are the events a human may send a flow (flow.EventName in
@@ -111,6 +114,8 @@ type FactoryPlan struct {
 	Comments               int
 	// Session is the factory session claiming the plan, "" when none does.
 	Session string
+	// Worker is the factory worker claiming the plan, "" when none does.
+	Worker string
 	// Events are the events sent the plan's flow, in order. The fake
 	// stores them without applying them: conductor applies them at the
 	// plan's next poll, which a test stands in for with
@@ -135,7 +140,7 @@ func (f *FakeCircleCI) FactoryPlan(id string) (FactoryPlan, bool) {
 	}
 	return FactoryPlan{
 		ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments),
-		Session: p.session, Events: slices.Clone(p.events), Reasons: slices.Clone(p.reasons),
+		Session: p.session, Worker: p.worker, Events: slices.Clone(p.events), Reasons: slices.Clone(p.reasons),
 		Repos: slices.Clone(p.repos),
 	}, true
 }
@@ -329,7 +334,63 @@ func (f *FakeCircleCI) ReleaseFactoryPlan(id string) {
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.session = ""
+		p.worker = ""
 	}
+}
+
+// FactoryWorkerSession is a session a worker lists, as GET
+// /api/v3/factory/workers/:id/sessions serves it.
+type FactoryWorkerSession struct {
+	ID, Dir, Kind string
+	FlowIDs       []string
+}
+
+// ClaimFactoryPlanForWorker has worker workerID claim plan id, as a claim
+// through POST /flows/:id/claim would, registering the worker with no
+// sessions when the fake has none for it.
+func (f *FakeCircleCI) ClaimFactoryPlanForWorker(id, workerID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.factoryPlans[id]
+	if p == nil {
+		return
+	}
+	p.worker = workerID
+	if f.factoryWorkers == nil {
+		f.factoryWorkers = map[string][]FactoryWorkerSession{}
+	}
+	if _, ok := f.factoryWorkers[workerID]; !ok {
+		f.factoryWorkers[workerID] = nil
+	}
+}
+
+// SetFactoryWorkerSessions sets the sessions worker workerID lists, and
+// registers the worker.
+func (f *FakeCircleCI) SetFactoryWorkerSessions(workerID string, sessions ...FactoryWorkerSession) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.factoryWorkers == nil {
+		f.factoryWorkers = map[string][]FactoryWorkerSession{}
+	}
+	f.factoryWorkers[workerID] = slices.Clone(sessions)
+}
+
+// DropFactoryWorker forgets worker workerID, so its sessions read 404, as
+// for a worker deleted between two reads.
+func (f *FakeCircleCI) DropFactoryWorker(workerID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.factoryWorkers, workerID)
+}
+
+// FailFactoryRelease has the next releases of plan id's flow answer status.
+func (f *FakeCircleCI) FailFactoryRelease(id string, status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.factoryReleaseFail == nil {
+		f.factoryReleaseFail = map[string]int{}
+	}
+	f.factoryReleaseFail[id] = status
 }
 
 // DropFactoryFlow takes plan id's flow away, as a plan made before conductor
@@ -759,6 +820,11 @@ func flowEntity(p *factoryPlan) gin.H {
 	if p.session != "" {
 		refs["factory_session"] = gin.H{"id": p.session}
 	}
+	if p.worker != "" {
+		refs["factory_worker"] = gin.H{"id": p.worker, "attributes": gin.H{
+			"hostname": "fake-host", "phase": "started", "health": "ok",
+		}}
+	}
 	if p.parent != "" {
 		refs["factory_plans"] = []gin.H{{"id": p.parent, "rel": "parent"}}
 	}
@@ -897,29 +963,65 @@ func blockerActive(b *factoryPlan, until string) bool {
 	return at < 0 || want < 0 || at < want
 }
 
-// handleReleaseClaim drops session :id's claim on the plan flow_id names, as
-// conductor does; the plan keeps its flow. It answers 404 for a plan that
-// session does not claim.
-func (f *FakeCircleCI) handleReleaseClaim(c *gin.Context) {
+// handleReleaseFlow frees whatever claim flow :id has, ignoring the request
+// body; the plan keeps its flow. It answers 200 with the flow, 204 when
+// nothing claims it, and 404 when the flow is unknown.
+func (f *FakeCircleCI) handleReleaseFlow(c *gin.Context) {
 	if !f.factoryStart(c) {
-		return
-	}
-	var body struct {
-		FlowID string `json:"flow_id"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil || body.FlowID == "" {
-		factoryError(c, http.StatusBadRequest, "a release needs a flow_id")
 		return
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	p := f.factoryPlans[body.FlowID]
-	if p == nil || p.noFlow || p.session != c.Param("id") {
-		factoryError(c, http.StatusNotFound, "claim not found")
+	p := f.factoryPlans[c.Param("id")]
+	if p == nil || p.noFlow {
+		factoryError(c, http.StatusNotFound, "flow not found")
 		return
 	}
-	p.session = ""
-	c.Status(http.StatusNoContent)
+	if status := f.factoryReleaseFail[p.id]; status != 0 {
+		factoryError(c, status, "API error")
+		return
+	}
+	if p.session == "" && p.worker == "" {
+		c.Status(http.StatusNoContent)
+		return
+	}
+	for i, s := range f.factoryWorkers[p.worker] {
+		f.factoryWorkers[p.worker][i].FlowIDs = slices.DeleteFunc(slices.Clone(s.FlowIDs), func(id string) bool { return id == p.id })
+	}
+	p.session, p.worker = "", ""
+	c.JSON(http.StatusOK, gin.H{"data": flowEntity(p)})
+}
+
+// handleGetWorkerSessions serves worker :id's sessions, each a minimal entity
+// referencing the flows it works, as conductor does; 404 for a worker the
+// fake does not know.
+func (f *FakeCircleCI) handleGetWorkerSessions(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	id := c.Param("id")
+	sessions, ok := f.factoryWorkers[id]
+	if !ok {
+		factoryError(c, http.StatusNotFound, "worker not found")
+		return
+	}
+	items := make([]gin.H, 0, len(sessions))
+	for _, s := range sessions {
+		flows := make([]gin.H, 0, len(s.FlowIDs))
+		for _, fid := range s.FlowIDs {
+			flows = append(flows, gin.H{"id": fid})
+		}
+		items = append(items, gin.H{
+			"id":         s.ID,
+			"attributes": gin.H{"dir": s.Dir, "kind": s.Kind},
+			"references": gin.H{"factory_flows": flows},
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"id": id, "attributes": gin.H{"sessions": items},
+	}})
 }
 
 // handleCreateEvent stores an event for a flow, as conductor does, answering

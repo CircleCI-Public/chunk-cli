@@ -146,6 +146,8 @@ type FakeCircleCI struct {
 
 	// Factory plans and their comments; see factory.go.
 	factoryPlans          map[string]*factoryPlan
+	factoryWorkers        map[string][]FactoryWorkerSession
+	factoryReleaseFail    map[string]int
 	FactoryStatusCode     int // override for every /api/v3/factory route
 	FactoryPlanStatusCode int // override for GET /api/v3/factory/plans/:id
 	FactoryPageSize       int // plans or comments per list page; 0 means 20

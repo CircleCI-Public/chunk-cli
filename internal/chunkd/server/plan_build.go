@@ -28,7 +28,7 @@ var planBuildPoll = 30 * time.Second
 type PlanAPI interface {
 	GetPlan(ctx context.Context, id string) (*circleci.Plan, error)
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
-	ReleaseClaim(ctx context.Context, sessionID, planID string) error
+	ReleaseClaim(ctx context.Context, planID string) error
 	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
 }
 
@@ -379,7 +379,7 @@ func releaseBuildClaim(api PlanAPI, sessionID, planID string, note func(iostream
 		return
 	}
 	if err == nil {
-		err = api.ReleaseClaim(ctx, sessionID, planID)
+		err = api.ReleaseClaim(ctx, planID)
 	}
 	if err != nil {
 		note(iostream.LevelWarn, fmt.Sprintf("Could not free plan %s's claim: %v; free it with factory daemon release %[1]s", planID, err))

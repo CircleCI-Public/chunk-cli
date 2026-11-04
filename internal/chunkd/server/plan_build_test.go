@@ -45,11 +45,10 @@ type fakePlans struct {
 	// task, when set, is the task a session takes to move the flow on, such
 	// as a review running.
 	task string
-	// released are the sessions whose claim ReleaseClaim released, and sent
-	// the events CreateFlowEvent sent; calls is both, in order.
-	released []string
-	sent     []circleci.FlowEvent
-	calls    []string
+	// sent are the events CreateFlowEvent sent; calls is those and the
+	// releases ReleaseClaim made, in order.
+	sent  []circleci.FlowEvent
+	calls []string
 	// releaseErr and eventErr fail ReleaseClaim and CreateFlowEvent.
 	releaseErr, eventErr error
 	// onRelease, when set, runs as ReleaseClaim is reached.
@@ -100,9 +99,8 @@ func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error
 	}, nil
 }
 
-// ReleaseClaim releases sessionID's claim on the plan, as factory does:
-// only the holder's release frees it.
-func (f *fakePlans) ReleaseClaim(_ context.Context, sessionID, _ string) error {
+// ReleaseClaim frees whatever holds the flow, as factory does.
+func (f *fakePlans) ReleaseClaim(_ context.Context, _ string) error {
 	f.mu.Lock()
 	hook := f.onRelease
 	f.mu.Unlock()
@@ -114,11 +112,8 @@ func (f *fakePlans) ReleaseClaim(_ context.Context, sessionID, _ string) error {
 	if f.releaseErr != nil {
 		return f.releaseErr
 	}
-	f.released = append(f.released, sessionID)
-	f.calls = append(f.calls, "release "+sessionID)
-	if f.holder == sessionID {
-		f.holder = ""
-	}
+	f.calls = append(f.calls, "release")
+	f.holder = ""
 	return nil
 }
 
@@ -140,10 +135,17 @@ func (f *fakePlans) CreateFlowEvent(_ context.Context, _ string, event circleci.
 	return nil
 }
 
-func (f *fakePlans) releasedSessions() []string {
+// releases is how many times ReleaseClaim freed the flow.
+func (f *fakePlans) releases() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]string(nil), f.released...)
+	n := 0
+	for _, c := range f.calls {
+		if c == "release" {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakePlans) sentEvents() []circleci.FlowEvent {
@@ -156,6 +158,13 @@ func (f *fakePlans) callLog() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
+}
+
+// currentHolder is whoever holds the flow now, "" when none does.
+func (f *fakePlans) currentHolder() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.holder
 }
 
 // claim has holder claim the plan, as factory plan claim would; "" releases
@@ -520,11 +529,11 @@ func TestPlanBuildCancelStopsTheSession(t *testing.T) {
 			detail := pb.stopBuild(t, sess.ID)
 			assert.Check(t, cmp.Equal(detail.State, chunkd.SessionCancelled))
 			assert.Check(t, pb.build.wasStopped(), "the build session was left running")
-			released := pb.plans.releasedSessions()
 			if tc.wantReleased {
-				assert.Check(t, cmp.DeepEqual(released, []string{id}))
+				assert.Check(t, cmp.Equal(pb.plans.releases(), 1))
+				assert.Check(t, cmp.Equal(pb.plans.currentHolder(), ""))
 			} else {
-				assert.Check(t, cmp.Len(released, 0))
+				assert.Check(t, cmp.Equal(pb.plans.releases(), 0))
 			}
 			if tc.wantWarn != "" {
 				assert.Check(t, slices.ContainsFunc(detail.Factory.Progress.Lines, func(l chunkd.FeedLine) bool {
@@ -547,7 +556,7 @@ func TestPlanBuildShutdownKeepsTheClaim(t *testing.T) {
 	detail := waitForSessionEnd(t, pb.daemon, sess.ID)
 	assert.Check(t, detail.State != chunkd.SessionCancelled, "a shutdown read as a developer's stop")
 	assert.Check(t, pb.build.wasStopped(), "the build session was left running")
-	assert.Check(t, cmp.Len(pb.plans.releasedSessions(), 0))
+	assert.Check(t, cmp.Equal(pb.plans.releases(), 0))
 }
 
 // A build session that exits by itself, before its plan is over, fails the

@@ -133,7 +133,7 @@ func TestApproveReleasesThePlanningSession(t *testing.T) {
 		}
 	}
 	assert.Check(t, cmp.DeepEqual(paths[len(paths)-2:], []string{
-		"/api/v3/factory/sessions/s-1/release",
+		"/api/v3/factory/flows/" + id + "/release",
 		"/api/v3/factory/events",
 	}))
 }
@@ -239,7 +239,7 @@ func TestApproveWithAnotherSessionsClaim(t *testing.T) {
 				assert.Check(t, cmp.Equal(p.Session, ""))
 				paths := posts(cci)
 				assert.Check(t, cmp.DeepEqual(paths[len(paths)-2:], []string{
-					"/api/v3/factory/sessions/parent/release",
+					"/api/v3/factory/flows/" + id + "/release",
 					"/api/v3/factory/events",
 				}))
 				return
@@ -251,7 +251,7 @@ func TestApproveWithAnotherSessionsClaim(t *testing.T) {
 			assert.Check(t, cmp.Len(p.Events, 0))
 			assert.Check(t, cmp.Equal(p.Session, holder))
 			for _, path := range posts(cci) {
-				assert.Check(t, !strings.HasPrefix(path, "/api/v3/factory/sessions/"), path)
+				assert.Check(t, !strings.HasSuffix(path, "/release"), path)
 			}
 		})
 	}
@@ -267,7 +267,7 @@ func TestReleaseForeign(t *testing.T) {
 		dir       string
 		unknown   bool
 		lookupErr error
-		// dropClaim releases the claim during the lookup, so ReleaseClaim fails.
+		// dropClaim has the release answer 404 from the lookup on, as for a flow that moved, so ReleaseClaim fails.
 		dropClaim   bool
 		wantErr     error
 		wantErrText []string
@@ -317,7 +317,7 @@ func TestReleaseForeign(t *testing.T) {
 			if tc.dropClaim {
 				inner := locate
 				locate = func(ctx context.Context, session string) (string, error) {
-					cci.ReleaseFactoryPlan(id)
+					cci.FailFactoryRelease(id, http.StatusNotFound)
 					return inner(ctx, session)
 				}
 			}
@@ -328,7 +328,7 @@ func TestReleaseForeign(t *testing.T) {
 				assert.NilError(t, err)
 				assert.Check(t, cmp.Equal(p.Session, ""))
 				assert.Check(t, cmp.DeepEqual(posts(cci)[len(posts(cci))-1:], []string{
-					"/api/v3/factory/sessions/S/release",
+					"/api/v3/factory/flows/" + id + "/release",
 				}))
 				return
 			}
@@ -344,7 +344,7 @@ func TestReleaseForeign(t *testing.T) {
 			}
 			assert.Check(t, cmp.Equal(p.Session, holder))
 			for _, path := range posts(cci) {
-				assert.Check(t, !strings.HasPrefix(path, "/api/v3/factory/sessions/"), path)
+				assert.Check(t, !strings.HasSuffix(path, "/release"), path)
 			}
 		})
 	}
@@ -376,7 +376,7 @@ func TestApproveWithNoClaim(t *testing.T) {
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
 	for _, path := range posts(cci) {
-		assert.Check(t, !strings.HasPrefix(path, "/api/v3/factory/sessions/"), path)
+		assert.Check(t, !strings.HasSuffix(path, "/release"), path)
 	}
 }
 
@@ -386,7 +386,7 @@ func TestApproveWithNoClaim(t *testing.T) {
 func TestApproveStopsWhenTheReleaseFails(t *testing.T) {
 	client, cci, id := approvablePlan(t, "parent")
 	locate := func(context.Context, string) (string, error) {
-		cci.ReleaseFactoryPlan(id)
+		cci.FailFactoryRelease(id, http.StatusNotFound)
 		return "/data/plans/parent-1", nil
 	}
 
