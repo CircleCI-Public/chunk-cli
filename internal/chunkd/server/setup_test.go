@@ -346,3 +346,13 @@ func TestSetupRoutes(t *testing.T) {
 		assert.Check(t, cmp.Equal(code, http.StatusBadRequest))
 	})
 }
+
+// set puts the run in state with summary, waking its waiters as an attempt's
+// end does.
+func (r *setupRun) set(state chunkd.SetupState, summary string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.act.State = state
+	r.act.Summary = summary
+	r.notifyLocked()
+}

@@ -1301,3 +1301,130 @@ func TestPlanBuildActivityPrefersTheRunningSession(t *testing.T) {
 		assert.Check(t, cmp.Equal(got.Error, "boom"))
 	})
 }
+
+// A build waits for the project's Setup run before it opens the plan's
+// worktree, and settles without opening it when the run fails or the build is
+// cancelled while waiting.
+func TestExecutePlanBuildWaitsForSetup(t *testing.T) {
+	const waiting = "Waiting for this project's setup to finish"
+	// The rows' plans record no repos, so checkPlanRepo passes and every row
+	// reaches the Setup gate.
+	for _, tc := range []struct {
+		name string
+		// seed is the run's state before the build, "" for no run.
+		seed chunkd.SetupState
+		// then moves the run on once the build is waiting.
+		then func(t *testing.T, pb *planBuildDaemon, run *setupRun, id string)
+		// want is how the build session ends, "" when it starts and runs.
+		want    chunkd.SessionState
+		wantErr string
+	}{
+		{
+			name: "no run",
+		},
+		{
+			name: "already ok",
+			seed: chunkd.SetupOK,
+		},
+		{
+			name: "ends ok while waiting",
+			seed: chunkd.SetupRunning,
+			then: func(_ *testing.T, _ *planBuildDaemon, run *setupRun, _ string) {
+				run.set(chunkd.SetupOK, "")
+			},
+		},
+		{
+			name: "continued",
+			seed: chunkd.SetupStuck,
+			then: func(_ *testing.T, _ *planBuildDaemon, run *setupRun, _ string) {
+				run.set(chunkd.SetupContinued, "")
+			},
+		},
+		{
+			name: "failed",
+			seed: chunkd.SetupRunning,
+			then: func(_ *testing.T, _ *planBuildDaemon, run *setupRun, _ string) {
+				run.set(chunkd.SetupFailed, "boom")
+			},
+			want:    chunkd.SessionFailed,
+			wantErr: "boom",
+		},
+		{
+			name: "cancelled while waiting",
+			seed: chunkd.SetupRunning,
+			then: func(t *testing.T, pb *planBuildDaemon, _ *setupRun, id string) {
+				_ = pb.stopBuild(t, id)
+			},
+			want: chunkd.SessionCancelled,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pb := newPlanBuildDaemon(t)
+			var run *setupRun
+			if tc.seed != "" {
+				run = &setupRun{
+					root:    pb.root,
+					changed: make(chan struct{}),
+					act:     chunkd.SetupActivity{State: tc.seed},
+				}
+				pb.setups.mu.Lock()
+				pb.setups.byRoot[pb.root] = run
+				pb.setups.mu.Unlock()
+			}
+			w := pb.postBuild(t)
+			id := startedID(t, w)
+			entry := pb.sessions.get(id)
+			assert.Assert(t, entry != nil)
+			feed := func() []string {
+				var texts []string
+				for _, l := range entry.snapshot().Factory.Progress.Lines {
+					texts = append(texts, l.Text)
+				}
+				return texts
+			}
+			opened := func() []string {
+				pb.mu.Lock()
+				defer pb.mu.Unlock()
+				return slices.Clone(pb.opened)
+			}
+			started := func() int {
+				pb.mu.Lock()
+				defer pb.mu.Unlock()
+				return len(pb.cfgs)
+			}
+
+			if tc.then != nil {
+				waitUntil(t, "the build to wait for setup", func() bool {
+					return slices.Contains(feed(), waiting)
+				})
+				early := opened()
+				assert.Check(t, cmp.Len(early, 0), "the worktree opened before setup finished")
+				tc.then(t, pb, run, id)
+			}
+
+			if tc.want != "" {
+				detail := waitForSessionEnd(t, pb.daemon, id)
+				assert.Check(t, cmp.Equal(detail.State, tc.want))
+				if tc.wantErr != "" {
+					assert.Check(t, cmp.Contains(detail.Error, tc.wantErr))
+				}
+				got := opened()
+				assert.Check(t, cmp.Len(got, 0), "the worktree opened")
+				n := started()
+				assert.Check(t, cmp.Equal(n, 0), "a build session started")
+				return
+			}
+
+			waitUntil(t, "the build session to start", func() bool {
+				return started() == 1
+			})
+			got := opened()
+			assert.Check(t, cmp.DeepEqual(got, []string{"plan-1"}))
+			if tc.then == nil {
+				waited := slices.Contains(feed(), waiting)
+				assert.Check(t, !waited, "the build waited with no setup to wait for")
+			}
+			_ = pb.stopBuild(t, id)
+		})
+	}
+}
