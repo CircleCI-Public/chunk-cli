@@ -755,11 +755,7 @@ image's CMD, not a step that runs during setup. Pipe stdout into
 
 			env, err := envbuilder.DetectEnvironment(cmd.Context(), dir)
 			if err != nil {
-				return &userError{
-					msg:        "Could not detect the environment.",
-					suggestion: "Check the directory contains a supported project.",
-					err:        err,
-				}
+				return detectEnvironmentError(err)
 			}
 
 			if !noSave {
@@ -1206,6 +1202,16 @@ Example:
 	return cmd
 }
 
+// detectEnvironmentError phrases a failure to detect the project's
+// environment for the user.
+func detectEnvironmentError(err error) error {
+	return &userError{
+		msg:        "Could not detect the environment.",
+		suggestion: "Check the directory contains a supported project.",
+		err:        err,
+	}
+}
+
 // msgUsingSavedEnvironment notes that the environment saved in
 // .chunk/config.json was used rather than detected.
 const msgUsingSavedEnvironment = "Using environment from .chunk/config.json"
@@ -1222,11 +1228,7 @@ func loadEnvironment(ctx context.Context, dir string, cfg *config.ProjectConfig,
 	status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))
 	env, err = envbuilder.DetectEnvironment(ctx, dir)
 	if err != nil {
-		return nil, false, &userError{
-			msg:        "Could not detect the environment.",
-			suggestion: "Check the directory contains a supported project.",
-			err:        err,
-		}
+		return nil, false, detectEnvironmentError(err)
 	}
 	cfg.Environment = env.ForConfig()
 	status(iostream.LevelInfo, "stack: "+env.Stack)

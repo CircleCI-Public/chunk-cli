@@ -22,6 +22,7 @@ chunk-cli/
     │   ├── upgrade.go         # upgrade
     │   └── validate.go        # validate
     ├── anthropic/             # Anthropic Messages API client
+    ├── bootstrap/             # factory bootstrap's steps: writes .chunk/config.json, makes and records the sidecar image
     ├── circleci/              # CircleCI REST API client
     ├── claudecode/            # Runs claude -p on a sidecar and explains how the run ended
     ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
@@ -81,8 +82,16 @@ is printed. Both exit with code 1.
 
 ## Data Flow: `factory bootstrap`
 
+The steps live in `internal/bootstrap`, so the daemon can run them as well as
+`chunk factory bootstrap`. `bootstrap.Plan` says which parts a run does, and
+`bootstrap.Setup` does them, reporting progress as events (step, level, text)
+and returning each error as a `*bootstrap.StepError` that keeps the
+underlying error. `internal/cmd/factorybootstrap.go` keeps login, choosing the
+org and the phrasing: it prints the events as status lines and turns the
+errors into user errors with `bootstrapError`.
+
 ```
-1. Config            writeBootstrapConfig() → validate.DetectCommands()
+1. Config            bootstrap.Setup → DetectVCS() + DetectCommands()
                      → .chunk/config.json
                      (skipped when the config exists)
 

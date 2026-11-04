@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +12,9 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/bootstrap"
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -68,52 +73,100 @@ func TestFactoryBootstrapSkipSidecarExcludesTheImageFlags(t *testing.T) {
 	}
 }
 
-func TestPlanBootstrap(t *testing.T) {
-	withImage := &config.ProjectConfig{Validation: &config.ValidationConfig{SidecarImage: "snap-1"}}
+// Each error Setup returns reads as a user error that says what failed and
+// what to do about it.
+func TestBootstrapError(t *testing.T) {
+	ctx := context.Background()
 	tests := []struct {
-		name        string
-		in          planInputs
-		want        bootstrapPlan
-		wantSkipped []string
-		empty       bool
+		name           string
+		err            error
+		wantMsg        string
+		wantSuggestion string
 	}{
 		{
-			name: "a new project gets everything",
-			in:   planInputs{},
-			want: bootstrapPlan{Config: true, Sidecar: true},
+			name: "a setup step that fails",
+			err: &bootstrap.StepError{
+				Step: bootstrap.StepEnvironment,
+				Err: &sidecar.SetupStepError{
+					Step:     "install",
+					ExitCode: 2,
+				},
+			},
+			wantMsg:        `Setup step "install" exited with status 2.`,
+			wantSuggestion: "Check the output above for details.",
 		},
 		{
-			name:        "an existing config is kept",
-			in:          planInputs{Cfg: &config.ProjectConfig{}},
-			want:        bootstrapPlan{Sidecar: true},
-			wantSkipped: []string{".chunk/config.json already exists"},
+			name: "a sidecar the token may not create",
+			err: &bootstrap.StepError{
+				Step: bootstrap.StepEnvironment,
+				Err: &bootstrap.CreateSidecarError{
+					Err: fmt.Errorf("create sidecar: %w", circleci.ErrNotAuthorized),
+				},
+			},
+			wantMsg:        "Not authorized to create sidecars.",
+			wantSuggestion: suggestionReauth,
 		},
 		{
-			name:        "--skip-sidecar leaves the image out",
-			in:          planInputs{SkipSidecar: true},
-			want:        bootstrapPlan{Config: true},
-			wantSkipped: []string{"sidecar image: --skip-sidecar"},
+			name: "a sidecar the network would not create",
+			err: &bootstrap.StepError{
+				Step: bootstrap.StepEnvironment,
+				Err: &bootstrap.CreateSidecarError{
+					Err: errors.New("dial tcp: connection refused"),
+				},
+			},
+			wantMsg:        msgCouldNotCreateSidecar,
+			wantSuggestion: suggestionNetworkRetry,
 		},
 		{
-			name:        "a config and --skip-sidecar leave nothing to do",
-			in:          planInputs{Cfg: &config.ProjectConfig{}, SkipSidecar: true},
-			empty:       true,
-			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: --skip-sidecar"},
+			name: "a snapshot name the org has",
+			err: &bootstrap.StepError{
+				Step: bootstrap.StepSnapshot,
+				Err: &bootstrap.SnapshotNameTakenError{
+					Name:       "n",
+					ExistingID: "s1",
+					Err:        errors.New("taken"),
+				},
+			},
+			wantMsg:        "A snapshot named n already exists in the org.",
+			wantSuggestion: "Pass --snapshot-name with another name. To use the existing one instead, run: chunk config set validation.sidecarImage s1",
 		},
 		{
-			name:        "a project set up already has nothing to do",
-			in:          planInputs{Cfg: withImage},
-			empty:       true,
-			wantSkipped: []string{".chunk/config.json already exists", "sidecar image: validation.sidecarImage is snap-1"},
+			name: "a snapshot the token may not create",
+			err: &bootstrap.StepError{
+				Step: bootstrap.StepSnapshot,
+				Err:  fmt.Errorf("create snapshot: %w", circleci.ErrNotAuthorized),
+			},
+			wantMsg:        "Not authorized to create snapshots.",
+			wantSuggestion: suggestionReauth,
+		},
+		{
+			name: "a config that cannot be written",
+			err: &bootstrap.StepError{
+				Step: bootstrap.StepConfig,
+				Err:  &bootstrap.SaveConfigError{Err: os.ErrPermission},
+			},
+			wantMsg:        "Could not write .chunk/config.json.",
+			wantSuggestion: suggestionCheckPerms,
+		},
+		{
+			name: "an image that cannot be recorded",
+			err: &bootstrap.StepError{
+				Step: bootstrap.StepSnapshot,
+				Err: &bootstrap.RecordImageError{
+					ID:  "snap-1",
+					Err: os.ErrPermission,
+				},
+			},
+			wantMsg:        "Created snapshot snap-1, but could not record it in .chunk/config.json.",
+			wantSuggestion: "Record it with: chunk config set validation.sidecarImage snap-1",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := planBootstrap(tt.in)
-			assert.Check(t, cmp.DeepEqual(got.skipped, tt.wantSkipped))
-			assert.Check(t, cmp.Equal(got.Config, tt.want.Config))
-			assert.Check(t, cmp.Equal(got.Sidecar, tt.want.Sidecar))
-			assert.Check(t, cmp.Equal(got.empty(), tt.empty))
+			ue, ok := errors.AsType[*userError](bootstrapError(ctx, tt.err, ""))
+			assert.Assert(t, ok)
+			assert.Check(t, cmp.Equal(ue.msg, tt.wantMsg))
+			assert.Check(t, cmp.Equal(ue.suggestion, tt.wantSuggestion))
 		})
 	}
 }

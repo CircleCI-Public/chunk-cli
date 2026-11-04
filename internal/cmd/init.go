@@ -10,6 +10,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
+	"github.com/CircleCI-Public/chunk-cli/internal/bootstrap"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -131,7 +132,7 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 			streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
 			// Still ensure pool state is gitignored for projects
 			// initialized before this pattern existed.
-			updateGitignore(workDir, status)
+			bootstrap.UpdateGitignore(workDir, status)
 			return nil
 		}
 	}
@@ -146,7 +147,7 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 	if rcErr != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("Could not load config: %v", rcErr))
 	}
-	vcs, err := detectVCS(ctx, workDir, status)
+	vcs, err := bootstrap.DetectVCS(ctx, workDir, status)
 	if err != nil {
 		return err
 	}
@@ -155,7 +156,7 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 	}
 	if !opts.skipValidate {
 		claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
-		if commands, ok := detectCommands(ctx, claude, workDir, status); ok {
+		if commands, ok := bootstrap.DetectCommands(ctx, claude, workDir, status); ok {
 			cfg.Commands = commands
 		}
 	}
@@ -175,7 +176,7 @@ func runInit(ctx context.Context, workDir string, opts initOptions, streams iost
 	}
 	status(iostream.LevelDone, "Wrote .chunk/config.json")
 
-	updateGitignore(workDir, status)
+	bootstrap.UpdateGitignore(workDir, status)
 	if !opts.skipHooks && !opts.skipGitHook {
 		if err := writeGitHook(gitCommonDir, status); err != nil {
 			return err
