@@ -126,11 +126,11 @@ type (
 	}
 	pollMsg      struct{}
 	refreshedMsg struct {
-		flow     Flow
-		text     string
-		units    []Unit
-		comments []Comment
-		err      error
+		flow      Flow
+		text      string
+		structure Structure
+		comments  []Comment
+		err       error
 	}
 	commentSavedMsg struct{ err error }
 	// createdMsg is the end of creating the plan in factory, for the
@@ -199,9 +199,9 @@ func (m Model) pollCmd() tea.Cmd {
 	return m.after(pollEvery, func(time.Time) tea.Msg { return pollMsg{} })
 }
 
-// refreshCmd reads the plan's flow, text, units and comments from the store.
-// It fails as a whole when any read fails, so the text and its units always
-// arrive together.
+// refreshCmd reads the plan's flow, text, structure and comments from the
+// store. It fails as a whole when any read fails, so the text and its units
+// and open questions always arrive together.
 func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg {
 		flow, err := s.Flow(ctx)
@@ -212,12 +212,12 @@ func refreshCmd(ctx context.Context, s Store) tea.Cmd {
 		if err != nil {
 			return refreshedMsg{err: err}
 		}
-		units, err := s.Units(ctx)
+		structure, err := s.Structure(ctx)
 		if err != nil {
 			return refreshedMsg{err: err}
 		}
 		cs, err := s.Comments(ctx)
-		return refreshedMsg{flow: flow, text: text, units: units, comments: cs, err: err}
+		return refreshedMsg{flow: flow, text: text, structure: structure, comments: cs, err: err}
 	}
 }
 
@@ -852,12 +852,13 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		m.status = ""
 	}
 	m.state, m.events, m.plan = msg.flow.State, msg.flow.Events, msg.text
-	if !slices.Equal(m.units, msg.units) {
+	if !slices.Equal(m.units, msg.structure.Units) {
 		// The steps come from the units, so the pane is drawn again even
 		// when the text is unchanged.
-		m.units = msg.units
+		m.units = msg.structure.Units
 		m.renderedWidth = 0
 	}
+	m.questions = len(msg.structure.OpenQuestions)
 	m.flow = msg.flow
 	if m.flow.Claimed || m.state != m.resumedIn {
 		// A flow that leaves the state it was resumed in, or that a session
@@ -1608,7 +1609,6 @@ func (m *Model) renderPlan() {
 	}
 	if strings.TrimSpace(m.plan) == "" {
 		m.blocks = nil
-		m.questions = 0
 		if m.busy {
 			m.setContent(textPlan, lipgloss.NewStyle().Padding(1, 2).Render(m.skeleton(m.planView.Width()-4)))
 			return
@@ -1654,7 +1654,6 @@ func (m *Model) renderPlan() {
 		}
 		m.blocks[i] = renderedBlock{block: b, lines: lines, at: at}
 	}
-	m.questions = st.questions
 	m.renderedFrom, m.renderedWidth = m.plan, w
 	m.reanchor()
 	// A selection is of blocks as they were split, so it goes with them.

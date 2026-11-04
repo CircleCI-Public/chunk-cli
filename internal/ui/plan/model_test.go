@@ -3060,6 +3060,7 @@ func TestPlanShowsUnitsAsSteps(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = planWithUnits
 	store.UnitsV = []Unit{{Name: "Unit 1: Add RetryPolicy", Done: true}, {Name: "Unit 2: Wire it in"}}
+	store.OpenQuestionsV = []string{"Which timeout caps the wait?"}
 	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it").WithBranch("hanabel/retry-429")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := ansi.Strip(m.Content())
