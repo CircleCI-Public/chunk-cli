@@ -36,6 +36,9 @@ type factoryPlan struct {
 	// units replace the units its structured content parses from text; nil
 	// until SetFactoryPlanUnits.
 	units []FactoryUnit
+	// openQuestions are the questions its structured content serves as
+	// items.open_questions; nil until SetFactoryPlanOpenQuestions.
+	openQuestions []string
 	// noStructured is whether FailFactoryStructuredContent has the plan's
 	// structured content answer 404.
 	noStructured bool
@@ -186,6 +189,17 @@ func (f *FakeCircleCI) SetFactoryPlanUnits(id string, units ...FactoryUnit) {
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.units = append([]FactoryUnit{}, units...)
+	}
+}
+
+// SetFactoryPlanOpenQuestions has plan id's structured content serve
+// items.open_questions as {text: "", questions}, questions [] when called
+// with none. Until it is called, items.open_questions is null.
+func (f *FakeCircleCI) SetFactoryPlanOpenQuestions(id string, questions ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.factoryPlans[id]; p != nil {
+		p.openQuestions = append([]string{}, questions...)
 	}
 }
 
@@ -664,12 +678,17 @@ func (f *FakeCircleCI) handleGetPlanStructuredContent(c *gin.Context) {
 			units[i] = gin.H{"name": u.Name, "is_done": u.Done, "body": u.Body}
 		}
 	}
+	var openQuestions any
+	if p.openQuestions != nil {
+		openQuestions = gin.H{"text": "", "questions": p.openQuestions}
+	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": p.id, "attributes": gin.H{
 		"outcome":        section("1. Outcome"),
 		"design":         section("2. Design"),
 		"open_questions": section("3. Open Questions"),
 		"worked_example": section("4. Worked example"),
 		"units":          units,
+		"items":          gin.H{"open_questions": openQuestions},
 	}}})
 }
 

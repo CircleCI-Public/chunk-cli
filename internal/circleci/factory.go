@@ -504,13 +504,21 @@ func (c *Client) PlanText(ctx context.Context, id string) (string, error) {
 	return attrs.Text, nil
 }
 
-// PlanStructuredContent is a plan's sections and the units of its 5. Units, as
-// factory parses its text.
+// PlanStructuredContent is a plan's sections, the units of its 5. Units and the
+// list items factory reads from them, as factory parses its text.
 type PlanStructuredContent struct {
 	// Each section is its body, or nil when factory found none.
 	Outcome, Design, OpenQuestions, WorkedExample *string
 	// Units is nil when the plan has no 5. Units, and empty when it has none in it.
 	Units []PlanUnit
+	Items PlanItems
+}
+
+// PlanItems is the route's items attribute.
+type PlanItems struct {
+	// OpenQuestions is items.open_questions.questions; nil when factory sends
+	// null or no items.
+	OpenQuestions []string
 }
 
 // planSections are the skeleton headings of the sections
@@ -567,6 +575,11 @@ type planStructuredContentAttrs struct {
 		IsDone bool   `json:"is_done"`
 		Body   string `json:"body"`
 	} `json:"units"`
+	Items struct {
+		OpenQuestions *struct {
+			Questions []string `json:"questions"`
+		} `json:"open_questions"`
+	} `json:"items"`
 }
 
 // PlanStructuredContent returns factory plan id's sections and units.
@@ -589,6 +602,9 @@ func (c *Client) PlanStructuredContent(ctx context.Context, id string) (*PlanStr
 	}
 	for _, u := range attrs.Units {
 		out.Units = append(out.Units, PlanUnit{Name: u.Name, Done: u.IsDone, Body: u.Body})
+	}
+	if q := attrs.Items.OpenQuestions; q != nil {
+		out.Items.OpenQuestions = q.Questions
 	}
 	return out, nil
 }
