@@ -14,6 +14,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
@@ -227,6 +228,28 @@ func planFlow(ctx context.Context, api PlanAPI, id string) (*circleci.Flow, erro
 	return f, nil
 }
 
+// waitForSetup waits for root's Setup run, if it has one, saying so with note
+// while the run is running or stuck. It proceeds once the run is ok or
+// continued. Otherwise err is why the build ends: the run's failure, or nil
+// when ctx was done while waiting.
+func (d *daemon) waitForSetup(ctx context.Context, root string, note func(iostream.Level, string)) (proceed bool, err error) {
+	run := d.setups.get(config.CanonicalProjectRoot(root))
+	if run == nil {
+		return true, nil
+	}
+	if act := run.view(-1); act.State == chunkd.SetupRunning || act.State == chunkd.SetupStuck {
+		note(iostream.LevelStep, "Waiting for this project's setup to finish")
+	}
+	err = run.wait(ctx)
+	switch {
+	case err == nil:
+		return true, nil
+	case ctx.Err() != nil: // cancelled while waiting
+		return false, nil
+	}
+	return false, fmt.Errorf("this project's setup failed: %w", err)
+}
+
 // executePlanBuild runs a plan build and settles it, once its plan ends, its
 // session does, or it is cancelled.
 //
@@ -246,6 +269,12 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 	open := d.rcfg.OpenPlanWorktree
 	if open == nil {
 		open = factory.OpenPlanWorktree
+	}
+	// The build waits for the project's Setup, so the worktree's config is
+	// copied once it holds the recorded sidecar image.
+	if proceed, err := d.waitForSetup(ctx, root, note); !proceed {
+		d.settleSession(entry, err)
+		return
 	}
 	dir, err := open(ctx, root, req.PlanID)
 	if err != nil {

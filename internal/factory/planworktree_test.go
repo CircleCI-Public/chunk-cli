@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
@@ -166,6 +167,53 @@ func TestOpenPlanWorktreeCopiesAChunkConfigAddedSinceIntoAReopenedOne(t *testing
 	assert.Check(t, cmp.Equal(config, `{"validation":{}}`))
 }
 
+func TestOpenPlanWorktreeRefreshesAnUntrackedChunkConfig(t *testing.T) {
+	ctx := context.Background()
+	root, _ := newPlanProject(t)
+	writeFile(t, root, ".chunk/config.json", `{"validation":{}}`)
+	path, err := OpenPlanWorktree(ctx, root, "plan-1")
+	assert.NilError(t, err)
+	writeFile(t, root, ".chunk/config.json", `{"validation":{"sidecarImage":"snap-1"}}`)
+
+	_, err = OpenPlanWorktree(ctx, root, "plan-1")
+	assert.NilError(t, err)
+	config := readFile(t, path, ".chunk/config.json")
+	assert.Check(t, cmp.Equal(config, `{"validation":{"sidecarImage":"snap-1"}}`))
+}
+
+func TestOpenPlanWorktreeKeepsAnIdenticalUntrackedChunkConfig(t *testing.T) {
+	ctx := context.Background()
+	root, _ := newPlanProject(t)
+	writeFile(t, root, ".chunk/config.json", `{"validation":{}}`)
+	path, err := OpenPlanWorktree(ctx, root, "plan-1")
+	assert.NilError(t, err)
+	copied := filepath.Join(path, ".chunk", "config.json")
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	err = os.Chtimes(copied, old, old)
+	assert.NilError(t, err)
+
+	_, err = OpenPlanWorktree(ctx, root, "plan-1")
+	assert.NilError(t, err)
+	info, err := os.Stat(copied)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(info.ModTime().UnixNano(), old.UnixNano()), "the identical copy was rewritten")
+}
+
+func TestOpenPlanWorktreeKeepsItsCopyWhenTheProjectConfigIsDeleted(t *testing.T) {
+	ctx := context.Background()
+	root, _ := newPlanProject(t)
+	writeFile(t, root, ".chunk/config.json", `{"validation":{}}`)
+	path, err := OpenPlanWorktree(ctx, root, "plan-1")
+	assert.NilError(t, err)
+	err = os.Remove(filepath.Join(root, ".chunk", "config.json"))
+	assert.NilError(t, err)
+
+	_, err = OpenPlanWorktree(ctx, root, "plan-1")
+	assert.NilError(t, err)
+	config := readFile(t, path, ".chunk/config.json")
+	assert.Check(t, cmp.Equal(config, `{"validation":{}}`))
+}
+
 func TestOpenPlanWorktreeKeepsACommittedChunkConfig(t *testing.T) {
 	ctx := context.Background()
 	root, _ := newPlanProject(t)
@@ -181,6 +229,12 @@ func TestOpenPlanWorktreeKeepsACommittedChunkConfig(t *testing.T) {
 	assert.Check(t, cmp.Equal(config, `{"committed":true}`))
 	status := gitOutput(t, path, "status", "--porcelain")
 	assert.Check(t, cmp.Equal(status, ""))
+
+	writeFile(t, root, ".chunk/config.json", `{"local":"changed"}`)
+	_, err = OpenPlanWorktree(ctx, root, "done")
+	assert.NilError(t, err)
+	config = readFile(t, path, ".chunk/config.json")
+	assert.Check(t, cmp.Equal(config, `{"committed":true}`))
 
 	err = PrunePlanWorktrees(ctx, root, func(context.Context, string) (bool, error) { return true, nil })
 	assert.NilError(t, err)

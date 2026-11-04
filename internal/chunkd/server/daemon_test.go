@@ -42,6 +42,7 @@ func newTestDaemon() *daemon {
 	}
 	d.tasks.onFinish = d.risk.record
 	d.chats = newChats(context.Background(), &d.rcfg)
+	d.setups = newSetups(context.Background())
 	return d
 }
 
