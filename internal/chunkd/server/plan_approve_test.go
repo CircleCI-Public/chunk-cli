@@ -150,6 +150,21 @@ func TestPlanApproveReleasesARecordedSessionsClaim(t *testing.T) {
 	assert.Check(t, cmp.Equal(ad.starts.sessions(), 0), "approval started a planner")
 }
 
+// A planning session that left the flow while its worker keeps the claim is
+// released by approve: the worker is the one the planner last read it under.
+func TestPlanApproveReleasesThePlannersWorkerClaim(t *testing.T) {
+	ad := newApproveDaemon(t)
+	ad.request(t, "plan-1", "add a flag")
+	id := ad.started(0).SessionID
+	ad.plans.claimWorker(id, "w-1")
+	ad.replied(t, ad.session(0), "Claimed.")
+	ad.plans.claimWorker("", "w-1")
+
+	resp := approveResponse(t, ad.approve(t, "plan-1"))
+	assert.Check(t, cmp.DeepEqual(ad.plans.callLog(), []string{"release", "event approve-for-building"}))
+	assert.Check(t, cmp.DeepEqual(ad.buildsStarted(), []string{resp.ID}))
+}
+
 // A refused or failed approval changes nothing: the planner, live or not,
 // takes resumes again.
 func TestPlanApproveRefuses(t *testing.T) {

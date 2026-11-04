@@ -30,6 +30,9 @@ func (d *daemon) takeOver(p *planner, holder string) (released bool, err error) 
 	if !slices.Contains(planning, f.State) {
 		return false, apiErr(http.StatusConflict, "the plan moved on to %s; nothing was released", f.State)
 	}
+	if f.SessionID == "" && f.WorkerID != "" {
+		return false, apiErr(http.StatusConflict, "%s", planapprove.WorkerHeldWhy(p.planID, f.WorkerID))
+	}
 	if f.SessionID == "" {
 		return false, nil
 	}

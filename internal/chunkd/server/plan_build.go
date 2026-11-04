@@ -111,8 +111,12 @@ func (d *daemon) resumePlanBuild(req chunkd.PlanBuildRequest) (chunkd.Session, e
 		return chunkd.Session{}, apiErr(http.StatusBadGateway, "read plan %s's flow from factory: %v", req.PlanID, err)
 	case f == nil:
 		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %s has no flow; factory hands it no tasks", req.PlanID)
-	case f.Phase != circleci.PhaseEnded && f.SessionID != "":
-		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %[1]s is claimed by session %[2]s; release it with factory daemon release %[1]s to resume it", req.PlanID, f.SessionID)
+	case f.Phase != circleci.PhaseEnded && f.Claimed():
+		holder := "session " + f.SessionID
+		if f.SessionID == "" {
+			holder = "factory worker " + f.WorkerID
+		}
+		return chunkd.Session{}, apiErr(http.StatusConflict, "plan %[1]s is claimed by %[2]s; release it with factory daemon release %[1]s to resume it", req.PlanID, holder)
 	}
 	return d.startPlanBuild(req)
 }
@@ -272,6 +276,9 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 	// last nudge; noted is the holder the feed last named.
 	var armed bool
 	var noted string
+	// worker is the factory_worker the build session was last read holding
+	// the plan under.
+	var worker string
 	tick := time.NewTicker(planBuildPoll)
 	defer tick.Stop()
 	for {
@@ -288,7 +295,7 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 			stopped := entry.cancelled // a developer's stop, not a daemon shutdown
 			entry.mu.Unlock()
 			if stopped {
-				releaseBuildClaim(api, cfg.SessionID, req.PlanID, note)
+				releaseBuildClaim(api, cfg.SessionID, worker, req.PlanID, note)
 			}
 			d.settleSession(entry, nil)
 			return
@@ -326,11 +333,16 @@ func (d *daemon) executePlanBuild(ctx context.Context, entry *sessionEntry, api 
 			switch h := f.SessionID; {
 			case h == cfg.SessionID:
 				armed, noted = false, "" // it claimed the plan itself: a later release is its own
-			case h != "":
+				worker = f.WorkerID
+			case f.Claimed():
 				armed = true
-				if idle.Load() && h != noted {
-					noted = h
-					note(iostream.LevelWarn, fmt.Sprintf("Plan %s is claimed by session %s; release it with factory daemon release %[1]s and the build picks it up", req.PlanID, h))
+				who := "session " + h
+				if h == "" {
+					who = "factory worker " + f.WorkerID
+				}
+				if idle.Load() && who != noted {
+					noted = who
+					note(iostream.LevelWarn, fmt.Sprintf("Plan %s is claimed by %s; release it with factory daemon release %[1]s and the build picks it up", req.PlanID, who))
 				}
 			case armed && idle.Load():
 				armed, noted = false, ""
@@ -366,16 +378,19 @@ func clip(s string, n int) string {
 	return s
 }
 
-// releaseBuildClaim frees factory's claim on planID if build session
-// sessionID still holds it, so a stopped build can be resumed at once rather
-// than once factory times the claim out. A failure is noted in the feed: the
-// build is stopped either way.
-func releaseBuildClaim(api PlanAPI, sessionID, planID string, note func(iostream.Level, string)) {
+// releaseBuildClaim frees factory's claim on planID. It frees the claim when
+// build session sessionID holds it. It also frees it when no session does and
+// its worker is worker, the one the build was last read holding the plan
+// under. That lets a stopped build resume at once, not after factory times
+// the claim out. A failure is noted in the feed: the build is stopped either
+// way.
+func releaseBuildClaim(api PlanAPI, sessionID, worker, planID string, note func(iostream.Level, string)) {
 	// The session's own context is cancelled already.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	f, err := planFlow(ctx, api, planID)
-	if err == nil && (f == nil || f.SessionID != sessionID) {
+	own := f != nil && (f.SessionID == sessionID || f.SessionID == "" && worker != "" && f.WorkerID == worker)
+	if err == nil && !own {
 		return
 	}
 	if err == nil {

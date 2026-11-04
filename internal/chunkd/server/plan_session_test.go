@@ -280,6 +280,37 @@ func TestPlannerSaysWhenAnotherSessionHoldsTheClaim(t *testing.T) {
 	assert.Check(t, cmp.Contains(events[1].Text, "claimed by another factory session"))
 }
 
+func TestPlannerSaysWhenAWorkerHoldsTheClaim(t *testing.T) {
+	t.Run("another worker", func(t *testing.T) {
+		pd := newPlannerDaemon(t)
+		pd.request(t, "plan-1", "add a flag")
+		pd.plans.claimWorker("", "w-1")
+
+		events := pd.replied(t, pd.session(0), "ok")
+		assert.Assert(t, cmp.Len(events, 2))
+		assert.Check(t, cmp.Equal(events[1].Kind, chunkd.SessionLogProblem))
+		assert.Check(t, cmp.Contains(events[1].Text, "claimed by factory worker w-1 with no session"))
+	})
+	t.Run("its own worker is not another", func(t *testing.T) {
+		pd := newPlannerDaemon(t)
+		pd.request(t, "plan-1", "add a flag")
+		s := pd.session(0)
+		pd.plans.claimWorker(pd.started(0).SessionID, "w-1")
+		pd.replied(t, s, "Claimed.")
+
+		// The session leaves the flow; its worker keeps the claim.
+		pd.plans.claimWorker("", "w-1")
+		p := pd.planner("plan-1")
+		p.mu.Lock()
+		p.checkClaim = true
+		p.mu.Unlock()
+		p.onReply(false)
+		for _, e := range pd.log(t, "plan-1", 0).Events {
+			assert.Check(t, !strings.Contains(e.Text, "claimed by factory worker"), "a note about its own worker: %q", e.Text)
+		}
+	})
+}
+
 func TestPlannerSaysWhenItCannotReadTheClaim(t *testing.T) {
 	pd := newPlannerDaemon(t)
 	pd.request(t, "plan-1", "add a flag")

@@ -83,6 +83,12 @@ func TestPlannerTakesOverAForeignClaim(t *testing.T) {
 			body:   "this plan is held by chunk's own planner",
 		},
 		{
+			name: "held by a worker with no session",
+			prep: func(_ *testing.T, pd *plannerDaemon) { pd.plans.claimWorker("", "w-1") },
+			code: http.StatusConflict,
+			body: "held by factory worker w-1",
+		},
+		{
 			name: "the plan has ended",
 			prep: func(_ *testing.T, pd *plannerDaemon) {
 				pd.plans.claim("s-other")
