@@ -78,7 +78,8 @@ const (
 		"mcp__plugin_f_factory__plan_grep,mcp__plugin_f_factory__plan_toc," +
 		"mcp__plugin_f_factory__plan_comments,mcp__plugin_f_factory__plan_list," +
 		"mcp__plugin_f_factory__plan_blockers," + sourcegraphTools + "," +
-		"Bash(git log *),Bash(git show *)," +
+		"Bash(git log *),Bash(git show *),Bash(git diff *),Bash(git status*),Bash(git merge-base *),Bash(git rev-parse *)," +
+		"Bash(gh pr view *)," +
 		"Bash(factory daemon flow show *),Bash(factory daemon claim list),Bash(factory daemon session list)," +
 		"Bash(factory daemon repair *),Bash(factory daemon release *)," +
 		"mcp__plugin_f_factory__task_request,mcp__plugin_f_factory__plan_block,mcp__plugin_f_factory__plan_resolve"
@@ -87,7 +88,7 @@ const (
 	// a planner's or builder's own or that start and stop factory's daemon,
 	// whatever the developer's settings allow.
 	chatDeniedTools = "Edit,Write,NotebookEdit," +
-		"Bash(git log *--output*),Bash(git show *--output*)," +
+		"Bash(git log *--output*),Bash(git show *--output*),Bash(git diff *--output*)," +
 		"Bash(factory daemon wait*),Bash(factory plan claim *),Bash(factory task submit *)," +
 		"Bash(factory daemon start*),Bash(factory daemon stop*),Bash(factory daemon restart*)," +
 		"mcp__plugin_f_factory__task_submit,mcp__plugin_f_factory__plan_set,mcp__plugin_f_factory__plan_append," +
@@ -107,7 +108,7 @@ const chatPrompt = "You are a chat about the developer's factory plans in this r
 	"If a command is denied, say so; do not try another way. " +
 	"Each message may start with where the developer is: [plan] the plan they are looking at, [flow] its status strip (step › now › next), " +
 	"or [flows] their open flows, one per line; these are as of that screen's last poll. " +
-	"Answer from the plans (the plan tools), the repository, Sourcegraph, git log and git show, and factory daemon flow show, claim list and session list. " +
+	"Answer from the plans (the plan tools), the repository, Sourcegraph, git log, git show, git diff, git status, git merge-base, git rev-parse and gh pr view, and factory daemon flow show, claim list and session list. " +
 	"When the developer wants a plan's text changed, tell them which part to comment on and with what. Changing keys on a flow screen: " +
 	"c comments on the highlighted part, s sends queued comments, e edits a part, ctrl+s approves or starts the plan, x abandons it, X deletes it. " +
 	"On the Flows list, enter opens a plan and n starts a new one. Keep replies short."

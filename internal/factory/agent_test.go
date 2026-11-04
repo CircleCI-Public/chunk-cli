@@ -311,7 +311,8 @@ func TestAgentArgsChat(t *testing.T) {
 	// It reads, and acts on a flow only with factory's own commands: no
 	// tool that edits, claims, waits for tasks or writes plan text.
 	commands := []string{
-		"Bash(git log *)", "Bash(git show *)",
+		"Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git status*)",
+		"Bash(git merge-base *)", "Bash(git rev-parse *)", "Bash(gh pr view *)",
 		"Bash(factory daemon flow show *)", "Bash(factory daemon claim list)", "Bash(factory daemon session list)",
 		"Bash(factory daemon repair *)", "Bash(factory daemon release *)",
 	}
@@ -320,17 +321,18 @@ func TestAgentArgsChat(t *testing.T) {
 		assert.Check(t, !strings.HasPrefix(tool, "Bash(") || slices.Contains(commands, tool), tool)
 	}
 	for _, tool := range []string{
+		"Bash(git diff *)", "Bash(git status*)", "Bash(git merge-base *)", "Bash(git rev-parse *)", "Bash(gh pr view *)",
 		"Bash(factory daemon repair *)", "Bash(factory daemon release *)",
 		"mcp__plugin_f_factory__task_request", "mcp__plugin_f_factory__plan_block", "mcp__plugin_f_factory__plan_resolve",
 	} {
 		assert.Check(t, slices.Contains(strings.Split(chatTools, ","), tool), tool)
 	}
-	for _, never := range []string{"plan_set", "plan_replace", "plan_init", "task_submit", "factory plan claim", "factory daemon wait", "Edit", "Write"} {
+	for _, never := range []string{"plan_set", "plan_replace", "plan_init", "task_submit", "factory plan claim", "factory daemon wait", "Edit", "Write", "WebFetch", "WebSearch", "codegraph"} {
 		assert.Check(t, !strings.Contains(chatTools, never), never)
 	}
 	// Denied whatever the developer's own settings allow.
 	for _, denied := range []string{
-		"Edit", "Write", "NotebookEdit", "Bash(git log *--output*)", "Bash(git show *--output*)",
+		"Edit", "Write", "NotebookEdit", "Bash(git log *--output*)", "Bash(git show *--output*)", "Bash(git diff *--output*)",
 		"Bash(factory daemon wait*)", "Bash(factory plan claim *)", "Bash(factory task submit *)",
 		"Bash(factory daemon start*)", "Bash(factory daemon stop*)", "Bash(factory daemon restart*)",
 		"mcp__plugin_f_factory__task_submit", "mcp__plugin_f_factory__plan_set", "mcp__plugin_f_factory__plan_append",
@@ -343,6 +345,7 @@ func TestAgentArgsChat(t *testing.T) {
 	for _, want := range []string{
 		"factory daemon repair", "factory daemon release", "task_request", "plan_block", "plan_resolve",
 		"only when the developer asks", "cannot add comments", "press c",
+		"git diff", "git status", "git merge-base", "git rev-parse", "gh pr view",
 	} {
 		assert.Check(t, cmp.Contains(chatPrompt, want))
 	}
