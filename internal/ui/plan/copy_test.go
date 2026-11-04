@@ -72,14 +72,14 @@ func TestDraggingBackwardsCopiesTheSameText(t *testing.T) {
 func TestDraggingAcrossPlanPartsCopiesEachLine(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
-	from, to := rowOf(t, m, "The flag exists."), rowOf(t, m, "SPEC")
+	from, to := rowOf(t, m, "The flag exists."), rowOf(t, m, "DESIGN")
 	x := planText(m)
 
-	_, got := dragged(t, m, x+4, from, x+3, to)
+	_, got := dragged(t, m, x+4, from, x+5, to)
 
 	lines := strings.Split(got, "\n")
 	assert.Check(t, cmp.Equal(lines[0], "flag exists."))
-	assert.Check(t, cmp.Equal(lines[len(lines)-1], "SPEC"), "the last line should end where the drag did: %q", got)
+	assert.Check(t, cmp.Equal(lines[len(lines)-1], "DESIGN"), "the last line should end where the drag did: %q", got)
 	assert.Check(t, cmp.Contains(got, "\n\n"), "the blank line between the parts was dropped: %q", got)
 }
 

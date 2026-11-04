@@ -140,7 +140,7 @@ func (m Model) progress() []string {
 		}
 		return rows
 	}
-	units := m.units
+	units := m.structure.Units
 	if len(units) == 0 {
 		return append(head, m.style(m.dim()).Render("No units"))
 	}
@@ -151,13 +151,10 @@ func (m Model) progress() []string {
 		switch {
 		case u.Done:
 			marker = m.style(m.green()).Render(ui.IconOK + " ")
-		case u.Name == current:
+		case strings.TrimPrefix(unitHeading(Unit{Number: u.Number, Name: u.Name}), "### ") == current:
 			marker = m.style(m.brand()).Render("▸ ")
 		}
-		name := unitNumRe.ReplaceAllString(u.Name, "")
-		if name == "" {
-			name = u.Name
-		}
+		name := u.Name
 		num := m.style(m.faint()).Render(strconv.Itoa(i + 1))
 		rows = append(rows, marker+num+"  "+lipgloss.NewStyle().Bold(true).Render(name))
 	}

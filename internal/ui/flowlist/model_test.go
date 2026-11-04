@@ -22,6 +22,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
@@ -37,7 +38,7 @@ type driver struct {
 	wg     sync.WaitGroup
 }
 
-func newDriver(t *testing.T, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (string, []circleci.PlanComment, error), opts ...func(flowlist.Model) flowlist.Model) *driver {
+func newDriver(t *testing.T, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (plan.Structure, []circleci.PlanComment, error), opts ...func(flowlist.Model) flowlist.Model) *driver {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &driver{t: t, ctx: ctx, cancel: cancel, events: make(chan tea.Msg, 100)}
@@ -144,8 +145,8 @@ var (
 	subPlanParents = map[string]string{"docs": "p1", "cfg": "p1", "cfg2": "p1", "deep": "cfg", "orphan": "gone", "skip": "docs"}
 )
 
-func preview(_ context.Context, id string) (string, []circleci.PlanComment, error) {
-	return "# Preview " + id, nil, nil
+func preview(_ context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
+	return doc("Preview " + id), nil, nil
 }
 
 // titleRows is the list's rows as listRows has them, but with only the
@@ -591,7 +592,7 @@ func TestResume(t *testing.T) {
 	t.Run("before the preview loads", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			release := make(chan struct{})
-			slow := func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
+			slow := func(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
 				select {
 				case <-release:
 				case <-ctx.Done():
@@ -811,15 +812,15 @@ func TestLatePreviewCannotOverwriteSelection(t *testing.T) {
 		releaseA := make(chan struct{})
 		d := newDriver(t, fixed(
 			circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"},
-		), func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
+		), func(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
 			if id == "a" {
 				select {
 				case <-releaseA:
 				case <-ctx.Done():
-					return "", nil, ctx.Err()
+					return plan.Structure{}, nil, ctx.Err()
 				}
 			}
-			return "UNIQUE PREVIEW " + id, nil, nil
+			return doc("UNIQUE PREVIEW " + id), nil, nil
 		})
 		d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 		d.send(d.m.Init()())
@@ -842,17 +843,17 @@ func TestLatePreviewForSameIDCannotOverwriteNewRequest(t *testing.T) {
 		var calls atomic.Int32
 		d := newDriver(t, fixed(
 			circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"},
-		), func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
+		), func(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
 			if id == "a" && calls.Add(1) == 1 {
 				close(started)
 				select {
 				case <-release:
-					return "OBSOLETE CONTENT", nil, nil
+					return doc("OBSOLETE CONTENT"), nil, nil
 				case <-ctx.Done():
-					return "", nil, ctx.Err()
+					return plan.Structure{}, nil, ctx.Err()
 				}
 			}
-			return "CURRENT CONTENT " + id, nil, nil
+			return doc("CURRENT CONTENT " + id), nil, nil
 		})
 		d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 		d.send(d.m.Init()())
@@ -960,11 +961,11 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 					return nil, errors.New("list offline")
 				}
 				return []circleci.Flow{{ID: "a", Title: "Retained"}}, nil
-			}, func(context.Context, string) (string, []circleci.PlanComment, error) {
+			}, func(context.Context, string) (plan.Structure, []circleci.PlanComment, error) {
 				if previews.Add(1) > 1 {
-					return "", nil, errors.New("preview offline")
+					return plan.Structure{}, nil, errors.New("preview offline")
 				}
-				return "Retained preview", nil, nil
+				return doc("Retained preview"), nil, nil
 			})
 			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 			d.load()
@@ -984,7 +985,7 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 	t.Run("revisit keeps stale cache", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			d := newDriver(t, fixed(circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"}), replies(map[string][]reply{
-				"a": {{text: "# Preview a"}, {err: errors.New("preview offline")}},
+				"a": {{text: "Preview a"}, {err: errors.New("preview offline")}},
 			}))
 			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 			d.load()
@@ -1008,20 +1009,20 @@ type reply struct {
 }
 
 // replies is a preview that answers each flow's calls in turn from byID,
-// repeating the last answer, or "# Preview <id>" for a flow it has none for.
-func replies(byID map[string][]reply) func(context.Context, string) (string, []circleci.PlanComment, error) {
+// repeating the last answer, or a plan of "Preview <id>" for a flow it has none for.
+func replies(byID map[string][]reply) func(context.Context, string) (plan.Structure, []circleci.PlanComment, error) {
 	var mu sync.Mutex
-	return func(_ context.Context, id string) (string, []circleci.PlanComment, error) {
+	return func(_ context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		rs := byID[id]
 		if len(rs) == 0 {
-			return "# Preview " + id, nil, nil
+			return doc("Preview " + id), nil, nil
 		}
 		if len(rs) > 1 {
 			byID[id] = rs[1:]
 		}
-		return rs[0].text, rs[0].comments, rs[0].err
+		return doc(rs[0].text), rs[0].comments, rs[0].err
 	}
 }
 
@@ -1032,18 +1033,18 @@ type renderCall struct {
 }
 
 // counting has m render with a fake that waits for gate to close, when it
-// is not nil, records each call in calls, and renders text as one line
+// is not nil, records each call in calls, and renders its plan as one line
 // naming the width and style it was given.
 func counting(mu *sync.Mutex, calls *[]renderCall, gate <-chan struct{}) func(flowlist.Model) flowlist.Model {
 	return func(m flowlist.Model) flowlist.Model {
-		return flowlist.WithRender(m, func(text string, width int, dark bool) []string {
+		return flowlist.WithRender(m, func(s plan.Structure, width int, dark bool) []string {
 			if gate != nil {
 				<-gate
 			}
 			mu.Lock()
 			defer mu.Unlock()
 			*calls = append(*calls, renderCall{width, dark})
-			return []string{fmt.Sprintf("%s (w=%d dark=%t)", text, width, dark)}
+			return []string{fmt.Sprintf("%s (w=%d dark=%t)", textOf(s), width, dark)}
 		})
 	}
 }
@@ -1164,7 +1165,7 @@ func TestPreviewRenderCache(t *testing.T) {
 				assert.Check(t, !strings.Contains(text, old), "a render for the old pane shows:\n%s", text)
 				d.step() // The render for the new pane.
 				text = d.content()
-				assert.Check(t, cmp.Contains(text, "# Preview a ("+tc.want+")"))
+				assert.Check(t, cmp.Contains(text, "Preview a ("+tc.want+")"))
 				assert.Check(t, !strings.Contains(text, old), "a render for the old pane shows:\n%s", text)
 				mu.Lock()
 				defer mu.Unlock()
@@ -1191,7 +1192,7 @@ func TestPreviewCache(t *testing.T) {
 	})
 	t.Run("refetch replaces changed text", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, ab, replies(map[string][]reply{"a": {{text: "# Preview a"}, {text: "# Preview a v2"}}}))
+			d := newDriver(t, ab, replies(map[string][]reply{"a": {{text: "Preview a"}, {text: "Preview a v2"}}}))
 			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 			d.load()
 			d.send(press('j'))
@@ -1204,8 +1205,8 @@ func TestPreviewCache(t *testing.T) {
 	t.Run("refetch replaces changed comments", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			d := newDriver(t, ab, replies(map[string][]reply{"a": {
-				{text: "# Preview a"},
-				{text: "# Preview a", comments: []circleci.PlanComment{{Body: "Fresh note"}}},
+				{text: "Preview a"},
+				{text: "Preview a", comments: []circleci.PlanComment{{Body: "Fresh note"}}},
 			}}))
 			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 			d.load()
@@ -1222,10 +1223,10 @@ func TestPreviewCache(t *testing.T) {
 	})
 	t.Run("new flow shows loading", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, ab, func(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
+			d := newDriver(t, ab, func(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
 				if id == "b" {
 					<-ctx.Done()
-					return "", nil, ctx.Err()
+					return plan.Structure{}, nil, ctx.Err()
 				}
 				return preview(ctx, id)
 			})
@@ -1246,7 +1247,7 @@ func TestPreviewCache(t *testing.T) {
 					return []circleci.Flow{a}, nil
 				}
 				return []circleci.Flow{a, b}, nil
-			}, replies(map[string][]reply{"b": {{text: "# Old b"}, {text: "# New b"}}}))
+			}, replies(map[string][]reply{"b": {{text: "Old b"}, {text: "New b"}}}))
 			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 			d.load()
 			d.send(press('j'))
@@ -1437,8 +1438,13 @@ func TestGroupsAndRows(t *testing.T) {
 			{ID: "start", Title: "Start me", State: "init", WaitingOn: "human", Next: []circleci.Transition{{Actor: "human", Event: circleci.Prioritize, IsRequired: true}}},
 			{ID: "unknown-actor", Title: "Unknown actor", State: "build", WaitingOn: "someone"},
 		}
-		d := newDriver(t, fixed(flows...), func(context.Context, string) (string, []circleci.PlanComment, error) {
-			return "# Markdown heading\n\n**Plan prose**\n\n" + strings.Repeat("界", 150), []circleci.PlanComment{
+		d := newDriver(t, fixed(flows...), func(context.Context, string) (plan.Structure, []circleci.PlanComment, error) {
+			prose := plan.Structure{Sections: []plan.Section{{Heading: "1. Outcome", Blocks: []plan.Block{
+				{Type: "heading", Text: "# Markdown heading"},
+				{Type: "paragraph", Text: "**Plan prose**"},
+				{Type: "paragraph", Text: strings.Repeat("界", 150)},
+			}}}}
+			return prose, []circleci.PlanComment{
 				{Body: "Please clarify", QuotedText: "Plan prose"},
 				{Body: "RESOLVED SECRET", ResolvedAt: &now},
 			}, nil
@@ -1882,3 +1888,15 @@ func TestFlowsIsTheLastReadCopied(t *testing.T) {
 		assert.Check(t, cmp.Equal(d.m.Flows()[0].Title, "Fix parser"))
 	})
 }
+
+// doc is a plan of an Outcome holding text as a paragraph, or no plan when
+// text is blank.
+func doc(text string) plan.Structure {
+	if strings.TrimSpace(text) == "" {
+		return plan.Structure{}
+	}
+	return plan.Structure{Sections: []plan.Section{{Heading: "1. Outcome", Blocks: []plan.Block{{Type: "paragraph", Text: text}}}}}
+}
+
+// textOf is the text of the first block of doc's Outcome.
+func textOf(s plan.Structure) string { return s.Sections[0].Blocks[0].Text }

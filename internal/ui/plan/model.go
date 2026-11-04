@@ -12,6 +12,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -275,8 +276,9 @@ type Model struct {
 	// and familyErr why that read failed, or nil.
 	family    Family
 	familyErr error
-	// units are the plan's units, read with its text by the last good refresh.
-	units []Unit
+	// structure is the plan's sections and units, read with its text by the
+	// last good refresh.
+	structure Structure
 	// familyLoaded is whether a read of the relatives has succeeded, so the
 	// plan's blockers are known.
 	familyLoaded bool
@@ -852,10 +854,10 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		m.status = ""
 	}
 	m.state, m.events, m.plan = msg.flow.State, msg.flow.Events, msg.text
-	if !slices.Equal(m.units, msg.structure.Units) {
-		// The steps come from the units, so the pane is drawn again even
+	if !reflect.DeepEqual(m.structure, msg.structure) {
+		// The pane is drawn from the structure, so it is drawn again even
 		// when the text is unchanged.
-		m.units = msg.structure.Units
+		m.structure = msg.structure
 		m.renderedWidth = 0
 	}
 	m.questions = len(msg.structure.OpenQuestions)
@@ -1607,7 +1609,8 @@ func (m *Model) renderPlan() {
 	if w <= 0 {
 		return
 	}
-	if strings.TrimSpace(m.plan) == "" {
+	blocks, steps := blocksOf(m.structure)
+	if len(blocks) == 0 {
 		m.blocks = nil
 		if m.busy {
 			m.setContent(textPlan, lipgloss.NewStyle().Padding(1, 2).Render(m.skeleton(m.planView.Width()-4)))
@@ -1634,25 +1637,15 @@ func (m *Model) renderPlan() {
 	if m.cursor < len(m.blocks) {
 		cursorSource = m.blocks[m.cursor].source
 	}
-	blocks := splitBlocks(m.plan)
 	m.blocks = make([]renderedBlock, len(blocks))
-	steps := unitSteps(blocks, m.units)
 	var st planStats
 	from := 0
 	for i, b := range blocks {
-		st.step = steps[i]
 		at := -1
 		if j := strings.Index(m.plan[from:], b.source); j >= 0 {
 			at, from = from+j, from+j+len(b.source)
 		}
-		lines, ok := m.styled(b, &st, w)
-		if !ok {
-			lines, ok = m.blockLines(b, w-1)
-		}
-		if !ok {
-			lines = renderLines(r, b.source)
-		}
-		m.blocks[i] = renderedBlock{block: b, lines: lines, at: at}
+		m.blocks[i] = renderedBlock{block: b, lines: m.drawBlock(r, b, steps[i], &st, w), at: at}
 	}
 	m.renderedFrom, m.renderedWidth = m.plan, w
 	m.reanchor()

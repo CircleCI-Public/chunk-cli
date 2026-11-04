@@ -1,15 +1,18 @@
 package plan
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 )
 
 // The plan factory writes has a fixed shape (factory's plan format): numbered
@@ -19,14 +22,13 @@ import (
 
 var (
 	sectionNumRe = regexp.MustCompile(`^\d+\.\s*`)
-	unitNumRe    = regexp.MustCompile(`(?i)^unit\s*\d*\s*[:.\-–—]?\s*`)
 )
 
 // planStats is what the walk over the plan's blocks learns on the way.
 type planStats struct {
 	section string
-	// step is the index in m.units of the unit whose step the current block
-	// is, or -1.
+	// step is the index in m.structure.Units of the unit whose step the
+	// current block is, or -1.
 	step int
 }
 
@@ -40,24 +42,62 @@ func heading(b block) (level int, text string) {
 	return len(b.source) - len(strings.TrimLeft(b.source, "#")), strings.TrimSpace(strings.TrimLeft(b.source, "#"))
 }
 
-// unitSteps is, for each block, the index of the unit whose step it is, or -1.
-// A unit's step is a ### heading whose text is the unit's name, or the name and
-// a space; units are matched from the end, as 5. Units is the plan's last
-// section.
-func unitSteps(blocks []block, units []Unit) []int {
-	steps := make([]int, len(blocks))
-	for i := range steps {
-		steps[i] = -1
-	}
-	j := len(units) - 1
-	for i := len(blocks) - 1; i >= 0 && j >= 0; i-- {
-		level, text := heading(blocks[i])
-		if level == 3 && (text == units[j].Name || strings.HasPrefix(text, units[j].Name+" ")) {
-			steps[i] = j
-			j--
+// blocksOf is the plan's blocks as factory parsed them, in plan order. A list
+// is its items, one block each. steps[i] is the index of the unit whose
+// heading blocks[i] is, or -1.
+func blocksOf(s Structure) (blocks []block, steps []int) {
+	add := func(b block, step int) { blocks, steps = append(blocks, b), append(steps, step) }
+	var walk func(bs []Block)
+	walk = func(bs []Block) {
+		for _, b := range bs {
+			if b.Type == "list" {
+				walk(b.Blocks)
+				continue
+			}
+			add(block{kind: kindOf(b.Type), source: b.Text}, -1)
 		}
 	}
-	return steps
+	for _, sec := range s.Sections {
+		add(block{kind: kindHeading, source: "## " + sec.Heading}, -1)
+		walk(sec.Blocks)
+	}
+	if s.Units != nil {
+		add(block{kind: kindHeading, source: "## 5. Units"}, -1)
+	}
+	for i, u := range s.Units {
+		add(block{kind: kindHeading, source: unitHeading(u)}, i)
+		walk(u.Blocks)
+	}
+	return blocks, steps
+}
+
+// unitHeading is u's heading as a well-formed plan writes it:
+// "### Unit 2: api", with " (done)" when it is done.
+func unitHeading(u Unit) string {
+	h := fmt.Sprintf("### Unit %d:", u.Number)
+	if u.Name != "" {
+		h += " " + u.Name
+	}
+	if u.Done {
+		h += " (done)"
+	}
+	return h
+}
+
+// kindOf is the kind of a block factory typed t. A type this screen does not
+// know, from a newer factory, is a paragraph.
+func kindOf(t string) blockKind {
+	switch t {
+	case "heading":
+		return kindHeading
+	case "list_item":
+		return kindListItem
+	case "code_block":
+		return kindCode
+	case "thematic_break":
+		return kindRule
+	}
+	return kindParagraph
 }
 
 // styled draws a heading in the screen's own style, or reports false for a
@@ -82,17 +122,53 @@ func (m Model) styled(b block, st *planStats, w int) ([]string, bool) {
 	if level != 3 || st.step < 0 {
 		return nil, false
 	}
-	u := m.units[st.step]
-	name := unitNumRe.ReplaceAllString(u.Name, "")
-	if name == "" {
-		name = u.Name
-	}
+	u := m.structure.Units[st.step]
+	name := u.Name
 	marker := m.style(m.dim()).Render("○ ")
 	if u.Done {
 		marker = m.style(m.green()).Render(ui.IconOK + " ")
 	}
 	num := m.style(m.faint()).Render(strconv.Itoa(st.step + 1))
 	return []string{marker + num + "  " + lipgloss.NewStyle().Bold(true).Render(name)}, true
+}
+
+// drawBlock is b as the plan screen draws it at width w. st carries what the
+// walk over the blocks learns, and step is the index in m.structure.Units of
+// the unit whose step b is, or -1. r is nil when no renderer could be made.
+func (m Model) drawBlock(r *glamour.TermRenderer, b block, step int, st *planStats, w int) []string {
+	st.step = step
+	if lines, ok := m.styled(b, st, w); ok {
+		return lines
+	}
+	if lines, ok := m.blockLines(b, w-1); ok {
+		return lines
+	}
+	if r == nil {
+		return strings.Split(b.source, "\n")
+	}
+	return renderLines(r, b.source)
+}
+
+// Lines is s drawn read-only at width, in the dark or light style, as the plan
+// screen draws a plan: each section heading, each block and each unit as a
+// step. It has no cursor, selection or comment marks, and no gutter.
+func Lines(s Structure, width int, dark bool) []string {
+	blocks, steps := blocksOf(s)
+	m := Model{dark: dark, structure: s}
+	width = max(width, 2)
+	r, err := chat.NewRenderer(dark, width-1)
+	if err != nil {
+		r = nil
+	}
+	var out []string
+	var st planStats
+	for i, b := range blocks {
+		if i > 0 && !joinsPrevious(blocks[i-1], b) {
+			out = append(out, "")
+		}
+		out = append(out, m.drawBlock(r, b, steps[i], &st, width)...)
+	}
+	return out
 }
 
 // skeleton is the plan pane while Claude writes the first plan: the shape of

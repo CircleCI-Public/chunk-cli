@@ -95,19 +95,47 @@ type Family struct {
 	Blockers []Relative
 }
 
-// Structure is what factory parses out of the plan's text: its units and its
-// open questions.
+// Structure is what factory parses out of the plan's text: its sections, its
+// units and its open questions.
 type Structure struct {
+	// Sections are the plan's sections that factory found exactly once, in
+	// plan order, 5. Units excluded.
+	Sections []Section
+	// Units is nil when the plan has no 5. Units.
 	Units []Unit
 	// OpenQuestions are the items of 3. Open Questions, in order.
-	OpenQuestions []string
+	OpenQuestions []Question
 }
 
-// Unit is one of the plan's units, as factory reads them from its text.
+// Question is one item of 3. Open Questions: its text and its blocks, as
+// factory parses them.
+type Question struct {
+	Text   string
+	Blocks []Block
+}
+
+// Section is one section of the plan: its skeleton heading, such as
+// "1. Outcome", and its blocks.
+type Section struct {
+	Heading string
+	Blocks  []Block
+}
+
+// Block is one markdown block of the plan, as factory parses it. Text is its
+// source as written.
+type Block struct {
+	Type   string
+	Text   string
+	Blocks []Block
+}
+
+// Unit is one of the plan's units. Name is factory's bare name; Number is
+// factory's number for it, its position from 1.
 type Unit struct {
-	// Name is the unit's heading without its done suffix.
-	Name string
-	Done bool
+	Number int
+	Name   string
+	Done   bool
+	Blocks []Block
 }
 
 // Store is where the plan and its comments are kept. Before Create, ID and

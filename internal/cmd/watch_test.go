@@ -181,7 +181,7 @@ func TestPreviewPlan(t *testing.T) {
 			mux := http.NewServeMux()
 			mux.HandleFunc("GET /api/v3/factory/plans/{id}/structured-content", func(w http.ResponseWriter, _ *http.Request) {
 				wait()
-				reply(w, tc.contentStatus, `{"data":{"attributes":{"outcome":"\nIt works.\n","design":null,"open_questions":null,"worked_example":null,"units":null}}}`)
+				reply(w, tc.contentStatus, `{"data":{"attributes":{"items":{"outcome":{"text":"\nIt works.\n","blocks":[{"type":"paragraph","text":"It works."}]},"design":null,"open_questions":null,"worked_example":null,"units":null}}}}`)
 			})
 			mux.HandleFunc("GET /api/v3/factory/comments", func(w http.ResponseWriter, _ *http.Request) {
 				wait()
@@ -192,13 +192,15 @@ func TestPreviewPlan(t *testing.T) {
 			client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 			assert.NilError(t, err)
 
-			text, comments, err := previewPlan(t.Context(), client, "p1")
+			structure, comments, err := previewPlan(t.Context(), client, "p1")
 			if tc.wantErr != "" {
 				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
 				return
 			}
 			assert.NilError(t, err)
-			assert.Check(t, cmp.Equal(text, "## 1. Outcome\n\nIt works.\n"))
+			assert.Check(t, cmp.DeepEqual(structure, plan.Structure{Sections: []plan.Section{
+				{Heading: "1. Outcome", Blocks: []plan.Block{{Type: "paragraph", Text: "It works."}}},
+			}}))
 			assert.Check(t, cmp.Len(comments, 1))
 		})
 	}

@@ -2,11 +2,9 @@ package circleci
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
@@ -505,103 +503,63 @@ func (c *Client) PlanText(ctx context.Context, id string) (string, error) {
 	return attrs.Text, nil
 }
 
-// PlanStructuredContent is a plan's sections, the units of its 5. Units and the
-// list items factory reads from them, as factory parses its text.
+// PlanStructuredContent is a plan's sections and the units of its 5. Units,
+// as factory parses its text and serves them under items.
 type PlanStructuredContent struct {
-	// Each section is its body, or nil when factory found none.
-	Outcome, Design, OpenQuestions, WorkedExample *string
+	// Each section is nil when factory found none, or two.
+	Outcome, Design, OpenQuestions, WorkedExample *PlanSection
 	// Units is nil when the plan has no 5. Units, and empty when it has none in it.
 	Units []PlanUnit
-	Items PlanItems
 }
 
-// PlanItems is the route's items attribute.
-type PlanItems struct {
-	// OpenQuestions is the text of each of items.open_questions.questions,
-	// whether factory sends a string or {text, blocks}; nil when factory sends
-	// null or no items.
-	OpenQuestions []string
+// PlanSection is one section: its body as written, and the blocks factory
+// parses it into. Questions is only on 3. Open Questions, which has no blocks of
+// its own: its list's items.
+type PlanSection struct {
+	Text      string         `json:"text"`
+	Blocks    []PlanBlock    `json:"blocks"`
+	Questions []PlanQuestion `json:"questions"`
 }
 
-// planSections are the skeleton headings of the sections
-// PlanStructuredContent serves, in plan order; 5. Units follows them.
-var planSections = [...]string{"1. Outcome", "2. Design", "3. Open Questions", "4. Worked example"}
-
-// Markdown is the plan rebuilt from its sections and units, each under
-// its skeleton heading, or "" when factory found none of them. A done
-// unit's heading gets back its " (done)", and a body that does not end
-// in a newline gets one, so no heading is glued onto it.
-func (c *PlanStructuredContent) Markdown() string {
-	var b strings.Builder
-	body := func(s string) {
-		b.WriteString(s)
-		if s != "" && !strings.HasSuffix(s, "\n") {
-			b.WriteByte('\n')
-		}
-	}
-	for i, s := range []*string{c.Outcome, c.Design, c.OpenQuestions, c.WorkedExample} {
-		if s == nil {
-			continue
-		}
-		b.WriteString("## " + planSections[i] + "\n")
-		body(*s)
-	}
-	if c.Units != nil {
-		b.WriteString("## 5. Units\n\n")
-		for _, u := range c.Units {
-			h := "### " + u.Name
-			if u.Done {
-				h += " (done)"
-			}
-			b.WriteString(h + "\n")
-			body(u.Body)
-		}
-	}
-	return b.String()
+// PlanQuestion is one item of 3. Open Questions: its text, and the blocks
+// factory parses it into.
+type PlanQuestion struct {
+	Text   string      `json:"text"`
+	Blocks []PlanBlock `json:"blocks"`
 }
 
-// PlanUnit is one unit of a plan's 5. Units.
+// PlanBlock is one markdown block. Text is its source as written; Blocks is
+// set only on a list, a list item or a blockquote.
+type PlanBlock struct {
+	Type   string      `json:"type"`
+	Text   string      `json:"text"`
+	Blocks []PlanBlock `json:"blocks"`
+}
+
+// PlanUnit is one unit of 5. Units. Number is factory's position of the unit,
+// from 1. Name is factory's bare name: no "Unit N: " and no " (done)".
 type PlanUnit struct {
-	Name string // the heading, without " (done)"
-	Done bool
-	Body string
+	Number int
+	Name   string
+	Done   bool
+	Text   string
+	Blocks []PlanBlock
 }
 
 type planStructuredContentAttrs struct {
-	Outcome       *string `json:"outcome"`
-	Design        *string `json:"design"`
-	OpenQuestions *string `json:"open_questions"`
-	WorkedExample *string `json:"worked_example"`
-	Units         []struct {
-		Name   string `json:"name"`
-		IsDone bool   `json:"is_done"`
-		Body   string `json:"body"`
-	} `json:"units"`
 	Items struct {
-		OpenQuestions *struct {
-			Questions []planQuestion `json:"questions"`
-		} `json:"open_questions"`
+		Outcome       *PlanSection `json:"outcome"`
+		Design        *PlanSection `json:"design"`
+		OpenQuestions *PlanSection `json:"open_questions"`
+		WorkedExample *PlanSection `json:"worked_example"`
+		Units         []struct {
+			Number int         `json:"number"`
+			Name   string      `json:"name"`
+			IsDone bool        `json:"is_done"`
+			Text   string      `json:"text"`
+			Blocks []PlanBlock `json:"blocks"`
+		} `json:"units"`
 	} `json:"items"`
-}
-
-// planQuestion is one of items.open_questions.questions, a string or
-// {text, blocks}, kept as its text.
-type planQuestion string
-
-func (q *planQuestion) UnmarshalJSON(b []byte) error {
-	var s string
-	if err := json.Unmarshal(b, &s); err == nil {
-		*q = planQuestion(s)
-		return nil
-	}
-	var o struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(b, &o); err != nil {
-		return fmt.Errorf("open question is neither a string nor an object: %w", err)
-	}
-	*q = planQuestion(o.Text)
-	return nil
 }
 
 // PlanStructuredContent returns factory plan id's sections and units.
@@ -615,21 +573,16 @@ func (c *Client) PlanStructuredContent(ctx context.Context, id string) (*PlanStr
 	if err != nil {
 		return nil, mapErr("get plan structured content", err)
 	}
+	items := attrs.Items
 	out := &PlanStructuredContent{
-		Outcome: attrs.Outcome, Design: attrs.Design,
-		OpenQuestions: attrs.OpenQuestions, WorkedExample: attrs.WorkedExample,
+		Outcome: items.Outcome, Design: items.Design,
+		OpenQuestions: items.OpenQuestions, WorkedExample: items.WorkedExample,
 	}
-	if attrs.Units != nil {
-		out.Units = make([]PlanUnit, 0, len(attrs.Units))
+	if items.Units != nil {
+		out.Units = make([]PlanUnit, 0, len(items.Units))
 	}
-	for _, u := range attrs.Units {
-		out.Units = append(out.Units, PlanUnit{Name: u.Name, Done: u.IsDone, Body: u.Body})
-	}
-	if q := attrs.Items.OpenQuestions; q != nil && q.Questions != nil {
-		out.Items.OpenQuestions = make([]string, len(q.Questions))
-		for i, s := range q.Questions {
-			out.Items.OpenQuestions[i] = string(s)
-		}
+	for _, u := range items.Units {
+		out.Units = append(out.Units, PlanUnit{Number: u.Number, Name: u.Name, Done: u.IsDone, Text: u.Text, Blocks: u.Blocks})
 	}
 	return out, nil
 }

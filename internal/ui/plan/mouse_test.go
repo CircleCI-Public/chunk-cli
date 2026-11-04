@@ -52,7 +52,7 @@ func TestClickingAPaneGivesItTheKeyboard(t *testing.T) {
 func TestClickingABlockMovesTheCursorToIt(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
-	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "SPEC")))
+	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "DESIGN")))
 	assert.Check(t, cmp.Equal(m.focus, panePlan))
 	assert.Check(t, cmp.Equal(m.cursor, 2))
 }
@@ -61,7 +61,7 @@ func TestShiftClickSelectsFromTheCursor(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
 	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "OUTCOME")))
-	shift := click(m.planLeft()+10, rowOf(t, m, "SPEC"))
+	shift := click(m.planLeft()+10, rowOf(t, m, "DESIGN"))
 	shift.Mod = tea.ModShift
 	m = drive(t, m, shift)
 	lo, hi := m.selection()

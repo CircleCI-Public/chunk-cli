@@ -85,8 +85,8 @@ func (m Model) header() string {
 		left += m.style(m.dim()).Render(" / " + m.branch)
 	}
 	var facts []string
-	if len(m.units) > 0 {
-		facts = append(facts, fmt.Sprintf("%d %s", len(m.units), plural(len(m.units), "unit", "units")))
+	if len(m.structure.Units) > 0 {
+		facts = append(facts, fmt.Sprintf("%d %s", len(m.structure.Units), plural(len(m.structure.Units), "unit", "units")))
 	}
 	if m.questions > 0 {
 		facts = append(facts, fmt.Sprintf("%d open %s", m.questions, plural(m.questions, "question", "questions")))
@@ -241,8 +241,8 @@ func (m Model) tabLabels() []string {
 		chat += " " + m.spin.View()
 	}
 	plan := "Plan"
-	if len(m.units) > 0 {
-		plan += fmt.Sprintf(" · %d %s", len(m.units), plural(len(m.units), "unit", "units"))
+	if len(m.structure.Units) > 0 {
+		plan += fmt.Sprintf(" · %d %s", len(m.structure.Units), plural(len(m.structure.Units), "unit", "units"))
 	}
 	return []string{chat, "Flow", plan}
 }

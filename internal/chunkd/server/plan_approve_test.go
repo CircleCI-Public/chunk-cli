@@ -44,7 +44,6 @@ func newApproveDaemon(t *testing.T) *approveDaemon {
 	ad.plans.mu.Lock()
 	ad.plans.state = "refine-proposal"
 	ad.plans.events = []circleci.FlowEvent{circleci.ApproveForBuilding}
-	ad.plans.content = circleci.PlanStructuredContent{Units: []circleci.PlanUnit{{Name: "Unit 1: Add it"}}}
 	ad.plans.mu.Unlock()
 	ad.rcfg.StartBuild = ad.builds.start
 	ad.rcfg.SessionWorktree = func(_ context.Context, session string) (string, error) {
@@ -176,8 +175,6 @@ func TestPlanApproveRefuses(t *testing.T) {
 			setup: func(ad *approveDaemon) {
 				ad.plans.mu.Lock()
 				defer ad.plans.mu.Unlock()
-				d := "\n"
-				ad.plans.content = circleci.PlanStructuredContent{Design: &d}
 				ad.plans.events = []circleci.FlowEvent{circleci.ApproveForUnits}
 			},
 			status:   http.StatusConflict,
@@ -261,7 +258,7 @@ func TestPlanApproveRefuses(t *testing.T) {
 				// Put factory right, with the claim free, and resume.
 				ad.rcfg.PlanAPI = ad.plans
 				ad.plans.mu.Lock()
-				ad.plans.flowErr, ad.plans.eventErr, ad.plans.unitsErr = nil, nil, nil
+				ad.plans.flowErr, ad.plans.eventErr = nil, nil
 				ad.plans.mu.Unlock()
 				ad.plans.claim("")
 				if live {

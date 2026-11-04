@@ -211,11 +211,58 @@ func (s *Store) Structure(ctx context.Context) (plan.Structure, error) {
 	if err != nil {
 		return plan.Structure{}, fmt.Errorf("get the plan's units: %w", err)
 	}
-	units := make([]plan.Unit, len(sc.Units))
-	for i, u := range sc.Units {
-		units[i] = plan.Unit{Name: u.Name, Done: u.Done}
+	return StructureOf(sc), nil
+}
+
+// StructureOf is sc as the plan screen draws it: each section it holds, in plan
+// order, then its units. Units is nil when sc has none.
+func StructureOf(sc *circleci.PlanStructuredContent) plan.Structure {
+	var out plan.Structure
+	// 3. Open Questions has no blocks of its own: its questions' are its blocks.
+	var questionBlocks []plan.Block
+	if sc.OpenQuestions != nil {
+		for _, q := range sc.OpenQuestions.Questions {
+			out.OpenQuestions = append(out.OpenQuestions, plan.Question{Text: q.Text, Blocks: blocksOf(q.Blocks)})
+			questionBlocks = append(questionBlocks, blocksOf(q.Blocks)...)
+		}
 	}
-	return plan.Structure{Units: units, OpenQuestions: sc.Items.OpenQuestions}, nil
+	for _, sec := range []struct {
+		heading string
+		section *circleci.PlanSection
+	}{
+		{"1. Outcome", sc.Outcome},
+		{"2. Design", sc.Design},
+		{"3. Open Questions", sc.OpenQuestions},
+		{"4. Worked example", sc.WorkedExample},
+	} {
+		if sec.section == nil {
+			continue
+		}
+		blocks := blocksOf(sec.section.Blocks)
+		if sec.section == sc.OpenQuestions {
+			blocks = questionBlocks
+		}
+		out.Sections = append(out.Sections, plan.Section{Heading: sec.heading, Blocks: blocks})
+	}
+	if sc.Units != nil {
+		out.Units = make([]plan.Unit, len(sc.Units))
+	}
+	for i, u := range sc.Units {
+		out.Units[i] = plan.Unit{Number: u.Number, Name: u.Name, Done: u.Done, Blocks: blocksOf(u.Blocks)}
+	}
+	return out
+}
+
+// blocksOf is bs as the plan screen's blocks.
+func blocksOf(bs []circleci.PlanBlock) []plan.Block {
+	if bs == nil {
+		return nil
+	}
+	out := make([]plan.Block, len(bs))
+	for i, b := range bs {
+		out[i] = plan.Block{Type: b.Type, Text: b.Text, Blocks: blocksOf(b.Blocks)}
+	}
+	return out
 }
 
 // parent is plan id's parent's ID, "" for a top-level plan, read from
