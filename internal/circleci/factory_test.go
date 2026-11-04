@@ -202,6 +202,16 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(got.Repos, []string{"CircleCI-Public/chunk-cli"}))
 		assert.Check(t, cmp.Equal(got.Text,
 			"# b plan\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"))
+
+		read, err := client.GetPlan(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(read.Repos, []string{"CircleCI-Public/chunk-cli"}))
+		listed, err := client.ListPlans(ctx)
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(listed, 2))
+		// "a plan", created first with no repo, records none.
+		assert.Check(t, cmp.DeepEqual(listed[0].Repos, []string(nil)))
+		assert.Check(t, cmp.DeepEqual(listed[1].Repos, []string{"CircleCI-Public/chunk-cli"}))
 	})
 
 	t.Run("an unknown plan is a 404", func(t *testing.T) {
