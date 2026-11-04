@@ -215,7 +215,13 @@ func (s *Store) Structure(ctx context.Context) (plan.Structure, error) {
 	for i, u := range sc.Units {
 		units[i] = plan.Unit{Name: u.Name, Done: u.Done}
 	}
-	return plan.Structure{Units: units, OpenQuestions: sc.Items.OpenQuestions}, nil
+	var openQuestions []string
+	if sc.OpenQuestions != nil {
+		for _, q := range sc.OpenQuestions.Questions {
+			openQuestions = append(openQuestions, q.Text)
+		}
+	}
+	return plan.Structure{Units: units, OpenQuestions: openQuestions}, nil
 }
 
 // parent is plan id's parent's ID, "" for a top-level plan, read from

@@ -3,7 +3,6 @@ package fakes
 import (
 	"fmt"
 	"net/http"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,11 +36,8 @@ type factoryPlan struct {
 	// until SetFactoryPlanUnits.
 	units []FactoryUnit
 	// openQuestions are the questions its structured content serves as
-	// items.open_questions; nil until SetFactoryPlanOpenQuestions.
+	// items.open_questions; nil until SetFactoryPlanOpenQuestionObjects.
 	openQuestions []string
-	// questionObjects is whether the questions are served as {text, blocks},
-	// as SetFactoryPlanOpenQuestionObjects sets.
-	questionObjects bool
 	// noStructured is whether FailFactoryStructuredContent has the plan's
 	// structured content answer 404.
 	noStructured bool
@@ -184,9 +180,11 @@ type FactoryUnit struct {
 	Body string
 }
 
-// SetFactoryPlanUnits has plan id's structured content serve units in place
-// of the units parsed from its text: [] when called with none. Until it is
-// called, units are parsed from the text, null when it has no 5. Units.
+// SetFactoryPlanUnits has plan id's structured content serve units as
+// items.units in place of the units parsed from its text: [] when called
+// with none. Each unit's name is its Name without " (done)" and "Unit N: ",
+// its text its Body, and its blocks parsed from that. Until it is called,
+// units are parsed from the text, null when it has no 5. Units.
 func (f *FakeCircleCI) SetFactoryPlanUnits(id string, units ...FactoryUnit) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -195,26 +193,16 @@ func (f *FakeCircleCI) SetFactoryPlanUnits(id string, units ...FactoryUnit) {
 	}
 }
 
-// SetFactoryPlanOpenQuestions has plan id's structured content serve
-// items.open_questions as {text: "", questions}, questions [] when called
-// with none. Until it is called, items.open_questions is null.
-func (f *FakeCircleCI) SetFactoryPlanOpenQuestions(id string, questions ...string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if p := f.factoryPlans[id]; p != nil {
-		p.openQuestions = append([]string{}, questions...)
-		p.questionObjects = false
-	}
-}
-
-// SetFactoryPlanOpenQuestionObjects is SetFactoryPlanOpenQuestions with each
-// question served as {text, blocks}.
+// SetFactoryPlanOpenQuestionObjects has plan id's structured content serve
+// items.open_questions as {text: "", questions: [{text, blocks}]}, one question
+// per string with the blocks goldmark parses from it, questions [] when called
+// with none. It overrides the questions the handler parses from the plan's
+// text.
 func (f *FakeCircleCI) SetFactoryPlanOpenQuestionObjects(id string, questions ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
 		p.openQuestions = append([]string{}, questions...)
-		p.questionObjects = true
 	}
 }
 
@@ -686,42 +674,43 @@ func (f *FakeCircleCI) handleGetPlanStructuredContent(c *gin.Context) {
 	if !serve {
 		served, serve = parsed, hasUnits
 	}
-	var units []gin.H
+	var topUnits []gin.H
 	if serve {
-		units = make([]gin.H, len(served))
+		topUnits = make([]gin.H, len(served))
 		for i, u := range served {
-			units[i] = gin.H{"name": u.Name, "is_done": u.Done, "body": u.Body}
+			topUnits[i] = gin.H{"name": u.Name, "is_done": u.Done, "body": u.Body}
 		}
 	}
-	var openQuestions any
-	if p.openQuestions != nil {
-		var questions any = p.openQuestions
-		if p.questionObjects {
-			objs := make([]gin.H, len(p.openQuestions))
-			for i, q := range p.openQuestions {
-				objs[i] = gin.H{"text": q, "blocks": []gin.H{{"type": "paragraph", "text": q}}}
-			}
-			questions = objs
+	items := PlanItems(p.text)
+	if p.units != nil {
+		units := make([]FactoryUnitItem, len(p.units))
+		for i, u := range p.units {
+			units[i] = unitItem(u.Name, u.Body)
+			units[i].Number = i + 1
+			units[i].IsDone = units[i].IsDone || u.Done
 		}
-		openQuestions = gin.H{"text": "", "questions": questions}
+		items.Units = &units
+	}
+	if p.openQuestions != nil {
+		questions := make([]FactoryQuestion, len(p.openQuestions))
+		for i, q := range p.openQuestions {
+			questions[i] = FactoryQuestion{Text: q, Blocks: blocksOf(q)}
+		}
+		items.OpenQuestions = &FactoryOpenQuestions{Questions: questions}
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": p.id, "attributes": gin.H{
 		"outcome":        section("1. Outcome"),
 		"design":         section("2. Design"),
 		"open_questions": section("3. Open Questions"),
 		"worked_example": section("4. Worked example"),
-		"units":          units,
-		"items":          gin.H{"open_questions": openQuestions},
+		"units":          topUnits,
+		"items":          items,
 	}}})
 }
 
 // factorySections are the skeleton headings factory's structured content
 // serves a body for.
 var factorySections = []string{"1. Outcome", "2. Design", "3. Open Questions", "4. Worked example", "5. Units"}
-
-// factoryDone is the suffix of a done unit's heading, as factory's
-// plan/structure matches it.
-var factoryDone = regexp.MustCompile(` \(done(, [^)]+)?\)$`)
 
 // structureOf parses text line by line the way factory's plan/structure does.
 // sections are the bodies of the skeleton sections, keyed by heading, each

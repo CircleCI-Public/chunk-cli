@@ -1,0 +1,27 @@
+{"data": {"id": "7b1e0000-0000-4000-8000-000000000000", "attributes": {
+  "outcome": "\nOne parser.\n\n",
+  "design": "\n### Context\n\n> quoted\n> more\n\n---\n\n1. first\n2. second\n\n",
+  "open_questions": "\n- Which store?\n",
+  "worked_example": null,
+  "units": [{"name": "Unit 1: parser", "is_done": true, "body": "\n- Add `Parse`.\n- Test it.\n\n"},
+            {"name": "Unit 2: api", "is_done": false, "body": "\nWire it.\n\n```go\nfunc route() {}\n```\n"}],
+  "items": {
+    "outcome": {"text": "\nOne parser.\n\n", "blocks": [{"type": "paragraph", "text": "One parser."}]},
+    "design": {"text": "\n### Context\n\n> quoted\n> more\n\n---\n\n1. first\n2. second\n\n", "blocks": [
+      {"type": "heading", "text": "### Context"},
+      {"type": "blockquote", "text": "> quoted\n> more", "blocks": [{"type": "paragraph", "text": "quoted\n> more"}]},
+      {"type": "thematic_break", "text": "---"},
+      {"type": "list", "text": "1. first\n2. second", "blocks": [
+        {"type": "list_item", "text": "1. first", "blocks": [{"type": "paragraph", "text": "first"}]},
+        {"type": "list_item", "text": "2. second", "blocks": [{"type": "paragraph", "text": "second"}]}]}]},
+    "open_questions": {"text": "\n- Which store?\n", "questions": [{"text": "Which store?", "blocks": [{"type": "paragraph", "text": "Which store?"}]}]},
+    "worked_example": null,
+    "units": [
+      {"name": "parser", "is_done": true, "text": "\n- Add `Parse`.\n- Test it.\n\n", "blocks": [
+        {"type": "list", "text": "- Add `Parse`.\n- Test it.", "blocks": [
+          {"type": "list_item", "text": "- Add `Parse`.", "blocks": [{"type": "paragraph", "text": "Add `Parse`."}]},
+          {"type": "list_item", "text": "- Test it.", "blocks": [{"type": "paragraph", "text": "Test it."}]}]}]},
+      {"name": "api", "is_done": false, "text": "\nWire it.\n\n```go\nfunc route() {}\n```\n", "blocks": [
+        {"type": "paragraph", "text": "Wire it."},
+        {"type": "code_block", "text": "```go\nfunc route() {}\n```"}]}]}
+}}}

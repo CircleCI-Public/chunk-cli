@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -58,10 +59,11 @@ func TestPlans(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		p, err := client.CreatePlan(ctx, "a plan", "# a plan\n")
 		assert.NilError(t, err)
+		para := func(s string) PlanBlock { return PlanBlock{Type: "paragraph", Text: s} }
 
 		sc, err := client.PlanStructuredContent(ctx, p.ID)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(sc, &PlanStructuredContent{}))
+		assertItems(t, sc, PlanStructuredContent{})
 
 		fake.SetFactoryPlanUnits(p.ID,
 			fakes.FactoryUnit{Name: "Unit 1: lexer", Done: true, Body: "\nLex.\n"},
@@ -70,22 +72,22 @@ func TestPlans(t *testing.T) {
 		sc, err = client.PlanStructuredContent(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(sc.Units, []PlanUnit{
-			{Name: "Unit 1: lexer", Done: true, Body: "\nLex.\n"},
-			{Name: "Unit 2: parser"},
+			{Number: 1, Name: "lexer", Done: true, Text: "\nLex.\n", Blocks: []PlanBlock{para("Lex.")}},
+			{Number: 2, Name: "parser", Blocks: []PlanBlock{}},
 		}))
+		assert.Check(t, cmp.Equal(sc.Markdown(), "## 5. Units\n\n### Unit 1: lexer (done)\n\nLex.\n### Unit 2: parser\n"))
 		assert.Check(t, sc.Outcome == nil)
-		assert.Check(t, sc.Items.OpenQuestions == nil, "unset decoded as %#v", sc.Items.OpenQuestions)
-
-		fake.SetFactoryPlanOpenQuestions(p.ID, "Which store?", "Which TTL?")
-		sc, err = client.PlanStructuredContent(ctx, p.ID)
-		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(sc.Items.OpenQuestions, []string{"Which store?", "Which TTL?"}))
-		assert.Check(t, cmp.Len(sc.Units, 2), "setting the questions kept the units")
+		assert.Check(t, sc.OpenQuestions == nil, "unset decoded as %#v", sc.OpenQuestions)
 
 		fake.SetFactoryPlanOpenQuestionObjects(p.ID, "Which store?", "Which TTL?")
 		sc, err = client.PlanStructuredContent(ctx, p.ID)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(sc.Items.OpenQuestions, []string{"Which store?", "Which TTL?"}), "questions served as objects")
+		assert.Assert(t, sc.OpenQuestions != nil)
+		assert.Check(t, cmp.DeepEqual(sc.OpenQuestions.Questions, []PlanQuestion{
+			{Text: "Which store?", Blocks: []PlanBlock{para("Which store?")}},
+			{Text: "Which TTL?", Blocks: []PlanBlock{para("Which TTL?")}},
+		}))
+		assert.Check(t, cmp.Len(sc.Units, 2), "setting the questions kept the units")
 
 		fake.SetFactoryPlanUnits(p.ID) // serves "units": []
 		sc, err = client.PlanStructuredContent(ctx, p.ID)
@@ -96,18 +98,64 @@ func TestPlans(t *testing.T) {
 		assert.NilError(t, err)
 		sc, err = client.PlanStructuredContent(ctx, p2.ID)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(sc, &PlanStructuredContent{
-			Outcome: ptr("\nIt works.\n\n"),
-			Design:  ptr("\n### Context\n\n- x\n\n"),
-			Units:   []PlanUnit{{Name: "Unit 1: a", Done: true, Body: "\nDo a.\n"}},
-		}))
+		assertItems(t, sc, PlanStructuredContent{
+			Outcome: &PlanSection{Text: "\nIt works.\n\n", Blocks: []PlanBlock{para("It works.")}},
+			Design: &PlanSection{Text: "\n### Context\n\n- x\n\n", Blocks: []PlanBlock{
+				{Type: "heading", Text: "### Context"},
+				{Type: "list", Text: "- x", Blocks: []PlanBlock{{Type: "list_item", Text: "- x", Blocks: []PlanBlock{para("x")}}}},
+			}},
+			Units: []PlanUnit{{Number: 1, Name: "a", Done: true, Text: "\nDo a.\n", Blocks: []PlanBlock{para("Do a.")}}},
+		})
+		assert.Check(t, cmp.Equal(sc.Markdown(), "## 1. Outcome\n\nIt works.\n\n## 2. Design\n\n### Context\n\n- x\n\n## 5. Units\n\n### Unit 1: a (done)\n\nDo a.\n"))
 
 		p3, err := client.CreatePlan(ctx, "dup", "# dup\n\n## 1. Outcome\n\nA.\n\n## 1. Outcome\n\nB.\n\n## 2. Design\n\nD.\n")
 		assert.NilError(t, err)
 		sc, err = client.PlanStructuredContent(ctx, p3.ID)
 		assert.NilError(t, err)
 		assert.Check(t, sc.Outcome == nil, "a twice-headed section was served")
-		assert.Check(t, cmp.DeepEqual(sc.Design, ptr("\nD.\n")))
+		assert.Assert(t, sc.Design != nil)
+		assert.Check(t, cmp.Equal(sc.Design.Text, "\nD.\n"))
+
+		p4, err := client.CreatePlan(ctx, "fenced", "# fenced\n\n## 2. Design\n\n```md\n## 5. Units\n```\n\n## 5. Units\n\n### Unit 1: a\n")
+		assert.NilError(t, err)
+		sc, err = client.PlanStructuredContent(ctx, p4.ID)
+		assert.NilError(t, err)
+		assert.Assert(t, sc.Design != nil)
+		assert.Check(t, cmp.Equal(sc.Design.Text, "\n```md\n## 5. Units\n```\n\n"), "a fenced heading ended 2. Design")
+		assert.Check(t, cmp.Len(sc.Units, 1), "a fenced heading made a second 5. Units")
+	})
+
+	t.Run("decodes factory's structured content", func(t *testing.T) {
+		body, err := os.ReadFile("testdata/structured-content.json")
+		assert.NilError(t, err)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		}))
+		t.Cleanup(srv.Close)
+		sc, err := newTestClient(t, srv.URL).PlanStructuredContent(t.Context(), "7b1e0000-0000-4000-8000-000000000000")
+		assert.NilError(t, err)
+		para := func(s string) PlanBlock { return PlanBlock{Type: "paragraph", Text: s} }
+		item := func(s, p string) PlanBlock {
+			return PlanBlock{Type: "list_item", Text: s, Blocks: []PlanBlock{para(p)}}
+		}
+		assertItems(t, sc, PlanStructuredContent{
+			Outcome: &PlanSection{Text: "\nOne parser.\n\n", Blocks: []PlanBlock{para("One parser.")}},
+			Design: &PlanSection{Text: "\n### Context\n\n> quoted\n> more\n\n---\n\n1. first\n2. second\n\n", Blocks: []PlanBlock{
+				{Type: "heading", Text: "### Context"},
+				{Type: "blockquote", Text: "> quoted\n> more", Blocks: []PlanBlock{para("quoted\n> more")}},
+				{Type: "thematic_break", Text: "---"},
+				{Type: "list", Text: "1. first\n2. second", Blocks: []PlanBlock{item("1. first", "first"), item("2. second", "second")}},
+			}},
+			OpenQuestions: &PlanSection{Text: "\n- Which store?\n", Questions: []PlanQuestion{{Text: "Which store?", Blocks: []PlanBlock{para("Which store?")}}}},
+			Units: []PlanUnit{
+				{Name: "parser", Done: true, Text: "\n- Add `Parse`.\n- Test it.\n\n", Blocks: []PlanBlock{
+					{Type: "list", Text: "- Add `Parse`.\n- Test it.", Blocks: []PlanBlock{item("- Add `Parse`.", "Add `Parse`."), item("- Test it.", "Test it.")}}}},
+				{Name: "api", Text: "\nWire it.\n\n```go\nfunc route() {}\n```\n", Blocks: []PlanBlock{
+					para("Wire it."), {Type: "code_block", Text: "```go\nfunc route() {}\n```"}}},
+			},
+		})
+		assert.Check(t, cmp.Equal(sc.Markdown(), "## 1. Outcome\n\nOne parser.\n\n## 2. Design\n\n### Context\n\n> quoted\n> more\n\n---\n\n1. first\n2. second\n\n## 3. Open Questions\n\n- Which store?\n## 5. Units\n\n### Unit 1: parser (done)\n\n- Add `Parse`.\n- Test it.\n\n### Unit 2: api\n\nWire it.\n\n```go\nfunc route() {}\n```\n"))
 	})
 
 	t.Run("sends the plan as a V3 entity with the token", func(t *testing.T) {
@@ -1233,6 +1281,17 @@ func TestNextCursor(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
+// assertItems checks the sections and units sc decoded from items. The
+// top-level attributes it also holds are read through its Markdown.
+func assertItems(t *testing.T, sc *PlanStructuredContent, want PlanStructuredContent) {
+	t.Helper()
+	assert.Check(t, cmp.DeepEqual(sc.Outcome, want.Outcome))
+	assert.Check(t, cmp.DeepEqual(sc.Design, want.Design))
+	assert.Check(t, cmp.DeepEqual(sc.OpenQuestions, want.OpenQuestions))
+	assert.Check(t, cmp.DeepEqual(sc.WorkedExample, want.WorkedExample))
+	assert.Check(t, cmp.DeepEqual(sc.Units, want.Units))
+}
+
 func TestPlanStructuredContentMarkdown(t *testing.T) {
 	s := func(v string) *string { return &v }
 	for _, tc := range []struct {
@@ -1247,15 +1306,15 @@ func TestPlanStructuredContentMarkdown(t *testing.T) {
 		},
 		{
 			name: "empty units section",
-			in:   PlanStructuredContent{Units: []PlanUnit{}},
+			in:   PlanStructuredContent{legacy: planLegacy{Units: []planLegacyUnit{}}},
 			want: "## 5. Units\n\n",
 		},
 		{
 			name: "sections in skeleton order, units with done",
-			in: PlanStructuredContent{
+			in: PlanStructuredContent{legacy: planLegacy{
 				WorkedExample: s("\nEx.\n\n"),
 				Outcome:       s("\nOut.\n\n"),
-				Units: []PlanUnit{
+				Units: []planLegacyUnit{
 					{
 						Name: "Unit 1: a",
 						Done: true,
@@ -1266,83 +1325,30 @@ func TestPlanStructuredContentMarkdown(t *testing.T) {
 						Body: "\nB.\n",
 					},
 				},
-			},
+			}},
 			want: "## 1. Outcome\n\nOut.\n\n## 4. Worked example\n\nEx.\n\n## 5. Units\n\n### Unit 1: a (done)\n\nA.\n\n### Unit 2: b\n\nB.\n",
 		},
 		{
 			name: "empty body",
-			in:   PlanStructuredContent{OpenQuestions: s("")},
+			in:   PlanStructuredContent{legacy: planLegacy{OpenQuestions: s("")}},
 			want: "## 3. Open Questions\n",
 		},
 		{
 			name: "body without a trailing newline",
-			in: PlanStructuredContent{
+			in: PlanStructuredContent{legacy: planLegacy{
 				Design: s("\nD."),
-				Units: []PlanUnit{
+				Units: []planLegacyUnit{
 					{
 						Name: "Unit 1: a",
 						Body: "\nA.",
 					},
 				},
-			},
+			}},
 			want: "## 2. Design\n\nD.\n## 5. Units\n\n### Unit 1: a\n\nA.\n",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Check(t, cmp.Equal(tc.in.Markdown(), tc.want))
-		})
-	}
-}
-
-// TestPlanQuestionUnmarshal checks that a question decodes from a string, an
-// object's text or null, and that any other shape fails.
-func TestPlanQuestionUnmarshal(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		in      string
-		want    []planQuestion
-		wantErr string
-	}{
-		{
-			name: "strings and objects",
-			in:   `["a", {"text": "b", "blocks": []}]`,
-			want: []planQuestion{"a", "b"},
-		},
-		{
-			name: "null",
-			in:   `[null]`,
-			want: []planQuestion{""},
-		},
-		{
-			name: "object without text",
-			in:   `[{}, {"blocks": []}]`,
-			want: []planQuestion{"", ""},
-		},
-		{
-			name:    "number",
-			in:      `[1]`,
-			wantErr: "open question is neither a string nor an object",
-		},
-		{
-			name:    "array",
-			in:      `[[]]`,
-			wantErr: "open question is neither a string nor an object",
-		},
-		{
-			name:    "non-string text",
-			in:      `[{"text": 1}]`,
-			wantErr: "open question is neither a string nor an object",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var got []planQuestion
-			err := json.Unmarshal([]byte(tc.in), &got)
-			if tc.wantErr != "" {
-				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
-				return
-			}
-			assert.NilError(t, err)
-			assert.Check(t, cmp.DeepEqual(got, tc.want))
 		})
 	}
 }

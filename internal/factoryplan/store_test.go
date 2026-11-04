@@ -74,8 +74,8 @@ func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 }
 
 // TestStoreStructureReadsItFromFactory checks that Structure reads the plan's
-// units and open questions, served as strings or as objects, from factory's
-// structured content, and is empty before the plan exists.
+// units and open questions from factory's structured content, and is empty
+// before the plan exists.
 func TestStoreStructureReadsItFromFactory(t *testing.T) {
 	client, cci := testClient(t)
 	store := newStore(client, "", "")
@@ -88,18 +88,18 @@ func TestStoreStructureReadsItFromFactory(t *testing.T) {
 	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
 	cci.SetFactoryPlanUnits(store.ID(), fakes.FactoryUnit{Name: "Unit 1: lexer", Done: true, Body: "\nLex.\n"})
-	cci.SetFactoryPlanOpenQuestions(store.ID(), "Which store?")
+	cci.SetFactoryPlanOpenQuestionObjects(store.ID(), "Which store?")
 	st, err = store.Structure(ctx)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(st, plan.Structure{
-		Units:         []plan.Unit{{Name: "Unit 1: lexer", Done: true}},
+		Units:         []plan.Unit{{Name: "lexer", Done: true}},
 		OpenQuestions: []string{"Which store?"},
 	}))
 
 	cci.SetFactoryPlanOpenQuestionObjects(store.ID(), "Which store?", "Which TTL?")
 	st, err = store.Structure(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.DeepEqual(st.OpenQuestions, []string{"Which store?", "Which TTL?"}), "questions served as objects")
+	assert.Check(t, cmp.DeepEqual(st.OpenQuestions, []string{"Which store?", "Which TTL?"}))
 
 	cci.FailFactoryStructuredContent(store.ID())
 	_, err = store.Structure(ctx)
