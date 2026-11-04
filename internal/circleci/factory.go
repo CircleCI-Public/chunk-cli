@@ -2,6 +2,7 @@ package circleci
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -516,7 +517,8 @@ type PlanStructuredContent struct {
 
 // PlanItems is the route's items attribute.
 type PlanItems struct {
-	// OpenQuestions is items.open_questions.questions; nil when factory sends
+	// OpenQuestions is the text of each of items.open_questions.questions,
+	// whether factory sends a string or {text, blocks}; nil when factory sends
 	// null or no items.
 	OpenQuestions []string
 }
@@ -577,9 +579,29 @@ type planStructuredContentAttrs struct {
 	} `json:"units"`
 	Items struct {
 		OpenQuestions *struct {
-			Questions []string `json:"questions"`
+			Questions []planQuestion `json:"questions"`
 		} `json:"open_questions"`
 	} `json:"items"`
+}
+
+// planQuestion is one of items.open_questions.questions, a string or
+// {text, blocks}, kept as its text.
+type planQuestion string
+
+func (q *planQuestion) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*q = planQuestion(s)
+		return nil
+	}
+	var o struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(b, &o); err != nil {
+		return fmt.Errorf("open question is neither a string nor an object: %w", err)
+	}
+	*q = planQuestion(o.Text)
+	return nil
 }
 
 // PlanStructuredContent returns factory plan id's sections and units.
@@ -603,8 +625,11 @@ func (c *Client) PlanStructuredContent(ctx context.Context, id string) (*PlanStr
 	for _, u := range attrs.Units {
 		out.Units = append(out.Units, PlanUnit{Name: u.Name, Done: u.IsDone, Body: u.Body})
 	}
-	if q := attrs.Items.OpenQuestions; q != nil {
-		out.Items.OpenQuestions = q.Questions
+	if q := attrs.Items.OpenQuestions; q != nil && q.Questions != nil {
+		out.Items.OpenQuestions = make([]string, len(q.Questions))
+		for i, s := range q.Questions {
+			out.Items.OpenQuestions[i] = string(s)
+		}
 	}
 	return out, nil
 }

@@ -82,6 +82,11 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(sc.Items.OpenQuestions, []string{"Which store?", "Which TTL?"}))
 		assert.Check(t, cmp.Len(sc.Units, 2), "setting the questions kept the units")
 
+		fake.SetFactoryPlanOpenQuestionObjects(p.ID, "Which store?", "Which TTL?")
+		sc, err = client.PlanStructuredContent(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(sc.Items.OpenQuestions, []string{"Which store?", "Which TTL?"}), "questions served as objects")
+
 		fake.SetFactoryPlanUnits(p.ID) // serves "units": []
 		sc, err = client.PlanStructuredContent(ctx, p.ID)
 		assert.NilError(t, err)
@@ -1285,6 +1290,59 @@ func TestPlanStructuredContentMarkdown(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Check(t, cmp.Equal(tc.in.Markdown(), tc.want))
+		})
+	}
+}
+
+// TestPlanQuestionUnmarshal checks that a question decodes from a string, an
+// object's text or null, and that any other shape fails.
+func TestPlanQuestionUnmarshal(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		in      string
+		want    []planQuestion
+		wantErr string
+	}{
+		{
+			name: "strings and objects",
+			in:   `["a", {"text": "b", "blocks": []}]`,
+			want: []planQuestion{"a", "b"},
+		},
+		{
+			name: "null",
+			in:   `[null]`,
+			want: []planQuestion{""},
+		},
+		{
+			name: "object without text",
+			in:   `[{}, {"blocks": []}]`,
+			want: []planQuestion{"", ""},
+		},
+		{
+			name:    "number",
+			in:      `[1]`,
+			wantErr: "open question is neither a string nor an object",
+		},
+		{
+			name:    "array",
+			in:      `[[]]`,
+			wantErr: "open question is neither a string nor an object",
+		},
+		{
+			name:    "non-string text",
+			in:      `[{"text": 1}]`,
+			wantErr: "open question is neither a string nor an object",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []planQuestion
+			err := json.Unmarshal([]byte(tc.in), &got)
+			if tc.wantErr != "" {
+				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
+				return
+			}
+			assert.NilError(t, err)
+			assert.Check(t, cmp.DeepEqual(got, tc.want))
 		})
 	}
 }
