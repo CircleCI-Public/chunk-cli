@@ -18,8 +18,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/planrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
@@ -357,22 +359,61 @@ func TestDaemonPlanBuildStop(t *testing.T) {
 	}
 }
 
-// daemonResume checks the project, then calls the daemon's route for the
-// kind of resume, and gives the daemon's refusal as it gives it.
+// daemonResume reads the plan and resolves the checkout of its repo, checks
+// that project, then calls the daemon's route for the kind of resume, and
+// gives the daemon's refusal as it gives it.
 func TestDaemonResume(t *testing.T) {
 	refused := &chunkd.SessionRefused{Status: 409, Message: "plan p is claimed by session s; release it with factory daemon release p to resume it"}
+	noCheckout := &planrepo.NoCheckoutError{Repos: []string{"circleci/factory"}}
 	for _, tc := range []struct {
 		name string
 		root string
 		kind planstate.ResumeKind
 		// holder is the session a take-over was confirmed for.
 		holder string
+		// readErr is reading the plan failing.
+		readErr error
+		// resolved is the root planRoot resolves to, "" for the one it
+		// prefers; resolveErr is it failing.
+		resolved   string
+		resolveErr error
+		// badRoot is a root the project check fails for.
+		badRoot string
 		// fails is what the daemon answers.
 		fails       error
 		wantErr     string
 		wantPlanner []string
 		wantBuild   []chunkd.PlanBuildRequest
 	}{
+		{
+			name:      "a plan whose checkout is elsewhere",
+			root:      "/src/app",
+			resolved:  "/src/factory",
+			kind:      planstate.ResumeBuild,
+			wantBuild: []chunkd.PlanBuildRequest{{ProjectRoot: "/src/factory", PlanID: "p"}},
+		},
+		{
+			name:       "no checkout",
+			root:       "/src/app",
+			resolveErr: noCheckout,
+			kind:       planstate.ResumeBuild,
+			wantErr:    noCheckout.Error(),
+		},
+		{
+			name:    "the plan read failing",
+			root:    "/src/app",
+			readErr: errors.New("factory is down"),
+			kind:    planstate.ResumeBuild,
+			wantErr: "read plan p: factory is down",
+		},
+		{
+			name:     "the resolved checkout failing the project check",
+			root:     "/src/app",
+			resolved: "/src/factory",
+			badRoot:  "/src/factory",
+			kind:     planstate.ResumeBuild,
+			wantErr:  "/src/factory: no chunk config",
+		},
 		{
 			name:    "outside a repository",
 			root:    "",
@@ -432,11 +473,35 @@ func TestDaemonResume(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			savedCheck, savedPlanner, savedBuild := checkWatchProject, resumePlanner, startPlanBuild
-			t.Cleanup(func() { checkWatchProject, resumePlanner, startPlanBuild = savedCheck, savedPlanner, savedBuild })
+			savedGet, savedRoot := getWatchPlan, planRoot
+			t.Cleanup(func() {
+				checkWatchProject, resumePlanner, startPlanBuild = savedCheck, savedPlanner, savedBuild
+				getWatchPlan, planRoot = savedGet, savedRoot
+			})
+			getWatchPlan = func(_ context.Context, id string) (*circleci.Plan, error) {
+				if tc.readErr != nil {
+					return nil, tc.readErr
+				}
+				return &circleci.Plan{ID: id, Repos: []string{"circleci/factory"}}, nil
+			}
+			planRoot = func(_ context.Context, _ *circleci.Plan, prefer string) (string, error) {
+				if tc.resolveErr != nil {
+					return "", tc.resolveErr
+				}
+				if tc.resolved != "" {
+					return tc.resolved, nil
+				}
+				return prefer, nil
+			}
 			if tc.root != "" {
 				// The real check needs a git origin and config; "" is
 				// refused before it is reached.
-				checkWatchProject = func(context.Context, string) error { return nil }
+				checkWatchProject = func(_ context.Context, root string) error {
+					if root == tc.badRoot {
+						return errors.New(root + ": no chunk config")
+					}
+					return nil
+				}
 			}
 			var planners []string
 			var builds []chunkd.PlanBuildRequest
@@ -463,6 +528,35 @@ func TestDaemonResume(t *testing.T) {
 			assert.Check(t, cmp.DeepEqual(builds, tc.wantBuild))
 		})
 	}
+}
+
+// A plan chunk knows no checkout of opens read-only: approving and resuming
+// it give why, before any daemon call.
+func TestWatchPlansOpenNoCheckout(t *testing.T) {
+	fake := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+	p, err := client.CreatePlan(t.Context(), "a plan", "", "circleci/factory")
+	assert.NilError(t, err)
+
+	noCheckout := &planrepo.NoCheckoutError{Repos: []string{"circleci/factory"}}
+	saved := planRoot
+	t.Cleanup(func() { planRoot = saved })
+	planRoot = func(context.Context, *circleci.Plan, string) (string, error) { return "", noCheckout }
+
+	plans := newWatchPlans(t.Context())
+	t.Cleanup(plans.stop)
+	plans.client = func() (*circleci.Client, error) { return client, nil }
+	opened, err := plans.plan(t.Context(), "/src/app", p.ID)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(opened.Root, ""))
+
+	_, err = opened.Approve(func(string) {})
+	assert.Check(t, cmp.Error(err, noCheckout.Error()))
+	err = opened.Agent.Resume(t.Context())
+	assert.Check(t, cmp.Error(err, noCheckout.Error()))
 }
 
 // factoryDelete deletes the plan in factory and gives factory's refusal as it

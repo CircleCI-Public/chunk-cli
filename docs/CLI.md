@@ -285,7 +285,12 @@ chunk
   daemon stops answering, and the daemon is started again.
 - **`watch` takes no directories.** Flows are the signed-in user's wherever it
   is run, and new plans are made in the project it was opened in, which it
-  registers. An argument exits 2. `--focus` and `--all` still parse, deprecated,
+  registers. An existing plan is planned and built in a checkout of the repo
+  it records, among the projects chunk knows: the opened-in project when it
+  is one, else the checkout already holding the plan's worktree, else the
+  most recently used. With none, the plan opens read-only and approving or
+  `R` says to run `chunk watch` once in a checkout of that repo. An argument
+  exits 2. `--focus` and `--all` still parse, deprecated,
   and do nothing.
 - **`chunk watch` is the recommended way to follow factory work.** It shows
   your flows in factory and opens their plans. So on a terminal chunk points
@@ -324,8 +329,10 @@ chunk
   working in the plan's worktree, or one factory's daemon does not know.
   In `chunk watch`, `R`
   resumes a planner or starts a fresh build session in the chunk daemon, in
-  the project `chunk watch` was opened in, and the flow list offers the same
-  `R` for the selected flow.
+  a checkout of the plan's repo, as above, and the flow list offers the same
+  `R` for the selected flow. The chunk daemon refuses to approve or build a
+  plan in a checkout of another repo (409), so a plan stays unapproved
+  rather than building in the wrong repository.
   While the plan's build session is running, `S` stops it, after a `y`:
   the activity pane ends the session with `Build session stopped`, and
   the daemon frees factory's claim if the session still holds it, so
