@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sync"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 // fakeStore is an in-memory Store for tests, recording what is called.
@@ -32,9 +35,10 @@ type fakeStore struct {
 	FlowV Flow
 	// FamilyV is what Family returns.
 	FamilyV Family
-	// UnitsV, OpenQuestionsV and UnitsErr are what Structure returns.
+	// UnitsV, OpenQuestionsV and UnitsErr are what Structure returns in place of
+	// what TextV holds, when set.
 	UnitsV         []Unit
-	OpenQuestionsV []string
+	OpenQuestionsV []Question
 	TextV          string
 	// TitleV is the title Create returns.
 	TitleV string
@@ -169,7 +173,21 @@ func (f *fakeStore) Family(context.Context) (Family, error) {
 func (f *fakeStore) Structure(context.Context) (Structure, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return Structure{Units: f.UnitsV, OpenQuestions: f.OpenQuestionsV}, f.UnitsErr
+	st := structureOfItems(fakes.PlanItems(f.TextV))
+	if f.UnitsV != nil {
+		parsed := st.Units
+		st.Units = make([]Unit, len(f.UnitsV))
+		for i, u := range f.UnitsV {
+			st.Units[i] = Unit{Number: i + 1, Name: fakeUnitNumRe.ReplaceAllString(u.Name, ""), Done: u.Done}
+			if i < len(parsed) {
+				st.Units[i].Blocks = parsed[i].Blocks
+			}
+		}
+	}
+	if f.OpenQuestionsV != nil {
+		st.OpenQuestions = f.OpenQuestionsV
+	}
+	return st, f.UnitsErr
 }
 
 // setTask has the plan's flow have a task of category out, or none for "".
@@ -355,4 +373,65 @@ func (f *fakeStore) DeleteComment(_ context.Context, id string) error {
 	f.CommentsV = kept
 	f.Deleted = append(f.Deleted, id)
 	return nil
+}
+
+// fakeUnitNumRe is the "Unit N:" the fake conductor drops from a unit's
+// name, with the spaces after it.
+var fakeUnitNumRe = regexp.MustCompile(`^Unit \d+: *`)
+
+// structureOfItems is the Structure that factory's items hold: each section
+// it has, in plan order, and its units, or none when it has no 5. Units.
+func structureOfItems(items fakes.FactoryItems) Structure {
+	var st Structure
+	for _, sec := range []struct {
+		heading string
+		section *fakes.FactorySection
+	}{
+		{"1. Outcome", items.Outcome},
+		{"2. Design", items.Design},
+		{"4. Worked example", items.WorkedExample},
+	} {
+		if sec.section != nil {
+			st.Sections = append(st.Sections, Section{Heading: sec.heading, Blocks: blocksOfItems(sec.section.Blocks)})
+		}
+	}
+	if oq := items.OpenQuestions; oq != nil {
+		// Its questions' blocks are its blocks: it has none of its own.
+		sec := Section{Heading: "3. Open Questions"}
+		for _, q := range oq.Questions {
+			qn := Question{Text: q.Text, Blocks: blocksOfItems(q.Blocks)}
+			st.OpenQuestions = append(st.OpenQuestions, qn)
+			sec.Blocks = append(sec.Blocks, qn.Blocks...)
+		}
+		at := len(st.Sections)
+		if items.WorkedExample != nil {
+			at--
+		}
+		st.Sections = slices.Insert(st.Sections, at, sec)
+	}
+	if items.Units != nil {
+		st.Units = make([]Unit, len(*items.Units))
+		for i, u := range *items.Units {
+			st.Units[i] = Unit{Number: u.Number, Name: u.Name, Done: u.IsDone, Blocks: blocksOfItems(u.Blocks)}
+		}
+	}
+	return st
+}
+
+// blocksOfItems is bs as the plan screen's blocks.
+func blocksOfItems(bs []fakes.FactoryBlock) []Block {
+	out := make([]Block, len(bs))
+	for i, b := range bs {
+		out[i] = Block{Type: b.Type, Text: b.Text}
+		if b.Blocks != nil {
+			out[i].Blocks = blocksOfItems(*b.Blocks)
+		}
+	}
+	return out
+}
+
+// setPlan has m draw text as factory's items hold it, as a refresh would.
+func setPlan(m *Model, text string) {
+	m.plan = text
+	m.structure = structureOfItems(fakes.PlanItems(text))
 }

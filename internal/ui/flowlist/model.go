@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
@@ -51,18 +53,18 @@ type listedMsg struct {
 type previewedMsg struct {
 	id         string
 	generation uint64
-	text       string
+	structure  plan.Structure
 	comments   []circleci.PlanComment
 	err        error
 	// blockers are the flow's blockers, read with its preview.
 	blockers    []planstate.Blocker
 	blockersErr error
-	// lines is text rendered for key, when the fetch rendered it.
+	// lines is structure rendered for key, when the fetch rendered it.
 	lines []string
 	key   renderKey
 }
 
-// renderedMsg is a flow's cached text rendered for key, off the UI goroutine.
+// renderedMsg is a flow's cached structure rendered for key, off the UI goroutine.
 type renderedMsg struct {
 	id    string
 	key   renderKey
@@ -73,7 +75,7 @@ type renderedMsg struct {
 type Model struct {
 	ctx     context.Context
 	list    func(context.Context) ([]circleci.Flow, error)
-	preview func(context.Context, string) (string, []circleci.PlanComment, error)
+	preview func(context.Context, string) (plan.Structure, []circleci.PlanComment, error)
 	parents func(context.Context) (map[string]string, error)
 	// blockers reads a flow's blockers along with its preview; nil when the
 	// host has none to read, so every flow has none.
@@ -116,13 +118,16 @@ type Model struct {
 	// selecting a flow again shows it while a fresh one loads. Only Update
 	// writes it, on the Bubble Tea goroutine.
 	cache map[string]cached
-	// render is glamour unless a test replaces it.
-	render func(text string, width int, dark bool) []string
+	// render is plan.Lines unless a test replaces it.
+	render func(s plan.Structure, width int, dark bool) []string
 }
 
-// cached is a flow's last preview, and its text as rendered for key.
+// cached is a flow's last preview, and its structure as rendered for key.
 type cached struct {
-	text     string
+	structure plan.Structure
+	// gen is the generation of the preview that first read structure, which
+	// is what a render of it is keyed on.
+	gen      uint64
 	comments []circleci.PlanComment
 	lines    []string
 	key      renderKey
@@ -136,17 +141,17 @@ type cached struct {
 
 // renderKey is what a rendered preview depends on.
 type renderKey struct {
-	text  string
+	gen   uint64
 	width int
 	dark  bool
 }
 
 // New creates a list of the flows list returns, each previewed with
 // preview. Both callbacks must honor ctx cancellation.
-func New(ctx context.Context, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (string, []circleci.PlanComment, error)) Model {
+func New(ctx context.Context, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (plan.Structure, []circleci.PlanComment, error)) Model {
 	return Model{
 		ctx: ctx, list: list, preview: preview, width: 80, height: 24, dark: true, styles: theme.New(true),
-		cache: map[string]cached{}, render: glamourLines,
+		cache: map[string]cached{}, render: plan.Lines,
 	}
 }
 
@@ -269,13 +274,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.previewing = false
 			m.previewErr = msg.err
 			if msg.err == nil {
-				// Lines and key stay unless the fetch rendered the text for
-				// the pane as it is now, so equal text does not render again
-				// and a render for an old size or style is dropped.
+				// Lines and key stay unless the fetch rendered the structure
+				// for the pane as it is now, so an equal structure does not
+				// render again and a render for an old size or style is
+				// dropped.
 				entry := m.cache[msg.id]
-				entry.text, entry.comments = msg.text, msg.comments
+				entry.structure, entry.gen = nextStructure(entry, msg.structure, msg.generation)
+				entry.comments = msg.comments
 				entry.blockers, entry.blockersOK = msg.blockers, msg.blockersErr == nil
-				if msg.lines != nil && msg.key == m.renderKey(msg.text) {
+				if msg.lines != nil && msg.key == m.renderKey(entry) {
 					entry.lines, entry.key = msg.lines, msg.key
 				}
 				m.cache[msg.id] = entry
@@ -287,7 +294,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if entry.pending == msg.key {
 				entry.pending = renderKey{}
 			}
-			if msg.key == m.renderKey(entry.text) {
+			if msg.key == m.renderKey(entry) {
 				entry.lines, entry.key = msg.lines, msg.key
 			}
 			m.cache[msg.id] = entry
@@ -311,18 +318,31 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// renderKey is the key text rendered for the preview pane as it is now
-// would have: the zero key when the pane is not drawn or text is blank.
-func (m Model) renderKey(text string) renderKey {
-	w := m.previewWidth()
-	if w == 0 || strings.TrimSpace(text) == "" {
-		return renderKey{}
+// nextStructure is the structure and generation entry has after a preview of
+// generation read structure: the same generation when the structure is the one
+// it had, so an unchanged plan is not rendered again.
+func nextStructure(entry cached, structure plan.Structure, generation uint64) (plan.Structure, uint64) {
+	if reflect.DeepEqual(entry.structure, structure) {
+		return entry.structure, entry.gen
 	}
-	return renderKey{text: text, width: w - 4, dark: m.dark}
+	return structure, generation
 }
 
-// renderPreview starts a render of the selected flow's cached plan text,
-// unless it was rendered, or is being rendered, for the same text, width and
+func noBlocks(s plan.Structure) bool { return len(s.Sections) == 0 && s.Units == nil }
+
+// renderKey is the key entry's structure rendered for the preview pane as it
+// is now would have: the zero key when the pane is not drawn or there is
+// nothing to draw.
+func (m Model) renderKey(entry cached) renderKey {
+	w := m.previewWidth()
+	if w == 0 || noBlocks(entry.structure) {
+		return renderKey{}
+	}
+	return renderKey{gen: entry.gen, width: w - 4, dark: m.dark}
+}
+
+// renderPreview starts a render of the selected flow's cached plan structure,
+// unless it was rendered, or is being rendered, for the same preview, width and
 // style. One render of a large plan takes longer than a frame, so it runs
 // off the UI goroutine; the cached lines show until it returns.
 func (m *Model) renderPreview() tea.Cmd {
@@ -330,18 +350,18 @@ func (m *Model) renderPreview() tea.Cmd {
 	if m.id == "" || !ok {
 		return nil
 	}
-	key := m.renderKey(entry.text)
+	key := m.renderKey(entry)
 	if key == (renderKey{}) || entry.key == key || entry.pending == key {
 		return nil
 	}
 	entry.pending = key
 	m.cache[m.id] = entry
-	ctx, render, id := m.ctx, m.render, m.id
+	ctx, render, id, structure := m.ctx, m.render, m.id, entry.structure
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			return nil
 		}
-		return renderedMsg{id: id, key: key, lines: render(key.text, key.width, key.dark)}
+		return renderedMsg{id: id, key: key, lines: render(structure, key.width, key.dark)}
 	}
 }
 
@@ -394,14 +414,15 @@ func (m *Model) startPreview() tea.Cmd {
 		if ctx.Err() != nil {
 			return nil
 		}
-		text, comments, err := preview(ctx, id)
-		msg := previewedMsg{id: id, generation: generation, text: text, comments: comments, err: err}
+		structure, comments, err := preview(ctx, id)
+		msg := previewedMsg{id: id, generation: generation, structure: structure, comments: comments, err: err}
 		if err == nil && blockers != nil {
 			msg.blockers, msg.blockersErr = blockers(ctx, id)
 		}
-		key := renderKey{text: text, width: width, dark: dark}
-		if err == nil && drawn && strings.TrimSpace(text) != "" && key != have {
-			msg.lines, msg.key = render(text, width, dark), key
+		_, gen := nextStructure(entry, structure, generation)
+		key := renderKey{gen: gen, width: width, dark: dark}
+		if err == nil && drawn && !noBlocks(structure) && key != have {
+			msg.lines, msg.key = render(structure, width, dark), key
 		}
 		return msg
 	}

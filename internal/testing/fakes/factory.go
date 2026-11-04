@@ -663,24 +663,6 @@ func (f *FakeCircleCI) handleGetPlanStructuredContent(c *gin.Context) {
 		factoryError(c, http.StatusNotFound, "not found")
 		return
 	}
-	sections, parsed, hasUnits := structureOf(p.text)
-	section := func(heading string) any {
-		if s, ok := sections[heading]; ok {
-			return s
-		}
-		return nil
-	}
-	served, serve := p.units, p.units != nil
-	if !serve {
-		served, serve = parsed, hasUnits
-	}
-	var topUnits []gin.H
-	if serve {
-		topUnits = make([]gin.H, len(served))
-		for i, u := range served {
-			topUnits[i] = gin.H{"name": u.Name, "is_done": u.Done, "body": u.Body}
-		}
-	}
 	items := PlanItems(p.text)
 	if p.units != nil {
 		units := make([]FactoryUnitItem, len(p.units))
@@ -698,102 +680,7 @@ func (f *FakeCircleCI) handleGetPlanStructuredContent(c *gin.Context) {
 		}
 		items.OpenQuestions = &FactoryOpenQuestions{Questions: questions}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": p.id, "attributes": gin.H{
-		"outcome":        section("1. Outcome"),
-		"design":         section("2. Design"),
-		"open_questions": section("3. Open Questions"),
-		"worked_example": section("4. Worked example"),
-		"units":          topUnits,
-		"items":          items,
-	}}})
-}
-
-// factorySections are the skeleton headings factory's structured content
-// serves a body for.
-var factorySections = []string{"1. Outcome", "2. Design", "3. Open Questions", "4. Worked example", "5. Units"}
-
-// structureOf parses text line by line the way factory's plan/structure does.
-// sections are the bodies of the skeleton sections, keyed by heading, each
-// running from just after its "## " heading line to the next "# " or "## "
-// line; a heading that appears more than once is left out. units are the
-// "### " units of 5. Units, and hasUnits is whether 5. Units was found exactly
-// once. Unlike factory, it does not skip fenced code: a "## " line inside a
-// code fence counts as a heading.
-func structureOf(text string) (sections map[string]string, units []FactoryUnit, hasUnits bool) {
-	var headings []textLine
-	for _, l := range linesOf(text) {
-		if strings.HasPrefix(l.text, "# ") || strings.HasPrefix(l.text, "## ") {
-			headings = append(headings, l)
-		}
-	}
-	count := map[string]int{}
-	bodies := map[string]string{}
-	for i, h := range headings {
-		if !strings.HasPrefix(h.text, "## ") {
-			continue
-		}
-		name := strings.TrimSpace(strings.TrimPrefix(h.text, "## "))
-		if !slices.Contains(factorySections, name) {
-			continue
-		}
-		stop := len(text)
-		if i+1 < len(headings) {
-			stop = headings[i+1].start
-		}
-		count[name]++
-		bodies[name] = text[h.end:stop]
-	}
-	sections = map[string]string{}
-	for name, n := range count {
-		if n == 1 {
-			sections[name] = bodies[name]
-		}
-	}
-	body, hasUnits := sections["5. Units"]
-	delete(sections, "5. Units")
-	if !hasUnits {
-		return sections, nil, false
-	}
-	var cur *FactoryUnit
-	curEnd := 0
-	for _, l := range linesOf(body) {
-		if !strings.HasPrefix(l.text, "### ") {
-			continue
-		}
-		if cur != nil {
-			cur.Body = body[curEnd:l.start]
-			units = append(units, *cur)
-		}
-		name := strings.TrimSpace(strings.TrimPrefix(l.text, "### "))
-		done := factoryDone.MatchString(name)
-		cur = &FactoryUnit{Name: factoryDone.ReplaceAllString(name, ""), Done: done}
-		curEnd = l.end
-	}
-	if cur != nil {
-		cur.Body = body[curEnd:]
-		units = append(units, *cur)
-	}
-	return sections, units, true
-}
-
-// textLine is one line of a text: its content without the "\n", its offset,
-// and the offset just after its "\n" (or the text's end).
-type textLine struct {
-	text       string
-	start, end int
-}
-
-func linesOf(text string) []textLine {
-	var out []textLine
-	for off := 0; off < len(text); {
-		end := len(text)
-		if i := strings.IndexByte(text[off:], '\n'); i >= 0 {
-			end = off + i + 1
-		}
-		out = append(out, textLine{strings.TrimSuffix(text[off:end], "\n"), off, end})
-		off = end
-	}
-	return out
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"id": p.id, "attributes": gin.H{"items": items}}})
 }
 
 func (f *FakeCircleCI) handlePutPlanText(c *gin.Context) {

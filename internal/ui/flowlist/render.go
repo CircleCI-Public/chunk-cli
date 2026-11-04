@@ -8,7 +8,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -279,7 +278,7 @@ func (m Model) previewLines(width int) []string {
 		rows = append(rows, "")
 	}
 	rows = append(rows, m.styles.Emphasis.Render("Plan"))
-	if m.previewLoaded && strings.TrimSpace(entry.text) == "" {
+	if m.previewLoaded && noBlocks(entry.structure) {
 		return append(rows, m.styles.Dim.Render("No plan text yet."))
 	}
 	return append(rows, entry.lines...)
@@ -292,22 +291,6 @@ func (m Model) previewWidth() int {
 		return 0
 	}
 	return m.width - theme.ListWidth - 5
-}
-
-// glamourLines is text rendered as markdown wrapped at width, in the dark or
-// light style, as lines; text as it is when glamour fails.
-func glamourLines(text string, width int, dark bool) []string {
-	style := "light"
-	if dark {
-		style = "dark"
-	}
-	text = clean(text)
-	if r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(max(width, 1))); err == nil {
-		if rendered, err := r.Render(text); err == nil {
-			text = strings.TrimSpace(rendered)
-		}
-	}
-	return strings.Split(text, "\n")
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(clean(s)), " ") }

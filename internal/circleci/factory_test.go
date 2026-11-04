@@ -63,7 +63,7 @@ func TestPlans(t *testing.T) {
 
 		sc, err := client.PlanStructuredContent(ctx, p.ID)
 		assert.NilError(t, err)
-		assertItems(t, sc, PlanStructuredContent{})
+		assert.Check(t, cmp.DeepEqual(sc, &PlanStructuredContent{}))
 
 		fake.SetFactoryPlanUnits(p.ID,
 			fakes.FactoryUnit{Name: "Unit 1: lexer", Done: true, Body: "\nLex.\n"},
@@ -75,7 +75,6 @@ func TestPlans(t *testing.T) {
 			{Number: 1, Name: "lexer", Done: true, Text: "\nLex.\n", Blocks: []PlanBlock{para("Lex.")}},
 			{Number: 2, Name: "parser", Blocks: []PlanBlock{}},
 		}))
-		assert.Check(t, cmp.Equal(sc.Markdown(), "## 5. Units\n\n### Unit 1: lexer (done)\n\nLex.\n### Unit 2: parser\n"))
 		assert.Check(t, sc.Outcome == nil)
 		assert.Check(t, sc.OpenQuestions == nil, "unset decoded as %#v", sc.OpenQuestions)
 
@@ -98,15 +97,14 @@ func TestPlans(t *testing.T) {
 		assert.NilError(t, err)
 		sc, err = client.PlanStructuredContent(ctx, p2.ID)
 		assert.NilError(t, err)
-		assertItems(t, sc, PlanStructuredContent{
+		assert.Check(t, cmp.DeepEqual(sc, &PlanStructuredContent{
 			Outcome: &PlanSection{Text: "\nIt works.\n\n", Blocks: []PlanBlock{para("It works.")}},
 			Design: &PlanSection{Text: "\n### Context\n\n- x\n\n", Blocks: []PlanBlock{
 				{Type: "heading", Text: "### Context"},
 				{Type: "list", Text: "- x", Blocks: []PlanBlock{{Type: "list_item", Text: "- x", Blocks: []PlanBlock{para("x")}}}},
 			}},
 			Units: []PlanUnit{{Number: 1, Name: "a", Done: true, Text: "\nDo a.\n", Blocks: []PlanBlock{para("Do a.")}}},
-		})
-		assert.Check(t, cmp.Equal(sc.Markdown(), "## 1. Outcome\n\nIt works.\n\n## 2. Design\n\n### Context\n\n- x\n\n## 5. Units\n\n### Unit 1: a (done)\n\nDo a.\n"))
+		}))
 
 		p3, err := client.CreatePlan(ctx, "dup", "# dup\n\n## 1. Outcome\n\nA.\n\n## 1. Outcome\n\nB.\n\n## 2. Design\n\nD.\n")
 		assert.NilError(t, err)
@@ -139,7 +137,7 @@ func TestPlans(t *testing.T) {
 		item := func(s, p string) PlanBlock {
 			return PlanBlock{Type: "list_item", Text: s, Blocks: []PlanBlock{para(p)}}
 		}
-		assertItems(t, sc, PlanStructuredContent{
+		assert.Check(t, cmp.DeepEqual(sc, &PlanStructuredContent{
 			Outcome: &PlanSection{Text: "\nOne parser.\n\n", Blocks: []PlanBlock{para("One parser.")}},
 			Design: &PlanSection{Text: "\n### Context\n\n> quoted\n> more\n\n---\n\n1. first\n2. second\n\n", Blocks: []PlanBlock{
 				{Type: "heading", Text: "### Context"},
@@ -154,8 +152,18 @@ func TestPlans(t *testing.T) {
 				{Name: "api", Text: "\nWire it.\n\n```go\nfunc route() {}\n```\n", Blocks: []PlanBlock{
 					para("Wire it."), {Type: "code_block", Text: "```go\nfunc route() {}\n```"}}},
 			},
-		})
-		assert.Check(t, cmp.Equal(sc.Markdown(), "## 1. Outcome\n\nOne parser.\n\n## 2. Design\n\n### Context\n\n> quoted\n> more\n\n---\n\n1. first\n2. second\n\n## 3. Open Questions\n\n- Which store?\n## 5. Units\n\n### Unit 1: parser (done)\n\n- Add `Parse`.\n- Test it.\n\n### Unit 2: api\n\nWire it.\n\n```go\nfunc route() {}\n```\n"))
+		}))
+	})
+
+	t.Run("reads only items", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data": {"id": "7b1e0000-0000-4000-8000-000000000000", "attributes": {"units": []}}}`))
+		}))
+		t.Cleanup(srv.Close)
+		sc, err := newTestClient(t, srv.URL).PlanStructuredContent(t.Context(), "7b1e0000-0000-4000-8000-000000000000")
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(sc, &PlanStructuredContent{}), "the top-level units were read")
 	})
 
 	t.Run("sends the plan as a V3 entity with the token", func(t *testing.T) {
@@ -1280,75 +1288,3 @@ func TestNextCursor(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
-
-// assertItems checks the sections and units sc decoded from items. The
-// top-level attributes it also holds are read through its Markdown.
-func assertItems(t *testing.T, sc *PlanStructuredContent, want PlanStructuredContent) {
-	t.Helper()
-	assert.Check(t, cmp.DeepEqual(sc.Outcome, want.Outcome))
-	assert.Check(t, cmp.DeepEqual(sc.Design, want.Design))
-	assert.Check(t, cmp.DeepEqual(sc.OpenQuestions, want.OpenQuestions))
-	assert.Check(t, cmp.DeepEqual(sc.WorkedExample, want.WorkedExample))
-	assert.Check(t, cmp.DeepEqual(sc.Units, want.Units))
-}
-
-func TestPlanStructuredContentMarkdown(t *testing.T) {
-	s := func(v string) *string { return &v }
-	for _, tc := range []struct {
-		name string
-		in   PlanStructuredContent
-		want string
-	}{
-		{
-			name: "nothing served",
-			in:   PlanStructuredContent{},
-			want: "",
-		},
-		{
-			name: "empty units section",
-			in:   PlanStructuredContent{legacy: planLegacy{Units: []planLegacyUnit{}}},
-			want: "## 5. Units\n\n",
-		},
-		{
-			name: "sections in skeleton order, units with done",
-			in: PlanStructuredContent{legacy: planLegacy{
-				WorkedExample: s("\nEx.\n\n"),
-				Outcome:       s("\nOut.\n\n"),
-				Units: []planLegacyUnit{
-					{
-						Name: "Unit 1: a",
-						Done: true,
-						Body: "\nA.\n\n",
-					},
-					{
-						Name: "Unit 2: b",
-						Body: "\nB.\n",
-					},
-				},
-			}},
-			want: "## 1. Outcome\n\nOut.\n\n## 4. Worked example\n\nEx.\n\n## 5. Units\n\n### Unit 1: a (done)\n\nA.\n\n### Unit 2: b\n\nB.\n",
-		},
-		{
-			name: "empty body",
-			in:   PlanStructuredContent{legacy: planLegacy{OpenQuestions: s("")}},
-			want: "## 3. Open Questions\n",
-		},
-		{
-			name: "body without a trailing newline",
-			in: PlanStructuredContent{legacy: planLegacy{
-				Design: s("\nD."),
-				Units: []planLegacyUnit{
-					{
-						Name: "Unit 1: a",
-						Body: "\nA.",
-					},
-				},
-			}},
-			want: "## 2. Design\n\nD.\n## 5. Units\n\n### Unit 1: a\n\nA.\n",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Check(t, cmp.Equal(tc.in.Markdown(), tc.want))
-		})
-	}
-}

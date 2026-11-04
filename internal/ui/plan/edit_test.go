@@ -95,7 +95,7 @@ func TestEditedPartIsSavedInPlaceWithAReReadNoteQueued(t *testing.T) {
 
 	assert.Assert(t, cmp.Len(store.Set, 1))
 	assert.Check(t, cmp.Equal(store.Set[0],
-		"## 1. Outcome\n\nThe flag exists and is documented.\n\n## 2. Spec\n\n* [AGENT] parse it in main.go"))
+		"## 1. Outcome\n\nThe flag exists and is documented.\n\n## 2. Design\n\n* [AGENT] parse it in main.go"))
 	assert.Check(t, !m.editing)
 	assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Saved your edit."))
 	assert.Check(t, cmp.Len(agent.Sent(), 0), "nothing goes to the session")

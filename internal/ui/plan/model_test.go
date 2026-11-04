@@ -153,7 +153,7 @@ func TestFirstMessageRendersPlanAndReply(t *testing.T) {
 		t.Fatalf("agent got %q", got)
 	}
 	view := ansi.Strip(m.Content())
-	for _, want := range []string{"Add a flag", "The flag exists.", "Wrote a first plan.", "add a --dry-run flag", "Activity"} {
+	for _, want := range []string{"The flag exists.", "Wrote a first plan.", "add a --dry-run flag", "Activity"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view is missing %q:\n%s", want, view)
 		}
@@ -206,7 +206,7 @@ func TestFirstSendCreatesPlan(t *testing.T) {
 func TestExistingPlanOpensWithoutStartingOrRecreatingIt(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
-	store.Created, store.TextV = true, "# Existing plan\n\nKeep this outcome."
+	store.Created, store.TextV = true, "# Existing plan\n\n## 1. Outcome\n\nKeep this outcome."
 	store.FlowV.Next = []Step{{Actor: "human", Event: "address-comments"}}
 	store.CreateErr = errors.New("an existing plan must not be recreated")
 	agent := turnReturning("Keeping the existing plan.")
@@ -256,7 +256,7 @@ func TestApprovingApprovesThePlanInFactory(t *testing.T) {
 func TestAPlanNotReadyIsNotSent(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
-	store.TextV = "# Plan"
+	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists."
 	store.StateV = "refine-units"
 	store.FlowV = Flow{Claimed: true, WaitingOn: "session", Next: []Step{
 		{Actor: "session", Task: "review-plan", Dispatched: true},
@@ -396,7 +396,7 @@ func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
 	t.Run("review running", func(t *testing.T) {
 		t.Parallel()
 		store := newFakeStore()
-		store.TextV = "# Plan"
+		store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists."
 		store.StateV = "refine-units"
 		store.FlowV = Flow{Claimed: true, WaitingOn: "session", Next: []Step{
 			{Actor: "session", Task: "review-plan", Dispatched: true},
@@ -420,7 +420,7 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			t.Parallel()
 			store := newFakeStore()
-			store.TextV = "# Plan"
+			store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists."
 			store.StateV = state
 			store.setEvents("abandon")
 			sent := false
@@ -1057,7 +1057,7 @@ func typeText(t *testing.T, m Model, s string) Model {
 	return m
 }
 
-const twoParts = "## 1. Outcome\n\nThe flag exists.\n\n## 2. Spec\n\n* [AGENT] parse it in main.go"
+const twoParts = "## 1. Outcome\n\nThe flag exists.\n\n## 2. Design\n\n* [AGENT] parse it in main.go"
 
 // planModel is a screen whose plan is already text, with turn replying ok.
 func planModel(t *testing.T) (Model, *fakeStore) {
@@ -1433,17 +1433,17 @@ func TestCommentFollowsItsBlockWhenThePlanChanges(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{{block: 3, quote: "* [AGENT] parse it in main.go", text: "x"}}
 
-	m.plan = "## 0. New section\n\n" + twoParts
+	setPlan(&m, strings.Replace(twoParts, "## 1. Outcome\n\n", "## 1. Outcome\n\nAdded.\n\n", 1))
 	m.renderPlan()
 	if got := m.comments[0].block; got != 4 {
 		t.Errorf("comment is on block %d, want 4", got)
 	}
 
-	m.plan = "## 1. Outcome\n\nRewritten."
+	setPlan(&m, "## 1. Outcome\n\nRewritten.")
 	m.renderPlan()
 	if got := m.comments[0].block; got != -1 {
 		t.Errorf("comment on a rewritten block is on %d, want -1", got)
@@ -1488,7 +1488,7 @@ func TestCursorDoesNotHideTheCommentBar(t *testing.T) {
 			t.Errorf("line %d should have lost the cursor bar: %q", i, lines[i])
 		}
 	}
-	headingLine := find(lines, "SPEC")
+	headingLine := find(lines, "DESIGN")
 	if headingLine < 0 || !strings.HasPrefix(lines[headingLine], "▌ ") {
 		t.Errorf("the heading line should carry the cursor bar alone: %q", lines[headingLine])
 	}
@@ -1961,7 +1961,7 @@ func TestApprovingInAKeptScreenFollowsTheBuild(t *testing.T) {
 	assert.Assert(t, m.focus == panePlan && m.tab == tabPlan, "focus %v, tab %v", m.focus, m.tab)
 	assert.Check(t, m.keys().SendComments.Enabled(), "s not offered after the approve")
 	m = drive(t, m, press("s"))
-	assert.Check(t, cmp.DeepEqual(store.Added, [][2]string{{"# Plan", "before"}}))
+	assert.Check(t, cmp.DeepEqual(store.Added, [][2]string{{"## 5. Units", "before"}}))
 	assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
 }
 
@@ -2193,7 +2193,7 @@ func TestPageKeysScrollTheChat(t *testing.T) {
 func TestEnterDoesNotConfirmSendingThePlan(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
-	store.TextV = "# Plan"
+	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists."
 	sent := false
 	approve := func(func(string)) (string, error) {
 		sent = true
@@ -2212,14 +2212,14 @@ func TestTwoCommentsOnIdenticalBlocksStayOnSeparateBlocks(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = "## Spec\n\n* Tests\n* Tests"
+	setPlan(&m, "## 2. Design\n\n* Tests\n* Tests")
 	m.renderPlan()
 	m.comments = []comment{
 		{block: 1, quote: "* Tests", text: "first"},
 		{block: 2, quote: "* Tests", text: "second"},
 	}
 
-	m.plan = "## New\n\n## Spec\n\n* Tests\n* Tests"
+	setPlan(&m, "## 1. Outcome\n\n## 2. Design\n\n* Tests\n* Tests")
 	m.renderPlan()
 	a, b := m.comments[0].block, m.comments[1].block
 	if a == b || min(a, b) != 2 || max(a, b) != 3 {
@@ -2231,11 +2231,11 @@ func TestCommentOnARewrittenPartIsStillShown(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{{block: 3, quote: "* [AGENT] parse it in main.go", text: "x"}}
 
-	m.plan = "## 1. Outcome\n\nRewritten."
+	setPlan(&m, "## 1. Outcome\n\nRewritten.")
 	m.renderPlan()
 	if got := m.comments[0].block; got != -1 {
 		t.Fatalf("comment on a rewritten block is on %d, want -1", got)
@@ -2253,10 +2253,10 @@ func TestCommentOnARewrittenPartCanBeEditedAndDeleted(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{{block: 3, quote: "* [AGENT] parse it in main.go", text: "x"}}
-	m.plan = "## 1. Outcome\n\nRewritten."
+	setPlan(&m, "## 1. Outcome\n\nRewritten.")
 	m.renderPlan()
 
 	m = drive(t, m, press("tab"))
@@ -2305,7 +2305,7 @@ func TestNextReachesTheNearestCommentThenRewrittenParts(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{
 		{block: 3, quote: "* [AGENT] parse it in main.go", text: "a"},
@@ -2331,7 +2331,7 @@ func TestNextReachesARewrittenPartsCommentFromAnywhereAbove(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{{block: -1, quote: "something gone", text: "c"}}
 	m.moveCursor(0)
@@ -2349,9 +2349,9 @@ func TestNextStaysPutWithNoCommentBelow(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
-	m.comments = []comment{{block: 2, quote: "## 2. Spec", text: "a"}}
+	m.comments = []comment{{block: 2, quote: "## 2. Design", text: "a"}}
 	m = drive(t, m, press("tab"))
 
 	// From above the only comment n reaches it and is offered; on it and
@@ -2390,7 +2390,7 @@ func TestCursorStaysOnARewrittenPartsCommentAcrossAPoll(t *testing.T) {
 	}
 	m = drive(t, m, press("c"))
 
-	store.TextV = "## 0. New\n\nAdded.\n\n" + twoParts
+	store.TextV = twoParts + "\n\n## 4. Worked example\n\nAdded."
 	m = refreshed(t, m)
 
 	ci := m.commentAt(m.cursor)
@@ -3060,7 +3060,7 @@ func TestPlanShowsUnitsAsSteps(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = planWithUnits
 	store.UnitsV = []Unit{{Name: "Unit 1: Add RetryPolicy", Done: true}, {Name: "Unit 2: Wire it in"}}
-	store.OpenQuestionsV = []string{"Which timeout caps the wait?"}
+	store.OpenQuestionsV = []Question{{Text: "Which timeout caps the wait?"}}
 	m := New(context.Background(), turnReturning("ok"), nil, store, "plan it").WithBranch("hanabel/retry-429")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := ansi.Strip(m.Content())
@@ -3070,6 +3070,65 @@ func TestPlanShowsUnitsAsSteps(t *testing.T) {
 		}
 	}
 	assert.Check(t, !strings.Contains(view, "(done)"), "a done unit's heading keeps its suffix:\n%s", view)
+}
+
+func TestPlanWithNoSkeletonSectionIsNotYetAPlan(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	store.TextV = "## Notes\n\nMine.\n"
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = refreshed(t, m)
+	view := ansi.Strip(m.planView.View())
+	assert.Check(t, cmp.Contains(view, "No plan yet"))
+	assert.Check(t, !strings.Contains(view, "Mine."), "a section outside the skeleton is drawn:\n%s", view)
+}
+
+func TestOpenQuestionsProseOutsideItsListIsNotDrawn(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	store.TextV = "## 1. Outcome\n\nOne.\n\n## 3. Open Questions\n\nNone.\n"
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = refreshed(t, m)
+	view := ansi.Strip(m.planView.View())
+	assert.Check(t, cmp.Contains(view, "OPEN QUESTIONS"), "the heading is drawn:\n%s", view)
+	assert.Check(t, !strings.Contains(view, "None."), "prose outside the list is drawn:\n%s", view)
+}
+
+func TestIdenticalBlocksOfDifferentUnitsEachHaveTheirOwnAt(t *testing.T) {
+	t.Parallel()
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	setPlan(&m, "## 5. Units\n\n### Unit 1: parser (done)\n\n- Test it.\n\n### Unit 2: api\n\n- Test it.\n")
+	m.renderPlan()
+	var ats []int
+	for _, b := range m.blocks {
+		if b.source == "- Test it." {
+			ats = append(ats, b.at)
+		}
+	}
+	assert.Assert(t, cmp.Len(ats, 2))
+	assert.Check(t, ats[0] >= 0 && ats[1] > ats[0], "the two blocks' ats are %v", ats)
+}
+
+func TestMalformedUnitHeadingHasNoAt(t *testing.T) {
+	t.Parallel()
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	setPlan(&m, "## 5. Units\n\n### unit 1 - x\n\nBody.\n")
+	m.renderPlan()
+	at := -2
+	for _, b := range m.blocks {
+		if b.source == "### Unit 1: unit 1 - x" {
+			at = b.at
+		}
+	}
+	assert.Check(t, cmp.Equal(at, -1), "the made-up heading is in the plan text")
+	m = drive(t, m, press("tab"))
+	for range len(m.blocks) + 1 {
+		m = drive(t, m, press("down"))
+	}
 }
 
 // TestPlanStepsComeFromTheRoute checks that the plan pane's steps are the
@@ -3150,7 +3209,7 @@ func TestNarrowScreenTakesTurnsWithTabs(t *testing.T) {
 	if !regexp.MustCompile(`Activity +Flow +Plan · 2 units`).MatchString(view) {
 		t.Errorf("no tab strip:\n%s", view)
 	}
-	if strings.Contains(view, "Retry on 429") {
+	if strings.Contains(view, "Create retries.") {
 		t.Errorf("the plan shows beside the chat on a narrow screen:\n%s", view)
 	}
 	assertFits(t, m, 70, 30)
@@ -3158,21 +3217,21 @@ func TestNarrowScreenTakesTurnsWithTabs(t *testing.T) {
 	// tab goes round chat, Flow and Plan.
 	m = drive(t, m, press("tab"))
 	view = ansi.Strip(m.Content())
-	if !strings.Contains(view, "PROGRESS") || strings.Contains(view, "Wrote it.") || strings.Contains(view, "Retry on 429") {
+	if !strings.Contains(view, "PROGRESS") || strings.Contains(view, "Wrote it.") || strings.Contains(view, "Create retries.") {
 		t.Errorf("tab did not bring the Flow tab up in place of the chat:\n%s", view)
 	}
 	assertFits(t, m, 70, 30)
 
 	m = drive(t, m, press("tab"))
 	view = ansi.Strip(m.Content())
-	if !strings.Contains(view, "Retry on 429") || strings.Contains(view, "PROGRESS") {
+	if !strings.Contains(view, "Create retries.") || strings.Contains(view, "PROGRESS") {
 		t.Errorf("a second tab did not bring the plan up:\n%s", view)
 	}
 	assertFits(t, m, 70, 30)
 
 	m = drive(t, m, press("tab"))
 	view = ansi.Strip(m.Content())
-	if !strings.Contains(view, "Wrote it.") || strings.Contains(view, "Retry on 429") {
+	if !strings.Contains(view, "Wrote it.") || strings.Contains(view, "Create retries.") {
 		t.Errorf("a third tab did not bring the chat back:\n%s", view)
 	}
 	assert.Check(t, cmp.Equal(m.focus, paneChat))
@@ -3199,7 +3258,7 @@ func TestActionBarOffersNoButtonWhileACommentIsWritten(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 110, Height: 30})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{{block: 0, quote: "## 1. Outcome", text: "x"}}
 	m = drive(t, m, press("tab"))
@@ -3233,7 +3292,7 @@ func TestShiftSelectsSeveralBlocksForOneComment(t *testing.T) {
 	m = typeText(t, m, "merge these")
 	m = drive(t, m, press("enter"))
 
-	want := "The flag exists.\n\n## 2. Spec"
+	want := "The flag exists.\n\n## 2. Design"
 	if len(m.comments) != 1 || m.comments[0].block != 1 || m.comments[0].span != 2 || m.comments[0].quote != want {
 		t.Fatalf("comments: %+v", m.comments)
 	}
@@ -3251,7 +3310,7 @@ func TestCommentOnSeveralBlocksHangsUnderTheLast(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{{block: 1, span: 3, quote: m.quoteOf(1, 3), text: "use cobra flags"}}
 	m.drawPlan()
@@ -3283,7 +3342,7 @@ func TestSelectionTakesInTheCommentsItTouches(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{
 		{block: 3, quote: "* [AGENT] parse it in main.go", text: "first"},
@@ -3324,7 +3383,7 @@ func TestEmptyCommentOnASelectionDeletesWhatItTookIn(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{{block: 1, quote: "The flag exists.", text: "x"}}
 	m = drive(t, m, press("tab"))
@@ -3341,7 +3400,7 @@ func TestEscClearsTheSelectionBeforeItLeaves(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithBack()
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("shift+down"))
@@ -3364,7 +3423,7 @@ func TestMovingWithoutShiftDropsTheSelection(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("shift+down"))
@@ -3382,18 +3441,18 @@ func TestCommentOnSeveralBlocksFollowsThemWhenThePlanChanges(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.plan = twoParts
+	setPlan(&m, twoParts)
 	m.renderPlan()
 	m.comments = []comment{{block: 1, span: 2, quote: m.quoteOf(1, 2), text: "x"}}
 
-	m.plan = "## 0. New section\n\n" + twoParts
+	setPlan(&m, strings.Replace(twoParts, "## 1. Outcome\n\n", "## 1. Outcome\n\nAdded.\n\n", 1))
 	m.renderPlan()
 	if c := m.comments[0]; c.block != 2 || c.span != 2 {
 		t.Errorf("comment is on %d+%d, want 2+2", c.block, c.span)
 	}
 
 	// Rewriting either block leaves the comment on a rewritten part.
-	m.plan = strings.Replace(twoParts, "## 2. Spec", "## 2. Design", 1)
+	setPlan(&m, strings.Replace(twoParts, "## 2. Design", "## 4. Worked example", 1))
 	m.renderPlan()
 	if got := m.comments[0].block; got != -1 {
 		t.Errorf("comment on a rewritten block is on %d, want -1", got)
@@ -3427,7 +3486,7 @@ func TestSavedCommentAnchorsByQuote(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	store.TextV = twoParts
-	store.AddComment(context.Background(), "## 2. Spec", "needs more detail")
+	store.AddComment(context.Background(), "## 2. Design", "needs more detail")
 	m := New(context.Background(), newFakeAgent(), nil, store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 	m = refreshed(t, m)
@@ -3548,7 +3607,7 @@ func TestResolvedStopDisablesCommentKeys(t *testing.T) {
 func TestPollKeepsCommentPlace(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
-	store.TextV = "## Spec\n\n* Tests\n* Tests"
+	store.TextV = "## 2. Design\n\n* Tests\n* Tests"
 	store.AddComment(context.Background(), "* Tests", "second one")
 	m := New(context.Background(), newFakeAgent(), nil, store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
@@ -4780,6 +4839,19 @@ func TestFlowTabShowsProgress(t *testing.T) {
 			without: []string{"▸"},
 		},
 		{
+			name:  "a unit with no name is ▸ by its number alone",
+			units: []Unit{{Name: "Unit 1:"}, {Name: "Unit 2: b"}},
+			flow:  Flow{Progress: &Progress{CurrentUnit: "Unit 1:"}},
+			want:  []string{"▸ 1", "○ 2  b"},
+		},
+		{
+			name:    "a heading not in Unit N: name form never gets ▸",
+			units:   []Unit{{Name: "unit 1 - x"}},
+			flow:    Flow{Progress: &Progress{CurrentUnit: "unit 1 - x"}},
+			want:    []string{"○ 1  unit 1 - x"},
+			without: []string{"▸"},
+		},
+		{
 			name:   "sub-plans keep the summary line",
 			units:  threeUnitsRead,
 			family: Family{Children: []Relative{{ID: "c1", Title: "Lex it", State: "build"}}},
@@ -6006,7 +6078,7 @@ func TestPlanLinks(t *testing.T) {
 	}{
 		{
 			name:  "link",
-			text:  "Builds after [plan-id-links](" + planURL + ").",
+			text:  "## 1. Outcome\n\n" + "Builds after [plan-id-links](" + planURL + ").",
 			width: 140,
 			check: func(t *testing.T, raw string) {
 				assert.Check(t, cmp.Contains(raw, ansi.SetHyperlink(planURL)))
@@ -6016,7 +6088,7 @@ func TestPlanLinks(t *testing.T) {
 		},
 		{
 			name:  "other",
-			text:  "See [docs](https://example.com/x).",
+			text:  "## 1. Outcome\n\n" + "See [docs](https://example.com/x).",
 			width: 140,
 			check: func(t *testing.T, raw string) {
 				assert.Check(t, cmp.Contains(raw, ansi.SetHyperlink("https://example.com/x")))
@@ -6024,7 +6096,7 @@ func TestPlanLinks(t *testing.T) {
 		},
 		{
 			name:  "wrapped",
-			text:  "[a very long plan name that wraps over lines because it is longer than the plan pane is wide](" + planURL + ")",
+			text:  "## 1. Outcome\n\n" + "[a very long plan name that wraps over lines because it is longer than the plan pane is wide](" + planURL + ")",
 			width: 100,
 			check: func(t *testing.T, raw string) {
 				ls := linesWith(raw, "very long", "because it", "pane is wide")
@@ -6037,7 +6109,7 @@ func TestPlanLinks(t *testing.T) {
 		},
 		{
 			name:  "uuid-text",
-			text:  "[" + planUUID + "](" + planURL + ") " + planUUID,
+			text:  "## 1. Outcome\n\n" + "[" + planUUID + "](" + planURL + ") " + planUUID,
 			width: 140,
 			check: func(t *testing.T, raw string) {
 				assert.Check(t, cmp.Equal(strings.Count(ansi.Strip(raw), planUUID), 2))
@@ -6046,31 +6118,31 @@ func TestPlanLinks(t *testing.T) {
 		},
 		{
 			name:  "escape",
-			text:  "[x](https://a.test/\x1b]0;pwned\x07)",
+			text:  "## 1. Outcome\n\n" + "[x](https://a.test/\x1b]0;pwned\x07)",
 			width: 140,
 			check: noHyperlink,
 		},
 		{
 			name:  "scheme",
-			text:  "[x](file:///etc/passwd)",
+			text:  "## 1. Outcome\n\n" + "[x](file:///etc/passwd)",
 			width: 140,
 			check: noHyperlink,
 		},
 		{
 			name:  "fence",
-			text:  "```\n[x](" + planURL + ")\n```",
+			text:  "## 1. Outcome\n\n" + "```\n[x](" + planURL + ")\n```",
 			width: 140,
 			check: noHyperlink,
 		},
 		{
 			name:  "heading",
-			text:  "## [x](" + planURL + ")",
+			text:  "## 5. Units\n\n### Unit 1: [x](" + planURL + ")",
 			width: 140,
 			check: noHyperlink,
 		},
 		{
 			name:  "bare",
-			text:  "see " + planUUID,
+			text:  "## 1. Outcome\n\n" + "see " + planUUID,
 			width: 140,
 			check: noHyperlink,
 		},
@@ -6082,4 +6154,23 @@ func TestPlanLinks(t *testing.T) {
 			c.check(t, m.Content())
 		})
 	}
+}
+
+// TestSavedCommentOnABlockGoldmarkSplitsDifferentlyIsStillShown checks a
+// comment saved when the screen split the plan itself. Its quote is a
+// splitBlocks block that items does not hold: a rule straight after a table's
+// lines is a setext underline to goldmark, so the lines are a heading outside
+// the skeleton and are not drawn.
+func TestSavedCommentOnABlockGoldmarkSplitsDifferentlyIsStillShown(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	store.TextV = "## 1. Outcome\n\n| a | b |\n|---|---|\n| 1 | 2 |\n---\n"
+	store.AddComment(context.Background(), "---", "needs more detail")
+	m := New(context.Background(), newFakeAgent(), nil, store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = refreshed(t, m)
+
+	view := ansi.Strip(m.planView.View())
+	assert.Check(t, cmp.Contains(view, "needs more detail"), "view:\n%s", view)
+	assert.Check(t, cmp.Contains(view, "On parts chunk has since rewritten"), "view:\n%s", view)
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
@@ -511,25 +510,6 @@ type PlanStructuredContent struct {
 	Outcome, Design, OpenQuestions, WorkedExample *PlanSection
 	// Units is nil when the plan has no 5. Units, and empty when it has none in it.
 	Units []PlanUnit
-
-	// legacy is the top-level attributes factory still serves beside items. Only
-	// Markdown reads them, for the watch preview.
-	legacy planLegacy
-}
-
-// planLegacy is a plan's top-level structured content attributes: each
-// section as its body, or nil when factory found none, and the units of its
-// 5. Units, nil when it has none.
-type planLegacy struct {
-	Outcome, Design, OpenQuestions, WorkedExample *string
-	Units                                         []planLegacyUnit
-}
-
-// planLegacyUnit is one unit of 5. Units as the top-level attributes serve it.
-type planLegacyUnit struct {
-	Name string // the heading, without " (done)"
-	Done bool
-	Body string
 }
 
 // PlanSection is one section: its body as written, and the blocks factory
@@ -566,54 +546,7 @@ type PlanUnit struct {
 	Blocks []PlanBlock
 }
 
-// planSections are the skeleton headings of the sections
-// PlanStructuredContent serves, in plan order; 5. Units follows them.
-var planSections = [...]string{"1. Outcome", "2. Design", "3. Open Questions", "4. Worked example"}
-
-// Markdown is the plan rebuilt from its top-level sections and units, each
-// under its skeleton heading, or "" when factory found none of them. A done
-// unit's heading gets back its " (done)", and a body that does not end
-// in a newline gets one, so no heading is glued onto it.
-func (c *PlanStructuredContent) Markdown() string {
-	var b strings.Builder
-	body := func(s string) {
-		b.WriteString(s)
-		if s != "" && !strings.HasSuffix(s, "\n") {
-			b.WriteByte('\n')
-		}
-	}
-	l := c.legacy
-	for i, s := range []*string{l.Outcome, l.Design, l.OpenQuestions, l.WorkedExample} {
-		if s == nil {
-			continue
-		}
-		b.WriteString("## " + planSections[i] + "\n")
-		body(*s)
-	}
-	if l.Units != nil {
-		b.WriteString("## 5. Units\n\n")
-		for _, u := range l.Units {
-			h := "### " + u.Name
-			if u.Done {
-				h += " (done)"
-			}
-			b.WriteString(h + "\n")
-			body(u.Body)
-		}
-	}
-	return b.String()
-}
-
 type planStructuredContentAttrs struct {
-	Outcome       *string `json:"outcome"`
-	Design        *string `json:"design"`
-	OpenQuestions *string `json:"open_questions"`
-	WorkedExample *string `json:"worked_example"`
-	Units         []struct {
-		Name   string `json:"name"`
-		IsDone bool   `json:"is_done"`
-		Body   string `json:"body"`
-	} `json:"units"`
 	Items struct {
 		Outcome       *PlanSection `json:"outcome"`
 		Design        *PlanSection `json:"design"`
@@ -644,22 +577,12 @@ func (c *Client) PlanStructuredContent(ctx context.Context, id string) (*PlanStr
 	out := &PlanStructuredContent{
 		Outcome: items.Outcome, Design: items.Design,
 		OpenQuestions: items.OpenQuestions, WorkedExample: items.WorkedExample,
-		legacy: planLegacy{
-			Outcome: attrs.Outcome, Design: attrs.Design,
-			OpenQuestions: attrs.OpenQuestions, WorkedExample: attrs.WorkedExample,
-		},
 	}
 	if items.Units != nil {
 		out.Units = make([]PlanUnit, 0, len(items.Units))
 	}
 	for _, u := range items.Units {
 		out.Units = append(out.Units, PlanUnit{Number: u.Number, Name: u.Name, Done: u.IsDone, Text: u.Text, Blocks: u.Blocks})
-	}
-	if attrs.Units != nil {
-		out.legacy.Units = make([]planLegacyUnit, 0, len(attrs.Units))
-	}
-	for _, u := range attrs.Units {
-		out.legacy.Units = append(out.legacy.Units, planLegacyUnit{Name: u.Name, Done: u.IsDone, Body: u.Body})
 	}
 	return out, nil
 }

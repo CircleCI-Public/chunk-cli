@@ -189,7 +189,7 @@ func TestChatContextFromEachScreen(t *testing.T) {
 }
 
 func TestCtrlOKeepsWhatIsBeingTyped(t *testing.T) {
-	p := &fakePlans{plan: "# Retry uploads\n\nRetry transient failures."}
+	p := &fakePlans{plan: "# Retry uploads\n\n## 1. Outcome\n\nRetry transient failures."}
 	m := chatModel(t, p, &fakeChat{})
 	m = openFlow(t, m, "p1", "Retry uploads")
 	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))

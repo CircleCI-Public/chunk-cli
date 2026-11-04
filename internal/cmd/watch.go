@@ -467,26 +467,26 @@ func planParents(flows []circleci.Flow) map[string]string {
 	return out
 }
 
-func previewFactoryPlan(ctx context.Context, id string) (string, []circleci.PlanComment, error) {
+func previewFactoryPlan(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
 	api, err := factoryPlanClient()
 	if err != nil {
-		return "", nil, err
+		return plan.Structure{}, nil, err
 	}
 	return previewPlan(ctx, api, id)
 }
 
-// previewPlan is plan id, rebuilt from factory's structured content, and its
+// previewPlan is plan id as factory's structured content holds it, and its
 // open comments, fetched at the same time.
-func previewPlan(ctx context.Context, api *circleci.Client, id string) (string, []circleci.PlanComment, error) {
+func previewPlan(ctx context.Context, api *circleci.Client, id string) (plan.Structure, []circleci.PlanComment, error) {
 	g, ctx := errgroup.WithContext(ctx)
-	var text string
+	var structure plan.Structure
 	var comments []circleci.PlanComment
 	g.Go(func() error {
 		sc, err := api.PlanStructuredContent(ctx, id)
 		if err != nil {
 			return fmt.Errorf("plan structured content: %w", err)
 		}
-		text = sc.Markdown()
+		structure = factoryplan.StructureOf(sc)
 		return nil
 	})
 	g.Go(func() error {
@@ -497,9 +497,9 @@ func previewPlan(ctx context.Context, api *circleci.Client, id string) (string, 
 		return nil
 	})
 	if err := g.Wait(); err != nil {
-		return "", nil, err
+		return plan.Structure{}, nil, err
 	}
-	return text, comments, nil
+	return structure, comments, nil
 }
 
 // dashboardMessage is err as the dashboard shows it: a user error's message

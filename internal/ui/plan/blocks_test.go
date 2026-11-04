@@ -9,6 +9,8 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 )
 
@@ -21,7 +23,7 @@ func TestSplitBlocks(t *testing.T) {
 The flag exists
 and is documented.
 
-## 2. Spec
+## 2. Design
 
 * [USER] one
   * tradeoff
@@ -47,7 +49,7 @@ and is documented.
 		"# Add a flag",
 		"## 1. Outcome",
 		"The flag exists\nand is documented.",
-		"## 2. Spec",
+		"## 2. Design",
 		"* [USER] one\n  * tradeoff",
 		"* [AGENT] two\n\n  more about two",
 		"1. first",
@@ -59,6 +61,130 @@ and is documented.
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("blocks:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestBlocksOf(t *testing.T) {
+	t.Parallel()
+	// TestSplitBlocks' plan, its sections under the skeleton's headings, with
+	// the same sources where goldmark agrees. It differs in one place: "---"
+	// straight after the table's lines is a setext underline, so they are a ##
+	// heading outside the skeleton. It ends 2. Design, and neither it nor the
+	// rule and the quote after it is drawn.
+	split := "# Add a flag\n\n## 1. Outcome\n\nThe flag exists\nand is documented.\n\n## 2. Design\n\n" +
+		"* [USER] one\n  * tradeoff\n* [AGENT] two\n\n  more about two\n1. first\n2. second\n\n" +
+		"```go\nfunc x() {}\n\nfunc y() {}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n---\n> quoted\n"
+	tests := []struct {
+		name       string
+		text       string
+		wantSource []string
+		wantSteps  []int
+	}{
+		{
+			name: "the split plan",
+			text: split,
+			wantSource: []string{
+				"## 1. Outcome", "The flag exists\nand is documented.", "## 2. Design",
+				"* [USER] one\n  * tradeoff", "* [AGENT] two\n\n  more about two", "1. first", "2. second",
+				"```go\nfunc x() {}\n\nfunc y() {}\n```",
+			},
+			wantSteps: []int{-1, -1, -1, -1, -1, -1, -1, -1},
+		},
+		{
+			name:       "a table, a rule and a quote",
+			text:       "## 2. Design\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n\n> quoted\n",
+			wantSource: []string{"## 2. Design", "| a | b |\n|---|---|\n| 1 | 2 |", "---", "> quoted"},
+			wantSteps:  []int{-1, -1, -1, -1},
+		},
+		{
+			name:       "open questions are drawn from each question's blocks",
+			text:       "## 3. Open Questions\n\n- Which store?\n- Which queue?\n",
+			wantSource: []string{"## 3. Open Questions", "Which store?", "Which queue?"},
+			wantSteps:  []int{-1, -1, -1},
+		},
+		{
+			name:       "open questions with no list are the heading alone",
+			text:       "## 3. Open Questions\n\nNone.\n",
+			wantSource: []string{"## 3. Open Questions"},
+			wantSteps:  []int{-1},
+		},
+		{
+			name:       "a section outside the skeleton is not drawn",
+			text:       "## 1. Outcome\n\nOne.\n\n## Notes\n\nMine.\n",
+			wantSource: []string{"## 1. Outcome", "One."},
+			wantSteps:  []int{-1, -1},
+		},
+		{
+			name:       "a duplicated section is not drawn",
+			text:       "## 1. Outcome\n\nOne.\n\n## 1. Outcome\n\nTwo.\n\n## 2. Design\n\nD.\n",
+			wantSource: []string{"## 2. Design", "D."},
+			wantSteps:  []int{-1, -1},
+		},
+		{
+			name:       "a unit with no name",
+			text:       "## 5. Units\n\n### Unit 1:\n\nBody.\n",
+			wantSource: []string{"## 5. Units", "### Unit 1:", "Body."},
+			wantSteps:  []int{-1, 0, -1},
+		},
+		{
+			name:       "units are numbered by position",
+			text:       "## 5. Units\n\n### Unit 1: parser (done)\n\n- Test it.\n\n### Unit 2: api\n\n- Test it.\n",
+			wantSource: []string{"## 5. Units", "### Unit 1: parser (done)", "- Test it.", "### Unit 2: api", "- Test it."},
+			wantSteps:  []int{-1, 0, -1, 1, -1},
+		},
+		{
+			name:       "a malformed unit heading is made up by position",
+			text:       "## 5. Units\n\n### unit 1 - x\n\nBody.\n",
+			wantSource: []string{"## 5. Units", "### Unit 1: unit 1 - x", "Body."},
+			wantSteps:  []int{-1, 0, -1},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			blocks, steps := blocksOf(structureOfItems(fakes.PlanItems(tc.text)))
+			var got []string
+			for _, b := range blocks {
+				got = append(got, b.source)
+			}
+			assert.Check(t, cmp.DeepEqual(got, tc.wantSource))
+			assert.Check(t, cmp.DeepEqual(steps, tc.wantSteps))
+		})
+	}
+}
+
+func TestBlocksOfDrawsAnUnknownBlockTypeAsAParagraph(t *testing.T) {
+	t.Parallel()
+	blocks, _ := blocksOf(Structure{Sections: []Section{{
+		Heading: "1. Outcome",
+		Blocks:  []Block{{Type: "table", Text: "| a |\n|---|\n| 1 |"}},
+	}}})
+	assert.Assert(t, cmp.Len(blocks, 2))
+	assert.Check(t, cmp.Equal(blocks[1].kind, kindParagraph))
+	assert.Check(t, cmp.Equal(blocks[1].source, "| a |\n|---|\n| 1 |"))
+}
+
+func TestLinesDrawsEachSectionBlockAndUnit(t *testing.T) {
+	t.Parallel()
+	s := Structure{
+		Sections: []Section{
+			{Heading: "1. Outcome", Blocks: []Block{{Type: "paragraph", Text: "It works."}}},
+			{Heading: "2. Design", Blocks: []Block{{Type: "paragraph", Text: "One parser."}}},
+		},
+		Units: []Unit{
+			{Number: 1, Name: "lexer", Done: true, Blocks: []Block{{Type: "paragraph", Text: "Lex it."}}},
+			{Number: 2, Name: "parser", Blocks: []Block{{Type: "paragraph", Text: "Parse it."}}},
+		},
+	}
+	for _, dark := range []bool{true, false} {
+		got := ansi.Strip(strings.Join(Lines(s, 60, dark), "\n"))
+		for _, want := range []string{
+			"OUTCOME", "It works.", "DESIGN", "One parser.", "UNITS",
+			ui.IconOK + " 1  lexer", "Lex it.", "○ 2  parser", "Parse it.",
+		} {
+			assert.Check(t, cmp.Contains(got, want), "dark %t:\n%s", dark, got)
+		}
+		assert.Check(t, !strings.Contains(got, "▌"), "a gutter is drawn:\n%s", got)
 	}
 }
 

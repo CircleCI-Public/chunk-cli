@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
@@ -80,7 +81,29 @@ func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 }
 func (f *fakePlanStore) Family(context.Context) (plan.Family, error) { return plan.Family{}, nil }
 func (f *fakePlanStore) Structure(context.Context) (plan.Structure, error) {
-	return plan.Structure{Units: f.units}, nil
+	items := fakes.PlanItems(f.text)
+	st := plan.Structure{Units: f.units}
+	for _, sec := range []struct {
+		heading string
+		section *fakes.FactorySection
+	}{{"1. Outcome", items.Outcome}, {"2. Design", items.Design}} {
+		if sec.section != nil {
+			st.Sections = append(st.Sections, plan.Section{Heading: sec.heading, Blocks: blocksOf(sec.section.Blocks)})
+		}
+	}
+	return st, nil
+}
+
+// blocksOf is bs as the plan screen's blocks.
+func blocksOf(bs []fakes.FactoryBlock) []plan.Block {
+	out := make([]plan.Block, len(bs))
+	for i, b := range bs {
+		out[i] = plan.Block{Type: b.Type, Text: b.Text}
+		if b.Blocks != nil {
+			out[i].Blocks = blocksOf(*b.Blocks)
+		}
+	}
+	return out
 }
 func (f *fakePlanStore) AddressComments(context.Context) error     { return nil }
 func (f *fakePlanStore) AnswerOpenQuestions(context.Context) error { return nil }
@@ -210,11 +233,13 @@ func (d *fakeDeleter) called() []string {
 	return append([]string(nil), d.calls...)
 }
 
-// flowList is a flow list of flows, each previewed as its title.
+// flowList is a flow list of flows, each previewed as an Outcome of its ID.
 func flowList(t *testing.T, flows ...circleci.Flow) flowlist.Model {
 	t.Helper()
 	return flowlist.New(t.Context(), func(context.Context) ([]circleci.Flow, error) { return flows, nil },
-		func(_ context.Context, id string) (string, []circleci.PlanComment, error) { return "# " + id, nil, nil })
+		func(_ context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
+			return plan.Structure{Sections: []plan.Section{{Heading: "1. Outcome", Blocks: []plan.Block{{Type: "paragraph", Text: id}}}}}, nil, nil
+		})
 }
 
 // sized is m after a terminal of 110x40 reports its size.
@@ -475,8 +500,8 @@ func TestWindowSizeReachesTheKeptPlan(t *testing.T) {
 }
 
 func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
-	a := &fakePlans{plan: "# Upload retries\n\nRetry transient failures."}
-	b := &fakePlans{plan: "# Cache installs\n\nCache dependencies."}
+	a := &fakePlans{plan: "# Upload retries\n\n## 1. Outcome\n\nRetry transient failures."}
+	b := &fakePlans{plan: "# Cache installs\n\n## 1. Outcome\n\nCache dependencies."}
 	opened := map[string]int{}
 	planner := func(ctx context.Context, root, id string) (plan.Agent, plan.Approver, plan.Store, error) {
 		opened[id]++

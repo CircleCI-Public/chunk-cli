@@ -87,19 +87,31 @@ func TestStoreStructureReadsItFromFactory(t *testing.T) {
 
 	_, err = store.Create(ctx, "a plan")
 	assert.NilError(t, err)
+	err = client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 1. Outcome\n\nWhy.\n")
+	assert.NilError(t, err)
 	cci.SetFactoryPlanUnits(store.ID(), fakes.FactoryUnit{Name: "Unit 1: lexer", Done: true, Body: "\nLex.\n"})
-	cci.SetFactoryPlanOpenQuestionObjects(store.ID(), "Which store?")
 	st, err = store.Structure(ctx)
 	assert.NilError(t, err)
+	unit := plan.Unit{Number: 1, Name: "lexer", Done: true, Blocks: []plan.Block{{Type: "paragraph", Text: "Lex."}}}
+	outcome := plan.Section{Heading: "1. Outcome", Blocks: []plan.Block{{Type: "paragraph", Text: "Why."}}}
 	assert.Check(t, cmp.DeepEqual(st, plan.Structure{
-		Units:         []plan.Unit{{Name: "lexer", Done: true}},
-		OpenQuestions: []string{"Which store?"},
+		Sections: []plan.Section{outcome},
+		Units:    []plan.Unit{unit},
 	}))
 
 	cci.SetFactoryPlanOpenQuestionObjects(store.ID(), "Which store?", "Which TTL?")
 	st, err = store.Structure(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.DeepEqual(st.OpenQuestions, []string{"Which store?", "Which TTL?"}))
+	which := plan.Block{Type: "paragraph", Text: "Which store?"}
+	ttl := plan.Block{Type: "paragraph", Text: "Which TTL?"}
+	assert.Check(t, cmp.DeepEqual(st, plan.Structure{
+		Sections: []plan.Section{outcome, {Heading: "3. Open Questions", Blocks: []plan.Block{which, ttl}}},
+		Units:    []plan.Unit{unit},
+		OpenQuestions: []plan.Question{
+			{Text: "Which store?", Blocks: []plan.Block{which}},
+			{Text: "Which TTL?", Blocks: []plan.Block{ttl}},
+		},
+	}))
 
 	cci.FailFactoryStructuredContent(store.ID())
 	_, err = store.Structure(ctx)
