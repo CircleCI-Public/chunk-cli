@@ -27,9 +27,12 @@ func (m Model) keys() keyMap {
 	}
 	k.Chat.SetEnabled(m.chatKey)
 	k.Delete.SetEnabled(m.deletable() && m.ask == "" && m.takeOver == "")
-	listed := len(m.flows) > 0
+	listed := len(m.flows) > 0 || m.suggesting()
 	k.Select.SetEnabled(listed)
 	k.Open.SetEnabled(listed)
+	if m.suggesting() {
+		k.Open.SetHelp("enter", "start")
+	}
 	k.Resume.SetEnabled(m.resume().Kind != planstate.ResumeNone && m.takeOver == "")
 	return k
 }

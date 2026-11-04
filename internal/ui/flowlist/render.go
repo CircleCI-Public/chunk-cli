@@ -145,6 +145,18 @@ func (m Model) listLines(width, height int) []string {
 		// below can count on two rows a flow.
 		rows = append(rows, "  "+indent+strings.Join(detail, st.VDim.Render(" · ")))
 	}
+	if len(rows) == 0 && m.suggesting() {
+		rows = append(rows, st.Warning.Bold(true).Render("Start a change"))
+		for i, sg := range m.suggestions {
+			title := ansi.Truncate(oneLine(sg.Title), max(width-2, 1), "…")
+			if i == m.suggestion {
+				selected = len(rows)
+				rows = append(rows, st.Success.Render("▶ ")+st.Emphasis.Render(title))
+				continue
+			}
+			rows = append(rows, "  "+title)
+		}
+	}
 	if len(rows) == 0 {
 		message := []string{"  " + st.Dim.Render("no open flows"), "  " + st.Dim.Render("n starts one")}
 		switch {

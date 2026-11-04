@@ -286,6 +286,75 @@ func TestHostMessages(t *testing.T) {
 	})
 }
 
+// suggestions has the list offer titles under "Start a change".
+func suggestions(titles ...string) func(flowlist.Model) flowlist.Model {
+	return func(m flowlist.Model) flowlist.Model {
+		var s []flowlist.Suggestion
+		for _, t := range titles {
+			s = append(s, flowlist.Suggestion{Title: t})
+		}
+		return m.WithSuggestions(s)
+	}
+}
+
+func TestSuggestionsUnderStartAChange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newDriver(t, fixed(), preview, suggestions("Add keyboard shortcuts", "Add dark mode"))
+		d.send(tea.WindowSizeMsg{Width: 120, Height: 30})
+		d.send(d.m.Init()())
+		d.step() // The empty list.
+		got := d.content()
+		assert.Check(t, cmp.Contains(got, "Start a change"))
+		assert.Check(t, cmp.Contains(got, "▶ Add keyboard shortcuts"))
+		assert.Check(t, cmp.Contains(got, "Add dark mode"))
+		assert.Check(t, !strings.Contains(got, "no open flows"), got)
+		d.send(press(tea.KeyDown))
+		got = d.content()
+		assert.Check(t, cmp.Contains(got, "▶ Add dark mode"))
+		d.send(press(tea.KeyEnter))
+		msg := d.next()
+		assert.Check(t, cmp.DeepEqual(msg, flowlist.NewMsg{Request: "Add dark mode"}))
+		d.send(press('n'))
+		msg = d.next()
+		assert.Check(t, cmp.DeepEqual(msg, flowlist.NewMsg{}), "n did not emit an empty NewMsg")
+	})
+}
+
+func TestSuggestionsHideOnceAFlowExists(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		flow := circleci.Flow{
+			ID:        "a",
+			Title:     "Alpha",
+			State:     "refine-proposal",
+			Next:      waitHuman,
+			WaitingOn: "human",
+		}
+		d := newDriver(t, fixed(flow), preview, suggestions("Add dark mode"))
+		d.send(tea.WindowSizeMsg{Width: 120, Height: 30})
+		d.load()
+		got := d.content()
+		assert.Check(t, !strings.Contains(got, "Start a change"), got)
+		assert.Check(t, !strings.Contains(got, "Add dark mode"), got)
+		d.send(press(tea.KeyEnter))
+		msg := d.next()
+		assert.Check(t, cmp.DeepEqual(msg, flowlist.OpenMsg{ID: "a", Title: "Alpha"}))
+	})
+}
+
+func TestNoStartAChangeWithoutSuggestions(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newDriver(t, fixed(), preview, suggestions())
+		d.send(tea.WindowSizeMsg{Width: 120, Height: 30})
+		d.send(d.m.Init()())
+		d.step()
+		got := d.content()
+		assert.Check(t, !strings.Contains(got, "Start a change"), got)
+		assert.Check(t, cmp.Contains(got, "no open flows"))
+		_, cmd := d.m.Update(press(tea.KeyEnter))
+		assert.Check(t, cmp.Nil(cmd), "enter did something with nothing to start")
+	})
+}
+
 // resumeLines are every line ResumeLine can say, so a test can check the
 // list itself shows none: the host shows it, in its header. The preview's
 // own "Waiting on" names factory's actor, as waiting_on serves it.

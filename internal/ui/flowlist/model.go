@@ -25,8 +25,13 @@ import (
 // which is its plan's.
 type OpenMsg struct{ ID, Title string }
 
-// NewMsg asks the host to start a new plan workspace.
-type NewMsg struct{}
+// NewMsg asks the host to start a new plan workspace, with Request as its
+// first request when it is not empty.
+type NewMsg struct{ Request string }
+
+// Suggestion is a change the list offers under "Start a change" while there
+// are no open flows.
+type Suggestion struct{ Title string }
 
 // ResumeMsg asks the host to start the flow's agent again, as kind says.
 type ResumeMsg struct {
@@ -81,6 +86,10 @@ type Model struct {
 	// host has none to read, so every flow has none.
 	blockers func(context.Context, string) ([]planstate.Blocker, error)
 	flows    []circleci.Flow
+	// suggestions are offered under "Start a change" while there are no
+	// open flows; suggestion is the selected one's index.
+	suggestions []Suggestion
+	suggestion  int
 	// parentOf is each sub-plan's parent plan ID, from the last list.
 	parentOf   map[string]string
 	parentsErr error
@@ -169,6 +178,20 @@ func (m Model) WithParents(parents func(context.Context) (map[string]string, err
 func (m Model) WithBlockers(blockers func(context.Context, string) ([]planstate.Blocker, error)) Model {
 	m.blockers = blockers
 	return m
+}
+
+// WithSuggestions shows suggestions under "Start a change" while the list
+// has no open flows.
+func (m Model) WithSuggestions(s []Suggestion) Model {
+	m.suggestions = slices.Clone(s)
+	m.suggestion = min(m.suggestion, max(len(s)-1, 0))
+	return m
+}
+
+// suggesting is whether the list shows its suggestions: it has some, and
+// has listed no open flows.
+func (m Model) suggesting() bool {
+	return m.loaded && len(m.flows) == 0 && len(m.suggestions) > 0
 }
 
 // Init requests the first list. Polling starts when that request finishes.
@@ -471,6 +494,10 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+c", "q", "esc":
 		return func() tea.Msg { return QuitMsg{} }
 	case "enter":
+		if m.suggesting() {
+			request := m.suggestions[m.suggestion].Title
+			return func() tea.Msg { return NewMsg{Request: request} }
+		}
 		if f, ok := m.selected(); ok {
 			return func() tea.Msg { return OpenMsg{ID: f.ID, Title: f.Title} }
 		}
@@ -537,6 +564,10 @@ func (m Model) resume() planstate.Resume {
 }
 
 func (m *Model) move(step int) {
+	if m.suggesting() {
+		m.suggestion = max(0, min(m.suggestion+step, len(m.suggestions)-1))
+		return
+	}
 	flows, _ := m.visible()
 	for i, f := range flows {
 		if f.ID == m.id {

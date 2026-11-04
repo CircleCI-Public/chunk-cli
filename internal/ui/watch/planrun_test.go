@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -39,8 +40,12 @@ type fakePlans struct {
 	newID   string
 	release chan struct{}
 	sent    bool
-	// requests is how many messages the agent was sent.
+	// requests is how many messages the agent was sent. request is the
+	// last of them, guarded by mu for a test that reads it while commands
+	// run.
 	requests int
+	mu       sync.Mutex
+	request  string
 	// units are the units the store serves, as factory reads them.
 	units []plan.Unit
 	// flow is the flow the store serves, when it is not the default.
@@ -156,8 +161,11 @@ type fakePlanAgent struct {
 
 func (a *fakePlanAgent) Resume(context.Context) error { return nil }
 
-func (a *fakePlanAgent) Request(ctx context.Context, _ string) error {
+func (a *fakePlanAgent) Request(ctx context.Context, text string) error {
+	a.f.mu.Lock()
 	a.f.requests++
+	a.f.request = text
+	a.f.mu.Unlock()
 	go func() {
 		if a.f.release != nil {
 			select {
@@ -615,6 +623,75 @@ func TestANewPlansHeaderTakesItsName(t *testing.T) {
 	m = next.(Model)
 	assert.Check(t, cmp.Equal(m.planKey, newKey))
 	assert.Check(t, cmp.Contains(screen(m), "chunk plan / retry-uploads"))
+}
+
+// A change started from the flow list's suggestions is the new plan's first
+// request: the plan is created and its agent asked, with no typing.
+func TestNewMsgRequestIsTheFirstRequest(t *testing.T) {
+	f := &fakePlans{newID: "dark-mode", title: "add-dark-mode"}
+	m := New().WithConnection(chunkd.Connection{}).
+		WithPlans(t.Context(), "/src/chunk-cli", f.planner).WithFlowList(flowList(t))
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = next.(Model)
+
+	next, cmd := m.Update(flowlist.NewMsg{Request: "Add dark mode"})
+	asked := func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.request != ""
+	}
+	m = runUntil(t, next.(Model), cmd, asked)
+	assert.Check(t, m.planOpen, "no plan opened")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	assert.Check(t, cmp.Equal(f.requests, 1))
+	assert.Check(t, cmp.Equal(f.request, "Add dark mode"))
+}
+
+// runUntil runs cmd and the commands each message it brings back returns,
+// concurrently as the program would, delivering their messages to m one at a
+// time, until done holds. A command that waits, as the planning screen's
+// wait for its agent's events does, does not hold up the others.
+func runUntil(t *testing.T, m Model, cmd tea.Cmd, done func() bool) Model {
+	t.Helper()
+	msgs := make(chan tea.Msg, 64)
+	var run func(tea.Cmd)
+	run = func(c tea.Cmd) {
+		go func() {
+			msg := c()
+			if batch, ok := msg.(tea.BatchMsg); ok {
+				for _, b := range batch {
+					if b != nil {
+						run(b)
+					}
+				}
+				return
+			}
+			if msg == nil {
+				return
+			}
+			select {
+			case msgs <- msg:
+			case <-t.Context().Done():
+			}
+		}()
+	}
+	run(cmd)
+	deadline := time.After(10 * time.Second)
+	for !done() {
+		select {
+		case msg := <-msgs:
+			next, follow := m.Update(msg)
+			m = next.(Model)
+			if follow != nil {
+				run(follow)
+			}
+		case <-deadline:
+			ok := done()
+			assert.Assert(t, ok, "timed out")
+		}
+	}
+	return m
 }
 
 // The flow list is drawn under the dashboard's own header, and the two
