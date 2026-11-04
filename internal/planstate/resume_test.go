@@ -21,6 +21,7 @@ func TestResumeOf(t *testing.T) {
 	}
 	const takeOver = "Claimed by session 1be8ec19 · R releases it and resumes the planner"
 	const claimedLine = "Claimed by session 1be8ec19 · factory daemon release p-42 frees it"
+	const workerLine = "Claimed by worker w-1 · factory daemon release p-42 frees it"
 	for _, tc := range []struct {
 		name string
 		f    ResumeFacts
@@ -68,6 +69,36 @@ func TestResumeOf(t *testing.T) {
 			f:    claimed(Init, func(f *ResumeFacts) { f.Holder = "s-1" }),
 			kind: ResumeTakeOver,
 			line: "Claimed by session s-1 · R releases it and resumes the planner",
+		},
+		{
+			name: "worker-only holder, planning",
+			f:    claimed(RefineProposal, func(f *ResumeFacts) { f.Holder, f.Worker = "", "w-1" }),
+			line: workerLine,
+		},
+		{
+			name: "worker-only holder, building",
+			f:    claimed(Build, func(f *ResumeFacts) { f.Holder, f.Worker = "", "w-1" }),
+			line: workerLine,
+		},
+		{
+			name: "worker-only holder, waiting_on empty",
+			f: claimed(RefineProposal, func(f *ResumeFacts) {
+				f.Holder, f.Worker, f.WaitingOn = "", "w-1", ""
+			}),
+			line: workerLine,
+		},
+		{
+			name: "worker-only holder, waiting on human",
+			f: claimed(RefineProposal, func(f *ResumeFacts) {
+				f.Holder, f.Worker, f.WaitingOn = "", "w-1", Human
+			}),
+			line: "Waiting on you",
+		},
+		{
+			name: "session and worker, planning",
+			f:    claimed(RefineProposal, func(f *ResumeFacts) { f.Worker = "w-1" }),
+			kind: ResumeTakeOver,
+			line: takeOver,
 		},
 		{
 			name: "claimed, ended",

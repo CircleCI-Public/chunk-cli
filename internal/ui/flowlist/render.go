@@ -135,7 +135,7 @@ func (m Model) listLines(width, height int) []string {
 		if u := unitCount(f.Progress); u != "" {
 			detail = append(detail, st.VDim.Render(u))
 		}
-		if f.SessionID != "" {
+		if f.Claimed() {
 			detail = append(detail, st.VDim.Render("claimed"))
 		}
 		if !f.UpdatedAt.IsZero() {

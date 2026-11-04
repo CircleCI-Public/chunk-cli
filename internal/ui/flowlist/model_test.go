@@ -414,6 +414,19 @@ func TestDelete(t *testing.T) {
 		})
 	})
 
+	t.Run("a flow only a worker claims does not offer X", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			claimed := alpha
+			claimed.WorkerID = "w-1"
+			d := loaded(t, fixed(claimed))
+			got := d.content()
+			assert.Check(t, cmp.Contains(got, "claimed"))
+			assert.Check(t, !strings.Contains(got, "X delete plan"))
+			d.send(press('X'))
+			assert.Check(t, !strings.Contains(d.content(), asking))
+		})
+	})
+
 	t.Run("an empty list does not offer X", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			d := newDriver(t, fixed(), preview, chat)
@@ -532,6 +545,30 @@ func TestResume(t *testing.T) {
 			kind:   planstate.ResumeTakeOver,
 			holder: "1be8ec19-0000",
 			line:   "Claimed by session 1be8ec19 · R releases it and resumes the planner",
+		},
+		{
+			name: "claimed by a worker only, planning",
+			flow: circleci.Flow{
+				ID:        "a",
+				Title:     "Alpha",
+				State:     "refine-proposal",
+				Next:      []circleci.Transition{{Actor: "session", TaskCategory: "write-units"}},
+				WaitingOn: "session",
+				WorkerID:  "w-1",
+			},
+			line: "Claimed by worker w-1 · factory daemon release a frees it",
+		},
+		{
+			name: "claimed by a worker only, building",
+			flow: circleci.Flow{
+				ID:        "a",
+				Title:     "Alpha",
+				State:     "build",
+				Next:      waitAgent,
+				WaitingOn: "session",
+				WorkerID:  "w-1",
+			},
+			line: "Claimed by worker w-1 · factory daemon release a frees it",
 		},
 		{
 			name: "waiting on you",

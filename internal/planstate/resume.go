@@ -28,6 +28,10 @@ type ResumeFacts struct {
 	// PlanID is the plan's, and Holder the session claiming it, "" when
 	// none does.
 	PlanID, Holder string
+	// Worker is the factory worker claiming the plan, "" when none does. It
+	// is set whether or not a session works the plan; ResumeOf treats the
+	// plan as worker-only when Holder is "" and Worker is set.
+	Worker string
 	// WaitingOn is who factory waits on to move the flow on, "" for nobody.
 	WaitingOn string
 	// Blockers are the plan's blockers; BlockersKnown is false until they
@@ -78,6 +82,9 @@ func ResumeOf(f ResumeFacts) Resume {
 		return Resume{Why: "Waiting on sub-plans"}
 	case Session:
 	default:
+		if f.Holder == "" && f.Worker != "" {
+			return Resume{Why: WorkerClaimedWhy(f.Worker, f.PlanID)}
+		}
 		if f.Holder != "" {
 			return Resume{Why: ClaimedWhy(f.Holder, f.PlanID)}
 		}
@@ -85,11 +92,17 @@ func ResumeOf(f ResumeFacts) Resume {
 	}
 	switch state {
 	case Init, Ready, RefineProposal, RefineUnits, RecordSubPlans, StandBy:
+		if f.Holder == "" && f.Worker != "" {
+			return Resume{Why: WorkerClaimedWhy(f.Worker, f.PlanID)}
+		}
 		if f.Holder != "" {
 			return Resume{Kind: ResumeTakeOver, Holder: f.Holder}
 		}
 		return Resume{Kind: ResumePlanner}
 	case Build, Integrate:
+		if f.Holder == "" && f.Worker != "" {
+			return Resume{Why: WorkerClaimedWhy(f.Worker, f.PlanID)}
+		}
 		if f.Holder != "" {
 			return Resume{Why: ClaimedWhy(f.Holder, f.PlanID)}
 		}
@@ -102,6 +115,12 @@ func ResumeOf(f ResumeFacts) Resume {
 // over.
 func ClaimedWhy(holder, planID string) string {
 	return fmt.Sprintf("Claimed by session %s · factory daemon release %s frees it", shortID(holder), planID)
+}
+
+// WorkerClaimedWhy is the line for a plan a factory worker holds with no
+// session working it.
+func WorkerClaimedWhy(worker, planID string) string {
+	return fmt.Sprintf("Claimed by worker %s · factory daemon release %s frees it", shortID(worker), planID)
 }
 
 // TakeOverQuestion is what chunk asks before releasing holder's claim and
