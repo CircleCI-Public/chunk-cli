@@ -374,8 +374,10 @@ abandons a plan, and stops its build with it.
 comments still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.
 
-`ctrl+o` opens a chat you can ask about your plans and flows from any
-screen. Ask it to, and it gets a stuck flow going with factory's own commands:
+`ctrl+o` opens a chat on the right of any screen, which you can ask about your
+plans and flows. `esc` goes back to the screen beside it, and `ctrl+o` goes
+back to the chat, or hides it from there. Ask it to, and it gets a stuck flow
+going with factory's own commands:
 it repairs a plan, frees a dead session's claim, changes blockers or resolves
 comments. It does nothing else to your plans.
 

@@ -491,7 +491,12 @@ func (m Model) header() string {
 
 func (m Model) Content() string {
 	if m.reason != "" {
-		return m.header() + "\n\n" + theme.New(m.dark).Dim.Render(m.reason)
+		reason := theme.New(m.dark).Dim
+		if m.width > 0 {
+			// Wrapped, for a chat in a sidebar narrower than the reason.
+			reason = reason.Width(m.width)
+		}
+		return m.header() + "\n\n" + reason.Render(m.reason)
 	}
 	pad := lipgloss.NewStyle().Padding(0, padX)
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(theme.New(m.dark).VDim.GetForeground()).

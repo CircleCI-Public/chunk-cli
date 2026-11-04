@@ -20,45 +20,66 @@ func (m Model) WithChat(newChat func() chat.Model) Model {
 	return m
 }
 
-// updateChat handles a key while the chat is open, or ctrl+o
-// to open it; handled is false for a key the screens below should have.
+// updateChat handles a key while the chat has the keyboard, or ctrl+o to
+// show it or give it the keyboard; handled is false for a key the screens
+// should have.
 func (m Model) updateChat(msg tea.KeyPressMsg) (_ Model, _ tea.Cmd, handled bool) {
 	if m.newChat == nil {
 		return m, nil, false
 	}
 	k := m.keys()
 	if key.Matches(msg, k.Chat) {
-		if m.chatOpen {
-			return m.closeChat(), nil, true
+		var cmd tea.Cmd
+		switch {
+		case !m.chatShown:
+			m, cmd = m.showChat()
+		case m.chatFocused:
+			m, cmd = m.hideChat()
+		default:
+			m, cmd = m.focusChat()
 		}
-		next, cmd := m.openChat()
-		return next, cmd, true
+		return m, cmd, true
 	}
-	if !m.chatOpen {
+	if !m.chatFocused {
 		return m, nil, false
 	}
 	switch {
-	case key.Matches(msg, k.CloseChat):
-		return m.closeChat(), nil, true
+	case key.Matches(msg, k.Unfocus):
+		if m.sideBySide() {
+			return m.focusMain(), nil, true
+		}
+		next, cmd := m.hideChat()
+		return next, cmd, true
 	case key.Matches(msg, k.ForceQuit):
-		// The dashboard's quit, which asks first on Flows when plans have
-		// unsent input, so the question is shown.
-		next, cmd := m.closeChat().quitWithPlans()
-		if next.confirmPlanQuit && next.planOpen {
+		next, cmd := m.quitWithPlans()
+		if !next.confirmPlanQuit {
+			return next, cmd, true // tea.Quit; the chat's session runs on in the daemon
+		}
+		// The question is asked on Flows: beside the chat, or instead of
+		// one that covered the screen.
+		var cmds []tea.Cmd
+		if next.sideBySide() {
+			next = next.focusMain()
+		} else {
+			next, cmd = next.hideChat()
+			cmds = append(cmds, cmd)
+		}
+		if next.planOpen {
 			note := next.note
 			next, cmd = next.showFlows()
 			next.note = note
+			cmds = append(cmds, cmd)
 		}
-		return next, cmd, true
+		return next, tea.Batch(cmds...), true
 	}
 	var cmd tea.Cmd
 	*m.chatView, cmd = m.chatView.Update(msg)
 	return m, cmd, true
 }
 
-// openChat shows the chat over the screen showing, which is
-// kept as it is, and tells it where it was opened.
-func (m Model) openChat() (Model, tea.Cmd) {
+// showChat shows the chat beside the screen showing, which is kept as it
+// is but narrowed, and gives it the keyboard.
+func (m Model) showChat() (Model, tea.Cmd) {
 	if m.chatView == nil {
 		c := m.newChat()
 		if !m.hasDarkBG {
@@ -67,19 +88,34 @@ func (m Model) openChat() (Model, tea.Cmd) {
 		m.chatView = &c
 	}
 	place, ctx := m.chatPlace()
-	c, cmd := m.chatView.WithPlace(place, ctx).SetSize(m.width, m.height).Open()
+	c, open := m.chatView.WithPlace(place, ctx).Open()
 	*m.chatView = c
-	m.chatOpen = true
+	m.chatShown, m.chatFocused = true, true
+	m, size := m.resize()
+	return m, tea.Batch(open, size)
+}
+
+// hideChat gives the screen its width back. The chat stops polling, and
+// its session runs on in the daemon.
+func (m Model) hideChat() (Model, tea.Cmd) {
+	*m.chatView = m.chatView.Close()
+	m.chatShown, m.chatFocused = false, false
+	return m.resize()
+}
+
+// focusChat gives the keyboard to the shown chat.
+func (m Model) focusChat() (Model, tea.Cmd) {
+	var cmd tea.Cmd
+	*m.chatView, cmd = m.chatView.Focus()
+	m.chatFocused = true
 	return m, cmd
 }
 
-// closeChat goes back to the screen it was opened over. The chat stops
-// polling, and its session runs on in the daemon.
-func (m Model) closeChat() Model {
-	if m.chatView != nil {
-		*m.chatView = m.chatView.Close()
-	}
-	m.chatOpen = false
+// focusMain gives the keyboard to the screen beside the chat, which keeps
+// polling.
+func (m Model) focusMain() Model {
+	*m.chatView = m.chatView.Blur()
+	m.chatFocused = false
 	return m
 }
 

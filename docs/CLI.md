@@ -227,8 +227,8 @@ chunk
   back one level, cancelling a comment or prompt first when there is one, and
   leaves from the top; where leaving would drop unsent
   comments or a request it asks first. `q` quits wherever no text is being
-  typed and `ctrl+c` always quits. `ctrl+o` opens a chat from any
-  screen. A lowercase key is the common action and its
+  typed and `ctrl+c` always quits. `ctrl+o` shows a chat beside any
+  screen, and hides it. A lowercase key is the common action and its
   capital the bigger one (`n` and `N` go to the next and previous comment). Plain letters are never actions while a text
   box has focus. Footer hints read `key action`, in lowercase.
 - Telemetry is opt-out. Events are anonymous until you authenticate with
@@ -528,16 +528,20 @@ chunk
   its conversation, for the next time the plan is opened, but the activity
   shown and an unsent request are not kept. Closing the dashboard stops no
   planning session or build: both run in the chunk daemon.
-- **`ctrl+o` opens a chat over any screen** of `watch`: a Claude Code session
-  that answers questions about your plans and flows, from the plans, the code,
+- **`ctrl+o` shows a chat sidebar** on the right of any screen of `watch`, which
+  stays usable beside it: a Claude Code session that answers questions about your plans and flows, from the plans, the code,
   Sourcegraph, git history and the factory daemon. It is told where it was
   opened: on a plan's screen, the plan and its status strip; on Flows, the open
   flows. Asked to, it acts on a flow with factory's own commands, without
   asking first: `factory daemon repair` and `release`, and factory's
   `task_request`, `plan_block` and `plan_resolve`. It runs nothing else that
   changes anything: it does not plan, claim, edit plan text or add comments;
-  for those it says what to comment or which key to press. `esc` or `ctrl+o`
-  goes back to the screen as it was. Dragging the mouse over the conversation
+  for those it says what to comment or which key to press. `esc` gives the
+  keyboard back to the screen beside the chat, which keeps showing and reading
+  the conversation, and `ctrl+o` gives it back to the chat; `ctrl+o` in the
+  chat hides it, and the screen gets its width back. Below 100 columns the
+  chat covers the screen instead, and `esc` hides it. Clicking either side
+  gives it the keyboard, and the wheel scrolls the side under the pointer. Dragging the mouse over the conversation
   selects its text and puts it on the clipboard when the button is let go, as
   on a plan's screen, without a message's frame. The line under the
   conversation says what was copied for 2 seconds. A key press or a click
