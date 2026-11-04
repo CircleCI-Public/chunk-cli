@@ -372,4 +372,49 @@ func TestReviewCards(t *testing.T) {
 			assert.Check(t, cmp.Contains(content, "◐ Review · you · checks passed"))
 		})
 	})
+
+	// A rollup has no counts, so its text names the state only; real counts
+	// still print.
+	for _, tc := range []struct {
+		name   string
+		checks onboarding.Checks
+		want   string
+	}{
+		{
+			name:   "rollup failed",
+			checks: onboarding.Checks{State: "FAILURE", Failed: 1, Rollup: true},
+			want:   "checks failed",
+		},
+		{
+			name:   "rollup pending",
+			checks: onboarding.Checks{State: "PENDING", Pending: 1, Rollup: true},
+			want:   "checks pending",
+		},
+		{
+			name:   "counted failed",
+			checks: onboarding.Checks{Failed: 2, Passed: 5},
+			want:   "2 failed, 5 passed",
+		},
+		{
+			name:   "counted pending",
+			checks: onboarding.Checks{Passed: 5, Pending: 1},
+			want:   "5 passed, 1 pending",
+		},
+	} {
+		t.Run("checks text: "+tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				w := planWorld(nil, nil)
+				w.store.SetFlow(integrate, nil)
+				w.checks = func(_ context.Context, _ string) (*onboarding.Checks, error) {
+					c := tc.checks
+					return &c, nil
+				}
+				d := newDriver(t.Context(), t, w.deps())
+				d.until("shows the review card", d.shows("◐ Review · you · "+tc.want))
+				content := d.content()
+				assert.Check(t, cmp.Contains(content, "CI checks · agent · "+tc.want))
+				assert.Check(t, !strings.Contains(content, "0 passed"), content)
+			})
+		})
+	}
 }

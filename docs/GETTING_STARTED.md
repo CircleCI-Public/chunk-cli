@@ -315,6 +315,19 @@ git commit -m "Regenerate lock file on Linux"
 
 ## Planning and following flows with chunk watch
 
+In a repository not yet set up for chunk factory, `chunk watch` opens on
+onboarding instead: a timeline that takes you from nothing to a first merged
+change. Once you're signed in to CircleCI, it runs Setup in the background
+(the steps `chunk factory bootstrap` runs: it detects validation commands,
+gets the environment working on a sidecar, and snapshots it). Meanwhile it
+offers three changes to start with, or one you describe. The change you pick
+is planned and built as a normal factory plan, and the timeline walks it
+through Plan, Build, CI checks, Review and Merge, with each step that needs
+you as a card on the timeline. Its pull request includes
+`.chunk/config.json`, so merging it sets the repository up. Build waits for
+Setup to finish. `esc` → Go to flows leaves onboarding for the flow list, and
+it won't open again in that repository.
+
 `chunk watch` is the recommended way to interact with chunk. Keep it open in
 another terminal while you work. Planning needs the factory daemon running
 with `FACTORY_PLAN_STORE=circleci`. Run it in the project you want to plan in:
@@ -493,7 +506,7 @@ The `--suite` value must match the `name` field in `.circleci/test-suites.yml`. 
 
 An additional tool, independent of the sidecar workflow above. Review prompts are one `.md` or `.txt` file per area in `.chunk/reviews/`, such as `testing.md`, written by your team. `chunk review` and `chunk factory plan` review changes with them. Commit them with the config so the whole team shares them.
 
-`chunk factory bootstrap` sets a project up for `chunk factory` in one command. It writes `.chunk/config.json` if there is none, sets up a sidecar with your project's environment, and records a snapshot of it as `validation.sidecarImage` (`--skip-sidecar` leaves this out). It prints what it will do first and leaves out any part already done, so running it again finishes a setup that stopped partway.
+`chunk factory bootstrap` sets a project up for `chunk factory` in one command. It writes `.chunk/config.json` if there is none, sets up a sidecar with your project's environment, and records a snapshot of it as `validation.sidecarImage` (`--skip-sidecar` leaves this out). It prints what it will do first and leaves out any part already done, so running it again finishes a setup that stopped partway. `chunk watch` does the same setup for you in a repository not yet set up, as the first step of its onboarding ([above](#planning-and-following-flows-with-chunk-watch)).
 
 ```bash
 chunk factory bootstrap

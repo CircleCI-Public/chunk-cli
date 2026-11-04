@@ -123,6 +123,8 @@ func (m Model) focusMain() Model {
 // messages carry, from the screen showing.
 func (m Model) chatPlace() (place, context string) {
 	switch {
+	case m.onboardingOpen && m.onboarding != nil:
+		return m.onboarding.Place()
 	case m.planOpen && m.planScreen != nil:
 		if m.planScreen.ID() == "" {
 			return "New plan", ""

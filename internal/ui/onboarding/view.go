@@ -309,10 +309,8 @@ func (m Model) checksActivity() activity {
 		return ci
 	case f.PR == "":
 		return ci
-	case m.checks != nil && m.checks.Failed > 0:
-		ci.state, ci.detail = actRunning, fmt.Sprintf("%d failed, %d passed", m.checks.Failed, m.checks.Passed)
-	case m.checks != nil && m.checks.Pending > 0:
-		ci.state, ci.detail = actRunning, fmt.Sprintf("%d passed, %d pending", m.checks.Passed, m.checks.Pending)
+	case m.checks != nil && !checksPassed(m.checks):
+		ci.state, ci.detail = actRunning, checksText(m.checks)
 	case m.checks != nil:
 		ci.state, ci.detail = actDone, "checks passed"
 	default:

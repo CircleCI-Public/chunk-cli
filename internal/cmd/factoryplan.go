@@ -152,7 +152,7 @@ func checkPlanProject(ctx context.Context, root string) error {
 	}
 	cfg, err := config.LoadProjectConfig(root)
 	if err != nil {
-		return errors.New(dashboardMessage(&userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err}))
+		return errors.New(dashboardMessage(&userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit + " " + suggestionWatchSetup, err: err}))
 	}
 	dir := filepath.Join(root, review.DefaultDir)
 	_, _, err = factory.LoadChecks(dir, true, cfg, false)

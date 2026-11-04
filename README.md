@@ -39,7 +39,7 @@ Download the latest `chunk-cli_Windows_x86_64.zip` or `chunk-cli_Windows_arm64.z
 
 ```bash
 chunk init                                     # set up this project: config, sandbox, review prompts
-chunk factory bootstrap                        # set the project up for factory: config and sidecar image
+chunk factory bootstrap                        # set the project up for factory: config and sidecar image (or let chunk watch guide you)
 chunk factory plan "add a --verbose flag"      # plan a change, approve it, and it is built through to a PR
 chunk watch                                    # plan and follow your factory flows — keep it open
 ```
@@ -144,7 +144,9 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 `chunk factory plan` plans a change with Claude in factory. Once you approve the plan, the chunk daemon builds it unit by unit, checking the work with each prompt in `.chunk/reviews/` and your validation commands, through to a pull request on GitHub. It works in a git worktree of its own, so your checkout is never touched, and you can follow the build in `chunk watch`, where `n` starts a new plan too.
 
 ```bash
-# Set the project up: .chunk/config.json and a sidecar image with its environment
+# Set the project up: .chunk/config.json and a sidecar image with its environment.
+# Or open chunk watch in the repository: it sets the project up for you and
+# guides a first change through to a merged PR.
 chunk factory bootstrap
 
 # Plan a change, approve it, and it is built

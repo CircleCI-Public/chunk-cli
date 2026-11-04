@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/onboarding"
 )
 
 var (
@@ -698,4 +699,119 @@ func TestAPasteGoesToThePaneWithTheKeyboard(t *testing.T) {
 		assert.Check(t, cmp.Contains(screen(m), "zz"), "the paste did not reach the new plan's input")
 		assert.Check(t, !strings.Contains(m.chatView.Content(), "zz"), "a paste reached the chat without the keyboard")
 	})
+}
+
+// onboardingChatModel is a dashboard on onboarding, 110 wide, whose ctrl+o
+// opens a chat with c.
+func onboardingChatModel(t *testing.T, c *fakeChat) Model {
+	t.Helper()
+	m := chatModel(t, &fakePlans{}, c).WithOnboarding(fakeOnboarding(t, onboarding.State{}))
+	return resized(m, 110)
+}
+
+func TestOnboardingBesideTheChat(t *testing.T) {
+	down := tea.KeyPressMsg{Code: tea.KeyDown}
+	first, second := "Add keyboard shortcuts", "Export a table to CSV"
+	tests := []struct {
+		name string
+		run  func(t *testing.T, m Model)
+	}{
+		{
+			name: "narrowed beside the chat, and widened again",
+			run: func(t *testing.T, m Model) {
+				m = openChat(t, m)
+				assertRuleAt(t, m, 73)
+				left, _ := halves(m, 73)
+				assert.Check(t, cmp.Contains(left, "What should we change first?"))
+				assert.Check(t, cmp.Equal(m.onboarding.Width(), 73))
+				for i, row := range strings.Split(m.onboarding.Content(), "\n") {
+					w := ansi.StringWidth(row)
+					assert.Check(t, w <= 73, "row %d is wider than the main pane: %q", i, row)
+				}
+				m, _ = pressKey(m, ctrlO)
+				assert.Check(t, cmp.Equal(m.chatShown, false))
+				assert.Check(t, cmp.Equal(m.onboarding.Width(), 110))
+			},
+		},
+		{
+			name: "keys go to the chat while it has the keyboard",
+			run: func(t *testing.T, m Model) {
+				m = openChat(t, m)
+				m = typeInto(m, "q")
+				m, _ = pressKey(m, down)
+				assert.Check(t, cmp.Contains(m.chatView.Content(), "q"))
+				assert.Check(t, cmp.Equal(onboardingFocus(m), first), "a key for the chat reached onboarding")
+				m, _ = pressKey(m, esc)
+				m, _ = pressKey(m, down)
+				assert.Check(t, cmp.Equal(onboardingFocus(m), second), "↓ did not reach onboarding")
+			},
+		},
+		{
+			name: "a click on the main pane gives onboarding the keyboard",
+			run: func(t *testing.T, m Model) {
+				m = click(t, openChat(t, m), 5, 5)
+				assert.Check(t, cmp.Equal(m.chatFocused, false))
+				m, _ = pressKey(m, down)
+				assert.Check(t, cmp.Equal(onboardingFocus(m), second))
+			},
+		},
+		{
+			name: "the wheel scrolls the timeline under the pointer",
+			run: func(t *testing.T, m Model) {
+				// A terminal shorter than the timeline, so it scrolls.
+				next, _ := m.Update(tea.WindowSizeMsg{Width: 110, Height: 8})
+				m = openChat(t, next.(Model))
+				m, _ = pressKey(m, esc)
+				firstRow := func(m Model) string {
+					left, _ := halves(m, 73)
+					return strings.Split(left, "\n")[1]
+				}
+				before := firstRow(m)
+				next, _ = m.Update(tea.MouseWheelMsg{X: 80, Y: 3, Button: tea.MouseWheelDown})
+				m = next.(Model)
+				assert.Check(t, cmp.Equal(firstRow(m), before), "a wheel over the chat scrolled onboarding")
+				next, _ = m.Update(tea.MouseWheelMsg{X: 5, Y: 3, Button: tea.MouseWheelDown})
+				m = next.(Model)
+				after := firstRow(m)
+				assert.Check(t, after != before, "a wheel over onboarding did not scroll it")
+			},
+		},
+		{
+			name: "the chat's header reads Set up",
+			run: func(t *testing.T, m Model) {
+				m = openChat(t, m)
+				assert.Check(t, cmp.Contains(screen(m), "chat · Set up"))
+			},
+		},
+		{
+			name: "a narrow terminal covers onboarding with the chat",
+			run: func(t *testing.T, m Model) {
+				m = openChat(t, resized(m, 90))
+				s := screen(m)
+				assert.Check(t, !strings.Contains(s, "What should we change first?"), s)
+				m, _ = pressKey(m, down)
+				assert.Check(t, cmp.Equal(onboardingFocus(m), first), "a key reached the covered onboarding")
+			},
+		},
+		{
+			name: "ctrl+c asks first over unsent input",
+			run: func(t *testing.T, m Model) {
+				for range 3 {
+					m, _ = pressKey(m, down)
+				}
+				m = typeInto(m, "add a theme")
+				unsent := m.onboarding.Unsent()
+				assert.Assert(t, unsent != "", "nothing was typed into onboarding")
+				m, cmd := pressKey(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+				assert.Check(t, cmp.Equal(m.confirmPlanQuit, true))
+				assert.Check(t, cmp.Nil(cmd), "ctrl+c quit over unsent input")
+				assert.Check(t, cmp.Contains(screen(m), "ctrl+c again"))
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.run(t, onboardingChatModel(t, &fakeChat{}))
+		})
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/onboarding"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
@@ -203,7 +204,7 @@ func (m Model) WithFlowList(flows flowlist.Model) Model {
 	if m.newChat != nil {
 		flows = flows.WithChatKey()
 	}
-	m.flows, m.flowsOpen = &flows, true
+	m.flows, m.flowsOpen = &flows, !m.onboardingOpen
 	return m
 }
 
@@ -315,29 +316,10 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.openPlanRequest(msg.Request)
 	case flowlist.QuitMsg:
 		return m.quitWithPlans()
+	case onboarding.LeaveMsg, onboarding.DoneMsg:
+		return m.closeOnboarding()
 	case tea.KeyPressMsg:
-		k := m.keys()
-		if m.confirmPlanQuit {
-			if key.Matches(msg, k.ForceQuit) {
-				return m, tea.Quit
-			}
-			m.confirmPlanQuit, m.note = false, ""
-		}
-		if next, cmd, ok := m.updateChat(msg); ok {
-			return next, cmd
-		}
-		if key.Matches(msg, k.Flows) {
-			return m.showFlows()
-		}
-		if m.planOpen {
-			return m.forwardPlan(msg)
-		}
-		if m.flowsOpen && m.flows != nil {
-			var cmd tea.Cmd
-			*m.flows, cmd = m.flows.Update(msg)
-			return m, cmd
-		}
-		return m, nil
+		return m.updateKey(msg)
 	case tea.PasteMsg, tea.MouseMsg:
 		return m.updateMouse(msg)
 	case tea.WindowSizeMsg, tea.BackgroundColorMsg, tea.KeyboardEnhancementsMsg:
@@ -359,6 +341,8 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 			*m.flows, cmd = m.flows.Update(msg)
 			cmds = append(cmds, cmd)
 		}
+		m, cmd = m.forwardOnboarding(msg)
+		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
 	}
 	next, cmd := m.update(msg)
@@ -368,7 +352,43 @@ func (m Model) updateWithPlan(msg tea.Msg) (tea.Model, tea.Cmd) {
 		*m.flows, flowsCmd = m.flows.Update(msg)
 		cmd = tea.Batch(cmd, flowsCmd)
 	}
-	return m, cmd
+	m, onboardingCmd := m.forwardOnboarding(msg)
+	return m, tea.Batch(cmd, onboardingCmd)
+}
+
+// updateKey hands a key to the chat, onboarding, the open plan screen or the
+// flow list, after the dashboard's own.
+func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	k := m.keys()
+	if m.confirmPlanQuit {
+		if key.Matches(msg, k.ForceQuit) {
+			return m, tea.Quit
+		}
+		m.confirmPlanQuit, m.note = false, ""
+	}
+	if next, cmd, ok := m.updateChat(msg); ok {
+		return next, cmd
+	}
+	if m.onboardingOpen {
+		// Onboarding takes every key but ctrl+c, ctrl+p included: it
+		// asks before going to flows, as esc does, so leaving is saved.
+		if key.Matches(msg, k.ForceQuit) {
+			return m.quitWithPlans()
+		}
+		return m.forwardOnboarding(msg)
+	}
+	if key.Matches(msg, k.Flows) {
+		return m.showFlows()
+	}
+	if m.planOpen {
+		return m.forwardPlan(msg)
+	}
+	if m.flowsOpen && m.flows != nil {
+		var cmd tea.Cmd
+		*m.flows, cmd = m.flows.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 func (m Model) forwardPlan(msg tea.Msg) (Model, tea.Cmd) {
@@ -404,9 +424,13 @@ func (m Model) quitWithPlans() (Model, tea.Cmd) {
 			count++
 		}
 	}
-	if count > 0 && !m.confirmPlanQuit {
+	onboardingUnsent := m.onboarding != nil && m.onboarding.Unsent() != ""
+	if (count > 0 || onboardingUnsent) && !m.confirmPlanQuit {
 		m.confirmPlanQuit = true
 		m.note = fmt.Sprintf("%d plan workspace(s) have unsent input. Press ctrl+c again to discard it and quit; any other key keeps it.", count)
+		if count == 0 {
+			m.note = "Onboarding has unsent input. Press ctrl+c again to discard it and quit; any other key keeps it."
+		}
 		return m, nil
 	}
 	return m, tea.Quit

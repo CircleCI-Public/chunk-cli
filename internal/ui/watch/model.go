@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/onboarding"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
@@ -83,6 +84,11 @@ type Model struct {
 	planKey, planSeq           uint64
 	flows                      *flowlist.Model
 	flowsOpen, confirmPlanQuit bool
+	// onboarding is the onboarding timeline while it is open, the screen
+	// watch opens on in a project not yet set up; nil once it is left or
+	// done.
+	onboarding     *onboarding.Model
+	onboardingOpen bool
 
 	// chatView is the chat newChat made on the first ctrl+o, nil before it,
 	// or when the host offers none. chatShown is whether it polls and is
@@ -137,6 +143,9 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{checkUpdateCmd()}
 	if m.flows != nil {
 		cmds = append(cmds, m.flows.Init())
+	}
+	if m.onboarding != nil {
+		cmds = append(cmds, m.onboarding.Init())
 	}
 	if m.checkDaemon != nil {
 		cmds = append(cmds, m.pingDaemon)
@@ -204,8 +213,26 @@ func (m Model) View() tea.View {
 	return v
 }
 
-// screenView is the plan screen or the flow list, whichever is showing.
+// screenView is the plan screen, onboarding or the flow list, whichever is
+// showing.
 func (m Model) screenView() tea.View {
+	if m.onboardingOpen && m.onboarding != nil {
+		content := m.onboarding.Content()
+		switch {
+		case m.width > 0 && m.note != "":
+			// Onboarding has no note line of its own, so a question such
+			// as quitting's takes the header's.
+			content = clip(m.styles().Warning.Render(m.note), m.mainWidth()) + "\n" + content
+		case m.width > 0:
+			content = m.renderHeader(m.styles()) + content
+		}
+		v := tea.NewView(content)
+		v.AltScreen = true
+		// The timeline scrolls with the wheel.
+		v.MouseMode = tea.MouseModeCellMotion
+		v.WindowTitle = "chunk watch — set up"
+		return v
+	}
 	if m.planOpen {
 		v := tea.NewView(m.planScreen.Content())
 		v.AltScreen = true

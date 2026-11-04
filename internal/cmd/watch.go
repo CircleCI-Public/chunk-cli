@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factoryplan"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/planrepo"
@@ -26,6 +27,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/onboarding"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 )
@@ -83,14 +85,33 @@ func newWatchCmd() *cobra.Command {
 			// Claude runs as a process of its own, which would outlive the
 			// dashboard; it is stopped as the dashboard ends.
 			defer plans.stop()
+			// In a project not yet set up, watch opens on onboarding. Once
+			// it was left or finished, the suggestions it left unused show
+			// under the flow list's "Start a change".
+			var store onboarding.StateStore
+			st := onboarding.Fresh()
+			if root != "" {
+				if s, err := onboarding.FileStore(root); err == nil {
+					store, st = s, s.Load()
+				}
+			}
+			flows := flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).
+				WithParents(listFactoryParents).WithBlockers(listFactoryBlockers)
+			if st.Finished || st.Left {
+				flows = flows.WithSuggestions(watch.Suggestions(st))
+			}
 			m := watch.New().WithRelaunch().WithBottomMargin(editorRowMargin()).
 				WithPlans(plans.ctx, root, plans.plan).
 				WithPlanBuilds(daemonPlanBuild{}).
 				WithPlanResume(daemonResume{}).
 				WithPlanDelete(factoryDelete{}).
-				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).
-					WithParents(listFactoryParents).WithBlockers(listFactoryBlockers)).
+				WithFlowList(flows).
 				WithChat(newChatModel(plans.ctx, root))
+			if store != nil {
+				if ok, _ := onboardingStart(ctx, root, listFactoryFlows, st); ok {
+					m = m.WithOnboarding(onboarding.New(plans.ctx, onboardingDeps(root, plans, store)))
+				}
+			}
 			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
 			if err != nil {
@@ -141,6 +162,28 @@ func watchProject(ctx context.Context, cwd string) (root string, ok bool) {
 		_ = sidecar.RegisterProjectRoot(dataDir, root)
 	}
 	return root, true
+}
+
+// onboardingStart is whether watch opens on onboarding. A failed flow
+// listing gives false and the error.
+func onboardingStart(ctx context.Context, root string, flows func(context.Context) ([]circleci.Flow, error), state onboarding.State) (bool, error) {
+	if root == "" || state.Left || state.Finished {
+		return false, nil
+	}
+	if _, err := gitremote.URL(ctx, root, "origin"); err != nil {
+		return false, nil
+	}
+	// A config that fails to load counts as having no image, so Setup shows
+	// why rather than watch hiding it.
+	cfg, err := config.LoadProjectConfig(root)
+	if err == nil && cfg.HasSidecarImage() {
+		return false, nil
+	}
+	open, err := flows(ctx)
+	if err != nil {
+		return false, err
+	}
+	return len(open) == 0, nil
 }
 
 // editorRowMargin is how many of the terminal's last rows the dashboard leaves

@@ -17,4 +17,5 @@ const (
 	suggestionNetworkRetry = "Check your network connection and try again."
 	suggestionGitRepo      = "Run this command from inside a git repo."
 	suggestionRunInit      = "Run 'chunk init' first."
+	suggestionWatchSetup   = "Or open chunk watch in this repository to set it up."
 )

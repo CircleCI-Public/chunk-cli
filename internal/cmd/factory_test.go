@@ -138,6 +138,9 @@ func TestCheckPlanProject(t *testing.T) {
 			}
 			assert.Assert(t, cmp.ErrorContains(err, tc.wantErr))
 			assert.Check(t, !strings.Contains(err.Error(), "factory build"))
+			if tc.wantErr == msgValidateNotConfigured {
+				assert.Check(t, cmp.ErrorContains(err, suggestionWatchSetup))
+			}
 		})
 	}
 }

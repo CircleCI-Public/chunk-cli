@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -22,8 +23,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/onboarding"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 )
 
 // watchProject is the git top level chunk watch was opened under, canonical
@@ -651,6 +655,189 @@ func TestBlockerStates(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Check(t, cmp.DeepEqual(blockerStates(tc.blockers), tc.want))
+		})
+	}
+}
+
+// chunk watch opens on onboarding in a repo with an origin that is not yet
+// set up, for a developer with no open flows, unless onboarding was left or
+// finished.
+func TestWatchOnboardingTrigger(t *testing.T) {
+	noFlows := func(context.Context) ([]circleci.Flow, error) { return nil, nil }
+	oneFlow := func(context.Context) ([]circleci.Flow, error) {
+		return []circleci.Flow{{ID: "p1", Title: "Retry uploads"}}, nil
+	}
+	failing := func(context.Context) ([]circleci.Flow, error) { return nil, errors.New("boom") }
+	tests := []struct {
+		name    string
+		config  string // .chunk/config.json; "" writes none
+		noRoot  bool
+		noOrig  bool
+		flows   func(context.Context) ([]circleci.Flow, error)
+		state   onboarding.State
+		want    bool
+		wantErr string
+	}{
+		{
+			name:  "unconfigured",
+			flows: noFlows,
+			want:  true,
+		},
+		{
+			name:   "configured",
+			config: `{"validation":{"sidecarImage":"snap-1"}}`,
+			flows:  noFlows,
+		},
+		{
+			name:  "open flows",
+			flows: oneFlow,
+		},
+		{
+			name:   "outside a repo",
+			noRoot: true,
+			flows:  noFlows,
+		},
+		{
+			name:   "no origin",
+			noOrig: true,
+			flows:  noFlows,
+		},
+		{
+			name:   "unparsable config",
+			config: `{`,
+			flows:  noFlows,
+			want:   true,
+		},
+		{
+			name:   "finished",
+			config: `{"orgID":"o"}`,
+			flows:  noFlows,
+			state:  onboarding.State{Finished: true},
+		},
+		{
+			name:  "left",
+			flows: noFlows,
+			state: onboarding.State{Left: true},
+		},
+		{
+			name:  "saved plan",
+			flows: noFlows,
+			state: onboarding.State{PlanID: "p1"},
+			want:  true,
+		},
+		{
+			name:    "listing fails",
+			flows:   failing,
+			wantErr: "boom",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := gitrepo.SetupGitRepo(t, "org", "repo")
+			if tc.noOrig {
+				out, err := exec.Command("git", "-C", root, "remote", "remove", "origin").CombinedOutput()
+				assert.NilError(t, err, string(out))
+			}
+			if tc.config != "" {
+				err := os.MkdirAll(filepath.Join(root, ".chunk"), 0o755)
+				assert.NilError(t, err)
+				err = os.WriteFile(filepath.Join(root, ".chunk", "config.json"), []byte(tc.config), 0o644)
+				assert.NilError(t, err)
+			}
+			if tc.noRoot {
+				root = ""
+			}
+			got, err := onboardingStart(t.Context(), root, tc.flows, tc.state)
+			if tc.wantErr != "" {
+				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
+			} else {
+				assert.Check(t, err)
+			}
+			assert.Check(t, cmp.Equal(got, tc.want))
+		})
+	}
+}
+
+func TestParsePRURL(t *testing.T) {
+	owner, repo, n, err := parsePRURL("https://github.com/o/r/pull/7")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(owner+"/"+repo, "o/r"))
+	assert.Check(t, cmp.Equal(n, 7))
+	_, _, _, err = parsePRURL("https://github.com/o/r/issues/7")
+	assert.Check(t, cmp.ErrorContains(err, "not a pull request URL"))
+}
+
+// GitHub's rollup has no counts, so every Checks from it is marked Rollup,
+// and success or no checks count as passed.
+func TestPRChecks(t *testing.T) {
+	for _, tc := range []struct {
+		rollup string
+		want   onboarding.Checks
+	}{
+		{
+			rollup: "FAILURE",
+			want:   onboarding.Checks{State: "FAILURE", Failed: 1, Rollup: true},
+		},
+		{
+			rollup: "ERROR",
+			want:   onboarding.Checks{State: "ERROR", Failed: 1, Rollup: true},
+		},
+		{
+			rollup: "PENDING",
+			want:   onboarding.Checks{State: "PENDING", Pending: 1, Rollup: true},
+		},
+		{
+			rollup: "EXPECTED",
+			want:   onboarding.Checks{State: "EXPECTED", Pending: 1, Rollup: true},
+		},
+		{
+			rollup: "SUCCESS",
+			want:   onboarding.Checks{State: "SUCCESS", Passed: 1, Rollup: true},
+		},
+		{
+			rollup: "",
+			want:   onboarding.Checks{Rollup: true},
+		},
+	} {
+		t.Run(tc.rollup, func(t *testing.T) {
+			assert.Check(t, cmp.DeepEqual(*prChecks(tc.rollup), tc.want))
+		})
+	}
+}
+
+// onboardingOpener keeps the opened plan's Root, not the root it was asked
+// to open in, and passes the opener's error on.
+func TestOnboardingOpener(t *testing.T) {
+	refused := errors.New("no checkout")
+	for _, tc := range []struct {
+		name     string
+		opened   watch.OpenedPlan
+		err      error
+		wantRoot string
+	}{
+		{
+			name:     "another checkout",
+			opened:   watch.OpenedPlan{Root: "/src/other"},
+			wantRoot: "/src/other",
+		},
+		{
+			name:     "no checkout",
+			opened:   watch.OpenedPlan{Root: ""},
+			err:      refused,
+			wantRoot: "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotRoot, gotID string
+			open := onboardingOpener(func(_ context.Context, root, id string) (watch.OpenedPlan, error) {
+				gotRoot, gotID = root, id
+				return tc.opened, tc.err
+			})
+			opened, err := open(t.Context(), "/src/app", "plan-1")
+			assert.Check(t, cmp.ErrorIs(err, tc.err))
+			assert.Check(t, cmp.Equal(opened.Root, tc.wantRoot))
+			assert.Check(t, cmp.Equal(gotRoot, "/src/app"))
+			assert.Check(t, cmp.Equal(gotID, "plan-1"))
 		})
 	}
 }
