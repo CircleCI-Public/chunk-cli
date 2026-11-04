@@ -189,7 +189,9 @@ func (m Model) WithPlace(place, context string) Model {
 }
 
 // Open starts polling from 0, so the whole conversation shows, and focuses
-// the input. A host calls it each time the chat is shown.
+// the input. A host calls it each time the chat is shown, and Close when it
+// is hidden; Focus and Blur move only the keyboard, and leave polling as it
+// is.
 func (m Model) Open() (Model, tea.Cmd) {
 	if m.reason != "" {
 		return m, nil
@@ -206,6 +208,21 @@ func (m Model) Close() Model {
 	m.input.Blur()
 	m.drag.Clear()
 	m.note = ""
+	return m
+}
+
+// Focus gives the input the keyboard, and leaves polling as it is. It does
+// nothing on an Unavailable chat.
+func (m Model) Focus() (Model, tea.Cmd) {
+	if m.reason != "" {
+		return m, nil
+	}
+	return m, m.input.Focus()
+}
+
+// Blur takes the keyboard from the input, and leaves polling as it is.
+func (m Model) Blur() Model {
+	m.input.Blur()
 	return m
 }
 
