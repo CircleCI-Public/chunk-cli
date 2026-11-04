@@ -28,6 +28,11 @@ func (d *daemon) approvePlan(ctx context.Context, planID string, req chunkd.Plan
 	if err != nil {
 		return chunkd.Session{}, err
 	}
+	// Checked before the approval is marked, so a refusal leaves no mark and
+	// sends factory nothing.
+	if err := checkApprovedRepo(ctx, api, planID, ps.root); err != nil {
+		return chunkd.Session{}, err
+	}
 	p, done, err := d.planners.beginApproval(planID, ps.root, api)
 	if err != nil {
 		return chunkd.Session{}, err
@@ -66,6 +71,18 @@ func (d *daemon) approvePlan(ctx context.Context, planID string, req chunkd.Plan
 			"the plan is approved in factory, but chunk could not start building it (%s); build it in Claude Code with /f:resume %s", apiMessage(err), planID)
 	}
 	return sess, nil
+}
+
+// checkApprovedRepo reads plan planID from factory and refuses it when root
+// is a checkout of none of the repos it records.
+func checkApprovedRepo(ctx context.Context, api PlanAPI, planID, root string) error {
+	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	p, err := api.GetPlan(rctx, planID)
+	if err != nil {
+		return apiErr(http.StatusBadGateway, "read plan %s from factory: %v", planID, err)
+	}
+	return checkPlanRepo(rctx, root, p)
 }
 
 // sessionWorktree is where factory's daemon has a session working.

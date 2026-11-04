@@ -244,6 +244,26 @@ func TestPlanApproveRefuses(t *testing.T) {
 			contains: "get the plan's flow: 503 from factory",
 		},
 		{
+			name: "a checkout of another repo",
+			setup: func(ad *approveDaemon) {
+				ad.plans.mu.Lock()
+				defer ad.plans.mu.Unlock()
+				ad.plans.repos = []string{"circleci/a", "circleci/b"}
+			},
+			status:   http.StatusConflict,
+			contains: "plan plan-1 builds in circleci/a, circleci/b, but ",
+		},
+		{
+			name: "factory fails the plan read",
+			setup: func(ad *approveDaemon) {
+				ad.plans.mu.Lock()
+				defer ad.plans.mu.Unlock()
+				ad.plans.getErr = errors.New("503 from factory")
+			},
+			status:   http.StatusBadGateway,
+			contains: "read plan plan-1 from factory: 503 from factory",
+		},
+		{
 			name: "no factory API",
 			setup: func(ad *approveDaemon) {
 				ad.rcfg.PlanAPI = nil
@@ -274,6 +294,7 @@ func TestPlanApproveRefuses(t *testing.T) {
 				ad.rcfg.PlanAPI = ad.plans
 				ad.plans.mu.Lock()
 				ad.plans.flowErr, ad.plans.eventErr = nil, nil
+				ad.plans.getErr, ad.plans.repos = nil, nil
 				ad.plans.mu.Unlock()
 				ad.plans.claim("")
 				if live {
@@ -288,6 +309,20 @@ func TestPlanApproveRefuses(t *testing.T) {
 			})
 		}
 	}
+}
+
+// A plan that records its repo is approved in a checkout of it, matched
+// whatever the case.
+func TestPlanApproveInACheckoutOfThePlansRepo(t *testing.T) {
+	ad := newApproveDaemon(t)
+	git(t, ad.root, "remote", "add", "origin", "git@github.com:circleci/factory.git")
+	ad.plans.mu.Lock()
+	ad.plans.repos = []string{"CircleCI/Factory"}
+	ad.plans.mu.Unlock()
+
+	resp := approveResponse(t, ad.approve(t, "plan-1"))
+	assert.Check(t, cmp.DeepEqual(ad.plans.sentEvents(), []circleci.FlowEvent{circleci.ApproveForBuilding}))
+	assert.Check(t, cmp.DeepEqual(ad.buildsStarted(), []string{resp.ID}))
 }
 
 func TestPlanApproveNeedsAProjectRoot(t *testing.T) {
@@ -417,7 +452,8 @@ func TestPlanApproveSaysWhenTheBuildWouldNotStart(t *testing.T) {
 	ad := newApproveDaemon(t)
 	ad.livePlanner(t)
 	ad.plans.mu.Lock()
-	ad.plans.getErr = errors.New("502 from factory")
+	// The approval's own read succeeds; the build's fails.
+	ad.plans.getErr, ad.plans.getErrAfter = errors.New("502 from factory"), 1
 	ad.plans.mu.Unlock()
 
 	w := ad.approve(t, "plan-1")

@@ -37,9 +37,13 @@ type fakePlans struct {
 	phase, outcome string
 	branch         string
 	getErr         error
-	noFlow         bool
-	flowErr        error
-	holder         string
+	// getErrAfter is how many plan reads succeed before getErr fails them.
+	getErrAfter int
+	// repos are the GitHub repos the plan records, as OWNER/NAME.
+	repos   []string
+	noFlow  bool
+	flowErr error
+	holder  string
 	// worker is the factory worker claiming the flow, with or without holder.
 	worker string
 	// events are the flow's applicable events.
@@ -63,12 +67,15 @@ func (f *fakePlans) GetPlan(_ context.Context, id string) (*circleci.Plan, error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.getErr != nil {
-		return nil, f.getErr
+		if f.getErrAfter == 0 {
+			return nil, f.getErr
+		}
+		f.getErrAfter--
 	}
 	if id != f.id {
 		return nil, errors.New("plan not found")
 	}
-	return &circleci.Plan{ID: id, Branch: f.branch}, nil
+	return &circleci.Plan{ID: id, Branch: f.branch, Repos: f.repos}, nil
 }
 
 func (f *fakePlans) GetFlow(_ context.Context, id string) (*circleci.Flow, error) {
@@ -806,37 +813,41 @@ func TestPlanBuildResumesAnUnclaimedPlan(t *testing.T) {
 func TestPlanBuildRouteRefuses(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		setup  func(pb *planBuildDaemon)
+		setup  func(t *testing.T, pb *planBuildDaemon)
 		status int
 		msg    string
+		// also, when set, is more the answer must contain.
+		also string
 	}{
 		{
 			name:   "claimed by another session",
-			setup:  func(pb *planBuildDaemon) { pb.plans.holder = "sess-other" },
+			setup:  func(_ *testing.T, pb *planBuildDaemon) { pb.plans.holder = "sess-other" },
 			status: http.StatusConflict,
 			msg:    "plan plan-1 is claimed by session sess-other; release it with factory daemon release plan-1 to resume it",
 		},
 		{
 			name:   "no flow",
-			setup:  func(pb *planBuildDaemon) { pb.plans.noFlow = true },
+			setup:  func(_ *testing.T, pb *planBuildDaemon) { pb.plans.noFlow = true },
 			status: http.StatusConflict,
 			msg:    "plan plan-1 has no flow; factory hands it no tasks",
 		},
 		{
 			name:   "flow read fails",
-			setup:  func(pb *planBuildDaemon) { pb.plans.flowErr = errors.New("factory is down") },
+			setup:  func(_ *testing.T, pb *planBuildDaemon) { pb.plans.flowErr = errors.New("factory is down") },
 			status: http.StatusBadGateway,
 			msg:    "factory is down",
 		},
 		{
-			name:   "ended",
-			setup:  func(pb *planBuildDaemon) { pb.plans.phase, pb.plans.outcome = circleci.PhaseEnded, "merged" },
+			name: "ended",
+			setup: func(_ *testing.T, pb *planBuildDaemon) {
+				pb.plans.phase, pb.plans.outcome = circleci.PhaseEnded, "merged"
+			},
 			status: http.StatusConflict,
 			msg:    "merged",
 		},
 		{
 			name: "ended while claimed",
-			setup: func(pb *planBuildDaemon) {
+			setup: func(_ *testing.T, pb *planBuildDaemon) {
 				pb.plans.phase, pb.plans.outcome, pb.plans.holder = circleci.PhaseEnded, "merged", "sess-other"
 			},
 			status: http.StatusConflict,
@@ -844,21 +855,40 @@ func TestPlanBuildRouteRefuses(t *testing.T) {
 		},
 		{
 			name:   "not authenticated",
-			setup:  func(pb *planBuildDaemon) { pb.rcfg.PlanAPI = nil; pb.client = nil },
+			setup:  func(_ *testing.T, pb *planBuildDaemon) { pb.rcfg.PlanAPI = nil; pb.client = nil },
 			status: http.StatusServiceUnavailable,
 			msg:    "not authenticated to CircleCI",
+		},
+		{
+			name:   "a checkout of another repo",
+			setup:  func(_ *testing.T, pb *planBuildDaemon) { pb.plans.repos = []string{"circleci/factory"} },
+			status: http.StatusConflict,
+			msg:    "plan plan-1 builds in circleci/factory, but ",
+			also:   " has no GitHub origin",
+		},
+		{
+			name: "a GitHub checkout of another repo",
+			setup: func(t *testing.T, pb *planBuildDaemon) {
+				git(t, pb.root, "remote", "add", "origin", "git@github.com:CircleCI-Public/chunk-cli.git")
+				pb.plans.repos = []string{"circleci/factory"}
+			},
+			status: http.StatusConflict,
+			msg:    " is a checkout of CircleCI-Public/chunk-cli",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pb := newPlanBuildDaemon(t)
 			pb.plans.mu.Lock()
 			pb.plans.state = "build"
-			tc.setup(pb)
+			tc.setup(t, pb)
 			pb.plans.mu.Unlock()
 
 			w := pb.postBuild(t)
 			assert.Check(t, cmp.Equal(w.Code, tc.status))
 			assert.Check(t, cmp.Contains(w.Body.String(), tc.msg))
+			if tc.also != "" {
+				assert.Check(t, cmp.Contains(w.Body.String(), tc.also))
+			}
 			assert.Check(t, cmp.Len(pb.sessions.forProject(pb.root), 0))
 			pb.mu.Lock()
 			defer pb.mu.Unlock()
