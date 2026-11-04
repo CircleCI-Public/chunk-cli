@@ -226,6 +226,10 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// State is onboarding's state as last saved, or as loaded when nothing was
+// saved: its host shows the unused suggestions once it closes.
+func (m Model) State() State { return m.state }
+
 // Width is the width of the last WindowSizeMsg.
 func (m Model) Width() int { return m.width }
 

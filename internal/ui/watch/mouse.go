@@ -75,10 +75,13 @@ func (m Model) forwardChat(msg tea.Msg, dx int) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-// forwardScreen hands msg to the plan screen or the flow list.
+// forwardScreen hands msg to the plan screen, onboarding or the flow list.
 func (m Model) forwardScreen(msg tea.Msg) (Model, tea.Cmd) {
 	if m.planOpen {
 		return m.forwardPlan(msg)
+	}
+	if m.onboardingOpen {
+		return m.forwardOnboarding(msg)
 	}
 	if m.flowsOpen && m.flows != nil {
 		var cmd tea.Cmd

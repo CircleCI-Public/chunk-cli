@@ -168,6 +168,10 @@ func checksText(c *Checks) string {
 	switch {
 	case c == nil:
 		return ""
+	case c.Rollup && c.Failed > 0:
+		return "checks failed"
+	case c.Rollup && c.Pending > 0:
+		return "checks pending"
 	case c.Failed > 0:
 		return fmt.Sprintf("%d failed, %d passed", c.Failed, c.Passed)
 	case c.Pending > 0:

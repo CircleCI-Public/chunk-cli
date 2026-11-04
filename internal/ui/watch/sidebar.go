@@ -34,7 +34,7 @@ func (m Model) sidebarWidth() int {
 	return min(max(m.width/3, sidebarMin), sidebarMax)
 }
 
-// mainWidth is the flow list's or plan screen's width: what the sidebar and
+// mainWidth is the flow list's, onboarding's or plan screen's width: what the sidebar and
 // its rule leave.
 func (m Model) mainWidth() int {
 	if !m.sideBySide() {
@@ -60,6 +60,12 @@ func (m Model) resize() (Model, tea.Cmd) {
 		// The flow list draws under the dashboard's header.
 		var cmd tea.Cmd
 		*m.flows, cmd = m.flows.Update(tea.WindowSizeMsg{Width: size.Width, Height: max(size.Height-1, 0)})
+		cmds = append(cmds, cmd)
+	}
+	if m.onboarding != nil {
+		// Onboarding draws under the header too.
+		var cmd tea.Cmd
+		*m.onboarding, cmd = m.onboarding.Update(tea.WindowSizeMsg{Width: size.Width, Height: max(size.Height-1, 0)})
 		cmds = append(cmds, cmd)
 	}
 	if m.chatView != nil {

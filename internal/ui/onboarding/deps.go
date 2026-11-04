@@ -47,9 +47,13 @@ type Opener func(ctx context.Context, root, id string) (Opened, error)
 type PRChecks func(ctx context.Context, prURL string) (*Checks, error)
 
 // Checks is a PR's checks: their overall state and how many are in each.
+// Rollup is set when the counts only stand for State, as GitHub's rollup
+// gives no counts: a failing or pending rollup counts one, so the text says
+// the state without numbers.
 type Checks struct {
 	State                   string
 	Passed, Failed, Pending int
+	Rollup                  bool
 }
 
 // Browser shows url to the developer; an error means it could not, and the

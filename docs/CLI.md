@@ -535,6 +535,20 @@ chunk
   its conversation, for the next time the plan is opened, but the activity
   shown and an unsent request are not kept. Closing the dashboard stops no
   planning session or build: both run in the chunk daemon.
+- **`watch` opens on onboarding in a project not yet set up.** It does when
+  all of these hold: it was opened in a git repository with an `origin`
+  remote; `.chunk/config.json` is missing, can't be parsed, or has no
+  `validation.sidecarImage`; the signed-in user has no open flows; and
+  onboarding was neither left nor finished there. Otherwise it opens on Flows,
+  and a failed flow listing shows Flows with the error. Onboarding
+  keeps its state (the suggestions and which were used, the started plan, and
+  whether it was left or finished) in `onboarding.json` in the repository's
+  data directory (`config.RepoDataDir`), outside the repository, so reopening
+  `watch` returns to the started plan. `esc` or `ctrl+p` asks before going to
+  Flows, and going saves that it was left. Once it is left, or the first
+  change's flow ends merged, Flows lists the suggestions not yet used under
+  "Start a change" while there are no open flows. Setup runs in the chunk
+  daemon, so it keeps going when `watch` quits.
 - **`ctrl+o` shows a chat sidebar** on the right of any screen of `watch`, which
   stays usable beside it: a Claude Code session that answers questions about your plans and flows, from the plans, the code,
   Sourcegraph, git history and the factory daemon. It is told where it was

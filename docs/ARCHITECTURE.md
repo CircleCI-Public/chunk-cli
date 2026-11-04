@@ -454,6 +454,15 @@ GET  /factory/plans/{plan}/planner[?after=N] → {session_id, log_id, oldest, bu
                                    next, events[]}: the planner's events from cursor N (the
                                    `next` of an earlier read), and whether it is mid-turn;
                                    without after, no events
+POST /factory/setup        {project_root, org_id} → 202 SetupActivity: start the project's Setup
+                             run (bootstrap's config, provisioning and snapshot steps), or
+                             return the one under way; on a stuck or failed run, delete its
+                             sidecar and start again (Retry)
+GET  /factory/setup?root=&after=N → SetupActivity: the project's Setup run, its state
+                             (running, ok, stuck, continued, failed) and its feed lines
+                             after the first N (404 no run)
+POST /factory/setup/continue {project_root} → 200 SetupActivity: Continue without an image on a stuck
+                             run (409 not stuck; 404 no run)
 POST /factory/{id}/cancel  → 202 (idempotent): stop a build without ending its plan, and
                                    free factory's claim if the build still holds it, so a new
                                    build can start at once (a daemon shutdown frees nothing)
@@ -501,6 +510,20 @@ released it.
 
 - **Test seams.** `server.WithPlans` replaces factory, the worktree and the
   build session in tests; left out, the daemon uses the real ones.
+- **Build waits for the project's Setup run.** `executePlanBuild` checks for
+  the project's Setup run (keyed by `config.CanonicalProjectRoot`) before it
+  opens the worktree. While the run is running or stuck, the build's feed says
+  "Waiting for this project's setup to finish", and the build waits for it to
+  end `ok` or `continued`. A `failed` run, or a cancel while waiting, settles
+  the build without opening the worktree or starting Claude. Approval is not
+  held: factory has the plan approved as soon as it is asked.
+- **The worktree's config copy is refreshed while git doesn't track it.**
+  `OpenPlanWorktree` copies the project's `.chunk/config.json` into the plan's
+  worktree when it has none. When the worktree's copy is untracked and differs
+  from the project's, it is overwritten, so a `validation.sidecarImage`
+  recorded after planning started reaches the build's sidecar. A committed
+  config is never touched, and a copy is kept when the project's config is
+  gone.
 - **Detach is not cancel.** A viewer disconnecting changes nothing; the build
   belongs to the daemon and outlives the screen that approved it. A build
   ends with its plan, or with `POST /factory/{id}/cancel`.
