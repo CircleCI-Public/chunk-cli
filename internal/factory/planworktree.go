@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -47,7 +48,7 @@ func OpenPlanWorktree(ctx context.Context, root, planID string) (string, error) 
 		return "", err
 	}
 	if _, err := os.Stat(path); err == nil {
-		if err := copyProjectConfig(root, path); err != nil {
+		if err := copyProjectConfig(ctx, root, path); err != nil {
 			return "", err
 		}
 		return path, nil
@@ -63,7 +64,7 @@ func OpenPlanWorktree(ctx context.Context, root, planID string) (string, error) 
 	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "--detach", path, start); err != nil {
 		return "", fmt.Errorf("add the plan's worktree: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	if err := copyProjectConfig(root, path); err != nil {
+	if err := copyProjectConfig(ctx, root, path); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -120,10 +121,14 @@ func remoteHead(ctx context.Context, root, remote string) string {
 var projectConfig = filepath.Join(".chunk", "config.json")
 
 // copyProjectConfig copies the developer's .chunk/config.json into the
-// worktree at path when it has none, as when the file is not committed.
-func copyProjectConfig(root, path string) error {
+// worktree at path when it has none, as when the file is not committed, and
+// refreshes a copy git does not track there, so a sidecar image recorded
+// after planning started reaches the build. A committed config is never
+// touched, and a copy is kept when the project's has been deleted.
+func copyProjectConfig(ctx context.Context, root, path string) error {
 	rel := projectConfig
-	if _, err := os.Stat(filepath.Join(path, rel)); err == nil {
+	dst := filepath.Join(path, rel)
+	if _, err := os.Stat(dst); err == nil && tracked(ctx, path) {
 		return nil
 	}
 	b, err := os.ReadFile(filepath.Join(root, rel)) //nolint:gosec // G304: the project's own config
@@ -133,10 +138,13 @@ func copyProjectConfig(root, path string) error {
 	if err != nil {
 		return fmt.Errorf("read the project's chunk config: %w", err)
 	}
+	if old, err := os.ReadFile(dst); err == nil && bytes.Equal(old, b) { //nolint:gosec // G304: the plan's worktree's copy
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Join(path, ".chunk"), 0o755); err != nil {
 		return fmt.Errorf("copy the project's chunk config to the plan's worktree: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(path, rel), b, 0o600); err != nil {
+	if err := os.WriteFile(dst, b, 0o600); err != nil {
 		return fmt.Errorf("copy the project's chunk config to the plan's worktree: %w", err)
 	}
 	return nil
@@ -187,9 +195,14 @@ func PrunePlanWorktrees(ctx context.Context, root string, ended func(ctx context
 // worktree at path, when it is not committed there: git refuses to remove a
 // worktree with an untracked file in it.
 func dropCopiedConfig(ctx context.Context, path string) {
-	if err := (gitexec.Runner{Dir: path}).Run(ctx, "ls-files", "--error-unmatch", projectConfig); err == nil {
+	if tracked(ctx, path) {
 		return
 	}
 	_ = os.Remove(filepath.Join(path, projectConfig))
 	_ = os.Remove(filepath.Join(path, ".chunk")) // only when copying made it
+}
+
+// tracked is whether git tracks the worktree at path's .chunk/config.json.
+func tracked(ctx context.Context, path string) bool {
+	return (gitexec.Runner{Dir: path}).Run(ctx, "ls-files", "--error-unmatch", projectConfig) == nil
 }
