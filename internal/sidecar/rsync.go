@@ -28,9 +28,10 @@ import (
 const proxyErrDrainTimeout = 200 * time.Millisecond
 
 // RsyncSync syncs the local working tree (rooted at cwd) to a sidecar using
-// rsync over an SSH-over-WebSocket tunnel. Files matching .gitignore rules are
-// excluded. In a normal checkout, .git is copied so the remote has a fully
-// functional git repo. In a git worktree, .git is a local pointer file that
+// rsync over an SSH-over-WebSocket tunnel. Files git ignores are excluded;
+// outside a git repo, files a .gitignore lists are. In a normal checkout,
+// .git is copied so the remote has a fully functional git repo. In a git
+// worktree, .git is a local pointer file that
 // would be broken on the sidecar, so it is excluded and a fresh git repo is
 // initialised on the remote instead. workdir overrides the destination path;
 // defaults to /home/user/<repo name from git remote>.
@@ -128,15 +129,11 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 		return "", fmt.Errorf("rsync: mkdir %s: %s", repoPath, result.Stderr)
 	}
 
-	flags := mirrorFlags()
-	if gitRoot != "" {
-		excludeFile, err := localExcludeFile(ctx, cwd)
-		if err != nil {
-			return "", err
-		}
-		defer func() { _ = os.Remove(excludeFile) }()
-		flags = append(flags, "--exclude-from="+excludeFile)
+	flags, cleanup, err := syncFilterFlags(ctx, cwd, gitRoot)
+	if err != nil {
+		return "", err
 	}
+	defer cleanup()
 	if isWorktree {
 		// Exclude the .git pointer file: rsync --delete does not remove excluded
 		// destination files, so a stale pointer from a previous run stays on the
@@ -163,8 +160,8 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 // minus files git ignores there. The workspace must be a git repo, and so must
 // localDir. No .git, at any depth, is copied and localDir's own is left alone,
 // so a sidecar's git config and hooks never reach this machine. Files localDir
-// tracks but git ignores are left alone too: a sync never sends them, so the
-// workspace not having them is no reason to delete them. Anything else in
+// tracks but git ignores are left alone too: the workspace may not have them,
+// so their absence there is no reason to delete them. Anything else in
 // localDir that is not in the workspace is deleted, so localDir must be a
 // directory chunk owns.
 func RsyncPull(ctx context.Context,
@@ -334,8 +331,8 @@ func anchoredPaths(paths []string) []string {
 }
 
 // trackedIgnoredPaths lists the files git tracks in localDir that its ignore
-// rules match, each anchored like ignoredPaths' paths. A sync's .gitignore
-// filter never sends them, so a pull must not delete them.
+// rules match, each anchored like ignoredPaths' paths. A sidecar's workspace
+// may not have them, so a pull must not delete them.
 func trackedIgnoredPaths(ctx context.Context, localDir string) ([]string, error) {
 	out, err := (gitexec.Runner{Dir: localDir}).Output(ctx, "ls-files", "-z", "--cached", "--ignored", "--exclude-standard")
 	if err != nil {
@@ -377,10 +374,29 @@ func writeExcludeFile(patterns []string) (string, error) {
 	return f.Name(), nil
 }
 
+// gitignoreFilter has rsync read each directory's .gitignore itself. It reads
+// every line as an exclude, so a "!" negation excludes a file of that name
+// rather than re-including one.
+const gitignoreFilter = "--filter=:- .gitignore"
+
 // mirrorFlags make an rsync destination an exact copy of the source, minus
-// files the source's .gitignore rules exclude.
+// what the caller excludes.
 func mirrorFlags() []string {
-	return []string{"--archive", "--delete", "--filter=:- .gitignore"}
+	return []string{"--archive", "--delete"}
+}
+
+// syncFilterFlags are the rsync flags for a sync of cwd. cleanup removes the
+// exclude file and is never nil.
+func syncFilterFlags(ctx context.Context, cwd, gitRoot string) (flags []string, cleanup func(), err error) {
+	flags = mirrorFlags()
+	if gitRoot == "" {
+		return append(flags, gitignoreFilter), func() {}, nil
+	}
+	excludeFile, err := localExcludeFile(ctx, cwd)
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(flags, "--exclude-from="+excludeFile), func() { _ = os.Remove(excludeFile) }, nil
 }
 
 // remotePath addresses path on the sidecar for rsync. The host is always the

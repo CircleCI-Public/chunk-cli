@@ -14,35 +14,125 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
-// A sync leaves out what git ignores even where the local rsync would not:
-// macOS's openrsync drops a .gitignore's last line when it has no newline, as
-// uv's "*" in every .venv has, which sent a Mac's venv to the sidecar to be
-// rebuilt by every run there. The sidecar's own copy is kept.
-func TestSyncFlagsLeaveOutWhatGitIgnores(t *testing.T) {
+// TestSyncFlags runs the local rsync with the flags a sync uses: in a git
+// repo, what git ignores is left out, negations and tracked files included;
+// outside one, rsync reads .gitignore itself.
+func TestSyncFlags(t *testing.T) {
 	if _, err := exec.LookPath("rsync"); err != nil {
 		t.Skip("rsync not on PATH")
 	}
-	src := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	writeTree(t, src, map[string]string{
-		"harness/.venv/.gitignore": "*",
-		"harness/.venv/pyvenv.cfg": "home = /Users/me/python\n",
-		"harness/tool.py":          "print()\n",
-	})
-	dst := t.TempDir()
-	writeTree(t, dst, map[string]string{"harness/.venv/pyvenv.cfg": "home = /usr/bin\n"})
+	tests := []struct {
+		name    string
+		notGit  bool
+		files   map[string]string // in the source
+		tracked []string          // added to git with -f
+		onDest  map[string]string // already on the destination
+		sent    []string          // must arrive, with the source's content
+		notSent []string          // must not arrive
+		kept    map[string]string // destination files left as they were
+	}{
+		{
+			name:    "a negated file is sent",
+			files:   map[string]string{".gitignore": "*.log\n!keep.log\n", "a.log": "x\n", "keep.log": "x\n"},
+			sent:    []string{"keep.log"},
+			notSent: []string{"a.log"},
+		},
+		{
+			name: "a subdirectory's negation re-includes a parent's pattern",
+			files: map[string]string{
+				".gitignore": "*.log\n", "sub/.gitignore": "!b.log\n",
+				"sub/b.log": "x\n", "sub/c.log": "x\n",
+			},
+			sent:    []string{"sub/b.log"},
+			notSent: []string{"sub/c.log"},
+		},
+		{
+			// web-ui-consolidated#9382
+			name: "a negated directory is re-included",
+			files: map[string]string{
+				".gitignore": "test-results/\n!src/libs/api-hooks/api/v3/test-results/\n",
+				"src/libs/api-hooks/api/v3/test-results/hooks.ts": "x\n",
+				"src/libs/api-hooks/api/v3/test-results/new.ts":   "x\n",
+				"test/e2e/test-results/out.json":                  "x\n",
+			},
+			tracked: []string{"src/libs/api-hooks/api/v3/test-results/hooks.ts"},
+			sent: []string{
+				"src/libs/api-hooks/api/v3/test-results/hooks.ts",
+				"src/libs/api-hooks/api/v3/test-results/new.ts",
+			},
+			notSent: []string{"test/e2e/test-results/out.json"},
+		},
+		{
+			name:    "a negation under an ignored directory does not re-include",
+			files:   map[string]string{".gitignore": "build/\n!build/out.txt\n", "build/out.txt": "x\n"},
+			notSent: []string{"build/out.txt"},
+		},
+		{
+			name:    "a tracked file a .gitignore matches is sent",
+			files:   map[string]string{".gitignore": "*.log\n", "forced.log": "x\n"},
+			tracked: []string{"forced.log"},
+			sent:    []string{"forced.log"},
+		},
+		{
+			// macOS's openrsync drops a .gitignore's last line with no
+			// newline, as uv's "*" in every .venv has.
+			name: "ignored files on the sidecar are kept",
+			files: map[string]string{
+				"harness/.venv/.gitignore": "*",
+				"harness/.venv/pyvenv.cfg": "home = /Users/me/python\n",
+				"harness/tool.py":          "print()\n",
+			},
+			onDest: map[string]string{"harness/.venv/pyvenv.cfg": "home = /usr/bin\n"},
+			sent:   []string{"harness/tool.py"},
+			kept:   map[string]string{"harness/.venv/pyvenv.cfg": "home = /usr/bin\n"},
+		},
+		{
+			name:    "outside a git repo rsync reads .gitignore, without negations",
+			notGit:  true,
+			files:   map[string]string{".gitignore": "*.log\n!keep.log\n", "a.log": "x\n", "keep.log": "x\n", "x.txt": "x\n"},
+			sent:    []string{"x.txt"},
+			notSent: []string{"a.log", "keep.log"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := t.TempDir()
+			if !tt.notGit {
+				src = gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+			}
+			writeTree(t, src, tt.files)
+			for _, f := range tt.tracked {
+				gitIn(t, src, "add", "-f", f)
+			}
+			dst := t.TempDir()
+			writeTree(t, dst, tt.onDest)
 
-	excludeFile, err := localExcludeFile(t.Context(), src)
-	assert.NilError(t, err)
-	t.Cleanup(func() { _ = os.Remove(excludeFile) })
-	args := append(mirrorFlags(), "--exclude-from="+excludeFile, src+"/", dst+"/")
-	out, err := exec.CommandContext(t.Context(), "rsync", args...).CombinedOutput()
-	assert.NilError(t, err, string(out))
+			gitRoot := src
+			if tt.notGit {
+				gitRoot = ""
+			}
+			flags, cleanup, err := syncFilterFlags(t.Context(), src, gitRoot)
+			assert.NilError(t, err)
+			t.Cleanup(cleanup)
+			args := append(append([]string{}, flags...), src+"/", dst+"/")
+			out, err := exec.CommandContext(t.Context(), "rsync", args...).CombinedOutput()
+			assert.NilError(t, err, string(out))
 
-	got, err := os.ReadFile(filepath.Join(dst, "harness/.venv/pyvenv.cfg"))
-	assert.NilError(t, err)
-	assert.Equal(t, string(got), "home = /usr/bin\n", "the sidecar's venv is kept, not replaced by the local one")
-	_, err = os.Stat(filepath.Join(dst, "harness/tool.py"))
-	assert.NilError(t, err, "files git does not ignore are synced")
+			for _, f := range tt.sent {
+				_, err := os.Stat(filepath.Join(dst, f))
+				assert.Check(t, err, "%s is sent", f)
+			}
+			for _, f := range tt.notSent {
+				_, err := os.Stat(filepath.Join(dst, f))
+				assert.Check(t, os.IsNotExist(err), "%s is not sent", f)
+			}
+			for f, want := range tt.kept {
+				got, err := os.ReadFile(filepath.Join(dst, f))
+				assert.Check(t, err)
+				assert.Check(t, cmp.Equal(string(got), want), "%s is kept", f)
+			}
+		})
+	}
 }
 
 func TestGitIgnoredPathsDescendsIntoNestedRepos(t *testing.T) {
