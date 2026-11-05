@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -223,35 +224,113 @@ func ignoredPaths(ctx context.Context, sess *Session, repoPath string) ([]string
 	if result.ExitCode != 0 {
 		return nil, fmt.Errorf("rsync pull: list ignored files: exit %d: %s", result.ExitCode, result.Stderr)
 	}
-	return anchoredPaths(result.Stdout), nil
+	return anchoredPaths(splitZ(result.Stdout)), nil
 }
 
-// localExcludeFile writes the paths git ignores under cwd to an exclude file
-// for a sync to the sidecar, and returns its path. mirrorFlags' .gitignore
-// filter alone misses some: macOS's openrsync drops a .gitignore's last line
-// when it has no newline, as uv's "*" in every .venv has, and rsync never
-// reads .git/info/exclude or the global excludes file. Excluded paths are
-// also kept on the sidecar, so what it builds there, such as its own .venv,
-// survives the next sync.
+// localExcludeFile writes the paths git ignores under cwd, including inside
+// submodules and nested repos, to an exclude file for a sync to the sidecar,
+// and returns its path. Git answers rather than rsync reading .gitignore:
+// rsync reads a "!" negation as one more exclude, macOS's openrsync drops a
+// last line with no newline, and rsync never reads .git/info/exclude or the
+// global excludes file. Excluded paths are also kept on the sidecar, so what
+// it builds there, such as its own .venv, survives the next sync.
 func localExcludeFile(ctx context.Context, cwd string) (string, error) {
-	out, err := (gitexec.Runner{Dir: cwd}).Output(ctx, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+	paths, err := gitIgnoredPaths(ctx, cwd)
 	if err != nil {
-		return "", fmt.Errorf("rsync: list ignored files: %w", err)
+		return "", fmt.Errorf("rsync: %w", err)
 	}
-	return writeExcludeFile(anchoredPaths(string(out)))
+	return writeExcludeFile(anchoredPaths(paths))
 }
 
-// anchoredPaths turns git's -z path list into rsync excludes, each anchored
-// to the transfer's root so it excludes that path alone. -z keeps git from
-// quoting paths with unusual characters, which would then match nothing.
-func anchoredPaths(out string) []string {
+// gitIgnoredPaths lists what git ignores under dir, then does the same in
+// each submodule and untracked nested repo under dir, each path relative to
+// dir. git ls-files never looks inside a nested repo, so each answers for
+// itself. A submodule with no .git, one never initialized, holds nothing
+// to list.
+func gitIgnoredPaths(ctx context.Context, dir string) ([]string, error) {
+	git := gitexec.Runner{Dir: dir}
+	ignored, err := git.Output(ctx, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+	if err != nil {
+		return nil, fmt.Errorf("list ignored files: %w", err)
+	}
+	paths := splitZ(string(ignored))
+
+	nested, err := nestedRepos(ctx, git)
+	if err != nil {
+		return nil, err
+	}
+	for _, rel := range nested {
+		if _, err := os.Stat(filepath.Join(dir, rel, ".git")); err != nil {
+			continue // uninitialized submodule
+		}
+		sub, err := gitIgnoredPaths(ctx, filepath.Join(dir, rel))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", rel, err)
+		}
+		for _, p := range sub {
+			paths = append(paths, path.Join(rel, p)+trailingSlash(p))
+		}
+	}
+	return paths, nil
+}
+
+// nestedRepos lists, relative to git's Dir, each submodule (a gitlink, mode
+// 160000) and each untracked directory git shows as a nested repo (an entry
+// ending in "/", as git ls-files lists a directory holding its own .git).
+func nestedRepos(ctx context.Context, git gitexec.Runner) ([]string, error) {
+	staged, err := git.Output(ctx, "ls-files", "-z", "--stage")
+	if err != nil {
+		return nil, fmt.Errorf("list nested repos: %w", err)
+	}
+	var repos []string
+	for _, entry := range splitZ(string(staged)) {
+		meta, p, ok := strings.Cut(entry, "\t")
+		if ok && strings.HasPrefix(meta, "160000 ") {
+			repos = append(repos, p)
+		}
+	}
+
+	others, err := git.Output(ctx, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, fmt.Errorf("list nested repos: %w", err)
+	}
+	for _, p := range splitZ(string(others)) {
+		if dir, ok := strings.CutSuffix(p, "/"); ok {
+			repos = append(repos, dir)
+		}
+	}
+	return repos, nil
+}
+
+// splitZ splits git's -z output into its paths. -z keeps git from quoting
+// paths with unusual characters, which would then match nothing.
+func splitZ(out string) []string {
 	var paths []string
 	for _, p := range strings.Split(out, "\x00") {
 		if p != "" {
-			paths = append(paths, "/"+escapeRsyncPattern(p))
+			paths = append(paths, p)
 		}
 	}
 	return paths
+}
+
+// trailingSlash keeps the slash git marks a directory with, which path.Join
+// drops, so the exclude matches only that directory.
+func trailingSlash(p string) string {
+	if strings.HasSuffix(p, "/") {
+		return "/"
+	}
+	return ""
+}
+
+// anchoredPaths turns git's paths into rsync excludes, each anchored to the
+// transfer's root so it excludes that path alone.
+func anchoredPaths(paths []string) []string {
+	anchored := make([]string, 0, len(paths))
+	for _, p := range paths {
+		anchored = append(anchored, "/"+escapeRsyncPattern(p))
+	}
+	return anchored
 }
 
 // trackedIgnoredPaths lists the files git tracks in localDir that its ignore
@@ -262,7 +341,7 @@ func trackedIgnoredPaths(ctx context.Context, localDir string) ([]string, error)
 	if err != nil {
 		return nil, fmt.Errorf("rsync pull: list tracked ignored files: %w", err)
 	}
-	return anchoredPaths(string(out)), nil
+	return anchoredPaths(splitZ(string(out))), nil
 }
 
 // escapeRsyncPattern makes rsync match path literally. rsync reads an exclude
