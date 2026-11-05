@@ -169,9 +169,9 @@ type Store interface {
 	// StartWork has factory start work on the init plan. Factory
 	// moves it at its next poll, not before StartWork returns.
 	StartWork(ctx context.Context) error
-	// Abandon ends the plan without its PR merging, for reason: "canceled",
-	// "wont-do" or "duplicate".
-	Abandon(ctx context.Context, reason string) error
+	// End ends the plan without its PR merging, for reason: "canceled",
+	// "wont-do" or "duplicate", with the event the flow offers for it.
+	End(ctx context.Context, reason string) error
 	// Delete deletes the plan in factory.
 	Delete(ctx context.Context) error
 	// ApproveDesign approves the plan's design, moving it from Planning -

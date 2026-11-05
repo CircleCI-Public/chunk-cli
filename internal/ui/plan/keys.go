@@ -200,11 +200,11 @@ func (m Model) chatKeys(k *keyMap) {
 		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
 }
 
-// endKeys enables the keys that end the plan: abandon, its reasons, and
-// delete.
+// endKeys enables the keys that end the plan: abandon (factory's end or
+// abandon), its reasons, and delete.
 func (m Model) endKeys(k *keyMap) {
 	idle := m.focus == panePlan && !m.commenting && !m.confirming && !m.askingReason && !m.abandoning && !m.deleting
-	k.Abandon.SetEnabled(idle && m.created && slices.Contains(m.events, abandon))
+	k.Abandon.SetEnabled(idle && m.created && (slices.Contains(m.events, endEvent) || slices.Contains(m.events, abandon)))
 	k.DeletePlan.SetEnabled(idle && m.created && !m.flow.Claimed)
 	for _, b := range []*key.Binding{&k.AbandonCanceled, &k.AbandonWontDo, &k.AbandonDuplicate} {
 		b.SetEnabled(m.askingReason)
