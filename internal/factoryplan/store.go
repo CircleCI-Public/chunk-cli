@@ -329,17 +329,41 @@ func (s *Store) StartWork(ctx context.Context) error {
 	return nil
 }
 
-// Abandon sends the plan's flow factory's abandon event, for reason, which
-// ends the plan without its PR merging at factory's next poll.
-func (s *Store) Abandon(ctx context.Context, reason string) error {
+// ErrNotEndable is End's error when the flow's next lists no event that
+// ends the plan.
+var ErrNotEndable = errors.New("factory offers no event that ends the plan")
+
+// End sends the plan's flow the event its next lists to end the plan, end
+// or abandon, for reason, which ends the plan without its PR merging at
+// factory's next poll. It sends nothing, and fails with ErrNotEndable, when
+// next lists neither.
+func (s *Store) End(ctx context.Context, reason string) error {
 	id := s.ID()
 	if id == "" {
 		return errNotCreated
 	}
-	if err := s.api.AbandonFlow(ctx, id, circleci.AbandonReason(reason)); err != nil {
-		return fmt.Errorf("send the abandon event: %w", err)
+	f, err := s.Flow(ctx)
+	if err != nil {
+		return fmt.Errorf("get the flow's events: %w", err)
+	}
+	event := endEvent(f.Events)
+	if event == "" {
+		return ErrNotEndable
+	}
+	if err := s.api.EndFlow(ctx, id, event, circleci.AbandonReason(reason)); err != nil {
+		return fmt.Errorf("send the %s event: %w", event, err)
 	}
 	return nil
+}
+
+// endEvent is the event among events that ends the plan, "" when none does.
+func endEvent(events []string) circleci.FlowEvent {
+	for _, e := range []circleci.FlowEvent{circleci.End, circleci.Abandon} {
+		if slices.Contains(events, string(e)) {
+			return e
+		}
+	}
+	return ""
 }
 
 // Delete deletes the plan in factory, with its comments and its flow. The

@@ -357,7 +357,7 @@ func TestStoreAnswerOpenQuestionsSendsTheEvent(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"answer-open-questions"}))
 }
 
-// TestStoreSendsTheHumansActions checks that StartWork, Abandon and Delete
+// TestStoreSendsTheHumansActions checks that StartWork, End and Delete
 // each fail before Create, and after it do what they say to the store's plan
 // in factory.
 func TestStoreSendsTheHumansActions(t *testing.T) {
@@ -377,9 +377,9 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 			},
 		},
 		{
-			name:  "Abandon sends abandon with its reason",
+			name:  "End sends the end event the flow lists, with its reason",
 			state: "refine-proposal",
-			call:  func(ctx context.Context, s *Store) error { return s.Abandon(ctx, "wont-do") },
+			call:  func(ctx context.Context, s *Store) error { return s.End(ctx, "wont-do") },
 			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
 				p, _ := cci.FactoryPlan(id)
 				assert.Check(t, cmp.DeepEqual(p.Events, []string{"abandon"}))
@@ -408,6 +408,79 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 			err = tc.call(ctx, store)
 			assert.Check(t, err)
 			tc.check(t, cci, store.ID())
+		})
+	}
+}
+
+// TestStoreEnd checks that End posts the end event the flow's next lists.
+func TestStoreEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		applicable []string
+		refused    []string
+		status     int // the fake's FactoryStatusCode, failing every factory call
+		wantEvents []string
+		wantErr    string
+	}{
+		{
+			name:       "before end-event, abandon",
+			applicable: []string{"address-comments", "abandon"},
+			refused:    []string{"end"},
+			wantEvents: []string{"abandon"},
+		},
+		{
+			name:       "after end-event, end",
+			applicable: []string{"address-comments", "end"},
+			refused:    []string{"abandon"},
+			wantEvents: []string{"end"},
+		},
+		{
+			name:       "both listed sends end",
+			applicable: []string{"abandon", "end"},
+			wantEvents: []string{"end"},
+		},
+		{
+			name:       "neither listed sends nothing",
+			applicable: []string{"address-comments"},
+			wantErr:    ErrNotEndable.Error(),
+		},
+		{
+			name:       "a 400 is an error",
+			applicable: []string{"abandon"},
+			refused:    []string{"abandon"},
+			wantErr:    "send the abandon event",
+		},
+		{
+			name:       "a failed flow read sends nothing",
+			applicable: []string{"abandon"},
+			status:     http.StatusInternalServerError,
+			wantErr:    "get the flow's events",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _, cci := createdStore(t)
+			ctx := context.Background()
+			cci.SetFactoryPlanState(store.ID(), "build")
+			cci.SetFactoryApplicableEvents(store.ID(), tc.applicable...)
+			cci.SetFactoryRefusedEvents(tc.refused...)
+			cci.FactoryStatusCode = tc.status
+
+			err := store.End(ctx, "duplicate")
+
+			cci.FactoryStatusCode = 0
+			if tc.wantErr == "" {
+				assert.Check(t, err)
+			} else {
+				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
+			}
+			if tc.wantErr == ErrNotEndable.Error() {
+				assert.Check(t, cmp.ErrorIs(err, ErrNotEndable))
+			}
+			p, _ := cci.FactoryPlan(store.ID())
+			assert.Check(t, cmp.DeepEqual(p.Events, tc.wantEvents))
+			if len(tc.wantEvents) > 0 {
+				assert.Check(t, cmp.DeepEqual(p.Reasons, []string{"duplicate"}))
+			}
 		})
 	}
 }

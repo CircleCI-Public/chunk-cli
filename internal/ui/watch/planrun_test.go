@@ -111,7 +111,7 @@ func blocksOf(bs []fakes.FactoryBlock) []plan.Block {
 func (f *fakePlanStore) AddressComments(context.Context) error     { return nil }
 func (f *fakePlanStore) AnswerOpenQuestions(context.Context) error { return nil }
 func (f *fakePlanStore) StartWork(context.Context) error           { return nil }
-func (f *fakePlanStore) Abandon(context.Context, string) error     { return nil }
+func (f *fakePlanStore) End(context.Context, string) error         { return nil }
 func (f *fakePlanStore) Delete(context.Context) error              { return nil }
 func (f *fakePlanStore) ApproveDesign(context.Context) error       { return nil }
 func (f *fakePlanStore) Text(context.Context) (string, error)      { return f.text, nil }

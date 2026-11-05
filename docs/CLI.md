@@ -453,11 +453,12 @@ chunk
   waits on you, else factory's reason it is waiting; a plan waiting on its
   blockers names the first that still blocks.
 
-  `x` abandons the plan, while factory offers `abandon` (in every live
-  state): the strip asks `Abandon plan as: c canceled · w won't do ·
-  d duplicate · esc keep it`, and the key picked sends factory's `abandon`
-  event with that reason. Factory ends the plan in Canceled, Won't Do or
-  Duplicate at its next poll. Any other key keeps the plan.
+  `x` abandons the plan, while factory offers `end` or `abandon` (in every
+  live state): the strip asks `Abandon plan as: c canceled · w won't do ·
+  d duplicate · esc keep it`, and the key picked sends whichever of
+  factory's `end` or `abandon` the flow offers then, with that reason.
+  Factory ends the plan in Canceled, Won't Do or Duplicate at its next
+  poll. Any other key keeps the plan.
 
   `X` deletes the plan, after a `y`, while no factory session claims it:
   its text, comments and flow go, and the screen closes, back to where it

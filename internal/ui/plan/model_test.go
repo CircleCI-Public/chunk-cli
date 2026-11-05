@@ -5165,17 +5165,18 @@ func pressAll(t *testing.T, m Model, keys ...string) Model {
 	return m
 }
 
-// TestAbandonThePlan checks that x, while factory offers abandon, asks for a
-// reason and sends abandon with the one picked, and that any other key keeps
-// the plan.
+// TestAbandonThePlan checks that x, while factory offers end or abandon, asks
+// for a reason and ends the plan with the one picked, and that any other key
+// keeps the plan.
 func TestAbandonThePlan(t *testing.T) {
 	t.Parallel()
-	abandoned := func(store *fakeStore) []string {
+	ended := func(store *fakeStore) []string {
 		store.mu.Lock()
 		defer store.mu.Unlock()
-		return slices.Clone(store.Abandoned)
+		return slices.Clone(store.Ended)
 	}
 	live := []string{"address-comments", "abandon"}
+	liveEnd := []string{"address-comments", "end"}
 	for _, tc := range []struct {
 		name   string
 		state  string
@@ -5185,14 +5186,14 @@ func TestAbandonThePlan(t *testing.T) {
 		check  func(t *testing.T, m Model, store *fakeStore)
 	}{
 		{
-			name:   "not offered without abandon",
+			name:   "not offered without end or abandon",
 			state:  "refine-proposal",
 			events: []string{"address-comments"},
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "abandon plan"))
 				m = pressAll(t, m, "x")
 				assert.Check(t, !m.askingReason)
-				assert.Check(t, cmp.Len(abandoned(store), 0))
+				assert.Check(t, cmp.Len(ended(store), 0))
 			},
 		},
 		{
@@ -5204,7 +5205,20 @@ func TestAbandonThePlan(t *testing.T) {
 				m = pressAll(t, m, "x")
 				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as: c canceled · w won't do · d duplicate · esc keep it"))
 				m = pressAll(t, m, "c")
-				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"canceled"}))
+				assert.Check(t, cmp.DeepEqual(ended(store), []string{"canceled"}))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: canceled"))
+			},
+		},
+		{
+			name:   "c ends as canceled when the flow offers end",
+			state:  "build",
+			events: liveEnd,
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "x abandon plan"))
+				m = pressAll(t, m, "x")
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as: c canceled · w won't do · d duplicate · esc keep it"))
+				m = pressAll(t, m, "c")
+				assert.Check(t, cmp.DeepEqual(ended(store), []string{"canceled"}))
 				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: canceled"))
 			},
 		},
@@ -5214,7 +5228,7 @@ func TestAbandonThePlan(t *testing.T) {
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "w")
-				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"wont-do"}))
+				assert.Check(t, cmp.DeepEqual(ended(store), []string{"wont-do"}))
 				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: won't do"))
 			},
 		},
@@ -5224,7 +5238,7 @@ func TestAbandonThePlan(t *testing.T) {
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "d")
-				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"duplicate"}))
+				assert.Check(t, cmp.DeepEqual(ended(store), []string{"duplicate"}))
 				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: duplicate"))
 			},
 		},
@@ -5239,7 +5253,7 @@ func TestAbandonThePlan(t *testing.T) {
 				assert.Check(t, !gone, "esc at the reason prompt left the screen")
 				assert.Check(t, !m.askingReason)
 				assert.Check(t, cmp.Equal(m.status, ""))
-				assert.Check(t, cmp.Len(abandoned(store), 0))
+				assert.Check(t, cmp.Len(ended(store), 0))
 			},
 		},
 		{
@@ -5253,7 +5267,7 @@ func TestAbandonThePlan(t *testing.T) {
 				assert.Check(t, !gone, "q at the reason prompt left the screen")
 				assert.Check(t, !m.askingReason)
 				assert.Check(t, cmp.Equal(m.status, ""))
-				assert.Check(t, cmp.Len(abandoned(store), 0))
+				assert.Check(t, cmp.Len(ended(store), 0))
 			},
 		},
 		{
@@ -5268,6 +5282,20 @@ func TestAbandonThePlan(t *testing.T) {
 				m, _ = m.Update(cmd())
 				assert.Check(t, !m.abandoning)
 				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not abandon the plan: factory is down"))
+			},
+		},
+		{
+			name:   "a refusal of the end says so",
+			state:  "build",
+			events: liveEnd,
+			err:    errors.New("factory offers no event that ends the plan"),
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				m = pressAll(t, m, "x")
+				m, cmd := m.Update(press("d"))
+				assert.Assert(t, cmd != nil)
+				m, _ = m.Update(cmd())
+				assert.Check(t, !m.abandoning)
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not abandon the plan: factory offers no event that ends the plan"))
 			},
 		},
 		{
@@ -5293,7 +5321,7 @@ func TestAbandonThePlan(t *testing.T) {
 				assert.Check(t, m.askingReason)
 				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as:"))
 				m = pressAll(t, m, "w")
-				assert.Check(t, cmp.DeepEqual(abandoned(store), []string{"wont-do"}))
+				assert.Check(t, cmp.DeepEqual(ended(store), []string{"wont-do"}))
 			},
 		},
 		{
@@ -5305,7 +5333,7 @@ func TestAbandonThePlan(t *testing.T) {
 				assert.Assert(t, m.abandoning)
 				m = pressAll(t, m, "x")
 				assert.Check(t, !m.askingReason)
-				assert.Check(t, cmp.Len(abandoned(store), 1))
+				assert.Check(t, cmp.Len(ended(store), 1))
 			},
 		},
 		{
@@ -5325,7 +5353,7 @@ func TestAbandonThePlan(t *testing.T) {
 			t.Parallel()
 			store := newFakeStore()
 			store.FlowV.Ended = tc.ended
-			store.AbandonErr = tc.err
+			store.EndErr = tc.err
 			m := endScreen(t, store, tc.state, tc.events...)
 			tc.check(t, m, store)
 		})

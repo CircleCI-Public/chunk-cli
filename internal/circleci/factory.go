@@ -164,6 +164,9 @@ const Prioritize FlowEvent = "prioritize"
 // AbandonReason.
 const Abandon FlowEvent = "abandon"
 
+// End is the event that ends a flow; it takes the same reasons as Abandon.
+const End FlowEvent = "end"
+
 // An AbandonReason is why a human abandons a plan, as factory names it.
 type AbandonReason string
 
@@ -735,11 +738,10 @@ func (c *Client) CreateFlowEvent(ctx context.Context, planID string, event FlowE
 	return c.createEvent(ctx, planID, eventAttrs{Event: event}, "create flow event")
 }
 
-// AbandonFlow sends factory plan planID's flow the abandon event, for reason.
-// Factory ends the flow at the plan's next poll, in Canceled, Won't Do or
-// Duplicate. A plan with no flow is a 404.
-func (c *Client) AbandonFlow(ctx context.Context, planID string, reason AbandonReason) error {
-	return c.createEvent(ctx, planID, eventAttrs{Event: Abandon, Reason: reason}, "abandon flow")
+// EndFlow sends factory plan planID's flow event, End or Abandon, for reason.
+// Factory ends the flow at the plan's next poll. A plan with no flow is a 404.
+func (c *Client) EndFlow(ctx context.Context, planID string, event FlowEvent, reason AbandonReason) error {
+	return c.createEvent(ctx, planID, eventAttrs{Event: event, Reason: reason}, "end flow")
 }
 
 // createEvent posts an event with attrs to factory plan planID's flow; label

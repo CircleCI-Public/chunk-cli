@@ -1469,7 +1469,7 @@ func startWorkCmd(ctx context.Context, s Store) tea.Cmd {
 
 // abandonCmd has factory end the plan without its PR merging, for reason.
 func abandonCmd(ctx context.Context, s Store, reason string) tea.Cmd {
-	return func() tea.Msg { return abandonedMsg{err: s.Abandon(ctx, reason)} }
+	return func() tea.Msg { return abandonedMsg{err: s.End(ctx, reason)} }
 }
 
 // deletePlanCmd deletes the plan in factory.

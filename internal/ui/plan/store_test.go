@@ -59,8 +59,8 @@ type fakeStore struct {
 	// Started records the state the plan was in at each StartWork call, in
 	// order.
 	Started []string
-	// Abandoned records the reasons Abandon was called with, in order.
-	Abandoned []string
+	// Ended records the reasons End was called with, in order.
+	Ended []string
 	// PlanDeleted is whether Delete deleted the plan.
 	PlanDeleted bool
 	// Added records the AddComment calls, in order.
@@ -77,7 +77,7 @@ type fakeStore struct {
 	CreateErr, FlowErr, FamilyErr, UnitsErr, AddressErr, TextErr, CommentsErr error
 	SetTextErr                                                                error
 	AddErr, EditErr, ResolveErr, DeleteErr                                    error
-	AbandonErr, DeletePlanErr                                                 error
+	EndErr, DeletePlanErr                                                     error
 	// FailAddAfter, when > 0, fails AddComment calls numbered after this
 	// many successes.
 	FailAddAfter int
@@ -263,13 +263,13 @@ func (f *fakeStore) StartWork(context.Context) error {
 	return nil
 }
 
-func (f *fakeStore) Abandon(_ context.Context, reason string) error {
+func (f *fakeStore) End(_ context.Context, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.AbandonErr != nil {
-		return f.AbandonErr
+	if f.EndErr != nil {
+		return f.EndErr
 	}
-	f.Abandoned = append(f.Abandoned, reason)
+	f.Ended = append(f.Ended, reason)
 	return nil
 }
 
