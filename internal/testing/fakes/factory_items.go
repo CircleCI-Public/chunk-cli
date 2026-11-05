@@ -4,9 +4,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/v2"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/text"
 )
 
 // FactoryItems is the items attribute of a plan's structured content, as
