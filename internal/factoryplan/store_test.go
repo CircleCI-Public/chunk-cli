@@ -695,6 +695,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Deviations:   []string{"lint fails"},
 		Claimed:      true,
 		Holder:       "s-1",
+		Worker:       fakes.FactoryWorkerID,
 		WaitingOn:    "session",
 		WaitingOnWhy: "the session builds Unit 2: parser",
 		Progress: &plan.Progress{
@@ -719,6 +720,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Outcome:    "merged",
 		Claimed:    true,
 		Holder:     "s-1",
+		Worker:     fakes.FactoryWorkerID,
 	}))
 
 	cci.SetFactoryPlanState(store.ID(), "ended")
