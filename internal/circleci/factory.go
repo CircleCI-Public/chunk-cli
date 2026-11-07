@@ -43,8 +43,8 @@ type Flow struct {
 	// while its flow runs and PhaseEnded once it ends.
 	Phase string
 	// SessionID is the factory session holding the flow's claim: the one its
-	// worker's sessions list it under, else its factory_session; "" when none
-	// does. ListFlows reads no worker's sessions, so names only factory_session.
+	// worker's sessions list it under; "" when none does. ListFlows reads no
+	// worker's sessions, so leaves it "".
 	SessionID string
 	// WorkerID is the factory worker claiming the flow, "" when none does or
 	// it is not registered.
@@ -276,9 +276,6 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 	if a.UpdatedAt != nil {
 		f.UpdatedAt = *a.UpdatedAt
 	}
-	if refs.FactorySession != nil {
-		f.SessionID = refs.FactorySession.ID
-	}
 	if refs.FactoryWorker != nil {
 		f.WorkerID = refs.FactoryWorker.ID
 	}
@@ -331,10 +328,9 @@ func humanEvents(next []transitionAttrs) []FlowEvent {
 }
 
 type flowRefs struct {
-	FactorySession *v3Ref    `json:"factory_session"`
-	FactoryWorker  *v3Ref    `json:"factory_worker"`
-	FactoryTask    *taskRef  `json:"factory_task"`
-	Plans          []planRef `json:"factory_plans"`
+	FactoryWorker *v3Ref    `json:"factory_worker"`
+	FactoryTask   *taskRef  `json:"factory_task"`
+	Plans         []planRef `json:"factory_plans"`
 }
 
 type taskRef struct {

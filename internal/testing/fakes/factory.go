@@ -12,16 +12,17 @@ import (
 	"github.com/google/uuid"
 )
 
+// FactoryWorkerID is the worker ClaimFactoryPlan claims plans for.
+const FactoryWorkerID = "fake-worker"
+
 // factoryPlan is a plan the fake holds, with its comments in the order they
 // were made, as conductor keeps them. Its state is its flow's.
 type factoryPlan struct {
 	id, title, state, branch, text string
 	createdAt, updatedAt           time.Time
 	// noFlow is whether DropFactoryFlow took the plan's flow away, as a plan
-	// made before conductor gave every plan one has none; session is the one
-	// claiming the plan now, "" when none does.
-	noFlow  bool
-	session string
+	// made before conductor gave every plan one has none.
+	noFlow bool
 	// worker is the factory worker claiming the plan, "" when none does.
 	worker string
 	events []string
@@ -112,7 +113,8 @@ var factoryEnds = []string{"ended"}
 type FactoryPlan struct {
 	ID, Title, State, Text string
 	Comments               int
-	// Session is the factory session claiming the plan, "" when none does.
+	// Session is the session the fake's worker's sessions list the plan
+	// under, "" when none does.
 	Session string
 	// Worker is the factory worker claiming the plan, "" when none does.
 	Worker string
@@ -138,9 +140,16 @@ func (f *FakeCircleCI) FactoryPlan(id string) (FactoryPlan, bool) {
 	if p == nil {
 		return FactoryPlan{}, false
 	}
+	session := ""
+	for _, s := range f.factoryWorkers[FactoryWorkerID] {
+		if slices.Contains(s.FlowIDs, p.id) {
+			session = s.ID
+			break
+		}
+	}
 	return FactoryPlan{
 		ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments),
-		Session: p.session, Worker: p.worker, Events: slices.Clone(p.events), Reasons: slices.Clone(p.reasons),
+		Session: session, Worker: p.worker, Events: slices.Clone(p.events), Reasons: slices.Clone(p.reasons),
 		Repos: slices.Clone(p.repos),
 	}, true
 }
@@ -325,23 +334,39 @@ func (f *FakeCircleCI) BlockFactoryPlanUntil(id, until string, by ...string) {
 	}
 }
 
-// ClaimFactoryPlan has factory session sessionID claim plan id, as factory's
-// daemon would.
+// ClaimFactoryPlan has the fake's worker claim plan id and list it under
+// session sessionID in the worker's sessions; "" lists it under none.
 func (f *FakeCircleCI) ClaimFactoryPlan(id, sessionID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if p := f.factoryPlans[id]; p != nil {
-		p.session = sessionID
+	p := f.factoryPlans[id]
+	if p == nil {
+		return
 	}
+	f.unlistFactoryPlan(p)
+	p.worker = FactoryWorkerID
+	if f.factoryWorkers == nil {
+		f.factoryWorkers = map[string][]FactoryWorkerSession{}
+	}
+	sessions := f.factoryWorkers[FactoryWorkerID]
+	if sessionID != "" {
+		n := slices.IndexFunc(sessions, func(s FactoryWorkerSession) bool { return s.ID == sessionID })
+		if n < 0 {
+			sessions = append(sessions, FactoryWorkerSession{ID: sessionID})
+			n = len(sessions) - 1
+		}
+		sessions[n].FlowIDs = append(slices.Clone(sessions[n].FlowIDs), id)
+	}
+	f.factoryWorkers[FactoryWorkerID] = sessions
 }
 
-// ReleaseFactoryPlan has the session claiming plan id release it, as
-// factory's daemon would; the plan keeps its flow.
+// ReleaseFactoryPlan frees plan id's claim, dropping it from its worker's
+// sessions; the plan keeps its flow.
 func (f *FakeCircleCI) ReleaseFactoryPlan(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if p := f.factoryPlans[id]; p != nil {
-		p.session = ""
+		f.unlistFactoryPlan(p)
 		p.worker = ""
 	}
 }
@@ -381,6 +406,17 @@ func (f *FakeCircleCI) SetFactoryWorkerSessions(workerID string, sessions ...Fac
 		f.factoryWorkers = map[string][]FactoryWorkerSession{}
 	}
 	f.factoryWorkers[workerID] = slices.Clone(sessions)
+}
+
+// FactoryWorkerSessions is a copy of the sessions worker workerID lists.
+func (f *FakeCircleCI) FactoryWorkerSessions(workerID string) []FactoryWorkerSession {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	out := slices.Clone(f.factoryWorkers[workerID])
+	for i := range out {
+		out[i].FlowIDs = slices.Clone(out[i].FlowIDs)
+	}
+	return out
 }
 
 // DropFactoryWorker forgets worker workerID, so its sessions read 404, as
@@ -698,8 +734,8 @@ func (f *FakeCircleCI) handleDeletePlan(c *gin.Context) {
 	if p == nil {
 		return
 	}
-	if p.session != "" {
-		factoryError(c, http.StatusConflict, "plan is claimed by a session")
+	if p.worker != "" {
+		factoryError(c, http.StatusConflict, "plan is claimed")
 		return
 	}
 	for _, o := range f.factoryPlans {
@@ -830,9 +866,6 @@ func (f *FakeCircleCI) handleListFlows(c *gin.Context) {
 // flowEntity is plan p's flow as both flow routes serve it.
 func flowEntity(p *factoryPlan) gin.H {
 	refs := gin.H{"factory_plan": gin.H{"id": p.id}}
-	if p.session != "" {
-		refs["factory_session"] = gin.H{"id": p.session}
-	}
 	if p.worker != "" {
 		refs["factory_worker"] = gin.H{"id": p.worker, "attributes": gin.H{
 			"hostname": "fake-host", "phase": "started", "health": "ok",
@@ -994,15 +1027,23 @@ func (f *FakeCircleCI) handleReleaseFlow(c *gin.Context) {
 		factoryError(c, status, "API error")
 		return
 	}
-	if p.session == "" && p.worker == "" {
+	if p.worker == "" {
 		c.Status(http.StatusNoContent)
 		return
 	}
-	for i, s := range f.factoryWorkers[p.worker] {
-		f.factoryWorkers[p.worker][i].FlowIDs = slices.DeleteFunc(slices.Clone(s.FlowIDs), func(id string) bool { return id == p.id })
-	}
-	p.session, p.worker = "", ""
+	f.unlistFactoryPlan(p)
+	p.worker = ""
 	c.JSON(http.StatusOK, gin.H{"data": flowEntity(p)})
+}
+
+// unlistFactoryPlan drops p from every session of the worker claiming it.
+// The caller holds f.mu.
+func (f *FakeCircleCI) unlistFactoryPlan(p *factoryPlan) {
+	for i, s := range f.factoryWorkers[p.worker] {
+		ids := slices.Clone(s.FlowIDs)
+		f.factoryWorkers[p.worker][i].FlowIDs = slices.DeleteFunc(ids,
+			func(id string) bool { return id == p.id })
+	}
 }
 
 // handleGetWorkerSessions serves worker :id's sessions, each a minimal entity

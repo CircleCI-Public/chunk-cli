@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -792,7 +793,7 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(flows, []Flow{
 			{
 				ID: a.ID, Title: "a", State: "init", Phase: PhaseReceived,
-				SessionID: "session-1", ApplicableEvents: []FlowEvent{},
+				SessionID: "", WorkerID: fakes.FactoryWorkerID, ApplicableEvents: []FlowEvent{},
 				Deviations: []string{}, Next: []Transition{},
 			},
 			{
@@ -1088,7 +1089,7 @@ func TestReleaseClaim(t *testing.T) {
 		assert.NilError(t, err)
 	})
 
-	t.Run("a top-level session's claim is freed too", func(t *testing.T) {
+	t.Run("a session's claim is freed from the worker's sessions", func(t *testing.T) {
 		fake, client := newFlowClient(t)
 		p, err := client.CreatePlan(ctx, "a plan", "")
 		assert.NilError(t, err)
@@ -1099,6 +1100,55 @@ func TestReleaseClaim(t *testing.T) {
 
 		got, _ := fake.FactoryPlan(p.ID)
 		assert.Check(t, cmp.Equal(got.Session, ""))
+		assert.Check(t, cmp.Equal(got.Worker, ""))
+	})
+
+	t.Run("the fake's worker lists each session's plans", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		plan := func() string {
+			p, err := client.CreatePlan(ctx, "a plan", "")
+			assert.NilError(t, err)
+			return p.ID
+		}
+		e, f, g, h, m := plan(), plan(), plan(), plan(), plan()
+		fake.SetFactoryWorkerSessions(fakes.FactoryWorkerID, fakes.FactoryWorkerSession{ID: "s-0", FlowIDs: []string{e}})
+		fake.ClaimFactoryPlanForWorker(m, "w-1")
+		fake.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-9", FlowIDs: []string{m}})
+		fake.ClaimFactoryPlan(f, "s-1")
+		fake.ClaimFactoryPlan(g, "s-1")
+		fake.ClaimFactoryPlan(h, "s-2")
+		fake.ClaimFactoryPlan(m, "s-2")
+		session := func(id string) string {
+			got, _ := fake.FactoryPlan(id)
+			return got.Session
+		}
+		assert.Check(t, cmp.Equal(session(e), "s-0"), "the setter's session is kept")
+		assert.Check(t, cmp.Equal(session(f), "s-1"))
+		assert.Check(t, cmp.Equal(session(g), "s-1"))
+		assert.Check(t, cmp.Equal(session(h), "s-2"))
+		assert.Check(t, cmp.Equal(session(m), "s-2"))
+		w1 := fake.FactoryWorkerSessions("w-1")
+		assert.Assert(t, cmp.Len(w1, 1))
+		assert.Check(t, cmp.Len(w1[0].FlowIDs, 0), "the earlier worker's session no longer lists m")
+
+		err := client.ReleaseClaim(ctx, f)
+		assert.NilError(t, err)
+		fake.ReleaseFactoryPlan(h)
+		assert.Check(t, cmp.Equal(session(f), ""))
+		assert.Check(t, cmp.Equal(session(g), "s-1"), "a release drops only its own plan")
+		assert.Check(t, cmp.Equal(session(h), ""))
+		assert.Check(t, cmp.Equal(session(m), "s-2"))
+		listed := map[string]int{}
+		for _, s := range fake.FactoryWorkerSessions(fakes.FactoryWorkerID) {
+			listed[s.ID] = len(s.FlowIDs)
+		}
+		assert.Check(t, cmp.DeepEqual(listed, map[string]int{"s-0": 1, "s-1": 1, "s-2": 1}))
+
+		fake.ReleaseFactoryPlan(g)
+		sessions := fake.FactoryWorkerSessions(fakes.FactoryWorkerID)
+		n := slices.IndexFunc(sessions, func(s fakes.FactoryWorkerSession) bool { return s.ID == "s-1" })
+		assert.Assert(t, n >= 0, "a session left with no flows stays listed")
+		assert.Check(t, cmp.Len(sessions[n].FlowIDs, 0))
 	})
 
 	t.Run("a plan with no flow is a 404", func(t *testing.T) {
@@ -1133,9 +1183,36 @@ func TestGetFlowHolder(t *testing.T) {
 			claim: func(*fakes.FakeCircleCI, string) {},
 		},
 		{
-			name:        "a top-level session",
+			name:        "a session ClaimFactoryPlan lists",
 			claim:       func(f *fakes.FakeCircleCI, id string) { f.ClaimFactoryPlan(id, "s-1") },
 			wantSession: "s-1",
+			wantWorker:  fakes.FactoryWorkerID,
+		},
+		{
+			name:       "ClaimFactoryPlan with no session",
+			claim:      func(f *fakes.FakeCircleCI, id string) { f.ClaimFactoryPlan(id, "") },
+			wantWorker: fakes.FactoryWorkerID,
+		},
+		{
+			// GetFlow reads the first session listing the flow, and s-1 was
+			// listed first, so reading s-2 means s-1 no longer lists it.
+			name: "ClaimFactoryPlan under another session moves it",
+			claim: func(f *fakes.FakeCircleCI, id string) {
+				f.ClaimFactoryPlan(id, "s-1")
+				f.ClaimFactoryPlan(id, "s-2")
+			},
+			wantSession: "s-2",
+			wantWorker:  fakes.FactoryWorkerID,
+		},
+		{
+			name: "ClaimFactoryPlan after another worker's claim moves it to the fake's worker",
+			claim: func(f *fakes.FakeCircleCI, id string) {
+				f.ClaimFactoryPlanForWorker(id, "w-1")
+				f.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-2", FlowIDs: []string{id}})
+				f.ClaimFactoryPlan(id, "s-1")
+			},
+			wantSession: "s-1",
+			wantWorker:  fakes.FactoryWorkerID,
 		},
 		{
 			name:       "a worker with no session working it",
@@ -1146,26 +1223,6 @@ func TestGetFlowHolder(t *testing.T) {
 			name: "the worker's session listing the flow",
 			claim: func(f *fakes.FakeCircleCI, id string) {
 				f.ClaimFactoryPlanForWorker(id, "w-1")
-				f.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-2", FlowIDs: []string{id}})
-			},
-			wantSession: "s-2",
-			wantWorker:  "w-1",
-		},
-		{
-			name: "the worker's sessions list no flow: factory_session",
-			claim: func(f *fakes.FakeCircleCI, id string) {
-				f.ClaimFactoryPlanForWorker(id, "w-1")
-				f.ClaimFactoryPlan(id, "s-1")
-				f.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-3", FlowIDs: []string{"another"}})
-			},
-			wantSession: "s-1",
-			wantWorker:  "w-1",
-		},
-		{
-			name: "the worker's listing wins over factory_session",
-			claim: func(f *fakes.FakeCircleCI, id string) {
-				f.ClaimFactoryPlanForWorker(id, "w-1")
-				f.ClaimFactoryPlan(id, "s-1")
 				f.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-2", FlowIDs: []string{id}})
 			},
 			wantSession: "s-2",
