@@ -596,19 +596,23 @@ func TestFlows(t *testing.T) {
 
 	t.Run("ends a flow for each reason", func(t *testing.T) {
 		for _, tc := range []struct {
-			reason  AbandonReason
+			reason  EndReason
 			outcome string
 		}{
 			{
-				reason:  AbandonCanceled,
+				reason:  EndCompleted,
+				outcome: "completed",
+			},
+			{
+				reason:  EndCanceled,
 				outcome: "canceled",
 			},
 			{
-				reason:  AbandonWontDo,
+				reason:  EndWontDo,
 				outcome: "rejected",
 			},
 			{
-				reason:  AbandonDuplicate,
+				reason:  EndDuplicate,
 				outcome: "duplicated",
 			},
 		} {
@@ -658,7 +662,7 @@ func TestFlows(t *testing.T) {
 		assert.NilError(t, err)
 		fake.DropFactoryFlow(p.ID)
 
-		err = client.EndFlow(ctx, p.ID, AbandonCanceled)
+		err = client.EndFlow(ctx, p.ID, EndCanceled)
 		var se *StatusError
 		assert.Assert(t, errors.As(err, &se), "got %v", err)
 		assert.Check(t, cmp.Equal(se.StatusCode, http.StatusNotFound))
@@ -992,19 +996,24 @@ func TestFlows(t *testing.T) {
 		assert.NilError(t, err)
 		e2, err := client.CreatePlan(ctx, "merged", "")
 		assert.NilError(t, err)
+		e4, err := client.CreatePlan(ctx, "completed", "")
+		assert.NilError(t, err)
 		e3, err := client.CreatePlan(ctx, "ended-blocked", "")
 		assert.NilError(t, err)
 		fake.SetFactoryPlanState(e1.ID, "ended")
 		fake.SetFactoryFlowStatus(e1.ID, fakes.FactoryFlowStatus{Outcome: "canceled"})
 		fake.SetFactoryPlanState(e2.ID, "ended")
 		fake.SetFactoryFlowStatus(e2.ID, fakes.FactoryFlowStatus{Outcome: "merged"})
-		fake.BlockFactoryPlan(e3.ID, e1.ID, e2.ID)
+		fake.SetFactoryPlanState(e4.ID, "ended")
+		fake.SetFactoryFlowStatus(e4.ID, fakes.FactoryFlowStatus{Outcome: "completed"})
+		fake.BlockFactoryPlan(e3.ID, e1.ID, e2.ID, e4.ID)
 		got, err = client.ListFlowBlockers(ctx, e3.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(got, []Blocker{
 			{ID: e1.ID, Title: "canceled", State: "ended", Outcome: "canceled", Active: true},
 			{ID: e2.ID, Title: "merged", State: "ended", Outcome: "merged", Active: false},
-		}), "an ended blocker still blocks unless it merged")
+			{ID: e4.ID, Title: "completed", State: "ended", Outcome: "completed", Active: false},
+		}), "an ended blocker still blocks unless it merged or completed")
 
 		_, err = client.ListFlowBlockers(ctx, uuid.NewString())
 		assertStatus(t, err, http.StatusNotFound)

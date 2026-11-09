@@ -95,13 +95,6 @@ func handOff(ctx context.Context, s Store, event string) error {
 	return s.AddressComments(ctx)
 }
 
-// abandon is factory's event that ends the plan without its PR merging.
-const abandon = "abandon"
-
-// endEvent is factory's other event that ends the plan without its PR
-// merging.
-const endEvent = "end"
-
 // prioritize is factory's event that starts work on an init plan.
 const prioritize = "prioritize"
 

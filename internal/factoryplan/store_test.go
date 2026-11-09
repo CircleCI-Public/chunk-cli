@@ -432,6 +432,13 @@ func TestStoreEnd(t *testing.T) {
 			wantEvents: []string{"end"},
 		},
 		{
+			name:       "a live flow ends as completed",
+			state:      "build",
+			applicable: []string{"end"},
+			reason:     "completed",
+			wantEvents: []string{"end"},
+		},
+		{
 			name:       "a held flow, with an empty next, posts end",
 			state:      "build",
 			wantEvents: []string{"end"},

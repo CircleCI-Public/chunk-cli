@@ -486,7 +486,7 @@ message resumes the same Claude session.
 A build records a `chunkd.Session` whose `factory` field (`FactoryRun`) names
 the plan, and runs a factory build session in the plan's worktree. While it
 runs, the daemon follows the plan's flow in factory: it stops the build once
-the flow has ended, so abandoning a plan stops its build, and tells the build
+the flow has ended, so ending a plan stops its build, and tells the build
 session to claim the plan again when another session has held its claim and
 released it.
 

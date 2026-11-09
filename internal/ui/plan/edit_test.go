@@ -234,7 +234,7 @@ func TestEditIsRefusedOnceFactoryStopsWaiting(t *testing.T) {
 func TestEditIsSavedWhileFactoryWaitsOnOpenQuestions(t *testing.T) {
 	t.Parallel()
 	m, store, _ := planInPlan(t)
-	store.setEvents("answer-open-questions", "abandon")
+	store.setEvents("answer-open-questions", "end")
 	m = refreshed(t, m)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
@@ -247,7 +247,7 @@ func TestEditIsSavedWhileFactoryWaitsOnOpenQuestions(t *testing.T) {
 func TestEditIsSavedWhileFactoryWaitsOnYouWithNoComments(t *testing.T) {
 	t.Parallel()
 	m, store, _ := planInPlan(t)
-	store.setEvents("approve-for-units", "abandon")
+	store.setEvents("approve-for-units", "end")
 	store.setWaitingOn("human")
 	m = refreshed(t, m)
 	assert.Check(t, cmp.Equal(m.cannotEdit(), ""))
@@ -262,7 +262,7 @@ func TestEditIsSavedWhileFactoryWaitsOnYouWithNoComments(t *testing.T) {
 func TestEditIsRefusedWhileFactoryWorksOnThePlan(t *testing.T) {
 	t.Parallel()
 	m, store, _ := planInPlan(t)
-	store.setEvents("abandon")
+	store.setEvents("end")
 	store.setWaitingOn("session")
 	m = refreshed(t, m)
 	assert.Check(t, cmp.Contains(m.cannotEdit(), "once factory is waiting on you"))

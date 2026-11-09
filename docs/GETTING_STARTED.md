@@ -369,7 +369,7 @@ frees its claim, and the Flow tab then says that no session holds the plan
 and that `R` starts a build session. Once factory frees the old claim of a
 plan whose build stopped some other way, after the daemon restarted say, it
 says the same. `R` starts a new build that picks up factory's next task. `x`
-abandons a plan, and stops its build with it.
+ends a plan, and stops its build with it.
 `esc` goes back to your plans with the plan kept. Quitting with a request or
 comments still unsent in any plan asks for a second `ctrl+c`.
 `chunk factory plan` opens the same screen on its own.

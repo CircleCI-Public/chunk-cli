@@ -453,12 +453,13 @@ chunk
   waits on you, else factory's reason it is waiting; a plan waiting on its
   blockers names the first that still blocks.
 
-  `x` abandons the plan, while factory offers `end` or `abandon` (in every
-  live state): the strip asks `Abandon plan as: c canceled · w won't do ·
-  d duplicate · esc keep it`, and the key picked sends whichever of
-  factory's `end` or `abandon` the flow offers then, with that reason.
-  Factory ends the plan in Canceled, Won't Do or Duplicate at its next
-  poll. Any other key keeps the plan.
+  `x` ends the plan until its flow has ended, also while its blockers
+  hold it: the strip asks `End plan as: m complete · c canceled · w won't
+  do · d duplicate · esc keep it`, and the key picked sends factory's
+  `end` event with that reason. Factory ends the plan as Complete,
+  Canceled, Won't Do or Duplicate at its next poll. A complete plan
+  releases the plans it blocks, as a merged one does. Any other key keeps
+  the plan.
 
   `X` deletes the plan, after a `y`, while no factory session claims it:
   its text, comments and flow go, and the screen closes, back to where it
@@ -482,7 +483,7 @@ chunk
   session holds says so in `chunk watch`, and picks the plan up once the claim
   is released. Builds outlive the screen and the terminal, and any number go at
   once; the plan's Flow tab follows each, from factory. A build ends with its
-  plan, so abandoning the plan (`x`) stops it at its next poll. A
+  plan, so ending the plan (`x`) stops it at its next poll. A
   stopped one leaves the plan approved in factory, and `/f:resume <ID>` in
   Claude Code carries it on. A plan not approved stays in factory, and its ID
   is printed. Before it opens, the screen checks that the project has a git

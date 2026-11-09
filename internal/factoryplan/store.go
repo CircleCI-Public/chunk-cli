@@ -347,7 +347,7 @@ func (s *Store) End(ctx context.Context, reason string) error {
 	if f.Ended {
 		return ErrEnded
 	}
-	if err := s.api.EndFlow(ctx, id, circleci.AbandonReason(reason)); err != nil {
+	if err := s.api.EndFlow(ctx, id, circleci.EndReason(reason)); err != nil {
 		return fmt.Errorf("send the end event: %w", err)
 	}
 	return nil

@@ -103,7 +103,7 @@ var factoryEvents = []string{"prioritize", "address-comments", "answer-open-ques
 
 // endReasons are the reasons an end takes, and only an end
 // (api/conductorapi/events.go in circleci/factory).
-var endReasons = []string{"canceled", "wont-do", "duplicate"}
+var endReasons = []string{"completed", "canceled", "wont-do", "duplicate"}
 
 // factoryEnds are the states a plan ends in, which the plan list leaves out
 // (conductor.Ends in circleci/factory).
@@ -995,7 +995,8 @@ func blockerActive(b *factoryPlan, until string) bool {
 		return true
 	}
 	if b.state == "ended" {
-		return endOutcome(b) != "merged"
+		o := endOutcome(b)
+		return o != "merged" && o != "completed"
 	}
 	at, want := slices.Index(fakeStateOrder, b.state), slices.Index(fakeStateOrder, until)
 	return at < 0 || want < 0 || at < want
@@ -1098,7 +1099,7 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 	}
 	event, reason := body.Data.Attributes.Event, body.Data.Attributes.Reason
 	if event == "end" && !slices.Contains(endReasons, reason) {
-		factoryError(c, http.StatusBadRequest, "an end needs a reason: canceled, wont-do or duplicate")
+		factoryError(c, http.StatusBadRequest, "an end needs a reason: completed, canceled, wont-do or duplicate")
 		return
 	}
 	if event != "end" && reason != "" {
