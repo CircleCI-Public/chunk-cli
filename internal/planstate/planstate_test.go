@@ -42,7 +42,7 @@ func TestApproval(t *testing.T) {
 			next: []Move{
 				{Actor: Human, Event: ApproveForBuilding, Required: true},
 				{Actor: Human, Event: "request-revision"},
-				{Actor: Human, Event: "abandon"},
+				{Actor: Human, Event: "end"},
 			},
 			want: ApproveForBuilding,
 		},

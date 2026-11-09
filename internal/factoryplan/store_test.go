@@ -350,7 +350,7 @@ func TestStoreAnswerOpenQuestionsSendsTheEvent(t *testing.T) {
 	store, _, cci = createdStore(t)
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryPlanState(store.ID(), "build")
-	cci.SetFactoryApplicableEvents(store.ID(), "answer-open-questions", "abandon")
+	cci.SetFactoryApplicableEvents(store.ID(), "answer-open-questions", "end")
 	err = store.AnswerOpenQuestions(ctx)
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
@@ -377,12 +377,12 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 			},
 		},
 		{
-			name:  "End sends the end event the flow lists, with its reason",
+			name:  "End sends the end event, with its reason",
 			state: "refine-proposal",
 			call:  func(ctx context.Context, s *Store) error { return s.End(ctx, "wont-do") },
 			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
 				p, _ := cci.FactoryPlan(id)
-				assert.Check(t, cmp.DeepEqual(p.Events, []string{"abandon"}))
+				assert.Check(t, cmp.DeepEqual(p.Events, []string{"end"}))
 				assert.Check(t, cmp.DeepEqual(p.Reasons, []string{"wont-do"}))
 			},
 		},
@@ -404,7 +404,7 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 
 			store, _, cci := createdStore(t)
 			cci.SetFactoryPlanState(store.ID(), tc.state)
-			cci.SetFactoryApplicableEvents(store.ID(), "prioritize", "abandon")
+			cci.SetFactoryApplicableEvents(store.ID(), "prioritize", "end")
 			err = tc.call(ctx, store)
 			assert.Check(t, err)
 			tc.check(t, cci, store.ID())
@@ -412,60 +412,71 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 	}
 }
 
-// TestStoreEnd checks that End posts the end event the flow's next lists.
+// TestStoreEnd checks that End posts end to every flow that has not ended,
+// held flows included, and posts nothing to one that has.
 func TestStoreEnd(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
+		state      string
 		applicable []string
-		refused    []string
-		status     int // the fake's FactoryStatusCode, failing every factory call
+		reason     string // "" means "duplicate"
+		status     int    // the fake's FactoryStatusCode, failing every factory call
+		noFlow     bool
 		wantEvents []string
 		wantErr    string
 	}{
 		{
-			name:       "before end-event, abandon",
-			applicable: []string{"address-comments", "abandon"},
-			refused:    []string{"end"},
-			wantEvents: []string{"abandon"},
-		},
-		{
-			name:       "after end-event, end",
+			name:       "a live flow posts end",
+			state:      "build",
 			applicable: []string{"address-comments", "end"},
-			refused:    []string{"abandon"},
 			wantEvents: []string{"end"},
 		},
 		{
-			name:       "both listed sends end",
-			applicable: []string{"abandon", "end"},
+			name:       "a held flow, with an empty next, posts end",
+			state:      "build",
 			wantEvents: []string{"end"},
 		},
 		{
-			name:       "neither listed sends nothing",
-			applicable: []string{"address-comments"},
-			wantErr:    ErrNotEndable.Error(),
+			name:    "an ended flow posts nothing",
+			state:   "ended",
+			wantErr: ErrEnded.Error(),
 		},
 		{
 			name:       "a 400 is an error",
-			applicable: []string{"abandon"},
-			refused:    []string{"abandon"},
-			wantErr:    "send the abandon event",
+			state:      "build",
+			applicable: []string{"end"},
+			reason:     "bored",
+			wantErr:    "send the end event",
 		},
 		{
-			name:       "a failed flow read sends nothing",
-			applicable: []string{"abandon"},
+			name:       "a failed flow read posts nothing",
+			state:      "build",
+			applicable: []string{"end"},
 			status:     http.StatusInternalServerError,
-			wantErr:    "get the flow's events",
+			wantErr:    "get the flow",
+		},
+		{
+			name:    "a plan with no flow posts end and reports the 404",
+			state:   "build",
+			noFlow:  true,
+			wantErr: "send the end event",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, _, cci := createdStore(t)
 			ctx := context.Background()
-			cci.SetFactoryPlanState(store.ID(), "build")
+			cci.SetFactoryPlanState(store.ID(), tc.state)
 			cci.SetFactoryApplicableEvents(store.ID(), tc.applicable...)
-			cci.SetFactoryRefusedEvents(tc.refused...)
 			cci.FactoryStatusCode = tc.status
+			if tc.noFlow {
+				cci.DropFactoryFlow(store.ID())
+			}
+			reason := tc.reason
+			if reason == "" {
+				reason = "duplicate"
+			}
 
-			err := store.End(ctx, "duplicate")
+			err := store.End(ctx, reason)
 
 			cci.FactoryStatusCode = 0
 			if tc.wantErr == "" {
@@ -473,14 +484,19 @@ func TestStoreEnd(t *testing.T) {
 			} else {
 				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
 			}
-			if tc.wantErr == ErrNotEndable.Error() {
-				assert.Check(t, cmp.ErrorIs(err, ErrNotEndable))
+			if tc.wantErr == ErrEnded.Error() {
+				assert.Check(t, cmp.ErrorIs(err, ErrEnded))
 			}
 			p, _ := cci.FactoryPlan(store.ID())
 			assert.Check(t, cmp.DeepEqual(p.Events, tc.wantEvents))
-			if len(tc.wantEvents) > 0 {
-				assert.Check(t, cmp.DeepEqual(p.Reasons, []string{"duplicate"}))
+			if len(tc.wantEvents) == 0 {
+				return
 			}
+			assert.Check(t, cmp.DeepEqual(p.Reasons, []string{reason}))
+			cci.SetFactoryPlanState(store.ID(), "ended")
+			f, err := store.Flow(ctx)
+			assert.NilError(t, err)
+			assert.Check(t, f.Ended, "the plan did not end")
 		})
 	}
 }
@@ -525,7 +541,7 @@ func TestStoreApproveDesignSendsTheEvent(t *testing.T) {
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryPlanState(store.ID(), "refine-proposal")
 	cci.SetFactoryRequiredEvents(store.ID(), "approve-for-units")
-	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "abandon")
+	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "end")
 
 	err := store.ApproveDesign(ctx)
 	assert.NilError(t, err)
@@ -548,27 +564,27 @@ func TestStoreApproveDesignRefusesWhatFactoryDoesNotOffer(t *testing.T) {
 			name:       "building is what is required",
 			state:      "refine-units",
 			required:   []string{"approve-for-building"},
-			applicable: []string{"abandon"},
+			applicable: []string{"end"},
 			want:       ErrDesignApproved,
 		},
 		{
 			name:       "both are required",
 			state:      "refine-proposal",
 			required:   []string{"approve-for-units", "approve-for-building"},
-			applicable: []string{"abandon"},
+			applicable: []string{"end"},
 			want:       ErrDesignApproved,
 		},
 		{
 			name:       "open questions",
 			state:      "refine-proposal",
 			required:   []string{"answer-open-questions"},
-			applicable: []string{"approve-for-units", "approve-for-building", "abandon"},
+			applicable: []string{"approve-for-units", "approve-for-building", "end"},
 			want:       planapprove.ErrNoApproval,
 		},
 		{
 			name:       "nothing listed",
 			state:      "stand-by",
-			applicable: []string{"abandon"},
+			applicable: []string{"end"},
 			want:       planapprove.ErrNoApproval,
 		},
 	} {
@@ -638,10 +654,10 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.Check(t, cmp.Nil(f.Progress))
 
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
-	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "abandon")
+	cci.SetFactoryApplicableEvents(store.ID(), "address-comments", "end")
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
-	assert.Check(t, cmp.DeepEqual(f.Events, []string{"address-comments", "abandon"}))
+	assert.Check(t, cmp.DeepEqual(f.Events, []string{"address-comments", "end"}))
 	assert.Check(t, cmp.Equal(f.Task, ""), "a flow with no task out")
 
 	cci.SetFactoryTask(store.ID(), "early-plan")
