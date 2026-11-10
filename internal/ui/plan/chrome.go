@@ -15,7 +15,7 @@ import (
 )
 
 // The screen's palette: what each colour means is the same everywhere it is
-// used, so the header, the plan, the chat and the action bar read as one.
+// used, so the header, the plan, the Overview and the action bar read as one.
 // Each has a darker twin for a light terminal.
 func (m Model) hue(light, dark string) color.Color {
 	return lipgloss.LightDark(m.dark)(lipgloss.Color(light), lipgloss.Color(dark))
@@ -157,7 +157,8 @@ func (m Model) strip() string {
 }
 
 // tabs is the row that stands in for the right pane on a screen too narrow
-// for both: which of chat, Flow and Plan is showing, and what the plan has.
+// for both: which of the Overview and the plan is showing, and what the plan
+// has.
 func (m Model) tabs() string {
 	labels := m.tabLabels()
 	tab := func(on bool, text string) string {
@@ -185,18 +186,14 @@ func (s span) has(x int) bool { return x >= s.start && x < s.end }
 
 // The narrow screen's tabs, in the order tabs draws them.
 const (
-	narrowChat = iota
-	narrowFlow
+	narrowOverview = iota
 	narrowPlan
 )
 
 // narrowTab is the narrow screen's tab that is showing.
 func (m Model) narrowTab() int {
-	switch {
-	case m.focus == paneChat:
-		return narrowChat
-	case m.tab == tabFlow:
-		return narrowFlow
+	if m.focus == paneOverview {
+		return narrowOverview
 	}
 	return narrowPlan
 }
@@ -215,26 +212,20 @@ func (m Model) tabSpans() []span {
 	return spans
 }
 
-// tabLabels is the text of the narrow screen's three tabs.
+// tabLabels is the text of the narrow screen's two tabs.
 func (m Model) tabLabels() []string {
-	chat := activityTitle
+	left := "Request"
+	if m.created {
+		left = "Overview"
+	}
 	if m.busy {
-		chat += " " + m.spin.View()
+		left += " " + m.spin.View()
 	}
 	plan := "Plan"
 	if len(m.structure.Units) > 0 {
 		plan += fmt.Sprintf(" · %d %s", len(m.structure.Units), plural(len(m.structure.Units), "unit", "units"))
 	}
-	return []string{chat, "Flow", plan}
-}
-
-// rightTabSpans is the columns the words Flow and Plan take in the right
-// pane's title, which titled sets after "╭─ ".
-func (m Model) rightTabSpans() (flow, plan span) {
-	start := m.planLeft() + 3
-	flow = span{start, start + len("Flow")}
-	plan = span{flow.end + 2, flow.end + 2 + len("Plan")}
-	return flow, plan
+	return []string{left, plan}
 }
 
 // actionBar is the box under the panes: the keys at hand on the left and, on
@@ -338,10 +329,7 @@ func (m Model) actions() (main, side string) {
 		held := fmt.Sprintf("%d %s held until factory is waiting on you", queued, plural(queued, "comment", "comments"))
 		return "", m.style(m.faint()).Render(held)
 	case queued > 0:
-		save := fmt.Sprintf("enter Save %d %s", queued, plural(queued, "comment", "comments"))
-		if m.focus == panePlan {
-			save = "s " + strings.TrimPrefix(save, "enter ")
-		}
+		save := fmt.Sprintf("s Save %d %s", queued, plural(queued, "comment", "comments"))
 		return button(m.brand(), save), m.style(m.faint()).Render(approve + " · resolve comments first")
 	case open > 0:
 		return "", m.style(m.faint()).Render(approve + " · resolve comments first")

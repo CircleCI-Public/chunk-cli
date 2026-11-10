@@ -365,11 +365,11 @@ func (m Model) updateWorkspace(key uint64, msg tea.Msg) (Model, tea.Cmd) {
 	}
 	switch msg := msg.(type) {
 	case plan.ClosedMsg:
-		// Left, or approved: an approved plan's build is followed on its
-		// Flow tab, from the flow list.
+		// Left, or approved: an approved plan's build is followed in its
+		// Overview, from the flow list.
 		return m.showFlows()
 	case plan.BuildingMsg:
-		// The screen stays open on its Flow tab, which follows the build.
+		// The screen stays open on its Overview, which follows the build.
 		return m, nil
 	case plan.OpenMsg:
 		next, cmd := m.openPlanID(msg.ID, msg.Title)

@@ -42,11 +42,11 @@ func rowOf(t *testing.T, m Model, s string) int {
 func TestClickingAPaneGivesItTheKeyboard(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
-	assert.Assert(t, cmp.Equal(m.focus, paneChat), "the chat should start with the keyboard")
+	assert.Assert(t, cmp.Equal(m.focus, paneOverview), "the chat should start with the keyboard")
 	m = drive(t, m, click(m.planLeft()+10, 10+stripRows))
 	assert.Check(t, cmp.Equal(m.focus, panePlan), "clicking the plan did not focus it")
 	m = drive(t, m, click(5, 10+stripRows))
-	assert.Check(t, cmp.Equal(m.focus, paneChat), "clicking the chat did not focus it")
+	assert.Check(t, cmp.Equal(m.focus, paneOverview), "clicking the chat did not focus it")
 }
 
 func TestClickingABlockMovesTheCursorToIt(t *testing.T) {
@@ -88,13 +88,13 @@ func TestDoubleClickOpensTheComment(t *testing.T) {
 func TestClickingTheTabsSwitchesPanes(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 70, 30, twoParts, nil)
-	y := rowOf(t, m, "Activity")
+	y := rowOf(t, m, "Overview")
 	m = drive(t, m, click(5, y))
-	assert.Assert(t, cmp.Equal(m.focus, paneChat), "clicking the activity tab left the activity")
+	assert.Assert(t, cmp.Equal(m.focus, paneOverview), "clicking the Overview tab left the Overview")
 	m = drive(t, m, click(18, y))
 	assert.Assert(t, cmp.Equal(m.focus, panePlan), "clicking the plan tab did not open the plan")
 	m = drive(t, m, click(3, y))
-	assert.Check(t, cmp.Equal(m.focus, paneChat), "clicking the chat tab did not bring the chat back")
+	assert.Check(t, cmp.Equal(m.focus, paneOverview), "clicking the Overview tab did not bring the Overview back")
 }
 
 func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
@@ -145,30 +145,34 @@ func TestWheelScrollsThePaneUnderThePointer(t *testing.T) {
 	// The chat has the keyboard, but the pointer is over the plan.
 	m = drive(t, m, tea.MouseWheelMsg{X: m.planLeft() + 10, Y: 8 + stripRows, Button: tea.MouseWheelDown})
 	assert.Check(t, m.planView.YOffset() != 0, "the wheel over the plan did not scroll it")
-	assert.Check(t, cmp.Equal(m.focus, paneChat), "scrolling took the keyboard")
+	assert.Check(t, cmp.Equal(m.focus, paneOverview), "scrolling took the keyboard")
 }
 
-func TestClickingATabWordSwitchesTheTab(t *testing.T) {
+// A click on the right pane's title gives the plan the keyboard, as a click
+// anywhere in it does, and both panes keep showing what they showed.
+func TestClickingTheRightPanesTitleSwitchesNothing(t *testing.T) {
 	t.Parallel()
 	m, _ := planned(t, 140, 40, twoParts, nil)
-	flow, plan := m.rightTabSpans()
-	m = drive(t, m, click(flow.start+1, m.topRows()))
-	assert.Check(t, cmp.Equal(m.tab, tabFlow), "a click on Flow did not switch")
-	assert.Check(t, cmp.Equal(m.focus, panePlan))
-	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "PROGRESS"))
-	m = drive(t, m, click(plan.start+1, m.topRows()))
-	assert.Check(t, cmp.Equal(m.tab, tabPlan), "a click on Plan did not switch back")
+	before := ansi.Strip(m.Content())
+	assert.Assert(t, cmp.Contains(before, "Plan"))
+	m = drive(t, m, click(m.planLeft()+4, m.topRows()))
+	after := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(after, "DESIGN"), "a click on the title hid the plan")
+	assert.Check(t, cmp.Contains(after, "ACTIVITY"), "a click on the title took the Overview away")
+	assert.Check(t, cmp.Equal(m.focus, panePlan), "a click in the plan pane did not give it the keyboard")
+}
 
-	// A narrow screen's tab row picks any of the three.
-	m, _ = planned(t, 70, 30, twoParts, nil)
+// A narrow screen's tab row picks the Overview or the plan, with the strip
+// one row tall.
+func TestClickingANarrowTabPicksAPane(t *testing.T) {
+	t.Parallel()
+	m, _ := planned(t, 70, 30, twoParts, nil)
 	y := headerRows + stripRows
 	spans := m.tabSpans()
-	assert.Assert(t, cmp.Len(spans, 3))
-	m = drive(t, m, click(spans[narrowFlow].start+1, y))
+	assert.Assert(t, cmp.Len(spans, 2))
+	assert.Check(t, cmp.Contains(ansi.Strip(strings.Split(m.Content(), "\n")[y]), "Overview"))
+	m = drive(t, m, click(spans[narrowPlan].start+1, y))
 	assert.Check(t, cmp.Equal(m.focus, panePlan))
-	assert.Check(t, cmp.Equal(m.tab, tabFlow))
-	m = drive(t, m, click(m.tabSpans()[narrowPlan].start+1, y))
-	assert.Check(t, cmp.Equal(m.tab, tabPlan))
-	m = drive(t, m, click(m.tabSpans()[narrowChat].start+1, y))
-	assert.Check(t, cmp.Equal(m.focus, paneChat))
+	m = drive(t, m, click(m.tabSpans()[narrowOverview].start+1, y))
+	assert.Check(t, cmp.Equal(m.focus, paneOverview))
 }

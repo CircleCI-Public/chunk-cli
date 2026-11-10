@@ -67,7 +67,7 @@ func (m Model) inPane(x int) pane {
 	if x >= m.chatWidth() {
 		return panePlan
 	}
-	return paneChat
+	return paneOverview
 }
 
 // wheel scrolls the pane the pointer is over, whichever has the keyboard.
@@ -76,15 +76,11 @@ func (m Model) wheel(msg tea.MouseWheelMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	var cmd tea.Cmd
-	if m.inPane(msg.X) == panePlan && m.tab == tabFlow {
-		m.flowView, cmd = m.flowView.Update(msg)
-		return m, cmd
-	}
 	if m.inPane(msg.X) == panePlan {
 		m.planView, cmd = m.planView.Update(msg)
 		return m, cmd
 	}
-	m.chatView, cmd = m.chatView.Update(msg)
+	m.overviewView, cmd = m.overviewView.Update(msg)
 	return m, cmd
 }
 
@@ -123,39 +119,26 @@ func (m Model) click(mouse tea.Mouse) (Model, tea.Cmd) {
 	case mouse.Y < m.topRows():
 		return m, nil
 	}
-	if mouse.Y == m.topRows() && m.inPane(mouse.X) == panePlan {
-		// The right pane's title is its tabs.
-		switch flow, plan := m.rightTabSpans(); {
-		case flow.has(mouse.X):
-			return m.showTab(tabFlow)
-		case plan.has(mouse.X):
-			return m.showTab(tabPlan)
-		}
-	}
 	var cmd tea.Cmd
 	switch {
-	case m.inPane(mouse.X) == panePlan && m.tab == tabFlow:
-		m, cmd = m.focusOn(panePlan)
 	case m.inPane(mouse.X) == panePlan:
 		m, cmd = m.clickPlan(mouse)
-	case m.focus != paneChat:
-		m, cmd = m.focusOn(paneChat)
+	case m.focus != paneOverview:
+		m, cmd = m.focusOn(paneOverview)
 	}
 	// The press may also begin a selection of text, if it is dragged.
 	return m.beginText(mouse), cmd
 }
 
-// clickTab picks chat, Flow or Plan from the tabs of a narrow screen.
+// clickTab picks the Overview or the plan from the tabs of a narrow screen.
 func (m Model) clickTab(x int) (Model, tea.Cmd) {
 	for i, s := range m.tabSpans() {
 		switch {
 		case !s.has(x) || i == m.narrowTab():
-		case i == narrowChat:
-			return m.focusOn(paneChat)
-		case i == narrowFlow:
-			return m.showTab(tabFlow)
+		case i == narrowOverview:
+			return m.focusOn(paneOverview)
 		default:
-			return m.showTab(tabPlan)
+			return m.focusOn(panePlan)
 		}
 	}
 	return m, nil

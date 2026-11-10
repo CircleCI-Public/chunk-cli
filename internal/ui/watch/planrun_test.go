@@ -342,7 +342,7 @@ func TestNOpensANewPlanInTheProject(t *testing.T) {
 	assert.Equal(t, f.root, "/src/chunk-cli")
 	assert.Assert(t, m.planOpen)
 	out := screen(m)
-	assert.Assert(t, strings.Contains(out, "Activity") && strings.Contains(out, "No plan yet"), "the planning screen is shown:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "Request") && strings.Contains(out, "No plan yet"), "the planning screen is shown:\n%s", out)
 	assert.Check(t, cmp.Contains(out, "back to plans"), "the way back is in the footer")
 	assert.Check(t, !strings.Contains(out, "runs"), "the footer names runs:\n%s", out)
 	assert.Assert(t, m.View().MouseMode == tea.MouseModeCellMotion, "the plan and chat scroll with the mouse")
@@ -413,25 +413,40 @@ func TestThePlanIsKeptBehindFlows(t *testing.T) {
 	next, _ := m.Update(flowlist.OpenMsg{ID: m.planWorkspaces[key].store.ID()})
 	m = next.(Model)
 	assert.Assert(t, m.planOpen)
+	// The reply came before factory gave the plan a state, so it is in the
+	// Created stage, which enter opens.
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	out := screen(m)
 	assert.Assert(t, strings.Contains(out, "Wrote a plan.") && strings.Contains(out, "The flag exists."), "the reply that came while away is shown:\n%s", out)
 }
 
-// The open flow screen gets the arrows.
+// The open flow screen gets the keys: its left pane is the Overview, its right
+// the plan, and ← and → leave the plan pane showing the plan.
 func TestArrowsReachTheOpenFlowScreen(t *testing.T) {
-	m := openPlanScreen(t, planModel(t, &fakePlans{}))
-	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
-	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyLeft})
-	assert.Assert(t, m.planOpen, "← left the flow screen")
+	f := &fakePlans{reply: "ok", newID: "plan-1", plan: "# The plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
+	f.units = []plan.Unit{{Name: "Unit 1: Add the flag"}}
+	m := openPlanScreen(t, planModel(t, f))
+	m = typeInto(m, "add a flag")
+	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = deliverThen(t, m, cmd, 1)                                   // the plan is created, then the message sent
+	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Next())) // chunk's reply
+	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
 	s := screen(m)
-	assert.Check(t, cmp.Contains(s, "PROGRESS"))
-	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyRight})
-	assert.Assert(t, m.planOpen)
+	assert.Check(t, cmp.Contains(s, "ACTIVITY"), "the Overview is the left pane:\n%s", s)
+	assert.Check(t, cmp.Contains(s, "The flag exists."))
+	assert.Check(t, !strings.Contains(s, "PROGRESS"), "the plan pane shows the plan, not progress:\n%s", s)
+
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyTab})
+	for _, k := range []rune{tea.KeyLeft, tea.KeyRight} {
+		m, _ = pressKey(m, tea.KeyPressMsg{Code: k})
+		assert.Assert(t, m.planOpen, "an arrow left the flow screen")
+	}
 	s = screen(m)
-	assert.Check(t, !strings.Contains(s, "PROGRESS"), "→ did not show the Plan tab:\n%s", s)
+	assert.Check(t, cmp.Contains(s, "ACTIVITY"))
+	assert.Check(t, cmp.Contains(s, "The flag exists."))
 }
 
-// Approving keeps the plan screen open on its Flow tab, which follows the
+// Approving keeps the plan screen open on its Overview, which follows the
 // build, and reads that build from the daemon when watch gives it one.
 func TestApprovingThePlanKeepsItsScreen(t *testing.T) {
 	for _, withBuilds := range []bool{true, false} {
@@ -472,6 +487,8 @@ func testApprovingThePlanKeepsItsScreen(t *testing.T, withBuilds bool) {
 	out := screen(m)
 	assert.Check(t, cmp.Contains(out, "Approved · building as run build-1"))
 	assert.Check(t, !strings.Contains(out, "Runs"), "the screen names Runs:\n%s", out)
+	// The Overview has the keyboard, so its cursor is on the Building stage.
+	assert.Check(t, cmp.Contains(out, "▶ ◉ Building"), "the Overview does not have the keyboard:\n%s", out)
 	if withBuilds {
 		assert.Check(t, cmp.DeepEqual(builds.planIDs(), []string{"plan-1"}))
 	} else {

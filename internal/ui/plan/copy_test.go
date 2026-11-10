@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -107,9 +108,13 @@ func TestAClickWithoutADragCopiesNothing(t *testing.T) {
 	assert.Check(t, m.text.drag.Empty())
 }
 
-func TestDraggingOverTheChatCopiesTheMessageWithoutItsFrame(t *testing.T) {
+func TestDraggingOverTheRequestCopiesTheMessageWithoutItsFrame(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.copyText = tea.SetClipboard
+	// The request is a bubble until the plan is made; it is sent, not made.
+	m, _ = m.send("plan it")
 	y := rowOf(t, m, "plan it")
 
 	// From above the bubble to below it, across its border and padding.
@@ -117,6 +122,19 @@ func TestDraggingOverTheChatCopiesTheMessageWithoutItsFrame(t *testing.T) {
 
 	assert.Check(t, cmp.Contains(got, "plan it"))
 	assert.Check(t, !strings.ContainsAny(got, "╭╮╰╯│─"), "the bubble's frame was copied: %q", got)
+}
+
+func TestDraggingOverTheOverviewCopiesTheTextWithoutItsCursor(t *testing.T) {
+	t.Parallel()
+	m, _ := planned(t, 140, 40, twoParts, nil)
+	y := rowOf(t, m, "✓ Created")
+	assert.Assert(t, cmp.Contains(strings.Split(ansi.Strip(m.Content()), "\n")[y], "▶ ✓ Created"), "the cursor is not on the row")
+
+	// The drag starts on the cursor's column, left of the text.
+	_, got := dragged(t, m, 2, y, m.chatWidth()-3, y)
+
+	assert.Check(t, strings.HasPrefix(got, "✓ Created"), "the cursor column was copied: %q", got)
+	assert.Check(t, !strings.Contains(got, "▶"), "the cursor was copied: %q", got)
 }
 
 func TestTheSelectionIsDrawnOverTheText(t *testing.T) {
