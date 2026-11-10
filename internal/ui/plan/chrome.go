@@ -3,7 +3,6 @@ package plan
 import (
 	"fmt"
 	"image/color"
-	"slices"
 	"strings"
 	"time"
 
@@ -126,10 +125,10 @@ func (m Model) FlowText() string {
 }
 
 // stripRows is the status strip's height in rows.
-const stripRows = 2
+const stripRows = 1
 
-// strip is the rows under the header: the steps of the flow with the one it
-// is at in bold, then what is happening now and what comes next.
+// strip is the row under the header: the stage the flow is at, in bold,
+// then what is happening now and what comes next.
 func (m Model) strip() string {
 	f := m.flow
 	f.State = m.state
@@ -140,39 +139,21 @@ func (m Model) strip() string {
 		next = ""
 	}
 
-	var line1 string
-	if slices.Contains(steps, step) {
-		parts := make([]string, len(steps))
-		for i, s := range steps {
-			if s == step {
-				parts[i] = m.style(m.brand()).Bold(true).Render(s)
-			} else {
-				parts[i] = m.style(m.dim()).Render(s)
-			}
-		}
-		line1 = " " + strings.Join(parts, m.style(m.faint()).Render(" › "))
-	} else {
-		line1 = " " + m.style(m.dim()).Render(step)
-	}
-
-	var parts []string
+	parts := []string{m.style(m.brand()).Bold(true).Render(step)}
 	if now != "" {
 		parts = append(parts, m.style(m.faint()).Render("Now:")+" "+now)
 	}
 	if next != "" {
 		parts = append(parts, m.style(m.faint()).Render("Next:")+" "+next)
 	}
-	line2 := " " + strings.Join(parts, "   ")
+	line := " " + strings.Join(parts, m.style(m.faint()).Render(" · "))
 	if m.familyErr != nil {
 		// Only Related and the sub-plans go without; the rest of the strip
 		// still holds.
-		note := "could not read related plans: " + clean(m.familyErr.Error())
-		if len(parts) > 0 {
-			note = " · " + note
-		}
-		line2 += m.style(m.faint()).Render(note)
+		note := " · could not read related plans: " + clean(m.familyErr.Error())
+		line += m.style(m.faint()).Render(note)
 	}
-	return ansi.Truncate(line1, m.width, "…") + "\n" + ansi.Truncate(line2, m.width, "…")
+	return ansi.Truncate(line, m.width, "…")
 }
 
 // tabs is the row that stands in for the right pane on a screen too narrow

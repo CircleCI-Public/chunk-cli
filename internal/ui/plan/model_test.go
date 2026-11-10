@@ -440,8 +440,8 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 			assert.Check(t, strings.Contains(view, "the plan is "+shown), "the action bar does not name the state:\n%s", view)
 			lines := strings.Split(view, "\n")
 			row1 := shown
-			if slices.Contains(steps, planstate.Step(shown)) {
-				row1 = "Planning › Building › Integrating › Done"
+			if stage := planstate.Stage(shown); stage != "" {
+				row1 = stage
 			}
 			assert.Check(t, cmp.Contains(lines[headerRows], row1))
 			assert.Check(t, !strings.Contains(view, "Plan · "), "the pane's title names the state:\n%s", view)
@@ -3001,8 +3001,8 @@ func TestStripShowsFlowStatus(t *testing.T) {
 		t.Errorf("strip does not say the design is ready:\n%s", view)
 	}
 	lines := strings.Split(view, "\n")
-	assert.Check(t, cmp.Contains(lines[1], "Planning › Building › Integrating › Done"))
-	assert.Check(t, cmp.Contains(lines[2], "Next: you approve the design · ctrl+s"))
+	assert.Check(t, cmp.Contains(lines[1], "Planning · Next: you approve the design · ctrl+s"))
+	assert.Check(t, !strings.Contains(view, "Planning › Building"), view)
 
 	store.TextV += "\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
@@ -3015,8 +3015,8 @@ func TestStripShowsFlowStatus(t *testing.T) {
 		t.Errorf("strip does not say the plan is ready:\n%s", view)
 	}
 	lines = strings.Split(view, "\n")
-	assert.Check(t, cmp.Contains(lines[1], "Planning › Building › Integrating › Done"))
-	assert.Check(t, cmp.Contains(lines[2], "Next: you approve the plan · ctrl+s"))
+	assert.Check(t, cmp.Contains(lines[1], "Planning · Next: you approve the plan · ctrl+s"))
+	assert.Check(t, !strings.Contains(view, "Planning › Building"), view)
 
 	m.comments = []comment{{block: 0, quote: "# Add a flag", text: "name it --dry"}}
 	m.renderPlan()
@@ -3474,8 +3474,8 @@ func TestPaneRendersStoreText(t *testing.T) {
 	if !strings.Contains(view, "Done.") {
 		t.Errorf("plan text not shown:\n%s", view)
 	}
-	if lines := strings.Split(view, "\n"); !strings.Contains(lines[headerRows], "Planning › Building") {
-		t.Errorf("strip does not show the step:\n%s", view)
+	if lines := strings.Split(view, "\n"); !strings.Contains(lines[headerRows], "Planning") {
+		t.Errorf("strip does not show the stage:\n%s", view)
 	}
 	if strings.Contains(view, "Plan · refine-units") {
 		t.Errorf("title still shows the state:\n%s", view)
@@ -5030,8 +5030,8 @@ func TestFamilyErrorIsQuiet(t *testing.T) {
 	store.FamilyErr = errors.New("boom")
 	m := flowModel(t, store)
 	assert.Check(t, cmp.Equal(m.refreshErr, ""))
-	row2 := func(m Model) string { return ansi.Strip(strings.Split(m.Content(), "\n")[headerRows+1]) }
-	assert.Check(t, cmp.Contains(row2(m), "could not read related plans: boom"))
+	stripRow := func(m Model) string { return ansi.Strip(strings.Split(m.Content(), "\n")[headerRows]) }
+	assert.Check(t, cmp.Contains(stripRow(m), "could not read related plans: boom"))
 
 	store.mu.Lock()
 	store.TextV = "## 1. Outcome\n\nA new outcome."
@@ -5044,7 +5044,7 @@ func TestFamilyErrorIsQuiet(t *testing.T) {
 	store.FamilyErr = nil
 	store.mu.Unlock()
 	m = refreshed(t, m)
-	assert.Check(t, !strings.Contains(row2(m), "could not read related plans"), row2(m))
+	assert.Check(t, !strings.Contains(stripRow(m), "could not read related plans"), stripRow(m))
 }
 
 // TestUnitsErrorFailsTheRefresh checks that a failed units read fails the

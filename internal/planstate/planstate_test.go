@@ -144,3 +144,95 @@ func TestStep(t *testing.T) {
 		})
 	}
 }
+
+func TestStage(t *testing.T) {
+	for _, tc := range []struct {
+		state string
+		want  string
+	}{
+		{
+			state: Init,
+			want:  "Created",
+		},
+		{
+			state: Ready,
+			want:  "Created",
+		},
+		{
+			state: RefineProposal,
+			want:  "Planning",
+		},
+		{
+			state: RefineUnits,
+			want:  "Planning",
+		},
+		{
+			state: RecordSubPlans,
+			want:  "Planning",
+		},
+		{
+			state: StandBy,
+			want:  "Planning",
+		},
+		{
+			state: Build,
+			want:  "Building",
+		},
+		{
+			state: Integrate,
+			want:  "Integrating",
+		},
+		{
+			state: Ended,
+			want:  "Done",
+		},
+		{
+			state: "",
+			want:  "",
+		},
+		{
+			state: "Integrating - Agent",
+			want:  "",
+		},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(Stage(tc.state), tc.want))
+		})
+	}
+}
+
+func TestFinishedStage(t *testing.T) {
+	for _, tc := range []struct {
+		stage string
+		want  string
+	}{
+		{
+			stage: "Created",
+			want:  "Created",
+		},
+		{
+			stage: "Planning",
+			want:  "Planned",
+		},
+		{
+			stage: "Building",
+			want:  "Built",
+		},
+		{
+			stage: "Integrating",
+			want:  "Integrated",
+		},
+		{
+			stage: "Done",
+			want:  "Done",
+		},
+		{
+			stage: "Standing by",
+			want:  "Standing by",
+		},
+	} {
+		t.Run(tc.stage, func(t *testing.T) {
+			assert.Check(t, cmp.Equal(FinishedStage(tc.stage), tc.want))
+		})
+	}
+}

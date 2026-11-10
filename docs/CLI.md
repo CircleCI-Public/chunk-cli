@@ -300,11 +300,12 @@ chunk
   log file, a pipe), so none of those changes anything already being parsed.
   Chunk never opens `watch` for you.
 - **`factory plan` makes a plan with a factory planning session, then
-  approves it in factory and builds it.** It opens a flow screen. A two-row
-  strip under the header shows the plan's step (`Planning › Building › Integrating › Done`), what is
-  happening now (the factory task and its unit) and what comes next
-  (`Next: you approve the plan · ctrl+s`, `Next: chunk: build-unit`,
-  `Waiting on <blocker>`). The left pane is the planning session's activity.
+  approves it in factory and builds it.** It opens a flow screen. A one-row
+  strip under the header shows the plan's stage (`Created`, `Planning`,
+  `Building`, `Integrating` or `Done`), what is happening now (the factory
+  task and its unit) and what comes next, e.g.
+  `Building · Now: Build unit · Unit 2: parser · Next: chunk: build-unit`
+  (`Next: you approve the plan · ctrl+s`, `Waiting on <blocker>`). The left pane is the planning session's activity.
   The right has two tabs:
   **Plan**, the plan rendered as markdown (a markdown link is underlined and
   opens its URL in terminals that support hyperlinks; only `http` and `https`
