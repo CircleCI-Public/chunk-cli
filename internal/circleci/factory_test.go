@@ -395,6 +395,7 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(titles(plans), []string{"a", "b", "d", "e"}), "oldest first, ended left out")
 		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
 		assert.Check(t, cmp.Equal(last.URL.Query().Get("filter[user_id]"), "me"))
+		assert.Check(t, cmp.Equal(last.URL.Query().Get("filter[is_ended]"), "false"))
 	})
 
 	t.Run("reads references as conductor may serve them", func(t *testing.T) {

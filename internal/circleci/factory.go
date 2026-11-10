@@ -448,6 +448,7 @@ func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
 		}
 		opts := []func(*hc.Request){
 			hc.QueryParam("filter[user_id]", "me"),
+			hc.QueryParam("filter[is_ended]", "false"),
 			hc.JSONDecoder(&page),
 		}
 		if cursor != "" {
