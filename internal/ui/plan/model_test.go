@@ -231,7 +231,7 @@ func TestApprovingApprovesThePlanInFactory(t *testing.T) {
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 	store.StateV = "refine-units"
-	store.setEvents("address-comments", "approve-for-building", "abandon")
+	store.setEvents("address-comments", "approve-for-building", "end")
 	store.setRequired("approve-for-building")
 	agent := turnReturning("ok")
 	sent := false
@@ -302,14 +302,14 @@ func TestReadyToApprove(t *testing.T) {
 		{
 			name: "human, building required",
 			flow: Flow{State: "refine-units", WaitingOn: "human", Next: []Step{
-				human("address-comments", false), human("approve-for-building", true), human("abandon", false),
+				human("address-comments", false), human("approve-for-building", true), human("end", false),
 			}},
 			want: true,
 		},
 		{
 			name: "human, answer-open-questions required",
 			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
-				human("answer-open-questions", true), human("approve-for-units", false), human("abandon", false),
+				human("answer-open-questions", true), human("approve-for-units", false), human("end", false),
 			}},
 		},
 		{
@@ -321,7 +321,7 @@ func TestReadyToApprove(t *testing.T) {
 		{
 			name: "human, units not required, nothing required",
 			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
-				human("address-comments", false), human("approve-for-units", false), human("abandon", false),
+				human("address-comments", false), human("approve-for-units", false), human("end", false),
 			}},
 		},
 		{
@@ -353,7 +353,7 @@ func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
 		store := newFakeStore()
 		store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 		store.StateV = "refine-units"
-		store.setEvents("address-comments", "approve-for-building", "abandon")
+		store.setEvents("address-comments", "approve-for-building", "end")
 		store.setRequired("approve-for-building")
 		sent := false
 		approve := func(func(string)) (string, error) {
@@ -377,9 +377,9 @@ func TestANewNamedPlanIsApprovedFromNext(t *testing.T) {
 			{Actor: "human", Event: "address-comments"},
 			{Actor: "human", Event: "approve-for-building", Required: true},
 			{Actor: "session", Event: "request-revision"},
-			{Actor: "human", Event: "abandon"},
+			{Actor: "human", Event: "end"},
 		}}
-		store.setEvents("address-comments", "approve-for-building", "abandon")
+		store.setEvents("address-comments", "approve-for-building", "end")
 		sent := false
 		approve := func(func(string)) (string, error) {
 			sent = true
@@ -422,7 +422,7 @@ func TestAPlanInAnUnknownStateIsShownAsItIs(t *testing.T) {
 			store := newFakeStore()
 			store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists."
 			store.StateV = state
-			store.setEvents("abandon")
+			store.setEvents("end")
 			sent := false
 			approve := func(func(string)) (string, error) {
 				sent = true
@@ -463,7 +463,7 @@ func TestCtrlSApprovesTheDesignWhenFactoryRequiresIt(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n"
-	store.setEvents("address-comments", "approve-for-units", "approve-for-building", "abandon")
+	store.setEvents("address-comments", "approve-for-units", "approve-for-building", "end")
 	store.setRequired("approve-for-units")
 	sent := false
 	approve := func(func(string)) (string, error) {
@@ -515,7 +515,7 @@ func TestCtrlSApprovesThePlanWhenFactoryOffersOnlyBuilding(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n\n1. FNDSF-21 api: add it\n2. FNDSF-22 ui: show it\n"
-	store.setEvents("address-comments", "approve-for-building", "abandon")
+	store.setEvents("address-comments", "approve-for-building", "end")
 	store.setRequired("approve-for-building")
 	sent := false
 	approve := func(func(string)) (string, error) {
@@ -546,7 +546,7 @@ func TestCtrlSApprovesTheDesignWhenFactoryOffersOnlyUnits(t *testing.T) {
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
-	store.setEvents("address-comments", "approve-for-units", "abandon")
+	store.setEvents("address-comments", "approve-for-units", "end")
 	store.setRequired("approve-for-units")
 	sent := false
 	approve := func(func(string)) (string, error) {
@@ -809,7 +809,7 @@ func TestCtrlSApprovesNothingWhileQuestionsAreOpen(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	store.TextV = "# Plan\n\n## 3. Open Questions\n\n* Which store?\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
-	store.setEvents("address-comments", "answer-open-questions", "approve-for-units", "abandon")
+	store.setEvents("address-comments", "answer-open-questions", "approve-for-units", "end")
 	store.setRequired("answer-open-questions")
 	sent := false
 	approve := func(func(string)) (string, error) {
@@ -1152,7 +1152,7 @@ func TestSFollowsWhatFactoryShows(t *testing.T) {
 		{
 			name:           "first comment, factory offers address-comments after the save",
 			waitingOn:      "human",
-			events:         []string{"approve-for-units", "abandon"},
+			events:         []string{"approve-for-units", "end"},
 			offerOnComment: true,
 			offered:        true,
 			saved:          1,
@@ -1162,7 +1162,7 @@ func TestSFollowsWhatFactoryShows(t *testing.T) {
 		{
 			name:          "first comment, factory takes the comments itself",
 			waitingOn:     "human",
-			events:        []string{"approve-for-units", "abandon"},
+			events:        []string{"approve-for-units", "end"},
 			takeOnComment: true,
 			offered:       true,
 			saved:         1,
@@ -1171,7 +1171,7 @@ func TestSFollowsWhatFactoryShows(t *testing.T) {
 		{
 			name:      "waiting on a session with address-comments still offered",
 			waitingOn: "session",
-			events:    []string{"address-comments", "abandon"},
+			events:    []string{"address-comments", "end"},
 			offered:   true,
 			saved:     1,
 			handedOff: 1,
@@ -1180,12 +1180,12 @@ func TestSFollowsWhatFactoryShows(t *testing.T) {
 		{
 			name:      "factory works on the plan",
 			waitingOn: "session",
-			events:    []string{"abandon"},
+			events:    []string{"end"},
 		},
 		{
 			name:      "factory neither takes nor asks for the comments",
 			waitingOn: "human",
-			events:    []string{"abandon"},
+			events:    []string{"end"},
 			offered:   true,
 			saved:     1,
 			status:    "Comments saved.",
@@ -1193,7 +1193,7 @@ func TestSFollowsWhatFactoryShows(t *testing.T) {
 		{
 			name:          "the daemon dispatches between the read and the send",
 			waitingOn:     "human",
-			events:        []string{"address-comments", "abandon"},
+			events:        []string{"address-comments", "end"},
 			takeOnHandOff: true,
 			offered:       true,
 			saved:         1,
@@ -1202,7 +1202,7 @@ func TestSFollowsWhatFactoryShows(t *testing.T) {
 		{
 			name:        "the hand-off is refused and factory has not taken the comments",
 			waitingOn:   "human",
-			events:      []string{"address-comments", "abandon"},
+			events:      []string{"address-comments", "end"},
 			addressErr:  errors.New("refused"),
 			offered:     true,
 			saved:       1,
@@ -2985,7 +2985,7 @@ func TestStripShowsFlowStatus(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	store.setWaitingOn("human")
-	store.setEvents("address-comments", "approve-for-units", "approve-for-building", "abandon")
+	store.setEvents("address-comments", "approve-for-units", "approve-for-building", "end")
 	store.setRequired("approve-for-units")
 	m := New(context.Background(), turnReturning("Wrote a plan."), nil, store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -3007,7 +3007,7 @@ func TestStripShowsFlowStatus(t *testing.T) {
 	store.TextV += "\n\n## 5. Units\n\n### Unit 1: Add the flag\n"
 	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 	store.StateV = "refine-units"
-	store.setEvents("address-comments", "approve-for-building", "abandon")
+	store.setEvents("address-comments", "approve-for-building", "end")
 	store.setRequired("approve-for-building")
 	m = drive(t, m, eventFor(m, Event{Reply: &Reply{Text: "Wrote the units."}}))
 	view = ansi.Strip(m.Content())
@@ -3828,7 +3828,7 @@ func TestCommentsHeldWhileFactoryPicksUpTheHandOff(t *testing.T) {
 	// takes no answer while a task is out, so s stays off.
 	store.setTask("address-comments")
 	store.setWaitingOn("session")
-	store.setEvents("abandon")
+	store.setEvents("end")
 	m = drive(t, m, pollMsg{})
 	m = drive(t, m, press("tab")) // back to the plan pane, where s works
 	assert.Check(t, m.moving == nil, "the wait outlived the task going out")
@@ -3838,7 +3838,7 @@ func TestCommentsHeldWhileFactoryPicksUpTheHandOff(t *testing.T) {
 	// comment goes out.
 	store.setTask("")
 	store.setWaitingOn("human")
-	store.setEvents("address-comments", "approve-for-units", "abandon")
+	store.setEvents("address-comments", "approve-for-units", "end")
 	m = drive(t, m, pollMsg{})
 	assert.Check(t, m.keys().SendComments.Enabled(), "s not offered once factory waits on the developer")
 	m = drive(t, m, press("s"))
@@ -4243,17 +4243,17 @@ func TestSendHandsOffWithTheEventTheFlowLists(t *testing.T) {
 		}{
 			{
 				name:      "address-comments",
-				events:    []string{"address-comments", "abandon"},
+				events:    []string{"address-comments", "end"},
 				handedOff: []string{state},
 			},
 			{
 				name:     "answer-open-questions",
-				events:   []string{"answer-open-questions", "abandon"},
+				events:   []string{"answer-open-questions", "end"},
 				answered: []string{state},
 			},
 			{
 				name:     "both",
-				events:   []string{"answer-open-questions", "address-comments", "abandon"},
+				events:   []string{"answer-open-questions", "address-comments", "end"},
 				answered: []string{state},
 			},
 		} {
@@ -5101,7 +5101,7 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 
 	t.Run("y starts work", func(t *testing.T) {
 		t.Parallel()
-		m, store := unprioritized(t, "prioritize", "abandon")
+		m, store := unprioritized(t, "prioritize", "end")
 		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 		assert.Assert(t, m.confirming)
 		assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "Start work on the plan?"))
@@ -5113,7 +5113,7 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 
 	t.Run("n sends nothing", func(t *testing.T) {
 		t.Parallel()
-		m, store := unprioritized(t, "prioritize", "abandon")
+		m, store := unprioritized(t, "prioritize", "end")
 		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 		m = drive(t, m, press("n"))
 		assert.Check(t, !m.confirming)
@@ -5124,7 +5124,7 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 
 	t.Run("not offered", func(t *testing.T) {
 		t.Parallel()
-		m, store := unprioritized(t, "abandon")
+		m, store := unprioritized(t, "end")
 		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 		assert.Check(t, !m.confirming)
 		assert.Check(t, cmp.Len(started(store), 0))
@@ -5133,7 +5133,7 @@ func TestCtrlSStartsAnUnprioritizedPlan(t *testing.T) {
 
 	t.Run("a failed send says so", func(t *testing.T) {
 		t.Parallel()
-		m, store := unprioritized(t, "prioritize", "abandon")
+		m, store := unprioritized(t, "prioritize", "end")
 		store.AddressErr = errors.New("factory is down")
 		m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 		m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
@@ -5165,18 +5165,17 @@ func pressAll(t *testing.T, m Model, keys ...string) Model {
 	return m
 }
 
-// TestAbandonThePlan checks that x, while factory offers end or abandon, asks
+// TestEndThePlan checks that x, while the plan's flow has not ended, asks
 // for a reason and ends the plan with the one picked, and that any other key
 // keeps the plan.
-func TestAbandonThePlan(t *testing.T) {
+func TestEndThePlan(t *testing.T) {
 	t.Parallel()
 	ended := func(store *fakeStore) []string {
 		store.mu.Lock()
 		defer store.mu.Unlock()
 		return slices.Clone(store.Ended)
 	}
-	live := []string{"address-comments", "abandon"}
-	liveEnd := []string{"address-comments", "end"}
+	live := []string{"address-comments", "end"}
 	for _, tc := range []struct {
 		name   string
 		state  string
@@ -5186,60 +5185,66 @@ func TestAbandonThePlan(t *testing.T) {
 		check  func(t *testing.T, m Model, store *fakeStore)
 	}{
 		{
-			name:   "not offered without end or abandon",
-			state:  "refine-proposal",
-			events: []string{"address-comments"},
+			name:  "offered for a held flow, with an empty next",
+			state: "build",
 			check: func(t *testing.T, m Model, store *fakeStore) {
-				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "abandon plan"))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "x end plan"))
+				m = pressAll(t, m, "x", "d")
+				assert.Check(t, cmp.DeepEqual(ended(store), []string{"duplicate"}))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Ending: duplicate"))
+			},
+		},
+		{
+			name:  "not offered without a flow",
+			state: "",
+			check: func(t *testing.T, m Model, store *fakeStore) {
+				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "end plan"))
 				m = pressAll(t, m, "x")
 				assert.Check(t, !m.askingReason)
 				assert.Check(t, cmp.Len(ended(store), 0))
 			},
 		},
 		{
-			name:   "c abandons as canceled",
+			name:   "c ends as canceled",
 			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
-				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "x abandon plan"))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "x end plan"))
 				m = pressAll(t, m, "x")
-				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as: c canceled · w won't do · d duplicate · esc keep it"))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "End plan as: m complete · c canceled · w won't do · d duplicate · esc keep it"))
 				m = pressAll(t, m, "c")
 				assert.Check(t, cmp.DeepEqual(ended(store), []string{"canceled"}))
-				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: canceled"))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Ending: canceled"))
 			},
 		},
 		{
-			name:   "c ends as canceled when the flow offers end",
+			name:   "m ends as complete",
 			state:  "build",
-			events: liveEnd,
+			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
-				assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "x abandon plan"))
-				m = pressAll(t, m, "x")
-				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as: c canceled · w won't do · d duplicate · esc keep it"))
-				m = pressAll(t, m, "c")
-				assert.Check(t, cmp.DeepEqual(ended(store), []string{"canceled"}))
-				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: canceled"))
+				m = pressAll(t, m, "x", "m")
+				assert.Check(t, cmp.DeepEqual(ended(store), []string{"completed"}))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Ending: complete"))
 			},
 		},
 		{
-			name:   "w abandons as won't do",
+			name:   "w ends as won't do",
 			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "w")
 				assert.Check(t, cmp.DeepEqual(ended(store), []string{"wont-do"}))
-				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: won't do"))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Ending: won't do"))
 			},
 		},
 		{
-			name:   "d abandons as duplicate",
+			name:   "d ends as duplicate",
 			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "d")
 				assert.Check(t, cmp.DeepEqual(ended(store), []string{"duplicate"}))
-				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandoning: duplicate"))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Ending: duplicate"))
 			},
 		},
 		{
@@ -5271,7 +5276,7 @@ func TestAbandonThePlan(t *testing.T) {
 			},
 		},
 		{
-			name:   "a failed abandon says so",
+			name:   "a failed end says so",
 			state:  "refine-proposal",
 			events: live,
 			err:    errors.New("factory is down"),
@@ -5280,22 +5285,22 @@ func TestAbandonThePlan(t *testing.T) {
 				m, cmd := m.Update(press("w"))
 				assert.Assert(t, cmd != nil)
 				m, _ = m.Update(cmd())
-				assert.Check(t, !m.abandoning)
-				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not abandon the plan: factory is down"))
+				assert.Check(t, !m.ending)
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not end the plan: factory is down"))
 			},
 		},
 		{
 			name:   "a refusal of the end says so",
 			state:  "build",
-			events: liveEnd,
-			err:    errors.New("factory offers no event that ends the plan"),
+			events: live,
+			err:    errors.New("the plan has already ended"),
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x")
 				m, cmd := m.Update(press("d"))
 				assert.Assert(t, cmd != nil)
 				m, _ = m.Update(cmd())
-				assert.Check(t, !m.abandoning)
-				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not abandon the plan: factory offers no event that ends the plan"))
+				assert.Check(t, !m.ending)
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Could not end the plan: the plan has already ended"))
 			},
 		},
 		{
@@ -5303,7 +5308,7 @@ func TestAbandonThePlan(t *testing.T) {
 			state: "ended",
 			ended: true,
 			check: func(t *testing.T, m Model, store *fakeStore) {
-				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "abandon plan"))
+				assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "end plan"))
 				m = pressAll(t, m, "x")
 				assert.Check(t, !m.askingReason)
 			},
@@ -5319,33 +5324,33 @@ func TestAbandonThePlan(t *testing.T) {
 				store.mu.Unlock()
 				m = refreshed(t, m)
 				assert.Check(t, m.askingReason)
-				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Abandon plan as:"))
+				assert.Check(t, cmp.Contains(ansi.Strip(m.status), "End plan as:"))
 				m = pressAll(t, m, "w")
 				assert.Check(t, cmp.DeepEqual(ended(store), []string{"wont-do"}))
 			},
 		},
 		{
-			name:   "x while abandoning asks nothing",
+			name:   "x while ending asks nothing",
 			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "w")
-				assert.Assert(t, m.abandoning)
+				assert.Assert(t, m.ending)
 				m = pressAll(t, m, "x")
 				assert.Check(t, !m.askingReason)
 				assert.Check(t, cmp.Len(ended(store), 1))
 			},
 		},
 		{
-			name:   "an abandon sent refreshes the plan",
+			name:   "an end sent refreshes the plan",
 			state:  "refine-proposal",
 			events: live,
 			check: func(t *testing.T, m Model, store *fakeStore) {
 				m = pressAll(t, m, "x", "w")
-				m, cmd := m.Update(abandonedMsg{})
-				assert.Check(t, !m.abandoning)
-				assert.Check(t, !strings.Contains(ansi.Strip(m.status), "Abandoning"))
-				assert.Check(t, cmd != nil, "no refresh after the abandon")
+				m, cmd := m.Update(endedMsg{})
+				assert.Check(t, !m.ending)
+				assert.Check(t, !strings.Contains(ansi.Strip(m.status), "Ending"))
+				assert.Check(t, cmd != nil, "no refresh after the end")
 			},
 		},
 	} {
@@ -5861,10 +5866,10 @@ func TestRIsIgnoredWhileBusy(t *testing.T) {
 		assert.Check(t, !m.resumingBuild)
 		assert.Check(t, cmp.Equal(m.commentInput.Value(), "R"))
 	})
-	t.Run("asked why the plan is abandoned", func(t *testing.T) {
+	t.Run("asked why the plan is ending", func(t *testing.T) {
 		t.Parallel()
 		m, _, r, _ := resumeScreen(t, newFakeAgent(), "build", sessionStep, func(s *fakeStore) {
-			s.EventsV, s.eventsSet = []string{"abandon"}, true
+			s.EventsV, s.eventsSet = []string{"end"}, true
 		})
 		m = pressAll(t, m, "x")
 		assert.Assert(t, m.askingReason)

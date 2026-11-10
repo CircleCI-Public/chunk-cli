@@ -115,8 +115,8 @@ type (
 	designApprovedMsg struct{ err error }
 	// startedMsg is the end of sending prioritize.
 	startedMsg struct{ err error }
-	// abandonedMsg is the end of sending abandon.
-	abandonedMsg struct{ err error }
+	// endedMsg is the end of sending end.
+	endedMsg struct{ err error }
 	// planDeletedMsg is the end of deleting the plan.
 	planDeletedMsg struct{ err error }
 	// approveStepMsg is a step of the approval starting; next is where the
@@ -383,9 +383,9 @@ type Model struct {
 	// whether the y being asked for starts it.
 	startingWork, pendingStart bool
 	// askingReason is whether the status bar asks why the plan is
-	// abandoned; abandoning is set from the developer's reason until factory
-	// has the abandon event.
-	askingReason, abandoning bool
+	// ending; ending is set from the developer's reason until factory
+	// has the end event.
+	askingReason, ending bool
 	// pendingDeletePlan is whether the y being asked for deletes the plan;
 	// deleting is set from that y until factory answers.
 	pendingDeletePlan, deleting bool
@@ -718,7 +718,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, waitApproval(msg.next)
 
-	case designApprovedMsg, approvedMsg, startedMsg, abandonedMsg, planDeletedMsg:
+	case designApprovedMsg, approvedMsg, startedMsg, endedMsg, planDeletedMsg:
 		return m.applyApproval(msg)
 
 	case spinner.TickMsg:
@@ -825,7 +825,7 @@ func (m Model) spinning() bool {
 // approval or save factory has not answered yet.
 func (m Model) awaitingStatus() bool {
 	return m.confirming || m.quitting || m.approving || m.approvingDesign || m.savingComments ||
-		m.askingReason || m.abandoning || m.deleting
+		m.askingReason || m.ending || m.deleting
 }
 
 // applyRefresh is a successful or failed poll of the plan's state, text and
@@ -1042,9 +1042,9 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.confirming, m.pendingStop = true, m.latestBuildID()
 		m.status = ui.TitleStyle.Render("Stop this build session? ") + confirmButtons
 		return m, nil
-	case key.Matches(msg, k.Abandon):
+	case key.Matches(msg, k.End):
 		m.askingReason = true
-		m.status = ui.TitleStyle.Render("Abandon plan as: ") + "c canceled · w won't do · d duplicate · esc keep it"
+		m.status = ui.TitleStyle.Render("End plan as: ") + "m complete · c canceled · w won't do · d duplicate · esc keep it"
 		return m, nil
 	case key.Matches(msg, k.DeletePlan):
 		m.confirming, m.pendingDeletePlan = true, true
@@ -1143,24 +1143,26 @@ func (m Model) answerYes() (Model, tea.Cmd) {
 	return m, tea.Batch(approveCmd(m.approve), m.spin.Tick)
 }
 
-// answerReason answers the abandon prompt: a reason key sends the abandon
+// answerReason answers the end prompt: a reason key sends the end event
 // for that reason, and any other key keeps the plan.
 func (m Model) answerReason(msg tea.KeyPressMsg, k keyMap) (Model, tea.Cmd) {
 	m.askingReason, m.status = false, ""
 	var reason string
 	switch {
-	case key.Matches(msg, k.AbandonCanceled):
+	case key.Matches(msg, k.EndComplete):
+		reason = "completed"
+	case key.Matches(msg, k.EndCanceled):
 		reason = "canceled"
-	case key.Matches(msg, k.AbandonWontDo):
+	case key.Matches(msg, k.EndWontDo):
 		reason = "wont-do"
-	case key.Matches(msg, k.AbandonDuplicate):
+	case key.Matches(msg, k.EndDuplicate):
 		reason = "duplicate"
 	default:
 		return m, nil
 	}
-	m.abandoning = true
-	m.status = "Abandoning: " + reasonText(reason) + "…"
-	return m, abandonCmd(m.ctx, m.store, reason)
+	m.ending = true
+	m.status = "Ending: " + reasonText(reason) + "…"
+	return m, endCmd(m.ctx, m.store, reason)
 }
 
 // focusOn gives the keyboard to pane p, dropping any selection.
@@ -1193,7 +1195,7 @@ func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
 func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
-	case m.built, m.approving, m.approvingDesign, m.startingWork, m.abandoning, m.deleting, m.moving != nil:
+	case m.built, m.approving, m.approvingDesign, m.startingWork, m.ending, m.deleting, m.moving != nil:
 	case m.busy:
 		m.status = warn("Wait for chunk to finish.")
 	case slices.Contains(m.events, prioritize):
@@ -1394,7 +1396,7 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 }
 
 // applyApproval is the end of approving the plan's design, or the plan, of
-// sending prioritize or abandon, or of deleting the plan.
+// sending prioritize or end, or of deleting the plan.
 func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case designApprovedMsg:
@@ -1413,10 +1415,10 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, refreshCmd(m.ctx, m.store)
-	case abandonedMsg:
-		m.abandoning = false
+	case endedMsg:
+		m.ending = false
 		if msg.err != nil {
-			m.status = ui.ErrorStyle.Render("Could not abandon the plan: " + msg.err.Error())
+			m.status = ui.ErrorStyle.Render("Could not end the plan: " + msg.err.Error())
 			return m, nil
 		}
 		// Factory has the event; the refresh shows the flow end once its
@@ -1467,9 +1469,9 @@ func startWorkCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg { return startedMsg{err: s.StartWork(ctx)} }
 }
 
-// abandonCmd has factory end the plan without its PR merging, for reason.
-func abandonCmd(ctx context.Context, s Store, reason string) tea.Cmd {
-	return func() tea.Msg { return abandonedMsg{err: s.End(ctx, reason)} }
+// endCmd has factory end the plan without its PR merging, for reason.
+func endCmd(ctx context.Context, s Store, reason string) tea.Cmd {
+	return func() tea.Msg { return endedMsg{err: s.End(ctx, reason)} }
 }
 
 // deletePlanCmd deletes the plan in factory.
@@ -1477,9 +1479,12 @@ func deletePlanCmd(ctx context.Context, s Store) tea.Cmd {
 	return func() tea.Msg { return planDeletedMsg{err: s.Delete(ctx)} }
 }
 
-// reasonText is how the screen names an abandon reason.
+// reasonText is how the screen names an end reason.
 func reasonText(reason string) string {
-	if reason == "wont-do" {
+	switch reason {
+	case "completed":
+		return "complete"
+	case "wont-do":
 		return "won't do"
 	}
 	return reason

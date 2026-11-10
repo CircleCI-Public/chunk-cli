@@ -110,7 +110,7 @@ const chatPrompt = "You are a chat about the developer's factory plans in this r
 	"or [flows] their open flows, one per line; these are as of that screen's last poll. " +
 	"Answer from the plans (the plan tools), the repository, Sourcegraph, git log, git show, git diff, git status, git merge-base, git rev-parse and gh pr view, and factory daemon flow show, claim list and session list. " +
 	"When the developer wants a plan's text changed, tell them which part to comment on and with what. Changing keys on a flow screen: " +
-	"c comments on the highlighted part, s sends queued comments, e edits a part, ctrl+s approves or starts the plan, x abandons it, X deletes it. " +
+	"c comments on the highlighted part, s sends queued comments, e edits a part, ctrl+s approves or starts the plan, x ends it, X deletes it. " +
 	"On the Flows list, enter opens a plan and n starts a new one. Keep replies short."
 
 // buildMessage is a build session's first message: the plan is approved, so

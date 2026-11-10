@@ -27,7 +27,7 @@ type factoryPlan struct {
 	worker string
 	events []string
 	// reasons are the reasons sent with events, parallel to them: an
-	// end's or abandon's reason, "" for any other event.
+	// end's reason, "" for any other event.
 	reasons []string
 	// applicable are the human events the flow serves in next, as a test
 	// sets them with SetFactoryApplicableEvents.
@@ -99,11 +99,11 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 
 // factoryEvents are the events a human may send a flow (flow.EventName in
 // circleci/factory).
-var factoryEvents = []string{"prioritize", "address-comments", "answer-open-questions", "approve-for-units", "approve-for-building", "abandon-integrate", "abandon", "end"}
+var factoryEvents = []string{"prioritize", "address-comments", "answer-open-questions", "approve-for-units", "approve-for-building", "abandon-integrate", "end"}
 
-// endReasons are the reasons an end or an abandon takes, and only those
+// endReasons are the reasons an end takes, and only an end
 // (api/conductorapi/events.go in circleci/factory).
-var endReasons = []string{"canceled", "wont-do", "duplicate"}
+var endReasons = []string{"completed", "canceled", "wont-do", "duplicate"}
 
 // factoryEnds are the states a plan ends in (conductor.Ends in
 // circleci/factory).
@@ -124,7 +124,7 @@ type FactoryPlan struct {
 	// SetFactoryPlanState.
 	Events []string
 	// Reasons are the reasons sent with Events, parallel to them: an
-	// end's or abandon's reason, "" for any other event.
+	// end's reason, "" for any other event.
 	Reasons []string
 	// Repos are the GitHub repositories the plan was created with, as
 	// owner/name; nil when none.
@@ -165,18 +165,10 @@ func (f *FakeCircleCI) SetFactoryPlanState(id, state string) {
 	}
 }
 
-// SetFactoryRefusedEvents has the fake answer 400 for events, as a conductor
-// that does not know them does.
-func (f *FakeCircleCI) SetFactoryRefusedEvents(events ...string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.refusedEvents = slices.Clone(events)
-}
-
 // SetFactoryApplicableEvents has plan id's flow serve events as human events
 // of its next that factory applies now but does not require, after any
 // required ones, as conductor serves an approval it would accept early, or
-// abandon.
+// end.
 func (f *FakeCircleCI) SetFactoryApplicableEvents(id string, events ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1010,7 +1002,8 @@ func blockerActive(b *factoryPlan, until string) bool {
 		return true
 	}
 	if b.state == "ended" {
-		return endOutcome(b) != "merged"
+		o := endOutcome(b)
+		return o != "merged" && o != "completed"
 	}
 	at, want := slices.Index(fakeStateOrder, b.state), slices.Index(fakeStateOrder, until)
 	return at < 0 || want < 0 || at < want
@@ -1088,9 +1081,8 @@ func (f *FakeCircleCI) handleGetWorkerSessions(c *gin.Context) {
 // handleCreateEvent stores an event for a flow, as conductor does, answering
 // 400 for an event conductor does not know or one with no factory_flow
 // reference, and 404 for a plan with no flow. As conductor does, it answers
-// 400 for an end or abandon whose reason is not one of endReasons, and for a
-// reason on any other event. It also answers 400 for an event
-// SetFactoryRefusedEvents named.
+// 400 for an end whose reason is not one of endReasons, and for a reason on
+// any other event.
 func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
@@ -1108,22 +1100,17 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 			} `json:"references"`
 		} `json:"data"`
 	}
-	f.mu.RLock()
-	refused := f.refusedEvents
-	f.mu.RUnlock()
-	known := slices.DeleteFunc(slices.Clone(factoryEvents), func(e string) bool { return slices.Contains(refused, e) })
-	if err := c.ShouldBindJSON(&body); err != nil || !slices.Contains(known, body.Data.Attributes.Event) {
-		factoryError(c, http.StatusBadRequest, "event is not one of "+strings.Join(known, ", "))
+	if err := c.ShouldBindJSON(&body); err != nil || !slices.Contains(factoryEvents, body.Data.Attributes.Event) {
+		factoryError(c, http.StatusBadRequest, "event is not one of "+strings.Join(factoryEvents, ", "))
 		return
 	}
 	event, reason := body.Data.Attributes.Event, body.Data.Attributes.Reason
-	ends := event == "end" || event == "abandon"
-	if ends && !slices.Contains(endReasons, reason) {
-		factoryError(c, http.StatusBadRequest, "an end or abandon needs a reason: canceled, wont-do or duplicate")
+	if event == "end" && !slices.Contains(endReasons, reason) {
+		factoryError(c, http.StatusBadRequest, "an end needs a reason: completed, canceled, wont-do or duplicate")
 		return
 	}
-	if !ends && reason != "" {
-		factoryError(c, http.StatusBadRequest, "only end and abandon take a reason")
+	if event != "end" && reason != "" {
+		factoryError(c, http.StatusBadRequest, "only end takes a reason")
 		return
 	}
 	if body.Data.References.FactoryFlow == nil {

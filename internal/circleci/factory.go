@@ -160,22 +160,20 @@ const ApproveForBuilding FlowEvent = "approve-for-building"
 // starts work on the plan. It applies at once when no task is out.
 const Prioritize FlowEvent = "prioritize"
 
-// Abandon is the event that ends a flow without its PR merging; it takes an
-// AbandonReason.
-const Abandon FlowEvent = "abandon"
-
-// End is the event that ends a flow; it takes the same reasons as Abandon.
+// End is the event that ends a flow without its PR merging; it takes an
+// EndReason.
 const End FlowEvent = "end"
 
-// An AbandonReason is why a human abandons a plan, as factory names it.
-type AbandonReason string
+// An EndReason is why a human ends a plan, as factory names it.
+type EndReason string
 
-// The reasons a plan is abandoned for. Factory ends the flow in Canceled,
-// Won't Do or Duplicate, with outcome canceled, rejected or duplicated.
+// The reasons a plan is ended for. Factory ends the flow with outcome
+// completed, canceled, rejected or duplicated.
 const (
-	AbandonCanceled  AbandonReason = "canceled"
-	AbandonWontDo    AbandonReason = "wont-do"
-	AbandonDuplicate AbandonReason = "duplicate"
+	EndCompleted EndReason = "completed"
+	EndCanceled  EndReason = "canceled"
+	EndWontDo    EndReason = "wont-do"
+	EndDuplicate EndReason = "duplicate"
 )
 
 // PlanComment is a comment on a factory plan. QuotedText is the part of the
@@ -342,8 +340,8 @@ type taskRef struct {
 }
 
 type eventAttrs struct {
-	Event  FlowEvent     `json:"event"`
-	Reason AbandonReason `json:"reason,omitempty"`
+	Event  FlowEvent `json:"event"`
+	Reason EndReason `json:"reason,omitempty"`
 }
 
 type eventRefs struct {
@@ -735,10 +733,10 @@ func (c *Client) CreateFlowEvent(ctx context.Context, planID string, event FlowE
 	return c.createEvent(ctx, planID, eventAttrs{Event: event}, "create flow event")
 }
 
-// EndFlow sends factory plan planID's flow event, End or Abandon, for reason.
+// EndFlow sends factory plan planID's flow the end event, for reason.
 // Factory ends the flow at the plan's next poll. A plan with no flow is a 404.
-func (c *Client) EndFlow(ctx context.Context, planID string, event FlowEvent, reason AbandonReason) error {
-	return c.createEvent(ctx, planID, eventAttrs{Event: event, Reason: reason}, "end flow")
+func (c *Client) EndFlow(ctx context.Context, planID string, reason EndReason) error {
+	return c.createEvent(ctx, planID, eventAttrs{Event: End, Reason: reason}, "end flow")
 }
 
 // createEvent posts an event with attrs to factory plan planID's flow; label

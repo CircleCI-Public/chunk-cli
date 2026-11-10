@@ -1,8 +1,6 @@
 package plan
 
 import (
-	"slices"
-
 	"charm.land/bubbles/v2/key"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
@@ -47,11 +45,11 @@ type keyMap struct {
 	// enter too, says no: approving moves the plan on in factory, so it
 	// takes a y.
 	Confirm key.Binding
-	// Abandon asks for a reason, then ends the plan without its PR merging;
+	// End asks for a reason, then ends the plan without its PR merging;
 	// DeletePlan asks for a y, then deletes it. At the reason prompt the
-	// Abandon* keys pick the reason.
-	Abandon, DeletePlan                              key.Binding
-	AbandonCanceled, AbandonWontDo, AbandonDuplicate key.Binding
+	// End* keys pick the reason.
+	End, DeletePlan                                   key.Binding
+	EndComplete, EndCanceled, EndWontDo, EndDuplicate key.Binding
 
 	Focus  key.Binding
 	Switch key.Binding
@@ -106,7 +104,7 @@ func (m Model) keys() keyMap {
 		PlanTab:        key.NewBinding(key.WithKeys("right")),
 		Open:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open plan")),
 		Confirm:        key.NewBinding(key.WithKeys("y")),
-		Abandon:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "abandon plan")),
+		End:            key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "end plan")),
 		DeletePlan:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
 		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", m.focusHelp())),
 		Switch:         key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
@@ -117,9 +115,10 @@ func (m Model) keys() keyMap {
 		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 	// The reason prompt says what these do, so they carry no hint.
-	k.AbandonCanceled = key.NewBinding(key.WithKeys("c"))
-	k.AbandonWontDo = key.NewBinding(key.WithKeys("w"))
-	k.AbandonDuplicate = key.NewBinding(key.WithKeys("d"))
+	k.EndComplete = key.NewBinding(key.WithKeys("m"))
+	k.EndCanceled = key.NewBinding(key.WithKeys("c"))
+	k.EndWontDo = key.NewBinding(key.WithKeys("w"))
+	k.EndDuplicate = key.NewBinding(key.WithKeys("d"))
 
 	// Esc leaves, unless it has a comment to cancel, a selection to clear or a
 	// question to answer no to. q leaves wherever no text is being typed. A
@@ -200,13 +199,13 @@ func (m Model) chatKeys(k *keyMap) {
 		(len(queuedComments(m.comments)) > 0 || m.pendingHandOff))
 }
 
-// endKeys enables the keys that end the plan: abandon (factory's end or
-// abandon), its reasons, and delete.
+// endKeys enables the keys that end the plan: end, its reasons, and
+// delete.
 func (m Model) endKeys(k *keyMap) {
-	idle := m.focus == panePlan && !m.commenting && !m.confirming && !m.askingReason && !m.abandoning && !m.deleting
-	k.Abandon.SetEnabled(idle && m.created && (slices.Contains(m.events, endEvent) || slices.Contains(m.events, abandon)))
+	idle := m.focus == panePlan && !m.commenting && !m.confirming && !m.askingReason && !m.ending && !m.deleting
+	k.End.SetEnabled(idle && m.created && m.state != "" && !m.flow.Ended)
 	k.DeletePlan.SetEnabled(idle && m.created && !m.flow.Claimed)
-	for _, b := range []*key.Binding{&k.AbandonCanceled, &k.AbandonWontDo, &k.AbandonDuplicate} {
+	for _, b := range []*key.Binding{&k.EndComplete, &k.EndCanceled, &k.EndWontDo, &k.EndDuplicate} {
 		b.SetEnabled(m.askingReason)
 	}
 	k.Chat.SetEnabled(m.chatKey && !m.commenting)
@@ -282,7 +281,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.Switch,
 		k.Send, k.Newline,
 		k.Open, k.Comment, k.Edit, k.Next, k.SendComments, k.ClearSelection, k.Up,
-		k.Focus, k.SendPlan, k.Resume, k.StopBuild, k.Quit, k.Chat, k.Abandon, k.DeletePlan, k.FlowTab,
+		k.Focus, k.SendPlan, k.Resume, k.StopBuild, k.Quit, k.Chat, k.End, k.DeletePlan, k.FlowTab,
 		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
 	}
 }

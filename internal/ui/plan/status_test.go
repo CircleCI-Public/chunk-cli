@@ -80,7 +80,7 @@ func TestStatus(t *testing.T) {
 		{
 			name: "start work",
 			flow: Flow{State: "init", WaitingOn: "human", Next: []Step{
-				human("prioritize", true), human("abandon", false),
+				human("prioritize", true), human("end", false),
 			}},
 			step: "Not started",
 			next: "you start work · ctrl+s",
@@ -100,7 +100,7 @@ func TestStatus(t *testing.T) {
 		{
 			name: "waits on you to approve the design",
 			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
-				human("address-comments", false), human("approve-for-units", true), human("abandon", false),
+				human("address-comments", false), human("approve-for-units", true), human("end", false),
 			}},
 			step: "Planning",
 			next: "you approve the design · ctrl+s",
@@ -116,7 +116,7 @@ func TestStatus(t *testing.T) {
 		{
 			name: "waits on you to approve the plan",
 			flow: Flow{State: "refine-units", WaitingOn: "human", Next: []Step{
-				human("address-comments", false), human("approve-for-building", true), human("abandon", false),
+				human("address-comments", false), human("approve-for-building", true), human("end", false),
 			}},
 			step: "Planning",
 			next: "you approve the plan · ctrl+s",
@@ -133,7 +133,7 @@ func TestStatus(t *testing.T) {
 			name: "open questions",
 			flow: Flow{State: "refine-proposal", WaitingOn: "human", Next: []Step{
 				human("address-comments", false), human("approve-for-units", false),
-				human("answer-open-questions", true), human("abandon", false),
+				human("answer-open-questions", true), human("end", false),
 			}},
 			step: "Planning",
 			next: "you answer 3. Open Questions in comments",
@@ -172,7 +172,7 @@ func TestStatus(t *testing.T) {
 		{
 			name: "a human entry not required is not next",
 			flow: Flow{State: "build", WaitingOn: "human", Next: []Step{
-				human("address-comments", false), human("abandon", false),
+				human("address-comments", false), human("end", false),
 			}},
 			step: "Building",
 			next: "you",
@@ -180,7 +180,7 @@ func TestStatus(t *testing.T) {
 		{
 			name: "the developer, with why",
 			flow: Flow{State: "build", WaitingOn: "human", WaitingOnWhy: "review the PR", Next: []Step{
-				human("abandon", false),
+				human("end", false),
 			}},
 			step: "Building",
 			next: "review the PR",

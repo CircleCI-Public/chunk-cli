@@ -472,7 +472,7 @@ func TestApproveSendsBuildingWhenFactoryOffersIt(t *testing.T) {
 	cci.SetFactoryPlanState(id, "refine-units")
 	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human"})
 	cci.SetFactoryRequiredEvents(id, "approve-for-building")
-	cci.SetFactoryApplicableEvents(id, "request-revision", "abandon")
+	cci.SetFactoryApplicableEvents(id, "request-revision", "end")
 
 	err := Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.Check(t, err)
@@ -489,7 +489,7 @@ func TestApproveSendsBuildingWhenBothAreRequired(t *testing.T) {
 	cci.SetFactoryPlanState(id, "refine-proposal")
 	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human"})
 	cci.SetFactoryRequiredEvents(id, "approve-for-units", "approve-for-building")
-	cci.SetFactoryApplicableEvents(id, "address-comments", "abandon")
+	cci.SetFactoryApplicableEvents(id, "address-comments", "end")
 
 	err := Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
 	assert.Check(t, err)
@@ -508,7 +508,7 @@ func TestApproveIgnoresRequestRevision(t *testing.T) {
 	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{WaitingOn: "human", Next: []fakes.FactoryTransition{
 		{Actor: "human", Event: "approve-for-building", IsRequired: true},
 		{Actor: "session", Event: "request-revision"},
-		{Actor: "human", Event: "abandon"},
+		{Actor: "human", Event: "end"},
 	}})
 
 	err := Approve(ctx, client, noDaemon, id, "s-1", "", "/data/plans/"+id)
@@ -530,7 +530,7 @@ func TestApproveRefusesWhatFactoryDoesNotRequire(t *testing.T) {
 		{
 			name:       "open questions",
 			required:   []string{"answer-open-questions"},
-			applicable: []string{"approve-for-units", "approve-for-building", "abandon"},
+			applicable: []string{"approve-for-units", "approve-for-building", "end"},
 			want:       ErrNoApproval,
 		},
 		{
@@ -540,7 +540,7 @@ func TestApproveRefusesWhatFactoryDoesNotRequire(t *testing.T) {
 		{
 			name:       "the design is required",
 			required:   []string{"approve-for-units"},
-			applicable: []string{"approve-for-building", "abandon"},
+			applicable: []string{"approve-for-building", "end"},
 			want:       ErrNoUnits,
 		},
 	} {

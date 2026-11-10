@@ -520,19 +520,19 @@ func TestFlows(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Check(t, cmp.Len(f.ApplicableEvents, 0))
 
-		fake.SetFactoryApplicableEvents(p.ID, "address-comments", "abandon")
+		fake.SetFactoryApplicableEvents(p.ID, "address-comments", "end")
 		f, err = client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(f.ApplicableEvents, []FlowEvent{AddressComments, "abandon"}))
+		assert.Check(t, cmp.DeepEqual(f.ApplicableEvents, []FlowEvent{AddressComments, End}))
 
 		fake.SetFactoryTask(p.ID, "rebase")
 		fake.SetFactoryPlanState(p.ID, "integrate")
 		fake.SetFactoryRequiredEvents(p.ID, "answer-open-questions")
-		fake.SetFactoryApplicableEvents(p.ID, "address-comments", "abandon-integrate", "abandon")
+		fake.SetFactoryApplicableEvents(p.ID, "address-comments", "abandon-integrate", "end")
 		f, err = client.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(f.ApplicableEvents,
-			[]FlowEvent{AnswerOpenQuestions, AddressComments, "abandon-integrate", "abandon"}),
+			[]FlowEvent{AnswerOpenQuestions, AddressComments, "abandon-integrate", End}),
 			"required events first, after the task")
 	})
 
@@ -595,60 +595,62 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(got.Events, []string{"address-comments"}))
 	})
 
-	t.Run("ends a flow with either event, for each reason", func(t *testing.T) {
+	t.Run("ends a flow for each reason", func(t *testing.T) {
 		for _, tc := range []struct {
-			reason  AbandonReason
+			reason  EndReason
 			outcome string
 		}{
 			{
-				reason:  AbandonCanceled,
+				reason:  EndCompleted,
+				outcome: "completed",
+			},
+			{
+				reason:  EndCanceled,
 				outcome: "canceled",
 			},
 			{
-				reason:  AbandonWontDo,
+				reason:  EndWontDo,
 				outcome: "rejected",
 			},
 			{
-				reason:  AbandonDuplicate,
+				reason:  EndDuplicate,
 				outcome: "duplicated",
 			},
 		} {
-			for _, event := range []FlowEvent{Abandon, End} {
-				t.Run(string(event)+"/"+string(tc.reason), func(t *testing.T) {
-					fake := fakes.NewFakeCircleCI()
-					srv := httptest.NewServer(fake)
-					t.Cleanup(srv.Close)
-					client := newTestClient(t, srv.URL)
-					p, err := client.CreatePlan(ctx, "a plan", "")
-					assert.NilError(t, err)
-					fake.SetFactoryPlanState(p.ID, "refine-proposal")
+			t.Run(string(tc.reason), func(t *testing.T) {
+				fake := fakes.NewFakeCircleCI()
+				srv := httptest.NewServer(fake)
+				t.Cleanup(srv.Close)
+				client := newTestClient(t, srv.URL)
+				p, err := client.CreatePlan(ctx, "a plan", "")
+				assert.NilError(t, err)
+				fake.SetFactoryPlanState(p.ID, "refine-proposal")
 
-					err = client.EndFlow(ctx, p.ID, event, tc.reason)
-					assert.NilError(t, err)
+				err = client.EndFlow(ctx, p.ID, tc.reason)
+				assert.NilError(t, err)
 
-					reqs := fake.Recorder.AllRequests()
-					last := reqs[len(reqs)-1]
-					var body map[string]any
-					err = json.Unmarshal(last.Body, &body)
-					assert.NilError(t, err)
-					assert.Check(t, cmp.DeepEqual(body, map[string]any{"data": map[string]any{
-						"attributes": map[string]any{"event": string(event), "reason": string(tc.reason)},
-						"references": map[string]any{"factory_flow": map[string]any{"id": p.ID}},
-					}}))
-					got, _ := fake.FactoryPlan(p.ID)
-					assert.Assert(t, len(got.Events) > 0)
-					assert.Check(t, cmp.Equal(got.Events[len(got.Events)-1], string(event)))
-					assert.Assert(t, cmp.Len(got.Reasons, len(got.Events)))
-					assert.Check(t, cmp.Equal(got.Reasons[len(got.Reasons)-1], string(tc.reason)))
+				reqs := fake.Recorder.AllRequests()
+				last := reqs[len(reqs)-1]
+				var body map[string]any
+				err = json.Unmarshal(last.Body, &body)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.DeepEqual(body, map[string]any{"data": map[string]any{
+					"attributes": map[string]any{"event": "end", "reason": string(tc.reason)},
+					"references": map[string]any{"factory_flow": map[string]any{"id": p.ID}},
+				}}))
+				got, _ := fake.FactoryPlan(p.ID)
+				assert.Assert(t, len(got.Events) > 0)
+				assert.Check(t, cmp.Equal(got.Events[len(got.Events)-1], "end"))
+				assert.Assert(t, cmp.Len(got.Reasons, len(got.Events)))
+				assert.Check(t, cmp.Equal(got.Reasons[len(got.Reasons)-1], string(tc.reason)))
 
-					fake.SetFactoryPlanState(p.ID, "ended")
-					fake.SetFactoryFlowStatus(p.ID, fakes.FactoryFlowStatus{Outcome: tc.outcome})
-					f, err := client.GetFlow(ctx, p.ID)
-					assert.NilError(t, err)
-					assert.Check(t, cmp.Equal(f.Phase, PhaseEnded))
-					assert.Check(t, cmp.Equal(f.Outcome, tc.outcome))
-				})
-			}
+				fake.SetFactoryPlanState(p.ID, "ended")
+				fake.SetFactoryFlowStatus(p.ID, fakes.FactoryFlowStatus{Outcome: tc.outcome})
+				f, err := client.GetFlow(ctx, p.ID)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.Equal(f.Phase, PhaseEnded))
+				assert.Check(t, cmp.Equal(f.Outcome, tc.outcome))
+			})
 		}
 	})
 
@@ -661,13 +663,13 @@ func TestFlows(t *testing.T) {
 		assert.NilError(t, err)
 		fake.DropFactoryFlow(p.ID)
 
-		err = client.EndFlow(ctx, p.ID, End, AbandonCanceled)
+		err = client.EndFlow(ctx, p.ID, EndCanceled)
 		var se *StatusError
 		assert.Assert(t, errors.As(err, &se), "got %v", err)
 		assert.Check(t, cmp.Equal(se.StatusCode, http.StatusNotFound))
 	})
 
-	t.Run("the fake refuses an end or abandon without a reason, and a reason on another event", func(t *testing.T) {
+	t.Run("the fake refuses an end without a reason, and a reason on another event", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
@@ -683,27 +685,22 @@ func TestFlows(t *testing.T) {
 			{
 				name:  "an end with no reason",
 				attrs: `{"event":"end"}`,
-				want:  "an end or abandon needs a reason",
+				want:  "an end needs a reason",
 			},
 			{
 				name:  "an end with an unknown reason",
 				attrs: `{"event":"end","reason":"bored"}`,
-				want:  "an end or abandon needs a reason",
+				want:  "an end needs a reason",
 			},
 			{
-				name:  "an abandon with no reason",
-				attrs: `{"event":"abandon"}`,
-				want:  "an end or abandon needs a reason",
-			},
-			{
-				name:  "an abandon with an unknown reason",
-				attrs: `{"event":"abandon","reason":"bored"}`,
-				want:  "an end or abandon needs a reason",
+				name:  "abandon, which conductor no longer knows",
+				attrs: `{"event":"abandon","reason":"canceled"}`,
+				want:  "event is not one of",
 			},
 			{
 				name:  "a reason on another event",
 				attrs: `{"event":"address-comments","reason":"canceled"}`,
-				want:  "only end and abandon take a reason",
+				want:  "only end takes a reason",
 			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -723,23 +720,6 @@ func TestFlows(t *testing.T) {
 		}
 		got, _ := fake.FactoryPlan(p.ID)
 		assert.Check(t, cmp.Len(got.Events, 0), "a refused event is not stored")
-	})
-
-	t.Run("the fake refuses an event SetFactoryRefusedEvents names", func(t *testing.T) {
-		fake := fakes.NewFakeCircleCI()
-		srv := httptest.NewServer(fake)
-		t.Cleanup(srv.Close)
-		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
-		assert.NilError(t, err)
-		fake.SetFactoryRefusedEvents("end")
-
-		err = client.EndFlow(ctx, p.ID, End, AbandonCanceled)
-		assertStatus(t, err, http.StatusBadRequest)
-		err = client.EndFlow(ctx, p.ID, Abandon, AbandonCanceled)
-		assert.Check(t, err)
-		got, _ := fake.FactoryPlan(p.ID)
-		assert.Check(t, cmp.DeepEqual(got.Events, []string{"abandon"}))
 	})
 
 	t.Run("an event for a plan with no flow is a 404", func(t *testing.T) {
@@ -861,12 +841,12 @@ func TestFlows(t *testing.T) {
 		}{
 			{
 				name:  "from a conductor that serves applicable_events and next",
-				attrs: `"applicable_events":["abandon"],"next":[{"actor":"human","event":"address-comments"},{"actor":"human","event":"abandon"}]`,
-				want:  []FlowEvent{AddressComments, "abandon"},
+				attrs: `"applicable_events":["end"],"next":[{"actor":"human","event":"address-comments"},{"actor":"human","event":"end"}]`,
+				want:  []FlowEvent{AddressComments, End},
 			},
 			{
 				name:  "from a conductor that serves no next",
-				attrs: `"applicable_events":["abandon"]`,
+				attrs: `"applicable_events":["end"]`,
 				want:  nil,
 			},
 		} {
@@ -944,7 +924,7 @@ func TestFlows(t *testing.T) {
 		id := uuid.NewString()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":{"id":"` + id + `","attributes":{"state":"refine-proposal","applicable_events":["abandon"]}}}`))
+			_, _ = w.Write([]byte(`{"data":{"id":"` + id + `","attributes":{"state":"refine-proposal","applicable_events":["end"]}}}`))
 		}))
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
@@ -1017,19 +997,24 @@ func TestFlows(t *testing.T) {
 		assert.NilError(t, err)
 		e2, err := client.CreatePlan(ctx, "merged", "")
 		assert.NilError(t, err)
+		e4, err := client.CreatePlan(ctx, "completed", "")
+		assert.NilError(t, err)
 		e3, err := client.CreatePlan(ctx, "ended-blocked", "")
 		assert.NilError(t, err)
 		fake.SetFactoryPlanState(e1.ID, "ended")
 		fake.SetFactoryFlowStatus(e1.ID, fakes.FactoryFlowStatus{Outcome: "canceled"})
 		fake.SetFactoryPlanState(e2.ID, "ended")
 		fake.SetFactoryFlowStatus(e2.ID, fakes.FactoryFlowStatus{Outcome: "merged"})
-		fake.BlockFactoryPlan(e3.ID, e1.ID, e2.ID)
+		fake.SetFactoryPlanState(e4.ID, "ended")
+		fake.SetFactoryFlowStatus(e4.ID, fakes.FactoryFlowStatus{Outcome: "completed"})
+		fake.BlockFactoryPlan(e3.ID, e1.ID, e2.ID, e4.ID)
 		got, err = client.ListFlowBlockers(ctx, e3.ID)
 		assert.NilError(t, err)
 		assert.Check(t, cmp.DeepEqual(got, []Blocker{
 			{ID: e1.ID, Title: "canceled", State: "ended", Outcome: "canceled", Active: true},
 			{ID: e2.ID, Title: "merged", State: "ended", Outcome: "merged", Active: false},
-		}), "an ended blocker still blocks unless it merged")
+			{ID: e4.ID, Title: "completed", State: "ended", Outcome: "completed", Active: false},
+		}), "an ended blocker still blocks unless it merged or completed")
 
 		_, err = client.ListFlowBlockers(ctx, uuid.NewString())
 		assertStatus(t, err, http.StatusNotFound)
