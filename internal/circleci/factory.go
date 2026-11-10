@@ -43,8 +43,8 @@ type Flow struct {
 	// while its flow runs and PhaseEnded once it ends.
 	Phase string
 	// SessionID is the factory session holding the flow's claim: the one its
-	// worker's sessions list it under; "" when none does. ListFlows reads no
-	// worker's sessions, so leaves it "".
+	// worker's sessions list it under; "" when none does, a headless session
+	// counting as none. ListFlows reads no worker's sessions, so leaves it "".
 	SessionID string
 	// WorkerID is the factory worker claiming the flow, "" when none does or
 	// it is not registered.
@@ -394,6 +394,10 @@ type v3Page struct {
 // list cannot hold a caller forever.
 const maxPages = 1000
 
+// headlessSession is the kind of a session factory runs with no developer;
+// it holds no claim chunk reads as a session's.
+const headlessSession = "headless"
+
 // nextCursor is the cursor of the page after one that was read with cursor, or
 // "" when that was the last. It is an error when the server points back at the
 // cursor it was just asked for, or when pages reads have not reached the end.
@@ -639,14 +643,17 @@ func (c *Client) GetFlow(ctx context.Context, planID string) (*Flow, error) {
 	return f, nil
 }
 
-// workerSessionFor names the session worker workerID lists as working
-// planID, "" when none does.
+// workerSessionFor names the non-headless session worker workerID lists
+// as working planID, "" when none does.
 func (c *Client) workerSessionFor(ctx context.Context, workerID, planID string) (string, error) {
 	var body struct {
 		Data struct {
 			Attributes struct {
 				Sessions []struct {
 					ID         string `json:"id"`
+					Attributes struct {
+						Kind string `json:"kind"`
+					} `json:"attributes"`
 					References struct {
 						Flows []v3Ref `json:"factory_flows"`
 					} `json:"references"`
@@ -662,6 +669,9 @@ func (c *Client) workerSessionFor(ctx context.Context, workerID, planID string) 
 		return "", mapErr("get worker sessions", err)
 	}
 	for _, s := range body.Data.Attributes.Sessions {
+		if s.Attributes.Kind == headlessSession {
+			continue
+		}
 		if slices.ContainsFunc(s.References.Flows, func(r v3Ref) bool { return r.ID == planID }) {
 			return s.ID, nil
 		}

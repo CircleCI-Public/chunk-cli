@@ -180,6 +180,16 @@ func TestApproveHoldsAWorkerOnlyClaim(t *testing.T) {
 		assert.Check(t, cmp.Equal(p.Worker, ""))
 		assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
 	})
+	t.Run("a headless session listing the plan is not another session's", func(t *testing.T) {
+		client, cci, id := approvablePlan(t, "")
+		cci.ClaimFactoryPlanForWorker(id, "w-1")
+		cci.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "h-1", Kind: "headless", FlowIDs: []string{id}})
+		err := Approve(context.Background(), client, noDaemon, id, "s-1", "w-1", "/data/plans/"+id)
+		assert.NilError(t, err)
+		p, _ := cci.FactoryPlan(id)
+		assert.Check(t, cmp.Equal(p.Worker, ""))
+		assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+	})
 	t.Run("a failed worker sessions read stops approve", func(t *testing.T) {
 		client, cci, id := approvablePlan(t, "")
 		cci.ClaimFactoryPlanForWorker(id, "w-1")

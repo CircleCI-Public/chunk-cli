@@ -1214,6 +1214,29 @@ func TestGetFlowHolder(t *testing.T) {
 			wantSession: "s-2",
 			wantWorker:  "w-1",
 		},
+		{
+			name: "the worker's headless session listing the flow holds no session",
+			claim: func(f *fakes.FakeCircleCI, id string) {
+				f.ClaimFactoryPlanForWorker(id, "w-1")
+				f.SetFactoryWorkerSessions("w-1",
+					fakes.FactoryWorkerSession{ID: "s-1", Kind: "interactive"},
+					fakes.FactoryWorkerSession{ID: "h-1", Kind: "headless", FlowIDs: []string{id}},
+				)
+			},
+			wantWorker: "w-1",
+		},
+		{
+			name: "the worker's interactive session listing the flow",
+			claim: func(f *fakes.FakeCircleCI, id string) {
+				f.ClaimFactoryPlanForWorker(id, "w-1")
+				f.SetFactoryWorkerSessions("w-1",
+					fakes.FactoryWorkerSession{ID: "h-1", Kind: "headless"},
+					fakes.FactoryWorkerSession{ID: "s-2", Kind: "interactive", FlowIDs: []string{id}},
+				)
+			},
+			wantSession: "s-2",
+			wantWorker:  "w-1",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
