@@ -105,8 +105,8 @@ var factoryEvents = []string{"prioritize", "address-comments", "answer-open-ques
 // (api/conductorapi/events.go in circleci/factory).
 var endReasons = []string{"canceled", "wont-do", "duplicate"}
 
-// factoryEnds are the states a plan ends in, which the plan list leaves out
-// (conductor.Ends in circleci/factory).
+// factoryEnds are the states a plan ends in (conductor.Ends in
+// circleci/factory).
 var factoryEnds = []string{"ended"}
 
 // FactoryPlan is a plan as the fake holds it, for a test to inspect.
@@ -613,9 +613,7 @@ func fakeSkeleton(title string) string {
 	return b.String()
 }
 
-// handleListPlans pages through the caller's open plans, oldest first,
-// FactoryPageSize at a time, as conductor does. The fake has one user, so
-// filter[user_id]=me lists every plan and any other user's UUID none.
+// handleListPlans implements GET /api/v3/factory/plans.
 func (f *FakeCircleCI) handleListPlans(c *gin.Context) {
 	if !f.factoryStart(c) {
 		return
@@ -629,30 +627,39 @@ func (f *FakeCircleCI) handleListPlans(c *gin.Context) {
 		factoryError(c, http.StatusBadRequest, "filter[user_id] is not a uuid or me")
 		return
 	}
+	var isEnded *bool
+	if v := c.Query("filter[is_ended]"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			factoryError(c, http.StatusBadRequest, "filter[is_ended] is not a boolean")
+			return
+		}
+		isEnded = &b
+	}
 	after, ok := pageCursor(c)
 	if !ok {
 		return
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	var open []*factoryPlan
+	var listed []*factoryPlan
 	if user == "me" {
 		for _, p := range f.factoryPlans {
-			if !slices.Contains(factoryEnds, p.state) {
-				open = append(open, p)
+			if isEnded == nil || slices.Contains(factoryEnds, p.state) == *isEnded {
+				listed = append(listed, p)
 			}
 		}
 	}
-	slices.SortFunc(open, func(a, b *factoryPlan) int { return a.seq - b.seq })
-	end := min(after+f.pageSize(), len(open))
+	slices.SortFunc(listed, func(a, b *factoryPlan) int { return a.seq - b.seq })
+	end := min(after+f.pageSize(), len(listed))
 	items := []gin.H{}
-	for _, p := range open[min(after, len(open)):end] {
+	for _, p := range listed[min(after, len(listed)):end] {
 		item := gin.H{"id": p.id, "attributes": planListAttrs(p)}
 		addPlanRefs(item, p)
 		items = append(items, item)
 	}
 	resp := gin.H{"data": items}
-	if end < len(open) {
+	if end < len(listed) {
 		resp["page"] = gin.H{"next": strconv.Itoa(end)}
 	}
 	c.JSON(http.StatusOK, resp)
