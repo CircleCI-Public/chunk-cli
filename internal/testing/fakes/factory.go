@@ -92,6 +92,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.GET("/api/v3/factory/flows", f.handleListFlows)
 	r.GET("/api/v3/factory/flows/:id", f.handleGetFlow)
 	r.GET("/api/v3/factory/flows/:id/blockers", f.handleListFlowBlockers)
+	r.POST("/api/v3/factory/check-runs", f.handleCreateCheckRun)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
 	r.POST("/api/v3/factory/flows/:id/release", f.handleReleaseFlow)
 	r.GET("/api/v3/factory/workers/:id/sessions", f.handleGetWorkerSessions)
@@ -1310,4 +1311,78 @@ func (f *FakeCircleCI) handleDeleteComment(c *gin.Context) {
 	}
 	p.comments = slices.Delete(p.comments, i, i+1)
 	c.Status(http.StatusNoContent)
+}
+
+// CheckRun is a check run posted to the fake, with the attributes decoded.
+type CheckRun struct {
+	ID        string
+	Key       string
+	Name      string
+	Outcome   string
+	StartedAt time.Time
+	EndedAt   time.Time
+}
+
+// checkOutcomes are the outcomes a check run takes
+// (POST /api/v3/factory/check-runs in circleci/factory).
+var checkOutcomes = []string{"succeeded", "failed", "cancelled", "skipped", "timed_out"}
+
+// CheckRuns returns the check runs posted to the fake, in post order.
+func (f *FakeCircleCI) CheckRuns() []CheckRun {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return slices.Clone(f.checkRuns)
+}
+
+// handleCreateCheckRun implements POST /api/v3/factory/check-runs.
+func (f *FakeCircleCI) handleCreateCheckRun(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	f.mu.RLock()
+	status := f.CheckRunStatus
+	f.mu.RUnlock()
+	if status != 0 {
+		factoryError(c, status, "API error")
+		return
+	}
+	var body struct {
+		Data struct {
+			Attributes struct {
+				Key       string    `json:"key"`
+				Name      string    `json:"name"`
+				Outcome   string    `json:"outcome"`
+				StartedAt time.Time `json:"started_at"`
+				EndedAt   time.Time `json:"ended_at"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		factoryError(c, http.StatusBadRequest, "invalid check run")
+		return
+	}
+	a := body.Data.Attributes
+	switch {
+	case a.Key == "" || a.Name == "":
+		factoryError(c, http.StatusBadRequest, "a check run needs a key and a name")
+		return
+	case !slices.Contains(checkOutcomes, a.Outcome):
+		factoryError(c, http.StatusBadRequest, "outcome is not one of "+strings.Join(checkOutcomes, ", "))
+		return
+	case a.StartedAt.IsZero() || a.EndedAt.IsZero():
+		factoryError(c, http.StatusBadRequest, "started_at and ended_at are required")
+		return
+	}
+	run := CheckRun{
+		ID: uuid.NewString(), Key: a.Key, Name: a.Name, Outcome: a.Outcome,
+		StartedAt: a.StartedAt, EndedAt: a.EndedAt,
+	}
+	f.mu.Lock()
+	f.checkRuns = append(f.checkRuns, run)
+	f.mu.Unlock()
+	c.JSON(http.StatusCreated, gin.H{"data": gin.H{"id": run.ID, "attributes": gin.H{
+		"key": run.Key, "name": run.Name, "outcome": run.Outcome,
+		"started_at": run.StartedAt.UTC().Format(time.RFC3339),
+		"ended_at":   run.EndedAt.UTC().Format(time.RFC3339),
+	}}})
 }

@@ -151,6 +151,11 @@ type FakeCircleCI struct {
 	FactoryStatusCode     int // override for every /api/v3/factory route
 	FactoryPlanStatusCode int // override for GET /api/v3/factory/plans/:id
 	FactoryPageSize       int // plans or comments per list page; 0 means 20
+	// CheckRunStatus, when set, is the status POST /api/v3/factory/check-runs
+	// answers every request with, storing nothing. Set it before the first
+	// request.
+	CheckRunStatus int
+	checkRuns      []CheckRun
 
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.

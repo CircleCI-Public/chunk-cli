@@ -85,6 +85,8 @@ chunk
 │       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
 │       --workdir <path>            # Remote working directory
 │
+├── signoff                         # Run the validation commands on a snapshot of the working tree and report each as a factory check run
+│
 ├── sidecar
 │   ├── list                        # List sidecars
 │   │   --org-id <id>               # Organization ID
@@ -683,6 +685,18 @@ chunk
 - **`validate results` is a subcommand, not a flag, because it validates
   nothing.** It reads daemon state. A flag on `validate` would read as a
   modifier of a run that never happens.
+- **`chunk signoff` keys its runs on the working tree's content, not on a
+  commit.** Two working trees with the same content share runs, whatever their
+  commits, and uncommitted changes are signed off under their own key rather
+  than refused.
+- **`chunk signoff` runs every command on a clean checkout, every time, and
+  posts each.** Files `.gitignore` excludes (`.env`, generated code,
+  `node_modules`) are not there, as in CI, so a command that needs them fails.
+  A failing command does not stop the rest, and a second run on an unchanged
+  tree runs everything again.
+- **`CHUNK_SIGNOFF_LOCAL=1` runs `chunk signoff`'s commands on this machine.**
+  They run in the snapshot's checkout instead of on a sidecar, and are posted
+  under the same key. Any other value runs them on the sidecar.
 - Every command checks GitHub for a newer release in the background and prints a
   notice to stderr once it finishes. The result is cached in the app state dir
   (`update-check.json`) for 24 h to stay inside GitHub's unauthenticated rate
