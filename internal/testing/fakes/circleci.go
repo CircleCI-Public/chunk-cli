@@ -1,10 +1,14 @@
 package fakes
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
@@ -97,8 +102,16 @@ type FakeCircleCI struct {
 	// handleCommandOutput can serve the right one when ExecResponses varies
 	// them instead of every command sharing ExecResponse.
 	execResponsesByID map[string]*ExecResponse
-	CommandResponse   *CommandResponse
-	RunStatusCode     int // override status code for trigger run endpoint
+	// ExecRunsLocally makes the exec route run each submitted command with
+	// the real program on this machine, and answer with its real output and
+	// exit code, instead of a canned ExecResponse. Paths on the "sidecar" are
+	// then local paths, as with SSHServer.RunLocally. The route answers only
+	// when the command has ended, and stops the command if the client gives
+	// up first. Set it before the first request.
+	ExecRunsLocally bool
+	execScripts     []string
+	CommandResponse *CommandResponse
+	RunStatusCode   int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
 	CurrentUserStatusCode    int                     // override for GET /me
@@ -480,8 +493,13 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 	statusCode := f.ExecStatusCode
 	msg := f.ExecMessage
 	transitioning := f.execCalls < f.TransitioningBeforeExec
+	runLocally := f.ExecRunsLocally
 	f.execCalls++
 	f.mu.Unlock()
+
+	if runLocally && statusCode == 0 && !transitioning {
+		resp = f.runExecLocally(c)
+	}
 
 	if transitioning {
 		c.JSON(http.StatusConflict, gin.H{"error": gin.H{"id": "trace-1", "title": "sidecar is changing state; try again"}})
@@ -525,6 +543,54 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 			},
 		},
 	})
+}
+
+// ExecScripts returns the shell scripts submitted to the exec route, in order,
+// when ExecRunsLocally is set: the last argument of every exec request, the
+// moment it arrives, so a script still running is listed.
+func (f *FakeCircleCI) ExecScripts() []string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return slices.Clone(f.execScripts)
+}
+
+// runExecLocally runs the command a request carries and returns what it did.
+// The command stops when the request's client goes away; an orphan it left
+// holding the output open is given up on after a moment.
+func (f *FakeCircleCI) runExecLocally(c *gin.Context) *ExecResponse {
+	var req struct {
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Command == "" {
+		return &ExecResponse{CommandID: uuid.NewString(), Stderr: "bad exec request\n", ExitCode: 2}
+	}
+	if len(req.Args) > 0 {
+		f.mu.Lock()
+		f.execScripts = append(f.execScripts, req.Args[len(req.Args)-1])
+		f.mu.Unlock()
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(c.Request.Context(), req.Command, req.Args...)
+	cmd.Env = os.Environ()
+	for k, v := range req.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.WaitDelay = 500 * time.Millisecond
+	exitCode := 0
+	if err := cmd.Run(); err != nil {
+		exitCode = -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+	}
+	return &ExecResponse{
+		CommandID: uuid.NewString(), Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode,
+	}
 }
 
 func (f *FakeCircleCI) handleCommandOutput(c *gin.Context) {

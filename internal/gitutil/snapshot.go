@@ -2,8 +2,10 @@ package gitutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -52,15 +54,15 @@ func SnapshotTree(dir string) (string, error) {
 	// A repository with no commit yet has nothing to seed from.
 	if _, err := gitOutEnv(dir, nil, "rev-parse", "--verify", "-q", "HEAD^{tree}"); err == nil {
 		if _, err := gitOutEnv(dir, env, "read-tree", "HEAD"); err != nil {
-			return "", fmt.Errorf("seed index from HEAD: %w", err)
+			return "", fmt.Errorf("seed index from HEAD: %w", withStderr(err))
 		}
 	}
 	if _, err := gitOutEnv(dir, env, "add", "-A"); err != nil {
-		return "", fmt.Errorf("stage working tree: %w", err)
+		return "", fmt.Errorf("stage working tree: %w", withStderr(err))
 	}
 	out, err := gitOutEnv(dir, env, "write-tree")
 	if err != nil {
-		return "", fmt.Errorf("write tree: %w", err)
+		return "", fmt.Errorf("write tree: %w", withStderr(err))
 	}
 	return strings.TrimSpace(out), nil
 }
@@ -108,6 +110,21 @@ func ChangesBetween(dir, base string) (changeset.Changes, error) {
 		return changeset.Changes{}, fmt.Errorf("diff %s: %w", base, err)
 	}
 	return changeset.Changes{Paths: paths, Lines: countShortstat(stat), Baseline: base}, nil
+}
+
+// withStderr adds what git printed to stderr to a failed command's error, which
+// otherwise says only "exit status 128". Callers that show the error to a
+// developer need git's own words, such as which file it could not read.
+func withStderr(err error) error {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return err
+	}
+	msg := strings.TrimSpace(string(exitErr.Stderr))
+	if msg == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, msg)
 }
 
 // gitOutEnv is gitOut with an explicit environment. A nil env inherits this

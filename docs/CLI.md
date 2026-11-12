@@ -697,6 +697,8 @@ chunk
 - **`CHUNK_SIGNOFF_LOCAL=1` runs `chunk signoff`'s commands on this machine.**
   They run in the snapshot's checkout instead of on a sidecar, and are posted
   under the same key. Any other value runs them on the sidecar.
+- **`chunk signoff` posts only what it knows.** A result it cannot know, from an
+  exec error or Ctrl-C, is not posted, and a failed post fails `signoff`.
 - Every command checks GitHub for a newer release in the background and prints a
   notice to stderr once it finishes. The result is cached in the app state dir
   (`update-check.json`) for 24 h to stay inside GitHub's unauthenticated rate

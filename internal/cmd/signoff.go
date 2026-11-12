@@ -80,6 +80,15 @@ func runSignoff(cmd *cobra.Command) error {
 		return err
 	}
 
+	// A submodule's uncommitted changes are not in the snapshot, which records
+	// only the commit it is at. Warn and carry on; a status that fails here will
+	// fail the snapshot too, with its own error.
+	if dirty, err := gitutil.DirtySubmodules(dir); err == nil {
+		for _, path := range dirty {
+			statusFn(iostream.LevelWarn, fmt.Sprintf("submodule %s has uncommitted changes; signoff records only its commit, so they are not part of the key or the checkout", path))
+		}
+	}
+
 	tree, err := gitutil.SnapshotTree(dir)
 	if err != nil {
 		return fmt.Errorf("snapshot the working tree: %w", err)
@@ -124,7 +133,13 @@ func runSignoff(cmd *cobra.Command) error {
 		streams.ErrPrintln(ui.ErrWarning("interrupted"))
 		return &silentExitError{code: exitInterrupted}
 	}
-	streams.Printf("signed off %d of %d\n", res.Passed, res.Total)
+	// Only a run in which every command passed and was posted signs off: a
+	// failed post leaves a command with no run, however it ended.
+	if runErr == nil && res.Passed == res.Total {
+		streams.Printf("signed off %d of %d\n", res.Passed, res.Total)
+	} else {
+		streams.Printf("not signed off: %d of %d passed\n", res.Passed, res.Total)
+	}
 	streams.Printf("  ran on a clean checkout of the snapshot: files .gitignore excludes were not synced\n")
 	if runErr != nil {
 		if authErr := notAuthorized("report check runs", rc.CircleCITokenSource, runErr); authErr != nil {
