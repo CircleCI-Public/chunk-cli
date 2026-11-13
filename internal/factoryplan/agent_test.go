@@ -465,6 +465,26 @@ func TestAgentStopEndsPollingAndSendsNothing(t *testing.T) {
 	})
 }
 
+// Calling Stop more than once is harmless: each call succeeds and polling
+// stays stopped.
+func TestAgentStopTwiceIsHarmless(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newFakeDaemon()
+		a, _ := newTestAgent(t, "plan-1", d)
+		collect(t, a, d, 2)
+
+		err := a.Stop()
+		assert.NilError(t, err)
+		err = a.Stop()
+		assert.NilError(t, err)
+		synctest.Wait()
+		n := len(d.fetched())
+		time.Sleep(20 * pollInterval)
+		synctest.Wait()
+		assert.Check(t, cmp.Len(d.fetched(), n))
+	})
+}
+
 // A screen that stops reading does not hold up the poller once it is
 // stopped.
 func TestAgentStopEndsAnEmitNobodyReads(t *testing.T) {

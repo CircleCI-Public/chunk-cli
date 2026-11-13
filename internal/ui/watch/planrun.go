@@ -21,6 +21,9 @@ type OpenedPlan struct {
 	Approve plan.Approver
 	Store   plan.Store
 	Root    string
+	// Close stops the workspace's agent, when the dashboard lets the
+	// workspace go before it ends; nil when there is nothing to stop.
+	Close func()
 }
 
 // PlanOpener opens a workspace without starting an agent: the agent the

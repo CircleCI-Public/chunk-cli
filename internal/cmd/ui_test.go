@@ -559,6 +559,39 @@ func TestWatchPlansOpenNoCheckout(t *testing.T) {
 	assert.Check(t, cmp.Error(err, noCheckout.Error()))
 }
 
+// A workspace the dashboard lets go stops its agent and is no longer kept.
+func TestWatchPlansCloseStopsTheAgent(t *testing.T) {
+	fake := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+	p, err := client.CreatePlan(t.Context(), "a plan", "", "circleci/factory")
+	assert.NilError(t, err)
+
+	saved := planRoot
+	t.Cleanup(func() { planRoot = saved })
+	planRoot = func(_ context.Context, _ *circleci.Plan, prefer string) (string, error) { return prefer, nil }
+
+	plans := newWatchPlans(t.Context())
+	t.Cleanup(plans.stop)
+	plans.client = func() (*circleci.Client, error) { return client, nil }
+	opened, err := plans.plan(t.Context(), "/src/app", p.ID)
+	assert.NilError(t, err)
+	assert.Assert(t, opened.Close != nil)
+	plans.mu.Lock()
+	n := len(plans.planAgents)
+	plans.mu.Unlock()
+	assert.Check(t, cmp.Equal(n, 1), "an open workspace's agent is kept")
+
+	opened.Close()
+	plans.mu.Lock()
+	n = len(plans.planAgents)
+	plans.mu.Unlock()
+	assert.Check(t, cmp.Equal(n, 0), "a closed workspace's agent is no longer kept")
+	opened.Close() // a second Close is harmless
+}
+
 // factoryDelete deletes the plan in factory and gives factory's refusal as it
 // gives it; a client that cannot be made fails before any request.
 func TestFactoryDelete(t *testing.T) {

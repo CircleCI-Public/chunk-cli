@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -233,7 +234,18 @@ func (d *watchPlans) plan(ctx context.Context, root, id string) (watch.OpenedPla
 		return watch.OpenedPlan{}, err
 	}
 	d.planAgents = append(d.planAgents, agent)
-	return watch.OpenedPlan{Agent: agent, Approve: approve, Store: store, Root: root}, nil
+	return watch.OpenedPlan{
+		Agent:   agent,
+		Approve: approve,
+		Store:   store,
+		Root:    root,
+		Close: sync.OnceFunc(func() {
+			_ = agent.Stop()
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			d.planAgents = slices.DeleteFunc(d.planAgents, func(a *factoryplan.Agent) bool { return a == agent })
+		}),
+	}, nil
 }
 
 // planRoot is the project plan p is planned and built in, for the
