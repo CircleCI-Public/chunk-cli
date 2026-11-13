@@ -12,14 +12,13 @@ import (
 // asks the terminal to report the mouse, which is why the terminal's own
 // selection does not work on it; this is the one the screen has in its place.
 
-// textView is a view of text that can be selected: the chat, or the plan or
-// the flow, whichever the right pane shows.
+// textView is a view of text that can be selected: the left pane, the request
+// or the Overview, or the plan.
 type textView int
 
 const (
-	textChat textView = iota
+	textOverview textView = iota
 	textPlan
-	textFlow
 )
 
 // textDrag is the text selected with the mouse, in the view it began in.
@@ -33,11 +32,8 @@ type textDrag struct {
 
 // textViewAt is the view drawn at screen column x.
 func (m *Model) textViewAt(x int) textView {
-	switch {
-	case m.inPane(x) == paneChat:
-		return textChat
-	case m.tab == tabFlow:
-		return textFlow
+	if m.inPane(x) == paneOverview {
+		return textOverview
 	}
 	return textPlan
 }
@@ -47,33 +43,30 @@ func (m *Model) viewOf(t textView) *viewport.Model {
 	switch t {
 	case textPlan:
 		return &m.planView
-	case textFlow:
-		return &m.flowView
-	case textChat:
-		return &m.chatView
+	case textOverview:
+		return &m.overviewView
 	}
-	return &m.chatView
+	return &m.overviewView
 }
 
 // gutterOf is the cells at the left of t's text that are not part of it: the
-// plan's cursor and comment bars, and the room each side of the chat.
-func gutterOf(t textView) int {
-	switch t {
-	case textPlan:
+// plan's cursor and comment bars, the room each side of the request, and the
+// Overview's cursor column.
+func (m *Model) gutterOf(t textView) int {
+	switch {
+	case t == textPlan:
 		return gutterWidth
-	case textChat:
-		return chatGutter
-	case textFlow:
-		return 0
+	case m.created:
+		return overviewGutter
 	}
-	return 0
+	return chatGutter
 }
 
 // textOrigin is the screen cell t's view is drawn from: inside its pane's
 // border and padding.
 func (m *Model) textOrigin(t textView) (x, y int) {
 	x = 1 + padX
-	if t != textChat {
+	if t == textPlan {
 		x += m.planLeft()
 	}
 	return x, m.topRows() + 1 + padY
@@ -82,7 +75,7 @@ func (m *Model) textOrigin(t textView) (x, y int) {
 // pane is t's view where the screen draws it.
 func (m *Model) pane(t textView) textsel.Pane {
 	x, y := m.textOrigin(t)
-	return textsel.Pane{View: m.viewOf(t), X: x, Y: y, Margin: gutterOf(t), Framed: t == textChat}
+	return textsel.Pane{View: m.viewOf(t), X: x, Y: y, Margin: m.gutterOf(t), Framed: t == textOverview && !m.created}
 }
 
 // beginText starts a selection where the mouse was pressed, if that is on

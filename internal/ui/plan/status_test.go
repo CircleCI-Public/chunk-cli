@@ -22,7 +22,7 @@ func TestFlowText(t *testing.T) {
 			name:  "not started",
 			state: "init",
 			flow:  Flow{WaitingOn: "daemon"},
-			want:  "Not started › Next: waiting on factory",
+			want:  "Created › Next: waiting on factory",
 		},
 		{
 			name:  "in review",
@@ -74,7 +74,7 @@ func TestStatus(t *testing.T) {
 		{
 			name: "not started, waiting on factory",
 			flow: Flow{State: "init", WaitingOn: "daemon"},
-			step: "Not started",
+			step: "Created",
 			next: "waiting on factory",
 		},
 		{
@@ -82,7 +82,7 @@ func TestStatus(t *testing.T) {
 			flow: Flow{State: "init", WaitingOn: "human", Next: []Step{
 				human("prioritize", true), human("end", false),
 			}},
-			step: "Not started",
+			step: "Created",
 			next: "you start work · ctrl+s",
 		},
 		{
@@ -281,16 +281,21 @@ func TestStatus(t *testing.T) {
 			step: "Done",
 		},
 		{
-			name: "ready reads Planning",
+			name: "ready reads Created",
 			flow: Flow{State: "ready", WaitingOn: "session"},
-			step: "Planning",
+			step: "Created",
 			next: "waiting on chunk",
 		},
 		{
 			name: "stand-by",
 			flow: Flow{State: "stand-by", WaitingOn: "human"},
-			step: "Standing by",
+			step: "Planning",
 			next: "you",
+		},
+		{
+			name: "a state the stages do not name is shown as given",
+			flow: Flow{State: "Integrating - Agent"},
+			step: "Integrating - Agent",
 		},
 		{
 			name: "an old name is shown as given",

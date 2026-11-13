@@ -479,7 +479,7 @@ func (m *Model) deleteAtCursor() {
 	if m.comments[i].id == "" {
 		m.comments = append(m.comments[:i], m.comments[i+1:]...)
 		m.moveCursor(m.cursor)
-		m.renderChat()
+		m.renderLeft()
 		return
 	}
 	m.confirming, m.pendingDelete = true, m.comments[i].id
@@ -564,7 +564,7 @@ func (m Model) updateCommentKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.commenting, m.anchor = false, -1
 		m.commentInput.Blur()
 		m.moveCursor(m.cursor)
-		m.renderChat()
+		m.renderLeft()
 		return m, nil
 	}
 	var cmd tea.Cmd

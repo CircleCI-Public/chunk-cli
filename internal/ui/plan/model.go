@@ -1,6 +1,6 @@
-// Package plan is the planning screen: a new plan's request, then its
-// planning session's activity, beside the plan factory is writing, rendered
-// as markdown. The developer can comment on any part of the plan; comments
+// Package plan is the planning screen: a new plan's request, then the plan's
+// Overview, with the stages of its flow and what happened in each, beside the
+// plan factory is writing, rendered as markdown. The developer can comment on any part of the plan; comments
 // are queued locally and saved to factory when the developer sends. When the
 // developer approves the plan, chunk builds it through factory.
 //
@@ -69,30 +69,31 @@ func approval(f Flow) string {
 type pane int
 
 const (
-	paneChat pane = iota
+	paneOverview pane = iota
 	panePlan
 )
 
-// rightTab is what the right pane shows.
-type rightTab int
-
-const (
-	tabPlan rightTab = iota
-	tabFlow
-)
-
-// message is one entry in the chat.
+// message is one entry in a stage's log: what the developer asked for, or
+// what the planner answered, or why it could not.
 type message struct {
 	fromUser bool
 	text     string
 	failed   bool
+	// stage is the stage stageNow gave when the message was added: Created
+	// before factory has given the plan a state, Building once the screen has
+	// approved or started a build of the plan, and "" for a state the stages
+	// do not know.
+	stage string
+	// seq is the message's place among the log's entries, as addMessage
+	// numbers them.
+	seq int
 	// byTask is a reply to a factory task rather than to the developer.
 	byTask bool
 	// task is the category of the factory task the reply is to, when byTask
 	// and the screen knew it.
 	task string
 	// rendered is a reply's markdown as rendered at renderedWidth, kept so
-	// the chat is not rendered again on every tick of the spinner.
+	// the log is not rendered again on every tick of the spinner.
 	rendered      string
 	renderedWidth int
 }
@@ -283,6 +284,9 @@ type Model struct {
 	// plan's blockers are known.
 	familyLoaded bool
 	messages     []message
+	// seq counts the entries added to the stages' logs, messages and build
+	// sessions alike, so a log can be drawn in the order they happened.
+	seq int
 	// created is whether the plan has been made in factory with store.Create,
 	// and creating whether that is under way.
 	created, creating bool
@@ -342,20 +346,29 @@ type Model struct {
 	moving *transition
 
 	planView viewport.Model
-	// flowView is the Flow tab, which the right pane shows in place of the
-	// plan while tab is tabFlow.
-	flowView viewport.Model
-	chatView viewport.Model
-	input    textarea.Model
-	spin     spinner.Model
+	// overviewView is the left pane: the request before the plan exists, the
+	// Overview after.
+	overviewView viewport.Model
+	input        textarea.Model
+	spin         spinner.Model
 
 	focus pane
-	// tab is what the right pane shows; tabChosen is whether the first
-	// refresh, or the developer, has picked it yet.
-	tab       rightTab
-	tabChosen bool
-	// related is the Flow tab's cursor over its Related rows.
-	related int
+	// focusChosen is whether the first refresh of a plan opened as it is, or
+	// the developer, has picked the pane the keyboard is in.
+	focusChosen bool
+	// overviewCursor is the Overview's row under the cursor, an index into
+	// overviewRows; expanded holds the rows opened with enter, by "outcome"
+	// or by stage. It is made on the first write.
+	overviewCursor int
+	expanded       map[string]bool
+	// rowLines is the line each of the Overview's rows starts on, as it was
+	// last drawn, for keeping the cursor in view.
+	rowLines []int
+	// outcomeFolds is whether the Outcome, as last drawn, has more lines than
+	// its cut shows, so enter has something to open.
+	outcomeFolds bool
+	// outcome keeps the Outcome's rendered markdown between draws.
+	outcome *outcomeRender
 	width   int
 	height  int
 
@@ -469,8 +482,9 @@ func (m Model) after(d time.Duration, fn func(time.Time) tea.Msg) tea.Cmd {
 const chatPlaceholder = "Describe the change you want planned…"
 
 // New returns the planning screen. A non-empty first request is sent as soon
-// as the screen opens. Once the plan exists the left pane takes no typing, so
-// a plan that exists opens on the plan pane.
+// as the screen opens. Once the plan exists the left pane, the Overview, takes
+// no typing, so a plan that exists opens on the plan pane until its first
+// refresh says where the keyboard belongs.
 func New(ctx context.Context, agent Agent, approve Approver, store Store, first string) Model {
 	in := textarea.New()
 	in.Placeholder = chatPlaceholder
@@ -504,28 +518,32 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 	// and u would scroll where d deletes a comment.
 	planView := viewport.New()
 	planView.KeyMap = viewport.KeyMap{}
-	// The Flow tab's keys are the screen's own too: its ↑/↓ move the Related
-	// cursor rather than scroll.
-	flowView := viewport.New()
-	flowView.KeyMap = viewport.KeyMap{}
+	// The Overview's keys are the screen's own too: its ↑/↓ move its cursor
+	// rather than scroll. The request, before the plan exists, has the page
+	// keys of its own.
+	overviewView := viewport.New()
+	overviewView.KeyMap = viewport.KeyMap{}
 
 	created := store.ID() != ""
-	focus := paneChat
+	focus := paneOverview
 	if created {
 		focus = panePlan
 		in.Blur()
 	}
 	return Model{
-		ctx:          ctx,
-		agent:        agent,
-		approve:      approve,
-		store:        store,
-		created:      created,
-		focus:        focus,
+		ctx:     ctx,
+		agent:   agent,
+		approve: approve,
+		store:   store,
+		created: created,
+		focus:   focus,
+		// A new plan's keyboard is where the developer typed the request; only
+		// a plan that exists is opened where its phase wants the keyboard.
+		focusChosen:  !created,
 		copyText:     clipboard.Copy,
 		planView:     planView,
-		flowView:     flowView,
-		chatView:     viewport.New(),
+		overviewView: overviewView,
+		outcome:      &outcomeRender{},
 		input:        in,
 		commentInput: ci,
 		spin:         spinner.New(spinner.WithSpinner(spinner.Dot)),
@@ -679,6 +697,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.takeOverDone(msg), nil
 
 	case familiedMsg:
+		row, had := m.cursorRow()
 		m.family, m.familyErr = msg.family, msg.err
 		if msg.err != nil {
 			m.family = Family{}
@@ -686,8 +705,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.familyLoaded = true
 		}
 		// The cursor stays on a row that is still there.
-		m.related = max(min(m.related, len(m.relatedRows())-1), 0)
-		m.renderFlow()
+		m.restoreCursor(row, had)
+		m.renderLeft()
 		return m, nil
 
 	case createdMsg:
@@ -727,26 +746,33 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
-		m.renderChat()
+		m.renderLeft()
 		return m, cmd
 	}
 
 	return m.forward(msg)
 }
 
+// addMessage adds msg to the log, in the stage the flow is in now.
+func (m *Model) addMessage(msg message) {
+	m.seq++
+	msg.stage, msg.seq = m.stageNow(), m.seq
+	m.messages = append(m.messages, msg)
+}
+
 // applyCreated handles the end of creating the plan in factory: on success
 // it starts the planning session on the request, and on failure it says so
-// in the Activity pane.
+// in the request pane.
 func (m Model) applyCreated(msg createdMsg) (Model, tea.Cmd) {
 	m.creating = false
 	if msg.err != nil {
 		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.messages = append(m.messages, message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
+		m.addMessage(message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
 		m.renderPlan()
-		m.renderChat()
+		m.renderLeft()
 		return m, nil
 	}
-	// The input is gone for good, and the activity takes its rows.
+	// The input is gone for good, and the Overview takes its rows.
 	m.created, m.request, m.resuming = true, msg.text, true
 	// A title the host gave the screen becomes the plan's own once it is
 	// created; a screen with no title keeps showing the branch.
@@ -774,17 +800,17 @@ func (m Model) applySent(msg tea.Msg) Model {
 		// The request is kept, and sent again once factory next waits on the
 		// planner: it is in no plan yet.
 		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.messages = append(m.messages, message{text: "Could not start the planning session: " + msg.err.Error(), failed: true})
+		m.addMessage(message{text: "Could not start the planning session: " + msg.err.Error(), failed: true})
 		m.renderPlan()
-		m.renderChat()
+		m.renderLeft()
 	case resumedMsg:
 		if msg.agent != m.agent {
 			return m
 		}
 		m.resuming = false
 		if msg.err != nil {
-			m.messages = append(m.messages, message{text: "Could not resume the planning session: " + msg.err.Error(), failed: true})
-			m.renderChat()
+			m.addMessage(message{text: "Could not resume the planning session: " + msg.err.Error(), failed: true})
+			m.renderLeft()
 		}
 	}
 	return m
@@ -797,6 +823,7 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 	// the rest is still queued.
 	m.comments = dropQueued(m.comments, msg.saved)
 	m.renderPlan()
+	m.renderLeft()
 	m.pendingHandOff = msg.handOff && !msg.handedOff
 	m.trackFeedback(msg.saved)
 	var tick tea.Cmd
@@ -836,6 +863,7 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		return m
 	}
 	m.refreshErr = ""
+	row, had := m.cursorRow()
 
 	// The cursor stays on a comment on a rewritten part, wherever it now
 	// sits, rather than drifting to whatever ends up at its old stop.
@@ -873,10 +901,13 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 	case m.state != m.claimedIn:
 		m.claimedIn = ""
 	}
-	if !m.tabChosen {
-		// The first refresh of a visit opens the right pane on what the
-		// plan's phase is about; later moves leave the tab where it is.
-		m.tab, m.tabChosen = tabFor(m.state), true
+	m.restoreCursor(row, had)
+	// The first refresh of a plan opened as it is puts the keyboard where the
+	// plan's phase is about; later moves leave it where it is.
+	first := !m.focusChosen
+	if first {
+		m.focus, m.focusChosen = focusFor(m.state), true
+		m.overviewCursor = m.currentRow()
 	}
 	if m.byTask && m.task == "" {
 		// The first task the flow names in a turn is the one the turn is on:
@@ -897,8 +928,10 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 			}
 		}
 	}
-	m.renderChat()
-	m.renderFlow()
+	m.renderLeft()
+	if first {
+		m.scrollToCursor()
+	}
 	return m
 }
 
@@ -985,14 +1018,14 @@ func (m Model) resume() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// tabFor is the tab the right pane opens on for a plan in state: the plan
-// while it is being planned, or has not started, and its flow after.
-func tabFor(state string) rightTab {
+// focusFor is the pane the keyboard opens in for a plan in state: the plan
+// while it is being planned, or has not started, and the Overview after.
+func focusFor(state string) pane {
 	switch strings.TrimSpace(state) {
 	case "", planstate.Init, planstate.Ready, planstate.RefineProposal, planstate.RefineUnits:
-		return tabPlan
+		return panePlan
 	}
-	return tabFlow
+	return paneOverview
 }
 
 func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -1023,17 +1056,12 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(msg, k.Focus):
-		// A narrow screen shows one of chat, Flow and Plan at a time, so tab
-		// goes round all three.
-		switch {
-		case m.focus == paneChat && m.narrow():
-			return m.showTab(tabFlow)
-		case m.focus == paneChat:
+		// A narrow screen shows one of the Overview and the plan at a time,
+		// so tab goes between them on any width.
+		if m.focus == paneOverview {
 			return m.focusOn(panePlan)
-		case m.narrow() && m.tab == tabFlow:
-			return m.showTab(tabPlan)
 		}
-		return m.focusOn(paneChat)
+		return m.focusOn(paneOverview)
 	case key.Matches(msg, k.SendPlan):
 		return m.askToApprove(), nil
 	case key.Matches(msg, k.Resume):
@@ -1050,31 +1078,24 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.confirming, m.pendingDeletePlan = true, true
 		m.status = ui.TitleStyle.Render("Delete this plan, its comments and its flow? ") + confirmButtons
 		return m, nil
-	case key.Matches(msg, k.FlowTab):
-		return m.showTab(tabFlow)
-	case key.Matches(msg, k.PlanTab):
-		return m.showTab(tabPlan)
 	}
 
-	if m.focus == panePlan && m.tab == tabFlow {
-		return m.updateFlowKey(msg)
+	if m.focus == paneOverview && m.created {
+		return m.updateOverviewKey(msg)
 	}
 	if m.focus == panePlan {
 		return m.updatePlanKey(msg)
 	}
 	switch {
 	case key.Matches(msg, k.ChatPageUp):
-		m.chatView.PageUp()
+		m.overviewView.PageUp()
 		return m, nil
 	case key.Matches(msg, k.ChatPageDown):
-		m.chatView.PageDown()
+		m.overviewView.PageDown()
 		return m, nil
 	}
 	if key.Matches(msg, k.Send) {
-		if !m.created {
-			return m.send(m.input.Value())
-		}
-		return m.deliver()
+		return m.send(m.input.Value())
 	}
 	return m.forward(msg)
 }
@@ -1103,6 +1124,7 @@ func (m Model) deliver() (Model, tea.Cmd) {
 	}
 	m.savingComments = true
 	m.status = ""
+	m.renderLeft()
 	return m, saveQueued(m.ctx, m.store, queued)
 }
 
@@ -1172,22 +1194,16 @@ func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 		m.focus = panePlan
 		m.input.Blur()
 		m.drawPlan()
-		m.renderFlow()
+		m.renderLeft()
 		return m, nil
 	}
-	m.focus = paneChat
+	m.focus = paneOverview
 	m.drawPlan()
-	m.renderFlow()
+	m.renderLeft()
 	if m.created {
 		return m, nil
 	}
 	return m, m.input.Focus()
-}
-
-// showTab gives the keyboard to the right pane, showing tab t there.
-func (m Model) showTab(t rightTab) (Model, tea.Cmd) {
-	m.tab, m.tabChosen = t, true
-	return m.focusOn(panePlan)
 }
 
 // askToApprove starts approving the plan, or its design: it asks the
@@ -1283,10 +1299,6 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	var cmd tea.Cmd
-	if m.focus == panePlan && m.tab == tabFlow {
-		m.flowView, cmd = m.flowView.Update(msg)
-		return m, cmd
-	}
 	if m.focus == panePlan {
 		m.planView, cmd = m.planView.Update(msg)
 		return m, cmd
@@ -1296,9 +1308,9 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(msg)
 		cmds = append(cmds, cmd)
 	}
-	// The chat scrolls with the mouse wheel while typing.
+	// The left pane scrolls with the mouse wheel while typing.
 	if _, ok := msg.(tea.KeyPressMsg); !ok {
-		m.chatView, cmd = m.chatView.Update(msg)
+		m.overviewView, cmd = m.overviewView.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)
@@ -1313,7 +1325,7 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.input.Reset()
-	m.messages = append(m.messages, message{fromUser: true, text: text})
+	m.addMessage(message{fromUser: true, text: text})
 	m.status = ""
 	var tick tea.Cmd
 	if !m.busy {
@@ -1321,8 +1333,8 @@ func (m Model) send(text string) (Model, tea.Cmd) {
 		tick = m.spin.Tick
 	}
 	m.renderPlan()
-	m.renderChat()
-	m.chatView.GotoBottom()
+	m.renderLeft()
+	m.overviewView.GotoBottom()
 	m.creating = true
 	return m, tea.Batch(createCmd(m.ctx, m.store, text), tick)
 }
@@ -1380,18 +1392,18 @@ func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
 			m.log = m.log[len(m.log)-5:]
 		}
 		m.renderPlan()
-		m.renderChat()
+		m.renderLeft()
 		return m, tea.Batch(next, tick, refresh)
 	case ev.Reply != nil:
 		task := m.task
 		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.messages = append(m.messages, message{text: ev.Reply.Text, byTask: ev.Reply.ByTask, task: task})
+		m.addMessage(message{text: ev.Reply.Text, byTask: ev.Reply.ByTask, task: task})
 	case ev.Problem != nil:
 		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.messages = append(m.messages, message{text: ev.Problem.Error(), failed: true})
+		m.addMessage(message{text: ev.Problem.Error(), failed: true})
 	}
 	m.renderPlan()
-	m.renderChat()
+	m.renderLeft()
 	return m, tea.Batch(next, refreshCmd(m.ctx, m.store))
 }
 
@@ -1444,7 +1456,10 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 		if !m.back {
 			return m, closed(msg.buildID)
 		}
-		m.built, m.tab, m.tabChosen = true, tabFlow, true
+		// The keyboard goes to the Overview, to follow the build.
+		m.built, m.focusChosen = true, true
+		m, _ = m.focusOn(paneOverview)
+		m.overviewCursor = m.currentRow()
 		m.moving = &transition{kind: movingApprove, from: m.state, since: time.Now()}
 		m.status = "Approved · building as run " + msg.buildID
 		var follow tea.Cmd
@@ -1524,7 +1539,7 @@ func waitApproval(ch <-chan tea.Msg) tea.Cmd {
 	}
 }
 
-// Layout: the chat is on the left and the plan, which needs the room, takes
+// Layout: the Overview is on the left and the plan, which needs the room, takes
 // the right 60% of the screen. Each pane has a one-cell border with its title
 // set into the top edge; the plan has a row under it for comments, and the
 // screen a header row above the panes and a footer row below them.
@@ -1554,6 +1569,7 @@ func (m *Model) planWidth() int {
 	return m.width * planPercent / 100
 }
 
+// chatWidth is the left pane's width.
 func (m *Model) chatWidth() int {
 	if m.narrow() {
 		return m.width
@@ -1573,21 +1589,18 @@ func (m *Model) layout() {
 	inner := m.height - m.topRows() - footerRows - borderSize
 	m.planView.SetWidth(m.planWidth() - borderSize - 2*padX)
 	m.planView.SetHeight(inner - planFooterRows - padY)
-	m.flowView.SetWidth(m.planView.Width())
-	m.flowView.SetHeight(m.planView.Height())
 	// The editor is the text of a comment's card, which sits past the gutter
 	// on a rail, indented, with a cell either side.
 	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 6)
-	m.chatView.SetWidth(m.chatWidth() - borderSize - 2*padX)
+	m.overviewView.SetWidth(m.chatWidth() - borderSize - 2*padX)
 	if m.created {
-		m.chatView.SetHeight(inner - padY)
+		m.overviewView.SetHeight(inner - padY)
 	} else {
-		m.chatView.SetHeight(max(1, inner-inputBoxRows-padY))
+		m.overviewView.SetHeight(max(1, inner-inputBoxRows-padY))
 	}
 	m.input.SetWidth(m.chatWidth() - 2*borderSize - 2*padX)
 	m.renderPlan()
-	m.renderChat()
-	m.renderFlow()
+	m.renderLeft()
 }
 
 // renderLines renders one block with r, without the blank lines glamour puts
@@ -1671,7 +1684,7 @@ func (m *Model) renderPlan() {
 	m.moveCursor(m.cursor)
 }
 
-// userBubble is text as a bubble against the right edge of the chat, so it
+// userBubble is text as a bubble against the right edge of the request, so it
 // reads as the developer's side of the conversation.
 func (m *Model) userBubble(text string, w int) string {
 	// The bubble leaves room on its left, so that it reads as a side of the
@@ -1683,36 +1696,41 @@ func (m *Model) userBubble(text string, w int) string {
 	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
 }
 
-// queuedBubble is the queued comments waiting to be saved, shown like the
-// message they will go with when the developer sends.
-func (m *Model) queuedBubble(cs []comment, w int) string {
-	inner := max(w*85/100-bubbleChrome, 1)
+// queuedParts is the queued comments waiting to be saved, as lines w cells
+// wide: each one's quote, then its text, on a bar.
+func (m Model) queuedParts(cs []comment, w int) []string {
 	parts := make([]string, 0, 2*len(cs))
 	for _, c := range cs {
-		parts = append(parts, m.style(m.faint()).Render("┃ "+excerpt(c.quote, inner-2)), m.style(m.amber()).Render("┃ "+c.text))
+		parts = append(parts, m.style(m.faint()).Render("┃ "+excerpt(c.quote, w-2)))
+		for _, l := range strings.Split(ansi.Wrap(c.text, max(w-2, 1), ""), "\n") {
+			parts = append(parts, m.style(m.amber()).Render("┃ "+l))
+		}
 	}
-	text := strings.Join(parts, "\n")
-	fit := min(lipgloss.Width(text), inner)
-	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.faint()).
-		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
-	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
+	return parts
 }
 
-func (m *Model) renderChat() {
+// renderLeft draws the left pane: the request before the plan exists, the
+// Overview after.
+func (m *Model) renderLeft() {
+	if m.created {
+		m.renderOverview()
+		return
+	}
+	m.renderRequest()
+}
+
+// renderRequest draws the left pane before the plan exists: the inbox note,
+// the developer's request as a bubble, what went wrong in making the plan, and
+// the planner's turn. There are no queued comments or build yet.
+func (m *Model) renderRequest() {
 	// A cell of room each side keeps the messages off the pane's border.
-	w := m.chatView.Width() - 2*chatGutter
+	w := m.overviewView.Width() - 2*chatGutter
 	if w <= 0 {
 		return
 	}
 	var b strings.Builder
 	if m.inbox {
-		note := "Reading this plan does not start an agent."
-		if m.project == "" {
-			note += " Open chunk watch in its repository to plan it."
-		} else {
-			note += " Its planning session resumes here in " + m.project + " when factory is waiting on it."
-		}
-		b.WriteString(m.style(m.dim()).Width(w).Render(note) + "\n\n")
+		b.WriteString(m.style(m.dim()).Width(w).Render(m.inboxNote()) + "\n\n")
 	}
 	for i := range m.messages {
 		msg := &m.messages[i]
@@ -1723,43 +1741,47 @@ func (m *Model) renderChat() {
 			b.WriteString(chunkStyle.Render("chunk") + "\n")
 			b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text))
 		default:
-			b.WriteString(chunkStyle.Render("chunk"))
-			if msg.byTask {
-				mark := " · factory task"
-				if msg.task != "" {
-					mark = " · " + taskLabel(msg.task)
-				}
-				b.WriteString(m.style(m.faint()).Render(mark))
-			}
-			b.WriteString("\n")
-			if msg.renderedWidth != w {
-				msg.rendered, msg.renderedWidth = chat.RenderMarkdown(msg.text, m.dark, w-2), w
-			}
-			b.WriteString(msg.rendered)
+			b.WriteString(strings.Join(m.replyLines(msg, w), "\n"))
 		}
 		b.WriteString("\n\n")
-	}
-	if q := queuedComments(m.comments); len(q) > 0 && !m.savingComments {
-		// The comments wait in a bubble like the message they will go in.
-		b.WriteString(m.queuedBubble(q, w) + "\n")
-		b.WriteString(m.style(m.faint()).Render("queued · press enter or s to send") + "\n\n")
-	}
-	if m.savingComments {
-		b.WriteString(m.style(m.purple()).Render(m.spin.View()+"Saving your comments…") + "\n\n")
 	}
 	if m.busy {
 		b.WriteString(m.activityLog(w))
 	}
-	if m.showsBuild() {
-		b.WriteString(m.buildSection(w))
-	}
-	// The chat follows what is added to it unless the developer has
+	// The request follows what is added to it unless the developer has
 	// scrolled up to read, when it stays where they are.
-	follow := m.chatView.AtBottom()
-	m.setContent(textChat, lipgloss.NewStyle().PaddingLeft(chatGutter).Render(b.String()))
+	follow := m.overviewView.AtBottom()
+	m.setContent(textOverview, lipgloss.NewStyle().PaddingLeft(chatGutter).Render(b.String()))
 	if follow {
-		m.chatView.GotoBottom()
+		m.overviewView.GotoBottom()
 	}
+}
+
+// inboxNote is what the left pane says of a plan opened from the host's
+// inbox: reading it starts no agent.
+func (m Model) inboxNote() string {
+	note := "Reading this plan does not start an agent."
+	if m.project == "" {
+		return note + " Open chunk watch in its repository to plan it."
+	}
+	return note + " Its planning session resumes here in " + m.project + " when factory is waiting on it."
+}
+
+// replyLines is the planner's reply as the log draws it: headed by chunk and,
+// for a reply to a factory task, the task, then its markdown, w cells wide.
+func (m Model) replyLines(msg *message, w int) []string {
+	head := chunkStyle.Render("chunk")
+	if msg.byTask {
+		mark := " · factory task"
+		if msg.task != "" {
+			mark = " · " + taskLabel(msg.task)
+		}
+		head += m.style(m.faint()).Render(mark)
+	}
+	if msg.renderedWidth != w {
+		msg.rendered, msg.renderedWidth = chat.RenderMarkdown(msg.text, m.dark, w-2), w
+	}
+	return append([]string{head}, strings.Split(msg.rendered, "\n")...)
 }
 
 // activityLog is what the agent has been doing this turn: each thing it has
@@ -1769,7 +1791,17 @@ func (m Model) activityLog(w int) string {
 		// The spinner's frames carry their own space after the dot.
 		return m.style(m.purple()).Render(m.spin.View() + "chunk is thinking…")
 	}
+	// Newest first: the step in hand, then the steps finished, then what the
+	// turn is on.
 	var lines []string
+	for i := len(m.log) - 1; i >= 0; i-- {
+		a := ansi.Truncate(m.log[i], w-2, "…")
+		if i == len(m.log)-1 {
+			lines = append(lines, m.style(m.purple()).Render(m.spin.View()+a))
+			continue
+		}
+		lines = append(lines, m.style(m.green()).Render("✓ ")+m.style(m.dim()).Render(a))
+	}
 	if m.byTask {
 		label := "working on a factory task"
 		if m.task != "" {
@@ -1777,18 +1809,10 @@ func (m Model) activityLog(w int) string {
 		}
 		lines = append(lines, m.style(m.faint()).Render(label))
 	}
-	for i, a := range m.log {
-		a = ansi.Truncate(a, w-2, "…")
-		if i == len(m.log)-1 {
-			lines = append(lines, m.style(m.purple()).Render(m.spin.View()+a))
-			continue
-		}
-		lines = append(lines, m.style(m.green()).Render("✓ ")+m.style(m.dim()).Render(a))
-	}
 	return strings.Join(lines, "\n")
 }
 
-// taskLabel is a factory task's category as the chat shows it: in sentence
+// taskLabel is a factory task's category as the Overview shows it: in sentence
 // case, with spaces for hyphens, so "early-plan" reads "Early plan".
 func taskLabel(category string) string {
 	if category == "" {
@@ -1799,15 +1823,15 @@ func taskLabel(category string) string {
 	return string(unicode.ToUpper(r)) + s[n:]
 }
 
-// restyle renders the plan and the chat again for a change of background.
+// restyle renders the plan and the left pane again for a change of
+// background.
 func (m *Model) restyle() {
 	m.renderedWidth = 0
 	for i := range m.messages {
 		m.messages[i].renderedWidth = 0
 	}
 	m.renderPlan()
-	m.renderChat()
-	m.renderFlow()
+	m.renderLeft()
 }
 
 var chunkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
@@ -1836,33 +1860,23 @@ func (m Model) Content() string {
 		return ui.HelperStyle.Faint(true).Render(name)
 	}
 
-	// The right pane's title is its tabs, the one showing drawn as a title.
-	tabWord := func(t rightTab, name string) string {
-		if m.tab == t {
-			return title(m.focus == panePlan, name)
-		}
-		return ui.HelperStyle.Faint(true).Render(name)
-	}
-	planTitle := tabWord(tabFlow, "Flow") + "  " + tabWord(tabPlan, "Plan")
+	planTitle := title(m.focus == panePlan, "Plan")
 	if m.moving != nil {
 		planTitle += title(m.focus == panePlan, " · "+m.movingText())
 	}
 	body := m.shown(textPlan) + "\n" + m.planFooter()
-	if m.tab == tabFlow {
-		body = m.shown(textFlow)
-	}
-	chatBody := m.shown(textChat) + "\n" + m.inputBox()
+	leftTitle, leftBody := "Request", m.shown(textOverview)+"\n"+m.inputBox()
 	if m.created {
-		chatBody = m.shown(textChat)
+		leftTitle, leftBody = "Overview", m.shown(textOverview)
 	}
-	chat := pane(m.focus == paneChat, m.chatWidth(), title(m.focus == paneChat, activityTitle), chatBody)
+	left := pane(m.focus == paneOverview, m.chatWidth(), title(m.focus == paneOverview, leftTitle), leftBody)
 	plan := pane(m.focus == panePlan, m.planWidth(), planTitle, body)
 
-	panes := lipgloss.JoinHorizontal(lipgloss.Top, chat, plan)
+	panes := lipgloss.JoinHorizontal(lipgloss.Top, left, plan)
 	top := m.header() + "\n" + m.strip()
 	if m.narrow() {
 		// One pane at a time, the other a tab away.
-		panes = chat
+		panes = left
 		if m.focus == panePlan {
 			panes = plan
 		}
@@ -1871,16 +1885,12 @@ func (m Model) Content() string {
 	return lipgloss.JoinVertical(lipgloss.Left, top, panes, m.actionBar())
 }
 
-// activityTitle is the left pane's title, before the plan exists, when the
-// pane holds the request input, as after.
-const activityTitle = "Activity"
-
-// inputBox is the request being written, in a box of its own under the chat.
+// inputBox is the request being written, in a box of its own under the request.
 // Its border stays a step below the pane's accent, so the accent shows once
 // per pane.
 func (m Model) inputBox() string {
 	edge := m.quiet()
-	if m.focus == paneChat && !m.commenting {
+	if m.focus == paneOverview && !m.commenting {
 		edge = m.dim()
 	}
 	w := m.chatWidth() - borderSize - 2*padX

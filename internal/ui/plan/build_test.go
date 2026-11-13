@@ -146,15 +146,15 @@ func lines(n, from int) []BuildLine {
 	return out
 }
 
-// paneView is the Activity pane as it shows, without styles.
-func paneView(m Model) string { return ansi.Strip(m.chatView.View()) }
+// paneView is the whole Overview, without styles, as far as it is drawn.
+func paneView(m Model) string { return ansi.Strip(m.overviewView.GetContent()) }
 
-// sectionRows is the Building section's rows without styles, blank ones left
-// out, as renderChat appends it whole.
+// sectionRows is the build sessions' rows as the Building stage's log draws
+// them, without styles, blank ones left out.
 func sectionRows(m Model) []string {
-	w := m.chatView.Width() - 2*chatGutter
+	w := m.overviewView.Width() - overviewGutter - 3
 	var rows []string
-	for _, r := range strings.Split(ansi.Strip(m.buildSection(w)), "\n") {
+	for _, r := range strings.Split(ansi.Strip(m.buildSection(m.builds, true, w)), "\n") {
 		if strings.TrimSpace(r) != "" {
 			rows = append(rows, r)
 		}
@@ -171,7 +171,8 @@ func TestBuildIsNotReadWhilePlanning(t *testing.T) {
 			m := buildScreen(t, state, b)
 			m = buildTick(t, m)
 			assert.Check(t, cmp.Len(b.Asked(), 0))
-			assert.Check(t, !strings.Contains(paneView(m), "Building"), paneView(m))
+			assert.Check(t, !strings.Contains(paneView(m), "build session"), paneView(m))
+			assert.Check(t, !strings.Contains(paneView(m), "◉ Building"), paneView(m))
 		})
 	}
 }
@@ -194,11 +195,25 @@ func TestBuildIsReadOnceBuilding(t *testing.T) {
 func TestBuildIsReadAfterApprovingHere(t *testing.T) {
 	t.Parallel()
 	b := &fakeBuild{}
-	m := buildScreen(t, "refine-proposal", b)
+	b.answer(BuildActivity{Found: true, ID: "s-1", Running: true, Total: 1, Lines: []BuildLine{{Text: "Edit a.go"}}})
+	m := buildScreen(t, "refine-units", b)
 	assert.Check(t, cmp.Len(b.Asked(), 0))
-	drive(t, m, approvedMsg{buildID: "s-1"})
+	m = drive(t, m, approvedMsg{buildID: "s-1"})
 	// The approval's own followBuild and its refresh's start one loop.
 	askedFor(t, b, 0)
+
+	// Factory has yet to move the plan out of Planning, but the session is
+	// the Building stage's: the screen approved the plan.
+	assert.Assert(t, cmp.Equal(m.state, "refine-units"))
+	assert.Assert(t, cmp.Len(m.builds, 1))
+	assert.Check(t, cmp.Equal(m.builds[0].stage, "Building"))
+	assert.Check(t, cmp.Equal(m.focus, paneOverview), "the keyboard did not go to the Overview")
+	view := paneView(m)
+	assert.Check(t, cmp.Contains(view, "◉ Building"))
+	assert.Check(t, !strings.Contains(view, "◉ Planning"), view)
+	building := strings.Index(view, "◉ Building")
+	assert.Check(t, strings.Index(view, "Edit a.go") > building, "the session is not under Building:\n%s", view)
+	assert.Check(t, strings.Index(view, "Edit a.go") < strings.Index(view, "✓ Planned"), "the session is under Planning:\n%s", view)
 }
 
 func TestBuildIsNotReadOnAnEndedFlow(t *testing.T) {
@@ -211,7 +226,7 @@ func TestBuildIsNotReadOnAnEndedFlow(t *testing.T) {
 		m := buildScreenOn(t, store, b, 40)
 		m = buildTick(t, m)
 		assert.Check(t, cmp.Len(b.Asked(), 0))
-		assert.Check(t, !strings.Contains(ansi.Strip(m.Content()), "── Building"))
+		assert.Check(t, !strings.Contains(ansi.Strip(m.Content()), "── build session"))
 	})
 	t.Run("ends while open", func(t *testing.T) {
 		t.Parallel()
@@ -226,7 +241,10 @@ func TestBuildIsNotReadOnAnEndedFlow(t *testing.T) {
 		m = refreshed(t, m)
 		m = buildTick(t, m)
 		assert.Check(t, cmp.Len(b.Asked(), 1))
-		assert.Check(t, cmp.Contains(paneView(m), "── Building"))
+		// The session is in the Built stage now, where the cursor stayed.
+		assert.Check(t, cmp.Contains(paneView(m), "✓ Built · 1 build session"))
+		m = drive(t, m, press("enter"))
+		assert.Check(t, cmp.Contains(paneView(m), "── build session"))
 		assert.Check(t, cmp.Contains(paneView(m), "line 0"))
 	})
 }
@@ -235,7 +253,7 @@ func TestBuildIsNotReadWithoutABuild(t *testing.T) {
 	t.Parallel()
 	m := buildScreenOn(t, buildStore("build"), nil, 40)
 	m = buildTick(t, m)
-	assert.Check(t, !strings.Contains(paneView(m), "Building"), paneView(m))
+	assert.Check(t, !strings.Contains(paneView(m), "build session"), paneView(m))
 }
 
 func TestBuildSectionFollowsThePlanner(t *testing.T) {
@@ -243,6 +261,8 @@ func TestBuildSectionFollowsThePlanner(t *testing.T) {
 	b := &fakeBuild{}
 	m := buildScreen(t, "build", b)
 	m = drive(t, m, eventMsg{agent: m.agent, Event: Event{Reply: &Reply{Text: "Wrote the units."}}})
+	// The current stage shows the end of its log; enter opens it all.
+	m = drive(t, m, press("enter"))
 	b.answer(BuildActivity{Found: true, ID: "s-1", Running: true, Total: 2, Lines: []BuildLine{
 		{Level: BuildStep, Text: "Building plan plan-1 in /w"},
 		{Level: BuildInfo, Text: "Bash go test ./..."},
@@ -251,12 +271,15 @@ func TestBuildSectionFollowsThePlanner(t *testing.T) {
 
 	view := paneView(m)
 	reply := strings.Index(view, "Wrote the units.")
-	divider := strings.Index(view, "── Building")
+	divider := strings.Index(view, "── build session")
 	step := strings.Index(view, "Building plan plan-1 in /w")
 	info := strings.Index(view, "Bash go test ./...")
-	assert.Check(t, reply >= 0 && divider > reply, view)
-	assert.Check(t, step > divider, view)
-	assert.Check(t, info > step, view)
+	// Newest first: the session's divider, its newest line, its first, then
+	// the reply that came before it.
+	assert.Check(t, reply >= 0 && divider >= 0 && divider < reply, view)
+	assert.Check(t, info > divider, view)
+	assert.Check(t, step > info, view)
+	assert.Check(t, reply > step, view)
 }
 
 func TestBuildSectionStylesByLevel(t *testing.T) {
@@ -288,7 +311,7 @@ func TestBuildSectionTruncatesRows(t *testing.T) {
 	}
 	assert.Check(t, strings.HasSuffix(row, "…"), row)
 	for _, l := range strings.Split(paneView(m), "\n") {
-		assert.Check(t, ansi.StringWidth(l) <= m.chatWidth(), "%q is wider than the pane", l)
+		assert.Check(t, ansi.StringWidth(l) <= m.overviewView.Width(), "%q is wider than the pane", l)
 	}
 }
 
@@ -300,7 +323,9 @@ func TestBuildSectionSpinsWhileRunning(t *testing.T) {
 		b.answer(BuildActivity{Found: true, ID: "s-1", Running: true, Total: 2, Lines: lines(2, 0)})
 		m := buildScreen(t, "build", b)
 		rows := sectionRows(m)
-		assert.Check(t, cmp.Equal(rows[len(rows)-1], ansi.Strip(m.spin.View())+"line 1"))
+		// The divider, then the newest line, which has the spinner.
+		assert.Check(t, cmp.Equal(rows[1], ansi.Strip(m.spin.View())+"line 1"))
+		assert.Check(t, cmp.Equal(rows[2], "line 0"))
 		assert.Check(t, m.spinning())
 	})
 	t.Run("ended", func(t *testing.T) {
@@ -309,8 +334,8 @@ func TestBuildSectionSpinsWhileRunning(t *testing.T) {
 		b.answer(BuildActivity{Found: true, ID: "s-1", Total: 2, Lines: lines(2, 0)})
 		m := buildScreen(t, "build", b)
 		rows := sectionRows(m)
-		assert.Check(t, cmp.Equal(rows[len(rows)-1], "Build session ended"))
-		assert.Check(t, cmp.Equal(rows[len(rows)-2], "line 1"))
+		assert.Check(t, cmp.Equal(rows[1], "Build session ended"))
+		assert.Check(t, cmp.Equal(rows[2], "line 1"))
 		assert.Check(t, !m.spinning())
 	})
 	t.Run("failed", func(t *testing.T) {
@@ -319,7 +344,7 @@ func TestBuildSectionSpinsWhileRunning(t *testing.T) {
 		b.answer(BuildActivity{Found: true, ID: "s-1", Failed: "boom", Total: 2, Lines: lines(2, 0)})
 		m := buildScreen(t, "build", b)
 		rows := sectionRows(m)
-		assert.Check(t, cmp.Equal(rows[len(rows)-1], "Build session failed: boom"))
+		assert.Check(t, cmp.Equal(rows[1], "Build session failed: boom"))
 		assert.Check(t, cmp.Contains(m.Content(), ui.ErrorStyle.Render("Build session failed: boom")))
 		assert.Check(t, !m.spinning())
 	})
@@ -381,15 +406,17 @@ func TestBuildSectionNotesDroppedLines(t *testing.T) {
 			}
 
 			rows := sectionRows(m)
-			// The divider, the note if any, the lines, then the closing row.
-			assert.Assert(t, cmp.Contains(rows[0], "── Building"))
-			body := rows[1 : len(rows)-1]
+			// The divider, the closing row, the lines newest first, then the
+			// note on the lines dropped, if any.
+			assert.Assert(t, cmp.Contains(rows[0], "── build session"))
+			assert.Check(t, cmp.Equal(rows[1], "Build session ended"))
+			body := rows[2:]
 			if tc.note != "" {
-				assert.Check(t, cmp.Equal(body[0], tc.note))
-				body = body[1:]
+				assert.Check(t, cmp.Equal(body[len(body)-1], tc.note))
+				body = body[:len(body)-1]
 			}
-			assert.Check(t, cmp.Equal(body[0], tc.first))
-			assert.Check(t, cmp.Equal(body[len(body)-1], tc.last))
+			assert.Check(t, cmp.Equal(body[0], tc.last))
+			assert.Check(t, cmp.Equal(body[len(body)-1], tc.first))
 			assert.Assert(t, cmp.Len(m.builds, 1))
 			assert.Check(t, cmp.Len(m.builds[0].rows, 100))
 		})
@@ -405,10 +432,10 @@ func TestBuildSectionWithNoBuild(t *testing.T) {
 	missing := "No build of this plan in this machine"
 	rows := sectionRows(m)
 	assert.Assert(t, cmp.Len(rows, 2))
-	assert.Check(t, cmp.Contains(rows[0], "── Building"))
+	assert.Check(t, cmp.Contains(rows[0], "── build session"))
 	assert.Check(t, strings.HasPrefix(rows[1], missing), rows[1])
 	assert.Check(t, cmp.Contains(paneView(m), missing))
-	assert.Check(t, cmp.Contains(ansi.Strip(m.buildSection(200)), "No build of this plan in this machine's chunk daemon\n"))
+	assert.Check(t, cmp.Contains(ansi.Strip(m.buildSection(m.builds, true, 200)), "No build of this plan in this machine's chunk daemon\n"))
 
 	m = buildTick(t, m)
 	rows = sectionRows(m)
@@ -434,10 +461,11 @@ func TestBuildSectionNewSession(t *testing.T) {
 
 		rows := sectionRows(m)
 		spin := ansi.Strip(m.spin.View())
-		assert.Check(t, cmp.DeepEqual(rows[1:3], []string{"a", "Build session ended"}))
-		assert.Check(t, cmp.Contains(rows[3], "── Building"))
-		assert.Check(t, cmp.DeepEqual(rows[4:], []string{spin + "b"}))
-		assert.Check(t, cmp.Contains(rows[0], "── Building"))
+		// The new session is on top, the old one under it.
+		assert.Check(t, cmp.Contains(rows[0], "── build session"))
+		assert.Check(t, cmp.Equal(rows[1], spin+"b"))
+		assert.Check(t, cmp.Contains(rows[2], "── build session"))
+		assert.Check(t, cmp.DeepEqual(rows[3:], []string{"Build session ended", "a"}))
 
 		buildTick(t, m)
 		asked = b.Asked()
@@ -456,18 +484,19 @@ func TestBuildSectionNewSession(t *testing.T) {
 		// The third read comes at once, without a tick.
 		askedFor(t, b, 0, 5, 0)
 
+		// The new session is on top, newest line first, and the old one under it.
 		rows := sectionRows(m)
-		second := -1
+		older := -1
 		for i, r := range rows {
-			if i > 0 && strings.Contains(r, "── Building") {
-				second = i
+			if i > 0 && strings.Contains(r, "── build session") {
+				older = i
 			}
 		}
-		assert.Assert(t, second > 0, rows)
-		under := rows[second+1:]
-		assert.Assert(t, cmp.Len(under, 8))
-		assert.Check(t, cmp.Equal(under[0], "line 0"))
-		assert.Check(t, cmp.Equal(under[7], ansi.Strip(m.spin.View())+"line 7"))
+		assert.Assert(t, older > 0, rows)
+		newer := rows[1:older]
+		assert.Assert(t, cmp.Len(newer, 8))
+		assert.Check(t, cmp.Equal(newer[0], ansi.Strip(m.spin.View())+"line 7"))
+		assert.Check(t, cmp.Equal(newer[7], "line 0"))
 		assert.Check(t, !strings.Contains(strings.Join(rows, "\n"), "earlier lines not kept"))
 	})
 }
@@ -491,7 +520,9 @@ func TestBuildSectionShowsAReadErrorOnce(t *testing.T) {
 	assert.Check(t, cmp.Contains(paneView(m), "line 0"))
 }
 
-func TestBuildSectionFollowsTheBottom(t *testing.T) {
+// The Overview keeps where the developer has scrolled to: what the build
+// writes does not take it to the bottom.
+func TestBuildSectionKeepsTheScroll(t *testing.T) {
 	t.Parallel()
 	b := &fakeBuild{}
 	b.answer(
@@ -500,16 +531,18 @@ func TestBuildSectionFollowsTheBottom(t *testing.T) {
 		BuildActivity{Found: true, ID: "s-1", Running: true, First: 40, Total: 45, Lines: lines(5, 40)},
 	)
 	m := buildScreenOn(t, buildStore("build"), b, 16)
-	assert.Check(t, m.chatView.AtBottom())
+	assert.Assert(t, cmp.Equal(m.focus, paneOverview))
+	// Open the whole log, which is taller than the pane.
+	m = drive(t, m, press("enter"))
+	assert.Assert(t, !m.overviewView.AtBottom(), "the log should be taller than the pane")
+	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	at := m.overviewView.YOffset()
+	assert.Assert(t, at > 0)
 	m = buildTick(t, m)
-	assert.Check(t, m.chatView.AtBottom())
-
-	m = drive(t, m, press("tab"))
-	assert.Assert(t, cmp.Equal(m.focus, paneChat))
-	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
 	m = buildTick(t, m)
-	assert.Check(t, cmp.Contains(m.buildSection(m.chatView.Width()-2*chatGutter), "line 44"))
-	assert.Check(t, !m.chatView.AtBottom())
+	assert.Check(t, cmp.Contains(ansi.Strip(m.buildSection(m.builds, true, 40)), "line 44"))
+	assert.Check(t, cmp.Equal(m.overviewView.YOffset(), at), "a read moved the scroll")
+	assert.Check(t, !m.overviewView.AtBottom())
 }
 
 // The screen's timers run on the real clock unless a test stops them.
@@ -562,4 +595,23 @@ func TestTimersRunOnTheRealClock(t *testing.T) {
 			})
 		})
 	}
+}
+
+// What the reads of the build said of it is the newest thing in the log, so it
+// is above the sessions.
+func TestBuildNotesAreAboveTheSessions(t *testing.T) {
+	t.Parallel()
+	b := &fakeBuild{answers: []fakeBuildAnswer{
+		{activity: BuildActivity{Found: true, ID: "s-1", Running: true, Total: 1, Lines: lines(1, 0)}},
+		{err: errors.New("daemon down")},
+	}}
+	m := buildScreen(t, "build", b)
+	m = buildTick(t, m)
+	rows := sectionRows(m)
+	assert.Assert(t, len(rows) >= 3, rows)
+	assert.Check(t, cmp.Contains(rows[0], "Could not read the build: daemon down"))
+	assert.Check(t, cmp.Contains(rows[1], "── build session"))
+	assert.Check(t, cmp.Equal(rows[2], ansi.Strip(m.spin.View())+"line 0"))
+	view := paneView(m)
+	assert.Check(t, strings.Index(view, "daemon down") < strings.Index(view, "── build session"), view)
 }

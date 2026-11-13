@@ -62,7 +62,14 @@ func Approval(next []Move) string {
 	return ""
 }
 
-const planning = "Planning"
+// The stages' names, as Step and Stage give them.
+const (
+	created     = "Created"
+	planning    = "Planning"
+	building    = "Building"
+	integrating = "Integrating"
+	done        = "Done"
+)
 
 // Step is the label the screens show for state.
 func Step(state string) string {
@@ -74,11 +81,52 @@ func Step(state string) string {
 	case RecordSubPlans, StandBy:
 		return "Standing by"
 	case Build:
-		return "Building"
+		return building
 	case Integrate:
-		return "Integrating"
+		return integrating
 	case Ended:
-		return "Done"
+		return done
 	}
 	return state
+}
+
+// Stages are the stages a flow goes through, in order, as the web UI's
+// flow page names them.
+var Stages = []string{created, planning, building, integrating, done}
+
+// Stage is the stage of Stages that state is in, or "" for a state it
+// does not know. Unlike Step, a plan not started is Created and one
+// standing by is Planning.
+func Stage(state string) string {
+	switch state {
+	case Init, Ready:
+		return created
+	case RefineProposal, RefineUnits, RecordSubPlans, StandBy:
+		return planning
+	case Build:
+		return building
+	case Integrate:
+		return integrating
+	case Ended:
+		return done
+	}
+	return ""
+}
+
+// FinishedStage is what stage is called once the flow has moved past it.
+// Any other string is returned as it is.
+func FinishedStage(stage string) string {
+	switch stage {
+	case created:
+		return created
+	case planning:
+		return "Planned"
+	case building:
+		return "Built"
+	case integrating:
+		return "Integrated"
+	case done:
+		return done
+	}
+	return stage
 }

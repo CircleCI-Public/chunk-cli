@@ -66,7 +66,7 @@ const (
 )
 
 // WithBuild returns a copy of m that reads its plan's build from b, and shows
-// it in the Activity pane while the plan is being built.
+// it in the Overview's Building stage while the plan is being built.
 func (m Model) WithBuild(b Build) Model {
 	m.build = b
 	return m
@@ -151,6 +151,13 @@ const maxBuildRows = 100
 // buildRun is one build session as the screen has read it.
 type buildRun struct {
 	id string
+	// stage is the stage stageNow gave when the session was first read:
+	// Building once the screen has approved or started a build of the plan,
+	// even while factory has yet to move it.
+	stage string
+	// seq is the session's place among the log's entries, as the messages'
+	// are numbered.
+	seq int
 	// first is the number of rows[0] among every line the session wrote.
 	first int
 	rows  []BuildLine
@@ -237,25 +244,27 @@ func (m Model) buildRunning() bool {
 func (m Model) applyBuildRead(msg buildReadMsg) (Model, bool) {
 	if msg.err != nil {
 		m.buildErr = msg.err.Error()
-		m.renderChat()
+		m.renderLeft()
 		return m, false
 	}
 	m.buildErr = ""
 	a := msg.activity
 	m.buildMissing = !a.Found
 	if !a.Found {
-		m.renderChat()
+		m.renderLeft()
 		return m, false
 	}
 	newRun := len(m.builds) == 0 || m.builds[len(m.builds)-1].id != a.ID
 	if newRun && msg.after > 0 {
 		// This answer may have skipped the new session's first lines.
-		m.builds = append(m.builds, buildRun{id: a.ID})
-		m.renderChat()
+		m.seq++
+		m.builds = append(m.builds, buildRun{id: a.ID, stage: m.stageNow(), seq: m.seq})
+		m.renderLeft()
 		return m, true
 	}
 	if newRun {
-		m.builds = append(m.builds, buildRun{id: a.ID, first: a.First})
+		m.seq++
+		m.builds = append(m.builds, buildRun{id: a.ID, stage: m.stageNow(), seq: m.seq, first: a.First})
 	}
 	run := &m.builds[len(m.builds)-1]
 	if a.First > run.first+len(run.rows) {
@@ -268,35 +277,32 @@ func (m Model) applyBuildRead(msg buildReadMsg) (Model, bool) {
 		run.first += over
 	}
 	run.total, run.running, run.cancelled, run.failed = a.Total, a.Running, a.Cancelled, a.Failed
-	m.renderChat()
+	m.renderLeft()
 	return m, false
 }
 
-// showsBuild is whether the Activity pane has a Building section.
-func (m Model) showsBuild() bool {
-	return len(m.builds) > 0 || m.buildMissing || m.buildErr != ""
-}
-
-// buildSection is the build's feed, under a divider per session.
-func (m Model) buildSection(w int) string {
+// buildSection draws runs, build sessions, newest first, w cells wide. With
+// notes, what the reads of the build said of it is above the sessions.
+func (m Model) buildSection(runs []buildRun, notes bool, w int) string {
 	var b strings.Builder
 	divider := func() {
-		b.WriteString("\n\n" + m.style(m.faint()).Render(ansi.Truncate("── Building "+strings.Repeat("─", w), w, "")) + "\n")
+		b.WriteString(m.style(m.faint()).Render(ansi.Truncate("── build session "+strings.Repeat("─", w), w, "")) + "\n")
 	}
-	for i, run := range m.builds {
-		divider()
-		if run.first > 0 {
-			b.WriteString(m.style(m.faint()).Render(fmt.Sprintf("… %d earlier lines not kept", run.first)) + "\n")
-		}
-		last := i == len(m.builds)-1
-		for j, l := range run.rows {
-			text := ansi.Truncate(strings.Join(strings.Fields(l.Text), " "), w-2, "…")
-			if last && run.running && j == len(run.rows)-1 {
-				b.WriteString(m.style(m.purple()).Render(m.spin.View()+text) + "\n")
-				continue
+	if notes {
+		if n := m.buildNotes(w); len(n) > 0 {
+			if len(runs) == 0 {
+				divider()
 			}
-			b.WriteString(m.buildRowStyle(l.Level).Render(text) + "\n")
+			b.WriteString(strings.Join(n, "\n") + "\n")
 		}
+	}
+	latest := m.latestBuildID()
+	for i := range runs {
+		run := runs[len(runs)-1-i]
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		divider()
 		switch {
 		case run.failed != "":
 			b.WriteString(ui.ErrorStyle.Render(ansi.Truncate("Build session failed: "+run.failed, w, "…")) + "\n")
@@ -305,17 +311,33 @@ func (m Model) buildSection(w int) string {
 		case !run.running:
 			b.WriteString(m.style(m.dim()).Render("Build session ended") + "\n")
 		}
-	}
-	if len(m.builds) == 0 {
-		divider()
-	}
-	if m.buildMissing {
-		b.WriteString(m.style(m.dim()).Render(ansi.Truncate("No build of this plan in this machine's chunk daemon", w, "…")) + "\n")
-	}
-	if m.buildErr != "" {
-		b.WriteString(m.style(m.dim()).Render(ansi.Truncate("Could not read the build: "+m.buildErr, w, "…")) + "\n")
+		last := run.id == latest
+		for j := len(run.rows) - 1; j >= 0; j-- {
+			text := ansi.Truncate(strings.Join(strings.Fields(run.rows[j].Text), " "), w-2, "…")
+			if last && run.running && j == len(run.rows)-1 {
+				b.WriteString(m.style(m.purple()).Render(m.spin.View()+text) + "\n")
+				continue
+			}
+			b.WriteString(m.buildRowStyle(run.rows[j].Level).Render(text) + "\n")
+		}
+		if run.first > 0 {
+			b.WriteString(m.style(m.faint()).Render(fmt.Sprintf("… %d earlier lines not kept", run.first)) + "\n")
+		}
 	}
 	return b.String()
+}
+
+// buildNotes is what the reads of the build said of it, as lines w cells wide:
+// that there is none, or that it could not be read.
+func (m Model) buildNotes(w int) []string {
+	var out []string
+	if m.buildErr != "" {
+		out = append(out, m.style(m.dim()).Render(ansi.Truncate("Could not read the build: "+m.buildErr, w, "…")))
+	}
+	if m.buildMissing {
+		out = append(out, m.style(m.dim()).Render(ansi.Truncate("No build of this plan in this machine's chunk daemon", w, "…")))
+	}
+	return out
 }
 
 func (m Model) buildRowStyle(l BuildLevel) lipgloss.Style {

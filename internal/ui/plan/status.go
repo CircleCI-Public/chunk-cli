@@ -13,16 +13,15 @@ import (
 // done is the last step, and the state of a flow that ended merged.
 const done = "Done"
 
-// steps are the phases a flow goes through, in order, as the strip draws
-// them: the labels planstate.Step gives factory's states.
-var steps = []string{"Planning", "Building", "Integrating", done}
-
-// status is the strip's text for flow and its family: the step it is at,
+// status is the strip's text for flow and its family: the stage it is at,
 // what is happening now, and what comes next, by who factory waits on.
 // inReview is whether factory is working on the plan. Text from factory is
 // stripped of escapes and kept to one line.
 func status(f Flow, fam Family, inReview bool) (step, now, next string) {
-	step = planstate.Step(clean(f.State))
+	step = planstate.Stage(clean(f.State))
+	if step == "" {
+		step = clean(f.State)
+	}
 	if f.Ended {
 		step = done
 		if o := clean(f.Outcome); o != "" {
