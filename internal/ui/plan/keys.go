@@ -7,7 +7,7 @@ import (
 )
 
 // keyMap is every key the planning screen answers to. The handlers match
-// against it and the footer is drawn from it, as in chunk watch, so a hint
+// against it and the footer is drawn from it, as in chunk ui, so a hint
 // cannot name a key that does nothing: a binding the current state has no use
 // for is disabled, which both stops it matching and drops it from the footer.
 type keyMap struct {

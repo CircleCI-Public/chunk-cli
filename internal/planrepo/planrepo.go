@@ -38,14 +38,14 @@ func Matches(ctx context.Context, root string, repos []string) (ok bool, own str
 // NoCheckoutError is Root finding no known checkout of a plan's repos.
 type NoCheckoutError struct{ Repos []string }
 
-// Error names the plan's repos and says to run chunk watch once in a
+// Error names the plan's repos and says to run chunk ui once in a
 // checkout of one.
 func (e *NoCheckoutError) Error() string {
 	if len(e.Repos) == 1 {
 		r := e.Repos[0]
-		return fmt.Sprintf("plan builds in %s, and chunk knows no checkout of it; run chunk watch once in a checkout of %s", r, r)
+		return fmt.Sprintf("plan builds in %s, and chunk knows no checkout of it; run chunk ui once in a checkout of %s", r, r)
 	}
-	return fmt.Sprintf("plan builds in one of %s, and chunk knows no checkout of them; run chunk watch once in a checkout of one",
+	return fmt.Sprintf("plan builds in one of %s, and chunk knows no checkout of them; run chunk ui once in a checkout of one",
 		strings.Join(e.Repos, ", "))
 }
 

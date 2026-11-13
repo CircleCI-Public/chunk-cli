@@ -1724,7 +1724,7 @@ func TestUserBubbleIsQuiet(t *testing.T) {
 }
 
 // The panes and the action bar sit on the terminal's own background, as
-// chunk watch's do: only what is set apart (the block the cursor is on,
+// chunk ui's do: only what is set apart (the block the cursor is on,
 // comments, code) has a ground of its own.
 func TestPanesSitOnTheTerminalsBackground(t *testing.T) {
 	t.Parallel()
@@ -6492,7 +6492,7 @@ func TestNoResumerOffersNoBuildResume(t *testing.T) {
 	agent := newFakeAgent()
 	m, _ := resumeModel(t, agent, "build", sessionStep)
 	m = refreshed(t, m.WithInbox("Alpha", "/src/app").WithBuild(&fakeBuild{}))
-	assert.Check(t, cmp.Equal(flowLines(m)[0], "Resume this build from chunk watch"))
+	assert.Check(t, cmp.Equal(flowLines(m)[0], "Resume this build from chunk ui"))
 	assert.Check(t, !offersResume(m))
 	m = pressAll(t, m, "R")
 	assert.Check(t, !m.resumingBuild)

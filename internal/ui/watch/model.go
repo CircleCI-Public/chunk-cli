@@ -1,4 +1,4 @@
-// Package watch implements the chunk watch TUI dashboard: the flow list, and
+// Package watch implements the chunk ui TUI dashboard: the flow list, and
 // the plan screens opened from it.
 package watch
 
@@ -193,7 +193,7 @@ func (m Model) View() tea.View {
 		v.AltScreen = true
 		// The conversation scrolls with the wheel.
 		v.MouseMode = tea.MouseModeCellMotion
-		v.WindowTitle = "chunk watch — chat"
+		v.WindowTitle = "chunk — chat"
 		return v
 	}
 	v := m.screenView()
@@ -210,7 +210,7 @@ func (m Model) screenView() tea.View {
 		v := tea.NewView(m.planScreen.Content())
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
-		v.WindowTitle = "chunk watch"
+		v.WindowTitle = "chunk"
 		return v
 	}
 	content := ""
@@ -222,7 +222,7 @@ func (m Model) screenView() tea.View {
 	}
 	v := tea.NewView(content)
 	v.AltScreen = true
-	v.WindowTitle = "chunk watch — flows"
+	v.WindowTitle = "chunk — flows"
 	return v
 }
 
@@ -235,7 +235,7 @@ func (m Model) renderHeader(st watchStyles) string {
 	if m.flows != nil {
 		n = m.flows.Len()
 	}
-	title := st.brand("◆ ") + st.emphasis("chunk watch") + "  " + st.muted(fmt.Sprintf("%d flow%s", n, plural(n)))
+	title := st.brand("◆ ") + st.emphasis("chunk") + "  " + st.muted(fmt.Sprintf("%d flow%s", n, plural(n)))
 	right := m.updateTag(st) + m.statusTag(st)
 	w := m.mainWidth()
 	gap := max(w-lipgloss.Width(title)-lipgloss.Width(right), 1)

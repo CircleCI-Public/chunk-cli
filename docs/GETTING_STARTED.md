@@ -313,17 +313,17 @@ git commit -m "Regenerate lock file on Linux"
 
 ---
 
-## Planning and following flows with chunk watch
+## Planning and following flows with chunk ui
 
-`chunk watch` is the recommended way to interact with chunk. Keep it open in
+`chunk ui` is the recommended way to interact with chunk. Keep it open in
 another terminal while you work. Planning needs the factory daemon running
 with `FACTORY_PLAN_STORE=circleci`. Run it in the project you want to plan in:
 
 ```bash
-chunk watch
+chunk ui
 ```
 
-`chunk watch` opens on **Flows**, your open flows in factory grouped by who
+`chunk ui` opens on **Flows**, your open flows in factory grouped by who
 factory waits on: Needs your review (you), With agent (a session or
 factory), Not started (a new plan not waiting on you), Other (blockers,
 sub-plans, or nobody); each heading shows how many flows it holds. Within
@@ -333,7 +333,7 @@ the same heading), and each flow's second line saying what factory is doing on i
 `Building unit 2 of 5 · 1/5 units`) or that it waits on its blockers or
 sub-plans, with a read-only preview of the selected one's plan that starts
 with who the flow waits on and why. Flows are yours wherever
-`chunk watch` is run. `Enter` opens a flow's plan, `n` starts a new one,
+`chunk ui` is run. `Enter` opens a flow's plan, `n` starts a new one,
 `R` resumes the selected flow when it waits on an agent and no session holds
 it (a build gets a fresh build session in the chunk daemon; a planner picks
 up its conversation). When `R` isn't offered, the header's right-hand end
@@ -343,7 +343,7 @@ plan, its comments and its flow after a y/n question (any key but `y` cancels);
 it isn't offered on a plan a session holds. `q` or `esc` quits. Opening or
 reading a plan never claims it; the request you type for a new plan does, and
 the screen resumes a planner factory is waiting on, in a checkout of the
-plan's repo (the project `chunk watch` was opened in when it is one). `ctrl+p` goes back to the list to
+plan's repo (the project `chunk ui` was opened in when it is one). `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its activity while another is shown,
 and its session keeps planning in the chunk daemon even once chunk is closed.
 The Overview is on the left and the plan is on the right, under a one-row strip that says
@@ -513,7 +513,7 @@ review PR #123
 
 The agent runs one reviewer per prompt over the diff and returns the combined findings (High and Medium issues, capped at 10).
 
-`chunk factory plan "<prompt>"` has factory make the change instead: you plan it with Claude, approve the plan, and it is built, checking the work with the same prompts and your validation commands, through to a pull request. `n` on Flows in `chunk watch` does the same ([above](#planning-and-following-flows-with-chunk-watch)).
+`chunk factory plan "<prompt>"` has factory make the change instead: you plan it with Claude, approve the plan, and it is built, checking the work with the same prompts and your validation commands, through to a pull request. `n` on Flows in `chunk ui` does the same ([above](#planning-and-following-flows-with-chunk-ui)).
 
 ---
 
@@ -525,7 +525,7 @@ Make changes
 Validate on a sidecar
     └─ chunk sidecar sync + chunk validate --remote   (or locally: chunk validate)
     └─ or hand it to the agent: "validate on the sidecar"
-    └─ chunk watch   (recommended: keep it open to plan and follow your factory flows)
+    └─ chunk ui   (recommended: keep it open to plan and follow your factory flows)
 
 Before committing
     └─ The git pre-commit hook runs chunk validate

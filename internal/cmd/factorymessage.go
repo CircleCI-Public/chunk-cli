@@ -11,10 +11,10 @@ import (
 
 // watchStartHint is the line printed once a plan is building that says where
 // to follow it.
-const watchStartHint = "Follow it and your other plans in chunk watch."
+const watchStartHint = "Follow it and your other plans in chunk ui."
 
 // showHints reports whether output meant only for a person reading a terminal,
-// such as the pointers to chunk watch, should be printed. It is not with
+// such as the pointers to chunk ui, should be printed. It is not with
 // --json, whose stdout a program consumes, in CI, or when stdout or stderr is
 // not a terminal (a log file, a pipe): for those the output is the same with
 // or without hints.

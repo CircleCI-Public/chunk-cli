@@ -14,7 +14,7 @@ import (
 )
 
 // tracking is a context whose events are recorded, as one sitting of
-// `chunk watch` would have.
+// `chunk ui` would have.
 func tracking(t *testing.T) (context.Context, *fakes.Events) {
 	t.Helper()
 	ctx, ev := fakes.Tracking(t.Context(), t)

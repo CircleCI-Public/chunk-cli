@@ -35,7 +35,7 @@ Ground truth:
 Do:
 - Make the README Commands block match the command tree exactly: add missing
   commands, remove ones that no longer exist.
-- Make sure every top-level capability (sidecars, validate, factory, watch,
+- Make sure every top-level capability (sidecars, validate, factory, ui,
   mutate, ...) is described, and the docs table lists every file in docs/.
 - Check the environment variable table against `dist/chunk --help`.
 - Verify any flag or example you keep or add against --help output.

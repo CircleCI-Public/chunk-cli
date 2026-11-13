@@ -645,7 +645,7 @@ func TestFlowListSharesTheDashboardHeader(t *testing.T) {
 	m = deliverThen(t, m, m.flows.Init(), 1)
 
 	lines := strings.Split(screen(m), "\n")
-	assert.Check(t, cmp.Contains(lines[0], "chunk watch  1 flow"))
+	assert.Check(t, cmp.Contains(lines[0], "chunk  1 flow"))
 	assert.Check(t, !strings.Contains(lines[0], "Runs"), lines[0])
 	assert.Assert(t, strings.HasPrefix(lines[1], "╭─ flows"), lines[1])
 	assert.Equal(t, len(lines), 20)

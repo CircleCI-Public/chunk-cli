@@ -11,6 +11,7 @@ func newFactoryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "factory",
 		Short: "Plan changes and build them in factory",
+		Long:  "Plan changes and build them in factory.\n\nFollow every plan live with 'chunk ui'.",
 		RunE:  groupRunE,
 	}
 	cmd.AddCommand(newFactoryPlanCmd())

@@ -14,7 +14,7 @@ import (
 
 // newSidecarLogsCmd prints a remote command's output.
 //
-// This is the non-TUI door onto the output `chunk watch` opens a pane over, which
+// This is the non-TUI door onto the output `chunk ui` opens a pane over, which
 // matters because the most common reader here has no terminal at all: an agent
 // that just ran validate and wants to know why it failed can pipe this, where it
 // cannot drive a dashboard.

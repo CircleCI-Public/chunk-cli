@@ -26,7 +26,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
-// watchProject is the git top level chunk watch was opened under, canonical
+// watchProject is the git top level chunk ui was opened under, canonical
 // and registered for the daemon to find, and nothing outside a repository.
 func TestWatchProject(t *testing.T) {
 	repo := gitRepo(t, "")
@@ -94,7 +94,7 @@ func TestWatchProject(t *testing.T) {
 }
 
 func TestWatchFlagsAreDeprecatedButAccepted(t *testing.T) {
-	cmd := newWatchCmd()
+	cmd := newUICmd()
 
 	focus := cmd.Flags().Lookup("focus")
 	assert.Assert(t, focus != nil, "--focus should still parse for existing invocations")
@@ -107,7 +107,7 @@ func TestWatchFlagsAreDeprecatedButAccepted(t *testing.T) {
 }
 
 func TestWatchTakesNoArgs(t *testing.T) {
-	cmd := newWatchCmd()
+	cmd := newUICmd()
 	err := cmd.Args(cmd, nil)
 	assert.NilError(t, err)
 
@@ -418,7 +418,7 @@ func TestDaemonResume(t *testing.T) {
 			name:    "outside a repository",
 			root:    "",
 			kind:    planstate.ResumeBuild,
-			wantErr: "open chunk watch in this plan's local repository to plan or build",
+			wantErr: "open chunk ui in this plan's local repository to plan or build",
 		},
 		{
 			name:    "nothing to resume",

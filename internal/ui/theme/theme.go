@@ -1,5 +1,5 @@
 // Package theme is the shared palette and pane drawing for chunk's full-screen
-// TUIs (chunk watch and the planning screen), computed for the terminal's
+// TUIs (chunk ui and the planning screen), computed for the terminal's
 // current background.
 package theme
 
@@ -18,7 +18,7 @@ var (
 	Green  = lipgloss.Color("#00DB73")
 )
 
-// ListWidth is the text width of the list pane on the left of chunk watch's
+// ListWidth is the text width of the list pane on the left of chunk ui's
 // tabs, so the panes keep their place when switching between them.
 const ListWidth = 32
 

@@ -38,7 +38,7 @@ its activity is shown beside the plan. The plan is kept in factory; comment
 on it until it is right, then press ctrl+s to approve it in
 factory, and the chunk daemon builds it, in a build session of Claude Code
 in the plan's own worktree, through to a pull request. Follow the build in
-chunk watch.
+chunk ui.
 
 Needs factory, its f plugin for Claude Code, and the factory daemon running
 with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,

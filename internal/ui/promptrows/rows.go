@@ -33,7 +33,7 @@ var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"
 
 // Row is one prompt of a review pass as the row renderers show it. Each view
 // fills it in from its own source, which is what lets `chunk review` and
-// `chunk watch` draw a review identically.
+// `chunk ui` draw a review identically.
 type Row struct {
 	Name      string
 	SidecarID string

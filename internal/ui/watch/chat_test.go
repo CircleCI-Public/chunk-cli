@@ -147,10 +147,10 @@ func TestCtrlOShowsAndHidesTheChatOnEachScreen(t *testing.T) {
 		m = openChat(t, m)
 		assert.Check(t, cmp.Contains(screen(m), "▶ Retry uploads"))
 		assert.Check(t, cmp.Contains(screen(m), "chat · "))
-		assert.Check(t, cmp.Equal(m.View().WindowTitle, "chunk watch — flows"))
+		assert.Check(t, cmp.Equal(m.View().WindowTitle, "chunk — flows"))
 		m, _ = pressKey(m, esc)
 		assert.Check(t, m.chatShown, "esc hid the chat beside the screen")
-		assert.Check(t, cmp.Equal(m.View().WindowTitle, "chunk watch — flows"))
+		assert.Check(t, cmp.Equal(m.View().WindowTitle, "chunk — flows"))
 
 		m, _ = pressKey(m, ctrlO)
 		assert.Check(t, m.chatShown && m.chatFocused)
@@ -229,7 +229,7 @@ func TestANarrowTerminalCoversTheScreenWithTheChat(t *testing.T) {
 		m = openChat(t, m)
 		assert.Check(t, cmp.Contains(screen(m), "chat · Flows"))
 		assert.Check(t, !strings.Contains(screen(m), "Retry uploads"), screen(m))
-		assert.Check(t, cmp.Equal(m.View().WindowTitle, "chunk watch — chat"))
+		assert.Check(t, cmp.Equal(m.View().WindowTitle, "chunk — chat"))
 		m, _ = pressKey(m, esc)
 		assert.Check(t, !m.chatShown && !m.chatFocused)
 	})
@@ -491,7 +491,7 @@ func TestQuittingLeavesTheChatRunning(t *testing.T) {
 }
 
 func TestChatUnavailable(t *testing.T) {
-	const reason = "Open chunk watch in a repository to use chat."
+	const reason = "Open chunk ui in a repository to use chat."
 	m := New().WithConnection(chunkd.Connection{}).
 		WithPlans(t.Context(), "", (&fakePlans{}).planner).WithFlowList(flowList(t)).
 		WithChat(func() chat.Model { return chat.Unavailable(reason) })
@@ -501,7 +501,7 @@ func TestChatUnavailable(t *testing.T) {
 	assert.Assert(t, m.chatShown && m.chatFocused)
 	// Wrapped to the sidebar.
 	assert.Check(t, cmp.Contains(strings.Join(strings.Fields(ansi.Strip(m.chatView.Content())), " "), reason))
-	assert.Check(t, cmp.Contains(screen(m), "chunk watch in a"))
+	assert.Check(t, cmp.Contains(screen(m), "chunk ui in a"))
 	m = typeInto(m, "hi")
 	m, _ = pressKey(m, enter)
 	assert.Check(t, !strings.Contains(screen(m), "hi"), screen(m))
