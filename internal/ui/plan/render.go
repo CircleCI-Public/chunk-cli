@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 )
 
 // The plan factory writes has a fixed shape (factory's plan format): numbered
@@ -147,28 +146,6 @@ func (m Model) drawBlock(r *glamour.TermRenderer, b block, step int, st *planSta
 		return strings.Split(b.source, "\n")
 	}
 	return renderLines(r, b.source)
-}
-
-// Lines is s drawn read-only at width, in the dark or light style, as the plan
-// screen draws a plan: each section heading, each block and each unit as a
-// step. It has no cursor, selection or comment marks, and no gutter.
-func Lines(s Structure, width int, dark bool) []string {
-	blocks, steps := blocksOf(s)
-	m := Model{dark: dark, structure: s}
-	width = max(width, 2)
-	r, err := chat.NewRenderer(dark, width-1)
-	if err != nil {
-		r = nil
-	}
-	var out []string
-	var st planStats
-	for i, b := range blocks {
-		if i > 0 && !joinsPrevious(blocks[i-1], b) {
-			out = append(out, "")
-		}
-		out = append(out, m.drawBlock(r, b, steps[i], &st, width)...)
-	}
-	return out
 }
 
 // skeleton is the plan pane while Claude writes the first plan: the shape of

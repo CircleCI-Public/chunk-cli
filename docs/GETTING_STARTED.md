@@ -331,9 +331,9 @@ the first two they are grouped by step (Planning, Building, ...), a
 sub-plan marked `↳` with its parent (and indented under it when both are under
 the same heading), and each flow's second line saying what factory is doing on it now (for example
 `Building unit 2 of 5 · 1/5 units`) or that it waits on its blockers or
-sub-plans, with a read-only preview of the selected one's plan that starts
-with who the flow waits on and why. Flows are yours wherever
-`chunk ui` is run. `Enter` opens a flow's plan, `n` starts a new one,
+sub-plans, with the selected one's plan beside it, its Overview and Plan a
+`tab` apart. Flows are yours wherever
+`chunk ui` is run. `Enter` moves the keyboard into that plan, `n` starts a new one there,
 `R` resumes the selected flow when it waits on an agent and no session holds
 it (a build gets a fresh build session in the chunk daemon; a planner picks
 up its conversation). When `R` isn't offered, the header's right-hand end
@@ -343,10 +343,10 @@ plan, its comments and its flow after a y/n question (any key but `y` cancels);
 it isn't offered on a plan a session holds. `q` or `esc` quits. Opening or
 reading a plan never claims it; the request you type for a new plan does, and
 the screen resumes a planner factory is waiting on, in a checkout of the
-plan's repo (the project `chunk ui` was opened in when it is one). `ctrl+p` goes back to the list to
+plan's repo (the project `chunk ui` was opened in when it is one). `esc` or `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its activity while another is shown,
 and its session keeps planning in the chunk daemon even once chunk is closed.
-The Overview is on the left and the plan is on the right, under a one-row strip that says
+The Overview and the plan are two tabs, under a one-row strip that says
 where the flow is and what comes next. The Overview has the plan's outcome, a timeline of its
 stages (Created, Planning, Building, Integrating, Done) that holds what the planner and the
 builder did in each, the plan's progress and pull request, and related plans; `↑`/`↓` move

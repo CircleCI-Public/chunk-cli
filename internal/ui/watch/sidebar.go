@@ -22,6 +22,8 @@ const (
 	dragNone dragPane = iota
 	dragMain
 	dragChat
+	// dragDetail is the flow list's pane, beside the list in dragMain.
+	dragDetail
 )
 
 func (m Model) sideBySide() bool { return m.chatShown && m.width >= sideBySideFrom }
@@ -43,25 +45,20 @@ func (m Model) mainWidth() int {
 	return m.width - m.sidebarWidth() - 1
 }
 
-// resize lays the screens out for the terminal and the sidebar: the main
-// size to every plan workspace and to the flow list under the header, and
-// the chat its column, or the whole screen when it covers it. A chat that
-// covers the screen has the keyboard, so keys never go to a hidden screen.
+// resize sizes the flow list, the plan workspaces and the chat for the
+// terminal.
 func (m Model) resize() (Model, tea.Cmd) {
 	m.drag = dragNone
 	size := tea.WindowSizeMsg{Width: m.mainWidth(), Height: m.height}
 	var cmds []tea.Cmd
-	for key := range m.planWorkspaces {
-		var cmd tea.Cmd
-		m, cmd = m.updateWorkspace(key, size)
-		cmds = append(cmds, cmd)
-	}
+	var cmd tea.Cmd
 	if m.flows != nil {
 		// The flow list draws under the dashboard's header.
-		var cmd tea.Cmd
 		*m.flows, cmd = m.flows.Update(tea.WindowSizeMsg{Width: size.Width, Height: max(size.Height-1, 0)})
 		cmds = append(cmds, cmd)
 	}
+	m, cmd = m.syncSizes(true)
+	cmds = append(cmds, cmd)
 	if m.chatView != nil {
 		w := m.width
 		if m.sideBySide() {
@@ -70,8 +67,33 @@ func (m Model) resize() (Model, tea.Cmd) {
 		*m.chatView = m.chatView.SetSize(w, m.height)
 	}
 	if m.chatShown && !m.sideBySide() && !m.chatFocused {
-		var cmd tea.Cmd
 		m, cmd = m.focusChat()
+		cmds = append(cmds, cmd)
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// workspaceSize is the size a plan workspace is drawn at: the pane's, or the
+// main area's where no pane fits.
+func (m Model) workspaceSize() (width, height int) {
+	if w, h := m.paneSize(); w > 0 {
+		return w, h
+	}
+	return m.mainWidth(), m.height
+}
+
+// syncSizes gives every workspace its drawn size, when that has changed or
+// when force.
+func (m Model) syncSizes(force bool) (Model, tea.Cmd) {
+	w, h := m.workspaceSize()
+	if !force && [2]int{w, h} == m.sentSize {
+		return m, nil
+	}
+	m.sentSize = [2]int{w, h}
+	var cmds []tea.Cmd
+	for _, ws := range m.planWorkspaces {
+		var cmd tea.Cmd
+		m, cmd = m.updateWorkspace(ws, tea.WindowSizeMsg{Width: w, Height: h})
 		cmds = append(cmds, cmd)
 	}
 	return m, tea.Batch(cmds...)

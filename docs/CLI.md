@@ -523,21 +523,22 @@ chunk
   `sidecar_image` (empty when no image was recorded).
 - **`ui` is Flows and the plans opened from it.** The dashboard opens on
   Flows: your open flows in factory, grouped by who they wait on, then by
-  phase, with the selected flow's plan sections, units and open comments
-  previewed beside it. A sub-plan stays in its own group and is marked `↳` with its parent's
+  phase, with the selected flow's plan beside it: its Overview and Plan as
+  tabs, as the plan screen draws them. A sub-plan stays in its own group and is marked `↳` with its parent's
   title; one listed under the same heading as its parent (same group, same
   phase) is indented under it. Sub-plans that have ended are not shown. When
   chunk cannot read the plans' parents the list is shown flat, with `sub-plans
-  unavailable` under it. `Enter` opens the `chunk factory plan` screen on the
-  selected flow's plan, and `n` on a new one, to plan the change with Claude
-  before it is built. `q` or `esc` quits. Opening a plan only reads it: no session claims it
-  until you send a new plan's request, or the screen resumes a planner factory
-  is waiting on, and then in the project the dashboard was opened
+  unavailable` under it. `Enter` gives that pane the keyboard, and `n` opens a new
+  plan there, to plan the change with Claude before it is built; on a
+  terminal too narrow for the pane, the plan takes the whole screen instead.
+  `q` or `esc` on the list quits. Selecting or opening a plan only reads it:
+  no session claims it until you send a new plan's request, or a plan you have
+  given the keyboard resumes a planner factory is waiting on, and then in the
+  project the dashboard was opened
   in; a plan made here records that project's GitHub repository in factory,
   but chunk does not check a plan's repository against the project; a plan another
-  session holds is refused rather than taken over. `esc` or `ctrl+c` goes back
-  to the plans with the plan and its session kept; `ctrl+p` does too, to
-  switch to another plan. Each opened plan keeps its own activity and
+  session holds is refused rather than taken over. `esc` or `ctrl+p` gives the
+  keyboard back to the list with the plan and its session kept. Each opened plan keeps its own activity and
   session. An approved plan's screen stays open on its Overview, which
   follows the build from factory. Quitting with a request or comments unsent
   in any plan asks for a second `ctrl+c`; plans and saved comments stay in

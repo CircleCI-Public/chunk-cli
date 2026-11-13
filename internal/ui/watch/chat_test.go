@@ -155,7 +155,7 @@ func TestCtrlOShowsAndHidesTheChatOnEachScreen(t *testing.T) {
 		m, _ = pressKey(m, ctrlO)
 		assert.Check(t, m.chatShown && m.chatFocused)
 		m, _ = pressKey(m, ctrlO)
-		assert.Check(t, !m.chatShown && !m.chatFocused && m.flowsOpen)
+		assert.Check(t, !m.chatShown && !m.chatFocused && m.focus == focusList)
 		assert.Check(t, cmp.Equal(screen(m), before))
 	})
 	t.Run("a plan screen", func(t *testing.T) {
@@ -167,7 +167,7 @@ func TestCtrlOShowsAndHidesTheChatOnEachScreen(t *testing.T) {
 		m = openChat(t, m)
 		assert.Check(t, cmp.Contains(screen(m), "chat · "))
 		m, _ = pressKey(m, ctrlO)
-		assert.Check(t, !m.chatShown && m.planOpen)
+		assert.Check(t, !m.chatShown && m.focus == focusPane)
 		assert.Check(t, cmp.Equal(m.planKey, key))
 		assert.Check(t, cmp.Equal(screen(m), before))
 	})
@@ -219,7 +219,7 @@ func TestChatHeaderNamesThePlace(t *testing.T) {
 	m = openFlow(t, m, "p1", "Retry uploads")
 	assert.Check(t, cmp.Contains(screen(m), "chat · Retry uploads"))
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	assert.Check(t, m.flowsOpen)
+	assert.Check(t, m.focus == focusList)
 	assert.Check(t, cmp.Contains(screen(m), "chat · Flows"))
 }
 
@@ -291,8 +291,8 @@ func TestChatContextFromEachScreen(t *testing.T) {
 		m, _ = pressKey(m, esc)
 
 		// A status read while the chat shows is in its next message.
-		m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
-		flow := m.planScreen.FlowText()
+		m = deliver(t, m, pollOf(m))
+		flow := m.planScreen().FlowText()
 		assert.Assert(t, flow != "", "the poll read no flow")
 		m, _ = pressKey(m, ctrlO)
 		assert.Assert(t, m.chatFocused)
@@ -314,7 +314,7 @@ func TestChatContextFromEachScreen(t *testing.T) {
 	t.Run("a new plan's screen", func(t *testing.T) {
 		c := &fakeChat{}
 		m := openPlanScreen(t, chatModel(t, &fakePlans{}, c))
-		assert.Assert(t, m.planOpen && m.planScreen.ID() == "")
+		assert.Assert(t, m.focus == focusPane && m.planScreen().ID() == "")
 		m = openChat(t, m)
 		assert.Check(t, cmp.Contains(screen(m), "chat · New plan"))
 		say(t, m, "hi")
@@ -326,7 +326,7 @@ func TestCtrlOKeepsWhatIsBeingTyped(t *testing.T) {
 	p := &fakePlans{plan: "# Retry uploads\n\n## 1. Outcome\n\nRetry transient failures."}
 	m := chatModel(t, p, &fakeChat{})
 	m = openFlow(t, m, "p1", "Retry uploads")
-	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
+	m = deliver(t, m, pollOf(m))
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'c', Text: "c"})
 	m = typeInto(m, "half a comment")
 	before := screen(m)
@@ -335,9 +335,9 @@ func TestCtrlOKeepsWhatIsBeingTyped(t *testing.T) {
 	m = openChat(t, m)
 	m = typeInto(m, "a question")
 	m, _ = pressKey(m, ctrlO)
-	assert.Check(t, !m.chatShown && m.planOpen)
+	assert.Check(t, !m.chatShown && m.focus == focusPane)
 	assert.Check(t, cmp.Equal(screen(m), before))
-	assert.Check(t, cmp.Equal(m.planScreen.Unsent(), "1 unsent comment"))
+	assert.Check(t, cmp.Equal(m.planScreen().Unsent(), "1 unsent comment"))
 	assert.Check(t, cmp.Equal(p.requests, 0), "the plan's agent was sent something")
 }
 
@@ -349,7 +349,7 @@ func TestOpenChatTakesTheKeyboard(t *testing.T) {
 	} {
 		m, _ = pressKey(m, k)
 		assert.Check(t, m.chatShown && m.chatFocused, "%s took the keyboard from the chat", k.String())
-		assert.Check(t, m.flowsOpen && !m.planOpen && !m.planOpening && !m.HasPlan(), "%s left Flows", k.String())
+		assert.Check(t, m.focus == focusList && !m.HasPlan() && len(m.planWorkspaces) == 0, "%s left Flows", k.String())
 	}
 	assert.Check(t, cmp.Contains(screen(m), "qn"), "the letters were not typed into the chat:\n%s", screen(m))
 
@@ -426,10 +426,10 @@ func withUnsentComment(t *testing.T, c *fakeChat) Model {
 	p := &fakePlans{plan: "# Retry uploads\n\n## 1. Outcome\n\nRetry transient failures."}
 	m := chatModel(t, p, c)
 	m = openFlow(t, m, "p1", "Retry uploads")
-	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
+	m = deliver(t, m, pollOf(m))
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'c', Text: "c"})
 	m = typeInto(m, "half a comment")
-	assert.Assert(t, cmp.Equal(m.planScreen.Unsent(), "1 unsent comment"))
+	assert.Assert(t, cmp.Equal(m.planScreen().Unsent(), "1 unsent comment"))
 	return m
 }
 
@@ -438,13 +438,13 @@ func TestQuittingLeavesTheChatRunning(t *testing.T) {
 	t.Run("with unsent input", func(t *testing.T) {
 		m := openChat(t, withUnsentComment(t, &fakeChat{}))
 		m, _ = pressKey(m, ctrlC)
-		assert.Check(t, m.confirmPlanQuit && m.flowsOpen && m.chatShown && !m.chatFocused)
+		assert.Check(t, m.confirmPlanQuit && m.focus == focusList && m.chatShown && !m.chatFocused)
 		assert.Check(t, cmp.Contains(screen(m), "unsent input"))
 	})
 	t.Run("with unsent input, narrow", func(t *testing.T) {
 		m := openChat(t, resized(withUnsentComment(t, &fakeChat{}), 90))
 		m, _ = pressKey(m, ctrlC)
-		assert.Check(t, !m.chatShown && m.confirmPlanQuit && m.flowsOpen)
+		assert.Check(t, !m.chatShown && m.confirmPlanQuit && m.focus == focusList)
 		assert.Check(t, cmp.Contains(screen(m), "unsent input"))
 	})
 	t.Run("beside the screen", func(t *testing.T) {
@@ -626,7 +626,7 @@ func TestADragStaysWithThePaneItBeganIn(t *testing.T) {
 		m = next.(Model)
 		assert.Check(t, !m.chatShown)
 		assert.Check(t, cmp.Equal(m.drag, dragNone))
-		assert.Check(t, m.flowsOpen)
+		assert.Check(t, m.focus == focusList)
 	})
 	t.Run("resized mid-drag", func(t *testing.T) {
 		m := openChat(t, chatModel(t, &fakePlans{}, &fakeChat{}, twoFlows...))

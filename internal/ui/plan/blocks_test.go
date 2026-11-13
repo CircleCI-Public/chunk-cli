@@ -10,7 +10,6 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 )
 
@@ -162,30 +161,6 @@ func TestBlocksOfDrawsAnUnknownBlockTypeAsAParagraph(t *testing.T) {
 	assert.Assert(t, cmp.Len(blocks, 2))
 	assert.Check(t, cmp.Equal(blocks[1].kind, kindParagraph))
 	assert.Check(t, cmp.Equal(blocks[1].source, "| a |\n|---|\n| 1 |"))
-}
-
-func TestLinesDrawsEachSectionBlockAndUnit(t *testing.T) {
-	t.Parallel()
-	s := Structure{
-		Sections: []Section{
-			{Heading: "1. Outcome", Blocks: []Block{{Type: "paragraph", Text: "It works."}}},
-			{Heading: "2. Design", Blocks: []Block{{Type: "paragraph", Text: "One parser."}}},
-		},
-		Units: []Unit{
-			{Number: 1, Name: "lexer", Done: true, Blocks: []Block{{Type: "paragraph", Text: "Lex it."}}},
-			{Number: 2, Name: "parser", Blocks: []Block{{Type: "paragraph", Text: "Parse it."}}},
-		},
-	}
-	for _, dark := range []bool{true, false} {
-		got := ansi.Strip(strings.Join(Lines(s, 60, dark), "\n"))
-		for _, want := range []string{
-			"OUTCOME", "It works.", "DESIGN", "One parser.", "UNITS",
-			ui.IconOK + " 1  lexer", "Lex it.", "○ 2  parser", "Parse it.",
-		} {
-			assert.Check(t, cmp.Contains(got, want), "dark %t:\n%s", dark, got)
-		}
-		assert.Check(t, !strings.Contains(got, "▌"), "a gutter is drawn:\n%s", got)
-	}
 }
 
 // TestRenderLinesDrawsLinksAndHeadings guards glamour's rendering of the

@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -17,9 +16,11 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
+
+// untitled is what the list calls a flow with no title.
+const untitled = "Untitled plan"
 
 // OpenMsg asks the host to open a flow's plan workspace. ID is the flow's,
 // which is its plan's.
@@ -50,35 +51,20 @@ type listedMsg struct {
 	parents    map[string]string
 	parentsErr error
 }
-type previewedMsg struct {
+type blockersMsg struct {
 	id         string
 	generation uint64
-	structure  plan.Structure
-	comments   []circleci.PlanComment
+	blockers   []planstate.Blocker
 	err        error
-	// blockers are the flow's blockers, read with its preview.
-	blockers    []planstate.Blocker
-	blockersErr error
-	// lines is structure rendered for key, when the fetch rendered it.
-	lines []string
-	key   renderKey
-}
-
-// renderedMsg is a flow's cached structure rendered for key, off the UI goroutine.
-type renderedMsg struct {
-	id    string
-	key   renderKey
-	lines []string
 }
 
 // Model is a Bubble Tea component, not a standalone tea.Model.
 type Model struct {
 	ctx     context.Context
 	list    func(context.Context) ([]circleci.Flow, error)
-	preview func(context.Context, string) (plan.Structure, []circleci.PlanComment, error)
 	parents func(context.Context) (map[string]string, error)
-	// blockers reads a flow's blockers along with its preview; nil when the
-	// host has none to read, so every flow has none.
+	// blockers reads a flow's blockers; nil when the host has none to read,
+	// so every flow has none.
 	blockers func(context.Context, string) ([]planstate.Blocker, error)
 	flows    []circleci.Flow
 	// parentOf is each sub-plan's parent plan ID, from the last list.
@@ -109,49 +95,36 @@ type Model struct {
 	listErr         error
 	pollGeneration  uint64
 
-	previewID         string
-	previewGeneration uint64
-	previewing        bool
-	previewLoaded     bool
-	previewErr        error
-	// cache is each flow's last preview and its render, by flow ID, so
-	// selecting a flow again shows it while a fresh one loads. Only Update
-	// writes it, on the Bubble Tea goroutine.
-	cache map[string]cached
-	// render is plan.Lines unless a test replaces it.
-	render func(s plan.Structure, width int, dark bool) []string
+	blockersID         string
+	blockersGeneration uint64
+	fetchingBlockers   bool
+	blockersLoaded     bool
+	blockersErr        error
+	// blockersByID is each flow's last blockers read, by flow ID, so
+	// selecting a flow again offers its resume while a fresh read loads. Only
+	// Update writes it, on the Bubble Tea goroutine.
+	blockersByID map[string]cached
+
+	// detail is what the host draws in the pane beside the list. unfocused is
+	// stored negated, so the zero value is a list that has the keyboard.
+	detail    string
+	unfocused bool
 }
 
-// cached is a flow's last preview, and its structure as rendered for key.
+// cached is a flow's last blockers read.
 type cached struct {
-	structure plan.Structure
-	// gen is the generation of the preview that first read structure, which
-	// is what a render of it is keyed on.
-	gen      uint64
-	comments []circleci.PlanComment
-	lines    []string
-	key      renderKey
-	// pending is the key of a render in flight, so one is not started twice.
-	pending renderKey
-	// blockers are the flow's blockers as the last preview read them;
+	// blockers are the flow's blockers as the last read found them;
 	// blockersOK is whether that read succeeded.
 	blockers   []planstate.Blocker
 	blockersOK bool
 }
 
-// renderKey is what a rendered preview depends on.
-type renderKey struct {
-	gen   uint64
-	width int
-	dark  bool
-}
-
-// New creates a list of the flows list returns, each previewed with
-// preview. Both callbacks must honor ctx cancellation.
-func New(ctx context.Context, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (plan.Structure, []circleci.PlanComment, error)) Model {
+// New creates a list of the flows list returns. The callback must honor ctx
+// cancellation.
+func New(ctx context.Context, list func(context.Context) ([]circleci.Flow, error)) Model {
 	return Model{
-		ctx: ctx, list: list, preview: preview, width: 80, height: 24, dark: true, styles: theme.New(true),
-		cache: map[string]cached{}, render: plan.Lines,
+		ctx: ctx, list: list, width: 80, height: 24, dark: true, styles: theme.New(true),
+		blockersByID: map[string]cached{},
 	}
 }
 
@@ -164,8 +137,8 @@ func (m Model) WithParents(parents func(context.Context) (map[string]string, err
 }
 
 // WithBlockers has the list read the selected flow's blockers with
-// blockers, along with its preview, so it offers to resume a flow only once
-// they have loaded and every one is done. Without it, no flow has blockers.
+// blockers, so it offers to resume a flow only once they have loaded and
+// every one is done. Without it, no flow has blockers.
 func (m Model) WithBlockers(blockers func(context.Context, string) ([]planstate.Blocker, error)) Model {
 	m.blockers = blockers
 	return m
@@ -178,6 +151,34 @@ func (m Model) Init() tea.Cmd { return m.Refresh() }
 // clears it.
 func (m Model) WithNote(note string) Model {
 	m.note = oneLine(note)
+	return m
+}
+
+// Selected is the selected flow's ID and title, as the list shows it;
+// "", "" when the list shows none.
+func (m Model) Selected() (id, title string) {
+	f, ok := m.selected()
+	if !ok {
+		return "", ""
+	}
+	title = oneLine(f.Title)
+	if title == "" {
+		title = untitled
+	}
+	return f.ID, title
+}
+
+// WithDetail is what the pane beside the list shows: drawn at DetailSize,
+// with no border of its own. "" draws an empty pane.
+func (m Model) WithDetail(content string) Model {
+	m.detail = content
+	return m
+}
+
+// WithFocused has the list drawn as having the keyboard or not: without it,
+// the selection marker and help bar are dim.
+func (m Model) WithFocused(focused bool) Model {
+	m.unfocused = !focused
 	return m
 }
 
@@ -206,7 +207,7 @@ func (m Model) Flows() []circleci.Flow { return slices.Clone(m.flows) }
 // Len is how many open flows the list shows.
 func (m Model) Len() int { return len(m.flows) }
 
-// Refresh requests fresh list and preview data. Concurrent refresh requests
+// Refresh requests fresh list and blockers data. Concurrent refresh requests
 // coalesce; only one list callback can be in flight at a time.
 func (m Model) Refresh() tea.Cmd {
 	return func() tea.Msg {
@@ -218,7 +219,7 @@ func (m Model) Refresh() tea.Cmd {
 }
 
 // Select selects a flow.
-// The next Update starts its preview; hosts can issue Refresh after Select
+// The next Update starts its blockers read; hosts can issue Refresh after Select
 // to start that update immediately when returning from a workspace.
 func (m Model) Select(id string) Model {
 	for _, f := range m.flows {
@@ -237,7 +238,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	var cmds []tea.Cmd
-	refreshPreview := false
+	refreshBlockers := false
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(msg.Width, 0), max(msg.Height, 0)
@@ -261,108 +262,36 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.parentOf = nil
 			}
 			m.loaded = true
-			maps.DeleteFunc(m.cache, func(id string, _ cached) bool {
+			maps.DeleteFunc(m.blockersByID, func(id string, _ cached) bool {
 				return !slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == id })
 			})
 			m.keepSelection()
 			m.dropGoneQuestions()
-			refreshPreview = true
+			refreshBlockers = true
 		}
 		cmds = append(cmds, m.poll())
-	case previewedMsg:
-		if msg.id == m.id && msg.generation == m.previewGeneration {
-			m.previewing = false
-			m.previewErr = msg.err
-			if msg.err == nil {
-				// Lines and key stay unless the fetch rendered the structure
-				// for the pane as it is now, so an equal structure does not
-				// render again and a render for an old size or style is
-				// dropped.
-				entry := m.cache[msg.id]
-				entry.structure, entry.gen = nextStructure(entry, msg.structure, msg.generation)
-				entry.comments = msg.comments
-				entry.blockers, entry.blockersOK = msg.blockers, msg.blockersErr == nil
-				if msg.lines != nil && msg.key == m.renderKey(entry) {
-					entry.lines, entry.key = msg.lines, msg.key
-				}
-				m.cache[msg.id] = entry
-				m.previewLoaded = true
-			}
-		}
-	case renderedMsg:
-		if entry, ok := m.cache[msg.id]; ok {
-			if entry.pending == msg.key {
-				entry.pending = renderKey{}
-			}
-			if msg.key == m.renderKey(entry) {
-				entry.lines, entry.key = msg.lines, msg.key
-			}
-			m.cache[msg.id] = entry
+	case blockersMsg:
+		if msg.id == m.id && msg.generation == m.blockersGeneration {
+			m.fetchingBlockers = false
+			m.blockersErr = msg.err
+			m.blockersByID[msg.id] = cached{blockers: msg.blockers, blockersOK: msg.err == nil}
+			m.blockersLoaded = true
 		}
 	case tea.KeyPressMsg:
 		cmds = append(cmds, m.key(msg))
 	}
-	if m.previewID != m.id {
-		m.previewID = m.id
-		m.previewGeneration++
-		m.previewing, m.previewErr = false, nil
-		// A flow previewed before shows that preview while a fresh one loads.
-		_, m.previewLoaded = m.cache[m.id]
-		refreshPreview = true
+	if m.blockersID != m.id {
+		m.blockersID = m.id
+		m.blockersGeneration++
+		m.fetchingBlockers, m.blockersErr = false, nil
+		// A flow read before offers that read while a fresh one loads.
+		_, m.blockersLoaded = m.blockersByID[m.id]
+		refreshBlockers = true
 	}
-	// Before startPreview, so the fetch knows a render is already in flight.
-	cmds = append(cmds, m.renderPreview())
-	if m.id != "" && !m.previewing && (refreshPreview || !m.previewLoaded && m.previewErr == nil) {
-		cmds = append(cmds, m.startPreview())
+	if m.id != "" && !m.fetchingBlockers && (refreshBlockers || !m.blockersLoaded && m.blockersErr == nil) {
+		cmds = append(cmds, m.startBlockers())
 	}
 	return m, tea.Batch(cmds...)
-}
-
-// nextStructure is the structure and generation entry has after a preview of
-// generation read structure: the same generation when the structure is the one
-// it had, so an unchanged plan is not rendered again.
-func nextStructure(entry cached, structure plan.Structure, generation uint64) (plan.Structure, uint64) {
-	if reflect.DeepEqual(entry.structure, structure) {
-		return entry.structure, entry.gen
-	}
-	return structure, generation
-}
-
-func noBlocks(s plan.Structure) bool { return len(s.Sections) == 0 && s.Units == nil }
-
-// renderKey is the key entry's structure rendered for the preview pane as it
-// is now would have: the zero key when the pane is not drawn or there is
-// nothing to draw.
-func (m Model) renderKey(entry cached) renderKey {
-	w := m.previewWidth()
-	if w == 0 || noBlocks(entry.structure) {
-		return renderKey{}
-	}
-	return renderKey{gen: entry.gen, width: w - 4, dark: m.dark}
-}
-
-// renderPreview starts a render of the selected flow's cached plan structure,
-// unless it was rendered, or is being rendered, for the same preview, width and
-// style. One render of a large plan takes longer than a frame, so it runs
-// off the UI goroutine; the cached lines show until it returns.
-func (m *Model) renderPreview() tea.Cmd {
-	entry, ok := m.cache[m.id]
-	if m.id == "" || !ok {
-		return nil
-	}
-	key := m.renderKey(entry)
-	if key == (renderKey{}) || entry.key == key || entry.pending == key {
-		return nil
-	}
-	entry.pending = key
-	m.cache[m.id] = entry
-	ctx, render, id, structure := m.ctx, m.render, m.id, entry.structure
-	return func() tea.Msg {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return renderedMsg{id: id, key: key, lines: render(structure, key.width, key.dark)}
-	}
 }
 
 func (m *Model) startList() tea.Cmd {
@@ -398,33 +327,21 @@ func (m Model) poll() tea.Cmd {
 	}
 }
 
-func (m *Model) startPreview() tea.Cmd {
-	m.previewing = true
-	m.previewGeneration++
-	ctx, preview, blockers, render, id, generation := m.ctx, m.preview, m.blockers, m.render, m.id, m.previewGeneration
-	// The fetch renders its text for the pane as it is now, off the UI
-	// goroutine, unless that render is cached or in flight already.
-	entry := m.cache[id]
-	have := entry.key
-	if entry.pending != (renderKey{}) {
-		have = entry.pending
+// startBlockers reads the selected flow's blockers off the UI goroutine;
+// nothing when the host has none to read.
+func (m *Model) startBlockers() tea.Cmd {
+	if m.blockers == nil {
+		return nil
 	}
-	width, dark, drawn := m.previewWidth()-4, m.dark, m.previewWidth() > 0
+	m.fetchingBlockers = true
+	m.blockersGeneration++
+	ctx, blockers, id, generation := m.ctx, m.blockers, m.id, m.blockersGeneration
 	return func() tea.Msg {
 		if ctx.Err() != nil {
 			return nil
 		}
-		structure, comments, err := preview(ctx, id)
-		msg := previewedMsg{id: id, generation: generation, structure: structure, comments: comments, err: err}
-		if err == nil && blockers != nil {
-			msg.blockers, msg.blockersErr = blockers(ctx, id)
-		}
-		_, gen := nextStructure(entry, structure, generation)
-		key := renderKey{gen: gen, width: width, dark: dark}
-		if err == nil && drawn && !noBlocks(structure) && key != have {
-			msg.lines, msg.key = render(structure, width, dark), key
-		}
-		return msg
+		list, err := blockers(ctx, id)
+		return blockersMsg{id: id, generation: generation, blockers: list, err: err}
 	}
 }
 
@@ -516,7 +433,11 @@ func (m Model) ResumeLine() string { return oneLine(m.resume().Line()) }
 // its blockers have loaded, so a blocked flow is never offered on a guess.
 func (m Model) resume() planstate.Resume {
 	f, ok := m.selected()
-	entry := m.cache[m.id]
+	entry := m.blockersByID[m.id]
+	if m.blockers == nil {
+		// A host with none to read has none to wait for.
+		entry.blockersOK = true
+	}
 	if !ok || !entry.blockersOK {
 		return planstate.Resume{}
 	}
@@ -704,7 +625,7 @@ func (m Model) parentTitle(id string) string {
 		if t := oneLine(f.Title); t != "" {
 			return t
 		}
-		return "Untitled plan"
+		return untitled
 	}
 	return ""
 }

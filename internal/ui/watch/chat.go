@@ -64,7 +64,7 @@ func (m Model) updateChat(msg tea.KeyPressMsg) (_ Model, _ tea.Cmd, handled bool
 			next, cmd = next.hideChat()
 			cmds = append(cmds, cmd)
 		}
-		if next.planOpen {
+		if next.focus == focusPane {
 			note := next.note
 			next, cmd = next.showFlows()
 			next.note = note
@@ -122,18 +122,19 @@ func (m Model) focusMain() Model {
 // chatPlace is the chat's header place and the context its
 // messages carry, from the screen showing.
 func (m Model) chatPlace() (place, context string) {
+	screen := m.planScreen()
 	switch {
-	case m.planOpen && m.planScreen != nil:
-		if m.planScreen.ID() == "" {
+	case m.focus == focusPane && screen != nil:
+		if screen.ID() == "" {
 			return "New plan", ""
 		}
-		title := oneLine(m.planScreen.Title())
-		ctx := "[plan] " + m.planScreen.ID() + " " + title
-		if f := m.planScreen.FlowText(); f != "" {
+		title := oneLine(screen.Title())
+		ctx := "[plan] " + screen.ID() + " " + title
+		if f := screen.FlowText(); f != "" {
 			ctx += "\n[flow] " + f
 		}
 		return title, ctx
-	case m.flowsOpen && m.flows != nil:
+	case m.flows != nil:
 		lines := []string{"[flows]"}
 		for _, f := range m.flows.Flows() {
 			lines = append(lines, f.ID+" "+f.State+" "+oneLine(f.Title))

@@ -16,8 +16,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
-// minPreview is the narrowest preview pane worth drawing. Below it the list
-// takes the whole screen; Enter still opens the workspace.
+// minPreview is the narrowest pane beside the list worth drawing. Below it
+// the list takes the whole screen.
 const minPreview = 30
 
 // Content draws the flow list, its footer included, within the last
@@ -34,33 +34,43 @@ func (m Model) Content() string {
 	}
 	h := contentHeight + 2
 	listWidth := m.width - 2
-	rightWidth := m.previewWidth()
-	if rightWidth > 0 {
+	detailWidth, _ := m.DetailSize()
+	if detailWidth > 0 {
 		listWidth = theme.ListWidth
 	}
 	left := m.styles.Pane(true, listWidth+2, h, m.styles.Emphasis.Render("flows"),
 		strings.Join(fit(m.listLines(listWidth, contentHeight), listWidth, contentHeight), "\n"))
 	body := left
-	if rightWidth > 0 {
-		lines := fit(m.previewLines(rightWidth), rightWidth, contentHeight)
-		for i, l := range lines {
-			lines[i] = " " + l
-		}
-		title := m.styles.VDim.Render("preview")
-		if m.id != "" {
-			title += m.styles.VDim.Render(" · " + oneLine(m.id))
-		}
-		body = lipgloss.JoinHorizontal(lipgloss.Top, left,
-			m.styles.Pane(false, m.width-listWidth-2, h, title, strings.Join(lines, "\n")))
+	if detailWidth > 0 {
+		lines := fit(strings.Split(m.detail, "\n"), detailWidth, h)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Join(lines, "\n"))
 	}
 	rows := append(strings.Split(body, "\n"), footer...)
 	return strings.Join(fit(rows, m.width, m.height), "\n")
 }
 
+// DetailSize is the pane's columns and rows as Content draws it, or 0, 0
+// when the terminal is too narrow for one.
+func (m Model) DetailSize() (width, height int) {
+	if m.width == 0 || m.height == 0 || m.width-theme.ListWidth-4 < minPreview {
+		return 0, 0
+	}
+	contentHeight := m.height - len(m.footerLines()) - 2
+	if contentHeight < 1 {
+		return 0, 0
+	}
+	return m.width - theme.ListWidth - 2, contentHeight + 2
+}
+
 // footerLines is the help bar, then the host's note and a list error, each
 // on a line of its own. What resuming does is the host's to show: ResumeLine.
 func (m Model) footerLines() []string {
-	bar := theme.Help(m.styles, m.width-2).View(m.keys())
+	st := m.styles
+	if m.unfocused {
+		// Unfocused, so the bar is dim.
+		st.Brand, st.Dim = st.VDim, st.VDim
+	}
+	bar := theme.Help(st, m.width-2).View(m.keys())
 	rows := []string{"  " + bar}
 	if m.ask != "" {
 		rows[0] = "  " + m.styles.Emphasis.Render("Delete this plan, its comments and its flow? ") + "y / n"
@@ -109,13 +119,17 @@ func (m Model) listLines(width, height int) []string {
 		}
 		title := oneLine(f.Title)
 		if title == "" {
-			title = "Untitled plan"
+			title = untitled
 		}
 		indent := strings.Repeat("  ", depth[f.ID])
 		title = ansi.Truncate(title, max(width-2-len(indent), 1), "…")
 		if f.ID == m.id {
 			selected = len(rows)
-			rows = append(rows, st.Success.Render("▶ ")+indent+st.Emphasis.Render(title))
+			if m.unfocused {
+				rows = append(rows, st.Dim.Render("▶ "+indent+title))
+			} else {
+				rows = append(rows, st.Success.Render("▶ ")+indent+st.Emphasis.Render(title))
+			}
 		} else {
 			rows = append(rows, "  "+indent+title)
 		}
@@ -229,68 +243,6 @@ func ago(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
-}
-
-func (m Model) previewLines(width int) []string {
-	var rows []string
-	if m.id == "" {
-		return append(rows, m.styles.Dim.Render("Select a flow to preview."))
-	}
-	// Select may be called between updates. Never display the previous plan's
-	// content under the newly selected row while its request is being started.
-	if m.previewID != m.id || !m.previewLoaded && m.previewErr == nil {
-		return append(rows, m.styles.Dim.Render("Loading preview…"))
-	}
-	if m.previewErr != nil {
-		note := "Preview error"
-		if m.previewLoaded {
-			note += " (stale)"
-		}
-		note += ": " + oneLine(m.previewErr.Error())
-		rows = append(rows, m.styles.Warning.Render(note))
-	}
-	// Who the flow waits on comes from the list, not the preview fetch.
-	if f, ok := m.selected(); ok && oneLine(f.WaitingOn) != "" {
-		rows = append(rows, m.styles.Emphasis.Render("Waiting on "+oneLine(f.WaitingOn)))
-		if why := clean(f.WaitingOnWhy); strings.TrimSpace(why) != "" {
-			for _, line := range strings.Split(ansi.Hardwrap(why, max(width-2, 1), true), "\n") {
-				rows = append(rows, m.styles.Dim.Render(line))
-			}
-		}
-		rows = append(rows, "")
-	}
-	entry := m.cache[m.id]
-	commentsHeading := false
-	for _, c := range entry.comments {
-		if c.ResolvedAt != nil {
-			continue
-		}
-		if !commentsHeading {
-			rows = append(rows, m.styles.Warning.Render("Open comments (not plan text)"))
-			commentsHeading = true
-		}
-		for _, line := range strings.Split(ansi.Hardwrap(clean(c.Body), max(width-2, 1), true), "\n") {
-			rows = append(rows, m.styles.Warning.Render("> "+line))
-		}
-		if c.QuotedText != "" {
-			rows = append(rows, m.styles.Dim.Render("  About: "+oneLine(c.QuotedText)))
-		}
-		rows = append(rows, "")
-	}
-	rows = append(rows, m.styles.Emphasis.Render("Plan"))
-	if m.previewLoaded && noBlocks(entry.structure) {
-		return append(rows, m.styles.Dim.Render("No plan text yet."))
-	}
-	return append(rows, entry.lines...)
-}
-
-// previewWidth is the preview pane's width inside its border and leading
-// space, as Content draws it, or 0 when the pane is not drawn.
-func (m Model) previewWidth() int {
-	if m.width-theme.ListWidth-4 < minPreview {
-		return 0
-	}
-	return m.width - theme.ListWidth - 5
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(clean(s)), " ") }

@@ -22,7 +22,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/theme"
 )
 
@@ -38,11 +37,14 @@ type driver struct {
 	wg     sync.WaitGroup
 }
 
-func newDriver(t *testing.T, list func(context.Context) ([]circleci.Flow, error), preview func(context.Context, string) (plan.Structure, []circleci.PlanComment, error), opts ...func(flowlist.Model) flowlist.Model) *driver {
+// newDriver is a driver for the list. It reads blockers unless an option says
+// otherwise.
+func newDriver(t *testing.T, list func(context.Context) ([]circleci.Flow, error), opts ...func(flowlist.Model) flowlist.Model) *driver {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	d := &driver{t: t, ctx: ctx, cancel: cancel, events: make(chan tea.Msg, 100)}
-	d.m = flowlist.New(ctx, list, preview)
+	d.m = flowlist.New(ctx, list)
+	d.m = blockers(nil, nil)(d.m)
 	for _, o := range opts {
 		d.m = o(d.m)
 	}
@@ -85,8 +87,8 @@ func (d *driver) step() { d.send(d.next()) }
 
 func (d *driver) load() {
 	d.send(d.m.Init()())
-	d.step() // List response starts the first preview and poll timer.
-	d.step() // Preview response.
+	d.step() // List response starts the first blockers read and poll timer.
+	d.step() // Blockers response.
 }
 
 func (d *driver) refresh() {
@@ -145,10 +147,6 @@ var (
 	subPlanParents = map[string]string{"docs": "p1", "cfg": "p1", "cfg2": "p1", "deep": "cfg", "orphan": "gone", "skip": "docs"}
 )
 
-func preview(_ context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
-	return doc("Preview " + id), nil, nil
-}
-
 // titleRows is the list's rows as listRows has them, but with only the
 // pane's border and the selection marker cut, so a title keeps its indent.
 func titleRows(d *driver) []string {
@@ -206,7 +204,7 @@ func TestNavigation(t *testing.T) {
 			// Listed in reverse phase order: Planning shows before Building.
 			circleci.Flow{ID: "c3", Title: "Build it", State: "build", Next: waitHuman, WaitingOn: "human"},
 			circleci.Flow{ID: "d4", Title: "Plan it", State: "refine-proposal", Next: waitHuman, WaitingOn: "human"},
-		), preview)
+		))
 		d.load()
 		text := d.content()
 		assert.Check(t, cmp.Contains(text, "▶ Fix parser"))
@@ -239,7 +237,7 @@ func TestNavigation(t *testing.T) {
 			var calls atomic.Int32
 			// The second read drops retry-config and its sub-plan's parents.
 			later := map[string]string{"docs": "p1", "cfg2": "p1", "orphan": "gone", "skip": "docs"}
-			d := newDriver(t, fixed(subPlans...), preview, func(m flowlist.Model) flowlist.Model {
+			d := newDriver(t, fixed(subPlans...), func(m flowlist.Model) flowlist.Model {
 				return m.WithParents(func(context.Context) (map[string]string, error) {
 					if calls.Add(1) == 1 {
 						return subPlanParents, nil
@@ -271,7 +269,7 @@ func TestNavigation(t *testing.T) {
 
 func TestHostMessages(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		d := newDriver(t, fixed(), preview)
+		d := newDriver(t, fixed())
 		// There is no other screen to switch to.
 		for _, key := range []tea.KeyPressMsg{press('2'), press(tea.KeyTab)} {
 			_, cmd := d.m.Update(key)
@@ -286,9 +284,60 @@ func TestHostMessages(t *testing.T) {
 	})
 }
 
+// The pane beside the list is the host's: drawn at DetailSize, to the right
+// of the list, with no border of its own, and not at all when it does not fit.
+func TestDetailFillsThePane(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newDriver(t, fixed(circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal", Next: waitHuman, WaitingOn: "human"}))
+		d.load()
+		d.send(tea.WindowSizeMsg{Width: 110, Height: 30})
+		d.m = d.m.WithDetail("hello")
+		w, h := d.m.DetailSize()
+		const footer = 1 // the help bar
+		assert.Check(t, cmp.Equal(w, 110-theme.ListWidth-2))
+		assert.Check(t, cmp.Equal(h, 30-footer))
+		rows := strings.Split(d.content(), "\n")
+		assert.Check(t, cmp.Len(rows, 30))
+		idx := strings.Index(rows[0], "hello")
+		assert.Assert(t, idx >= 0, "the detail is not drawn:\n%s", d.content())
+		assert.Check(t, cmp.Equal(ansi.StringWidth(rows[0][:idx]), theme.ListWidth+2))
+		assert.Check(t, !strings.Contains(d.content(), "preview"), "the pane has a title of its own:\n%s", d.content())
+
+		d.send(tea.WindowSizeMsg{Width: 60, Height: 30})
+		w, h = d.m.DetailSize()
+		assert.Check(t, w == 0 && h == 0, "DetailSize at 60 columns is %d, %d", w, h)
+		assert.Check(t, !strings.Contains(d.content(), "hello"), "the detail is drawn at 60 columns:\n%s", d.content())
+	})
+}
+
+// Selected is the flow the list shows selected, and its marker and help bar
+// are dim while the pane has the keyboard.
+func TestSelectedAndFocus(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d := newDriver(t, fixed(
+			circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal", Next: waitHuman, WaitingOn: "human"},
+			circleci.Flow{ID: "b", Title: "Be\x1b[31mta", State: "refine-proposal", Next: waitHuman, WaitingOn: "human"},
+		))
+		id, title := d.m.Selected()
+		assert.Check(t, id == "" && title == "", "a list that has not loaded shows none: %q, %q", id, title)
+		d.load()
+		id, title = d.m.Selected()
+		assert.Check(t, id == "a" && title == "Alpha", "%q, %q", id, title)
+		d.send(press('j'))
+		d.step()
+		id, title = d.m.Selected()
+		assert.Check(t, id == "b" && title == "Beta", "%q, %q", id, title)
+
+		focused := d.m.Content()
+		unfocused := d.m.WithFocused(false).Content()
+		assert.Check(t, focused != unfocused, "the focus does not change the drawing")
+		assert.Check(t, cmp.Equal(ansi.Strip(focused), ansi.Strip(unfocused)), "only the style changes")
+		assert.Check(t, cmp.Equal(d.m.WithFocused(false).WithFocused(true).Content(), focused))
+	})
+}
+
 // resumeLines are every line ResumeLine can say, so a test can check the
-// list itself shows none: the host shows it, in its header. The preview's
-// own "Waiting on" names factory's actor, as waiting_on serves it.
+// list itself shows none: the host shows it, in its header.
 var resumeLines = []string{
 	"No session holds", "Claimed by", "chunk can't resume",
 	"Waiting on you", "Waiting on factory", "Waiting on blockers", "Waiting on sub-plans", "Waiting on Retry config",
@@ -327,7 +376,7 @@ func TestDelete(t *testing.T) {
 	beta := circleci.Flow{ID: "b", Title: "Beta", State: "refine-proposal", Next: waitHuman, WaitingOn: "human"}
 	chat := func(m flowlist.Model) flowlist.Model { return m.WithChatKey() }
 	loaded := func(t *testing.T, list func(context.Context) ([]circleci.Flow, error)) *driver {
-		d := newDriver(t, list, preview, chat)
+		d := newDriver(t, list, chat)
 		d.send(tea.WindowSizeMsg{Width: 140, Height: 30})
 		d.load()
 		return d
@@ -429,7 +478,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("an empty list does not offer X", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, fixed(), preview, chat)
+			d := newDriver(t, fixed(), chat)
 			d.send(tea.WindowSizeMsg{Width: 140, Height: 30})
 			d.send(d.m.Init()())
 			d.step()
@@ -596,10 +645,9 @@ func TestResume(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				d := newDriver(t, fixed(tc.flow), preview, blockers(tc.blockers, tc.err))
+				d := newDriver(t, fixed(tc.flow), blockers(tc.blockers, tc.err))
 				d.load()
 				got := d.content()
-				assert.Check(t, cmp.Contains(got, "Preview a"), "the preview has not loaded:\n%s", got)
 				assert.Check(t, cmp.Equal(strings.Contains(got, "R resume"), tc.kind != planstate.ResumeNone), "help bar:\n%s", got)
 				assert.Check(t, cmp.Equal(d.m.ResumeLine(), tc.line))
 				noResumeLine(t, got)
@@ -619,26 +667,29 @@ func TestResume(t *testing.T) {
 	t.Run("without blockers", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			// A host that reads no blockers still offers resume.
-			d := newDriver(t, fixed(building), preview)
-			d.load()
+			d := newDriver(t, fixed(building), func(m flowlist.Model) flowlist.Model { return m.WithBlockers(nil) })
+			d.send(d.m.Init()())
+			d.step() // List response; there is no read to wait for.
 			assert.Check(t, cmp.Contains(d.content(), "R resume"))
 			d.send(press('R'))
 			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeBuild}))
 		})
 	})
-	t.Run("before the preview loads", func(t *testing.T) {
+	t.Run("before the blockers load", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			release := make(chan struct{})
-			slow := func(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
-				select {
-				case <-release:
-				case <-ctx.Done():
-				}
-				return preview(ctx, id)
+			slow := func(m flowlist.Model) flowlist.Model {
+				return m.WithBlockers(func(ctx context.Context, _ string) ([]planstate.Blocker, error) {
+					select {
+					case <-release:
+					case <-ctx.Done():
+					}
+					return nil, nil
+				})
 			}
-			d := newDriver(t, fixed(building), slow, blockers(nil, nil))
+			d := newDriver(t, fixed(building), slow)
 			d.send(d.m.Init()())
-			d.step() // List response starts the preview, which waits.
+			d.step() // List response starts the blockers read, which waits.
 			got := d.content()
 			assert.Check(t, !strings.Contains(got, "R resume"), "help bar:\n%s", got)
 			assert.Check(t, cmp.Equal(d.m.ResumeLine(), ""))
@@ -653,11 +704,11 @@ func TestResume(t *testing.T) {
 	t.Run("selection moves", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			claimed := circleci.Flow{ID: "b", Title: "Beta", State: "build", Next: waitAgent, WaitingOn: "session", SessionID: "cc6b734c-1111"}
-			d := newDriver(t, fixed(building, claimed), preview, blockers(nil, nil))
+			d := newDriver(t, fixed(building, claimed), blockers(nil, nil))
 			d.load()
 			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "No session holds this plan · R starts a build session"))
 			d.send(press('j'))
-			d.step() // Beta's preview, and its blockers.
+			d.step() // Beta's blockers.
 			got := d.content()
 			assert.Check(t, cmp.Contains(got, "▶ Beta"))
 			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Claimed by session cc6b734c · factory daemon release b frees it"))
@@ -695,7 +746,7 @@ func TestTakeOver(t *testing.T) {
 	}
 	question := planstate.TakeOverQuestion(holder)
 	loaded := func(t *testing.T, list func(context.Context) ([]circleci.Flow, error)) *driver {
-		d := newDriver(t, list, preview, blockers(nil, nil))
+		d := newDriver(t, list, blockers(nil, nil))
 		d.send(tea.WindowSizeMsg{Width: 200, Height: 30})
 		d.load()
 		return d
@@ -810,7 +861,7 @@ func TestStableRefreshAndSelect(t *testing.T) {
 				return []circleci.Flow{a, b, zeta, alphaPhase}, nil
 			}
 			return []circleci.Flow{c, b, a, alphaPhase, zeta, zetaToo}, nil
-		}, preview)
+		})
 		d.load()
 		d.send(press('j'))
 		d.step()
@@ -844,53 +895,71 @@ func TestStableRefreshAndSelect(t *testing.T) {
 	})
 }
 
-func TestLatePreviewCannotOverwriteSelection(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		releaseA := make(chan struct{})
-		d := newDriver(t, fixed(
-			circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"},
-		), func(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
-			if id == "a" {
+// blockersOf has m read each flow's blockers from byID, once its gate in gates
+// closes, when it has one.
+func blockersOf(byID map[string][]planstate.Blocker, gates map[string]<-chan struct{}) func(flowlist.Model) flowlist.Model {
+	return func(m flowlist.Model) flowlist.Model {
+		return m.WithBlockers(func(ctx context.Context, id string) ([]planstate.Blocker, error) {
+			if gate := gates[id]; gate != nil {
 				select {
-				case <-releaseA:
+				case <-gate:
 				case <-ctx.Done():
-					return plan.Structure{}, nil, ctx.Err()
+					return nil, ctx.Err()
 				}
 			}
-			return doc("UNIQUE PREVIEW " + id), nil, nil
+			return byID[id], nil
 		})
+	}
+}
+
+func TestLateBlockersCannotOverwriteSelection(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		releaseA := make(chan struct{})
+		// a's blockers are all done, so a late read would offer its resume.
+		done := []planstate.Blocker{{Title: "Retry config", State: "ended"}}
+		blocked := []planstate.Blocker{{Title: "Retry config", State: "build", Active: true}}
+		a := circleci.Flow{ID: "a", Title: "Alpha", State: "build", Next: waitAgent, WaitingOn: "session"}
+		b := circleci.Flow{ID: "b", Title: "Beta", State: "build", Next: waitAgent, WaitingOn: "session"}
+		d := newDriver(t, fixed(a, b),
+			blockersOf(map[string][]planstate.Blocker{"a": done, "b": blocked}, map[string]<-chan struct{}{"a": releaseA}))
 		d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 		d.send(d.m.Init()())
 		d.step()
 		d.send(press('j'))
 		d.step()
-		assert.Check(t, cmp.Contains(d.content(), "UNIQUE PREVIEW b"))
+		assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Waiting on Retry config"))
 		close(releaseA)
 		d.step()
-		text := d.content()
-		assert.Check(t, cmp.Contains(text, "UNIQUE PREVIEW b"))
-		assert.Check(t, !strings.Contains(text, "UNIQUE PREVIEW a"), "a late preview replaced the selected flow's:\n%s", text)
+		assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Waiting on Retry config"), "a late read replaced the selected flow's")
+		assert.Check(t, !strings.Contains(d.content(), "R resume"), "a late read offers the resume:\n%s", d.content())
+		// The late answer was dropped, not kept for a: back on a, nothing is
+		// offered until its own read lands.
+		d.send(press('k'))
+		assert.Check(t, cmp.Equal(d.m.ResumeLine(), ""), "the late read for a was kept")
 	})
 }
 
-func TestLatePreviewForSameIDCannotOverwriteNewRequest(t *testing.T) {
+func TestLateBlockersForSameIDCannotOverwriteNewRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
 		started := make(chan struct{})
 		var calls atomic.Int32
-		d := newDriver(t, fixed(
-			circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"},
-		), func(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
-			if id == "a" && calls.Add(1) == 1 {
-				close(started)
-				select {
-				case <-release:
-					return doc("OBSOLETE CONTENT"), nil, nil
-				case <-ctx.Done():
-					return plan.Structure{}, nil, ctx.Err()
+		blocked := []planstate.Blocker{{Title: "Retry config", State: "build", Active: true}}
+		a := circleci.Flow{ID: "a", Title: "Alpha", State: "build", Next: waitAgent, WaitingOn: "session"}
+		b := circleci.Flow{ID: "b", Title: "Beta", State: "build", Next: waitAgent, WaitingOn: "session"}
+		d := newDriver(t, fixed(a, b), func(m flowlist.Model) flowlist.Model {
+			return m.WithBlockers(func(ctx context.Context, id string) ([]planstate.Blocker, error) {
+				if id == "a" && calls.Add(1) == 1 {
+					close(started)
+					select {
+					case <-release:
+						return nil, nil // done: the obsolete answer offers the resume
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
 				}
-			}
-			return doc("CURRENT CONTENT " + id), nil, nil
+				return blocked, nil
+			})
 		})
 		d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 		d.send(d.m.Init()())
@@ -900,19 +969,17 @@ func TestLatePreviewForSameIDCannotOverwriteNewRequest(t *testing.T) {
 		d.step()
 		d.send(press('k'))
 		d.step()
-		assert.Check(t, cmp.Contains(d.content(), "CURRENT CONTENT a"))
+		assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Waiting on Retry config"))
 		close(release)
 		d.step()
-		text := d.content()
-		assert.Check(t, cmp.Contains(text, "CURRENT CONTENT a"))
-		assert.Check(t, !strings.Contains(text, "OBSOLETE CONTENT"), "an obsolete preview replaced the current one:\n%s", text)
+		assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Waiting on Retry config"), "an obsolete read replaced the current one")
 	})
 }
 
 func TestEmptyErrorsAndStaleData(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, fixed(), preview)
+			d := newDriver(t, fixed())
 			d.send(d.m.Init()())
 			d.step()
 			text := d.content()
@@ -922,7 +989,7 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 	})
 	t.Run("loading", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, fixed(), preview)
+			d := newDriver(t, fixed())
 			assert.Check(t, cmp.Contains(d.content(), "loading flows…"))
 		})
 	})
@@ -934,7 +1001,7 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 					return nil, errors.New("offline")
 				}
 				return []circleci.Flow{{ID: "a", Title: "Retained"}}, nil
-			}, preview)
+			})
 			d.send(d.m.Init()())
 			d.step()
 			text := d.content()
@@ -951,7 +1018,7 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 	t.Run("parents error recovers", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			var calls atomic.Int32
-			d := newDriver(t, fixed(subPlans...), preview, func(m flowlist.Model) flowlist.Model {
+			d := newDriver(t, fixed(subPlans...), func(m flowlist.Model) flowlist.Model {
 				return m.WithParents(func(context.Context) (map[string]string, error) {
 					if calls.Add(1) == 1 {
 						return nil, errors.New("plans\noffline")
@@ -976,7 +1043,7 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 			var calls atomic.Int32
 			d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 				return nil, errors.New("offline")
-			}, preview, func(m flowlist.Model) flowlist.Model {
+			}, func(m flowlist.Model) flowlist.Model {
 				return m.WithParents(func(context.Context) (map[string]string, error) {
 					calls.Add(1)
 					return subPlanParents, nil
@@ -990,335 +1057,22 @@ func TestEmptyErrorsAndStaleData(t *testing.T) {
 			assert.Check(t, !strings.Contains(text, "sub-plans unavailable"), "footer:\n%s", text)
 		})
 	})
-	t.Run("list and preview retain success", func(t *testing.T) {
+	t.Run("list retains success", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			var lists, previews atomic.Int32
+			var lists atomic.Int32
 			d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 				if lists.Add(1) == 2 {
 					return nil, errors.New("list offline")
 				}
 				return []circleci.Flow{{ID: "a", Title: "Retained"}}, nil
-			}, func(context.Context, string) (plan.Structure, []circleci.PlanComment, error) {
-				if previews.Add(1) > 1 {
-					return plan.Structure{}, nil, errors.New("preview offline")
-				}
-				return doc("Retained preview"), nil, nil
 			})
 			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
 			d.load()
 			d.refresh()
 			text := d.content()
-			for _, want := range []string{"Retained", "Retained preview", "list offline", "stale"} {
+			for _, want := range []string{"Retained", "list offline", "stale"} {
 				assert.Check(t, cmp.Contains(text, want))
 			}
-			d.refresh()
-			d.step()
-			text = d.content()
-			for _, want := range []string{"Retained preview", "preview offline", "stale"} {
-				assert.Check(t, cmp.Contains(text, want))
-			}
-		})
-	})
-	t.Run("revisit keeps stale cache", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, fixed(circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"}), replies(map[string][]reply{
-				"a": {{text: "Preview a"}, {err: errors.New("preview offline")}},
-			}))
-			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
-			d.load()
-			d.send(press('j'))
-			d.step()
-			d.send(press('k'))
-			d.step()
-			text := d.content()
-			for _, want := range []string{"Preview a", "Preview error (stale)", "preview offline"} {
-				assert.Check(t, cmp.Contains(text, want))
-			}
-		})
-	})
-}
-
-// reply is one answer of a fake preview.
-type reply struct {
-	text     string
-	comments []circleci.PlanComment
-	err      error
-}
-
-// replies is a preview that answers each flow's calls in turn from byID,
-// repeating the last answer, or a plan of "Preview <id>" for a flow it has none for.
-func replies(byID map[string][]reply) func(context.Context, string) (plan.Structure, []circleci.PlanComment, error) {
-	var mu sync.Mutex
-	return func(_ context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		rs := byID[id]
-		if len(rs) == 0 {
-			return doc("Preview " + id), nil, nil
-		}
-		if len(rs) > 1 {
-			byID[id] = rs[1:]
-		}
-		return doc(rs[0].text), rs[0].comments, rs[0].err
-	}
-}
-
-// renderCall is the width and style of one render.
-type renderCall struct {
-	width int
-	dark  bool
-}
-
-// counting has m render with a fake that waits for gate to close, when it
-// is not nil, records each call in calls, and renders its plan as one line
-// naming the width and style it was given.
-func counting(mu *sync.Mutex, calls *[]renderCall, gate <-chan struct{}) func(flowlist.Model) flowlist.Model {
-	return func(m flowlist.Model) flowlist.Model {
-		return flowlist.WithRender(m, func(s plan.Structure, width int, dark bool) []string {
-			if gate != nil {
-				<-gate
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			*calls = append(*calls, renderCall{width, dark})
-			return []string{fmt.Sprintf("%s (w=%d dark=%t)", textOf(s), width, dark)}
-		})
-	}
-}
-
-func TestPreviewRenderCache(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		act       func(d *driver)
-		wantCalls int
-		wantLast  renderCall
-	}{
-		{
-			name: "redraws reuse the render",
-			act: func(d *driver) {
-				for range 3 {
-					d.content()
-				}
-				d.refresh()
-				d.step()           // Same preview text again.
-				d.send(press('k')) // Already on the first row.
-			},
-			wantCalls: 1,
-			wantLast:  renderCall{width: 120 - theme.ListWidth - 9, dark: true},
-		},
-		{
-			name: "resize re-renders",
-			act: func(d *driver) {
-				d.send(tea.WindowSizeMsg{Width: 160, Height: 35})
-				d.step() // The render.
-			},
-			wantCalls: 2,
-			wantLast:  renderCall{width: 160 - theme.ListWidth - 9, dark: true},
-		},
-		{
-			name: "background re-renders",
-			act: func(d *driver) {
-				d.send(tea.BackgroundColorMsg{Color: color.White})
-				d.step() // The render.
-			},
-			wantCalls: 2,
-			wantLast:  renderCall{width: 120 - theme.ListWidth - 9},
-		},
-		{
-			name: "revisit at same size does not render",
-			act: func(d *driver) {
-				d.send(press('j'))
-				d.step()
-				d.send(press('k'))
-				d.step() // a's refetch, with the same text.
-			},
-			wantCalls: 2,
-			wantLast:  renderCall{width: 120 - theme.ListWidth - 9, dark: true},
-		},
-		{
-			name: "revisit after resize renders once",
-			act: func(d *driver) {
-				d.send(press('j'))
-				d.step()
-				d.send(tea.WindowSizeMsg{Width: 160, Height: 35})
-				d.step() // b's render at 160.
-				d.send(press('k'))
-				d.step() // a's render at 160 and its refetch, in either order.
-				d.step()
-			},
-			wantCalls: 4,
-			wantLast:  renderCall{width: 160 - theme.ListWidth - 9, dark: true},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				var mu sync.Mutex
-				var calls []renderCall
-				d := newDriver(t, fixed(circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"}), preview, counting(&mu, &calls, nil))
-				d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
-				d.load()
-				tc.act(d)
-				mu.Lock()
-				defer mu.Unlock()
-				assert.Check(t, cmp.Len(calls, tc.wantCalls))
-				if len(calls) > 0 {
-					assert.Check(t, cmp.Equal(calls[len(calls)-1], tc.wantLast))
-				}
-			})
-		})
-	}
-	// A render for an old size or style must not reach the screen.
-	for _, tc := range []struct {
-		name   string
-		change tea.Msg
-		want   string
-	}{
-		{
-			name:   "stale async render dropped on resize",
-			change: tea.WindowSizeMsg{Width: 160, Height: 35},
-			want:   fmt.Sprintf("w=%d dark=true", 160-theme.ListWidth-9),
-		},
-		{
-			name:   "stale async render dropped on background",
-			change: tea.BackgroundColorMsg{Color: color.White},
-			want:   fmt.Sprintf("w=%d dark=false", 120-theme.ListWidth-9),
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				old := fmt.Sprintf("w=%d dark=true", 120-theme.ListWidth-9)
-				release := make(chan struct{})
-				var mu sync.Mutex
-				var calls []renderCall
-				d := newDriver(t, fixed(circleci.Flow{ID: "a", Title: "Alpha"}), preview, counting(&mu, &calls, release))
-				d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
-				d.send(d.m.Init()())
-				d.step()        // The list starts a's fetch, which renders and blocks.
-				synctest.Wait() // a's render has started.
-				d.send(tc.change)
-				close(release)
-				d.step() // The fetch, rendered for the old pane.
-				text := d.content()
-				assert.Check(t, !strings.Contains(text, old), "a render for the old pane shows:\n%s", text)
-				d.step() // The render for the new pane.
-				text = d.content()
-				assert.Check(t, cmp.Contains(text, "Preview a ("+tc.want+")"))
-				assert.Check(t, !strings.Contains(text, old), "a render for the old pane shows:\n%s", text)
-				mu.Lock()
-				defer mu.Unlock()
-				assert.Check(t, cmp.Len(calls, 2))
-			})
-		})
-	}
-}
-
-func TestPreviewCache(t *testing.T) {
-	ab := fixed(circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"})
-	t.Run("revisit shows cache on same frame", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, ab, preview)
-			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
-			d.load()
-			d.send(press('j'))
-			d.step()
-			d.send(press('k'))
-			text := d.content()
-			assert.Check(t, cmp.Contains(text, "Preview a"))
-			assert.Check(t, !strings.Contains(text, "Loading preview…"), "a revisit waits for its fetch:\n%s", text)
-		})
-	})
-	t.Run("refetch replaces changed text", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, ab, replies(map[string][]reply{"a": {{text: "Preview a"}, {text: "Preview a v2"}}}))
-			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
-			d.load()
-			d.send(press('j'))
-			d.step()
-			d.send(press('k'))
-			d.step()
-			assert.Check(t, cmp.Contains(d.content(), "a v2"))
-		})
-	})
-	t.Run("refetch replaces changed comments", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, ab, replies(map[string][]reply{"a": {
-				{text: "Preview a"},
-				{text: "Preview a", comments: []circleci.PlanComment{{Body: "Fresh note"}}},
-			}}))
-			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
-			d.load()
-			text := d.content()
-			assert.Check(t, !strings.Contains(text, "Open comments"), "content:\n%s", text)
-			d.send(press('j'))
-			d.step()
-			d.send(press('k'))
-			d.step()
-			text = d.content()
-			assert.Check(t, cmp.Contains(text, "Open comments"))
-			assert.Check(t, cmp.Contains(text, "Fresh note"))
-		})
-	})
-	t.Run("new flow shows loading", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			d := newDriver(t, ab, func(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
-				if id == "b" {
-					<-ctx.Done()
-					return plan.Structure{}, nil, ctx.Err()
-				}
-				return preview(ctx, id)
-			})
-			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
-			d.load()
-			d.send(press('j'))
-			text := d.content()
-			assert.Check(t, cmp.Contains(text, "Loading preview…"))
-			assert.Check(t, !strings.Contains(text, "Preview a"), "the previous flow's preview shows:\n%s", text)
-		})
-	})
-	t.Run("pruned on list", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			a, b := circleci.Flow{ID: "a", Title: "Alpha"}, circleci.Flow{ID: "b", Title: "Beta"}
-			var lists atomic.Int32
-			d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
-				if lists.Add(1) == 2 {
-					return []circleci.Flow{a}, nil
-				}
-				return []circleci.Flow{a, b}, nil
-			}, replies(map[string][]reply{"b": {{text: "Old b"}, {text: "New b"}}}))
-			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
-			d.load()
-			d.send(press('j'))
-			d.step()
-			assert.Check(t, cmp.Contains(d.content(), "Old b"))
-			d.refresh() // b leaves the list, so a is selected again.
-			d.step()
-			d.refresh() // b comes back.
-			d.step()
-			d.send(press('j'))
-			text := d.content()
-			assert.Check(t, cmp.Contains(text, "Loading preview…"))
-			assert.Check(t, !strings.Contains(text, "Old b"), "a pruned flow's preview shows:\n%s", text)
-			d.step()
-			assert.Check(t, cmp.Contains(d.content(), "New b"))
-		})
-	})
-	t.Run("empty text", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			var mu sync.Mutex
-			var calls []renderCall
-			d := newDriver(t, ab, replies(map[string][]reply{"a": {{text: " \n"}}, "b": {{text: ""}}}), counting(&mu, &calls, nil))
-			d.send(tea.WindowSizeMsg{Width: 120, Height: 35})
-			d.load()
-			assert.Check(t, cmp.Contains(d.content(), "No plan text yet."))
-			d.send(press('j'))
-			d.step()
-			d.send(press('k'))
-			assert.Check(t, cmp.Contains(d.content(), "No plan text yet."))
-			d.step()
-			assert.Check(t, cmp.Contains(d.content(), "No plan text yet."))
-			mu.Lock()
-			defer mu.Unlock()
-			assert.Check(t, cmp.Len(calls, 0))
 		})
 	})
 }
@@ -1475,17 +1229,7 @@ func TestGroupsAndRows(t *testing.T) {
 			{ID: "start", Title: "Start me", State: "init", WaitingOn: "human", Next: []circleci.Transition{{Actor: "human", Event: circleci.Prioritize, IsRequired: true}}},
 			{ID: "unknown-actor", Title: "Unknown actor", State: "build", WaitingOn: "someone"},
 		}
-		d := newDriver(t, fixed(flows...), func(context.Context, string) (plan.Structure, []circleci.PlanComment, error) {
-			prose := plan.Structure{Sections: []plan.Section{{Heading: "1. Outcome", Blocks: []plan.Block{
-				{Type: "heading", Text: "# Markdown heading"},
-				{Type: "paragraph", Text: "**Plan prose**"},
-				{Type: "paragraph", Text: strings.Repeat("界", 150)},
-			}}}}
-			return prose, []circleci.PlanComment{
-				{Body: "Please clarify", QuotedText: "Plan prose"},
-				{Body: "RESOLVED SECRET", ResolvedAt: &now},
-			}, nil
-		})
+		d := newDriver(t, fixed(flows...))
 		d.load()
 		rows := listRows(d)
 		all := strings.Join(rows, "\n")
@@ -1565,6 +1309,7 @@ func TestGroupsAndRows(t *testing.T) {
 		assert.Check(t, cmp.Equal(rows[index("Built")+1], ""), "a flow with no details keeps a blank second row:\n%s", all)
 		assert.Check(t, !strings.Contains(all, "ago"), "a zero UpdatedAt shows an age:\n%s", all)
 
+		d.m = d.m.WithDetail("The pane\n" + strings.Repeat("界", 150))
 		for _, size := range []tea.WindowSizeMsg{{Width: 50, Height: 20}, {Width: 80, Height: 24}, {Width: 120, Height: 35}, {Width: 1, Height: 1}, {Width: 100, Height: 2}} {
 			for _, bg := range []color.Color{color.White, color.Black} {
 				d.send(size)
@@ -1581,19 +1326,12 @@ func TestGroupsAndRows(t *testing.T) {
 				noResumeLine(t, text)
 				assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Waiting on you"))
 				if size.Width == 50 {
-					for _, not := range []string{"preview", "Markdown heading", "Please clarify"} {
-						assert.Check(t, !strings.Contains(text, not), "%q shows at width 50:\n%s", not, text)
-					}
+					assert.Check(t, !strings.Contains(text, "The pane"), "the pane shows at width 50:\n%s", text)
 					assert.Check(t, cmp.Contains(lines[len(lines)-2], "n new plan"))
 					assert.Check(t, !strings.Contains(text, "runs"), "the help names runs:\n%s", text)
 				}
 				if size.Width >= 80 && size.Height > 2 {
-					for _, want := range []string{"preview · human", "Open comments (not plan text)", "> Please clarify", "Markdown heading", "Plan prose"} {
-						assert.Check(t, cmp.Contains(text, want))
-					}
-					for _, not := range []string{"RESOLVED SECRET", "# Markdown", "**Plan prose**"} {
-						assert.Check(t, !strings.Contains(text, not), "%q shows in the preview:\n%s", not, text)
-					}
+					assert.Check(t, cmp.Contains(text, "The pane"))
 					assert.Check(t, cmp.Contains(lines[len(lines)-2], "q quit"))
 					assert.Check(t, cmp.Contains(lines[len(lines)-1], "Unsent draft"))
 				}
@@ -1606,14 +1344,11 @@ func TestProgressRows(t *testing.T) {
 	five, two, zero := 5, 2, 0
 	long := strings.Repeat("Addressing findings ", 10)
 	for _, tc := range []struct {
-		name        string
-		flow        circleci.Flow
-		wantRow     string // the second row starts with this
-		notInRow    []string
-		cut         bool // the second row is cut to one line
-		wantPreview []string
-		notPreview  []string
-		before      [2]string // in the preview, the first comes before the second
+		name     string
+		flow     circleci.Flow
+		wantRow  string // the second row starts with this
+		notInRow []string
+		cut      bool // the second row is cut to one line
 	}{
 		{
 			name: "summary replaces the task category",
@@ -1665,22 +1400,6 @@ func TestProgressRows(t *testing.T) {
 			wantRow: "Addressing findings Addressing",
 			cut:     true,
 		},
-		{
-			name:        "preview says who and why",
-			flow:        circleci.Flow{WaitingOn: "session", WaitingOnWhy: "the session builds Unit 2: lexer"},
-			wantPreview: []string{"Waiting on session", "the session builds Unit 2: lexer"},
-			before:      [2]string{"Waiting on session", "Plan"},
-		},
-		{
-			name:        "preview with no why",
-			flow:        circleci.Flow{WaitingOn: "human"},
-			wantPreview: []string{"Waiting on human"},
-		},
-		{
-			name:       "no waiting_on: no block",
-			flow:       circleci.Flow{},
-			notPreview: []string{"Waiting on"},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -1695,7 +1414,7 @@ func TestProgressRows(t *testing.T) {
 				if f.WaitingOn == "" && tc.wantRow != "" {
 					f.WaitingOn = "session"
 				}
-				d := newDriver(t, fixed(f), preview)
+				d := newDriver(t, fixed(f))
 				d.load()
 				rows := listRows(d)
 				all := strings.Join(rows, "\n")
@@ -1712,18 +1431,6 @@ func TestProgressRows(t *testing.T) {
 					assert.Check(t, strings.HasSuffix(row, "…"), "row %q is not cut", row)
 					assert.Check(t, cmp.Equal(rows[i+2], ""), "the flow takes more than two rows:\n%s", all)
 				}
-				d.send(tea.WindowSizeMsg{Width: 120, Height: 40})
-				text := d.content()
-				for _, w := range tc.wantPreview {
-					assert.Check(t, cmp.Contains(text, w))
-				}
-				for _, not := range tc.notPreview {
-					assert.Check(t, !strings.Contains(text, not), "%q shows:\n%s", not, text)
-				}
-				if tc.before[0] != "" {
-					first, second := strings.Index(text, tc.before[0]), strings.Index(text, tc.before[1])
-					assert.Check(t, first >= 0 && first < second, "%q is not before %q:\n%s", tc.before[0], tc.before[1], text)
-				}
 			})
 		})
 	}
@@ -1739,7 +1446,7 @@ func TestSubHeadingCase(t *testing.T) {
 			circleci.Flow{ID: "r", Title: "Ready", State: "ready", Next: waitHuman, WaitingOn: "human"},
 			circleci.Flow{ID: "n", Title: "Numbered", State: "2nd pass - human", Next: waitHuman, WaitingOn: "human"},
 			circleci.Flow{ID: "p3", Title: "Shouted planning", State: "PLANNING - HUMAN", Next: waitHuman, WaitingOn: "human"},
-		), preview)
+		))
 		d.load()
 		rows := listRows(d)
 		all := strings.Join(rows, "\n")
@@ -1768,7 +1475,7 @@ func TestSubHeadingCase(t *testing.T) {
 
 func TestSubPlanRows(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		d := newDriver(t, fixed(subPlans...), preview, parents(subPlanParents))
+		d := newDriver(t, fixed(subPlans...), parents(subPlanParents))
 		d.load()
 		rows, titles := listRows(d), titleRows(d)
 		all := strings.Join(rows, "\n")
@@ -1797,9 +1504,9 @@ func TestSubPlanRows(t *testing.T) {
 		planning := slices.Index(rows, "Planning")
 		assert.Check(t, cmp.DeepEqual([]string{titles[planning+1], titles[planning+3]}, []string{"retry-docs", "other"}), "rows:\n%s", all)
 
-		plain := newDriver(t, fixed(subPlans...), preview)
+		plain := newDriver(t, fixed(subPlans...))
 		plain.load()
-		without := newDriver(t, fixed(subPlans...), preview, parents(nil))
+		without := newDriver(t, fixed(subPlans...), parents(nil))
 		without.load()
 		assert.Check(t, cmp.DeepEqual(listRows(without), listRows(plain)))
 
@@ -1807,7 +1514,7 @@ func TestSubPlanRows(t *testing.T) {
 		long := append(slices.Clone(subPlans), circleci.Flow{ID: "long", Title: strings.Repeat("界", 80), State: "build", Next: waitAgent, WaitingOn: "session"})
 		withLong := maps.Clone(subPlanParents)
 		withLong["long"] = "deep"
-		d = newDriver(t, fixed(long...), preview, parents(withLong))
+		d = newDriver(t, fixed(long...), parents(withLong))
 		d.load()
 		for _, size := range []tea.WindowSizeMsg{{Width: 50, Height: 20}, {Width: 80, Height: 24}, {Width: 120, Height: 35}, {Width: 1, Height: 1}, {Width: 100, Height: 2}} {
 			for _, bg := range []color.Color{color.White, color.Black} {
@@ -1829,16 +1536,13 @@ func TestLongListKeepsSelectedRowVisible(t *testing.T) {
 		for i := range 80 {
 			flows = append(flows, circleci.Flow{ID: fmt.Sprintf("id-%d", i), Title: fmt.Sprintf("Title-%02d", i), State: "refine-proposal", Next: waitHuman, WaitingOn: "human"})
 		}
-		d := newDriver(t, fixed(flows...), preview)
+		d := newDriver(t, fixed(flows...))
 		d.load()
 		d.m = d.m.Select("id-79")
 		d.send(nil)
 		d.step()
 		for _, size := range []tea.WindowSizeMsg{{Width: 80, Height: 24}, {Width: 120, Height: 35}} {
 			d.send(size)
-			if size.Width != 80 {
-				d.step() // The preview's render at the new width.
-			}
 			text := d.content()
 			assert.Check(t, cmp.Contains(text, "▶ Title-79"))
 			assert.Check(t, !strings.Contains(text, "Title-00"), "the list did not scroll to the selected row:\n%s", text)
@@ -1864,7 +1568,7 @@ func TestRefreshCoalescesAndCancellationStopsRequests(t *testing.T) {
 			close(started)
 			<-ctx.Done()
 			return nil, ctx.Err()
-		}, preview)
+		})
 		d.send(d.m.Init()())
 		<-started
 		for range 20 {
@@ -1884,7 +1588,7 @@ func TestPollRefreshesAfterFiveSecondsAndStopsOnCancellation(t *testing.T) {
 		d := newDriver(t, func(context.Context) ([]circleci.Flow, error) {
 			calls.Add(1)
 			return nil, nil
-		}, preview)
+		})
 		d.send(d.m.Init()())
 		d.step()
 		start := time.Now()
@@ -1913,7 +1617,7 @@ func TestFlowsIsTheLastReadCopied(t *testing.T) {
 				return []circleci.Flow{a}, nil
 			}
 			return []circleci.Flow{a, b}, nil
-		}, preview)
+		})
 		assert.Check(t, cmp.Len(d.m.Flows(), 0))
 		d.load()
 		d.refresh()
@@ -1925,15 +1629,3 @@ func TestFlowsIsTheLastReadCopied(t *testing.T) {
 		assert.Check(t, cmp.Equal(d.m.Flows()[0].Title, "Fix parser"))
 	})
 }
-
-// doc is a plan of an Outcome holding text as a paragraph, or no plan when
-// text is blank.
-func doc(text string) plan.Structure {
-	if strings.TrimSpace(text) == "" {
-		return plan.Structure{}
-	}
-	return plan.Structure{Sections: []plan.Section{{Heading: "1. Outcome", Blocks: []plan.Block{{Type: "paragraph", Text: text}}}}}
-}
-
-// textOf is the text of the first block of doc's Outcome.
-func textOf(s plan.Structure) string { return s.Sections[0].Blocks[0].Text }

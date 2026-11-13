@@ -12,7 +12,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -90,7 +89,7 @@ func newUICmd() *cobra.Command {
 				WithPlanBuilds(daemonPlanBuild{}).
 				WithPlanResume(daemonResume{}).
 				WithPlanDelete(factoryDelete{}).
-				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).
+				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows).
 					WithParents(listFactoryParents).WithBlockers(listFactoryBlockers)).
 				WithChat(newChatModel(plans.ctx, root))
 			p := tea.NewProgram(m, tea.WithContext(ctx))
@@ -526,41 +525,6 @@ func planParents(flows []circleci.Flow) map[string]string {
 		}
 	}
 	return out
-}
-
-func previewFactoryPlan(ctx context.Context, id string) (plan.Structure, []circleci.PlanComment, error) {
-	api, err := factoryPlanClient()
-	if err != nil {
-		return plan.Structure{}, nil, err
-	}
-	return previewPlan(ctx, api, id)
-}
-
-// previewPlan is plan id as factory's structured content holds it, and its
-// open comments, fetched at the same time.
-func previewPlan(ctx context.Context, api *circleci.Client, id string) (plan.Structure, []circleci.PlanComment, error) {
-	g, ctx := errgroup.WithContext(ctx)
-	var structure plan.Structure
-	var comments []circleci.PlanComment
-	g.Go(func() error {
-		sc, err := api.PlanStructuredContent(ctx, id)
-		if err != nil {
-			return fmt.Errorf("plan structured content: %w", err)
-		}
-		structure = factoryplan.StructureOf(sc)
-		return nil
-	})
-	g.Go(func() error {
-		var err error
-		if comments, err = api.ListComments(ctx, id, true); err != nil {
-			return fmt.Errorf("list comments: %w", err)
-		}
-		return nil
-	})
-	if err := g.Wait(); err != nil {
-		return plan.Structure{}, nil, err
-	}
-	return structure, comments, nil
 }
 
 // dashboardMessage is err as the dashboard shows it: a user error's message

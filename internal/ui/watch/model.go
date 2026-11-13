@@ -67,22 +67,30 @@ type Model struct {
 
 	// root is the project the dashboard was opened in, where new plans are
 	// made, "" outside one. Each workspace keeps its input and session while
-	// another is shown. planScreen points into planWorkspaces, to the last
-	// selected workspace.
-	root                       string
-	planCtx                    context.Context
-	planOpening                bool
-	planner                    PlanOpener
-	builds                     plan.Build
-	resumer                    plan.Resumer
-	deleter                    Deleter
-	deleting                   string
-	planScreen                 *plan.Model
-	planOpen                   bool
-	planWorkspaces             map[uint64]*planWorkspace
-	planKey, planSeq           uint64
-	flows                      *flowlist.Model
-	flowsOpen, confirmPlanQuit bool
+	// another is shown.
+	root     string
+	planCtx  context.Context
+	planner  PlanOpener
+	builds   plan.Build
+	resumer  plan.Resumer
+	deleter  Deleter
+	deleting string
+	// planWorkspaces are the plan workspaces by their plan's ID, "" for a new
+	// plan until it has one. planKey is the key of the one the pane shows: the
+	// list's selection, or the one that took the keyboard.
+	planWorkspaces map[string]*planWorkspace
+	planKey        string
+	flows          *flowlist.Model
+	// focus is who has the keyboard: the flow list, or the pane's workspace,
+	// which is drawn across the screen where no pane fits.
+	focus           focus
+	confirmPlanQuit bool
+
+	// settleGen counts the selections, so a settle tick for an old one does
+	// nothing.
+	settleGen uint64
+	// sentSize is the size every workspace was last given.
+	sentSize [2]int
 
 	// chatView is the chat newChat made on the first ctrl+o, nil before it,
 	// or when the host offers none. chatShown is whether it polls and is
@@ -106,7 +114,7 @@ func New() Model {
 	return Model{
 		hasDarkBG:      lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
 		conn:           chunkd.CurrentConnection(),
-		planWorkspaces: make(map[uint64]*planWorkspace),
+		planWorkspaces: make(map[string]*planWorkspace),
 	}
 }
 
@@ -147,13 +155,22 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.updateWithPlan(msg)
 	m = next.(Model)
+	m.tidyWorkspaces()
 	// The screen beside the chat can change under it: Flows, another plan,
 	// a plan's status read. Its header and the next message follow.
 	if m.chatShown && m.chatView != nil {
 		place, ctx := m.chatPlace()
 		*m.chatView = m.chatView.WithPlace(place, ctx)
 	}
-	return m, cmd
+	// The pane follows the list's selection, and is as large as the list
+	// leaves it, which its note and errors change.
+	var size tea.Cmd
+	if m.flows != nil {
+		*m.flows = m.flows.WithNote(m.note)
+	}
+	follow := m.followSelection()
+	m, size = m.syncSizes(false)
+	return m, tea.Batch(cmd, follow, size)
 }
 
 // update handles what is the dashboard's own, rather than the flow list's or
@@ -206,8 +223,8 @@ func (m Model) View() tea.View {
 
 // screenView is the plan screen or the flow list, whichever is showing.
 func (m Model) screenView() tea.View {
-	if m.planOpen {
-		v := tea.NewView(m.planScreen.Content())
+	if m.fullScreen() {
+		v := tea.NewView(m.planWorkspaces[m.planKey].Content(m.styles()))
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		v.WindowTitle = "chunk"
@@ -215,15 +232,31 @@ func (m Model) screenView() tea.View {
 	}
 	content := ""
 	if m.flows != nil {
-		content = m.flows.WithNote(m.note).Content()
+		content = m.flows.WithNote(m.note).WithFocused(m.focus == focusList).WithDetail(m.paneContent()).Content()
 	}
 	if m.width > 0 {
 		content = m.renderHeader(m.styles()) + content
 	}
 	v := tea.NewView(content)
 	v.AltScreen = true
+	// The pane takes the wheel.
+	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "chunk — flows"
 	return v
+}
+
+// paneContent is what the pane beside the list shows: the workspace that has
+// the keyboard, else the selected flow's, else why there is none.
+func (m Model) paneContent() string {
+	st := m.styles()
+	if ws := m.shown(); ws != nil {
+		return ws.Content(st)
+	}
+	if m.planKey != "" {
+		// The selection has not rested long enough to open its workspace.
+		return openingContent(st)
+	}
+	return st.dim("Select a flow, or press n to start one.")
 }
 
 func (m Model) styles() watchStyles {

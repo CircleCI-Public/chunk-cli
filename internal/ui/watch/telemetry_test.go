@@ -45,11 +45,36 @@ func TestOpeningAPlanIsTracked(t *testing.T) {
 	assert.Check(t, !hasID, "a new plan has no ID yet: %+v", p)
 
 	next, cmd := m.openPlanID("plan-7", "Add a flag")
-	_ = deliver(t, next.(Model), cmd)
+	_ = deliver(t, next, cmd)
 	assert.Assert(t, cmp.Len(ev.Names(), 2))
 	p = ev.Last().Properties
 	assert.Check(t, cmp.Equal(p["is_new"], false))
 	assert.Check(t, cmp.Equal(p["plan_id"], "plan-7"))
+}
+
+// A workspace the pane opens to show a flow is not a plan the developer
+// opened: only giving it the keyboard is tracked, and once.
+func TestOnlyOpenedPlansAreTracked(t *testing.T) {
+	ctx, ev := tracking(t)
+	f := &fakePlans{plan: "# Retry uploads"}
+	m := sized(New().WithConnection(chunkd.Connection{}).
+		WithPlans(ctx, "/src/chunk-cli", f.planner).WithFlowList(flowList(t, flowsOf("p1")...)))
+	m = settle(t, listed(t, m))
+	assert.Assert(t, cmp.Len(f.openedIDs(), 1))
+	assert.Check(t, cmp.Len(ev.Names(), 0), "a settle was tracked as an open")
+
+	m, cmd := pressKey(m, enter)
+	m = deliver(t, m, cmd)
+	assert.Assert(t, cmp.DeepEqual(ev.Names(), []string{"plan_opened"}))
+	p := ev.Last().Properties
+	assert.Check(t, cmp.Equal(p["is_new"], false))
+	assert.Check(t, cmp.Equal(p["plan_id"], "p1"))
+
+	m, back := pressKey(m, esc)
+	m = deliver(t, m, back)
+	m, cmd = pressKey(m, enter)
+	_ = deliver(t, m, cmd)
+	assert.Check(t, cmp.Len(ev.Names(), 1), "giving the pane the keyboard again was tracked")
 }
 
 // A plan that fails to load was never opened.
@@ -58,6 +83,6 @@ func TestAPlanThatFailsToLoadIsNotTracked(t *testing.T) {
 	m := trackedPlanModel(ctx, t, &fakePlans{err: errors.New("factory is down")})
 
 	next, cmd := m.openPlanID("plan-7", "Add a flag")
-	_ = deliver(t, next.(Model), cmd)
+	_ = deliver(t, next, cmd)
 	assert.Check(t, cmp.Len(ev.Names(), 0))
 }
