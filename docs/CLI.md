@@ -220,7 +220,7 @@ chunk
   guessing the wrong prepared environment produces failures that look like the
   repo's own. Selection never fails a run: an unreachable snapshot API is
   warned about and treated as no match.
-- **Keys in `chunk watch` and `chunk factory plan` follow one set of rules**, so
+- **Keys in `chunk ui` and `chunk factory plan` follow one set of rules**, so
   a key means the same thing on both screens. `↑↓←→` and `j k h l` move,
   `g`/`G` and `home`/`end` go to the top and bottom, `pgup`/`pgdn` page and
   `ctrl+u`/`ctrl+d` page by half. `enter` goes in or confirms and `esc` goes
@@ -277,28 +277,28 @@ chunk
   history only** — uncommitted work in the tree is invisible to it. A detached
   HEAD, a repo with no recorded default branch, and a branch that is itself the
   merge target all produce "no answer" rather than a clean bill of health.
-- **`watch` works with this machine's daemon only.** Flows and plans are
+- **`ui` works with this machine's daemon only.** Flows and plans are
   planned and built from this machine, so with `CHUNK_DAEMON_REMOTE_ADDR` set
-  `watch` refuses to start (`watch.remote_unsupported`), before it checks for a
+  `ui` refuses to start (`ui.remote_unsupported`), before it checks for a
   terminal, and says to unset the variable; the variable keeps its meaning for
   the other daemon clients. The header turns red with `unreachable` when the
   daemon stops answering, and the daemon is started again.
-- **`watch` takes no directories.** Flows are the signed-in user's wherever it
+- **`ui` takes no directories.** Flows are the signed-in user's wherever it
   is run, and new plans are made in the project it was opened in, which it
   registers. An existing plan is planned and built in a checkout of the repo
   it records, among the projects chunk knows: the opened-in project when it
   is one, else the checkout already holding the plan's worktree, else the
   most recently used. With none, the plan opens read-only and approving or
-  `R` says to run `chunk watch` once in a checkout of that repo. An argument
+  `R` says to run `chunk ui` once in a checkout of that repo. An argument
   exits 2. `--focus` and `--all` still parse, deprecated,
   and do nothing.
-- **`chunk watch` is the recommended way to follow factory work.** It shows
+- **`chunk ui` is the recommended way to follow factory work.** It shows
   your flows in factory and opens their plans. So on a terminal chunk points
   there when it helps: once an approved plan starts building, after
   `chunk init`, and in bare `chunk` help. These pointers are left out with
   `--json`, in CI (`CI` set), and when stdout or stderr is not a terminal (a
   log file, a pipe), so none of those changes anything already being parsed.
-  Chunk never opens `watch` for you.
+  Chunk never opens `ui` for you.
 - **`factory plan` makes a plan with a factory planning session, then
   approves it in factory and builds it.** It opens a flow screen. A one-row
   strip under the header shows the plan's stage (`Created`, `Planning`,
@@ -316,7 +316,7 @@ chunk
   ▸ being built, ○ to do), the pull request and its deviations, and the
   comments waiting to be sent; and Related, the plan's parent and the plans
   blocking it. `↑`/`↓` move over its rows, and `enter` expands the Outcome
-  or a stage, or, from `chunk watch`, opens a related plan. The right pane is
+  or a stage, or, from `chunk ui`, opens a related plan. The right pane is
   the plan, rendered as markdown (a markdown link is underlined and opens its
   URL in terminals that support hyperlinks; only `http` and `https` links
   do). `tab` moves the keyboard between the two. The keyboard starts in the
@@ -333,7 +333,7 @@ chunk
   `y` cancels), then releases the claim and resumes the planner. The
   release is refused when the holder is chunk's own planner, a session
   working in the plan's worktree, or one factory's daemon does not know.
-  In `chunk watch`, `R`
+  In `chunk ui`, `R`
   resumes a planner or starts a fresh build session in the chunk daemon, in
   a checkout of the plan's repo, as above, and the flow list offers the same
   `R` for the selected flow. The chunk daemon refuses to approve or build a
@@ -345,7 +345,7 @@ chunk
   `R` can start a fresh one at once. The dashboard's header says what `R` does there
   or why it can't, where it otherwise names the daemon; a daemon it can't
   reach is shown instead. On a screen opened by `chunk factory plan`, `R`
-  resumes only a planner; resume a build from `chunk watch`. chunk never
+  resumes only a planner; resume a build from `chunk ui`. chunk never
   resumes a build on its own. The flow list also offers `X`: it
   deletes the selected plan, its comments and its flow after a y/n question in the footer, where any key but `y` cancels. It is
   not offered on a plan a session claims. The request you type for a new plan (or the one passed as
@@ -475,7 +475,7 @@ chunk
   Approving a plan with units is one request to the chunk daemon, which
   approves it in factory, stops its planning session and starts its build, in
   a Claude Code session in the plan's worktree, through to a pull request.
-  Closing chunk once the daemon has the request does not stop it. In `chunk watch`,
+  Closing chunk once the daemon has the request does not stop it. In `chunk ui`,
   the screen stays open after approval, with the Overview focused, to follow the build;
   its Building stage shows what the build session is doing.
   Comments still go to factory whenever it takes them, as on any screen;
@@ -486,7 +486,7 @@ chunk
   closes on approval. The daemon frees the plan's claim from a session that
   is only planning it, a parent plan's included; while a build holds the claim,
   approving is refused and names its session. A build whose plan another
-  session holds says so in `chunk watch`, and picks the plan up once the claim
+  session holds says so in `chunk ui`, and picks the plan up once the claim
   is released. Builds outlive the screen and the terminal, and any number go at
   once; the plan's Overview follows each, from factory. A build ends with its
   plan, so ending the plan (`x`) stops it at its next poll. A
@@ -519,7 +519,7 @@ chunk
   a CircleCI token; it needs no Claude credential, GitHub token or GitHub
   `origin`. `--json` reports `config_written` and the snapshot as
   `sidecar_image` (empty when no image was recorded).
-- **`watch` is Flows and the plans opened from it.** The dashboard opens on
+- **`ui` is Flows and the plans opened from it.** The dashboard opens on
   Flows: your open flows in factory, grouped by who they wait on, then by
   phase, with the selected flow's plan sections, units and open comments
   previewed beside it. A sub-plan stays in its own group and is marked `↳` with its parent's
@@ -543,7 +543,7 @@ chunk
   its conversation, for the next time the plan is opened, but the activity
   shown and an unsent request are not kept. Closing the dashboard stops no
   planning session or build: both run in the chunk daemon.
-- **`ctrl+o` shows a chat sidebar** on the right of any screen of `watch`, which
+- **`ctrl+o` shows a chat sidebar** on the right of any screen of `ui`, which
   stays usable beside it: a Claude Code session that answers questions about your plans and flows, from the plans, the code,
   Sourcegraph, git history and the factory daemon. It is told where it was
   opened: on a plan's screen, the plan and its status strip; on Flows, the open
@@ -561,11 +561,11 @@ chunk
   on a plan's screen, without a message's frame. The line under the
   conversation says what was copied for 2 seconds. A key press or a click
   clears the selection. The chunk daemon runs one chat session
-  per repository, so every `chunk watch` there shares its conversation, and
-  quitting `chunk watch` does not end it. The daemon stops it after 30 idle
+  per repository, so every `chunk ui` there shares its conversation, and
+  quitting `chunk ui` does not end it. The daemon stops it after 30 idle
   minutes and resumes it on the next message. Outside a repository it says it
   is unavailable, and takes no input.
-- `watch` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It checks the daemon answers every 5 seconds. Running `watch` in a project also registers that project so the daemon finds it.
+- `ui` requires a TTY — it exits with an error if stdout is not a terminal. In an editor's built-in terminal (VS Code and the editors built on it, such as Cursor, and JetBrains IDEs) it leaves the bottom two rows blank: those terminals can report a couple of rows more than their panel shows, which would hide the footer. It checks the daemon answers every 5 seconds. Running `ui` in a project also registers that project so the daemon finds it.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a
   `project-root` breadcrumb in the same data directory) whether or not a daemon
@@ -700,13 +700,13 @@ chunk
   skipped entirely in CI (`CI` set), when the user sets
   `CHUNK_NO_UPDATE_CHECK`, under `go test`, and for `completion`,
   `receive-telemetry`, `upgrade`, and shell-completion requests, which either run
-  on every keypress or report versions themselves. `watch` runs its own check and
+  on every keypress or report versions themselves. `ui` runs its own check and
   renders the notice in the TUI header instead.
 - The notice suggests `brew upgrade chunk` when the running binary resolves into
   a Homebrew prefix, and `chunk upgrade` otherwise. `chunk upgrade` refuses to
   replace a Homebrew-managed binary in place.
 - The notice names both versions (`v0.7.180 → v0.7.186`) and links the new
-  release's GitHub page, so the reason to upgrade is one click away. The `watch`
+  release's GitHub page, so the reason to upgrade is one click away. The `ui`
   header keeps a one-line form: it has no room for a URL.
 
 ## Config keys

@@ -71,7 +71,7 @@ func NewRootCmd(version string) *cobra.Command {
 Start here
   chunk init                 Set up this project (config, sandbox, review prompts)
   chunk factory plan         Plan a change with Claude; factory then builds it
-  chunk watch                Plan and follow your factory flows. Keep it open.
+  chunk ui                   Plan and follow your factory flows. Keep it open.
 
 Other commands
 {{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}  {{rpad .Name .NamePadding}} {{.Short}}
@@ -124,7 +124,7 @@ Configuration:
 	rootCmd.AddCommand(newConflictsCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
 	rootCmd.AddCommand(newReceiveTelemetryCmd())
-	rootCmd.AddCommand(newWatchCmd())
+	rootCmd.AddCommand(newUICmd())
 	rootCmd.AddCommand(newDaemonCmd())
 
 	rootCmd.AddCommand(newCommandsCmd())
@@ -259,7 +259,7 @@ var noUpdateCheckCommands = map[string]bool{
 	"completion":                    true,
 	"receive-telemetry":             true,
 	"upgrade":                       true,
-	watchCmdName:                    true,
+	uiCmdName:                       true,
 	chunkd.DaemonSubcommand:         true,
 }
 
@@ -295,7 +295,7 @@ var noAutoLaunchCommands = map[string]bool{
 	cobra.ShellCompNoDescRequestCmd: true,
 	"completion":                    true,
 	"receive-telemetry":             true,
-	watchCmdName:                    true,
+	uiCmdName:                       true,
 	chunkd.DaemonSubcommand:         true,
 }
 

@@ -427,8 +427,8 @@ func TestResumeOf(t *testing.T) {
 
 func TestTakeOverQuestion(t *testing.T) {
 	assert.Check(t, cmp.Equal(TakeOverQuestion("1be8ec19-aaaa-bbbb-cccc-dddddddddddd"),
-		"Plan is claimed by session 1be8ec19, which chunk watch didn't start. Release it and resume the planner?"))
+		"Plan is claimed by session 1be8ec19, which chunk ui didn't start. Release it and resume the planner?"))
 	assert.Check(t, cmp.Equal(TakeOverQuestion("s-1"),
-		"Plan is claimed by session s-1, which chunk watch didn't start. Release it and resume the planner?"))
+		"Plan is claimed by session s-1, which chunk ui didn't start. Release it and resume the planner?"))
 	assert.Check(t, cmp.Equal(ClaimedWhy("s-1", "p-42"), "Claimed by session s-1 · factory daemon release p-42 frees it"))
 }

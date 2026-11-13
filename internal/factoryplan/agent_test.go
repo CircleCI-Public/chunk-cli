@@ -195,7 +195,7 @@ func TestAgentCheckStartRefusesBeforeTheDaemon(t *testing.T) {
 		checked := 0
 		a.CheckStart(func(context.Context) error {
 			checked++
-			return errors.New("open chunk watch in this plan's local repository to plan or build")
+			return errors.New("open chunk ui in this plan's local repository to plan or build")
 		})
 
 		err := a.Request(t.Context(), "add a flag")

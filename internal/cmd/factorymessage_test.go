@@ -20,7 +20,7 @@ func onATerminal(t *testing.T) {
 	t.Cleanup(func() { onTerminal = prev })
 }
 
-// The pointers to chunk watch are for a person at a terminal: --json, CI and
+// The pointers to chunk ui are for a person at a terminal: --json, CI and
 // an output that is not a terminal each leave them out.
 func TestShowHints(t *testing.T) {
 	streams, _, _ := testStreams()

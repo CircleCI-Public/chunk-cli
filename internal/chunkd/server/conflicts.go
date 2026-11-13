@@ -22,7 +22,7 @@ const (
 	//
 	// Not zero, because every project needs a fetch on that first pass and the
 	// instant the daemon starts is when the developer is most likely mid-sync.
-	// Not a full ConflictInterval either: a fresh `chunk watch` followed
+	// Not a full ConflictInterval either: a fresh `chunk ui` followed
 	// straight away by a commit would otherwise get no answer for a minute,
 	// which reads as "no conflicts" to anyone not counting.
 	firstConflictDelay = 5 * time.Second

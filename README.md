@@ -8,7 +8,7 @@ On top of sidecars, chunk provides:
 
 - **`chunk validate`** to run your test, lint and format checks locally, on a sidecar, or in the background.
 - **`chunk factory plan`** to plan a change with Claude, then have it built and checked against the prompts in `.chunk/reviews/` and your validation commands, through to a pull request.
-- **`chunk watch`** to plan and follow your factory flows.
+- **`chunk ui`** to plan and follow your factory flows.
 - **`chunk mutate`** to find test coverage gaps with mutation testing.
 
 ## Why chunk?
@@ -41,7 +41,7 @@ Download the latest `chunk-cli_Windows_x86_64.zip` or `chunk-cli_Windows_arm64.z
 chunk init                                     # set up this project: config, sandbox, review prompts
 chunk factory bootstrap                        # set the project up for factory: config and sidecar image
 chunk factory plan "add a --verbose flag"      # plan a change, approve it, and it is built through to a PR
-chunk watch                                    # plan and follow your factory flows — keep it open
+chunk ui                                       # plan and follow your factory flows — keep it open
 ```
 
 ### Project Setup
@@ -141,7 +141,7 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 
 ## Factory
 
-`chunk factory plan` plans a change with Claude in factory. Once you approve the plan, the chunk daemon builds it unit by unit, checking the work with each prompt in `.chunk/reviews/` and your validation commands, through to a pull request on GitHub. It works in a git worktree of its own, so your checkout is never touched, and you can follow the build in `chunk watch`, where `n` starts a new plan too.
+`chunk factory plan` plans a change with Claude in factory. Once you approve the plan, the chunk daemon builds it unit by unit, checking the work with each prompt in `.chunk/reviews/` and your validation commands, through to a pull request on GitHub. It works in a git worktree of its own, so your checkout is never touched, and you can follow the build in `chunk ui`, where `n` starts a new plan too.
 
 ```bash
 # Set the project up: .chunk/config.json and a sidecar image with its environment
@@ -156,7 +156,7 @@ Planning needs the factory daemon running with `FACTORY_PLAN_STORE=circleci`. Ad
 ## Other Tools
 
 ```bash
-chunk watch                  # plan and follow your factory flows
+chunk ui                     # plan and follow your factory flows
 chunk mutate ./internal --parallel 4   # find coverage gaps; see docs/MUTATE.md
 chunk conflicts              # does this branch still merge cleanly? (advisory, always exits 0)
 chunk validate --async       # run in the background, then `chunk validate results`
@@ -180,7 +180,7 @@ chunk config set|show                      Manage configuration
 chunk validate [name]                      Run quality checks
 chunk validate results|variants            Background run results; validate code variants
 chunk factory plan|bootstrap               Plan changes and build them in factory
-chunk watch                                Plan and follow your factory flows
+chunk ui                                   Plan and follow your factory flows
 chunk mutate [path]                        Find test coverage gaps via mutation testing
 chunk conflicts                            Report whether this branch merges cleanly
 chunk skill install|list                   Manage AI agent skills

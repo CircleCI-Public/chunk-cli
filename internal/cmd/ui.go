@@ -30,18 +30,19 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 )
 
-// watchCmdName is the name of the watch command, referenced by the update-check
+// uiCmdName is the name of the ui command, referenced by the update-check
 // and auto-launch skip lists.
-const watchCmdName = "watch"
+const uiCmdName = "ui"
 
-func newWatchCmd() *cobra.Command {
+func newUICmd() *cobra.Command {
 	var (
 		focus bool
 		all   bool
 	)
 
 	cmd := &cobra.Command{
-		Use:          "watch",
+		Use:          "ui",
+		Aliases:      []string{"watch"},
 		Short:        "Plan and follow your factory flows",
 		SilenceUsage: true,
 		Args:         watchArgs,
@@ -49,13 +50,13 @@ func newWatchCmd() *cobra.Command {
 			// Checked before the TTY, so the reason it cannot run is the one
 			// given wherever it is run.
 			if chunkd.CurrentConnection().Remote != "" {
-				return newUserError("chunk watch works from this machine, not a remote chunk daemon.").
-					withCode("watch.remote_unsupported").
-					withSuggestion("Unset CHUNK_DAEMON_REMOTE_ADDR to run chunk watch.").
+				return newUserError("chunk ui works from this machine, not a remote chunk daemon.").
+					withCode("ui.remote_unsupported").
+					withSuggestion("Unset CHUNK_DAEMON_REMOTE_ADDR to run chunk ui.").
 					withoutDetail()
 			}
 			if err := ui.RequireStdoutTTY(); err != nil {
-				return fmt.Errorf("watch requires a TTY")
+				return fmt.Errorf("ui requires a TTY")
 			}
 
 			// Every event from this sitting carries its ID, so a funnel can
@@ -64,7 +65,7 @@ func newWatchCmd() *cobra.Command {
 			telemetry.Track(cmd.Context(), "watch_opened", nil)
 
 			if err := chunkd.EnsureRunning(); err != nil {
-				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
+				iostream.FromCmd(cmd).ErrPrintf("chunk ui: daemon unavailable, running without background updates: %v\n", err)
 			}
 
 			cwd, err := os.Getwd()
@@ -97,18 +98,18 @@ func newWatchCmd() *cobra.Command {
 				return err
 			}
 			if fm, ok := final.(watch.Model); ok && fm.HasPlan() {
-				iostream.FromCmd(cmd).ErrPrintln("Plans and saved comments remain in Factory. Reopen them with chunk watch; local activity and unsent input are not kept after quitting.")
+				iostream.FromCmd(cmd).ErrPrintln("Plans and saved comments remain in Factory. Reopen them with chunk ui; local activity and unsent input are not kept after quitting.")
 			}
 			return nil
 		},
 	}
 
-	// Deprecated no-ops: flows are the signed-in user's wherever chunk watch is
+	// Deprecated no-ops: flows are the signed-in user's wherever chunk ui is
 	// run. They still parse so existing invocations keep working.
 	cmd.Flags().BoolVar(&focus, "focus", false, "Watch only the current directory instead of all known projects")
 	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects (default)")
-	_ = cmd.Flags().MarkDeprecated("focus", "chunk watch shows your factory flows wherever it is run")
-	_ = cmd.Flags().MarkDeprecated("all", "chunk watch shows your factory flows wherever it is run")
+	_ = cmd.Flags().MarkDeprecated("focus", "chunk ui shows your factory flows wherever it is run")
+	_ = cmd.Flags().MarkDeprecated("all", "chunk ui shows your factory flows wherever it is run")
 	return cmd
 }
 
@@ -118,14 +119,14 @@ func watchArgs(_ *cobra.Command, args []string) error {
 	if len(args) == 0 {
 		return nil
 	}
-	return newUserError(fmt.Sprintf("chunk watch takes no arguments, got %q.", args[0])).
+	return newUserError(fmt.Sprintf("chunk ui takes no arguments, got %q.", args[0])).
 		withCode("command.invalid_args").
-		withSuggestion("Run chunk watch in the project to plan in; it shows your factory flows wherever it is run.").
+		withSuggestion("Run chunk ui in the project to plan in; it shows your factory flows wherever it is run.").
 		withExitCode(ExitBadArgs).
 		withoutDetail()
 }
 
-// watchProject is the project chunk watch was opened in: the canonical
+// watchProject is the project chunk ui was opened in: the canonical
 // git top level of cwd, registered so the daemon finds it. ok is false,
 // and nothing is registered, outside a git repository.
 func watchProject(ctx context.Context, cwd string) (root string, ok bool) {
@@ -263,7 +264,7 @@ func newChatModel(ctx context.Context, root string) func() chat.Model {
 		case chunkd.CurrentConnection().Remote != "":
 			return chat.Unavailable("Chat runs on this machine's chunk daemon, not a remote one.")
 		case root == "":
-			return chat.Unavailable("Open chunk watch in a repository to use chat.")
+			return chat.Unavailable("Open chunk ui in a repository to use chat.")
 		}
 		send := func(_ context.Context, text, screen string) error {
 			// The log it answers with is read by the next poll.
@@ -363,7 +364,7 @@ func planBuildLevel(l chunkd.FeedLevel) plan.BuildLevel {
 
 func watchPlanProject(ctx context.Context, root string) error {
 	if root == "" {
-		return errors.New("open chunk watch in this plan's local repository to plan or build")
+		return errors.New("open chunk ui in this plan's local repository to plan or build")
 	}
 	return checkPlanProject(ctx, root)
 }

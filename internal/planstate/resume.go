@@ -126,7 +126,7 @@ func WorkerClaimedWhy(worker, planID string) string {
 // TakeOverQuestion is what chunk asks before releasing holder's claim and
 // resuming the planner, without the y/n choice.
 func TakeOverQuestion(holder string) string {
-	return fmt.Sprintf("Plan is claimed by session %s, which chunk watch didn't start. Release it and resume the planner?", shortID(holder))
+	return fmt.Sprintf("Plan is claimed by session %s, which chunk ui didn't start. Release it and resume the planner?", shortID(holder))
 }
 
 // Line is r as one line: what resuming does when Kind offers it, else Why.

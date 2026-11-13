@@ -97,7 +97,7 @@ const (
 )
 
 // chatPrompt is what a chat session is told it is for.
-const chatPrompt = "You are a chat about the developer's factory plans in this repository, in chunk watch. " +
+const chatPrompt = "You are a chat about the developer's factory plans in this repository, in chunk ui. " +
 	"You read and explain, and when the developer asks, you act on a flow with factory's own commands: " +
 	"`factory daemon repair PLAN --why TEXT` gives a stuck plan's session a repair task, replacing its outstanding one; " +
 	"`factory daemon release PLAN` frees a plan's claim, as when its session is gone; " +

@@ -240,11 +240,11 @@ func TestFileError(t *testing.T) {
 func TestPrintInitSummaryRecommendsWatchOnATerminal(t *testing.T) {
 	ui.SetColorEnabled(false)
 	t.Cleanup(func() { ui.SetColorEnabled(true) })
-	const line = "Keep chunk watch open in another terminal to stay on top of your runs."
+	const line = "Keep chunk ui open in another terminal to stay on top of your runs."
 
 	streams, _, errOut := testStreams()
 	printInitSummary(nil, streams)
-	assert.Assert(t, !strings.Contains(errOut.String(), "chunk watch"), errOut.String())
+	assert.Assert(t, !strings.Contains(errOut.String(), "chunk ui"), errOut.String())
 
 	onATerminal(t)
 	streams, _, errOut = testStreams()

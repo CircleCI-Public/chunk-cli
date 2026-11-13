@@ -989,7 +989,7 @@ func (m Model) resumable() planstate.Resume {
 		BlockersKnown: m.familyLoaded,
 	})
 	if r.Kind == planstate.ResumeBuild && m.resumer == nil {
-		return planstate.Resume{Why: "Resume this build from chunk watch"}
+		return planstate.Resume{Why: "Resume this build from chunk ui"}
 	}
 	if r.Kind == planstate.ResumeTakeOver && m.resumer == nil {
 		return planstate.Resume{Why: planstate.ClaimedWhy(r.Holder, m.store.ID())}
@@ -1762,7 +1762,7 @@ func (m *Model) renderRequest() {
 func (m Model) inboxNote() string {
 	note := "Reading this plan does not start an agent."
 	if m.project == "" {
-		return note + " Open chunk watch in its repository to plan it."
+		return note + " Open chunk ui in its repository to plan it."
 	}
 	return note + " Its planning session resumes here in " + m.project + " when factory is waiting on it."
 }

@@ -284,7 +284,7 @@ The daemon is split in two. `internal/chunkd` is its API: the types that go over
 the wire, the HTTP client, the socket and pid paths, and starting the process.
 Its internal dependencies are `config`, `eventlog`, `iostream` and `version`.
 `internal/chunkd/server` is the daemon itself and imports `chunkd` for the types
-it serves. Clients — `chunk watch`, `chunk factory plan`, hooks, `chunk validate` —
+it serves. Clients — `chunk ui`, `chunk factory plan`, hooks, `chunk validate` —
 import `chunkd` only, so they depend on the daemon's API and never on the plan
 builds or the sidecar pool behind it. Only `cmd/daemon.go`,
 which runs the daemon, imports `server` (and tests that start a real one).
@@ -311,10 +311,10 @@ The split is in the imports, not yet everywhere at runtime:
   in-process, through the `ValidateRunner` that `cmd/daemon.go` passes in, so
   the code doing the work lives in `cmd/validate.go`.
 - **Projects are registered by writing a file, not by asking the daemon.**
-  `chunk watch`, `chunk validate` and `chunk review` write the breadcrumbs
+  `chunk ui`, `chunk validate` and `chunk review` write the breadcrumbs
   `AllProjectRoots` reads, and the daemon finds projects by scanning them.
 
-The daemon backs `chunk watch` and builds the plans `chunk factory plan`
+The daemon backs `chunk ui` and builds the plans `chunk factory plan`
 approves. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte
 offset, and serves snapshots as JSON over a Unix socket at
@@ -334,7 +334,7 @@ release until it exits.
 ### Remote viewing
 
 Clients of `/snapshot` and `/output` open no local state, so they work
-unchanged against a daemon reached over TCP. `chunk watch` is not one of them:
+unchanged against a daemon reached over TCP. `chunk ui` is not one of them:
 its flows and plans are planned and built from this machine, so it refuses to
 start with `CHUNK_DAEMON_REMOTE_ADDR` set. What differs for the others:
 
@@ -400,7 +400,7 @@ Design constraints worth preserving:
   `Snapshot.AuthError` and carries on serving. It has no terminal, so a process
   blocked on a hidden prompt would be indistinguishable from one that has hung.
   Resolution is deferred to first use because it can read the OS keychain, and the
-  daemon starts on every `chunk watch` whether or not anything needs a token.
+  daemon starts on every `chunk ui` whether or not anything needs a token.
 
 ### Plan builds
 
@@ -409,7 +409,7 @@ record of building one approved factory plan for a project: a Claude Code
 session in the plan's worktree, with factory's f plugin, that works through
 factory's tasks for the plan through to a pull request. The daemon is the
 **local** one (Unix socket); a build works from files on this machine.
-Approving a plan in `chunk factory plan` (or in `chunk watch`) starts one. A
+Approving a plan in `chunk factory plan` (or in `chunk ui`) starts one. A
 build's progress is the plan's flow in factory; the daemon's session only
 records that the build is running.
 
@@ -466,7 +466,7 @@ apart from sessions, in a registry of their own: they are not listed in
 `GET /factory` or the snapshot, so an idle planner never keeps an outdated
 daemon from being replaced. A planner starts on a request or resume, and
 stops on approval, when the plan's flow ends, or when the daemon stops. It
-outlives the screens that follow it: `chunk factory plan` and `chunk watch`
+outlives the screens that follow it: `chunk factory plan` and `chunk ui`
 poll `GET …/planner` while a plan is open, and closing them only ends that
 polling.
 

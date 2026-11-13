@@ -162,7 +162,7 @@ func TestFactoryBootstrapSaysTheProjectIsAlreadySetUp(t *testing.T) {
 	}
 }
 
-// Flows and plans work from this machine, so chunk watch refuses a remote
+// Flows and plans work from this machine, so chunk ui refuses a remote
 // daemon, and says so before it needs a terminal.
 func TestWatchRefusesARemoteDaemon(t *testing.T) {
 	env := testenv.NewTestEnv(t)
@@ -175,14 +175,14 @@ func TestWatchRefusesARemoteDaemon(t *testing.T) {
 	assert.Check(t, cmp.Contains(result.Stderr, "Unset CHUNK_DAEMON_REMOTE_ADDR"))
 }
 
-// chunk watch refuses arguments as bad arguments.
+// chunk ui refuses arguments as bad arguments.
 func TestWatchTakesNoDirectories(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{"watch", "some/dir"}, env, env.HomeDir)
 
 	assert.Check(t, cmp.Equal(result.ExitCode, 2), "stderr: %s", result.Stderr)
-	assert.Check(t, cmp.Contains(result.Stderr, "chunk watch takes no arguments"))
+	assert.Check(t, cmp.Contains(result.Stderr, "chunk ui takes no arguments"))
 }
 
 // readProjectConfig reads .chunk/config.json from workDir.

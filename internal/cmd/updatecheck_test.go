@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
@@ -26,8 +28,8 @@ func TestSkipUpdateCheck(t *testing.T) {
 	}
 
 	// receive-telemetry is re-execed by every chunk invocation, and upgrade
-	// and watch report versions themselves.
-	for _, name := range []string{"completion", "receive-telemetry", "upgrade", "watch"} {
+	// and ui report versions themselves.
+	for _, name := range []string{"completion", "receive-telemetry", "upgrade", "ui"} {
 		cmd, _, err := root.Find([]string{name})
 		if err != nil {
 			t.Fatalf("find %q: %v", name, err)
@@ -41,6 +43,13 @@ func TestSkipUpdateCheck(t *testing.T) {
 			t.Errorf("expected update check to be skipped for %q", name)
 		}
 	}
+
+	// The hidden "watch" alias must resolve to the same command and skip list
+	// entry as "ui", so switching spelling does not lose the skip.
+	cmd, _, err := root.Find([]string{"watch"})
+	assert.NilError(t, err)
+	assert.Assert(t, cmp.Equal(cmd.Name(), "ui"))
+	assert.Check(t, skipUpdateCheck(cmd), "watch alias")
 
 	// Subcommands of a skipped command are skipped too (completion has one
 	// per shell).
@@ -57,6 +66,20 @@ func TestSkipUpdateCheck(t *testing.T) {
 		}
 	}
 
+}
+
+// --daemon is set so a skip-list miss returns true rather than being masked by
+// the default config's autoLaunchDaemon being false.
+func TestShouldAutoLaunchSkipsUIAndItsWatchAlias(t *testing.T) {
+	root := NewRootCmd("v1.0.0")
+	for _, name := range []string{"ui", "watch"} {
+		cmd, _, err := root.Find([]string{name})
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Equal(cmd.Name(), "ui"))
+		err = cmd.ParseFlags([]string{"--daemon"})
+		assert.NilError(t, err)
+		assert.Check(t, !shouldAutoLaunch(cmd), "%q", name)
+	}
 }
 
 func TestPrintUpdateNotice(t *testing.T) {

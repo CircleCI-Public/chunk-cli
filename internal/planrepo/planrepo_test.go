@@ -116,9 +116,9 @@ func TestMatchesMissingDir(t *testing.T) {
 
 func TestNoCheckoutError(t *testing.T) {
 	assert.Check(t, cmp.Equal((&NoCheckoutError{Repos: []string{"circleci/factory"}}).Error(),
-		"plan builds in circleci/factory, and chunk knows no checkout of it; run chunk watch once in a checkout of circleci/factory"))
+		"plan builds in circleci/factory, and chunk knows no checkout of it; run chunk ui once in a checkout of circleci/factory"))
 	assert.Check(t, cmp.Equal((&NoCheckoutError{Repos: []string{"circleci/a", "circleci/b"}}).Error(),
-		"plan builds in one of circleci/a, circleci/b, and chunk knows no checkout of them; run chunk watch once in a checkout of one"))
+		"plan builds in one of circleci/a, circleci/b, and chunk knows no checkout of them; run chunk ui once in a checkout of one"))
 }
 
 func TestRoot(t *testing.T) {

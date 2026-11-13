@@ -349,9 +349,9 @@ func TestChatFailedPollKeepsTheConversation(t *testing.T) {
 }
 
 func TestChatUnavailableTakesNoInput(t *testing.T) {
-	m := Unavailable("open chunk watch in a repository").SetSize(80, 30)
+	m := Unavailable("open chunk ui in a repository").SetSize(80, 30)
 	before := m.Content()
-	assert.Check(t, cmp.Contains(ansi.Strip(before), "open chunk watch in a repository"))
+	assert.Check(t, cmp.Contains(ansi.Strip(before), "open chunk ui in a repository"))
 	m, cmd := m.Open()
 	assert.Check(t, cmd == nil)
 	m = typed(m, "hi")

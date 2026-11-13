@@ -20,7 +20,7 @@ import (
 //
 // Every path that runs a command a developer might later want to read goes
 // through here. A command submitted any other way still runs, but it is
-// invisible to both `chunk watch` and `chunk sidecar logs` — which reads as
+// invisible to both `chunk ui` and `chunk sidecar logs` — which reads as
 // output being lost rather than never captured.
 //
 // reg may be nil for internal probes — commands the tool issues on its own
