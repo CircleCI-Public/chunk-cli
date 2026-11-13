@@ -434,6 +434,50 @@ func (c *Client) CreatePlan(ctx context.Context, title, text string, repos ...st
 	return attrs.plan(env.Data.ID), nil
 }
 
+// CheckRun is a finished check run, as /api/v3/factory/check-runs serves it.
+type CheckRun struct {
+	ID   string
+	Key  string
+	Name string
+	// Outcome is one of succeeded, failed, cancelled, skipped and timed_out.
+	Outcome   string
+	StartedAt time.Time
+	EndedAt   time.Time
+}
+
+// checkRunAttrs is a check run's attributes on the wire.
+type checkRunAttrs struct {
+	Key       string    `json:"key"`
+	Name      string    `json:"name"`
+	Outcome   string    `json:"outcome"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"`
+}
+
+// CreateCheckRun records a finished check run for the caller and returns it
+// with its ID. It is not idempotent: each call stores a run. Both times are
+// sent in RFC 3339, UTC, with sub-second precision kept so a short check's
+// start still precedes its end.
+func (c *Client) CreateCheckRun(ctx context.Context, r CheckRun) (*CheckRun, error) {
+	body := checkRunAttrs{
+		Key: r.Key, Name: r.Name, Outcome: r.Outcome,
+		StartedAt: r.StartedAt.UTC(), EndedAt: r.EndedAt.UTC(),
+	}
+	var attrs checkRunAttrs
+	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/check-runs",
+		hc.Body(v3Envelope{Data: v3DataEntity{Attributes: body}}),
+		hc.JSONDecoder(&env),
+	))
+	if err != nil {
+		return nil, mapErr("create check run", err)
+	}
+	return &CheckRun{
+		ID: env.Data.ID, Key: attrs.Key, Name: attrs.Name, Outcome: attrs.Outcome,
+		StartedAt: attrs.StartedAt, EndedAt: attrs.EndedAt,
+	}, nil
+}
+
 // ListPlans returns the caller's open plans, oldest first, reading every
 // page. A plan is open until its flow ends; ended plans are not listed.
 func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {

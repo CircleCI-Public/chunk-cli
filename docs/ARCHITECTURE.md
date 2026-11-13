@@ -188,6 +188,7 @@ in `config.Resolve` and makes clients testable.
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
 | `XDG_DATA_HOME` | sidecar, validate | Per-project state directory (default: `~/.local/share`) |
 | `XDG_STATE_HOME` | upgrade, chunkd | User state directory for the 24 h update-check cache and the daemon's socket, pid file and log (default: `~/.local/state`) |
+| `CHUNK_SIGNOFF_LOCAL` | signoff | Set to `1` to run `chunk signoff`'s commands on this machine, in the snapshot's checkout, instead of on a sidecar; any other value uses the sidecar |
 | `CHUNK_NO_TELEMETRY` | telemetry | Disable usage telemetry (any non-empty value) |
 | `NO_ANALYTICS` | telemetry | Disable usage telemetry (any non-empty value) |
 | `DO_NOT_TRACK` | telemetry | Disable usage telemetry (any non-empty value) |

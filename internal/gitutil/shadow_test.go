@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
 func materialize(t *testing.T, dir, tree string) string {
@@ -62,12 +63,13 @@ func TestMaterializeTreeLeavesIgnoredContentBehind(t *testing.T) {
 
 	dir := setupRepo(t)
 	writeFile(t, dir, ".gitignore", "node_modules/\n")
-	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755))
+	err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755)
+	assert.NilError(t, err)
 	writeFile(t, dir, "node_modules/dep.js", "module.exports = 1\n")
 
 	path := materialize(t, dir, snapshot(t, dir))
 
-	_, err := os.Stat(filepath.Join(path, "node_modules"))
+	_, err = os.Stat(filepath.Join(path, "node_modules"))
 	assert.Assert(t, err != nil, "ignored content reached the shadow")
 }
 
@@ -128,4 +130,34 @@ func TestMaterializeTreeRefusesAnEmptySnapshot(t *testing.T) {
 
 	_, _, err := MaterializeTree(setupRepo(t), "")
 	assert.Assert(t, err != nil)
+}
+
+// A checkout that fails returns git's or the OS's error and leaves nothing
+// behind: no directory for the caller to know about, and no entry in
+// .git/worktrees. Not parallel: it sets TMPDIR for the whole process.
+func TestMaterializeTreeLeavesNothingWhenTheCheckoutFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a directory whatever its mode")
+	}
+	dir := setupRepo(t)
+	writeFile(t, dir, "main.go", "package main\n")
+	tree := snapshot(t, dir)
+
+	unwritable := filepath.Join(t.TempDir(), "tmp")
+	err := os.Mkdir(unwritable, 0o500)
+	assert.NilError(t, err)
+	t.Setenv("TMPDIR", unwritable)
+
+	_, _, err = MaterializeTree(dir, tree)
+
+	assert.Assert(t, err != nil, "a checkout into an unwritable TMPDIR succeeded")
+	var worktrees []string
+	for _, line := range strings.Split(gitRun(t, dir, "worktree", "list", "--porcelain"), "\n") {
+		if path, ok := strings.CutPrefix(line, "worktree "); ok {
+			worktrees = append(worktrees, path)
+		}
+	}
+	assert.Check(t, cmp.Len(worktrees, 1), "worktrees: %v", worktrees)
+	entries, err := os.ReadDir(filepath.Join(dir, ".git", "worktrees"))
+	assert.Assert(t, err != nil || len(entries) == 0, "an entry was left in .git/worktrees")
 }

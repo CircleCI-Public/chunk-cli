@@ -78,8 +78,12 @@ type PoolOptions struct {
 	Image string
 	// WorkDir is the tree synced to every member.
 	WorkDir string
+	// StateDir is the project whose data directory keys the pool's state, when
+	// that is not WorkDir: for a pool synced from a checkout of the project's
+	// tree. When empty, WorkDir keys it.
+	StateDir string
 	// StatePath is the pool's state file, for a pool that belongs to
-	// something other than a project. When empty, state is keyed by WorkDir.
+	// something other than a project. When empty, state is keyed by StateDir.
 	StatePath   string
 	RepoPath    string
 	ExistingIDs []string
@@ -146,11 +150,15 @@ func NewPool(
 	}
 	statePath, legacyStatePath := opts.StatePath, ""
 	if statePath == "" {
+		stateDir := opts.StateDir
+		if stateDir == "" {
+			stateDir = opts.WorkDir
+		}
 		var err error
-		if statePath, err = poolStatePath(opts.WorkDir, opts.Name); err != nil {
+		if statePath, err = poolStatePath(stateDir, opts.Name); err != nil {
 			return nil, fmt.Errorf("pool: resolve state path: %w", err)
 		}
-		legacyStatePath = legacyPoolStatePath(opts.WorkDir, opts.Name)
+		legacyStatePath = legacyPoolStatePath(stateDir, opts.Name)
 	}
 	state, _ := loadPoolState(statePath, legacyStatePath)
 	repoPath := opts.RepoPath

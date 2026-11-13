@@ -298,7 +298,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 	activeSidecar, _ := sidecar.LoadActive(ctx)
 
-	validatePool, err := prepareValidationTarget(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, executionPlan.PoolSize, activeSidecar, statusFn, workDir, streams)
+	validatePool, err := prepareValidationTarget(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, executionPlan.PoolSize, activeSidecar, statusFn, workDir, workDir, streams)
 	if err != nil {
 		return err
 	}
@@ -400,6 +400,11 @@ func validateParallelism(parallel int, explicitSidecarID string) int {
 	return defaultValidateParallelism
 }
 
+// prepareValidationTarget readies the sidecar pool a validation runs on.
+// workDir is the tree synced to the sidecar and run in; projectDir is the
+// project it belongs to, which holds the config, names the sidecar and keys
+// the pool's state. They are one directory unless the tree is a checkout of a
+// snapshot.
 func prepareValidationTarget(
 	ctx context.Context,
 	client *circleci.Client,
@@ -408,7 +413,7 @@ func prepareValidationTarget(
 	poolSize int,
 	activeSidecar *sidecar.ActiveSidecar,
 	statusFn iostream.StatusFunc,
-	workDir string,
+	workDir, projectDir string,
 	streams iostream.Streams,
 ) (*sidecar.Pool, error) {
 	if poolSize == 0 {
@@ -433,7 +438,7 @@ func prepareValidationTarget(
 			}
 		}
 	} else {
-		created, resolvedImage, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, streams)
+		created, resolvedImage, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, projectDir, tokenSource, streams)
 		if err != nil {
 			return nil, err
 		}
@@ -447,7 +452,7 @@ func prepareValidationTarget(
 		}
 	}
 
-	pool, err := setupValidatePool(ctx, client, opts, image, tokenSource, poolSize, activeSidecar, existingIDs, freshIDs, statusFn, workDir)
+	pool, err := setupValidatePool(ctx, client, opts, image, tokenSource, poolSize, activeSidecar, existingIDs, freshIDs, statusFn, workDir, projectDir)
 	if err != nil {
 		return nil, err
 	}
@@ -1213,7 +1218,7 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 // a new sidecar when none is configured. Returns true when a new sidecar was
 // provisioned (as opposed to loaded from the active state file). The returned
 // image is the configured or auto-selected image used for new pool members.
-func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir, tokenSource string, streams iostream.Streams) (created bool, resolvedImage string, err error) {
+func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, projectDir, tokenSource string, streams iostream.Streams) (created bool, resolvedImage string, err error) {
 	if *sidecarID != "" {
 		return false, image, nil
 	}
@@ -1229,7 +1234,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	// of a first run, not something to headline.
 	statusFn := newStatusFunc(streams)
 	statusFn(iostream.LevelInfo, "no active sidecar; creating one")
-	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource, streams))
+	resolvedOrgID, err := resolveOrgID(orgID, projectDir, orgPicker(ctx, client, tokenSource, streams))
 	if err != nil {
 		return false, image, err
 	}
@@ -1243,15 +1248,15 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	if image != "" {
 		imageSource = config.SourceProjectConfig
 	} else {
-		image = autoSelectSnapshotImage(ctx, client, resolvedOrgID, workDir, newStatusFunc(streams), streams)
+		image = autoSelectSnapshotImage(ctx, client, resolvedOrgID, projectDir, newStatusFunc(streams), streams)
 	}
-	sandboxName := sidecarAutoName(ctx, workDir)
+	sandboxName := sidecarAutoName(ctx, projectDir)
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image, "")
 	if err != nil {
-		if authErr := cannotCreateSidecar(resolvedOrgID, orgSource(orgID, workDir), err); authErr != nil {
+		if authErr := cannotCreateSidecar(resolvedOrgID, orgSource(orgID, projectDir), err); authErr != nil {
 			return false, image, authErr
 		}
-		if rejectErr := sidecarCreateRejected("Could not create a sidecar.", resolvedOrgID, orgSource(orgID, workDir), image, imageSource, err); rejectErr != nil {
+		if rejectErr := sidecarCreateRejected("Could not create a sidecar.", resolvedOrgID, orgSource(orgID, projectDir), image, imageSource, err); rejectErr != nil {
 			return false, image, rejectErr
 		}
 		return false, image, &userError{
@@ -1264,13 +1269,13 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	// Persist the org ID so future sidecar creation skips the picker.
-	projCfg, loadErr := config.LoadProjectConfig(workDir)
+	projCfg, loadErr := config.LoadProjectConfig(projectDir)
 	if loadErr != nil {
 		projCfg = &config.ProjectConfig{}
 	}
 	if projCfg.OrgID == "" {
 		projCfg.OrgID = resolvedOrgID
-		if saveErr := config.SaveProjectConfig(workDir, projCfg); saveErr != nil {
+		if saveErr := config.SaveProjectConfig(projectDir, projCfg); saveErr != nil {
 			streams.ErrPrintf("warning: could not save org ID to project config: %v\n", saveErr)
 		}
 	}
@@ -1282,7 +1287,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 // branchSanitizer is kept for the no-session fallback path.
 var branchSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
 
-// sidecarAutoName builds a sidecar name from workDir, the Claude session ID,
+// sidecarAutoName builds a sidecar name from the project directory, the Claude session ID,
 // and the current git branch.
 //
 // When a session ID is present the branch is encoded as an 8-hex-char suffix
@@ -1299,10 +1304,10 @@ var branchSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
 // fallback):
 //   - Branch only → "<base>-<branch>-validate"
 //   - Neither     → "<base>-validate"
-func sidecarAutoName(ctx context.Context, workDir string) string {
-	base := filepath.Base(workDir)
+func sidecarAutoName(ctx context.Context, projectDir string) string {
+	base := filepath.Base(projectDir)
 	sessionID := session.IDFromCtx(ctx)
-	branch := sidecar.CurrentBranch(workDir)
+	branch := sidecar.CurrentBranch(projectDir)
 
 	if sessionID != "" {
 		short := shortSessionID(sessionID)
@@ -1347,15 +1352,16 @@ func mapValidateError(r validate.Result, err error) (validate.Result, error) {
 
 // setupValidatePool resolves a validate pool at the capacity selected by the
 // execution plan, reusing cached sidecars when possible and creating or
-// replacing members through the pool lifecycle when needed.
-func setupValidatePool(ctx context.Context, client *circleci.Client, opts *validateOpts, image, tokenSource string, n int, active *sidecar.ActiveSidecar, existingIDs, freshIDs []string, statusFn iostream.StatusFunc, workDir string) (*sidecar.Pool, error) {
+// replacing members through the pool lifecycle when needed. workDir is synced
+// to its members; projectDir resolves the org and keys the pool's state.
+func setupValidatePool(ctx context.Context, client *circleci.Client, opts *validateOpts, image, tokenSource string, n int, active *sidecar.ActiveSidecar, existingIDs, freshIDs []string, statusFn iostream.StatusFunc, workDir, projectDir string) (*sidecar.Pool, error) {
 	statusFn(iostream.LevelStep, fmt.Sprintf("Preparing sidecar pool with capacity %d...", n))
 	resolvedOrgID := opts.orgID
 	if resolvedOrgID == "" && active != nil {
 		resolvedOrgID = active.OrgID
 	}
 	if resolvedOrgID == "" {
-		resolvedOrgID, _ = config.ResolveOrgID(workDir)
+		resolvedOrgID, _ = config.ResolveOrgID(projectDir)
 	}
 	pool, err := sidecar.NewPool(ctx, client, sidecar.PoolOptions{
 		Size:        n,
@@ -1363,6 +1369,7 @@ func setupValidatePool(ctx context.Context, client *circleci.Client, opts *valid
 		OrgID:       resolvedOrgID,
 		Image:       image,
 		WorkDir:     workDir,
+		StateDir:    projectDir,
 		RepoPath:    validationRepoPath(opts.workdir, active),
 		ExistingIDs: existingIDs,
 		FreshIDs:    freshIDs,

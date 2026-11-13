@@ -46,7 +46,7 @@ func MaterializeTree(dir, tree string) (string, func(), error) {
 	commit, err := gitOutEnv(dir, append(os.Environ(), shadowIdentity...),
 		"commit-tree", tree, "-m", "chunk snapshot")
 	if err != nil {
-		return "", nil, fmt.Errorf("commit snapshot: %w", err)
+		return "", nil, fmt.Errorf("commit snapshot: %w", withStderr(err))
 	}
 
 	path, err := os.MkdirTemp("", "chunk-shadow-")
@@ -61,7 +61,10 @@ func MaterializeTree(dir, tree string) (string, func(), error) {
 	}
 
 	if _, err := gitOut(dir, "worktree", "add", "--detach", path, strings.TrimSpace(commit)); err != nil {
-		return "", nil, fmt.Errorf("add shadow worktree: %w", err)
+		// A checkout that failed partway can leave its directory and its
+		// .git/worktrees entry; neither is returned to the caller to remove.
+		cleanupShadow(dir, path)()
+		return "", nil, fmt.Errorf("add shadow worktree: %w", withStderr(err))
 	}
 	return path, cleanupShadow(dir, path), nil
 }

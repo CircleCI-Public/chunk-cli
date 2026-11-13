@@ -118,6 +118,7 @@ Configuration:
 	rootCmd.AddCommand(newPruneCmd())
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
+	rootCmd.AddCommand(newSignoffCmd())
 	rootCmd.AddCommand(newMutateCmd())
 	rootCmd.AddCommand(newReviewCmd())
 	rootCmd.AddCommand(newFactoryCmd())
