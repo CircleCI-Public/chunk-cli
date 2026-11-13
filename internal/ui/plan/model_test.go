@@ -6648,3 +6648,84 @@ func TestActivityLogIsNewestFirst(t *testing.T) {
 	assert.Check(t, cmp.Equal(lines[1], "✓ reading main.go"))
 	assert.Check(t, cmp.Equal(lines[2], "Early plan"))
 }
+
+// TestWithTabsDrawsTabsWhenWide checks that a host that gives the screen a
+// pane gets the tabbed layout at any width: a tab row and one pane, which
+// tab switches.
+func TestWithTabsDrawsTabsWhenWide(t *testing.T) {
+	t.Parallel()
+	tabRow := regexp.MustCompile(`(?m)^\s*Overview\s+Plan\b`)
+	titles := func(m Model) (overview, plan bool) {
+		view := ansi.Strip(m.Content())
+		return strings.Contains(view, "╭─ Overview"), strings.Contains(view, "╭─ Plan")
+	}
+
+	wide, _ := resumeModel(t, newFakeAgent(), "refine-proposal", nil)
+	wide = refreshed(t, drive(t, wide, tea.WindowSizeMsg{Width: 160, Height: 40}))
+	overview, plan := titles(wide)
+	assert.Check(t, overview && plan, "both panes are on one row without WithTabs:\n%s", ansi.Strip(wide.Content()))
+	assert.Check(t, !tabRow.MatchString(ansi.Strip(wide.Content())), "a tab row without WithTabs")
+
+	m, _ := resumeModel(t, newFakeAgent(), "refine-proposal", nil)
+	m = refreshed(t, drive(t, m.WithTabs(), tea.WindowSizeMsg{Width: 160, Height: 40}))
+	view := ansi.Strip(m.Content())
+	assert.Check(t, tabRow.MatchString(view), "no tab row:\n%s", view)
+	overview, plan = titles(m)
+	assert.Check(t, overview != plan, "want one pane, got overview=%v plan=%v:\n%s", overview, plan, view)
+	assertFits(t, m, 160, 40)
+
+	m = drive(t, m, press("tab"))
+	switched, switchedPlan := titles(m)
+	assert.Check(t, switched != switchedPlan, "want one pane after tab")
+	assert.Check(t, switched != overview, "tab did not switch the pane")
+	assert.Check(t, switchedPlan != plan, "tab did not switch the pane")
+}
+
+// TestWithTabsBeforeTheFirstSize checks that WithTabs on a screen that has
+// not been sized draws nothing and does not panic.
+func TestWithTabsBeforeTheFirstSize(t *testing.T) {
+	t.Parallel()
+	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "").WithTabs()
+	assert.Check(t, cmp.Equal(m.Content(), ""))
+	m = drive(t, m, tea.WindowSizeMsg{Width: 160, Height: 40})
+	assertFits(t, m, 160, 40)
+}
+
+// TestInactiveScreenDoesNotResume checks that a screen its host has not
+// made active leaves a planner that is not there alone, until it is.
+func TestInactiveScreenDoesNotResume(t *testing.T) {
+	t.Parallel()
+	agent := newFakeAgent()
+	m, _ := resumeModel(t, agent, "refine-proposal", sessionStep)
+	m = m.WithActive(false)
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
+	m = refreshed(t, m)
+	assert.Check(t, cmp.Equal(agent.Resumes(), 0))
+	m = m.WithActive(true)
+	refreshed(t, m)
+	assert.Check(t, cmp.Equal(agent.Resumes(), 1))
+}
+
+// TestUnfocusedScreenDrawsNoHints checks that a screen drawn without the
+// keyboard shows no key hints and no brand-coloured pane edge.
+func TestUnfocusedScreenDrawsNoHints(t *testing.T) {
+	t.Parallel()
+	m, _ := resumeModel(t, newFakeAgent(), "refine-proposal", nil)
+	m = refreshed(t, m.WithTabs())
+	brandEdge := lipgloss.NewStyle().Foreground(m.brand()).Render("╭─ ")
+
+	assert.Check(t, cmp.Contains(ansi.Strip(m.actionBar()), "tab"), "the focused bar has no hints")
+	assert.Check(t, cmp.Contains(m.Content(), brandEdge), "the focused pane has no brand edge")
+
+	m = m.WithFocused(false)
+	bar := ansi.Strip(m.actionBar())
+	for _, hint := range []string{"tab", "c comment", "ctrl+s"} {
+		assert.Check(t, !strings.Contains(bar, hint), "the unfocused bar shows %q: %q", hint, bar)
+	}
+	assert.Check(t, !strings.Contains(m.Content(), brandEdge), "an unfocused pane has a brand edge")
+	assertFits(t, m, 140, 40)
+
+	m = m.WithFocused(true)
+	assert.Check(t, cmp.Contains(m.Content(), brandEdge), "focus did not come back")
+}

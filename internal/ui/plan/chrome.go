@@ -46,7 +46,7 @@ func (m Model) pill(fg color.Color, bgLight, bgDark, text string) string {
 // instead of sharing it.
 const narrowBelow = 100
 
-func (m Model) narrow() bool { return m.width < narrowBelow }
+func (m Model) narrow() bool { return m.tabbed || m.width < narrowBelow }
 
 // header is the row above the panes: where the developer is, and what is
 // under way that the developer is waiting on, in colour. Where the flow is
@@ -245,6 +245,11 @@ func (m Model) actionBar() string {
 	}
 	if m.status != "" {
 		return edge.Width(m.width).Render(ansi.Truncate(m.status, inner, "…"))
+	}
+
+	if m.unfocused {
+		// The keyboard is elsewhere, so the bar offers no keys and no button.
+		return edge.Width(m.width).Render("")
 	}
 
 	_, right := m.barRight()

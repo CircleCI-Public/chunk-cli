@@ -422,6 +422,11 @@ type Model struct {
 	back bool
 	// inbox is whether the host offers a plan inbox and Ctrl+P switching.
 	inbox bool
+	// tabbed is whether the panes take turns at any width, for a host that
+	// gives the screen a pane. inactive and unfocused are stored negated, so
+	// the zero value keeps the screen as it is standalone: it may resume its
+	// planner and is drawn with the keyboard.
+	tabbed, inactive, unfocused bool
 	// chatKey is whether the host opens its chat with ctrl+o.
 	chatKey bool
 	title   string
@@ -560,6 +565,19 @@ func (m Model) WithTerminal(dark, disambiguates bool) Model {
 	m.dark, m.disambiguates = dark, disambiguates
 	return m
 }
+
+// WithTabs returns a copy of m that draws its panes a tab apart at any
+// width, as it does below narrowBelow, for a host that gives it a pane.
+func (m Model) WithTabs() Model { m.tabbed = true; m.layout(); return m }
+
+// WithActive returns a copy of m that may resume its planner, or not: a
+// host that opens a screen before the developer asks for it holds the
+// resume off until they do.
+func (m Model) WithActive(active bool) Model { m.inactive = !active; return m }
+
+// WithFocused returns a copy of m drawn as having the keyboard or not.
+// It changes only the drawing; the host decides where keys go.
+func (m Model) WithFocused(focused bool) Model { m.unfocused = !focused; return m }
 
 // WithBranch returns a copy of m that names the branch the plan is for in its
 // header.
@@ -955,7 +973,7 @@ func resumeOwed(f Flow) bool {
 // claims a new plan without it. In init it never resumes a state it has
 // seen a session claim, until the state moves.
 func (m Model) resumeIfOwed() (Model, tea.Cmd) {
-	if !m.created || m.resuming || !resumeOwed(m.flow) || m.resumedIn == m.state ||
+	if m.inactive || !m.created || m.resuming || !resumeOwed(m.flow) || m.resumedIn == m.state ||
 		(m.state == planstate.Init && m.claimedIn == m.state) ||
 		(m.inbox && m.project == "") {
 		return m, nil
@@ -1843,6 +1861,7 @@ func (m Model) Content() string {
 		return ""
 	}
 	pane := func(focused bool, w int, title, content string) string {
+		focused = focused && !m.unfocused
 		edge := m.quiet()
 		if focused {
 			edge = m.brand()
@@ -1854,7 +1873,7 @@ func (m Model) Content() string {
 	}
 	// The pane without the keyboard has a dim title as well as a dim border.
 	title := func(focused bool, name string) string {
-		if focused {
+		if focused && !m.unfocused {
 			return ui.TitleStyle.Render(name)
 		}
 		return ui.HelperStyle.Faint(true).Render(name)
