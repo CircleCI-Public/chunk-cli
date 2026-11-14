@@ -20,7 +20,7 @@ require (
 	github.com/sethvargo/go-envconfig/v2 v2.0.0
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/yuin/goldmark v1.8.6
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.58.0
