@@ -128,7 +128,7 @@ type Blocker struct {
 	Active bool
 }
 
-// The phases a plan or its flow is in, as factory serves them.
+// The phases a v3 lifecycle resource is in: a factory plan or its flow, or a sidecar instance.
 const (
 	PhaseReceived = "received"
 	PhaseStarted  = "started"

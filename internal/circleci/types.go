@@ -5,6 +5,11 @@ type Sidecar struct {
 	Name  string `json:"name"`
 	OrgID string `json:"org_id"`
 	Image string `json:"image,omitempty"`
+	// Phase is the sidecar's lifecycle: PhaseReceived while its agent boots,
+	// PhaseStarted once it takes work, PhaseEnded once it is gone.
+	Phase string `json:"phase,omitempty"`
+	// Outcome says why an ended sidecar ended, e.g. "failed".
+	Outcome string `json:"outcome,omitempty"`
 }
 
 type ExecRequest struct {

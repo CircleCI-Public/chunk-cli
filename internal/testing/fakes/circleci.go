@@ -157,6 +157,28 @@ type FakeCircleCI struct {
 	GetCommandStatusCode      int // override for GET /sidecar/commands/:id
 	CreateOrgStatusCode       int // override for POST /api/v2/organization
 
+	// The sidecar lifecycle create and GET /sidecar/instances/:id serve.
+
+	// CreatePhase is the phase create answers with; "" means "received".
+	CreatePhase string
+	// OmitCreatePhase makes create answer with no phase.
+	OmitCreatePhase bool
+	// ReceivedPolls is how many GET /sidecar/instances/:id calls on each
+	// sidecar answer phase "received" before it answers GetPhase.
+	ReceivedPolls int
+	// GetPhase is the phase GET /sidecar/instances/:id answers once past
+	// ReceivedPolls; "" means "started".
+	GetPhase string
+	// OmitGetPhase makes that GET answer with no phase at all.
+	OmitGetPhase bool
+	// GetStatusCode overrides GET /sidecar/instances/:id.
+	GetStatusCode int
+	// FailStart holds sidecar IDs whose GET answers phase "ended", outcome
+	// "failed", as a sidecar whose agent never came up.
+	FailStart map[string]bool
+
+	getSidecarCalls map[string]int
+
 	// Factory plans and their comments; see factory.go.
 	factoryPlans          map[string]*factoryPlan
 	factoryWorkers        map[string][]FactoryWorkerSession
@@ -215,6 +237,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.GET("/api/v3/sidecar/instances", f.handleListSidecars)
 	r.POST("/api/v3/sidecar/instances", f.handleCreateSidecar)
 	r.POST("/api/v3/sidecar/instances/prune", f.handlePruneSidecars)
+	r.GET("/api/v3/sidecar/instances/:id", f.handleGetSidecar)
 	r.DELETE("/api/v3/sidecar/instances/:id", f.handleDeleteSidecar)
 	r.POST("/api/v3/sidecar/instances/:id/ssh/add-key", f.handleAddSSHKey)
 	r.POST("/api/v3/sidecar/instances/:id/exec", f.handleExec)
@@ -321,6 +344,7 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 	f.sidecarCounter++
 	counter := f.sidecarCounter
 	statusCode := f.CreateStatusCode
+	createPhase, omitPhase := f.CreatePhase, f.OmitCreatePhase
 	wait := f.CreateWait[counter]
 	if f.CreateErrorAfter > 0 && counter > f.CreateErrorAfter {
 		statusCode = http.StatusInternalServerError
@@ -375,9 +399,20 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 	f.Sidecars = append(f.Sidecars, sidecar)
 	f.mu.Unlock()
 
-	c.JSON(http.StatusCreated, gin.H{
+	attrs := gin.H{"name": sidecar.Name}
+	status := http.StatusCreated
+	if !omitPhase {
+		if createPhase == "" {
+			createPhase = "received"
+		}
+		attrs["phase"] = createPhase
+		status = http.StatusAccepted
+		c.Header("Location", "/api/v3/sidecar/instances/"+sidecar.ID)
+		c.Header("Retry-After", "2")
+	}
+	c.JSON(status, gin.H{
 		"data": gin.H{
-			"attributes": gin.H{"name": sidecar.Name},
+			"attributes": attrs,
 			"id":         sidecar.ID,
 			"references": gin.H{
 				"org":  gin.H{"id": sidecar.OrgID},
@@ -385,6 +420,55 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 			},
 		},
 	})
+}
+
+func (f *FakeCircleCI) handleGetSidecar(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	id := c.Param("id")
+	f.mu.Lock()
+	if f.GetStatusCode != 0 {
+		code := f.GetStatusCode
+		f.mu.Unlock()
+		c.JSON(code, gin.H{"message": "API error"})
+		return
+	}
+	var found *Sidecar
+	for i := range f.Sidecars {
+		if f.Sidecars[i].ID == id {
+			found = &f.Sidecars[i]
+			break
+		}
+	}
+	if found == nil {
+		f.mu.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{"message": "Sidecar not found"})
+		return
+	}
+	if f.getSidecarCalls == nil {
+		f.getSidecarCalls = map[string]int{}
+	}
+	f.getSidecarCalls[id]++
+	attrs := gin.H{"name": found.Name, "domain": id + ".example.com", "state": "running"}
+	switch {
+	case f.FailStart[id]:
+		attrs["phase"], attrs["outcome"] = "ended", "failed"
+	case f.getSidecarCalls[id] <= f.ReceivedPolls:
+		attrs["phase"] = "received"
+	case f.OmitGetPhase:
+	case f.GetPhase != "":
+		attrs["phase"] = f.GetPhase
+	default:
+		attrs["phase"] = "started"
+	}
+	orgID := found.OrgID
+	f.mu.Unlock()
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{
+		"id":         id,
+		"attributes": attrs,
+		"references": gin.H{"org": gin.H{"id": orgID}, "user": gin.H{"id": "user-123"}},
+	}})
 }
 
 func (f *FakeCircleCI) handleDeleteSidecar(c *gin.Context) {

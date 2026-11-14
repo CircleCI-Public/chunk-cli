@@ -244,6 +244,9 @@ chunk
   env var → `orgID` in `.chunk/config.json` → interactive org picker (TTY only).
   Non-interactive sessions (agents, CI) should set `orgID` in project config or
   pass `--org-id` / `CIRCLECI_ORG_ID`.
+- **Creating a sidecar waits until it is ready.** Any command that creates a
+  sidecar returns only once the sidecar can run commands. A sidecar that fails
+  to start, or does not start in time, is an error, and the sidecar is deleted.
 - **`conflicts` is advisory and always exits 0.** It reports what the watch
   daemon already computed and never previews a merge itself, so it returns
   immediately. It is deliberately incapable of failing: run from an agent's
