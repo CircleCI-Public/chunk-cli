@@ -138,6 +138,23 @@ func TestApproveReleasesThePlanningSession(t *testing.T) {
 	}))
 }
 
+// TestApproveReadsTheApprovalByItsInput checks that an approval the flow
+// serves with only an input is found and sent.
+func TestApproveReadsTheApprovalByItsInput(t *testing.T) {
+	client, cci, id := createdPlan(t, "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
+	cci.ClaimFactoryPlan(id, "s-1")
+	cci.SetFactoryPlanState(id, "refine-proposal")
+	cci.SetFactoryFlowStatus(id, fakes.FactoryFlowStatus{
+		WaitingOn: "human",
+		Next:      []fakes.FactoryTransition{{Actor: "human", Input: "approve-for-building", IsRequired: true}},
+	})
+
+	err := Approve(context.Background(), client, noDaemon, id, "s-1", "", "/data/plans/"+id)
+	assert.NilError(t, err)
+	p, _ := cci.FactoryPlan(id)
+	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+}
+
 // TestApproveHoldsAWorkerOnlyClaim checks that a plan a worker claims with
 // no session working it is refused, unless it is the worker the planning
 // session was last read working it under.

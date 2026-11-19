@@ -595,6 +595,69 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(got.Events, []string{"address-comments"}))
 	})
 
+	t.Run("sends a flow inputs", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			inputs     func(commentID string) FlowInputs
+			wantInputs func(commentID string) map[string]any // the body's attributes.inputs, as json decodes it
+			wantEvent  string
+			wantValue  func(commentID string) any
+		}{
+			{
+				name:       "a bool input",
+				inputs:     func(string) FlowInputs { return BoolInput(ApproveForUnits) },
+				wantInputs: func(string) map[string]any { return map[string]any{"approve-for-units": true} },
+				wantEvent:  "approve-for-units",
+				wantValue:  func(string) any { return true },
+			},
+			{
+				name:   "a comment input",
+				inputs: func(id string) FlowInputs { return CommentsInput(AddressComments, []string{id}) },
+				wantInputs: func(id string) map[string]any {
+					return map[string]any{"address-comments": []any{id}}
+				},
+				wantEvent: "address-comments",
+				wantValue: func(id string) any { return []string{id} },
+			},
+			{
+				name:       "a comment input with no comments sends []",
+				inputs:     func(string) FlowInputs { return CommentsInput(AddressComments, nil) },
+				wantInputs: func(string) map[string]any { return map[string]any{"address-comments": []any{}} },
+				wantEvent:  "address-comments",
+				wantValue:  func(string) any { return []string{} },
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				fake := fakes.NewFakeCircleCI()
+				srv := httptest.NewServer(fake)
+				t.Cleanup(srv.Close)
+				client := newTestClient(t, srv.URL)
+				p, err := client.CreatePlan(ctx, "a plan", "")
+				assert.NilError(t, err)
+				fake.ClaimFactoryPlan(p.ID, "session-1")
+				cm, err := client.CreateComment(ctx, p.ID, "", "a comment")
+				assert.NilError(t, err)
+
+				err = client.SendFlowInputs(ctx, p.ID, tc.inputs(cm.ID))
+				assert.NilError(t, err)
+
+				reqs := fake.Recorder.AllRequests()
+				last := reqs[len(reqs)-1]
+				assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/events"))
+				var body map[string]any
+				err = json.Unmarshal(last.Body, &body)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.DeepEqual(body, map[string]any{"data": map[string]any{
+					"attributes": map[string]any{"event": "input", "inputs": tc.wantInputs(cm.ID)},
+					"references": map[string]any{"factory_flow": map[string]any{"id": p.ID}},
+				}}))
+				got, _ := fake.FactoryPlan(p.ID)
+				assert.Check(t, cmp.DeepEqual(got.Events, []string{tc.wantEvent}))
+				assert.Check(t, cmp.DeepEqual(got.Inputs, []any{tc.wantValue(cm.ID)}))
+			})
+		}
+	})
+
 	t.Run("ends a flow for each reason", func(t *testing.T) {
 		for _, tc := range []struct {
 			reason  EndReason
@@ -643,6 +706,7 @@ func TestFlows(t *testing.T) {
 				assert.Check(t, cmp.Equal(got.Events[len(got.Events)-1], "end"))
 				assert.Assert(t, cmp.Len(got.Reasons, len(got.Events)))
 				assert.Check(t, cmp.Equal(got.Reasons[len(got.Reasons)-1], string(tc.reason)))
+				assert.Check(t, cmp.Nil(got.Inputs[len(got.Inputs)-1]))
 
 				fake.SetFactoryPlanState(p.ID, "ended")
 				fake.SetFactoryFlowStatus(p.ID, fakes.FactoryFlowStatus{Outcome: tc.outcome})
@@ -669,12 +733,18 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, cmp.Equal(se.StatusCode, http.StatusNotFound))
 	})
 
-	t.Run("the fake refuses an end without a reason, and a reason on another event", func(t *testing.T) {
+	t.Run("the fake refuses what the factory events API does", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
 		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		resolved, err := client.CreateComment(ctx, p.ID, "", "a resolved comment")
+		assert.NilError(t, err)
+		_, err = client.CreateComment(ctx, p.ID, "", "an open comment")
+		assert.NilError(t, err)
+		_, err = client.ResolveComment(ctx, resolved.ID)
 		assert.NilError(t, err)
 
 		for _, tc := range []struct {
@@ -700,6 +770,51 @@ func TestFlows(t *testing.T) {
 			{
 				name:  "a reason on another event",
 				attrs: `{"event":"address-comments","reason":"canceled"}`,
+				want:  "only end takes a reason",
+			},
+			{
+				name:  "an input that is not one the API knows",
+				attrs: `{"event":"input","inputs":{"merge-pr":true}}`,
+				want:  "input merge-pr is not one of",
+			},
+			{
+				name:  "a bool input set to false",
+				attrs: `{"event":"input","inputs":{"approve-for-units":false}}`,
+				want:  "approve-for-units takes only true",
+			},
+			{
+				name:  "a comment input set to null",
+				attrs: `{"event":"input","inputs":{"address-comments":null}}`,
+				want:  "address-comments takes a list of comment IDs",
+			},
+			{
+				name:  "a comment input naming a comment not on the plan",
+				attrs: `{"event":"input","inputs":{"address-comments":["` + uuid.NewString() + `"]}}`,
+				want:  "is not an unresolved comment on the plan",
+			},
+			{
+				name:  "a comment input naming a resolved comment",
+				attrs: `{"event":"input","inputs":{"address-comments":["` + resolved.ID + `"]}}`,
+				want:  "is not an unresolved comment on the plan",
+			},
+			{
+				name:  "an input event setting nothing",
+				attrs: `{"event":"input","inputs":{}}`,
+				want:  "an input event sets one input",
+			},
+			{
+				name:  "an input event setting two inputs",
+				attrs: `{"event":"input","inputs":{"prioritize":true,"approve-for-units":true}}`,
+				want:  "an input event sets one input",
+			},
+			{
+				name:  "inputs on another event",
+				attrs: `{"event":"end","reason":"canceled","inputs":{"prioritize":true}}`,
+				want:  "only input takes inputs",
+			},
+			{
+				name:  "a reason on an input event",
+				attrs: `{"event":"input","inputs":{"prioritize":true},"reason":"canceled"}`,
 				want:  "only end takes a reason",
 			},
 		} {
@@ -845,6 +960,16 @@ func TestFlows(t *testing.T) {
 				want:  []FlowEvent{AddressComments, End},
 			},
 			{
+				name:  "from an entry with an input beside its event",
+				attrs: `"next":[{"actor":"human","event":"address-comments","input":"address-comments"},{"actor":"human","event":"end"}]`,
+				want:  []FlowEvent{AddressComments, End},
+			},
+			{
+				name:  "from an entry with an input and no event",
+				attrs: `"next":[{"actor":"human","input":"approve-for-units","is_required":true},{"actor":"human","event":"end"}]`,
+				want:  []FlowEvent{ApproveForUnits, End},
+			},
+			{
 				name:  "from a conductor that serves no next",
 				attrs: `"applicable_events":["end"]`,
 				want:  nil,
@@ -880,6 +1005,7 @@ func TestFlows(t *testing.T) {
 			Next: []fakes.FactoryTransition{
 				{Actor: "session", TaskCategory: "build-unit", IsDispatched: true},
 				{Actor: "human", Event: "answer-open-questions", IsRequired: true},
+				{Actor: "human", Input: "approve-for-units", IsRequired: true},
 				{Actor: "human", Action: "merge-pr"},
 				{Actor: "robot"},
 			},
@@ -900,13 +1026,14 @@ func TestFlows(t *testing.T) {
 		f.UpdatedAt = time.Time{}
 		assert.Check(t, cmp.DeepEqual(f, &Flow{
 			ID: p.ID, Title: "a plan", State: "build", Phase: PhaseStarted,
-			ApplicableEvents: []FlowEvent{AnswerOpenQuestions},
+			ApplicableEvents: []FlowEvent{AnswerOpenQuestions, ApproveForUnits},
 			Task:             &FlowTask{ID: f.Task.ID, Category: "build-unit", Unit: "Unit 2: parser"},
 			Outcome:          "merged", PR: "https://github.com/o/r/pull/1",
 			Deviations: []string{"lint"},
 			Next: []Transition{
 				{Actor: "session", TaskCategory: "build-unit", IsDispatched: true},
 				{Actor: "human", Event: AnswerOpenQuestions, IsRequired: true},
+				{Actor: "human", Event: ApproveForUnits, IsRequired: true},
 				{Actor: "human", Action: "merge-pr"},
 				{Actor: "robot"},
 			},

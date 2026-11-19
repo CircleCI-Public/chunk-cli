@@ -667,6 +667,19 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(f.Events, []string{"address-comments", "end"}))
 	assert.Check(t, cmp.Equal(f.Task, ""), "a flow with no task out")
 
+	cci.SetFactoryFlowStatus(store.ID(), fakes.FactoryFlowStatus{
+		Next: []fakes.FactoryTransition{
+			{Actor: "human", Input: "answer-open-questions", IsRequired: true},
+			{Actor: "human", Event: "end"},
+		},
+	})
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(f.Events, []string{"answer-open-questions", "end"}))
+	assert.Assert(t, len(f.Next) > 0)
+	assert.Check(t, cmp.Equal(f.Next[0].Event, "answer-open-questions"))
+	cci.SetFactoryFlowStatus(store.ID(), fakes.FactoryFlowStatus{})
+
 	cci.SetFactoryTask(store.ID(), "early-plan")
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)

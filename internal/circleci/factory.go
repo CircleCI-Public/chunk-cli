@@ -1,6 +1,7 @@
 package circleci
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -93,7 +94,10 @@ type FlowProgress struct {
 // as factory names it, and factory sets one of Event, TaskCategory and
 // Action. A transition is kept as served, even one chunk does not know.
 type Transition struct {
-	Actor        string
+	Actor string
+	// Event is the FlowEvent that takes this entry: next[].input when the
+	// entry has one, else next[].event (an agent's event, or a human event
+	// with no input, such as end).
 	Event        FlowEvent
 	TaskCategory string
 	// Action is what the human does outside factory, such as "merge-pr".
@@ -291,35 +295,40 @@ func (a flowAttrs) flow(id string, refs flowRefs) *Flow {
 type transitionAttrs struct {
 	Actor        string    `json:"actor"`
 	Event        FlowEvent `json:"event"`
+	Input        FlowEvent `json:"input"`
 	TaskCategory string    `json:"task_category"`
 	Action       string    `json:"action"`
 	IsDispatched bool      `json:"is_dispatched"`
 	IsRequired   bool      `json:"is_required"`
 }
 
-// transitions is next as served, every entry kept in order: nil when next
-// is, as from a conductor that serves none, else non-nil.
+// transitions is next as served, every entry kept in order, each named by
+// its input when it has one: nil when next is, as from an API that
+// serves none, else non-nil.
 func transitions(next []transitionAttrs) []Transition {
 	if next == nil {
 		return nil
 	}
 	out := make([]Transition, 0, len(next))
 	for _, t := range next {
-		out = append(out, Transition(t))
+		out = append(out, Transition{
+			Actor: t.Actor, Event: cmp.Or(t.Input, t.Event), TaskCategory: t.TaskCategory,
+			Action: t.Action, IsDispatched: t.IsDispatched, IsRequired: t.IsRequired,
+		})
 	}
 	return out
 }
 
-// humanEvents is next's human events, in order: nil when next is, as from a
-// conductor that serves none, else non-nil.
+// humanEvents is next's human events, in order, each named by its input when
+// it has one: nil when next is, as from an API that serves none, else non-nil.
 func humanEvents(next []transitionAttrs) []FlowEvent {
 	if next == nil {
 		return nil
 	}
 	out := []FlowEvent{}
 	for _, t := range next {
-		if t.Actor == "human" && t.Event != "" {
-			out = append(out, t.Event)
+		if e := cmp.Or(t.Input, t.Event); t.Actor == "human" && e != "" {
+			out = append(out, e)
 		}
 	}
 	return out
@@ -339,9 +348,28 @@ type taskRef struct {
 	} `json:"attributes"`
 }
 
+// Input is the event that sets a flow's inputs.
+const Input FlowEvent = "input"
+
+// FlowInputs are the inputs an input event sets, by name: true for an
+// action such as approve-for-units, comment IDs for a comment hand-off.
+type FlowInputs map[string]any
+
+// BoolInput sets name, an action such as prioritize, to true.
+func BoolInput(name FlowEvent) FlowInputs { return FlowInputs{string(name): true} }
+
+// CommentsInput sets name, a comment hand-off, to ids; nil sends [].
+func CommentsInput(name FlowEvent, ids []string) FlowInputs {
+	if ids == nil {
+		ids = []string{}
+	}
+	return FlowInputs{string(name): ids}
+}
+
 type eventAttrs struct {
-	Event  FlowEvent `json:"event"`
-	Reason EndReason `json:"reason,omitempty"`
+	Event  FlowEvent  `json:"event"`
+	Reason EndReason  `json:"reason,omitempty"`
+	Inputs FlowInputs `json:"inputs,omitempty"`
 }
 
 type eventRefs struct {
@@ -791,6 +819,12 @@ func (c *Client) CreateFlowEvent(ctx context.Context, planID string, event FlowE
 // Factory ends the flow at the plan's next poll. A plan with no flow is a 404.
 func (c *Client) EndFlow(ctx context.Context, planID string, reason EndReason) error {
 	return c.createEvent(ctx, planID, eventAttrs{Event: End, Reason: reason}, "end flow")
+}
+
+// SendFlowInputs sends factory plan planID's flow an input event setting
+// inputs, returning the server's refusal as a *StatusError.
+func (c *Client) SendFlowInputs(ctx context.Context, planID string, inputs FlowInputs) error {
+	return c.createEvent(ctx, planID, eventAttrs{Event: Input, Inputs: inputs}, "send flow inputs")
 }
 
 // createEvent posts an event with attrs to factory plan planID's flow; label
