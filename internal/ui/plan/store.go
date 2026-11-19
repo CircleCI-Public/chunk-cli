@@ -1,6 +1,12 @@
 package plan
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrNoWorker is Claim's error when no live worker can claim the plan.
+var ErrNoWorker = errors.New("no live worker can claim this plan")
 
 // Comment is a comment on the plan as factory keeps it.
 type Comment struct {
@@ -44,10 +50,25 @@ type Flow struct {
 	Claimed bool
 	// Holder is the session claiming the plan, "" when none does.
 	Holder string
-	// Worker is the factory worker claiming the plan, "" when none does. It
-	// is set whether or not a session works the plan.
-	Worker string
+	// Worker is the worker claiming the plan, nil when none does. It is set
+	// whether or not a session works the plan.
+	Worker *Worker
 }
+
+// Worker is the worker claiming a plan, and what it reports of the plan.
+type Worker struct {
+	ID, Hostname string
+	Live         bool
+	// Unread is why the worker could not be read; only ID is set besides it.
+	Unread string
+	// Headless is the worker's reports for the plan, one per role.
+	Headless []Headless
+	// Problem and Fix are the worker's error with the plan, "" when none.
+	Problem, Fix string
+}
+
+// Headless is a worker's report of one headless runner for the plan.
+type Headless struct{ Role, State, Health, HealthReason string }
 
 // Progress is how far a flow is along, as factory reports it. A nil count
 // does not apply.
