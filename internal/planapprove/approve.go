@@ -62,27 +62,9 @@ var ErrNoApproval = errors.New("factory offers no approval yet: " +
 // The flow and its claim are read fresh from factory, so a plan that moved
 // after a screen last polled is still refused.
 func Approve(ctx context.Context, api API, locate Locate, planID, session, worker, worktree string) error {
-	f, err := api.GetFlow(ctx, planID)
-	if isNotFound(err) {
-		return ErrNotReady
-	}
+	f, err := ready(ctx, api, planID)
 	if err != nil {
-		return fmt.Errorf("get the plan's flow: %w", err)
-	}
-	if f.WaitingOn != planstate.Human {
-		return ErrNotReady
-	}
-	next := make([]planstate.Move, len(f.Next))
-	for i, t := range f.Next {
-		next[i] = planstate.Move{Actor: t.Actor, Event: string(t.Event), Required: t.IsRequired}
-	}
-	switch planstate.Approval(next) {
-	case planstate.ApproveForUnits:
-		return ErrNoUnits
-	case "":
-		return ErrNoApproval
-	case planstate.ApproveForBuilding:
-		// The plan is what waits for approval: send it below.
+		return err
 	}
 	if f.Claimed() {
 		if err := release(ctx, api, locate, f, session, worker, worktree); err != nil {
@@ -93,6 +75,55 @@ func Approve(ctx context.Context, api API, locate Locate, planID, session, worke
 		return fmt.Errorf("send the approve-for-building event: %w", err)
 	}
 	return nil
+}
+
+// SendAPI is what Send needs of factory: *circleci.Client.
+type SendAPI interface {
+	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
+	SendFlowInputs(ctx context.Context, planID string, inputs circleci.FlowInputs) error
+}
+
+// Send approves factory plan planID for building when its flow waits on the
+// developer and factory requires approve-for-building, refusing as Approve
+// does (ErrNotReady, ErrNoUnits, ErrNoApproval). It releases no claim: the
+// worker holding the plan builds it.
+func Send(ctx context.Context, api SendAPI, planID string) error {
+	if _, err := ready(ctx, api, planID); err != nil {
+		return err
+	}
+	if err := api.SendFlowInputs(ctx, planID, circleci.BoolInput(circleci.ApproveForBuilding)); err != nil {
+		return fmt.Errorf("send the approve-for-building event: %w", err)
+	}
+	return nil
+}
+
+// ready reads plan planID's flow fresh from factory and returns it when it
+// waits on the developer and requires approve-for-building, or ErrNotReady,
+// ErrNoUnits or ErrNoApproval as Approve and Send refuse.
+func ready(ctx context.Context, api SendAPI, planID string) (*circleci.Flow, error) {
+	f, err := api.GetFlow(ctx, planID)
+	if isNotFound(err) {
+		return nil, ErrNotReady
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get the plan's flow: %w", err)
+	}
+	if f.WaitingOn != planstate.Human {
+		return nil, ErrNotReady
+	}
+	next := make([]planstate.Move, len(f.Next))
+	for i, t := range f.Next {
+		next[i] = planstate.Move{Actor: t.Actor, Event: string(t.Event), Required: t.IsRequired}
+	}
+	switch planstate.Approval(next) {
+	case planstate.ApproveForUnits:
+		return nil, ErrNoUnits
+	case "":
+		return nil, ErrNoApproval
+	case planstate.ApproveForBuilding:
+		// The plan is what waits for approval.
+	}
+	return f, nil
 }
 
 // release releases f's claim, or refuses, as Approve describes.
