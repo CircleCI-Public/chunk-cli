@@ -18,6 +18,7 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
 
 func TestPlans(t *testing.T) {
@@ -1537,6 +1538,173 @@ func TestPlanComments(t *testing.T) {
 	})
 }
 
+func TestListWorkers(t *testing.T) {
+	ctx := context.Background()
+	workerPath := "/api/v3/factory/workers"
+	workerRequests := func(fake *fakes.FakeCircleCI) []recorder.RecordedRequest {
+		var out []recorder.RecordedRequest
+		for _, r := range fake.Recorder.AllRequests() {
+			if r.URL.Path == workerPath {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	ids := func(ws []Worker) []string {
+		out := make([]string, 0, len(ws))
+		for _, w := range ws {
+			out = append(out, w.ID)
+		}
+		return out
+	}
+
+	t.Run("lists workers with their headless reports and flow errors", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.PutFactoryWorker(fakes.FactoryWorker{
+			ID: "w1", Hostname: "scotts-mbp", Phase: "started", Health: "ok",
+			Headless:   []fakes.FactoryHeadless{{FlowID: p.ID, Role: "architect", State: "running", Health: "ok"}},
+			FlowErrors: []fakes.FactoryFlowError{{FlowID: p.ID, Problem: "no repo", Fix: "clone it"}},
+		})
+		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w2", Hostname: "old-box", Phase: "ended"})
+
+		ws, err := client.ListWorkers(ctx, WorkerFilter{})
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(ws, 2))
+		got := ids(ws)
+		assert.Check(t, cmp.DeepEqual(got, []string{"w1", "w2"}))
+		assert.Assert(t, cmp.Len(ws[0].Headless, 1))
+		assert.Assert(t, cmp.Len(ws[0].FlowErrors, 1))
+		assert.Check(t, cmp.DeepEqual(
+			[]string{ws[0].ID, ws[0].Hostname, ws[0].Headless[0].FlowID, ws[0].Headless[0].Role, ws[0].Headless[0].State, ws[0].Headless[0].Health},
+			[]string{"w1", "scotts-mbp", p.ID, "architect", "running", "ok"}))
+		assert.Check(t, cmp.DeepEqual(ws[0].FlowErrors[0], WorkerFlowError{FlowID: p.ID, Problem: "no repo", Fix: "clone it"}))
+		live0, live1 := ws[0].Live(), ws[1].Live()
+		unresponsive := Worker{Phase: "started", Health: "unresponsive"}.Live()
+		assert.Check(t, live0)
+		assert.Check(t, !live1)
+		assert.Check(t, !unresponsive)
+	})
+
+	t.Run("CanClaim lists the unbound workers, live or not", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w-sidecar", Hostname: "sidecar", Phase: "started", Health: "ok", Bound: true})
+		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w-live", Hostname: "scotts-mbp", Phase: "started", Health: "ok"})
+		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w-gone", Hostname: "old-box", Phase: "ended"})
+
+		ws, err := client.ListWorkers(ctx, WorkerFilter{CanClaim: p.ID})
+		assert.NilError(t, err)
+		got := ids(ws)
+		assert.Check(t, cmp.DeepEqual(got, []string{"w-gone", "w-live"}))
+
+		ws, err = client.ListWorkers(ctx, WorkerFilter{CanClaim: uuid.NewString()})
+		assert.NilError(t, err)
+		assert.Check(t, ws != nil)
+		assert.Check(t, cmp.Len(ws, 0))
+	})
+
+	t.Run("FlowID lists the claiming worker", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		other, err := client.CreatePlan(ctx, "another plan", "")
+		assert.NilError(t, err)
+		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w-live", Hostname: "scotts-mbp", Phase: "started", Health: "ok"})
+		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w-other", Hostname: "elsewhere", Phase: "started", Health: "ok"})
+		fake.ClaimFactoryPlanForWorker(p.ID, "w-live")
+
+		ws, err := client.ListWorkers(ctx, WorkerFilter{FlowID: p.ID})
+		assert.NilError(t, err)
+		got := ids(ws)
+		assert.Check(t, cmp.DeepEqual(got, []string{"w-live"}))
+
+		ws, err = client.ListWorkers(ctx, WorkerFilter{FlowID: other.ID})
+		assert.NilError(t, err)
+		assert.Check(t, ws != nil)
+		assert.Check(t, cmp.Len(ws, 0))
+	})
+
+	t.Run("a worker claimed through ClaimFactoryPlanForWorker lists as live", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.ClaimFactoryPlanForWorker(p.ID, "w-unreg")
+
+		ws, err := client.ListWorkers(ctx, WorkerFilter{FlowID: p.ID})
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(ws, 1))
+		assert.Check(t, cmp.Equal(ws[0].ID, "w-unreg"))
+		assert.Check(t, cmp.Equal(ws[0].Hostname, "fake-host"))
+		live := ws[0].Live()
+		assert.Check(t, live)
+	})
+
+	t.Run("both filters are refused before any request", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+
+		_, err := client.ListWorkers(ctx, WorkerFilter{CanClaim: "a", FlowID: "b"})
+		assert.Check(t, err != nil)
+		reqs := workerRequests(fake)
+		assert.Check(t, cmp.Len(reqs, 0))
+	})
+
+	t.Run("reads every page in order", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		fake.FactoryPageSize = 2
+		for _, id := range []string{"w5", "w3", "w1", "w4", "w2"} {
+			fake.PutFactoryWorker(fakes.FactoryWorker{ID: id, Hostname: "h-" + id, Phase: "started", Health: "ok"})
+		}
+
+		ws, err := client.ListWorkers(ctx, WorkerFilter{})
+		assert.NilError(t, err)
+		got := ids(ws)
+		assert.Check(t, cmp.DeepEqual(got, []string{"w1", "w2", "w3", "w4", "w5"}))
+		reqs := workerRequests(fake)
+		assert.Assert(t, cmp.Len(reqs, 3))
+		limit := reqs[0].URL.Query().Get("page[limit]")
+		assert.Check(t, cmp.Equal(limit, "250"))
+	})
+
+	t.Run("an ended worker decodes with zero values", func(t *testing.T) {
+		for _, body := range []string{
+			`{"data":[{"id":"w1","attributes":{"hostname":"h","phase":"ended","health":null,"last_seen_at":null,"headless":null,"flow_errors":null}}],"page":{"next":null}}`,
+			`{"data":[{"id":"w1","attributes":{"hostname":"h","phase":"ended"}}],"page":{"next":null}}`,
+		} {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			client := newTestClient(t, srv.URL)
+
+			ws, err := client.ListWorkers(ctx, WorkerFilter{})
+			srv.Close()
+			assert.NilError(t, err)
+			assert.Assert(t, cmp.Len(ws, 1))
+			seen := ws[0].LastSeenAt.IsZero()
+			live := ws[0].Live()
+			assert.Check(t, seen)
+			assert.Check(t, cmp.Equal(ws[0].Health, ""))
+			assert.Check(t, cmp.Len(ws[0].Headless, 0))
+			assert.Check(t, cmp.Len(ws[0].FlowErrors, 0))
+			assert.Check(t, !live)
+		}
+	})
+
+	t.Run("a 404 is a *StatusError", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"id":"t","title":"not found"}}`))
+		}))
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+
+		_, err := client.ListWorkers(ctx, WorkerFilter{})
+		assertStatus(t, err, http.StatusNotFound)
+	})
+}
+
 func TestFactoryNotAuthorized(t *testing.T) {
 	ctx := context.Background()
 	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
@@ -1554,6 +1722,8 @@ func TestFactoryNotAuthorized(t *testing.T) {
 		_, err = client.ListPlans(ctx)
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		_, err = client.ListFlowBlockers(ctx, uuid.NewString())
+		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
+		_, err = client.ListWorkers(ctx, WorkerFilter{})
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		srv.Close()
 	}
@@ -1603,6 +1773,8 @@ func TestListsStopWhenTheServerNeverEndsThem(t *testing.T) {
 	_, err := client.ListComments(ctx, "plan-1", false)
 	assert.ErrorContains(t, err, "does not advance")
 	_, err = client.ListPlans(ctx)
+	assert.ErrorContains(t, err, "does not advance")
+	_, err = client.ListWorkers(ctx, WorkerFilter{})
 	assert.ErrorContains(t, err, "does not advance")
 }
 

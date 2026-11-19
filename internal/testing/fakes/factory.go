@@ -99,6 +99,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.POST("/api/v3/factory/check-runs", f.handleCreateCheckRun)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
 	r.POST("/api/v3/factory/flows/:id/release", f.handleReleaseFlow)
+	r.GET("/api/v3/factory/workers", f.handleListWorkers)
 	r.GET("/api/v3/factory/workers/:id/sessions", f.handleGetWorkerSessions)
 }
 
@@ -406,6 +407,46 @@ func (f *FakeCircleCI) ClaimFactoryPlanForWorker(id, workerID string) {
 	if _, ok := f.factoryWorkers[workerID]; !ok {
 		f.factoryWorkers[workerID] = nil
 	}
+	if _, ok := f.factoryWorkerEntities[workerID]; !ok {
+		if f.factoryWorkerEntities == nil {
+			f.factoryWorkerEntities = map[string]FactoryWorker{}
+		}
+		f.factoryWorkerEntities[workerID] = FactoryWorker{
+			ID: workerID, Hostname: "fake-host", Phase: "started", Health: "ok",
+		}
+	}
+}
+
+// FactoryWorker is a worker the fake serves from GET /api/v3/factory/workers.
+type FactoryWorker struct {
+	ID, Hostname, Phase, Health string
+	// Bound is a sidecar's worker, which filter[can_claim] leaves out.
+	Bound      bool
+	Headless   []FactoryHeadless
+	FlowErrors []FactoryFlowError
+}
+
+// FactoryHeadless is a headless report the fake serves for flow FlowID.
+type FactoryHeadless struct{ FlowID, Role, State, Health, HealthReason string }
+
+// FactoryFlowError is a flow error the fake serves for flow FlowID.
+type FactoryFlowError struct{ FlowID, Problem, Fix string }
+
+// PutFactoryWorker registers worker w, replacing one with its ID. The worker
+// lists no sessions unless SetFactoryWorkerSessions gave it some.
+func (f *FakeCircleCI) PutFactoryWorker(w FactoryWorker) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.factoryWorkerEntities == nil {
+		f.factoryWorkerEntities = map[string]FactoryWorker{}
+	}
+	f.factoryWorkerEntities[w.ID] = w
+	if f.factoryWorkers == nil {
+		f.factoryWorkers = map[string][]FactoryWorkerSession{}
+	}
+	if _, ok := f.factoryWorkers[w.ID]; !ok {
+		f.factoryWorkers[w.ID] = nil
+	}
 }
 
 // SetFactoryWorkerSessions sets the sessions worker workerID lists, and
@@ -436,6 +477,7 @@ func (f *FakeCircleCI) DropFactoryWorker(workerID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.factoryWorkers, workerID)
+	delete(f.factoryWorkerEntities, workerID)
 }
 
 // FailFactoryRelease has the next releases of plan id's flow answer status.
@@ -1078,6 +1120,94 @@ func (f *FakeCircleCI) unlistFactoryPlan(p *factoryPlan) {
 		ids := slices.Clone(s.FlowIDs)
 		f.factoryWorkers[p.worker][i].FlowIDs = slices.DeleteFunc(ids,
 			func(id string) bool { return id == p.id })
+	}
+}
+
+// handleListWorkers implements GET /api/v3/factory/workers.
+func (f *FakeCircleCI) handleListWorkers(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	canClaim, flowID := c.Query("filter[can_claim]"), c.Query("filter[flow_id]")
+	if canClaim != "" && flowID != "" {
+		factoryError(c, http.StatusBadRequest, "filter[can_claim] and filter[flow_id] cannot be used together")
+		return
+	}
+	after, ok := pageCursor(c)
+	if !ok {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	var listed []FactoryWorker
+	switch {
+	case canClaim != "":
+		if f.factoryPlans[canClaim] == nil {
+			break
+		}
+		for _, w := range f.factoryWorkerEntities {
+			if !w.Bound {
+				listed = append(listed, w)
+			}
+		}
+	case flowID != "":
+		p := f.factoryPlans[flowID]
+		if p == nil || p.worker == "" {
+			break
+		}
+		if w, ok := f.factoryWorkerEntities[p.worker]; ok {
+			listed = append(listed, w)
+		}
+	default:
+		for _, w := range f.factoryWorkerEntities {
+			listed = append(listed, w)
+		}
+	}
+	slices.SortFunc(listed, func(a, b FactoryWorker) int { return strings.Compare(a.ID, b.ID) })
+	end := min(after+f.pageSize(), len(listed))
+	items := []gin.H{}
+	for _, w := range listed[min(after, len(listed)):end] {
+		items = append(items, gin.H{"id": w.ID, "attributes": workerAttrs(w)})
+	}
+	resp := gin.H{"data": items}
+	if end < len(listed) {
+		resp["page"] = gin.H{"next": strconv.Itoa(end)}
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// workerAttrs is worker w's attributes as conductor serves them: health null
+// when empty, last_seen_at null once ended, and headless and flow_errors
+// never null.
+func workerAttrs(w FactoryWorker) gin.H {
+	var health, lastSeen any
+	if w.Health != "" {
+		health = w.Health
+	}
+	if w.Phase != "ended" {
+		lastSeen = time.Now().UTC().Format(time.RFC3339)
+	}
+	headless := make([]gin.H, 0, len(w.Headless))
+	for _, h := range w.Headless {
+		headless = append(headless, gin.H{
+			"attributes": gin.H{
+				"state": h.State, "health": h.Health, "health_reason": h.HealthReason,
+				"reported_at": time.Now().UTC().Format(time.RFC3339), "role": h.Role,
+			},
+			"references": gin.H{"factory_flow": gin.H{"id": h.FlowID}},
+		})
+	}
+	flowErrors := make([]gin.H, 0, len(w.FlowErrors))
+	for _, e := range w.FlowErrors {
+		flowErrors = append(flowErrors, gin.H{
+			"attributes": gin.H{"problem": e.Problem, "fix": e.Fix},
+			"references": gin.H{"factory_flow": gin.H{"id": e.FlowID}},
+		})
+	}
+	return gin.H{
+		"hostname": w.Hostname, "version": "1.4.0", "phase": w.Phase, "health": health,
+		"last_seen_at": lastSeen, "sessions": []gin.H{},
+		"headless": headless, "flow_errors": flowErrors,
 	}
 }
 
