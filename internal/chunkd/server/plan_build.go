@@ -30,7 +30,7 @@ type PlanAPI interface {
 	GetPlan(ctx context.Context, id string) (*circleci.Plan, error)
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
 	ReleaseClaim(ctx context.Context, planID string) error
-	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
+	SendFlowInputs(ctx context.Context, planID string, inputs circleci.FlowInputs) error
 }
 
 var _ planapprove.API = PlanAPI(nil)

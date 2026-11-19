@@ -374,6 +374,7 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
 				p, _ := cci.FactoryPlan(id)
 				assert.Check(t, cmp.DeepEqual(p.Events, []string{"prioritize"}))
+				assert.Check(t, cmp.DeepEqual(p.Inputs, []any{true}))
 			},
 		},
 		{
@@ -554,6 +555,7 @@ func TestStoreApproveDesignSendsTheEvent(t *testing.T) {
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-units"}))
+	assert.Check(t, cmp.DeepEqual(p.Inputs, []any{true}))
 }
 
 // TestStoreApproveDesignRefusesWhatFactoryDoesNotOffer checks that

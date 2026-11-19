@@ -124,6 +124,7 @@ func TestApproveReleasesThePlanningSession(t *testing.T) {
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(id)
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+	assert.Check(t, cmp.DeepEqual(p.Inputs, []any{true}))
 	assert.Check(t, cmp.Equal(p.Session, ""))
 
 	var paths []string

@@ -51,15 +51,17 @@ type fakePlans struct {
 	// task, when set, is the task a session takes to move the flow on, such
 	// as a review running.
 	task string
-	// sent are the events CreateFlowEvent sent; calls is those and the
+	// sent are the events SendFlowInputs sent; calls is those and the
 	// releases ReleaseClaim made, in order.
-	sent  []circleci.FlowEvent
-	calls []string
-	// releaseErr and eventErr fail ReleaseClaim and CreateFlowEvent.
+	// sentInputs are the inputs each SendFlowInputs call sent.
+	sentInputs []circleci.FlowInputs
+	sent       []circleci.FlowEvent
+	calls      []string
+	// releaseErr and eventErr fail ReleaseClaim and SendFlowInputs.
 	releaseErr, eventErr error
 	// onRelease, when set, runs as ReleaseClaim is reached.
 	onRelease func()
-	// eventGate, when set, holds CreateFlowEvent until it is closed.
+	// eventGate, when set, holds SendFlowInputs until it is closed.
 	eventGate chan struct{}
 }
 
@@ -126,8 +128,8 @@ func (f *fakePlans) ReleaseClaim(_ context.Context, _ string) error {
 	return nil
 }
 
-// CreateFlowEvent records event, once eventGate (when set) is closed.
-func (f *fakePlans) CreateFlowEvent(_ context.Context, _ string, event circleci.FlowEvent) error {
+// SendFlowInputs records each of inputs, once eventGate (when set) is closed.
+func (f *fakePlans) SendFlowInputs(_ context.Context, _ string, inputs circleci.FlowInputs) error {
 	f.mu.Lock()
 	gate := f.eventGate
 	f.mu.Unlock()
@@ -139,8 +141,11 @@ func (f *fakePlans) CreateFlowEvent(_ context.Context, _ string, event circleci.
 	if f.eventErr != nil {
 		return f.eventErr
 	}
-	f.sent = append(f.sent, event)
-	f.calls = append(f.calls, "event "+string(event))
+	for key := range inputs {
+		f.sent = append(f.sent, circleci.FlowEvent(key))
+		f.calls = append(f.calls, "event "+key)
+	}
+	f.sentInputs = append(f.sentInputs, inputs)
 	return nil
 }
 
@@ -161,6 +166,12 @@ func (f *fakePlans) sentEvents() []circleci.FlowEvent {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]circleci.FlowEvent(nil), f.sent...)
+}
+
+func (f *fakePlans) inputsSent() []circleci.FlowInputs {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]circleci.FlowInputs(nil), f.sentInputs...)
 }
 
 func (f *fakePlans) callLog() []string {

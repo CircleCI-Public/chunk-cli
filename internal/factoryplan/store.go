@@ -316,14 +316,14 @@ func (s *Store) AnswerOpenQuestions(ctx context.Context) error {
 	return nil
 }
 
-// StartWork sends the plan's flow factory's prioritize event, which moves an
+// StartWork sends the plan's flow the prioritize input, which moves an
 // init plan on for factory to start work on it.
 func (s *Store) StartWork(ctx context.Context) error {
 	id := s.ID()
 	if id == "" {
 		return errNotCreated
 	}
-	if err := s.api.CreateFlowEvent(ctx, id, circleci.Prioritize); err != nil {
+	if err := s.api.SendFlowInputs(ctx, id, circleci.BoolInput(circleci.Prioritize)); err != nil {
 		return fmt.Errorf("send the prioritize event: %w", err)
 	}
 	return nil
@@ -366,7 +366,7 @@ func (s *Store) Delete(ctx context.Context) error {
 	return nil
 }
 
-// ApproveDesign sends the plan's flow factory's approve-for-units event,
+// ApproveDesign sends the plan's flow the approve-for-units input,
 // which approves its design, when planstate.Approval offers it. Otherwise
 // it is refused without sending it: with ErrDesignApproved when
 // approve-for-building is offered instead, and with
@@ -391,7 +391,7 @@ func (s *Store) ApproveDesign(ctx context.Context) error {
 		return planapprove.ErrNoApproval
 	case planstate.ApproveForUnits:
 	}
-	if err := s.api.CreateFlowEvent(ctx, id, circleci.ApproveForUnits); err != nil {
+	if err := s.api.SendFlowInputs(ctx, id, circleci.BoolInput(circleci.ApproveForUnits)); err != nil {
 		return fmt.Errorf("send the approve-for-units event: %w", err)
 	}
 	return nil
