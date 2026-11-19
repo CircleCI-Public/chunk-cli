@@ -3,6 +3,7 @@ package circleci
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -548,6 +549,149 @@ func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
 	}
 }
 
+// Worker is a factory worker, as GET /api/v3/factory/workers serves it.
+type Worker struct {
+	ID, Hostname, Version string
+	// Phase is "started" or "ended"; Health "ok" or "unresponsive", "" once ended.
+	Phase, Health string
+	LastSeenAt    time.Time
+	Headless      []HeadlessReport
+	FlowErrors    []WorkerFlowError
+}
+
+// Live is whether the worker is started and answering.
+func (w Worker) Live() bool { return w.Phase == "started" && w.Health == "ok" }
+
+// HeadlessReport is a worker's heartbeat for one flow it runs headless.
+type HeadlessReport struct {
+	FlowID string
+	// Role is the agent's role, "" for a flow with one report.
+	Role string
+	// State is "waiting", "running" or "attached"; Health "ok",
+	// "unresponsive" or "unavailable", with HealthReason saying why when not ok.
+	State, Health, HealthReason string
+	ReportedAt                  time.Time
+}
+
+// WorkerFlowError is a worker's error with one flow, for the user to fix.
+type WorkerFlowError struct{ FlowID, Problem, Fix string }
+
+// WorkerFilter narrows ListWorkers; at most one field is set.
+type WorkerFilter struct {
+	// CanClaim lists the unbound workers, live or not, for this plan.
+	CanClaim string
+	// FlowID lists the worker claiming this plan.
+	FlowID string
+}
+
+// headlessItem is a worker's headless report on the wire.
+type headlessItem struct {
+	Attributes struct {
+		State        string    `json:"state"`
+		Health       string    `json:"health"`
+		HealthReason string    `json:"health_reason"`
+		ReportedAt   time.Time `json:"reported_at"`
+		Role         string    `json:"role"`
+	} `json:"attributes"`
+	References struct {
+		FactoryFlow v3Ref `json:"factory_flow"`
+	} `json:"references"`
+}
+
+// flowErrorItem is a worker's flow error on the wire.
+type flowErrorItem struct {
+	Attributes struct {
+		Problem string `json:"problem"`
+		Fix     string `json:"fix"`
+	} `json:"attributes"`
+	References struct {
+		FactoryFlow v3Ref `json:"factory_flow"`
+	} `json:"references"`
+}
+
+// workerAttrs is a worker's attributes on the wire. Health and LastSeenAt are
+// pointers because factory serves them null for a worker that has ended.
+type workerAttrs struct {
+	Hostname   string          `json:"hostname"`
+	Version    string          `json:"version"`
+	Phase      string          `json:"phase"`
+	Health     *string         `json:"health"`
+	LastSeenAt *time.Time      `json:"last_seen_at"`
+	Headless   []headlessItem  `json:"headless"`
+	FlowErrors []flowErrorItem `json:"flow_errors"`
+}
+
+func (a workerAttrs) worker(id string) Worker {
+	w := Worker{ID: id, Hostname: a.Hostname, Version: a.Version, Phase: a.Phase}
+	if a.Health != nil {
+		w.Health = *a.Health
+	}
+	if a.LastSeenAt != nil {
+		w.LastSeenAt = *a.LastSeenAt
+	}
+	for _, h := range a.Headless {
+		w.Headless = append(w.Headless, HeadlessReport{
+			FlowID: h.References.FactoryFlow.ID, Role: h.Attributes.Role,
+			State: h.Attributes.State, Health: h.Attributes.Health,
+			HealthReason: h.Attributes.HealthReason, ReportedAt: h.Attributes.ReportedAt,
+		})
+	}
+	for _, e := range a.FlowErrors {
+		w.FlowErrors = append(w.FlowErrors, WorkerFlowError{
+			FlowID: e.References.FactoryFlow.ID, Problem: e.Attributes.Problem, Fix: e.Attributes.Fix,
+		})
+	}
+	return w
+}
+
+// ListWorkers returns the caller's workers matching f, in ID order,
+// reading every page. A filter with both fields set is refused before any
+// request. A list with no workers is an empty slice.
+func (c *Client) ListWorkers(ctx context.Context, f WorkerFilter) ([]Worker, error) {
+	if f.CanClaim != "" && f.FlowID != "" {
+		return nil, errors.New("circleci: list workers: CanClaim and FlowID are both set")
+	}
+	out := []Worker{}
+	var cursor string
+	for pages := 1; ; pages++ {
+		var page struct {
+			Data []struct {
+				ID         string      `json:"id"`
+				Attributes workerAttrs `json:"attributes"`
+			} `json:"data"`
+			Page v3Page `json:"page"`
+		}
+		opts := []func(*hc.Request){
+			hc.QueryParam("page[limit]", "250"),
+			hc.JSONDecoder(&page),
+		}
+		if f.CanClaim != "" {
+			opts = append(opts, hc.QueryParam("filter[can_claim]", f.CanClaim))
+		}
+		if f.FlowID != "" {
+			opts = append(opts, hc.QueryParam("filter[flow_id]", f.FlowID))
+		}
+		if cursor != "" {
+			opts = append(opts, hc.QueryParam("page[cursor]", cursor))
+		}
+		_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/workers", opts...))
+		if err != nil {
+			return nil, mapErr("list workers", err)
+		}
+		for _, item := range page.Data {
+			out = append(out, item.Attributes.worker(item.ID))
+		}
+		next, err := nextCursor(cursor, page.Page, pages)
+		if err != nil {
+			return nil, err
+		}
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
 // GetPlan returns factory plan id.
 func (c *Client) GetPlan(ctx context.Context, id string) (*Plan, error) {
 	var attrs planAttrs
@@ -843,6 +987,21 @@ func (c *Client) ReleaseClaim(ctx context.Context, planID string) error {
 	))
 	if err != nil {
 		return mapErr("release claim", err)
+	}
+	return nil
+}
+
+// ClaimFlow has worker workerID claim plan planID's flow. A worker that
+// already claims it (204) is no error; a refusal is a *StatusError.
+func (c *Client) ClaimFlow(ctx context.Context, planID, workerID string) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/flows/%s/claim",
+		hc.RouteParams(url.PathEscape(planID)),
+		hc.Body(struct {
+			WorkerID string `json:"worker_id"`
+		}{workerID}),
+	))
+	if err != nil {
+		return mapErr("claim flow", err)
 	}
 	return nil
 }

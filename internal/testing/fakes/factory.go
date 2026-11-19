@@ -99,6 +99,8 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.POST("/api/v3/factory/check-runs", f.handleCreateCheckRun)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
 	r.POST("/api/v3/factory/flows/:id/release", f.handleReleaseFlow)
+	r.POST("/api/v3/factory/flows/:id/claim", f.handleClaimFlow)
+	r.GET("/api/v3/factory/workers", f.handleListWorkers)
 	r.GET("/api/v3/factory/workers/:id/sessions", f.handleGetWorkerSessions)
 }
 
@@ -406,6 +408,46 @@ func (f *FakeCircleCI) ClaimFactoryPlanForWorker(id, workerID string) {
 	if _, ok := f.factoryWorkers[workerID]; !ok {
 		f.factoryWorkers[workerID] = nil
 	}
+	if _, ok := f.factoryWorkerEntities[workerID]; !ok {
+		if f.factoryWorkerEntities == nil {
+			f.factoryWorkerEntities = map[string]FactoryWorker{}
+		}
+		f.factoryWorkerEntities[workerID] = FactoryWorker{
+			ID: workerID, Hostname: "fake-host", Phase: "started", Health: "ok",
+		}
+	}
+}
+
+// FactoryWorker is a worker the fake serves from GET /api/v3/factory/workers.
+type FactoryWorker struct {
+	ID, Hostname, Phase, Health string
+	// Bound is a sidecar's worker, which filter[can_claim] leaves out.
+	Bound      bool
+	Headless   []FactoryHeadless
+	FlowErrors []FactoryFlowError
+}
+
+// FactoryHeadless is a headless report the fake serves for flow FlowID.
+type FactoryHeadless struct{ FlowID, Role, State, Health, HealthReason string }
+
+// FactoryFlowError is a flow error the fake serves for flow FlowID.
+type FactoryFlowError struct{ FlowID, Problem, Fix string }
+
+// PutFactoryWorker registers worker w, replacing one with its ID. The worker
+// lists no sessions unless SetFactoryWorkerSessions gave it some.
+func (f *FakeCircleCI) PutFactoryWorker(w FactoryWorker) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.factoryWorkerEntities == nil {
+		f.factoryWorkerEntities = map[string]FactoryWorker{}
+	}
+	f.factoryWorkerEntities[w.ID] = w
+	if f.factoryWorkers == nil {
+		f.factoryWorkers = map[string][]FactoryWorkerSession{}
+	}
+	if _, ok := f.factoryWorkers[w.ID]; !ok {
+		f.factoryWorkers[w.ID] = nil
+	}
 }
 
 // SetFactoryWorkerSessions sets the sessions worker workerID lists, and
@@ -436,6 +478,7 @@ func (f *FakeCircleCI) DropFactoryWorker(workerID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.factoryWorkers, workerID)
+	delete(f.factoryWorkerEntities, workerID)
 }
 
 // FailFactoryRelease has the next releases of plan id's flow answer status.
@@ -446,6 +489,16 @@ func (f *FakeCircleCI) FailFactoryRelease(id string, status int) {
 		f.factoryReleaseFail = map[string]int{}
 	}
 	f.factoryReleaseFail[id] = status
+}
+
+// FailFactoryClaim makes the next claim of plan id answer status.
+func (f *FakeCircleCI) FailFactoryClaim(id string, status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.factoryClaimFail == nil {
+		f.factoryClaimFail = map[string]int{}
+	}
+	f.factoryClaimFail[id] = status
 }
 
 // DropFactoryFlow takes plan id's flow away, as a plan made before conductor
@@ -469,7 +522,17 @@ func (f *FakeCircleCI) DeleteFactoryPlan(id string) {
 
 // factoryError writes a V3 error, as conductor does.
 func factoryError(c *gin.Context, status int, msg string) {
-	c.JSON(status, gin.H{"error": gin.H{"id": "trace-1", "title": msg}})
+	factoryErrorType(c, status, "", msg)
+}
+
+// factoryErrorType writes a V3 error with conductor's type, as the 409s of
+// the claim route carry; typ "" leaves the type out.
+func factoryErrorType(c *gin.Context, status int, typ, msg string) {
+	e := gin.H{"id": "trace-1", "title": msg}
+	if typ != "" {
+		e["type"] = typ
+	}
+	c.JSON(status, gin.H{"error": e})
 }
 
 // factoryStart checks the token and FactoryStatusCode, answering for the
@@ -1071,6 +1134,51 @@ func (f *FakeCircleCI) handleReleaseFlow(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": flowEntity(p)})
 }
 
+// handleClaimFlow implements POST /api/v3/factory/flows/:id/claim: it claims
+// a plan's flow for a registered worker.
+func (f *FakeCircleCI) handleClaimFlow(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	var body struct {
+		WorkerID string `json:"worker_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.WorkerID == "" {
+		factoryError(c, http.StatusBadRequest, "worker_id is required")
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.factoryPlans[c.Param("id")]
+	if p == nil || p.noFlow {
+		factoryError(c, http.StatusNotFound, "flow not found")
+		return
+	}
+	if status := f.factoryClaimFail[p.id]; status != 0 {
+		delete(f.factoryClaimFail, p.id)
+		factoryError(c, status, "API error")
+		return
+	}
+	if _, ok := f.factoryWorkerEntities[body.WorkerID]; !ok {
+		factoryError(c, http.StatusNotFound, "worker not found")
+		return
+	}
+	if slices.Contains(factoryEnds, p.state) {
+		factoryErrorType(c, http.StatusConflict, "flow_ended", p.id+" has ended")
+		return
+	}
+	if p.worker == body.WorkerID {
+		c.Status(http.StatusNoContent)
+		return
+	}
+	if p.worker != "" {
+		factoryErrorType(c, http.StatusConflict, "flow_claimed", p.id+" is claimed by another worker")
+		return
+	}
+	p.worker = body.WorkerID
+	c.JSON(http.StatusOK, gin.H{"data": flowEntity(p)})
+}
+
 // unlistFactoryPlan drops p from every session of the worker claiming it.
 // The caller holds f.mu.
 func (f *FakeCircleCI) unlistFactoryPlan(p *factoryPlan) {
@@ -1078,6 +1186,94 @@ func (f *FakeCircleCI) unlistFactoryPlan(p *factoryPlan) {
 		ids := slices.Clone(s.FlowIDs)
 		f.factoryWorkers[p.worker][i].FlowIDs = slices.DeleteFunc(ids,
 			func(id string) bool { return id == p.id })
+	}
+}
+
+// handleListWorkers implements GET /api/v3/factory/workers.
+func (f *FakeCircleCI) handleListWorkers(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	canClaim, flowID := c.Query("filter[can_claim]"), c.Query("filter[flow_id]")
+	if canClaim != "" && flowID != "" {
+		factoryError(c, http.StatusBadRequest, "filter[can_claim] and filter[flow_id] cannot be used together")
+		return
+	}
+	after, ok := pageCursor(c)
+	if !ok {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	var listed []FactoryWorker
+	switch {
+	case canClaim != "":
+		if f.factoryPlans[canClaim] == nil {
+			break
+		}
+		for _, w := range f.factoryWorkerEntities {
+			if !w.Bound {
+				listed = append(listed, w)
+			}
+		}
+	case flowID != "":
+		p := f.factoryPlans[flowID]
+		if p == nil || p.worker == "" {
+			break
+		}
+		if w, ok := f.factoryWorkerEntities[p.worker]; ok {
+			listed = append(listed, w)
+		}
+	default:
+		for _, w := range f.factoryWorkerEntities {
+			listed = append(listed, w)
+		}
+	}
+	slices.SortFunc(listed, func(a, b FactoryWorker) int { return strings.Compare(a.ID, b.ID) })
+	end := min(after+f.pageSize(), len(listed))
+	items := []gin.H{}
+	for _, w := range listed[min(after, len(listed)):end] {
+		items = append(items, gin.H{"id": w.ID, "attributes": workerAttrs(w)})
+	}
+	resp := gin.H{"data": items}
+	if end < len(listed) {
+		resp["page"] = gin.H{"next": strconv.Itoa(end)}
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// workerAttrs is worker w's attributes as conductor serves them: health null
+// when empty, last_seen_at null once ended, and headless and flow_errors
+// never null.
+func workerAttrs(w FactoryWorker) gin.H {
+	var health, lastSeen any
+	if w.Health != "" {
+		health = w.Health
+	}
+	if w.Phase != "ended" {
+		lastSeen = time.Now().UTC().Format(time.RFC3339)
+	}
+	headless := make([]gin.H, 0, len(w.Headless))
+	for _, h := range w.Headless {
+		headless = append(headless, gin.H{
+			"attributes": gin.H{
+				"state": h.State, "health": h.Health, "health_reason": h.HealthReason,
+				"reported_at": time.Now().UTC().Format(time.RFC3339), "role": h.Role,
+			},
+			"references": gin.H{"factory_flow": gin.H{"id": h.FlowID}},
+		})
+	}
+	flowErrors := make([]gin.H, 0, len(w.FlowErrors))
+	for _, e := range w.FlowErrors {
+		flowErrors = append(flowErrors, gin.H{
+			"attributes": gin.H{"problem": e.Problem, "fix": e.Fix},
+			"references": gin.H{"factory_flow": gin.H{"id": e.FlowID}},
+		})
+	}
+	return gin.H{
+		"hostname": w.Hostname, "version": "1.4.0", "phase": w.Phase, "health": health,
+		"last_seen_at": lastSeen, "sessions": []gin.H{},
+		"headless": headless, "flow_errors": flowErrors,
 	}
 }
 
