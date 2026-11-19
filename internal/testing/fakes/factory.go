@@ -99,6 +99,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.POST("/api/v3/factory/check-runs", f.handleCreateCheckRun)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
 	r.POST("/api/v3/factory/flows/:id/release", f.handleReleaseFlow)
+	r.POST("/api/v3/factory/flows/:id/claim", f.handleClaimFlow)
 	r.GET("/api/v3/factory/workers", f.handleListWorkers)
 	r.GET("/api/v3/factory/workers/:id/sessions", f.handleGetWorkerSessions)
 }
@@ -490,6 +491,16 @@ func (f *FakeCircleCI) FailFactoryRelease(id string, status int) {
 	f.factoryReleaseFail[id] = status
 }
 
+// FailFactoryClaim makes the next claim of plan id answer status.
+func (f *FakeCircleCI) FailFactoryClaim(id string, status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.factoryClaimFail == nil {
+		f.factoryClaimFail = map[string]int{}
+	}
+	f.factoryClaimFail[id] = status
+}
+
 // DropFactoryFlow takes plan id's flow away, as a plan made before conductor
 // gave every plan a flow has none: GET /flows/:id answers 404 and GET /flows
 // leaves it out.
@@ -511,7 +522,17 @@ func (f *FakeCircleCI) DeleteFactoryPlan(id string) {
 
 // factoryError writes a V3 error, as conductor does.
 func factoryError(c *gin.Context, status int, msg string) {
-	c.JSON(status, gin.H{"error": gin.H{"id": "trace-1", "title": msg}})
+	factoryErrorType(c, status, "", msg)
+}
+
+// factoryErrorType writes a V3 error with conductor's type, as the 409s of
+// the claim route carry; typ "" leaves the type out.
+func factoryErrorType(c *gin.Context, status int, typ, msg string) {
+	e := gin.H{"id": "trace-1", "title": msg}
+	if typ != "" {
+		e["type"] = typ
+	}
+	c.JSON(status, gin.H{"error": e})
 }
 
 // factoryStart checks the token and FactoryStatusCode, answering for the
@@ -1110,6 +1131,51 @@ func (f *FakeCircleCI) handleReleaseFlow(c *gin.Context) {
 	}
 	f.unlistFactoryPlan(p)
 	p.worker = ""
+	c.JSON(http.StatusOK, gin.H{"data": flowEntity(p)})
+}
+
+// handleClaimFlow implements POST /api/v3/factory/flows/:id/claim: it claims
+// a plan's flow for a registered worker.
+func (f *FakeCircleCI) handleClaimFlow(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	var body struct {
+		WorkerID string `json:"worker_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.WorkerID == "" {
+		factoryError(c, http.StatusBadRequest, "worker_id is required")
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.factoryPlans[c.Param("id")]
+	if p == nil || p.noFlow {
+		factoryError(c, http.StatusNotFound, "flow not found")
+		return
+	}
+	if status := f.factoryClaimFail[p.id]; status != 0 {
+		delete(f.factoryClaimFail, p.id)
+		factoryError(c, status, "API error")
+		return
+	}
+	if _, ok := f.factoryWorkerEntities[body.WorkerID]; !ok {
+		factoryError(c, http.StatusNotFound, "worker not found")
+		return
+	}
+	if slices.Contains(factoryEnds, p.state) {
+		factoryErrorType(c, http.StatusConflict, "flow_ended", p.id+" has ended")
+		return
+	}
+	if p.worker == body.WorkerID {
+		c.Status(http.StatusNoContent)
+		return
+	}
+	if p.worker != "" {
+		factoryErrorType(c, http.StatusConflict, "flow_claimed", p.id+" is claimed by another worker")
+		return
+	}
+	p.worker = body.WorkerID
 	c.JSON(http.StatusOK, gin.H{"data": flowEntity(p)})
 }
 

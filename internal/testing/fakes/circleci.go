@@ -162,6 +162,7 @@ type FakeCircleCI struct {
 	factoryWorkers        map[string][]FactoryWorkerSession
 	factoryWorkerEntities map[string]FactoryWorker // served by GET /workers; same IDs as factoryWorkers
 	factoryReleaseFail    map[string]int
+	factoryClaimFail      map[string]int
 	FactoryStatusCode     int // override for every /api/v3/factory route
 	FactoryPlanStatusCode int // override for GET /api/v3/factory/plans/:id
 	FactoryPageSize       int // plans or comments per list page; 0 means 20

@@ -991,6 +991,21 @@ func (c *Client) ReleaseClaim(ctx context.Context, planID string) error {
 	return nil
 }
 
+// ClaimFlow has worker workerID claim plan planID's flow. A worker that
+// already claims it (204) is no error; a refusal is a *StatusError.
+func (c *Client) ClaimFlow(ctx context.Context, planID, workerID string) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/flows/%s/claim",
+		hc.RouteParams(url.PathEscape(planID)),
+		hc.Body(struct {
+			WorkerID string `json:"worker_id"`
+		}{workerID}),
+	))
+	if err != nil {
+		return mapErr("claim flow", err)
+	}
+	return nil
+}
+
 // CreateComment adds a comment to factory plan planID. quotedText is the part
 // of the plan's text the comment is about, or "" for the plan as a whole.
 func (c *Client) CreateComment(ctx context.Context, planID, quotedText, body string) (*PlanComment, error) {

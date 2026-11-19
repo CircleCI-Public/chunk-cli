@@ -1705,6 +1705,138 @@ func TestListWorkers(t *testing.T) {
 	})
 }
 
+func TestClaimFlow(t *testing.T) {
+	ctx := context.Background()
+	live := fakes.FactoryWorker{ID: "w-live", Hostname: "scotts-mbp", Phase: "started", Health: "ok"}
+	gone := fakes.FactoryWorker{ID: "w-gone", Hostname: "old-box", Phase: "ended"}
+	setup := func(t *testing.T) (*fakes.FakeCircleCI, *Client, *Plan) {
+		t.Helper()
+		fake, client := newFlowClient(t)
+		p, err := client.CreatePlan(ctx, "a plan", "")
+		assert.NilError(t, err)
+		fake.PutFactoryWorker(live)
+		fake.PutFactoryWorker(gone)
+		return fake, client, p
+	}
+	serverMessage := func(t *testing.T, err error, code int) string {
+		t.Helper()
+		var se *StatusError
+		assert.Assert(t, errors.As(err, &se), "got %v", err)
+		assert.Check(t, cmp.Equal(se.StatusCode, code))
+		return se.ServerMessage
+	}
+
+	t.Run("claims the flow for the worker", func(t *testing.T) {
+		fake, client, p := setup(t)
+
+		err := client.ClaimFlow(ctx, p.ID, "w-live")
+		assert.NilError(t, err)
+
+		reqs := fake.Recorder.AllRequests()
+		last := reqs[len(reqs)-1]
+		assert.Check(t, cmp.Equal(last.Method, http.MethodPost))
+		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/flows/"+p.ID+"/claim"))
+		var body map[string]string
+		err = json.Unmarshal(last.Body, &body)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(body, map[string]string{"worker_id": "w-live"}), "body %s", last.Body)
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.WorkerID, "w-live"))
+		assert.Check(t, cmp.Equal(f.SessionID, ""))
+		ws, err := client.ListWorkers(ctx, WorkerFilter{FlowID: p.ID})
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(ws, 1))
+		assert.Check(t, cmp.Equal(ws[0].ID, "w-live"))
+	})
+
+	t.Run("a worker that already claims the flow (204) is no error", func(t *testing.T) {
+		_, client, p := setup(t)
+
+		err := client.ClaimFlow(ctx, p.ID, "w-live")
+		assert.NilError(t, err)
+		err = client.ClaimFlow(ctx, p.ID, "w-live")
+		assert.NilError(t, err)
+	})
+
+	t.Run("another worker's claim is a 409 with factory's title", func(t *testing.T) {
+		_, client, p := setup(t)
+		err := client.ClaimFlow(ctx, p.ID, "w-live")
+		assert.NilError(t, err)
+
+		err = client.ClaimFlow(ctx, p.ID, "w-gone")
+
+		assert.Check(t, cmp.Equal(serverMessage(t, err, http.StatusConflict), p.ID+" is claimed by another worker"))
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.WorkerID, "w-live"))
+	})
+
+	t.Run("an ended plan is a 409", func(t *testing.T) {
+		fake, client, p := setup(t)
+		fake.SetFactoryPlanState(p.ID, "ended")
+
+		err := client.ClaimFlow(ctx, p.ID, "w-live")
+
+		assert.Check(t, cmp.Contains(serverMessage(t, err, http.StatusConflict), "ended"))
+	})
+
+	t.Run("an ended plan is a 409 even for the worker that claimed it", func(t *testing.T) {
+		fake, client, p := setup(t)
+		err := client.ClaimFlow(ctx, p.ID, "w-live")
+		assert.NilError(t, err)
+		fake.SetFactoryPlanState(p.ID, "ended")
+
+		err = client.ClaimFlow(ctx, p.ID, "w-live")
+
+		assert.Check(t, cmp.Contains(serverMessage(t, err, http.StatusConflict), "ended"))
+	})
+
+	t.Run("an unknown worker on an ended plan is a 404", func(t *testing.T) {
+		fake, client, p := setup(t)
+		fake.SetFactoryPlanState(p.ID, "ended")
+
+		err := client.ClaimFlow(ctx, p.ID, "no-such-worker")
+
+		assertStatus(t, err, http.StatusNotFound)
+	})
+
+	t.Run("an empty worker id is a 400", func(t *testing.T) {
+		_, client, p := setup(t)
+
+		err := client.ClaimFlow(ctx, p.ID, "")
+
+		assertStatus(t, err, http.StatusBadRequest)
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.WorkerID, ""))
+	})
+
+	t.Run("an unknown flow or worker is a 404", func(t *testing.T) {
+		_, client, p := setup(t)
+
+		err := client.ClaimFlow(ctx, uuid.NewString(), "w-live")
+		assertStatus(t, err, http.StatusNotFound)
+		err = client.ClaimFlow(ctx, p.ID, "no-such-worker")
+		assertStatus(t, err, http.StatusNotFound)
+	})
+
+	t.Run("a claim can be made to fail", func(t *testing.T) {
+		fake, client, p := setup(t)
+		// Not a 5xx: the client retries those, which would spend the failure.
+		fake.FailFactoryClaim(p.ID, http.StatusConflict)
+
+		err := client.ClaimFlow(ctx, p.ID, "w-live")
+		assertStatus(t, err, http.StatusConflict)
+		f, err := client.GetFlow(ctx, p.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(f.WorkerID, ""))
+
+		err = client.ClaimFlow(ctx, p.ID, "w-live")
+		assert.NilError(t, err)
+	})
+}
+
 func TestFactoryNotAuthorized(t *testing.T) {
 	ctx := context.Background()
 	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
@@ -1724,6 +1856,8 @@ func TestFactoryNotAuthorized(t *testing.T) {
 		_, err = client.ListFlowBlockers(ctx, uuid.NewString())
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		_, err = client.ListWorkers(ctx, WorkerFilter{})
+		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
+		err = client.ClaimFlow(ctx, uuid.NewString(), "w")
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		srv.Close()
 	}
