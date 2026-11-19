@@ -316,10 +316,11 @@ func TestStoreCommentsRoundTrip(t *testing.T) {
 	assert.Check(t, cmp.Equal(p.Comments, 0))
 }
 
-// TestStoreAddressCommentsSendsTheEvent checks that AddressComments sends
-// the plan's flow factory's address-comments event, and fails for a plan with
-// no flow to send it.
-func TestStoreAddressCommentsSendsTheEvent(t *testing.T) {
+// TestStoreAddressCommentsHandsOffTheUnresolvedComments checks that
+// AddressComments sends the plan's flow the address-comments input carrying
+// the IDs of the comments unresolved on the plan, whoever wrote them, and
+// fails for a plan with no flow to send it.
+func TestStoreAddressCommentsHandsOffTheUnresolvedComments(t *testing.T) {
 	store, _, cci := createdStore(t)
 	ctx := context.Background()
 	cci.DropFactoryFlow(store.ID())
@@ -327,13 +328,59 @@ func TestStoreAddressCommentsSendsTheEvent(t *testing.T) {
 	err := store.AddressComments(ctx)
 	assert.Check(t, err != nil, "a plan with no flow took the event")
 
-	store, _, cci = createdStore(t)
+	store, client, cci := createdStore(t)
 	cci.ClaimFactoryPlan(store.ID(), "s-1")
 	cci.SetFactoryPlanState(store.ID(), "refine-proposal")
+	// c1 and c2 saved through the store; c3 saved, then resolved; c4 written
+	// straight through the API, as another client would.
+	c1, err := store.AddComment(ctx, "", "one")
+	assert.NilError(t, err)
+	c2, err := store.AddComment(ctx, "", "two")
+	assert.NilError(t, err)
+	c3, err := store.AddComment(ctx, "", "three")
+	assert.NilError(t, err)
+	err = store.ResolveComment(ctx, c3.ID)
+	assert.NilError(t, err)
+	c4, err := client.CreateComment(ctx, store.ID(), "", "four")
+	assert.NilError(t, err)
+
 	err = store.AddressComments(ctx)
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"address-comments"}))
+	assert.Check(t, cmp.DeepEqual(p.Inputs, []any{[]string{c1.ID, c2.ID, c4.ID}}), "the resolved comment was handed off, or an open one left out")
+
+	// A retry lists again and sends the same IDs.
+	err = store.AddressComments(ctx)
+	assert.NilError(t, err)
+	p, _ = cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Inputs, []any{[]string{c1.ID, c2.ID, c4.ID}, []string{c1.ID, c2.ID, c4.ID}}))
+}
+
+// TestStoreHandOffWithNoCommentsSendsAnEmptyList checks that a hand-off with
+// no unresolved comments sends an empty list, not null.
+func TestStoreHandOffWithNoCommentsSendsAnEmptyList(t *testing.T) {
+	store, _, cci := createdStore(t)
+	cci.ClaimFactoryPlan(store.ID(), "s-1")
+	cci.SetFactoryPlanState(store.ID(), "build")
+
+	err := store.AnswerOpenQuestions(context.Background())
+	assert.NilError(t, err)
+	p, _ := cci.FactoryPlan(store.ID())
+	assert.Check(t, cmp.DeepEqual(p.Inputs, []any{[]string{}}))
+}
+
+// TestStoreHandOffSendsNothingWhenTheCommentsCannotBeListed checks that a
+// hand-off whose comment list fails is an error and sends no event.
+func TestStoreHandOffSendsNothingWhenTheCommentsCannotBeListed(t *testing.T) {
+	store, _, cci := createdStore(t)
+	cci.DeleteFactoryPlan(store.ID())
+
+	err := store.AddressComments(context.Background())
+	assert.Check(t, cmp.ErrorContains(err, "list the plan's open comments"))
+	for _, r := range cci.Recorder.AllRequests() {
+		assert.Check(t, r.Method != http.MethodPost || r.URL.Path != "/api/v3/factory/events", "an event was sent: %s", r.URL.Path)
+	}
 }
 
 // TestStoreAnswerOpenQuestionsSendsTheEvent checks that AnswerOpenQuestions
@@ -355,6 +402,7 @@ func TestStoreAnswerOpenQuestionsSendsTheEvent(t *testing.T) {
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"answer-open-questions"}))
+	assert.Check(t, cmp.DeepEqual(p.Inputs, []any{[]string{}}))
 }
 
 // TestStoreSendsTheHumansActions checks that StartWork, End and Delete
@@ -374,6 +422,7 @@ func TestStoreSendsTheHumansActions(t *testing.T) {
 			check: func(t *testing.T, cci *fakes.FakeCircleCI, id string) {
 				p, _ := cci.FactoryPlan(id)
 				assert.Check(t, cmp.DeepEqual(p.Events, []string{"prioritize"}))
+				assert.Check(t, cmp.DeepEqual(p.Inputs, []any{true}))
 			},
 		},
 		{
@@ -554,6 +603,7 @@ func TestStoreApproveDesignSendsTheEvent(t *testing.T) {
 	assert.NilError(t, err)
 	p, _ := cci.FactoryPlan(store.ID())
 	assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-units"}))
+	assert.Check(t, cmp.DeepEqual(p.Inputs, []any{true}))
 }
 
 // TestStoreApproveDesignRefusesWhatFactoryDoesNotOffer checks that
@@ -666,6 +716,19 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(f.Events, []string{"address-comments", "end"}))
 	assert.Check(t, cmp.Equal(f.Task, ""), "a flow with no task out")
+
+	cci.SetFactoryFlowStatus(store.ID(), fakes.FactoryFlowStatus{
+		Next: []fakes.FactoryTransition{
+			{Actor: "human", Input: "answer-open-questions", IsRequired: true},
+			{Actor: "human", Event: "end"},
+		},
+	})
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(f.Events, []string{"answer-open-questions", "end"}))
+	assert.Assert(t, len(f.Next) > 0)
+	assert.Check(t, cmp.Equal(f.Next[0].Event, "answer-open-questions"))
+	cci.SetFactoryFlowStatus(store.ID(), fakes.FactoryFlowStatus{})
 
 	cci.SetFactoryTask(store.ID(), "early-plan")
 	f, err = store.Flow(ctx)

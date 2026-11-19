@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"net/http"
 	"reflect"
 	"regexp"
 	"runtime"
@@ -6647,4 +6648,18 @@ func TestActivityLogIsNewestFirst(t *testing.T) {
 	assert.Check(t, cmp.Equal(lines[0], ansi.Strip(m.spin.View())+"reading go.mod"))
 	assert.Check(t, cmp.Equal(lines[1], "✓ reading main.go"))
 	assert.Check(t, cmp.Equal(lines[2], "Early plan"))
+}
+
+// A design approval the server refuses as no longer accepted, as when a
+// retried input was already applied, is shown as a failure.
+func TestARefusedDesignApprovalSaysSo(t *testing.T) {
+	t.Parallel()
+	m, store := planModel(t)
+	store.AddressErr = &circleci.StatusError{Op: "send the approve-for-units event", StatusCode: http.StatusConflict, ServerMessage: "approve-for-units is not accepted now"}
+	m = drive(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	m = drive(t, m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	assert.Check(t, !m.approvingDesign, "still approving after the approval failed")
+	view := ansi.Strip(m.Content())
+	assert.Check(t, cmp.Contains(view, "Could not approve the design: send the approve-for-units event: 409 Conflict — approve-for-units is not accepted now"), view)
+	assert.Check(t, m.moving == nil, "a refused event started the wait")
 }

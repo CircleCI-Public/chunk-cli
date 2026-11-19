@@ -146,6 +146,7 @@ func TestPlanApproveReleasesARecordedSessionsClaim(t *testing.T) {
 	assert.Check(t, cmp.Equal(rec.Code, http.StatusAccepted), "body: %s", rec.Body.String())
 	assert.Check(t, cmp.Equal(ad.plans.releases(), 1))
 	assert.Check(t, cmp.DeepEqual(ad.plans.sentEvents(), []circleci.FlowEvent{circleci.ApproveForBuilding}))
+	assert.Check(t, cmp.DeepEqual(ad.plans.inputsSent(), []circleci.FlowInputs{{"approve-for-building": true}}))
 	assert.Check(t, cmp.Len(ad.buildsStarted(), 1))
 	assert.Check(t, cmp.Equal(ad.starts.sessions(), 0), "approval started a planner")
 }
@@ -232,6 +233,16 @@ func TestPlanApproveRefuses(t *testing.T) {
 			},
 			status:   http.StatusBadGateway,
 			contains: "send the approve-for-building event: 500 from factory",
+		},
+		{
+			name: "factory refuses the input as no longer accepted",
+			setup: func(ad *approveDaemon) {
+				ad.plans.mu.Lock()
+				defer ad.plans.mu.Unlock()
+				ad.plans.eventErr = &circleci.StatusError{Op: "create flow event", StatusCode: http.StatusConflict, ServerMessage: "approve-for-building is not accepted now"}
+			},
+			status:   http.StatusBadGateway,
+			contains: "send the approve-for-building event: create flow event: 409 Conflict — approve-for-building is not accepted now",
 		},
 		{
 			name: "factory fails the read",
@@ -336,7 +347,7 @@ func TestPlanApproveNeedsAProjectRoot(t *testing.T) {
 	assert.Check(t, cmp.Len(ad.plans.sentEvents(), 0))
 }
 
-// gateEvents holds factory's CreateFlowEvent until the returned func runs,
+// gateEvents holds factory's SendFlowInputs until the returned func runs,
 // which a test must call (cleanup does too).
 func (ad *approveDaemon) gateEvents(t *testing.T) func() {
 	t.Helper()

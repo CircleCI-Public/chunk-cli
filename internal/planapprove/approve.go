@@ -19,7 +19,7 @@ import (
 type API interface {
 	GetFlow(ctx context.Context, planID string) (*circleci.Flow, error)
 	ReleaseClaim(ctx context.Context, planID string) error
-	CreateFlowEvent(ctx context.Context, planID string, event circleci.FlowEvent) error
+	SendFlowInputs(ctx context.Context, planID string, inputs circleci.FlowInputs) error
 }
 
 // Locate is the worktree root factory's daemon has session working in:
@@ -89,7 +89,7 @@ func Approve(ctx context.Context, api API, locate Locate, planID, session, worke
 			return err
 		}
 	}
-	if err := api.CreateFlowEvent(ctx, planID, circleci.ApproveForBuilding); err != nil {
+	if err := api.SendFlowInputs(ctx, planID, circleci.BoolInput(circleci.ApproveForBuilding)); err != nil {
 		return fmt.Errorf("send the approve-for-building event: %w", err)
 	}
 	return nil

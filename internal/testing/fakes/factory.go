@@ -1,6 +1,7 @@
 package fakes
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -29,6 +30,9 @@ type factoryPlan struct {
 	// reasons are the reasons sent with events, parallel to them: an
 	// end's reason, "" for any other event.
 	reasons []string
+	// inputs are the values input events set, parallel to events: true, or
+	// the comment IDs as []string; nil for end.
+	inputs []any
 	// applicable are the human events the flow serves in next, as a test
 	// sets them with SetFactoryApplicableEvents.
 	applicable []string
@@ -98,13 +102,21 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.GET("/api/v3/factory/workers/:id/sessions", f.handleGetWorkerSessions)
 }
 
-// factoryEvents are the events a human may send a flow (flow.EventName in
-// circleci/factory).
-var factoryEvents = []string{"prioritize", "address-comments", "answer-open-questions", "approve-for-units", "approve-for-building", "abandon-integrate", "end"}
+// factoryEvents are the events a client may send a flow: input for every
+// human action that has one, and end.
+var factoryEvents = []string{"input", "end"}
 
 // endReasons are the reasons an end takes, and only an end
 // (api/conductorapi/events.go in circleci/factory).
 var endReasons = []string{"completed", "canceled", "wont-do", "duplicate"}
+
+// boolInputs and commentInputs are the inputs the fake accepts on an input
+// event: a bool one takes only true, a comment one the IDs of comments
+// unresolved on the flow's plan.
+var (
+	boolInputs    = []string{"prioritize", "approve-for-units", "approve-for-building"}
+	commentInputs = []string{"address-comments", "answer-open-questions"}
+)
 
 // factoryEnds are the states a plan ends in (conductor.Ends in
 // circleci/factory).
@@ -127,6 +139,9 @@ type FactoryPlan struct {
 	// Reasons are the reasons sent with Events, parallel to them: an
 	// end's reason, "" for any other event.
 	Reasons []string
+	// Inputs are the value each input event set, parallel to Events: true, or
+	// the comment IDs as []string; nil for end.
+	Inputs []any
 	// Repos are the GitHub repositories the plan was created with, as
 	// owner/name; nil when none.
 	Repos []string
@@ -151,7 +166,8 @@ func (f *FakeCircleCI) FactoryPlan(id string) (FactoryPlan, bool) {
 	return FactoryPlan{
 		ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments),
 		Session: session, Worker: p.worker, Events: slices.Clone(p.events), Reasons: slices.Clone(p.reasons),
-		Repos: slices.Clone(p.repos),
+		Inputs: slices.Clone(p.inputs),
+		Repos:  slices.Clone(p.repos),
 	}, true
 }
 
@@ -258,7 +274,9 @@ func (f *FakeCircleCI) SetFactoryTaskIDOnly(id string) {
 // FactoryTransition is a transition as conductor serves it in a flow's next.
 type FactoryTransition struct {
 	Actor, Event, TaskCategory, Action string
-	IsDispatched                       bool
+	// Input is served as the entry's input when set, beside any Event.
+	Input        string
+	IsDispatched bool
 
 	// IsRequired is whether the entry is one of those one of which must
 	// happen for the flow to move on.
@@ -921,15 +939,28 @@ func flowNext(p *factoryPlan) []gin.H {
 		next = append(next, gin.H{"actor": "session", "task_category": p.taskCategory, "is_dispatched": true})
 	}
 	for _, e := range p.required {
-		next = append(next, gin.H{"actor": "human", "event": e, "is_required": true})
+		next = append(next, humanEntry(e, true))
 	}
 	if p.state == "integrate" && p.status.WaitingOn == "human" {
 		next = append(next, gin.H{"actor": "human", "action": "merge-pr"})
 	}
 	for _, e := range p.applicable {
-		next = append(next, gin.H{"actor": "human", "event": e})
+		next = append(next, humanEntry(e, false))
 	}
 	return next
+}
+
+// humanEntry is a human entry of next for event e, which also serves e as its
+// input unless it is end.
+func humanEntry(e string, required bool) gin.H {
+	ent := gin.H{"actor": "human", "event": e}
+	if e != "end" {
+		ent["input"] = e
+	}
+	if required {
+		ent["is_required"] = true
+	}
+	return ent
 }
 
 // transitionEntity is t as conductor serves it in a flow's next.
@@ -942,6 +973,9 @@ func transitionEntity(t FactoryTransition) gin.H {
 		ent["task_category"] = t.TaskCategory
 	case t.Action != "":
 		ent["action"] = t.Action
+	}
+	if t.Input != "" {
+		ent["input"] = t.Input
 	}
 	if t.IsDispatched {
 		ent["is_dispatched"] = true
@@ -1080,7 +1114,7 @@ func (f *FakeCircleCI) handleGetWorkerSessions(c *gin.Context) {
 }
 
 // handleCreateEvent stores an event for a flow, as conductor does, answering
-// 400 for an event conductor does not know or one with no factory_flow
+// 400 for an event not in factoryEvents or one with no factory_flow
 // reference, and 404 for a plan with no flow. As conductor does, it answers
 // 400 for an end whose reason is not one of endReasons, and for a reason on
 // any other event.
@@ -1091,8 +1125,9 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 	var body struct {
 		Data struct {
 			Attributes struct {
-				Event  string `json:"event"`
-				Reason string `json:"reason"`
+				Event  string                     `json:"event"`
+				Reason string                     `json:"reason"`
+				Inputs map[string]json.RawMessage `json:"inputs"`
 			} `json:"attributes"`
 			References struct {
 				FactoryFlow *struct {
@@ -1114,6 +1149,21 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 		factoryError(c, http.StatusBadRequest, "only end takes a reason")
 		return
 	}
+	if event != "input" && body.Data.Attributes.Inputs != nil {
+		factoryError(c, http.StatusBadRequest, "only input takes inputs")
+		return
+	}
+	var inputName string
+	var inputRaw json.RawMessage
+	if event == "input" {
+		if len(body.Data.Attributes.Inputs) != 1 {
+			factoryError(c, http.StatusBadRequest, "an input event sets one input")
+			return
+		}
+		for k, v := range body.Data.Attributes.Inputs {
+			inputName, inputRaw = k, v
+		}
+	}
 	if body.Data.References.FactoryFlow == nil {
 		factoryError(c, http.StatusBadRequest, "an event needs a factory_flow reference")
 		return
@@ -1126,7 +1176,19 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 		factoryError(c, http.StatusNotFound, "flow not found")
 		return
 	}
-	p.events = append(p.events, event)
+	var value any
+	if event == "input" {
+		v, msg := inputValue(p, inputName, inputRaw)
+		if msg != "" {
+			factoryError(c, http.StatusBadRequest, msg)
+			return
+		}
+		value = v
+		p.events = append(p.events, inputName)
+	} else {
+		p.events = append(p.events, event)
+	}
+	p.inputs = append(p.inputs, value)
 	p.reasons = append(p.reasons, reason)
 	attrs := gin.H{"event": event, "created_at": time.Now().UTC()}
 	if reason != "" {
@@ -1137,6 +1199,31 @@ func (f *FakeCircleCI) handleCreateEvent(c *gin.Context) {
 		"attributes": attrs,
 		"references": gin.H{"factory_flow": gin.H{"id": p.id}, "user": gin.H{"id": "user-1"}},
 	}})
+}
+
+// inputValue is the value raw sets input name to on plan p, or the 400's
+// message when the factory events API would refuse it. p's lock must be held.
+func inputValue(p *factoryPlan, name string, raw json.RawMessage) (any, string) {
+	switch {
+	case slices.Contains(boolInputs, name):
+		var b bool
+		if json.Unmarshal(raw, &b) != nil || !b {
+			return nil, name + " takes only true"
+		}
+		return true, ""
+	case slices.Contains(commentInputs, name):
+		var ids []string
+		if json.Unmarshal(raw, &ids) != nil || ids == nil {
+			return nil, name + " takes a list of comment IDs"
+		}
+		for _, id := range ids {
+			if !slices.ContainsFunc(p.comments, func(c factoryComment) bool { return c.id == id && c.resolvedAt == nil }) {
+				return nil, "comment " + id + " is not an unresolved comment on the plan"
+			}
+		}
+		return ids, ""
+	}
+	return nil, "input " + name + " is not one of " + strings.Join(slices.Concat(boolInputs, commentInputs), ", ")
 }
 
 func (f *FakeCircleCI) handleCreateComment(c *gin.Context) {
