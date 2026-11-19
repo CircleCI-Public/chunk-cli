@@ -807,14 +807,6 @@ func (c *Client) ListFlowBlockers(ctx context.Context, planID string) ([]Blocker
 	return out, nil
 }
 
-// CreateFlowEvent sends event to factory plan planID's flow. Factory applies
-// it at the plan's next poll, so the plan has not moved yet when this
-// returns. It is not idempotent: each call stores an event. A plan with no
-// flow is a 404.
-func (c *Client) CreateFlowEvent(ctx context.Context, planID string, event FlowEvent) error {
-	return c.createEvent(ctx, planID, eventAttrs{Event: event}, "create flow event")
-}
-
 // EndFlow sends factory plan planID's flow the end event, for reason.
 // Factory ends the flow at the plan's next poll. A plan with no flow is a 404.
 func (c *Client) EndFlow(ctx context.Context, planID string, reason EndReason) error {

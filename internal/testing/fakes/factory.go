@@ -102,9 +102,9 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.GET("/api/v3/factory/workers/:id/sessions", f.handleGetWorkerSessions)
 }
 
-// factoryEvents are the events a human may send a flow (flow.EventName in
-// circleci/factory).
-var factoryEvents = []string{"prioritize", "address-comments", "answer-open-questions", "approve-for-units", "approve-for-building", "abandon-integrate", "input", "end"}
+// factoryEvents are the events a client may send a flow: input for every
+// human action that has one, and end.
+var factoryEvents = []string{"input", "end"}
 
 // endReasons are the reasons an end takes, and only an end
 // (api/conductorapi/events.go in circleci/factory).
@@ -1114,7 +1114,7 @@ func (f *FakeCircleCI) handleGetWorkerSessions(c *gin.Context) {
 }
 
 // handleCreateEvent stores an event for a flow, as conductor does, answering
-// 400 for an event conductor does not know or one with no factory_flow
+// 400 for an event not in factoryEvents or one with no factory_flow
 // reference, and 404 for a plan with no flow. As conductor does, it answers
 // 400 for an end whose reason is not one of endReasons, and for a reason on
 // any other event.

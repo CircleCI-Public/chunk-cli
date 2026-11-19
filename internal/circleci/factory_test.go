@@ -569,32 +569,6 @@ func TestFlows(t *testing.T) {
 		assert.Check(t, f.Task == nil, "the task outlived its submit: %+v", f.Task)
 	})
 
-	t.Run("sends a flow an event", func(t *testing.T) {
-		fake := fakes.NewFakeCircleCI()
-		srv := httptest.NewServer(fake)
-		t.Cleanup(srv.Close)
-		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
-		assert.NilError(t, err)
-		fake.ClaimFactoryPlan(p.ID, "session-1")
-
-		err = client.CreateFlowEvent(ctx, p.ID, AddressComments)
-		assert.NilError(t, err)
-
-		reqs := fake.Recorder.AllRequests()
-		last := reqs[len(reqs)-1]
-		assert.Check(t, cmp.Equal(last.URL.Path, "/api/v3/factory/events"))
-		var body map[string]any
-		err = json.Unmarshal(last.Body, &body)
-		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(body, map[string]any{"data": map[string]any{
-			"attributes": map[string]any{"event": "address-comments"},
-			"references": map[string]any{"factory_flow": map[string]any{"id": p.ID}},
-		}}))
-		got, _ := fake.FactoryPlan(p.ID)
-		assert.Check(t, cmp.DeepEqual(got.Events, []string{"address-comments"}))
-	})
-
 	t.Run("sends a flow inputs", func(t *testing.T) {
 		for _, tc := range []struct {
 			name       string
@@ -768,9 +742,9 @@ func TestFlows(t *testing.T) {
 				want:  "event is not one of",
 			},
 			{
-				name:  "a reason on another event",
-				attrs: `{"event":"address-comments","reason":"canceled"}`,
-				want:  "only end takes a reason",
+				name:  "a named human event",
+				attrs: `{"event":"address-comments"}`,
+				want:  "event is not one of",
 			},
 			{
 				name:  "an input that is not one the API knows",
@@ -843,7 +817,7 @@ func TestFlows(t *testing.T) {
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
 
-		assertStatus(t, client.CreateFlowEvent(ctx, uuid.NewString(), AddressComments), http.StatusNotFound)
+		assertStatus(t, client.SendFlowInputs(ctx, uuid.NewString(), BoolInput(Prioritize)), http.StatusNotFound)
 	})
 
 	t.Run("a plan whose flow was dropped has none", func(t *testing.T) {
@@ -857,7 +831,7 @@ func TestFlows(t *testing.T) {
 
 		_, err = client.GetFlow(ctx, p.ID)
 		assertStatus(t, err, http.StatusNotFound)
-		assertStatus(t, client.CreateFlowEvent(ctx, p.ID, AddressComments), http.StatusNotFound)
+		assertStatus(t, client.SendFlowInputs(ctx, p.ID, BoolInput(Prioritize)), http.StatusNotFound)
 	})
 
 	t.Run("lists the caller's flows", func(t *testing.T) {
