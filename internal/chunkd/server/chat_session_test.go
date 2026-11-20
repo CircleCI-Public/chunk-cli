@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -164,23 +166,58 @@ func TestChatRecordOpenFailureIsAProblem(t *testing.T) {
 }
 
 func TestChatStartFailureIsAProblem(t *testing.T) {
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-	root, err := filepath.EvalSymlinks(initRepo(t))
-	assert.NilError(t, err)
-	f := newChatFakes()
-	startErr := fmt.Errorf("%w: install factory's f plugin", factory.ErrNoFactoryPlugin)
-	f.setErrs(startErr, nil)
-	startTestDaemonWithPlans(t, f.config())
+	cases := []struct {
+		name     string
+		startErr error
+		fix      string
+	}{
+		{
+			name:     "no claude binary",
+			startErr: factory.ErrNoClaude,
+			fix:      "claude.com/claude-code",
+		},
+		{
+			name:     "no factory plugin",
+			startErr: fmt.Errorf("%w: install factory's f plugin", factory.ErrNoFactoryPlugin),
+			fix:      "f plugin",
+		},
+		{
+			name:     "factory MCP not connected",
+			startErr: fmt.Errorf("%w: factory must be on PATH", factory.ErrFactoryMCP),
+			fix:      "MCP",
+		},
+		{
+			name:     "no factory daemon",
+			startErr: factory.ErrNoFactoryDaemon,
+			fix:      "factory daemon",
+		},
+		{
+			name:     "no factory",
+			startErr: factory.ErrNoFactory,
+			fix:      "no factory",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(config.EnvXDGDataHome, t.TempDir())
+			root, err := filepath.EvalSymlinks(initRepo(t))
+			assert.NilError(t, err)
+			f := newChatFakes()
+			f.setErrs(tc.startErr, nil)
+			startTestDaemonWithPlans(t, f.config())
 
-	_, err = chunkd.SendChat(chunkd.ChatMessage{Root: root, Text: "hi"})
-	assert.NilError(t, err, "a start failure still answers 200")
-	log, err := chunkd.FetchChat(root, 0)
-	assert.NilError(t, err)
-	assert.Assert(t, cmp.Len(log.Events, 2))
-	assert.Check(t, cmp.DeepEqual(log.Events[1], chunkd.SessionLogEvent{
-		Seq: 1, Kind: chunkd.SessionLogProblem, Text: sessionStartProblem(startErr, "chat").Error(),
-	}))
-	assert.Check(t, !log.Busy)
+			_, err = chunkd.SendChat(chunkd.ChatMessage{Root: root, Text: "hi"})
+			assert.NilError(t, err, "a start failure still answers 200")
+			log, err := chunkd.FetchChat(root, 0)
+			assert.NilError(t, err)
+			assert.Assert(t, cmp.Len(log.Events, 2))
+			assert.Check(t, cmp.DeepEqual(log.Events[1], chunkd.SessionLogEvent{
+				Seq: 1, Kind: chunkd.SessionLogProblem, Text: sessionStartProblem(tc.startErr, "chat").Error(),
+			}))
+			assert.Check(t, cmp.Contains(log.Events[1].Text, tc.fix))
+			assert.Check(t, !log.Busy)
+		})
+	}
 }
 
 func TestChatStopsWhenIdleAndResumes(t *testing.T) {
@@ -289,6 +326,69 @@ func TestChatsStopAllOnShutdown(t *testing.T) {
 			Text: "the chunk daemon is shutting down; send the message again once it has restarted",
 		}))
 	})
+}
+
+func TestRemovedFactoryRoutesAre404(t *testing.T) {
+	routes := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{
+			name:   "start a plan build",
+			method: http.MethodPost,
+			path:   "/factory/plans",
+		},
+		{
+			name:   "read a plan build",
+			method: http.MethodGet,
+			path:   "/factory/plans/p1/build",
+		},
+		{
+			name:   "approve a plan",
+			method: http.MethodPost,
+			path:   "/factory/plans/p1/approve",
+		},
+		{
+			name:   "request the planner",
+			method: http.MethodPost,
+			path:   "/factory/plans/p1/planner/request",
+		},
+		{
+			name:   "resume the planner",
+			method: http.MethodPost,
+			path:   "/factory/plans/p1/planner/resume",
+		},
+		{
+			name:   "read the planner",
+			method: http.MethodGet,
+			path:   "/factory/plans/p1/planner",
+		},
+		{
+			name:   "cancel a session",
+			method: http.MethodPost,
+			path:   "/factory/s-1/cancel",
+		},
+		{
+			name:   "delete a session",
+			method: http.MethodDelete,
+			path:   "/factory/s-1",
+		},
+	}
+	for _, rt := range routes {
+		t.Run(rt.name, func(t *testing.T) {
+			rec := serve(newTestDaemon(), httptest.NewRequest(rt.method, rt.path, strings.NewReader("{}")))
+			assert.Check(t, cmp.Equal(rec.Code, http.StatusNotFound))
+			assert.Check(t, cmp.Equal(rec.Body.String(), "404 page not found\n"), "a handler answered, not the router")
+		})
+	}
+	// Chat is on the same mux and still answers. It refuses a root that is
+	// not a repository, as TestChatRoutes shows, so the root is a real one.
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root, err := filepath.EvalSymlinks(initRepo(t))
+	assert.NilError(t, err)
+	rec := serve(newTestDaemon(), httptest.NewRequest(http.MethodGet, "/chat?root="+url.QueryEscape(root), nil))
+	assert.Check(t, cmp.Equal(rec.Code, http.StatusOK))
 }
 
 func TestChatRoutes(t *testing.T) {

@@ -47,7 +47,7 @@ chunk-cli/
     ├── upgrade/               # CLI self-upgrade
     ├── validate/              # Validation command logic
     └── chunkd/                # The daemon's API: wire types, client, paths, lifecycle
-        └── server/            # The daemon itself: poll loop, stores, handlers, plan builds
+        └── server/            # The daemon itself: poll loop, stores, handlers, chat
 ```
 
 ## Layering Rules
@@ -403,53 +403,9 @@ Design constraints worth preserving:
   Resolution is deferred to first use because it can read the OS keychain, and the
   daemon starts on every `chunk ui` whether or not anything needs a token.
 
-### Plan builds
-
-The daemon's factory sessions are plan builds. A session is the daemon's
-record of building one approved factory plan for a project: a Claude Code
-session in the plan's worktree, with factory's f plugin, that works through
-factory's tasks for the plan through to a pull request. The daemon is the
-**local** one (Unix socket); a build works from files on this machine.
-Approving a plan in `chunk factory plan` (or in `chunk ui`) starts one. A
-build's progress is the plan's flow in factory; the daemon's session only
-records that the build is running.
+### Chat
 
 ```
-POST /factory/plans        {project_root, plan_id, model?} → 202 {id}: build a factory plan
-                             no session holds, in a fresh build session that claims it (409
-                             claimed by another session, no flow, plan over or already
-                             building; 404 unknown project; 502 factory unreachable; 503 not
-                             authenticated to CircleCI)
-GET  /factory/plans/{plan}/build[?after=N] → PlanBuildActivity: the plan's build
-                             session (the running one, else the latest) and its feed
-                             lines after the first N, numbered from first; total is the
-                             next after (404 no build of the plan)
-POST /factory/plans/{plan}/approve {project_root, model?} → 202 {id}: approve the plan in
-                                   factory, stop its planner and start its build, in one call
-                                   that a client going away does not cut short (409 being
-                                   approved, not ready, no units, questions open or already being
-                                   built; 502 factory failed, or approved but the build would not
-                                   start; 503 not authenticated to CircleCI; 404 unknown project)
-POST /factory/plans/{plan}/planner/request {project_root, text, model?} → 200 SessionLog: start
-                                   the plan's planner on a new plan's request, once (409 already
-                                   requested, claimed by another session, or the plan being
-                                   approved or approved; 503 no Claude Code, factory or factory
-                                   daemon, or not authenticated to CircleCI; 404 unknown project)
-POST /factory/plans/{plan}/planner/resume  {project_root, model?, release_holder?} → 200 SessionLog: have the
-                                   planner claim the plan again, starting or resuming it, when it
-                                   holds no claim; nothing while it does (409/503/404 as request).
-                                   release_holder is the session the developer confirmed taking
-                                   over: the daemon re-reads the claim, refuses unless that same
-                                   session still holds it and it is a foreign session the
-                                   daemon may release, releases it, then resumes
-GET  /factory/plans/{plan}/planner[?after=N] → {session_id, log_id, oldest, busy, activity?,
-                                   next, events[]}: the planner's events from cursor N (the
-                                   `next` of an earlier read), and whether it is mid-turn;
-                                   without after, no events
-POST /factory/{id}/cancel  → 202 (idempotent): stop a build without ending its plan, and
-                                   free factory's claim if the build still holds it, so a new
-                                   build can start at once (a daemon shutdown frees nothing)
-DELETE /factory/{id}       → 204: forget a finished session; 409 while it is still running
 POST /chat                 {root, text, context?} → 200 SessionLog, once the session has the
                            message: send a message to root's chat, starting or
                            resuming its session (400 no text, or a root that is not an
@@ -457,49 +413,28 @@ POST /chat                 {root, text, context?} → 200 SessionLog, once the s
                            daemon shuts down)
 GET  /chat?root=&after=N → SessionLog: the conversation from cursor N; without
                            after, no events
-GET  /snapshot             → each project carries `sessions` (state only), and the
-                             top level a `review_auth_error` when plan builds cannot run
+GET  /snapshot             → each project carries its commands and sidecars; the top level
+                             an `auth_error` when output streaming is unavailable
 ```
-
-A plan's planner is a long-lived Claude Code session with factory's f plugin
-that plans the plan through factory's tasks, one per plan. Planners are kept
-apart from sessions, in a registry of their own: they are not listed in
-`GET /factory` or the snapshot, so an idle planner never keeps an outdated
-daemon from being replaced. A planner starts on a request or resume, and
-stops on approval, when the plan's flow ends, or when the daemon stops. It
-outlives the screens that follow it: `chunk factory plan` and `chunk ui`
-poll `GET …/planner` while a plan is open, and closing them only ends that
-polling.
 
 **The chat.** The daemon runs one chat per repository: a Claude Code session
 in `factory.ModeChat`, in the repository's root, that answers questions about
 its factory plans and, when asked, acts on their flows with factory's own
 commands: what `chatTools` allows, and never what `chatDeniedTools` denies. It
 starts on the repository's first message, resuming the session recorded in
-`factory.OpenChatSession(root)`. It runs on the same session runner as the
-planner, so its conversation is the runner's log, including the developer's
-messages (`message` events, without the context sent with them), and a client
-reads it by cursor and `log_id` as it reads a planner's. The daemon stops the
+`factory.OpenChatSession(root)`. Its conversation is the session runner's log,
+including the developer's messages (`message` events, without the context sent
+with them), and a client reads it by cursor and `log_id`. The daemon stops the
 session after 30 idle minutes, keeping the log; the next message resumes it. A
 restarted daemon has no log to show, and a new `log_id` says so, but its next
 message resumes the same Claude session.
 
-A build records a `chunkd.Session` whose `factory` field (`FactoryRun`) names
-the plan, and runs a factory build session in the plan's worktree. While it
-runs, the daemon follows the plan's flow in factory: it stops the build once
-the flow has ended, so ending a plan stops its build, and tells the build
-session to claim the plan again when another session has held its claim and
-released it.
+Factory plans are planned and built by the developer's factory worker. The
+only Claude Code session the daemon runs is the chat.
 
-- **Test seams.** `server.WithPlans` replaces factory, the worktree and the
-  build session in tests; left out, the daemon uses the real ones.
-- **Detach is not cancel.** A viewer disconnecting changes nothing; the build
-  belongs to the daemon and outlives the screen that approved it. A build
-  ends with its plan, or with `POST /factory/{id}/cancel`.
-- **In memory only.** Like async validate tasks, a daemon restart loses the
-  session record (the last 10 per project are kept while it runs). The build's
-  work is not lost with it: it is on the plan's branch, and the plan's flow is
-  in factory.
+- **Test seams.** `server.WithPlans` replaces Claude Code and the chat's
+  session record in tests (`PlanConfig.StartChat` and `OpenChatRecord`); left
+  out, the daemon uses the real ones.
 
 ### Resource sampling
 

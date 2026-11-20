@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
@@ -14,6 +15,73 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/claudecode"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 )
+
+// fakeBuild is a build session whose events a test sends, recording what it
+// is sent.
+type fakeBuild struct {
+	events  chan factory.AgentEvent
+	once    sync.Once
+	mu      sync.Mutex
+	stopped bool
+	sent    []string
+	sendErr error
+	// stopGate, when set, holds Stop until it is closed, as a claude slow to
+	// exit would.
+	stopGate chan struct{}
+}
+
+func newFakeBuild() *fakeBuild { return &fakeBuild{events: make(chan factory.AgentEvent, 8)} }
+
+func (b *fakeBuild) Send(message string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sent = append(b.sent, message)
+	return b.sendErr
+}
+
+// messages is what the session has been sent, failed sends included.
+func (b *fakeBuild) messages() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.sent...)
+}
+
+func (b *fakeBuild) Events() <-chan factory.AgentEvent { return b.events }
+
+func (b *fakeBuild) Stop() error {
+	b.mu.Lock()
+	gate := b.stopGate
+	b.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	b.mu.Lock()
+	b.stopped = true
+	b.mu.Unlock()
+	b.end()
+	return nil
+}
+
+// end closes the events, as claude exiting would.
+func (b *fakeBuild) end() { b.once.Do(func() { close(b.events) }) }
+
+func (b *fakeBuild) wasStopped() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.stopped
+}
+
+func waitUntil(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
 
 // reply ends the session's turn with text, as claude would.
 func (b *fakeBuild) reply(text string) {
@@ -118,7 +186,7 @@ func (r *memRecord) open() (SessionRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.held {
-		return nil, factory.ErrPlanSessionOpen
+		return nil, factory.ErrChatOpen
 	}
 	r.opens++
 	r.closed = false
@@ -462,44 +530,36 @@ func TestRunnerStopStopsTheSessionAndDropsItsLateEvents(t *testing.T) {
 
 func TestSessionStartProblem(t *testing.T) {
 	for _, tc := range []struct {
-		err   error
-		build string
-		plan  string
+		err  error
+		chat string
 	}{
 		{
-			err:   factory.ErrNoClaude,
-			build: "the chunk daemon found no Claude Code to build with; install it from https://claude.com/claude-code",
-			plan:  "the chunk daemon found no Claude Code to plan with; install it from https://claude.com/claude-code",
+			err:  factory.ErrNoClaude,
+			chat: "the chunk daemon found no Claude Code to chat with; install it from https://claude.com/claude-code",
 		},
 		{
-			err:   factory.ErrNoFactory,
-			build: "the chunk daemon found no factory; install it and put it on PATH, then restart the daemon",
-			plan:  "the chunk daemon found no factory; install it and put it on PATH, then restart the daemon",
+			err:  factory.ErrNoFactory,
+			chat: "the chunk daemon found no factory; install it and put it on PATH, then restart the daemon",
 		},
 		{
-			err:   fmt.Errorf("%w: install it", factory.ErrNoFactoryPlugin),
-			build: "factory's f plugin is not loaded in Claude Code; install it",
-			plan:  "factory's f plugin is not loaded in Claude Code; install it",
+			err:  fmt.Errorf("%w: install it", factory.ErrNoFactoryPlugin),
+			chat: "factory's f plugin is not loaded in Claude Code; install it",
 		},
 		{
-			err:   factory.ErrFactoryMCP,
-			build: "factory's MCP server is not connected; make sure factory is on PATH",
-			plan:  "factory's MCP server is not connected; make sure factory is on PATH",
+			err:  factory.ErrFactoryMCP,
+			chat: "factory's MCP server is not connected; make sure factory is on PATH",
 		},
 		{
-			err:   factory.ErrNoFactoryDaemon,
-			build: "the factory daemon is not running; run `factory daemon` with FACTORY_PLAN_STORE=circleci to plan",
-			plan:  "the factory daemon is not running; run `factory daemon` with FACTORY_PLAN_STORE=circleci to plan",
+			err:  factory.ErrNoFactoryDaemon,
+			chat: "the factory daemon is not running; run `factory daemon` with FACTORY_PLAN_STORE=circleci to plan",
 		},
 		{
-			err:   errors.New("claude exited"),
-			build: "start the build session: claude exited",
-			plan:  "start the planning session: claude exited",
+			err:  errors.New("claude exited"),
+			chat: "start the chat session: claude exited",
 		},
 	} {
 		t.Run(tc.err.Error(), func(t *testing.T) {
-			assert.Check(t, cmp.Error(sessionStartProblem(tc.err, "build"), tc.build))
-			assert.Check(t, cmp.Error(sessionStartProblem(tc.err, "plan"), tc.plan))
+			assert.Check(t, cmp.Error(sessionStartProblem(tc.err, "chat"), tc.chat))
 		})
 	}
 }

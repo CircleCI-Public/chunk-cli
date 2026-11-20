@@ -171,8 +171,6 @@ type ProjectSnapshot struct {
 	// ActiveClaims lists validate claims from all sessions currently active for
 	// this project. Nil when no sessions are validating.
 	ActiveClaims []ClaimState `json:"active_claims,omitempty"`
-	// Sessions lists this project's plan builds, newest first.
-	Sessions []Session `json:"sessions,omitempty"`
 }
 
 // ConflictReport is the response to a conflict query for one project root.
@@ -193,7 +191,4 @@ type Snapshot struct {
 	// empty logs pane with no explanation sends people hunting the wrong fault,
 	// so the daemon reports this rather than silently serving nothing.
 	AuthError string `json:"auth_error,omitempty"`
-	// ReviewAuthError explains why the daemon cannot build plans (no CircleCI
-	// login), empty when it can.
-	ReviewAuthError string `json:"review_auth_error,omitempty"`
 }

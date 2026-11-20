@@ -161,7 +161,6 @@ func TestLoadIgnoresLeftoverFactoryRunFiles(t *testing.T) {
 	p := snap.Projects[0]
 	assert.Check(t, cmp.Equal(canonicalRoot(p.Root), canonicalRoot(dir)))
 	assert.Check(t, cmp.Len(p.Sidecars, 0), "a leftover run's pool was loaded: %+v", p.Sidecars)
-	assert.Check(t, cmp.Len(p.Sessions, 0))
 }
 
 func TestLoadSidecars_readsPoolOrg(t *testing.T) {

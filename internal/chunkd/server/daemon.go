@@ -87,12 +87,8 @@ type daemon struct {
 	// live drops sidecars the API no longer lists, so the dashboard shows only
 	// the ones that exist.
 	live *livenessChecker
-	// sessions holds plan builds, and rcfg what the daemon builds them with.
-	sessions *sessionStore
-	rcfg     PlanConfig
-	// planners holds the plans' planning sessions, apart from sessions so
-	// they stay out of the runs list.
-	planners *plannerSet
+	// rcfg holds the seams chats start with.
+	rcfg PlanConfig
 	// chats holds each repository's chat.
 	chats *chats
 	// polled is closed once the first poll has finished, so /snapshot can wait
@@ -232,8 +228,6 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		prov:      prov,
 		claims:    newClaimStore(),
 		live:      newLivenessChecker(listFor(client)),
-		sessions:  newSessionStore(ctx),
-		planners:  newPlannerSet(ctx),
 		rcfg:      dopts.plans,
 		polled:    make(chan struct{}),
 	}
@@ -247,8 +241,6 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	defer d.out.stopAll()
 	defer d.res.stopAll()
 	defer d.tasks.stopAll()
-	defer d.sessions.stopAll()
-	defer d.planners.stopAll()
 	defer d.chats.stopAll()
 	if prov != nil {
 		defer prov.stopAll(context.Background())
@@ -504,12 +496,12 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 	if len(roots) == 0 {
 		projects := make([]chunkd.ProjectSnapshot, 0, len(d.projects))
 		for _, ps := range d.projects {
-			projects = append(projects, d.withSessions(ps.root, ps.snap))
+			projects = append(projects, d.snapshotOf(ps.root, ps.snap))
 		}
 		// Map iteration is random; sort by root so project rows stay stable
 		// between polls when watchAll mode requests all projects.
 		sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-		return chunkd.Snapshot{Projects: projects, AuthError: d.authError, ReviewAuthError: d.factoryAuthError()}
+		return chunkd.Snapshot{Projects: projects, AuthError: d.authError}
 	}
 
 	ordered := make([]chunkd.ProjectSnapshot, 0, len(roots))
@@ -520,33 +512,20 @@ func (d *daemon) snapshot(roots []string) chunkd.Snapshot {
 				continue
 			}
 			seen[ps.root] = true
-			ordered = append(ordered, d.withSessions(ps.root, ps.snap))
+			ordered = append(ordered, d.snapshotOf(ps.root, ps.snap))
 			break
 		}
 	}
-	return chunkd.Snapshot{Projects: ordered, AuthError: d.authError, ReviewAuthError: d.factoryAuthError()}
+	return chunkd.Snapshot{Projects: ordered, AuthError: d.authError}
 }
 
-// withSessions attaches the project's sessions to a snapshot. It is done when a
-// snapshot is read rather than when the poll builds it, so a session's progress
-// is as fresh as the request instead of as fresh as the last five-second poll.
-//
-// root is passed in because a project adopted a moment ago has no snapshot yet,
-// and so no Root of its own to look sessions up by.
-func (d *daemon) withSessions(root string, p chunkd.ProjectSnapshot) chunkd.ProjectSnapshot {
+// snapshotOf is a project's snapshot with its Root set. A project adopted a
+// moment ago has no snapshot yet, and so no Root of its own.
+func (d *daemon) snapshotOf(root string, p chunkd.ProjectSnapshot) chunkd.ProjectSnapshot {
 	if p.Root == "" {
 		p.Root = root
 	}
-	p.Sessions = d.sessions.forProject(root)
 	return p
-}
-
-// factoryAuthError explains why plan builds cannot run, or "" when they can.
-func (d *daemon) factoryAuthError() string {
-	if d.planAPI() == nil {
-		return "not authenticated to CircleCI — plan builds unavailable (run: chunk auth login)"
-	}
-	return ""
 }
 
 // fillMissingOrg gives sidecars whose state recorded no org the project's org,
