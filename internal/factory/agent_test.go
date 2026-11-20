@@ -18,27 +18,11 @@ import (
 )
 
 // fakeFactory puts a factory on PATH, so StartAgent's check that factory is
-// installed passes without a real factory daemon. `factory daemon claim list`
-// prints $FAKE_CLAIMS, or fails with $FAKE_CLAIMS_ERR when that is set;
-// `factory daemon session show` prints $FAKE_SESSION, or fails with
-// $FAKE_SESSION_ERR when that is set. Each also fails unless told not to retry while the daemon isn't running, as a
-// real factory would for a minute.
+// installed passes without a real factory daemon.
 func fakeFactory(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
-	script := `#!/bin/sh
-if [ "$1 $2 $3" = "daemon claim list" ]; then
-  if [ "$FACTORY_DAEMON_NOT_RUNNING_RETRY" != "0s" ]; then echo "would retry for a minute" >&2; exit 1; fi
-  if [ -n "$FAKE_CLAIMS_ERR" ]; then echo "$FAKE_CLAIMS_ERR" >&2; exit 1; fi
-  printf '%s' "$FAKE_CLAIMS"
-fi
-if [ "$1 $2 $3" = "daemon session show" ]; then
-  if [ "$FACTORY_DAEMON_NOT_RUNNING_RETRY" != "0s" ]; then echo "would retry for a minute" >&2; exit 1; fi
-  if [ -n "$FAKE_SESSION_ERR" ]; then echo "$FAKE_SESSION_ERR" >&2; exit 1; fi
-  printf '%s' "$FAKE_SESSION"
-fi
-exit 0
-`
+	script := "#!/bin/sh\nexit 0\n"
 	err := os.WriteFile(filepath.Join(dir, "factory"), []byte(script), 0o755)
 	assert.NilError(t, err)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -205,22 +189,6 @@ func startTestAgent(ctx context.Context, t *testing.T, cfg AgentConfig, first st
 	return a
 }
 
-func TestPlanMessageNamesThePlanAndTheRequest(t *testing.T) {
-	msg := PlanMessage("plan-1", "add a flag")
-	assert.Check(t, cmp.Contains(msg, "as plan plan-1"))
-	assert.Check(t, cmp.Contains(msg, "`factory plan claim plan-1`"))
-	assert.Check(t, strings.HasSuffix(msg, "The developer's request:\n\nadd a flag"), msg)
-	assert.Check(t, cmp.Contains(msg, "put every question for the developer in 3. Open Questions, never in a reply"))
-}
-
-func TestPlanRetryMessageNamesThePlan(t *testing.T) {
-	msg := PlanRetryMessage("plan-1")
-	assert.Check(t, cmp.Contains(msg, "Your claim on plan plan-1 has been released"))
-	assert.Check(t, cmp.Contains(msg, "`factory plan claim plan-1`"))
-	assert.Check(t, cmp.Contains(msg, "put every question for the developer in 3. Open Questions, never in a reply"))
-	assert.Check(t, !strings.Contains(msg, "request"), msg)
-}
-
 func TestAgentArgs(t *testing.T) {
 	agentFakeEnv(t)
 	fakeClaude(t, agentFakeScript)
@@ -234,61 +202,11 @@ func TestAgentArgs(t *testing.T) {
 	gotArgs := readFile(t, filepath.Dir(os.Getenv("ARGS")), "args")
 	assert.Assert(t, strings.Contains(gotArgs, "--session-id s-123"), gotArgs)
 	assert.Assert(t, !strings.Contains(gotArgs, "--resume"), gotArgs)
-	assert.Check(t, cmp.Contains(gotArgs, "--allowedTools "+agentTools))
-	// What a factory planning session runs.
-	for _, tool := range []string{
-		"mcp__plugin_f_factory", "Bash(factory daemon wait)", "Bash(factory plan claim *)",
-		"Bash(factory daemon release *)", "Agent", "mcp__sg__code_finder", "Bash(git log *)",
-		"Bash(git switch --detach *)",
-	} {
-		assert.Check(t, cmp.Contains(agentTools, tool))
-	}
 	assert.Assert(t, strings.Contains(gotArgs, "--plugin-dir /plugins"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, "--model sonnet"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, "--input-format stream-json"), gotArgs)
-	// Planning only: no edits to the working tree, whatever the developer's
-	// own settings allow.
-	assert.Assert(t, strings.Contains(gotArgs, "--permission-mode default"), gotArgs)
-	assert.Assert(t, strings.Contains(gotArgs, "--disallowedTools Edit,Write,NotebookEdit"), gotArgs)
 	assert.Assert(t, !strings.Contains(gotArgs, "acceptEdits"), gotArgs)
 	assert.Assert(t, strings.Contains(gotArgs, dir), gotArgs)
-}
-
-func TestAgentArgsBuild(t *testing.T) {
-	agentFakeEnv(t)
-	fakeClaude(t, agentFakeScript)
-	fakeFactory(t)
-	dir := t.TempDir()
-
-	startTestAgent(context.Background(), t, AgentConfig{Dir: dir, SessionID: "s-123", Mode: ModeBuild}, "hello")
-
-	gotArgs := readFile(t, filepath.Dir(os.Getenv("ARGS")), "args")
-	// A build session edits its worktree and runs what factory's build
-	// tasks run, and nothing else without asking.
-	assert.Assert(t, strings.Contains(gotArgs, "--permission-mode acceptEdits"), gotArgs)
-	assert.Check(t, cmp.Contains(gotArgs, "--allowedTools "+buildTools))
-	for _, tool := range []string{
-		"mcp__plugin_f_factory", "Edit", "Write", "Agent",
-		"Bash(factory *)", "Bash(git *)", "Bash(gh *)", "Bash(chunk *)",
-	} {
-		assert.Check(t, cmp.Contains(buildTools, tool))
-	}
-	msg := BuildMessage("plan-1")
-	for _, want := range []string{"chunk validate", "chunk sidecar sync", "chunk sidecar exec", "denied", "builder"} {
-		assert.Check(t, cmp.Contains(msg, want))
-	}
-	retry := BuildRetryMessage("plan-1")
-	for _, want := range []string{"factory plan claim plan-1", "factory daemon wait"} {
-		assert.Check(t, cmp.Contains(retry, want))
-	}
-	// The message says local project commands are denied; that holds only
-	// while buildTools leaves them out.
-	for _, tool := range []string{"Bash(go", "Bash(task", "Bash(gofmt"} {
-		assert.Check(t, !strings.Contains(buildTools, tool), tool)
-	}
-	assert.Check(t, !strings.Contains(gotArgs, "--disallowedTools"), gotArgs)
-	assert.Check(t, !strings.Contains(gotArgs, "bypassPermissions"), gotArgs)
-	assert.Check(t, cmp.Contains(gotArgs, dir))
 }
 
 func TestAgentArgsChat(t *testing.T) {
@@ -718,125 +636,6 @@ func TestAgentSlowConsumerDoesNotBlockSendOrStop(t *testing.T) {
 
 	events := collect(t, a, nil, 5*time.Second)
 	assert.Assert(t, len(events) > 300, "got %d events", len(events))
-}
-
-// Claims asks the daemon, and keeps only this session's claims.
-func TestAgentClaims(t *testing.T) {
-	agentFakeEnv(t)
-	t.Setenv("FAKE_CLAIMS", `[{"plan":"FNDSF-40","session":"s1","dir":"/w"},{"plan":"FNDSF-41","session":"s2","dir":"/w2"}]`)
-	fakeClaude(t, agentFakeScript)
-	fakeFactory(t)
-	a := startTestAgent(context.Background(), t, AgentConfig{SessionID: "s1"}, "hello")
-
-	got, err := a.Claims(context.Background())
-	assert.NilError(t, err)
-	assert.DeepEqual(t, got, []string{"FNDSF-40"})
-}
-
-// Claims matches on the session claude reports, not the one asked for, in case
-// a resumed session comes back under another ID.
-func TestAgentClaimsUseTheReportedSession(t *testing.T) {
-	agentFakeEnv(t)
-	t.Setenv("FAKE_CLAIMS", `[{"plan":"FNDSF-40","session":"s1","dir":"/w"},{"plan":"FNDSF-41","session":"asked","dir":"/w2"}]`)
-	fakeClaude(t, agentFakeScript)
-	fakeFactory(t)
-	a := startTestAgent(context.Background(), t, AgentConfig{SessionID: "asked", Resume: true}, "hello")
-
-	got, err := a.Claims(context.Background())
-	assert.NilError(t, err)
-	assert.DeepEqual(t, got, []string{"FNDSF-40"})
-}
-
-func TestAgentClaimsWhenTheDaemonFails(t *testing.T) {
-	agentFakeEnv(t)
-	t.Setenv("FAKE_CLAIMS_ERR", "factory daemon isn't running")
-	fakeClaude(t, agentFakeScript)
-	fakeFactory(t)
-	a := startTestAgent(context.Background(), t, AgentConfig{SessionID: "s1"}, "hello")
-
-	_, err := a.Claims(context.Background())
-	assert.Check(t, cmp.ErrorIs(err, ErrNoFactoryDaemon))
-	err = CheckFactoryDaemon(context.Background())
-	assert.Check(t, cmp.ErrorIs(err, ErrNoFactoryDaemon))
-}
-
-func TestAgentClaimsPassOtherDaemonFailuresOn(t *testing.T) {
-	agentFakeEnv(t)
-	t.Setenv("FAKE_CLAIMS_ERR", "claims store is corrupt")
-	fakeClaude(t, agentFakeScript)
-	fakeFactory(t)
-	a := startTestAgent(context.Background(), t, AgentConfig{SessionID: "s1"}, "hello")
-
-	_, err := a.Claims(context.Background())
-	assert.Check(t, cmp.ErrorContains(err, "claims store is corrupt"))
-	assert.Check(t, !errors.Is(err, ErrNoFactoryDaemon))
-}
-
-func TestCheckFactoryDaemonWithoutFactory(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	err := CheckFactoryDaemon(context.Background())
-	assert.Check(t, cmp.ErrorIs(err, ErrNoFactory))
-}
-
-func TestSessionWorktree(t *testing.T) {
-	for _, tc := range []struct {
-		name, session, sessionErr string
-		noFactory                 bool
-		want                      string
-		wantErr                   error
-		wantErrText               string
-	}{
-		{
-			name:    "known",
-			session: `{"id":"s-1","location":{"machine":"m","dir":"/data/plans/C"}}`,
-			want:    "/data/plans/C",
-		},
-		{
-			name:       "unknown",
-			sessionErr: "s-1 has no session",
-			wantErr:    ErrUnknownSession,
-		},
-		{
-			name:    "no dir",
-			session: `{"id":"s-1","location":{}}`,
-			wantErr: ErrUnknownSession,
-		},
-		{
-			name:        "not json",
-			session:     "garbage",
-			wantErrText: "read factory session s-1",
-		},
-		{
-			name:       "no daemon",
-			sessionErr: daemonNotRunning,
-			wantErr:    ErrNoFactoryDaemon,
-		},
-		{
-			name:      "no factory",
-			noFactory: true,
-			wantErr:   ErrNoFactory,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.noFactory {
-				t.Setenv("PATH", t.TempDir()) // no factory on PATH
-			} else {
-				fakeFactory(t)
-			}
-			t.Setenv("FAKE_SESSION", tc.session)
-			t.Setenv("FAKE_SESSION_ERR", tc.sessionErr)
-			got, err := SessionWorktree(context.Background(), "s-1")
-			switch {
-			case tc.wantErr != nil:
-				assert.Check(t, cmp.ErrorIs(err, tc.wantErr))
-			case tc.wantErrText != "":
-				assert.Check(t, cmp.ErrorContains(err, tc.wantErrText))
-			default:
-				assert.Check(t, err)
-			}
-			assert.Check(t, cmp.Equal(got, tc.want))
-		})
-	}
 }
 
 // A Send stuck writing to a claude that stopped reading its stdin must not hold

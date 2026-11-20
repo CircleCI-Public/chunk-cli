@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -32,13 +34,11 @@ func newTestDaemon() *daemon {
 		// and the sampler only has to be non-nil to annotate.
 		res: newResourceSampler(nil),
 		// No GitHub client: PR monitoring is skipped when client is nil.
-		prm:      newPRMonitor(nil),
-		tasks:    newTaskStore(context.Background()),
-		risk:     newRiskMemory(),
-		hist:     newRiskHistory(),
-		claims:   newClaimStore(),
-		sessions: newSessionStore(context.Background()),
-		planners: newPlannerSet(context.Background()),
+		prm:    newPRMonitor(nil),
+		tasks:  newTaskStore(context.Background()),
+		risk:   newRiskMemory(),
+		hist:   newRiskHistory(),
+		claims: newClaimStore(),
 	}
 	d.tasks.onFinish = d.risk.record
 	d.chats = newChats(context.Background(), &d.rcfg)
@@ -148,6 +148,36 @@ func TestStopForCredentialChangeStopsARunningDaemon(t *testing.T) {
 	runTestDaemon(t, "")
 	_, err = chunkd.FetchSnapshot(nil)
 	assert.Check(t, err == nil, "call after a restart on the same socket: %v", err)
+}
+
+// A project's snapshot carries no sessions, even after a chat has started and
+// run in it.
+func TestSnapshotHasNoSessionsAfterAChat(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root, err := filepath.EvalSymlinks(initRepo(t))
+	assert.NilError(t, err)
+	dataDir, err := config.ProjectDataDir(root)
+	assert.NilError(t, err)
+	err = sidecar.RegisterProjectRoot(dataDir, root)
+	assert.NilError(t, err)
+
+	d := newTestDaemon()
+	d.rcfg = newChatFakes().config()
+	d.poll()
+	_, err = d.chats.get(root).send(chunkd.ChatMessage{Root: root, Text: "hi"})
+	assert.NilError(t, err)
+	d.poll()
+
+	b, err := json.Marshal(d.snapshot(nil))
+	assert.NilError(t, err)
+	var raw struct {
+		Projects []map[string]json.RawMessage `json:"projects"`
+	}
+	err = json.Unmarshal(b, &raw)
+	assert.NilError(t, err)
+	assert.Assert(t, cmp.Len(raw.Projects, 1))
+	_, has := raw.Projects[0]["sessions"]
+	assert.Check(t, !has, "snapshot carries sessions: %s", b)
 }
 
 // The duplicate rows this guards against were found by hand: one project drawn

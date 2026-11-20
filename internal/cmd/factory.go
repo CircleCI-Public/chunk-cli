@@ -15,7 +15,6 @@ func newFactoryCmd() *cobra.Command {
 		RunE:  groupRunE,
 	}
 	cmd.AddCommand(newFactoryPlanCmd())
-	cmd.AddCommand(newFactoryAgentCmd())
 	cmd.AddCommand(newFactoryBootstrapCmd())
 	return cmd
 }

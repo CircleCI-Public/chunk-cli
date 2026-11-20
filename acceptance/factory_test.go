@@ -72,7 +72,7 @@ func TestFactoryRequiresASubcommand(t *testing.T) {
 }
 
 func TestFactoryOldCommandsAreGone(t *testing.T) {
-	for _, name := range []string{"build", "start", "pull", "eval"} {
+	for _, name := range []string{"build", "start", "pull", "eval", "agent"} {
 		t.Run(name, func(t *testing.T) {
 			env := testenv.NewTestEnv(t)
 

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -34,9 +33,6 @@ var ErrNoFactoryDaemon = errors.New("the factory daemon is not running")
 // factoryBinary is the factory command an Agent checks is installed.
 const factoryBinary = "factory"
 
-// daemonNotRunning is in what factory says when its daemon isn't running.
-const daemonNotRunning = "factory daemon isn't running"
-
 // Package variables so tests can shorten them.
 var (
 	agentInitTimeout  = 60 * time.Second
@@ -52,25 +48,6 @@ const (
 	// outside the repository.
 	sourcegraphTools = "mcp__sg__code_finder,mcp__sg__commit_search,mcp__sg__diff_search,mcp__sg__keyword_search," +
 		"mcp__sg__list_files,mcp__sg__list_repos,mcp__sg__read_file"
-	// agentTools is what an Agent allows claude to use without asking: what
-	// a factory planning session uses. It reads the repository and writes
-	// only the plan, except that it may detach HEAD at another commit. It is
-	// enough to plan, not to build.
-	agentTools = "Read,Grep,Glob,Agent,mcp__plugin_f_factory," +
-		"Bash(factory daemon wait),Bash(factory plan claim *),Bash(factory daemon release *)," +
-		"Bash(codegraph *)," + sourcegraphTools + "," +
-		"Bash(git log *),Bash(git show *),Bash(git diff *),Bash(git merge-base *),Bash(git rev-parse *)," +
-		"Bash(git switch --detach *)," +
-		"Bash(gh pr view *)"
-	// agentDeniedTools is what an Agent never lets claude use, whatever the
-	// developer's own settings allow: planning edits plans through the plan
-	// tools, never the working tree.
-	agentDeniedTools = "Edit,Write,NotebookEdit"
-	// buildTools is what a build session allows claude to use without
-	// asking, on top of acceptEdits in its worktree. The project's own
-	// commands are not among them: they run on its sidecar, with chunk.
-	buildTools = "Read,Grep,Glob,Edit,Write,Agent,TodoWrite,mcp__plugin_f_factory," +
-		"Bash(factory *),Bash(git *),Bash(gh *),Bash(chunk *),Bash(codegraph *)," + sourcegraphTools
 	// chatTools is what a chat session may use: tools that read, and factory's
 	// own commands that act on a flow.
 	chatTools = "Read,Grep,Glob," +
@@ -113,81 +90,22 @@ const chatPrompt = "You are a chat about the developer's factory plans in this r
 	"c comments on the highlighted part, s sends queued comments, e edits a part, ctrl+s approves or starts the plan, x ends it, X deletes it. " +
 	"On the Flows list, enter opens a plan and n starts a new one. Keep replies short."
 
-// buildMessage is a build session's first message: the plan is approved, so
-// the session claims it and does the build tasks factory hands it. It names
-// the sidecar because buildTools leaves the project's commands out, and asks
-// the session to pass that on because a builder never sees this message.
-const buildMessage = "Plan %s is approved, and factory builds it in this session. " +
-	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the tasks it hands out, through to the pull request. " +
-	"Check the project with `chunk validate`: it runs the project's checks on the plan's sidecar, or one of them with `chunk validate NAME`. " +
-	"For a fallback or a one-off command, run it on the sidecar too: `chunk sidecar sync`, then `chunk sidecar exec` in the workspace sync prints, /home/user/ and the repository's name written out, " +
-	"such as `chunk sidecar exec --command sh -- -c \"cd /home/user/REPO && go test ./internal/factory/...\"`. " +
-	"Local go, task, gofmt and the like are denied in this session, not asked about. " +
-	"Tell every builder you send this. " +
-	"Nobody reads your replies while you build, so keep them short, and do not ask the developer anything: " +
-	"what needs their decision goes in the plan, as factory's tasks say."
-
-// BuildMessage is the first message of a session started with ModeBuild to build
-// factory plan planID.
-func BuildMessage(planID string) string { return fmt.Sprintf(buildMessage, planID) }
-
-const buildRetryMessage = "Plan %s's claim has been released. " +
-	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the tasks it hands out, through to the pull request, as your first message said."
-
-// BuildRetryMessage is what a build session that could not claim factory
-// plan planID is sent once the claim is released.
-func BuildRetryMessage(planID string) string { return fmt.Sprintf(buildRetryMessage, planID) }
-
-// planMessage is what a new plan's planning session is first sent: the
-// claim instructions, then the developer's request.
-const planMessage = "This conversation plans a change through factory, as plan %s. " +
-	"Claim it by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the planning tasks it hands out. " +
-	"The plan is written with the plan tools, never in your replies; keep replies short. " +
-	noChatQuestions +
-	"The developer's request:\n\n%s"
-
-// planRetryMessage is what a planning session that holds no claim on its
-// plan is sent: the claim instructions alone, since nothing the developer
-// writes reaches it.
-const planRetryMessage = "Your claim on plan %s has been released. " +
-	"Claim it again by running `factory plan claim %[1]s` in Bash, then run `factory daemon wait` in the background and do the planning tasks it hands out. " +
-	noChatQuestions
-
-// noChatQuestions keeps the planner's questions out of its replies, which
-// nobody answers.
-const noChatQuestions = "Nobody can answer you in chat: put every question for the developer in 3. Open Questions, never in a reply. "
-
-// PlanMessage is a new plan's planning session's first message: claim plan
-// planID, plan it through the daemon's tasks, and here is the request.
-func PlanMessage(planID, request string) string { return fmt.Sprintf(planMessage, planID, request) }
-
-// PlanRetryMessage is what a planning session that holds no claim on plan
-// planID is sent: the claim instructions alone, since nothing the developer
-// writes reaches it.
-func PlanRetryMessage(planID string) string { return fmt.Sprintf(planRetryMessage, planID) }
-
 // Mode is what a session may do.
 type Mode int
 
 const (
-	// ModePlan plans: it reads the repository and writes only the plan.
-	ModePlan Mode = iota
-	// ModeBuild builds a plan: it may edit Dir and run what factory's build
-	// tasks run.
-	ModeBuild
 	// ModeChat reads, and acts on flows with factory's own commands; chatTools
 	// is what it may use.
-	ModeChat
+	ModeChat Mode = iota
 )
 
 // AgentConfig starts a long-lived factory session.
 type AgentConfig struct {
-	// Dir is the repository claude plans in, or for ModeBuild the worktree it
-	// builds in.
+	// Dir is the repository claude runs in.
 	Dir string
-	// The zero value plans.
+	// The zero value is ModeChat.
 	Mode Mode
-	// Model is the model to plan with, or "" for the developer's default.
+	// Model is the model to use, or "" for the developer's default.
 	Model string
 	// PluginDir loads the f plugin from this directory instead of the
 	// installed one, or "" for the installed one.
@@ -262,17 +180,9 @@ func agentArgs(cfg AgentConfig) []string {
 	}
 	// Not the developer's own mode: in -p, a tool the list does not allow is
 	// denied rather than asked about.
-	switch cfg.Mode {
-	case ModeBuild:
-		args = append(args, "--permission-mode", "acceptEdits", "--allowedTools", buildTools)
-	case ModeChat:
+	if cfg.Mode == ModeChat {
 		args = append(args, "--permission-mode", "default", "--allowedTools", chatTools,
 			flagDisallowedTools, chatDeniedTools, "--append-system-prompt", chatPrompt)
-	case ModePlan:
-		fallthrough
-	default:
-		args = append(args, "--permission-mode", "default",
-			"--allowedTools", agentTools, flagDisallowedTools, agentDeniedTools)
 	}
 	if cfg.PluginDir != "" {
 		args = append(args, "--plugin-dir", cfg.PluginDir)
@@ -370,8 +280,8 @@ func StartAgent(ctx context.Context, cfg AgentConfig, message string) (*Agent, e
 		if err := checkFactoryInit(init); err != nil {
 			return fail(err)
 		}
-		// The session claude reports is the one factory's hooks claim plans
-		// for, so Claims matches on it rather than on what was asked for.
+		// The session claude reports is the one factory's hooks know, so use
+		// it rather than what was asked for.
 		if init.SessionID != "" {
 			a.sessionID = init.SessionID
 		}
@@ -443,114 +353,6 @@ type stdinUserMessage struct {
 // Events is every Activity, TurnEnded and Problem an Agent reports, in order.
 // It is closed once, after the session ends.
 func (a *Agent) Events() <-chan AgentEvent { return a.events }
-
-// Claims is the plans the factory daemon holds a claim on for this session,
-// by address, as `factory daemon claim list` reports them.
-func (a *Agent) Claims(ctx context.Context) ([]string, error) {
-	all, err := listClaims(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var plans []string
-	for _, c := range all {
-		if c.Session == a.sessionID {
-			plans = append(plans, c.Plan)
-		}
-	}
-	return plans, nil
-}
-
-// claim is one entry of `factory daemon claim list`.
-type claim struct {
-	Plan    string `json:"plan"`
-	Session string `json:"session"`
-}
-
-// listClaims is every claim the factory daemon holds. It returns
-// ErrNoFactory when factory is not installed and ErrNoFactoryDaemon when its
-// daemon is not running.
-func listClaims(ctx context.Context) ([]claim, error) {
-	if _, err := exec.LookPath(factoryBinary); err != nil {
-		return nil, ErrNoFactory
-	}
-	cmd := exec.CommandContext(ctx, factoryBinary, "daemon", "claim", "list")
-	// factory retries for a minute by default while the daemon isn't running;
-	// fail at once instead, so the screen can say so.
-	cmd.Env = append(os.Environ(), "FACTORY_DAEMON_NOT_RUNNING_RETRY=0s")
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			stderr := strings.TrimSpace(string(exitErr.Stderr))
-			if strings.Contains(stderr, daemonNotRunning) {
-				return nil, ErrNoFactoryDaemon
-			}
-			return nil, fmt.Errorf("list factory claims: %s", stderr)
-		}
-		return nil, fmt.Errorf("list factory claims: %w", err)
-	}
-	var all []claim
-	if err := json.Unmarshal(out, &all); err != nil {
-		return nil, fmt.Errorf("read factory claims: %w", err)
-	}
-	return all, nil
-}
-
-// ErrUnknownSession is returned by SessionWorktree for a session factory's
-// daemon does not hold, or holds with no worktree.
-var ErrUnknownSession = errors.New("factory's daemon does not know the session")
-
-// sessionUnknown is in what factory says for a session its daemon does not
-// hold.
-const sessionUnknown = "has no session"
-
-// SessionWorktree is the worktree root factory's daemon has session working
-// in, from `factory daemon session show SESSION`. It returns ErrNoFactory
-// when factory is not installed, ErrNoFactoryDaemon when its daemon is not
-// running, and ErrUnknownSession for a session it does not hold.
-func SessionWorktree(ctx context.Context, session string) (string, error) {
-	if _, err := exec.LookPath(factoryBinary); err != nil {
-		return "", ErrNoFactory
-	}
-	cmd := exec.CommandContext(ctx, factoryBinary, "daemon", "session", "show", session)
-	// As in listClaims: fail at once while the daemon isn't running.
-	cmd.Env = append(os.Environ(), "FACTORY_DAEMON_NOT_RUNNING_RETRY=0s")
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			stderr := strings.TrimSpace(string(exitErr.Stderr))
-			switch {
-			case strings.Contains(stderr, daemonNotRunning):
-				return "", ErrNoFactoryDaemon
-			case strings.Contains(stderr, sessionUnknown):
-				return "", ErrUnknownSession
-			}
-			return "", fmt.Errorf("show factory session %s: %s", session, stderr)
-		}
-		return "", fmt.Errorf("show factory session %s: %w", session, err)
-	}
-	var s struct {
-		Location struct {
-			Dir string `json:"dir"`
-		} `json:"location"`
-	}
-	if err := json.Unmarshal(out, &s); err != nil {
-		return "", fmt.Errorf("read factory session %s: %w", session, err)
-	}
-	if s.Location.Dir == "" {
-		return "", ErrUnknownSession
-	}
-	return s.Location.Dir, nil
-}
-
-// CheckFactoryDaemon reports ErrNoFactory when factory is not installed and
-// ErrNoFactoryDaemon when its daemon is not running, so there is nothing to
-// hand an Agent planning tasks.
-func CheckFactoryDaemon(ctx context.Context) error {
-	_, err := listClaims(ctx)
-	return err
-}
 
 // Stop ends the session: SIGINT, then stdin closed, then SIGTERM if claude has
 // not exited, then SIGKILL for whatever is left in claude's process group,

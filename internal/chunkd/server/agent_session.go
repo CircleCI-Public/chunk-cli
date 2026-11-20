@@ -32,7 +32,7 @@ type SessionRecord interface {
 var errRunnerStopped = errors.New("the session has been stopped")
 
 // sessionStartProblem is a failure to start a daemon-run session, saying how
-// to fix it. verb is what the session does: "build", "plan" or "chat".
+// to fix it. verb is what the session does: "chat".
 func sessionStartProblem(err error, verb string) error {
 	switch {
 	case errors.Is(err, factory.ErrNoClaude):
@@ -49,23 +49,9 @@ func sessionStartProblem(err error, verb string) error {
 	return fmt.Errorf("start the %s session: %w", sessionName(verb), err)
 }
 
-// isStartSentinel is whether err is one of the failures sessionStartProblem
-// has a sentence for: something missing on this machine, not a fault.
-func isStartSentinel(err error) bool {
-	for _, s := range []error{factory.ErrNoClaude, factory.ErrNoFactory, factory.ErrNoFactoryPlugin, factory.ErrFactoryMCP, factory.ErrNoFactoryDaemon} {
-		if errors.Is(err, s) {
-			return true
-		}
-	}
-	return false
-}
-
 // sessionName is what a verb's session is called.
 func sessionName(verb string) string {
-	switch verb {
-	case "plan":
-		return "planning"
-	case "chat":
+	if verb == "chat" {
 		return "chat"
 	}
 	return verb
@@ -77,8 +63,8 @@ func sessionName(verb string) string {
 type runner struct {
 	ctx   context.Context // the session's lifetime: the daemon's, not a request's
 	start func(ctx context.Context, cfg factory.AgentConfig, message string) (AgentSession, error)
-	// onReply runs after each reply is in the log, outside mu; the planner's
-	// claim check. nil for none. Set before the first send.
+	// onReply runs after each reply is in the log, outside mu. nil for none.
+	// Set before the first send.
 	onReply func(byTask bool)
 
 	// sendMu keeps sends in order; it is not mu, as a Send can block on a
