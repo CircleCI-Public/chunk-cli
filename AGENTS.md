@@ -2,7 +2,7 @@
 
 `chunk` is a Go CLI (built with cobra) for inner loop validation. Its primary capability is **sidecars** — ephemeral Linux environments on CircleCI that a developer's working tree is synced to so quality checks (test, lint, format) run there instead of locally, catching environment-specific failures before they reach CI.
 
-It also provides `factory plan`, which plans a change with Claude in factory; once approved, the chunk daemon builds it and checks it against the review prompts in `.chunk/reviews/` and the validation commands.
+It also provides `factory plan`, which creates a plan in factory and hands it to one of your factory workers; once approved, the worker builds it and checks it against the review prompts in `.chunk/reviews/` and the validation commands.
 `factory bootstrap` sets a project up for it: it writes `.chunk/config.json` if there is none, and records a sidecar image with the project's environment (`validation.sidecarImage`).
 
 ## Common Commands

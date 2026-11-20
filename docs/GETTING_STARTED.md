@@ -316,8 +316,10 @@ git commit -m "Regenerate lock file on Linux"
 ## Planning and following flows with chunk ui
 
 `chunk ui` is the recommended way to interact with chunk. Keep it open in
-another terminal while you work. Planning needs the factory daemon running
-with `FACTORY_PLAN_STORE=circleci`. Run it in the project you want to plan in:
+another terminal while you work. Planning needs `factory daemon` running,
+which starts a worker that plans and builds for you, CircleCI auth, and a git
+repo with an origin. Run `chunk ui` in the project you want to plan in. `chunk`
+itself needs no Claude Code:
 
 ```bash
 chunk ui
@@ -334,47 +336,50 @@ the same heading), and each flow's second line saying what factory is doing on i
 sub-plans, with a read-only preview of the selected one's plan that starts
 with who the flow waits on and why. Flows are yours wherever
 `chunk ui` is run. `Enter` opens a flow's plan, `n` starts a new one,
-`R` resumes the selected flow when it waits on an agent and no session holds
-it (a build gets a fresh build session in the chunk daemon; a planner picks
-up its conversation). When `R` isn't offered, the header's right-hand end
-(where it otherwise shows `✓ local`) says why. For example, it names the session that holds the claim and the release
-command that frees it, or a blocker that isn't Done. `X` deletes the selected
+`R` claims the selected flow for your worker whenever nobody holds it and no
+blocker is active, including while it waits on you or on factory. When `R` isn't offered, the header's right-hand end
+(where it otherwise shows `✓ local`) says why. For example, it names the session
+or worker that holds the claim, or a blocker that isn't Done. `X` deletes the selected
 plan, its comments and its flow after a y/n question (any key but `y` cancels);
 it isn't offered on a plan a session holds. `q` or `esc` quits. Opening or
-reading a plan never claims it; the request you type for a new plan does, and
-the screen resumes a planner factory is waiting on, in a checkout of the
-plan's repo (the project `chunk ui` was opened in when it is one). `ctrl+p` goes back to the list to
+reading a plan never claims it, and needs no local checkout of its repo; the
+title and request you type for a new plan do, and `R` claims a plan nobody
+holds. `ctrl+p` goes back to the list to
 switch plans; each open plan keeps its activity while another is shown,
-and its session keeps planning in the chunk daemon even once chunk is closed.
+and the worker keeps planning after chunk closes.
 The Overview is on the left and the plan is on the right, under a one-row strip that says
 where the flow is and what comes next. The Overview has the plan's outcome, a timeline of its
-stages (Created, Planning, Building, Integrating, Done) that holds what the planner and the
-builder did in each, the plan's progress and pull request, and related plans; `↑`/`↓` move
+stages (Created, Planning, Building, Integrating, Done) that holds what you asked and
+what the worker reports, the plan's progress and pull request, and related plans; `↑`/`↓` move
 over it and `enter` expands a stage. `tab` moves between the Overview and the plan,
 where `c` writes a comment right under the highlighted part, saved to factory
 for chunk to address when you press `s`; `shift+↑/↓` selects several
-parts to comment on together. There is no chat with the planner: comments
+parts to comment on together. There is no chat with the worker: comments
 are how you change the plan, and questions go in comments too. Once factory's review of the design has
 passed, `ctrl+s` approves the design, and chunk writes the units; once those
 pass review too, `ctrl+s` approves the finished plan in factory, and the
-chunk daemon builds it through to a pull request. The strip says which of
+worker builds it through to a pull request. The strip says which of
 the two factory is waiting for: `Next: you approve the design · ctrl+s` or
 `Next: you approve the plan · ctrl+s`. The build keeps going when you close
 chunk; plan as many as you like.
 Once approved, the screen stays open on the Overview, which follows the
 build: what factory is doing now and who it waits on, each unit done,
 being built or to do, and the pull request.
-The Overview's Building stage then shows the builder at work. If it warns that another
-session holds the plan's claim, run the `factory daemon release` command it
-names. A build that looks stuck can be stopped with `S` (after a `y`); the daemon
-frees its claim, and the Overview then says that no session holds the plan
-and that `R` starts a build session. Once factory frees the old claim of a
-plan whose build stopped some other way, after the daemon restarted say, it
-says the same. `R` starts a new build that picks up factory's next task. `x`
-ends a plan, and stops its build with it.
+The Overview then shows the worker at work: its hostname, its headless items
+and any error it reports. If a Claude Code session holds the plan's claim, the
+Overview names it and offers neither `R` nor `S`. A build that looks stuck can
+be stopped with `S` (after a `y`), which releases the worker's claim; the plan
+stays where it is, and `R` claims it again. `x` ends a plan, and stops its
+build with it.
 `esc` goes back to your plans with the plan kept. Quitting with a request or
 comments still unsent in any plan asks for a second `ctrl+c`.
-`chunk factory plan` opens the same screen on its own.
+`chunk factory plan` opens the same screen on its own: type a title and a
+request (`chunk factory plan "<request>"` fills the request in), press
+`Enter` to create the plan and hand it to your worker, comment on the plan as it
+takes shape, press `ctrl+s` to approve it, and follow the build in `chunk ui`.
+
+If the screen says `No live worker can claim this plan`, start `factory daemon`,
+then press `R`.
 
 `ctrl+o` opens a chat on the right of any screen, which you can ask about your
 plans and flows. `esc` goes back to the screen beside it, and `ctrl+o` goes
@@ -513,7 +518,7 @@ review PR #123
 
 The agent runs one reviewer per prompt over the diff and returns the combined findings (High and Medium issues, capped at 10).
 
-`chunk factory plan "<prompt>"` has factory make the change instead: you plan it with Claude, approve the plan, and it is built, checking the work with the same prompts and your validation commands, through to a pull request. `n` on Flows in `chunk ui` does the same ([above](#planning-and-following-flows-with-chunk-ui)).
+`chunk factory plan "<request>"` has factory make the change instead: a factory worker plans it with you, you approve the plan, and it is built, checking the work with the same prompts and your validation commands, through to a pull request. `n` on Flows in `chunk ui` does the same ([above](#planning-and-following-flows-with-chunk-ui)).
 
 ---
 
