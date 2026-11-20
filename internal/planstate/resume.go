@@ -5,19 +5,14 @@ import (
 	"strings"
 )
 
-// ResumeKind is how chunk starts a plan's agent again.
+// ResumeKind is how chunk hands a plan to a worker again.
 type ResumeKind int
 
 const (
 	// ResumeNone is a plan chunk does not resume now.
 	ResumeNone ResumeKind = iota
-	// ResumePlanner has the plan's planner claim it again.
-	ResumePlanner
-	// ResumeBuild starts a build session that claims the plan.
-	ResumeBuild
-	// ResumeTakeOver releases a claim another session holds on a plan being
-	// planned, then resumes its planner.
-	ResumeTakeOver
+	// ResumeClaim has the default worker claim the plan.
+	ResumeClaim
 )
 
 // ResumeFacts is what ResumeOf reads of a plan.
@@ -28,10 +23,13 @@ type ResumeFacts struct {
 	// PlanID is the plan's, and Holder the session claiming it, "" when
 	// none does.
 	PlanID, Holder string
-	// Worker is the factory worker claiming the plan, "" when none does. It
-	// is set whether or not a session works the plan; ResumeOf treats the
-	// plan as worker-only when Holder is "" and Worker is set.
+	// Worker is the ID of the factory worker claiming the plan, "" when none
+	// does. It is set whether or not a session works the plan; ResumeOf treats
+	// the plan as a worker's when Holder is "" and Worker is set.
 	Worker string
+	// WorkerLine is the line for that worker, built by the caller from what it
+	// read: "Worker <hostname> · <state>", or the unreadable wording.
+	WorkerLine string
 	// WaitingOn is who factory waits on to move the flow on, "" for nobody.
 	WaitingOn string
 	// Blockers are the plan's blockers; BlockersKnown is false until they
@@ -51,13 +49,13 @@ type Blocker struct {
 type Resume struct {
 	Kind ResumeKind
 	Why  string
-	// Holder is the session ResumeTakeOver releases.
-	Holder string
 }
 
 // ResumeOf is whether chunk resumes the plan f describes, and how: a plan
-// with a live flow nobody claims, whose blockers are all done, which factory
-// waits on a session to move on, in a state chunk knows how to resume.
+// with a live flow that no session or worker claims and no active blocker
+// holds, whoever factory waits on. A wait on a session offers it only in a
+// state chunk knows how to resume. A held plan shows who holds it, and a
+// wait on blockers or sub-plans offers nothing.
 func ResumeOf(f ResumeFacts) Resume {
 	state := strings.TrimSpace(f.State)
 	switch {
@@ -73,72 +71,73 @@ func ResumeOf(f ResumeFacts) Resume {
 	}
 	switch strings.TrimSpace(f.WaitingOn) {
 	case Human:
-		return Resume{Why: "Waiting on you"}
+		return waitOrClaim(f, "Waiting on you")
 	case Daemon:
-		return Resume{Why: "Waiting on factory"}
+		return waitOrClaim(f, "Waiting on factory")
 	case Blockers:
 		return Resume{Why: "Waiting on blockers"}
 	case SubPlans:
 		return Resume{Why: "Waiting on sub-plans"}
 	case Session:
 	default:
-		if f.Holder == "" && f.Worker != "" {
-			return Resume{Why: WorkerClaimedWhy(f.Worker, f.PlanID)}
+		if r := held(f); r.Why != "" {
+			return r
 		}
-		if f.Holder != "" {
-			return Resume{Why: ClaimedWhy(f.Holder, f.PlanID)}
-		}
-		return Resume{}
+		return Resume{Kind: ResumeClaim}
 	}
 	switch state {
-	case Init, Ready, RefineProposal, RefineUnits, RecordSubPlans, StandBy:
-		if f.Holder == "" && f.Worker != "" {
-			return Resume{Why: WorkerClaimedWhy(f.Worker, f.PlanID)}
+	case Init, Ready, RefineProposal, RefineUnits, RecordSubPlans, StandBy, Build, Integrate:
+		if r := held(f); r.Why != "" {
+			return r
 		}
-		if f.Holder != "" {
-			return Resume{Kind: ResumeTakeOver, Holder: f.Holder}
-		}
-		return Resume{Kind: ResumePlanner}
-	case Build, Integrate:
-		if f.Holder == "" && f.Worker != "" {
-			return Resume{Why: WorkerClaimedWhy(f.Worker, f.PlanID)}
-		}
-		if f.Holder != "" {
-			return Resume{Why: ClaimedWhy(f.Holder, f.PlanID)}
-		}
-		return Resume{Kind: ResumeBuild}
+		return Resume{Kind: ResumeClaim}
 	}
 	return Resume{Why: "chunk can't resume a plan in " + state}
 }
 
-// ClaimedWhy is the line for a plan a session holds that chunk does not take
-// over.
-func ClaimedWhy(holder, planID string) string {
-	return fmt.Sprintf("Claimed by session %s · factory daemon release %s frees it", shortID(holder), planID)
+// waitOrClaim is wait for a plan a worker holds, wait with the session's claim
+// after it for one a session holds, and for one nobody holds the same line
+// with R offered to claim it for a worker.
+func waitOrClaim(f ResumeFacts, wait string) Resume {
+	if f.Holder != "" {
+		claimed := ClaimedWhy(f.Holder)
+		r := []rune(claimed)
+		return Resume{Why: wait + " · " + strings.ToLower(string(r[:1])) + string(r[1:])}
+	}
+	if held(f).Why != "" {
+		return Resume{Why: wait}
+	}
+	return Resume{Kind: ResumeClaim, Why: wait + " · R claims it for a worker"}
 }
 
-// WorkerClaimedWhy is the line for a plan a factory worker holds with no
-// session working it.
-func WorkerClaimedWhy(worker, planID string) string {
-	return fmt.Sprintf("Claimed by worker %s · factory daemon release %s frees it", shortID(worker), planID)
+// held is the line for a plan a session or a worker claims, the zero Resume
+// when nobody does. A session claim wins: chunk offers nothing for it.
+func held(f ResumeFacts) Resume {
+	switch {
+	case f.Holder != "":
+		return Resume{Why: ClaimedWhy(f.Holder)}
+	case f.Worker != "":
+		if f.WorkerLine != "" {
+			return Resume{Why: f.WorkerLine}
+		}
+		return Resume{Why: "Claimed by worker " + shortID(f.Worker)}
+	}
+	return Resume{}
 }
 
-// TakeOverQuestion is what chunk asks before releasing holder's claim and
-// resuming the planner, without the y/n choice.
-func TakeOverQuestion(holder string) string {
-	return fmt.Sprintf("Plan is claimed by session %s, which chunk ui didn't start. Release it and resume the planner?", shortID(holder))
+// ClaimedWhy is the line for a plan a session holds, which chunk does not
+// take over.
+func ClaimedWhy(holder string) string {
+	return fmt.Sprintf("Claimed by session %s", shortID(holder))
 }
 
 // Line is r as one line: what resuming does when Kind offers it, else Why.
 func (r Resume) Line() string {
-	switch r.Kind {
-	case ResumePlanner:
-		return "No session holds this plan · R resumes its planner"
-	case ResumeBuild:
-		return "No session holds this plan · R starts a build session"
-	case ResumeTakeOver:
-		return fmt.Sprintf("Claimed by session %s · R releases it and resumes the planner", shortID(r.Holder))
-	case ResumeNone:
+	if r.Kind == ResumeClaim && r.Why != "" {
+		return r.Why
+	}
+	if r.Kind == ResumeClaim {
+		return "No worker holds this plan · R claims it for a worker"
 	}
 	return r.Why
 }

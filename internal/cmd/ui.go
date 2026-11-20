@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/google/uuid"
@@ -19,7 +18,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/factoryplan"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/planrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
@@ -76,21 +74,18 @@ func newUICmd() *cobra.Command {
 			// in. Outside one, new plans cannot be made nor the chat used.
 			root, _ := watchProject(cmd.Context(), cwd)
 
-			// Closing the window stops the planning sessions as quitting does,
-			// rather than leaving them running.
+			// Closing the window ends the dashboard as quitting does.
 			ctx, stopHangup := untilHangup(cmd.Context())
 			defer stopHangup()
 			plans := newWatchPlans(ctx)
-			// Claude runs as a process of its own, which would outlive the
-			// dashboard; it is stopped as the dashboard ends.
 			defer plans.stop()
 			m := watch.New().WithRelaunch().WithBottomMargin(editorRowMargin()).
 				WithPlans(plans.ctx, root, plans.plan).
-				WithPlanBuilds(daemonPlanBuild{}).
-				WithPlanResume(daemonResume{}).
+				WithPlanClaim(claimPlan).
 				WithPlanDelete(factoryDelete{}).
 				WithFlowList(flowlist.New(plans.ctx, listFactoryFlows, previewFactoryPlan).
-					WithParents(listFactoryParents).WithBlockers(listFactoryBlockers)).
+					WithParents(listFactoryParents).WithBlockers(listFactoryBlockers).
+					WithWorkers(readFactoryWorker)).
 				WithChat(newChatModel(plans.ctx, root))
 			p := tea.NewProgram(m, tea.WithContext(ctx))
 			final, err := p.Run()
@@ -156,19 +151,14 @@ func editorRowMargin() int {
 	return 0
 }
 
-// watchPlans opens the plans the dashboard asks for, and stops their agents
-// when it ends.
+// watchPlans opens the plans the dashboard asks for, and cancels what they
+// read as it ends.
 type watchPlans struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
 	// client makes the factory client; factoryPlanClient when nil.
 	client func() (*circleci.Client, error)
-
-	mu sync.Mutex
-	// planAgents are the agents of every plan opened from the dashboard,
-	// whose polling stops as it closes.
-	planAgents []*factoryplan.Agent
 }
 
 func newWatchPlans(parent context.Context) *watchPlans {
@@ -176,22 +166,12 @@ func newWatchPlans(parent context.Context) *watchPlans {
 	return &watchPlans{ctx: ctx, cancel: cancel}
 }
 
-func (d *watchPlans) stop() {
-	d.cancel()
-	d.mu.Lock()
-	agents := append([]*factoryplan.Agent(nil), d.planAgents...)
-	d.mu.Unlock()
-	for _, agent := range agents {
-		_ = agent.Stop()
-	}
-}
+func (d *watchPlans) stop() { d.cancel() }
 
-// plan opens an existing plan or a new workspace. A new one is in root, the
-// project the dashboard was opened in; an existing one in the checkout of its
-// repo planRoot resolves. Reading requires only the API; the local project
-// is checked before a request, resume or approval, and a plan with no known
-// checkout opens read-only, refusing them with why. The agent's polling
-// stops as the dashboard closes.
+// plan opens an existing plan or a new workspace. An existing plan needs only
+// the API, whether or not this machine has a checkout of its repo. A new one
+// is made in root, the project the dashboard was opened in, which is checked
+// before the screen opens, so a failure shows as the dashboard's note.
 func (d *watchPlans) plan(ctx context.Context, root, id string) (watch.OpenedPlan, error) {
 	newClient := d.client
 	if newClient == nil {
@@ -201,59 +181,43 @@ func (d *watchPlans) plan(ctx context.Context, root, id string) (watch.OpenedPla
 	if err != nil {
 		return watch.OpenedPlan{}, err
 	}
-	var resolveErr error
 	if id != "" {
-		p, err := api.GetPlan(ctx, id)
-		if err != nil {
-			return watch.OpenedPlan{}, fmt.Errorf("open plan: %w", err)
-		}
-		root, resolveErr = planRoot(ctx, p, root)
-		if resolveErr != nil {
-			root = ""
-		}
+		return watch.OpenedPlan{Store: factoryplan.NewStore(api, id, "")}, nil
 	}
-	check := func(ctx context.Context) error {
-		if resolveErr != nil {
-			return resolveErr
-		}
-		return watchPlanProject(ctx, root)
-	}
-	agent, build, store := planSession(d.ctx, root, id, "", api)
-	agent.CheckStart(check)
-	approve := func(step func(string)) (string, error) {
-		if err := check(ctx); err != nil {
-			return "", err
-		}
-		return build(step)
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if err := d.ctx.Err(); err != nil {
-		_ = agent.Stop()
+	if err := checkWatchProject(ctx, root); err != nil {
 		return watch.OpenedPlan{}, err
 	}
-	d.planAgents = append(d.planAgents, agent)
-	return watch.OpenedPlan{Agent: agent, Approve: approve, Store: store, Root: root}, nil
+	return watch.OpenedPlan{Store: factoryplan.NewStore(api, "", planRepo(ctx, root)), Root: root}, nil
 }
 
-// planRoot is the project plan p is planned and built in, for the
-// dashboard opened in prefer: planrepo.Root over the known projects, most
-// recent first. A test seam, as checkWatchProject.
-var planRoot = func(ctx context.Context, p *circleci.Plan, prefer string) (string, error) {
-	known, err := sidecar.RecentProjectRoots()
+// claimPlan has the default worker claim plan planID, and returns the worker's
+// hostname, for the flow list's R.
+func claimPlan(ctx context.Context, planID string) (string, error) {
+	api, err := factoryPlanClient()
 	if err != nil {
-		return "", fmt.Errorf("list chunk's projects: %w", err)
+		return "", err
 	}
-	return planrepo.Root(ctx, p.ID, p.Repos, prefer, known)
+	return factoryplan.NewStore(api, planID, "").Claim(ctx)
 }
 
-// getWatchPlan reads plan id from factory. A test seam, as planRoot.
-var getWatchPlan = func(ctx context.Context, id string) (*circleci.Plan, error) {
+// readFactoryWorker is the worker that claims flow flowID, as it reports the
+// flow, for the flow list; nil when no worker claims it.
+func readFactoryWorker(ctx context.Context, flowID string) (*plan.Worker, error) {
 	api, err := factoryPlanClient()
 	if err != nil {
 		return nil, err
 	}
-	return api.GetPlan(ctx, id)
+	return readWorker(ctx, api, flowID)
+}
+
+// readWorker reads who claims flow flowID, then that worker as it reports the
+// flow. The list only has the claim's worker ID, which it may since have lost.
+func readWorker(ctx context.Context, api *circleci.Client, flowID string) (*plan.Worker, error) {
+	f, err := api.GetFlow(ctx, flowID)
+	if err != nil {
+		return nil, fmt.Errorf("get the plan's flow: %w", err)
+	}
+	return factoryplan.WorkerOf(ctx, api, flowID, f.WorkerID), nil
 }
 
 // newChatModel makes the chat, talking to root's chat session in the
@@ -301,116 +265,17 @@ func chatUpdate(l chunkd.SessionLog) chat.Update {
 	return u
 }
 
-// daemonPlanBuild reads plan builds from the local chunk daemon for the flow
-// screen.
-type daemonPlanBuild struct{}
-
-// Activity reads plan planID's build.
-func (daemonPlanBuild) Activity(_ context.Context, planID string, after int) (plan.BuildActivity, error) {
-	a, found, err := chunkd.FetchPlanBuild(planID, after)
-	if errors.Is(err, chunkd.ErrDaemonUnavailable) {
-		return plan.BuildActivity{}, fmt.Errorf("the chunk daemon is not reachable, or is too old to show builds: %w", err)
-	}
-	if err != nil {
-		return plan.BuildActivity{}, fmt.Errorf("read the build of plan %s: %w", planID, err)
-	}
-	return planBuildFrom(a, found), nil
-}
-
-// Stop stops build session sessionID in the local chunk daemon.
-func (daemonPlanBuild) Stop(_ context.Context, sessionID string) error {
-	return resumeProblem(cancelSession(sessionID))
-}
-
-// planBuildFrom is the daemon's answer as the flow screen reads it.
-func planBuildFrom(a chunkd.PlanBuildActivity, found bool) plan.BuildActivity {
-	if !found {
-		return plan.BuildActivity{}
-	}
-	out := plan.BuildActivity{
-		Found:     true,
-		ID:        a.ID,
-		Running:   a.State == chunkd.SessionRunning,
-		Cancelled: a.State == chunkd.SessionCancelled,
-		First:     a.First,
-		Total:     a.Total,
-	}
-	if a.State == chunkd.SessionFailed {
-		out.Failed = a.Error
-	}
-	if len(a.Lines) > 0 {
-		out.Lines = make([]plan.BuildLine, len(a.Lines))
-		for i, l := range a.Lines {
-			out.Lines[i] = plan.BuildLine{Level: planBuildLevel(l.Level), Text: l.Text}
-		}
-	}
-	return out
-}
-
-// planBuildLevel is a feed line's level as the flow screen styles it. An
-// unknown level, from a newer daemon, reads as info.
-func planBuildLevel(l chunkd.FeedLevel) plan.BuildLevel {
-	switch l {
-	case chunkd.FeedStep, chunkd.FeedDone:
-		return plan.BuildStep
-	case chunkd.FeedWarn:
-		return plan.BuildWarn
-	case chunkd.FeedError:
-		return plan.BuildError
-	case chunkd.FeedInfo:
-	}
-	return plan.BuildInfo
-}
-
+// watchPlanProject is the check of the project a new plan is made in: that
+// the dashboard was opened in one, and that it can be built from.
 func watchPlanProject(ctx context.Context, root string) error {
 	if root == "" {
-		return errors.New("open chunk ui in this plan's local repository to plan or build")
+		return errors.New("open chunk ui in a local repository to make a plan")
 	}
 	return checkPlanProject(ctx, root)
 }
 
-// The chunk daemon's routes and the project check, but in tests.
-var (
-	checkWatchProject = watchPlanProject
-	resumePlanner     = chunkd.ResumePlanner
-	startPlanBuild    = chunkd.StartPlanBuild
-	cancelSession     = chunkd.CancelSession
-)
-
-// errNothingToResume is a resume of a kind chunk does not start.
-var errNothingToResume = errors.New("this plan has nothing for chunk to resume")
-
-// daemonResume starts plans' agents again in the local chunk daemon.
-type daemonResume struct{}
-
-// Resume has plan planID's planner claim it again, or starts a build session
-// of it, as kind says, in the checkout of the plan's repo planRoot resolves
-// for the dashboard opened in root.
-func (daemonResume) Resume(ctx context.Context, root, planID string, kind planstate.ResumeKind, holder string) error {
-	p, err := getWatchPlan(ctx, planID)
-	if err != nil {
-		return fmt.Errorf("read plan %s: %w", planID, err)
-	}
-	if root, err = planRoot(ctx, p, root); err != nil {
-		return err
-	}
-	if err := checkWatchProject(ctx, root); err != nil {
-		return err
-	}
-	switch kind {
-	case planstate.ResumePlanner:
-		_, err = resumePlanner(planID, chunkd.PlannerResume{ProjectRoot: root})
-	case planstate.ResumeTakeOver:
-		_, err = resumePlanner(planID, chunkd.PlannerResume{ProjectRoot: root, ReleaseHolder: holder})
-	case planstate.ResumeBuild:
-		_, err = startPlanBuild(chunkd.PlanBuildRequest{ProjectRoot: root, PlanID: planID})
-	case planstate.ResumeNone:
-		return errNothingToResume
-	default:
-		return errNothingToResume
-	}
-	return resumeProblem(err)
-}
+// checkWatchProject is the project check, but in tests.
+var checkWatchProject = watchPlanProject
 
 // factoryDelete deletes plans in factory. It needs no project root.
 type factoryDelete struct {
@@ -429,18 +294,6 @@ func (d factoryDelete) Delete(ctx context.Context, planID string) error {
 		return err
 	}
 	return api.DeletePlan(ctx, planID)
-}
-
-// resumeProblem is a failed resume as the dashboard shows it: the daemon's
-// refusal as it gives it.
-func resumeProblem(err error) error {
-	if refused, ok := errors.AsType[*chunkd.SessionRefused](err); ok {
-		return errors.New(refused.Message)
-	}
-	if errors.Is(err, chunkd.ErrDaemonUnavailable) {
-		return errors.New("the chunk daemon is not reachable")
-	}
-	return err
 }
 
 // listFactoryBlockers is the plans blocking plan id, each with its flow's

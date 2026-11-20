@@ -9,8 +9,7 @@ import (
 
 func TestResumeOf(t *testing.T) {
 	done := []Blocker{{Title: "Add retry config", State: Ended, Outcome: "merged"}}
-	const build = "No session holds this plan · R starts a build session"
-	const planner = "No session holds this plan · R resumes its planner"
+	const claim = "No worker holds this plan · R claims it for a worker"
 	const holder = "1be8ec19-aaaa-bbbb-cccc-dddddddddddd"
 	claimed := func(state string, edit func(*ResumeFacts)) ResumeFacts {
 		f := ResumeFacts{PlanID: "p-42", State: state, Holder: holder, WaitingOn: Session, BlockersKnown: true}
@@ -19,9 +18,8 @@ func TestResumeOf(t *testing.T) {
 		}
 		return f
 	}
-	const takeOver = "Claimed by session 1be8ec19 · R releases it and resumes the planner"
-	const claimedLine = "Claimed by session 1be8ec19 · factory daemon release p-42 frees it"
-	const workerLine = "Claimed by worker w-1 · factory daemon release p-42 frees it"
+	const claimedLine = "Claimed by session 1be8ec19"
+	const workerLine = "Worker scotts-mbp · architect running"
 	for _, tc := range []struct {
 		name string
 		f    ResumeFacts
@@ -29,76 +27,64 @@ func TestResumeOf(t *testing.T) {
 		line string
 	}{
 		{
-			name: "claimed, planning",
-			f:    claimed(RefineProposal, nil),
-			kind: ResumeTakeOver,
-			line: takeOver,
-		},
-		{
-			name: "claimed, init",
-			f:    claimed(Init, nil),
-			kind: ResumeTakeOver,
-			line: takeOver,
-		},
-		{
-			name: "claimed, ready",
-			f:    claimed(Ready, nil),
-			kind: ResumeTakeOver,
-			line: takeOver,
-		},
-		{
-			name: "claimed, refining units",
-			f:    claimed(RefineUnits, nil),
-			kind: ResumeTakeOver,
-			line: takeOver,
-		},
-		{
-			name: "claimed, recording sub-plans",
-			f:    claimed(RecordSubPlans, nil),
-			kind: ResumeTakeOver,
-			line: takeOver,
-		},
-		{
-			name: "claimed, standing-by",
-			f:    claimed(StandBy, nil),
-			kind: ResumeTakeOver,
-			line: takeOver,
+			name: "holder and worker, planning",
+			f:    claimed(RefineProposal, func(f *ResumeFacts) { f.Worker = "w-1" }),
+			line: claimedLine,
 		},
 		{
 			name: "claimed, short ID",
 			f:    claimed(Init, func(f *ResumeFacts) { f.Holder = "s-1" }),
-			kind: ResumeTakeOver,
-			line: "Claimed by session s-1 · R releases it and resumes the planner",
+			line: "Claimed by session s-1",
 		},
 		{
-			name: "worker-only holder, planning",
-			f:    claimed(RefineProposal, func(f *ResumeFacts) { f.Holder, f.Worker = "", "w-1" }),
-			line: workerLine,
-		},
-		{
-			name: "worker-only holder, building",
-			f:    claimed(Build, func(f *ResumeFacts) { f.Holder, f.Worker = "", "w-1" }),
-			line: workerLine,
-		},
-		{
-			name: "worker-only holder, waiting_on empty",
+			name: "worker, planning",
 			f: claimed(RefineProposal, func(f *ResumeFacts) {
-				f.Holder, f.Worker, f.WaitingOn = "", "w-1", ""
+				f.Holder, f.Worker, f.WorkerLine = "", "w-1", workerLine
 			}),
 			line: workerLine,
 		},
 		{
-			name: "worker-only holder, waiting on human",
+			name: "worker, building",
+			f: claimed(Build, func(f *ResumeFacts) {
+				f.Holder, f.Worker, f.WorkerLine = "", "w-1", workerLine
+			}),
+			line: workerLine,
+		},
+		{
+			name: "worker, no worker line",
+			f:    claimed(Build, func(f *ResumeFacts) { f.Holder, f.Worker = "", "w-1" }),
+			line: "Claimed by worker w-1",
+		},
+		{
+			name: "worker, waiting_on empty",
 			f: claimed(RefineProposal, func(f *ResumeFacts) {
-				f.Holder, f.Worker, f.WaitingOn = "", "w-1", Human
+				f.Holder, f.Worker, f.WorkerLine, f.WaitingOn = "", "w-1", workerLine, ""
+			}),
+			line: workerLine,
+		},
+		{
+			name: "worker, waiting on human",
+			f: claimed(RefineProposal, func(f *ResumeFacts) {
+				f.Holder, f.Worker, f.WorkerLine, f.WaitingOn = "", "w-1", workerLine, Human
 			}),
 			line: "Waiting on you",
 		},
 		{
-			name: "session and worker, planning",
-			f:    claimed(RefineProposal, func(f *ResumeFacts) { f.Worker = "w-1" }),
-			kind: ResumeTakeOver,
-			line: takeOver,
+			name: "session and worker, waiting on human",
+			f: claimed(RefineUnits, func(f *ResumeFacts) {
+				f.Worker, f.WorkerLine, f.WaitingOn = "w-1", workerLine, Human
+			}),
+			line: "Waiting on you · claimed by session 1be8ec19",
+		},
+		{
+			name: "session, waiting on factory",
+			f:    claimed(RefineUnits, func(f *ResumeFacts) { f.WaitingOn = Daemon }),
+			line: "Waiting on factory · claimed by session 1be8ec19",
+		},
+		{
+			name: "session, waiting on session",
+			f:    claimed(RefineUnits, nil),
+			line: claimedLine,
 		},
 		{
 			name: "claimed, ended",
@@ -122,7 +108,7 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "claimed, waiting on human",
 			f:    claimed(RefineProposal, func(f *ResumeFacts) { f.WaitingOn = Human }),
-			line: "Waiting on you",
+			line: "Waiting on you · claimed by session 1be8ec19",
 		},
 		{
 			name: "claimed, unknown state",
@@ -147,6 +133,33 @@ func TestResumeOf(t *testing.T) {
 		{
 			name: "unclaimed, waiting_on empty",
 			f:    ResumeFacts{PlanID: "p-42", State: RefineProposal, BlockersKnown: true},
+			kind: ResumeClaim,
+			line: claim,
+		},
+		{
+			name: "unclaimed, waiting on human",
+			f:    ResumeFacts{PlanID: "p-42", State: RefineProposal, WaitingOn: Human, BlockersKnown: true},
+			kind: ResumeClaim,
+			line: "Waiting on you · R claims it for a worker",
+		},
+		{
+			name: "unclaimed, waiting on factory",
+			f:    ResumeFacts{PlanID: "p-42", State: Build, WaitingOn: Daemon, BlockersKnown: true},
+			kind: ResumeClaim,
+			line: "Waiting on factory · R claims it for a worker",
+		},
+		{
+			name: "unclaimed, waiting on factory, blocker active",
+			f: ResumeFacts{
+				PlanID: "p-42", State: Build, WaitingOn: Daemon, BlockersKnown: true,
+				Blockers: []Blocker{{Title: "Fix uploads", Active: true}},
+			},
+			line: "Waiting on Fix uploads",
+		},
+		{
+			name: "claimed by session, waiting on factory",
+			f:    claimed(Build, func(f *ResumeFacts) { f.WaitingOn = Daemon }),
+			line: "Waiting on factory · claimed by session 1be8ec19",
 		},
 		{
 			name: "building, unclaimed",
@@ -156,8 +169,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			kind: ResumeBuild,
-			line: build,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "claimed",
@@ -168,7 +181,7 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			line: "Claimed by session bb5a623b · factory daemon release p-42 frees it",
+			line: "Claimed by session bb5a623b",
 		},
 		{
 			name: "blocked",
@@ -187,8 +200,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			kind: ResumeBuild,
-			line: build,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "new name build",
@@ -197,8 +210,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			kind: ResumeBuild,
-			line: build,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "planning",
@@ -207,8 +220,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			kind: ResumePlanner,
-			line: planner,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "refining units",
@@ -217,8 +230,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			kind: ResumePlanner,
-			line: planner,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "ready",
@@ -227,8 +240,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			kind: ResumePlanner,
-			line: planner,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "unprioritized",
@@ -237,8 +250,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			kind: ResumePlanner,
-			line: planner,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "recording sub-plans",
@@ -247,8 +260,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			kind: ResumePlanner,
-			line: planner,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "recording sub-plans, waiting on you",
@@ -257,7 +270,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Human,
 				BlockersKnown: true,
 			},
-			line: "Waiting on you",
+			kind: ResumeClaim,
+			line: "Waiting on you · R claims it for a worker",
 		},
 		{
 			name: "standing-by",
@@ -266,8 +280,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			kind: ResumePlanner,
-			line: planner,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "every blocker done",
@@ -277,8 +291,8 @@ func TestResumeOf(t *testing.T) {
 				Blockers:      done,
 				BlockersKnown: true,
 			},
-			kind: ResumeBuild,
-			line: build,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "a blocker merged",
@@ -288,8 +302,8 @@ func TestResumeOf(t *testing.T) {
 				Blockers:      []Blocker{{Title: "a", State: Ended, Outcome: "merged"}},
 				BlockersKnown: true,
 			},
-			kind: ResumeBuild,
-			line: build,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "no flow",
@@ -316,7 +330,7 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Session,
 				BlockersKnown: true,
 			},
-			line: "Claimed by session s-1 · factory daemon release p-42 frees it",
+			line: "Claimed by session s-1",
 		},
 		{
 			name: "a canceled blocker still blocks",
@@ -336,8 +350,8 @@ func TestResumeOf(t *testing.T) {
 				Blockers:      []Blocker{{Title: "a", State: Build}},
 				BlockersKnown: true,
 			},
-			kind: ResumeBuild,
-			line: build,
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "blockers not loaded",
@@ -354,7 +368,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Human,
 				BlockersKnown: true,
 			},
-			line: "Waiting on you",
+			kind: ResumeClaim,
+			line: "Waiting on you · R claims it for a worker",
 		},
 		{
 			name: "waiting on factory",
@@ -363,7 +378,8 @@ func TestResumeOf(t *testing.T) {
 				WaitingOn:     Daemon,
 				BlockersKnown: true,
 			},
-			line: "Waiting on factory",
+			kind: ResumeClaim,
+			line: "Waiting on factory · R claims it for a worker",
 		},
 		{
 			name: "nothing next",
@@ -371,7 +387,8 @@ func TestResumeOf(t *testing.T) {
 				State:         Integrate,
 				BlockersKnown: true,
 			},
-			line: "",
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "waiting on blockers",
@@ -397,6 +414,8 @@ func TestResumeOf(t *testing.T) {
 				State:         Build,
 				BlockersKnown: true,
 			},
+			kind: ResumeClaim,
+			line: claim,
 		},
 		{
 			name: "unknown state",
@@ -425,10 +444,7 @@ func TestResumeOf(t *testing.T) {
 	}
 }
 
-func TestTakeOverQuestion(t *testing.T) {
-	assert.Check(t, cmp.Equal(TakeOverQuestion("1be8ec19-aaaa-bbbb-cccc-dddddddddddd"),
-		"Plan is claimed by session 1be8ec19, which chunk ui didn't start. Release it and resume the planner?"))
-	assert.Check(t, cmp.Equal(TakeOverQuestion("s-1"),
-		"Plan is claimed by session s-1, which chunk ui didn't start. Release it and resume the planner?"))
-	assert.Check(t, cmp.Equal(ClaimedWhy("s-1", "p-42"), "Claimed by session s-1 · factory daemon release p-42 frees it"))
+func TestClaimedWhy(t *testing.T) {
+	assert.Check(t, cmp.Equal(ClaimedWhy("s-1"), "Claimed by session s-1"))
+	assert.Check(t, cmp.Equal(ClaimedWhy("1be8ec19-aaaa-bbbb-cccc-dddddddddddd"), "Claimed by session 1be8ec19"))
 }

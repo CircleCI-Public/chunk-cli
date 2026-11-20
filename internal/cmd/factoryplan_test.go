@@ -2,15 +2,16 @@ package cmd
 
 import (
 	"context"
-	"fmt"
+	"os"
 	"os/exec"
-	"strings"
+	"path/filepath"
 	"testing"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
@@ -63,64 +64,102 @@ func TestPlanRepo(t *testing.T) {
 	}
 }
 
-// TestApprovePlan checks that approving is one ApproveAndBuild call for the
-// plan in the project, and that the daemon's answers read as the screen shows
-// them.
-func TestApprovePlan(t *testing.T) {
-	tests := []struct {
-		name    string
-		id      string
-		err     error
-		want    string
-		wantErr string
+// reportPlanLeft says where the plan was left: nothing for no plan, not
+// approved, approved with a worker building it, and approved with none.
+func TestReportPlanLeft(t *testing.T) {
+	t.Setenv("CI", "")
+	saved := onTerminal
+	t.Cleanup(func() { onTerminal = saved })
+	onTerminal = func(iostream.Streams) bool { return true }
+
+	for _, tc := range []struct {
+		name     string
+		planID   string
+		approved bool
+		worker   string
+		want     string
 	}{
 		{
-			name: "built",
-			id:   "b-1",
-			want: "b-1",
+			name: "no plan",
 		},
 		{
-			name:    "refused",
-			err:     &chunkd.SessionRefused{Status: 409, Message: "the plan is not ready yet; answer its open questions first"},
-			wantErr: "the plan is not ready yet; answer its open questions first",
+			name:   "not approved",
+			planID: "p-42",
+			want:   "The plan was not approved. It is plan p-42 in factory.\n",
 		},
 		{
-			name:    "unreachable",
-			err:     fmt.Errorf("%w: dial unix: no such file", chunkd.ErrDaemonUnavailable),
-			wantErr: "the chunk daemon is not reachable; the plan was not approved",
+			name:     "approved, a worker builds it",
+			planID:   "p-42",
+			approved: true,
+			worker:   "scotts-mbp",
+			want:     "Plan p-42 is approved; worker scotts-mbp is building it.\n" + watchStartHint + "\n",
 		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			type call struct {
-				PlanID string
-				Req    chunkd.PlanApproveRequest
-			}
-			var calls []call
-			saved := approveAndBuild
-			t.Cleanup(func() { approveAndBuild = saved })
-			approveAndBuild = func(planID string, req chunkd.PlanApproveRequest) (string, error) {
-				calls = append(calls, call{planID, req})
-				return tt.id, tt.err
-			}
-
-			id, err := approvePlan("/src", "plan-1", "opus")
-			if tt.wantErr != "" {
-				assert.Check(t, cmp.Error(err, tt.wantErr))
-			} else {
-				assert.NilError(t, err)
-			}
-			assert.Check(t, cmp.Equal(id, tt.want))
-			assert.Check(t, cmp.DeepEqual(calls, []call{{"plan-1", chunkd.PlanApproveRequest{ProjectRoot: "/src", Model: "opus"}}}))
+		{
+			name:     "approved, no worker",
+			planID:   "p-42",
+			approved: true,
+			want:     "Plan p-42 is approved; no worker is building it. Press R in chunk ui to claim it.\n",
+		},
+		{
+			name:   "a worker with no approval is not mentioned",
+			planID: "p-42",
+			worker: "scotts-mbp",
+			want:   "The plan was not approved. It is plan p-42 in factory.\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			streams, _, errOut := testStreams()
+			reportPlanLeft(streams, tc.planID, tc.approved, tc.worker)
+			assert.Check(t, cmp.Equal(errOut.String(), tc.want))
 		})
 	}
 }
 
-// A plan works from this machine's files, so a remote daemon is refused, and
-// the refusal names chunk factory plan.
-func TestFactoryPlanRefusesARemoteDaemon(t *testing.T) {
-	t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", "127.0.0.1:9999")
-	err := requireLocalDaemon()
-	assert.Assert(t, cmp.ErrorContains(err, "chunk factory plan"))
-	assert.Check(t, !strings.Contains(err.Error(), "factory build"))
+// chunk factory plan takes an optional request argument and has no --model
+// flag.
+func TestFactoryPlanFlagsHaveNoModel(t *testing.T) {
+	cmd := newFactoryPlanCmd()
+	assert.Check(t, cmd.Flags().Lookup("model") == nil)
+	assert.Check(t, cmp.Equal(cmd.Use, "plan [request]"))
+}
+
+// chunk factory plan needs no Claude Code, factory daemon socket or local
+// chunk daemon of its own: with no claude on PATH, no daemon, and even with a
+// remote chunk daemon configured, its preflight passes in a project that can
+// be built from.
+func TestFactoryPlanNeedsNoClaude(t *testing.T) {
+	repo := planProjectRepo(t, true, configWithCmds, "prompt")
+	t.Chdir(repo)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("XDG_DATA_HOME", home)
+	t.Setenv("CIRCLE_TOKEN", "test-token")
+	// Nothing on PATH is claude or factory, only git, and there is no factory
+	// socket.
+	git, err := exec.LookPath("git")
+	assert.NilError(t, err)
+	bin := t.TempDir()
+	err = os.Symlink(git, filepath.Join(bin, "git"))
+	assert.NilError(t, err)
+	t.Setenv("PATH", bin)
+	_, err = exec.LookPath("claude")
+	assert.Assert(t, err != nil, "claude is on PATH")
+	t.Setenv("FACTORY_DAEMON_SOCKET", home+"/no-such.sock")
+
+	for _, tc := range []struct {
+		name   string
+		remote string
+	}{
+		{name: "a local chunk daemon"},
+		{name: "a remote chunk daemon", remote: "127.0.0.1:9999"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", tc.remote)
+			root, api, err := factoryPlanPreflight(t.Context())
+			assert.NilError(t, err)
+			assert.Check(t, api != nil)
+			assert.Check(t, cmp.Equal(root, config.CanonicalProjectRoot(repo)))
+		})
+	}
 }

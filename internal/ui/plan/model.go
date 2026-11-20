@@ -1,8 +1,9 @@
-// Package plan is the planning screen: a new plan's request, then the plan's
-// Overview, with the stages of its flow and what happened in each, beside the
-// plan factory is writing, rendered as markdown. The developer can comment on any part of the plan; comments
-// are queued locally and saved to factory when the developer sends. When the
-// developer approves the plan, chunk builds it through factory.
+// Package plan is the planning screen: a new plan's title and request, then
+// the plan's Overview, with the stages of its flow and what happened in each,
+// beside the plan factory is writing, rendered as markdown. The developer can
+// comment on any part of the plan; comments are queued locally and saved to
+// factory when the developer sends. When the developer approves the plan, the
+// worker that claims it builds it.
 //
 // The screen is a component: its host passes it messages and draws what
 // Content returns, and it reports that it is done with a ClosedMsg. Screen
@@ -11,6 +12,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -22,6 +24,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
@@ -34,12 +37,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/clipboard"
 )
-
-// Approver approves the plan in factory and starts its build, returning the
-// build's ID. It reads the plan itself rather than taking the screen's copy,
-// which may be behind factory's by a poll. It calls step with each step as
-// it starts, as a line for the screen to show while it works.
-type Approver func(step func(string)) (string, error)
 
 // ReadyToApprove is whether f waits for the developer to approve it:
 // factory waits on the developer and requires an approval of them.
@@ -74,11 +71,11 @@ const (
 )
 
 // message is one entry in a stage's log: what the developer asked for, or
-// what the planner answered, or why it could not.
+// why chunk could not do something.
 type message struct {
-	fromUser bool
-	text     string
-	failed   bool
+	request bool
+	text    string
+	failed  bool
 	// stage is the stage stageNow gave when the message was added: Created
 	// before factory has given the plan a state, Building once the screen has
 	// approved or started a build of the plan, and "" for a state the stages
@@ -87,15 +84,6 @@ type message struct {
 	// seq is the message's place among the log's entries, as addMessage
 	// numbers them.
 	seq int
-	// byTask is a reply to a factory task rather than to the developer.
-	byTask bool
-	// task is the category of the factory task the reply is to, when byTask
-	// and the screen knew it.
-	task string
-	// rendered is a reply's markdown as rendered at renderedWidth, kept so
-	// the log is not rendered again on every tick of the spinner.
-	rendered      string
-	renderedWidth int
 }
 
 // renderedBlock is a block of the plan and its lines as glamour renders it.
@@ -108,10 +96,16 @@ type renderedBlock struct {
 }
 
 type (
-	approvedMsg struct {
-		buildID string
-		err     error
+	// approvedMsg is the end of sending approve-for-building.
+	approvedMsg struct{ err error }
+	// claimedMsg is the end of having the default worker claim the plan:
+	// host is the worker's hostname.
+	claimedMsg struct {
+		host string
+		err  error
 	}
+	// releasedMsg is the end of freeing the plan's claim.
+	releasedMsg struct{ err error }
 	// designApprovedMsg is the end of approving the plan's design.
 	designApprovedMsg struct{ err error }
 	// startedMsg is the end of sending prioritize.
@@ -120,14 +114,8 @@ type (
 	endedMsg struct{ err error }
 	// planDeletedMsg is the end of deleting the plan.
 	planDeletedMsg struct{ err error }
-	// approveStepMsg is a step of the approval starting; next is where the
-	// approval's later messages come from.
-	approveStepMsg struct {
-		text string
-		next <-chan tea.Msg
-	}
-	pollMsg      struct{}
-	refreshedMsg struct {
+	pollMsg        struct{}
+	refreshedMsg   struct {
 		flow      Flow
 		text      string
 		structure Structure
@@ -135,11 +123,11 @@ type (
 		err       error
 	}
 	commentSavedMsg struct{ err error }
-	// createdMsg is the end of creating the plan in factory, for the
-	// developer's first message, text; title is the name factory gave it.
+	// createdMsg is the end of creating the plan in factory, with the
+	// developer's title and request.
 	createdMsg struct {
-		text, title string
-		err         error
+		title, request string
+		err            error
 	}
 	queueSavedMsg struct {
 		saved int
@@ -242,29 +230,27 @@ type familiedMsg struct {
 // plan the developer chose.
 type OpenMsg struct{ ID, Title string }
 
-// ClosedMsg is the screen asking its host to close it: the plan was approved
-// and is being built as BuildID, or, when BuildID is "", the developer left.
+// ClosedMsg is the screen asking its host to close it: Approved when the
+// developer approved the plan, with Worker the hostname of the worker building
+// it, "" when none is.
 type ClosedMsg struct {
-	BuildID string
+	Approved bool
+	Worker   string
 }
 
 // BuildingMsg is the screen telling its host that the plan was approved and
-// is being built as BuildID, while the screen stays open to follow it. A
-// host that does not keep the screen gets ClosedMsg instead.
-type BuildingMsg struct {
-	BuildID string
-}
+// Worker, "" when none, is building it, while the screen stays open to follow
+// it. A host that does not keep the screen gets ClosedMsg instead.
+type BuildingMsg struct{ Worker string }
 
-func closed(buildID string) tea.Cmd {
-	return func() tea.Msg { return ClosedMsg{BuildID: buildID} }
+func closed(approved bool, worker string) tea.Cmd {
+	return func() tea.Msg { return ClosedMsg{Approved: approved, Worker: worker} }
 }
 
 // Model is the planning screen.
 type Model struct {
-	ctx     context.Context
-	agent   Agent
-	approve Approver
-	store   Store
+	ctx   context.Context
+	store Store
 
 	plan  string
 	state string
@@ -284,23 +270,23 @@ type Model struct {
 	// plan's blockers are known.
 	familyLoaded bool
 	messages     []message
-	// seq counts the entries added to the stages' logs, messages and build
-	// sessions alike, so a log can be drawn in the order they happened.
+	// seq counts the entries added to the stages' logs, so a log can be drawn
+	// in the order they happened.
 	seq int
 	// created is whether the plan has been made in factory with store.Create,
 	// and creating whether that is under way.
 	created, creating bool
-	// request is the new plan's request until a session has started on it.
-	request string
-	// resuming is whether a Request or Resume is under way.
-	resuming bool
-	// resumedIn is the flow state the screen last called Resume in, so a
-	// planner that cannot be started is tried once per state rather than on
-	// every poll; "" once a session claims the plan or the state moves.
-	resumedIn string
-	// claimedIn is the flow state the screen last saw a session claim the
-	// plan in, or "" once the state moves.
-	claimedIn string
+	// claiming is whether a claim of the plan is under way, from the plan's
+	// creation or the developer's R; workerName is the hostname of the worker
+	// the last claim got, "" before one has.
+	claiming   bool
+	workerName string
+	// releasing is whether the release of the plan's claim is under way.
+	releasing bool
+	// keepStatus is whether the next refresh leaves the status bar alone even
+	// as the flow's state moves: a claim just failed, and the first read of
+	// the plan after it is where it moves from nothing to its first state.
+	keepStatus bool
 
 	// blocks is renderedFrom, the plan as last rendered, split for
 	// commenting and rendered at renderedWidth.
@@ -346,11 +332,17 @@ type Model struct {
 	moving *transition
 
 	planView viewport.Model
-	// overviewView is the left pane: the request before the plan exists, the
-	// Overview after.
+	// overviewView is the left pane: the title and request before the plan
+	// exists, the Overview after.
 	overviewView viewport.Model
-	input        textarea.Model
-	spin         spinner.Model
+	// titleInput is the new plan's title, one line above the request input.
+	// It is not title: that is the host's title for the plan.
+	titleInput textinput.Model
+	input      textarea.Model
+	spin       spinner.Model
+	// onTitle is whether the new plan's keyboard is in titleInput rather than
+	// input, whichever pane has it.
+	onTitle bool
 
 	focus pane
 	// focusChosen is whether the first refresh of a plan opened as it is, or
@@ -372,20 +364,6 @@ type Model struct {
 	width   int
 	height  int
 
-	// busy is whether the agent is working: from a send, or from the first
-	// thing it does on a factory task, until its reply.
-	busy bool
-	// byTask is whether what the agent is working on is a factory task's,
-	// rather than the developer's message.
-	byTask bool
-	// task is the category of the factory task the agent's turn is on, as
-	// the turn's first refresh found it on the flow; "" until then, and
-	// when the flow named none.
-	task string
-	// log is what the agent has done this turn, oldest first.
-	log      []string
-	activity string
-
 	confirming bool
 	// approvingDesign is set from the developer's y to a design until factory
 	// has the event that approves it; pendingDesign is whether the y being
@@ -405,6 +383,8 @@ type Model struct {
 	// approving is set from the developer's y until factory answers, so a
 	// second ctrl+s cannot approve the plan twice.
 	approving bool
+	// pendingStop is whether the y being asked for releases the plan's claim.
+	pendingStop bool
 	// quitting is set by a ctrl+c that would drop what the developer has not
 	// sent; a second ctrl+c quits.
 	quitting bool
@@ -425,41 +405,18 @@ type Model struct {
 	// chatKey is whether the host opens its chat with ctrl+o.
 	chatKey bool
 	title   string
-	project string
 	// branch is the git branch the plan is for, shown in the header.
 	branch string
 	// questions is how many open questions the plan has.
 	questions int
-	// BuildID is the build of the plan, once it has been approved.
-	BuildID string
-	// built is whether the plan was approved, or its build started, while the
-	// screen stays open: its build is followed before factory's state moves.
+	// Approved is whether the developer has approved the plan, and Worker the
+	// hostname of the live worker that holds it then, "" when none does.
+	Approved bool
+	Worker   string
+	// built is whether the plan was approved while the screen stays open: its
+	// build is followed before factory's state moves.
 	built bool
 
-	// build reads the plan's build from the daemon; nil when the host has none.
-	build Build
-	// builds is each build session read, oldest first; reading is whether a
-	// read is out or its tick is set, so only one loop runs.
-	builds  []buildRun
-	reading bool
-	// buildMissing is that the last read found no build; buildErr that it failed.
-	buildMissing bool
-	buildErr     string
-	// resumer starts a build session of the plan on R; nil when the host has
-	// none. resumingBuild is set from that R until the daemon answers.
-	resumer       Resumer
-	resumingBuild bool
-	// pendingStop is the build session S asked to stop, until the question
-	// is answered; stoppingBuild is set from that y until the daemon answers.
-	pendingStop   string
-	stoppingBuild bool
-	// pendingTakeOver is the session the take-over question being asked is
-	// about, as when it opened. takingOver is set from its y until the
-	// daemon answers.
-	pendingTakeOver string
-	takingOver      bool
-
-	pending string
 	// lastClick is the plan block last clicked, to tell a double click.
 	lastClick *lastClick
 	// text is the text selected with the mouse, to copy.
@@ -478,22 +435,36 @@ func (m Model) after(d time.Duration, fn func(time.Time) tea.Msg) tea.Cmd {
 	return m.tick(d, fn)
 }
 
-// chatPlaceholder is the request input's, the only input the left pane has.
-const chatPlaceholder = "Describe the change you want planned…"
+// titlePlaceholder and requestPlaceholder are the new plan's two inputs'.
+const (
+	titlePlaceholder   = "Title of the plan…"
+	requestPlaceholder = "Describe the change you want planned…"
+)
 
-// New returns the planning screen. A non-empty first request is sent as soon
-// as the screen opens. Once the plan exists the left pane, the Overview, takes
+// New returns the planning screen. A new plan asks for its title, then its
+// request; a non-empty request fills the request input, and the screen still
+// asks for the title. Once the plan exists the left pane, the Overview, takes
 // no typing, so a plan that exists opens on the plan pane until its first
 // refresh says where the keyboard belongs.
-func New(ctx context.Context, agent Agent, approve Approver, store Store, first string) Model {
+func New(ctx context.Context, store Store, request string) Model {
+	ti := textinput.New()
+	ti.Placeholder = titlePlaceholder
+	ti.Prompt = ""
+	ti.Focus()
+	tiStyles := ti.Styles()
+	tiStyles.Focused.Text = lipgloss.NewStyle()
+	tiStyles.Blurred.Text = lipgloss.NewStyle()
+	ti.SetStyles(tiStyles)
+
 	in := textarea.New()
-	in.Placeholder = chatPlaceholder
+	in.Placeholder = requestPlaceholder
 	in.ShowLineNumbers = false
 	in.Prompt = ""
 	// Enter sends; a new line is shift+enter or ctrl+j.
 	in.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
 	in.SetHeight(inputRows)
-	in.Focus()
+	in.SetValue(strings.TrimSpace(request))
+	in.Blur()
 	inStyles := in.Styles()
 	inStyles.Focused.CursorLine = lipgloss.NewStyle()
 	in.SetStyles(inStyles)
@@ -504,7 +475,7 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 	ci.Placeholder = "Comment on this part"
 	ci.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
 	ci.DynamicHeight = true
-	// MaxContentHeight bounds the comment itself, at the chat input's own
+	// MaxContentHeight bounds the comment itself, at the textarea's own
 	// limit, so that MaxHeight bounds only the rows it is shown in: without
 	// it the editor would take no more lines than it shows.
 	ci.MaxContentHeight = ci.MaxHeight
@@ -528,12 +499,10 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 	focus := paneOverview
 	if created {
 		focus = panePlan
-		in.Blur()
+		ti.Blur()
 	}
 	return Model{
 		ctx:     ctx,
-		agent:   agent,
-		approve: approve,
 		store:   store,
 		created: created,
 		focus:   focus,
@@ -544,10 +513,11 @@ func New(ctx context.Context, agent Agent, approve Approver, store Store, first 
 		planView:     planView,
 		overviewView: overviewView,
 		outcome:      &outcomeRender{},
+		titleInput:   ti,
+		onTitle:      true,
 		input:        in,
 		commentInput: ci,
 		spin:         spinner.New(spinner.WithSpinner(spinner.Dot)),
-		pending:      strings.TrimSpace(first),
 		dark:         true,
 		anchor:       -1,
 	}
@@ -576,12 +546,9 @@ func (m Model) WithBack() Model {
 	return m
 }
 
-// WithInbox names the plan and local project and returns to the host's inbox.
-// No agent starts until a new plan's request is sent, or, with a project,
-// factory waits on a planner that is not there. Activity belongs to this
-// visit.
-func (m Model) WithInbox(title, project string) Model {
-	m.back, m.inbox, m.title, m.project = true, true, title, project
+// WithInbox names the plan and returns to the host's inbox.
+func (m Model) WithInbox(title string) Model {
+	m.back, m.inbox, m.title = true, true, title
 	return m
 }
 
@@ -603,7 +570,7 @@ func (m Model) ID() string { return m.store.ID() }
 func (m Model) Unsent() string { return m.unsent() }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.Poll(), m.pollCmd(), waitEvent(m.ctx, m.agent))
+	return tea.Batch(textarea.Blink, m.Poll(), m.pollCmd())
 }
 
 // Poll reads the plan's state, text, comments and relatives from the store,
@@ -613,42 +580,11 @@ func (m Model) Poll() tea.Cmd {
 	return tea.Batch(refreshCmd(m.ctx, m.store), familyCmd(m.ctx, m.store))
 }
 
-// Next waits for the agent's next event, as the screen itself does from Init
-// on. A host can use it to deliver one deterministically.
-func (m Model) Next() tea.Cmd { return waitEvent(m.ctx, m.agent) }
-
-// buildResumed is the end of starting a build session: an error in the status
-// bar, or the new session followed at once, before factory's state moves.
-func (m Model) buildResumed(msg buildResumedMsg) (Model, tea.Cmd) {
-	m.resumingBuild = false
-	if msg.err != nil {
-		m.status = ui.ErrorStyle.Render("Could not start a build session: " + msg.err.Error())
-		return m, nil
-	}
-	m.status, m.built = "", true
-	return m.followBuild()
-}
-
-// takeOverDone is the end of a take-over: an error in the status bar, as for
-// a build session.
-func (m Model) takeOverDone(msg takeOverDoneMsg) Model {
-	m.takingOver, m.status = false, ""
-	if msg.err != nil {
-		m.status = ui.ErrorStyle.Render("Could not take over the plan: " + msg.err.Error())
-	}
-	return m
-}
-
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
-		if m.pending != "" {
-			first := m.pending
-			m.pending = ""
-			return m.send(first)
-		}
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -668,33 +604,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case eventMsg:
-		if msg.agent != m.agent {
-			return m, nil
-		}
-		return m.applyEvent(msg.Event)
-
-	case sentMsg, resumedMsg:
-		return m.applySent(msg), nil
-
 	case pollMsg:
 		return m, tea.Batch(m.Poll(), m.pollCmd())
 
 	case refreshedMsg:
-		m = m.applyRefresh(msg)
-		var resume, follow tea.Cmd
-		m, resume = m.resumeIfOwed()
-		m, follow = m.followBuild()
-		return m, tea.Batch(resume, follow)
+		return m.applyRefresh(msg), nil
 
-	case buildTickMsg, buildReadMsg, buildStoppedMsg:
-		return m.updateBuild(msg)
+	case claimedMsg:
+		return m.applyClaimed(msg)
 
-	case buildResumedMsg:
-		return m.buildResumed(msg)
-
-	case takeOverDoneMsg:
-		return m.takeOverDone(msg), nil
+	case releasedMsg:
+		return m.applyReleased(msg)
 
 	case familiedMsg:
 		row, had := m.cursorRow()
@@ -731,12 +651,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case editSavedMsg:
 		return m.applyEditSaved(msg)
 
-	case approveStepMsg:
-		if m.approving {
-			m.status = msg.text
-		}
-		return m, waitApproval(msg.next)
-
 	case designApprovedMsg, approvedMsg, startedMsg, endedMsg, planDeletedMsg:
 		return m.applyApproval(msg)
 
@@ -760,60 +674,65 @@ func (m *Model) addMessage(msg message) {
 	m.messages = append(m.messages, msg)
 }
 
-// applyCreated handles the end of creating the plan in factory: on success
-// it starts the planning session on the request, and on failure it says so
-// in the request pane.
+// applyCreated handles the end of creating the plan in factory: on success it
+// has the default worker claim the plan, and on failure it says so in the
+// request pane and keeps what the developer typed.
 func (m Model) applyCreated(msg createdMsg) (Model, tea.Cmd) {
 	m.creating = false
 	if msg.err != nil {
-		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
 		m.addMessage(message{text: "Could not create the plan: " + msg.err.Error(), failed: true})
 		m.renderPlan()
 		m.renderLeft()
 		return m, nil
 	}
-	// The input is gone for good, and the Overview takes its rows.
-	m.created, m.request, m.resuming = true, msg.text, true
+	// The inputs are gone for good, and the Overview takes their rows.
+	m.created, m.claiming = true, true
+	m.addMessage(message{request: true, text: msg.request})
+	m.input.Reset()
+	m.titleInput.Reset()
+	m.input.Blur()
+	m.titleInput.Blur()
 	// A title the host gave the screen becomes the plan's own once it is
 	// created; a screen with no title keeps showing the branch.
 	if m.title != "" && msg.title != "" {
 		m.title = msg.title
 	}
-	m.input.Blur()
 	m.layout()
-	return m, requestCmd(m.ctx, m.agent, msg.text)
+	return m, tea.Batch(claimCmd(m.ctx, m.store), m.spin.Tick)
 }
 
-// applySent handles the end of a Request (sentMsg) or a Resume (resumedMsg)
-// of the screen's agent.
-func (m Model) applySent(msg tea.Msg) Model {
-	switch msg := msg.(type) {
-	case sentMsg:
-		if msg.agent != m.agent {
-			return m
-		}
-		m.resuming = false
-		if msg.err == nil {
-			m.request = ""
-			return m
-		}
-		// The request is kept, and sent again once factory next waits on the
-		// planner: it is in no plan yet.
-		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.addMessage(message{text: "Could not start the planning session: " + msg.err.Error(), failed: true})
-		m.renderPlan()
-		m.renderLeft()
-	case resumedMsg:
-		if msg.agent != m.agent {
-			return m
-		}
-		m.resuming = false
-		if msg.err != nil {
-			m.addMessage(message{text: "Could not resume the planning session: " + msg.err.Error(), failed: true})
-			m.renderLeft()
-		}
+// noWorkerText is what the screen says when no live worker can claim the plan.
+const noWorkerText = "No live worker can claim this plan · start factory daemon, then press R"
+
+// applyClaimed handles the end of having the default worker claim the plan,
+// after the plan is created or on the developer's R. A refusal leaves the plan
+// as it was, unclaimed, with the reason in the status bar; R claims it again.
+// Either way the screen goes on to follow the flow.
+func (m Model) applyClaimed(msg claimedMsg) (Model, tea.Cmd) {
+	m.claiming = false
+	switch {
+	case errors.Is(msg.err, ErrNoWorker):
+		m.status, m.keepStatus = ui.ErrorStyle.Render(noWorkerText), true
+	case msg.err != nil:
+		m.status, m.keepStatus = ui.ErrorStyle.Render("Could not claim the plan: "+msg.err.Error()), true
+	default:
+		m.workerName, m.status = msg.host, ""
 	}
-	return m
+	m.renderLeft()
+	return m, m.Poll()
+}
+
+// applyReleased handles the end of freeing the plan's claim: an error in the
+// status bar, with the holder shown as it was, or a refresh that shows the
+// freed claim.
+func (m Model) applyReleased(msg releasedMsg) (Model, tea.Cmd) {
+	m.releasing = false
+	if msg.err != nil {
+		m.status = ui.ErrorStyle.Render("Could not stop the plan: " + msg.err.Error())
+		return m, nil
+	}
+	m.status, m.workerName = "", ""
+	return m, m.Poll()
 }
 
 // applyQueueSaved handles the end of saving the queued comments.
@@ -841,10 +760,11 @@ func (m Model) applyQueueSaved(msg queueSavedMsg) (Model, tea.Cmd) {
 	return m, tea.Batch(refreshCmd(m.ctx, m.store), tick)
 }
 
-// spinning is whether something the spinner shows is under way: the agent's
-// turn, an approval or event not yet answered, or the wait for factory.
+// spinning is whether something the spinner shows is under way: the creation
+// or claim of the plan, an approval or event not yet answered, or the wait for
+// factory.
 func (m Model) spinning() bool {
-	return m.busy || m.approving || m.approvingDesign || m.moving != nil || m.buildRunning()
+	return m.creating || m.claiming || m.approving || m.approvingDesign || m.moving != nil
 }
 
 // awaitingStatus is whether the status bar holds something still under way
@@ -876,11 +796,12 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 		}
 	}
 
-	if msg.flow.State != m.state && !m.awaitingStatus() {
+	if msg.flow.State != m.state && !m.awaitingStatus() && !m.keepStatus {
 		// A note on what happened is out of date once factory moves the
 		// plan, and left up it would hide the bar's buttons.
 		m.status = ""
 	}
+	m.keepStatus = false
 	m.state, m.events, m.plan = msg.flow.State, msg.flow.Events, msg.text
 	if !reflect.DeepEqual(m.structure, msg.structure) {
 		// The pane is drawn from the structure, so it is drawn again even
@@ -890,17 +811,6 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 	}
 	m.questions = len(msg.structure.OpenQuestions)
 	m.flow = msg.flow
-	if m.flow.Claimed || m.state != m.resumedIn {
-		// A flow that leaves the state it was resumed in, or that a session
-		// claims, is resumed again once it is next owed one.
-		m.resumedIn = ""
-	}
-	switch {
-	case m.flow.Claimed:
-		m.claimedIn = m.state
-	case m.state != m.claimedIn:
-		m.claimedIn = ""
-	}
 	m.restoreCursor(row, had)
 	// The first refresh of a plan opened as it is puts the keyboard where the
 	// plan's phase is about; later moves leave it where it is.
@@ -908,11 +818,6 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 	if first {
 		m.focus, m.focusChosen = focusFor(m.state), true
 		m.overviewCursor = m.currentRow()
-	}
-	if m.byTask && m.task == "" {
-		// The first task the flow names in a turn is the one the turn is on:
-		// by its end the agent may have submitted it and the flow moved on.
-		m.task = msg.flow.Task
 	}
 	if m.moving != nil && m.moving.over(m.state, m.flow) {
 		m.moving = nil
@@ -935,41 +840,9 @@ func (m Model) applyRefresh(msg refreshedMsg) Model {
 	return m
 }
 
-// resumeOwed is whether f is waiting on a planner that is not there, so the
-// screen should have its planner claim the plan again: it is being planned,
-// or not started, and factory waits on a session. Factory starts a new
-// plan's flow in init with a task for a session, so that counts as
-// planning; a plan deferred there waits on the developer instead.
-func resumeOwed(f Flow) bool {
-	switch clean(f.State) {
-	case planstate.Init, planstate.Ready, planstate.RefineProposal, planstate.RefineUnits:
-	default:
-		return false
-	}
-	return !f.Ended && !f.Claimed && clean(f.WaitingOn) == planstate.Session
-}
-
-// resumeIfOwed has the planner claim the plan again when factory waits on a
-// planner that is not there, once per flow state. A request that has not
-// started a session yet goes in place of the resume, so the planner never
-// claims a new plan without it. In init it never resumes a state it has
-// seen a session claim, until the state moves.
-func (m Model) resumeIfOwed() (Model, tea.Cmd) {
-	if !m.created || m.resuming || !resumeOwed(m.flow) || m.resumedIn == m.state ||
-		(m.state == planstate.Init && m.claimedIn == m.state) ||
-		(m.inbox && m.project == "") {
-		return m, nil
-	}
-	m.resuming, m.resumedIn = true, m.state
-	if m.request != "" {
-		return m, requestCmd(m.ctx, m.agent, m.request)
-	}
-	return m, resumeCmd(m.ctx, m.agent)
-}
-
-// resumable is whether R resumes the plan, and how, or why not, as
-// planstate.ResumeOf decides. Before the plan exists there is nothing to say.
-// A screen with no Resumer starts no build: it says where one can be.
+// resumable is whether R has the default worker claim the plan, or why not,
+// as planstate.ResumeOf decides. Before the plan exists there is nothing to
+// say.
 func (m Model) resumable() planstate.Resume {
 	if !m.created {
 		return planstate.Resume{}
@@ -978,23 +851,17 @@ func (m Model) resumable() planstate.Resume {
 	for i, b := range m.family.Blockers {
 		blockers[i] = planstate.Blocker{Title: clean(b.Title), State: clean(b.State), Outcome: clean(b.Outcome), Active: b.Active}
 	}
-	r := planstate.ResumeOf(planstate.ResumeFacts{
+	return planstate.ResumeOf(planstate.ResumeFacts{
 		State:         clean(m.flow.State),
 		Ended:         m.flow.Ended,
 		PlanID:        m.store.ID(),
 		Holder:        clean(m.flow.Holder),
 		Worker:        clean(workerID(m.flow.Worker)),
+		WorkerLine:    WorkerLine(m.flow.Worker, m.flow.Holder),
 		WaitingOn:     clean(m.flow.WaitingOn),
 		Blockers:      blockers,
 		BlockersKnown: m.familyLoaded,
 	})
-	if r.Kind == planstate.ResumeBuild && m.resumer == nil {
-		return planstate.Resume{Why: "Resume this build from chunk ui"}
-	}
-	if r.Kind == planstate.ResumeTakeOver && m.resumer == nil {
-		return planstate.Resume{Why: planstate.ClaimedWhy(r.Holder, m.store.ID())}
-	}
-	return r
 }
 
 // workerID is w's ID, "" for no worker.
@@ -1005,25 +872,33 @@ func workerID(w *Worker) string {
 	return w.ID
 }
 
-// resume is the developer's R: it has the planner claim the plan again, as
-// resumeIfOwed does, or starts a build session of it.
+// resume is the developer's R: it has the default worker claim the plan.
 func (m Model) resume() (Model, tea.Cmd) {
-	switch m.resumable().Kind {
-	case planstate.ResumePlanner:
-		m.resuming, m.resumedIn = true, m.state
-		return m, resumeCmd(m.ctx, m.agent)
-	case planstate.ResumeTakeOver:
-		holder := m.resumable().Holder
-		m.confirming, m.pendingTakeOver = true, holder
-		m.status = ui.TitleStyle.Render(planstate.TakeOverQuestion(holder)+" ") + confirmButtons
+	if m.resumable().Kind != planstate.ResumeClaim {
 		return m, nil
-	case planstate.ResumeBuild:
-		m.resumingBuild = true
-		m.status = "starting a build session…"
-		return m, resumeBuildCmd(m.ctx, m.resumer, m.project, m.store.ID())
-	case planstate.ResumeNone:
 	}
-	return m, nil
+	m.claiming = true
+	m.status = "Claiming the plan for a worker…"
+	return m, tea.Batch(claimCmd(m.ctx, m.store), m.spin.Tick)
+}
+
+// claimCmd has the default worker claim the plan.
+func claimCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg {
+		host, err := s.Claim(ctx)
+		return claimedMsg{host: host, err: err}
+	}
+}
+
+// releaseCmd frees the plan's claim.
+func releaseCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg { return releasedMsg{err: s.Release(ctx)} }
+}
+
+// stopOwed is whether S can release the plan's claim: a worker holds a plan
+// that has not ended, and no interactive session does.
+func (m Model) stopOwed() bool {
+	return m.created && m.flow.Worker != nil && !m.flow.Ended && clean(m.flow.Holder) == ""
 }
 
 // focusFor is the pane the keyboard opens in for a plan in state: the plan
@@ -1053,13 +928,17 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.confirming, m.status = false, ""
 		if !key.Matches(msg, k.Confirm) {
 			m.pendingDelete, m.pendingDesign, m.pendingStart = "", false, false
-			m.pendingDeletePlan, m.pendingStop, m.pendingTakeOver = false, "", ""
+			m.pendingDeletePlan, m.pendingStop = false, false
 			return m, nil
 		}
 		return m.answerYes()
 	}
 	if m.commenting {
 		return m.updateCommentKey(msg)
+	}
+
+	if next, cmd, ok := m.updateFieldKey(msg, k); ok {
+		return next, cmd
 	}
 
 	switch {
@@ -1075,8 +954,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case key.Matches(msg, k.Resume):
 		return m.resume()
 	case key.Matches(msg, k.StopBuild):
-		m.confirming, m.pendingStop = true, m.latestBuildID()
-		m.status = ui.TitleStyle.Render("Stop this build session? ") + confirmButtons
+		m.confirming, m.pendingStop = true, true
+		m.status = ui.TitleStyle.Render("Stop this plan? The worker lets go of it. ") + confirmButtons
 		return m, nil
 	case key.Matches(msg, k.End):
 		m.askingReason = true
@@ -1095,17 +974,45 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.updatePlanKey(msg)
 	}
 	switch {
-	case key.Matches(msg, k.ChatPageUp):
+	case key.Matches(msg, k.RequestPageUp):
 		m.overviewView.PageUp()
 		return m, nil
-	case key.Matches(msg, k.ChatPageDown):
+	case key.Matches(msg, k.RequestPageDown):
 		m.overviewView.PageDown()
 		return m, nil
 	}
 	if key.Matches(msg, k.Send) {
-		return m.send(m.input.Value())
+		return m.send(m.titleInput.Value(), m.input.Value())
 	}
 	return m.forward(msg)
+}
+
+// updateFieldKey handles the keys that move the new plan's keyboard between
+// its title and its request: tab or enter in the title goes to the request,
+// and shift+tab in the request goes back. ok is false for any other key.
+func (m Model) updateFieldKey(msg tea.KeyPressMsg, k keyMap) (Model, tea.Cmd, bool) {
+	if m.created || m.focus != paneOverview {
+		return m, nil, false
+	}
+	switch {
+	case m.onTitle && (key.Matches(msg, k.NextField) || key.Matches(msg, k.Send)):
+		return m, m.focusField(false), true
+	case !m.onTitle && key.Matches(msg, k.PrevField):
+		return m, m.focusField(true), true
+	}
+	return m, nil, false
+}
+
+// focusField gives the new plan's keyboard to its title input, or to its
+// request input.
+func (m *Model) focusField(title bool) tea.Cmd {
+	m.onTitle = title
+	if title {
+		m.input.Blur()
+		return m.titleInput.Focus()
+	}
+	m.titleInput.Blur()
+	return m.input.Focus()
 }
 
 // heldStatus says why a send left the queued comments unsent.
@@ -1114,7 +1021,7 @@ const heldStatus = "Comments not sent: factory is working on the plan. Send them
 // deliver is a send of the queued comments from the developer: while factory
 // waits on the developer or asks for comments it saves them to factory and
 // hands them off as factory's flow then shows; at any other time they stay
-// queued. Nothing goes to the planning session.
+// queued.
 func (m Model) deliver() (Model, tea.Cmd) {
 	if m.savingComments {
 		return m, nil
@@ -1139,15 +1046,10 @@ func (m Model) deliver() (Model, tea.Cmd) {
 // answerYes does what the question in the status bar asked, now it has been
 // answered yes.
 func (m Model) answerYes() (Model, tea.Cmd) {
-	if id := m.pendingStop; id != "" {
-		m.pendingStop, m.stoppingBuild = "", true
-		m.status = "Stopping the build session…"
-		return m, stopBuildCmd(m.ctx, m.build, id)
-	}
-	if holder := m.pendingTakeOver; holder != "" {
-		m.pendingTakeOver, m.takingOver = "", true
-		m.status = "releasing the session and resuming the planner…"
-		return m, takeOverCmd(m.ctx, m.resumer, m.project, m.store.ID(), holder)
+	if m.pendingStop {
+		m.pendingStop, m.releasing = false, true
+		m.status = "Stopping the plan…"
+		return m, releaseCmd(m.ctx, m.store)
 	}
 	if m.pendingDeletePlan {
 		m.pendingDeletePlan, m.deleting = false, true
@@ -1170,7 +1072,7 @@ func (m Model) answerYes() (Model, tea.Cmd) {
 	}
 	m.approving = true
 	m.status = "Approving the plan…"
-	return m, tea.Batch(approveCmd(m.approve), m.spin.Tick)
+	return m, tea.Batch(approveCmd(m.ctx, m.store), m.spin.Tick)
 }
 
 // answerReason answers the end prompt: a reason key sends the end event
@@ -1201,6 +1103,7 @@ func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 	if p == panePlan {
 		m.focus = panePlan
 		m.input.Blur()
+		m.titleInput.Blur()
 		m.drawPlan()
 		m.renderLeft()
 		return m, nil
@@ -1211,7 +1114,7 @@ func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 	if m.created {
 		return m, nil
 	}
-	return m, m.input.Focus()
+	return m, m.focusField(m.onTitle)
 }
 
 // askToApprove starts approving the plan, or its design: it asks the
@@ -1220,8 +1123,6 @@ func (m Model) askToApprove() Model {
 	queued := len(queuedComments(m.comments))
 	switch {
 	case m.built, m.approving, m.approvingDesign, m.startingWork, m.ending, m.deleting, m.moving != nil:
-	case m.busy:
-		m.status = warn("Wait for chunk to finish.")
 	case slices.Contains(m.events, prioritize):
 		m.confirming, m.pendingStart = true, true
 		m.status = ui.TitleStyle.Render("Start work on the plan? ") + confirmButtons
@@ -1257,14 +1158,14 @@ func (m Model) askToApprove() Model {
 // once.
 func (m Model) quit(pressed string) (Model, tea.Cmd) {
 	if m.back {
-		return m, closed("")
+		return m, closed(m.Approved, m.Worker)
 	}
 	if unsent := m.unsent(); unsent != "" && !m.quitting {
 		m.quitting, m.confirming = true, false
 		m.status = warn(fmt.Sprintf("Your %s will be lost. Press %s again to quit.", unsent, pressed))
 		return m, nil
 	}
-	return m, closed("")
+	return m, closed(m.Approved, m.Worker)
 }
 
 // unsent names what the developer has written that has not gone to Claude,
@@ -1287,7 +1188,7 @@ func (m Model) unsent() string {
 	if n > 0 {
 		parts = append(parts, fmt.Sprintf("%d unsent %s", n, plural(n, "comment", "comments")))
 	}
-	if !m.created && strings.TrimSpace(m.input.Value()) != "" {
+	if !m.created && (strings.TrimSpace(m.input.Value()) != "" || strings.TrimSpace(m.titleInput.Value()) != "") {
 		parts = append(parts, "unsent request")
 	}
 	return strings.Join(parts, " and ")
@@ -1312,7 +1213,10 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	var cmds []tea.Cmd
-	if !m.created {
+	if !m.created && m.onTitle {
+		m.titleInput, cmd = m.titleInput.Update(msg)
+		cmds = append(cmds, cmd)
+	} else if !m.created {
 		m.input, cmd = m.input.Update(msg)
 		cmds = append(cmds, cmd)
 	}
@@ -1324,27 +1228,38 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// send is a new plan's request: it creates the plan in factory, then starts
-// the planning session on text once it is made. Once the plan exists, or
-// while it is being created, it does nothing, as it does for an empty text.
-func (m Model) send(text string) (Model, tea.Cmd) {
-	text = strings.TrimSpace(text)
-	if m.created || m.creating || text == "" {
+// sendEmpty is what the screen says when the new plan's title or request is
+// empty, by which it is.
+func sendEmpty(title, request string) string {
+	switch {
+	case title == "" && request == "":
+		return "Add a title and a request."
+	case title == "":
+		return "Add a title."
+	case request == "":
+		return "Add a request."
+	}
+	return ""
+}
+
+// send is a new plan's title and request: it creates the plan in factory,
+// and has a worker claim it once it is made. Once the plan exists, or while it
+// is being created, it does nothing, and with an empty title or request it
+// says which is missing and sends nothing.
+func (m Model) send(title, request string) (Model, tea.Cmd) {
+	if m.created || m.creating {
 		return m, nil
 	}
-	m.input.Reset()
-	m.addMessage(message{fromUser: true, text: text})
-	m.status = ""
-	var tick tea.Cmd
-	if !m.busy {
-		m.busy, m.byTask, m.task, m.log = true, false, "", nil
-		tick = m.spin.Tick
+	title, request = strings.TrimSpace(title), strings.TrimSpace(request)
+	if why := sendEmpty(title, request); why != "" {
+		m.status = why
+		return m, nil
 	}
+	m.status = ""
+	m.creating = true
 	m.renderPlan()
 	m.renderLeft()
-	m.overviewView.GotoBottom()
-	m.creating = true
-	return m, tea.Batch(createCmd(m.ctx, m.store, text), tick)
+	return m, tea.Batch(createCmd(m.ctx, m.store, title, request), m.spin.Tick)
 }
 
 // track reports eventName from the screen, with the plan's ID once factory
@@ -1369,50 +1284,12 @@ func (m Model) trackFeedback(comments int) {
 	m.track("plan_feedback_sent", map[string]any{"feedback_type": "comments", "comment_count": comments})
 }
 
-// createCmd creates the plan in factory for text, the developer's request,
-// which the store names it for.
-func createCmd(ctx context.Context, s Store, text string) tea.Cmd {
+// createCmd creates the plan in factory, titled title, with request as its
+// Outcome.
+func createCmd(ctx context.Context, s Store, title, request string) tea.Cmd {
 	return func() tea.Msg {
-		title, err := s.Create(ctx, text)
-		return createdMsg{text: text, title: title, err: err}
+		return createdMsg{title: title, request: request, err: s.Create(ctx, title, request)}
 	}
-}
-
-// applyEvent shows one thing the agent reported, then waits for the next.
-func (m Model) applyEvent(ev Event) (Model, tea.Cmd) {
-	next := waitEvent(m.ctx, m.agent)
-	switch {
-	case ev.Activity != "":
-		var tick tea.Cmd
-		var refresh tea.Cmd
-		if !m.busy {
-			// Nothing was sent, so a factory task started this turn.
-			m.busy, m.byTask, m.log = true, true, nil
-			// A task for this screen's planner means factory has acted.
-			m.moving = nil
-			tick = m.spin.Tick
-			// The flow names the task; read it now rather than at the next poll.
-			refresh = refreshCmd(m.ctx, m.store)
-		}
-		m.activity = ev.Activity
-		m.log = append(m.log, m.activity)
-		if len(m.log) > 5 {
-			m.log = m.log[len(m.log)-5:]
-		}
-		m.renderPlan()
-		m.renderLeft()
-		return m, tea.Batch(next, tick, refresh)
-	case ev.Reply != nil:
-		task := m.task
-		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.addMessage(message{text: ev.Reply.Text, byTask: ev.Reply.ByTask, task: task})
-	case ev.Problem != nil:
-		m.busy, m.byTask, m.task, m.activity, m.log = false, false, "", "", nil
-		m.addMessage(message{text: ev.Problem.Error(), failed: true})
-	}
-	m.renderPlan()
-	m.renderLeft()
-	return m, tea.Batch(next, refreshCmd(m.ctx, m.store))
 }
 
 // applyApproval is the end of approving the plan's design, or the plan, of
@@ -1451,31 +1328,33 @@ func (m Model) applyApproval(msg tea.Msg) (Model, tea.Cmd) {
 			m.status = ui.ErrorStyle.Render("Could not delete the plan: " + msg.err.Error())
 			return m, nil
 		}
-		return m, closed("")
+		return m, closed(false, "")
 	case approvedMsg:
 		m.approving = false
 		if msg.err != nil {
 			m.status = ui.ErrorStyle.Render("Could not approve the plan: " + msg.err.Error())
 			return m, nil
 		}
-		m.BuildID = msg.buildID
-		// Counted once factory has the plan, with the run it started.
-		m.track("plan_approved", map[string]any{"run_id": msg.buildID})
+		m.Approved = true
+		m.Worker = liveHostname(m.flow.Worker)
+		// Counted once factory has the plan.
+		m.track("plan_approved", nil)
 		if !m.back {
-			return m, closed(msg.buildID)
+			return m, closed(true, m.Worker)
 		}
 		// The keyboard goes to the Overview, to follow the build.
 		m.built, m.focusChosen = true, true
 		m, _ = m.focusOn(paneOverview)
 		m.overviewCursor = m.currentRow()
 		m.moving = &transition{kind: movingApprove, from: m.state, since: time.Now()}
-		m.status = "Approved · building as run " + msg.buildID
-		var follow tea.Cmd
-		m, follow = m.followBuild()
+		m.status = "Approved"
+		if m.Worker != "" {
+			m.status += " · " + m.Worker + " is building it"
+		}
+		worker := m.Worker
 		return m, tea.Batch(
-			func() tea.Msg { return BuildingMsg{BuildID: msg.buildID} },
+			func() tea.Msg { return BuildingMsg{Worker: worker} },
 			refreshCmd(m.ctx, m.store),
-			follow,
 		)
 	}
 	return m, nil
@@ -1513,38 +1392,19 @@ func reasonText(reason string) string {
 	return reason
 }
 
-// approveCmd runs approve in the background, and reads what it reports: an
-// approveStepMsg as each step starts, then its approvedMsg.
-func approveCmd(approve Approver) tea.Cmd {
-	// Buffered past the steps an approval takes, so it never waits on a
-	// screen that has closed.
-	ch := make(chan tea.Msg, 16)
-	go func() {
-		defer close(ch)
-		id, err := approve(func(text string) {
-			select {
-			case ch <- approveStepMsg{text: text}:
-			default:
-			}
-		})
-		ch <- approvedMsg{buildID: id, err: err}
-	}()
-	return waitApproval(ch)
+// approveCmd has factory take the approval: approve-for-building, sent when
+// factory waits for it.
+func approveCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg { return approvedMsg{err: s.Approve(ctx)} }
 }
 
-// waitApproval reads the approval's next message from ch.
-func waitApproval(ch <-chan tea.Msg) tea.Cmd {
-	return func() tea.Msg {
-		msg, ok := <-ch
-		if !ok {
-			return nil
-		}
-		if step, isStep := msg.(approveStepMsg); isStep {
-			step.next = ch
-			return step
-		}
-		return msg
+// liveHostname is the hostname of w when it is a live worker, "" otherwise: a
+// worker that is not live builds nothing.
+func liveHostname(w *Worker) string {
+	if w == nil || !w.Live || w.Unread != "" {
+		return ""
 	}
+	return clean(w.Hostname)
 }
 
 // Layout: the Overview is on the left and the plan, which needs the room, takes
@@ -1552,17 +1412,17 @@ func waitApproval(ch <-chan tea.Msg) tea.Cmd {
 // set into the top edge; the plan has a row under it for comments, and the
 // screen a header row above the panes and a footer row below them.
 const (
-	borderSize   = 2
-	bubbleChrome = borderSize + 2
-	// chatGutter is the cells of room left and right of the messages.
-	chatGutter = 1
-	headerRows = 1
-	tabRows    = 1
-	footerRows = 3
-	inputRows  = 6
-	// inputBoxRows is the input and its border, which has the input's title
-	// set into the top edge.
+	borderSize = 2
+	// requestGutter is the cells of room left and right of the messages.
+	requestGutter = 1
+	headerRows    = 1
+	tabRows       = 1
+	footerRows    = 3
+	inputRows     = 6
+	// inputBoxRows is the request input and its border, which has the input's
+	// title set into the top edge; titleBoxRows is the title's, of one row.
 	inputBoxRows = inputRows + borderSize
+	titleBoxRows = 1 + borderSize
 	// padX and padY are the room between a pane's border and its content.
 	padX           = 1
 	padY           = 1
@@ -1577,8 +1437,8 @@ func (m *Model) planWidth() int {
 	return m.width * planPercent / 100
 }
 
-// chatWidth is the left pane's width.
-func (m *Model) chatWidth() int {
+// leftWidth is the left pane's width.
+func (m *Model) leftWidth() int {
 	if m.narrow() {
 		return m.width
 	}
@@ -1600,13 +1460,14 @@ func (m *Model) layout() {
 	// The editor is the text of a comment's card, which sits past the gutter
 	// on a rail, indented, with a cell either side.
 	m.commentInput.SetWidth(m.planView.Width() - gutterWidth - 6)
-	m.overviewView.SetWidth(m.chatWidth() - borderSize - 2*padX)
+	m.overviewView.SetWidth(m.leftWidth() - borderSize - 2*padX)
 	if m.created {
 		m.overviewView.SetHeight(inner - padY)
 	} else {
-		m.overviewView.SetHeight(max(1, inner-inputBoxRows-padY))
+		m.overviewView.SetHeight(max(1, inner-titleBoxRows-inputBoxRows-padY))
 	}
-	m.input.SetWidth(m.chatWidth() - 2*borderSize - 2*padX)
+	m.titleInput.SetWidth(m.leftWidth() - 2*borderSize - 2*padX)
+	m.input.SetWidth(m.leftWidth() - 2*borderSize - 2*padX)
 	m.renderPlan()
 	m.renderLeft()
 }
@@ -1639,12 +1500,12 @@ func (m *Model) renderPlan() {
 	blocks, steps := blocksOf(m.structure)
 	if len(blocks) == 0 {
 		m.blocks = nil
-		if m.busy {
+		if m.creating {
 			m.setContent(textPlan, lipgloss.NewStyle().Padding(1, 2).Render(m.skeleton(m.planView.Width()-4)))
 			return
 		}
 		m.setContent(textPlan, ui.HelperStyle.Padding(1, 2).Width(m.planView.Width()).
-			Render("No plan yet. Tell chunk what you want to change, and the plan it writes appears here."))
+			Render("No plan yet. Give the plan a title and say what you want changed, and the plan appears here."))
 		return
 	}
 	if w == m.renderedWidth && m.blocks != nil && m.renderedFrom == m.plan {
@@ -1692,18 +1553,6 @@ func (m *Model) renderPlan() {
 	m.moveCursor(m.cursor)
 }
 
-// userBubble is text as a bubble against the right edge of the request, so it
-// reads as the developer's side of the conversation.
-func (m *Model) userBubble(text string, w int) string {
-	// The bubble leaves room on its left, so that it reads as a side of the
-	// conversation, and has a border and a cell of padding each side.
-	inner := max(w*85/100-bubbleChrome, 1)
-	fit := min(lipgloss.Width(text), inner)
-	bubble := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(m.faint()).
-		Padding(0, 1).Width(fit + bubbleChrome).Render(text)
-	return lipgloss.PlaceHorizontal(w, lipgloss.Right, bubble)
-}
-
 // queuedParts is the queued comments waiting to be saved, as lines w cells
 // wide: each one's quote, then its text, on a bar.
 func (m Model) queuedParts(cs []comment, w int) []string {
@@ -1727,97 +1576,33 @@ func (m *Model) renderLeft() {
 	m.renderRequest()
 }
 
-// renderRequest draws the left pane before the plan exists: the inbox note,
-// the developer's request as a bubble, what went wrong in making the plan, and
-// the planner's turn. There are no queued comments or build yet.
+// renderRequest draws the left pane before the plan exists: what went wrong in
+// making the plan, and the wait while it is made. There are no queued comments
+// or worker yet.
 func (m *Model) renderRequest() {
 	// A cell of room each side keeps the messages off the pane's border.
-	w := m.overviewView.Width() - 2*chatGutter
+	w := m.overviewView.Width() - 2*requestGutter
 	if w <= 0 {
 		return
 	}
 	var b strings.Builder
-	if m.inbox {
-		b.WriteString(m.style(m.dim()).Width(w).Render(m.inboxNote()) + "\n\n")
-	}
-	for i := range m.messages {
-		msg := &m.messages[i]
-		switch {
-		case msg.fromUser:
-			b.WriteString(m.userBubble(msg.text, w))
-		case msg.failed:
-			b.WriteString(chunkStyle.Render("chunk") + "\n")
-			b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text))
-		default:
-			b.WriteString(strings.Join(m.replyLines(msg, w), "\n"))
+	for _, msg := range m.messages {
+		if !msg.failed {
+			continue
 		}
-		b.WriteString("\n\n")
+		b.WriteString(chunkStyle.Render("chunk") + "\n")
+		b.WriteString(ui.ErrorStyle.Width(w).Render(msg.text) + "\n\n")
 	}
-	if m.busy {
-		b.WriteString(m.activityLog(w))
+	if m.creating {
+		b.WriteString(m.style(m.purple()).Render(m.spin.View() + "Creating the plan…"))
 	}
-	// The request follows what is added to it unless the developer has
-	// scrolled up to read, when it stays where they are.
+	// The pane follows what is added to it unless the developer has scrolled
+	// up to read, when it stays where they are.
 	follow := m.overviewView.AtBottom()
-	m.setContent(textOverview, lipgloss.NewStyle().PaddingLeft(chatGutter).Render(b.String()))
+	m.setContent(textOverview, lipgloss.NewStyle().PaddingLeft(requestGutter).Render(b.String()))
 	if follow {
 		m.overviewView.GotoBottom()
 	}
-}
-
-// inboxNote is what the left pane says of a plan opened from the host's
-// inbox: reading it starts no agent.
-func (m Model) inboxNote() string {
-	note := "Reading this plan does not start an agent."
-	if m.project == "" {
-		return note + " Open chunk ui in its repository to plan it."
-	}
-	return note + " Its planning session resumes here in " + m.project + " when factory is waiting on it."
-}
-
-// replyLines is the planner's reply as the log draws it: headed by chunk and,
-// for a reply to a factory task, the task, then its markdown, w cells wide.
-func (m Model) replyLines(msg *message, w int) []string {
-	head := chunkStyle.Render("chunk")
-	if msg.byTask {
-		mark := " · factory task"
-		if msg.task != "" {
-			mark = " · " + taskLabel(msg.task)
-		}
-		head += m.style(m.faint()).Render(mark)
-	}
-	if msg.renderedWidth != w {
-		msg.rendered, msg.renderedWidth = chat.RenderMarkdown(msg.text, m.dark, w-2), w
-	}
-	return append([]string{head}, strings.Split(msg.rendered, "\n")...)
-}
-
-// activityLog is what the agent has been doing this turn: each thing it has
-// finished with a tick, and the one in hand with the spinner.
-func (m Model) activityLog(w int) string {
-	if len(m.log) == 0 {
-		// The spinner's frames carry their own space after the dot.
-		return m.style(m.purple()).Render(m.spin.View() + "chunk is thinking…")
-	}
-	// Newest first: the step in hand, then the steps finished, then what the
-	// turn is on.
-	var lines []string
-	for i := len(m.log) - 1; i >= 0; i-- {
-		a := ansi.Truncate(m.log[i], w-2, "…")
-		if i == len(m.log)-1 {
-			lines = append(lines, m.style(m.purple()).Render(m.spin.View()+a))
-			continue
-		}
-		lines = append(lines, m.style(m.green()).Render("✓ ")+m.style(m.dim()).Render(a))
-	}
-	if m.byTask {
-		label := "working on a factory task"
-		if m.task != "" {
-			label = taskLabel(m.task)
-		}
-		lines = append(lines, m.style(m.faint()).Render(label))
-	}
-	return strings.Join(lines, "\n")
 }
 
 // taskLabel is a factory task's category as the Overview shows it: in sentence
@@ -1835,9 +1620,6 @@ func taskLabel(category string) string {
 // background.
 func (m *Model) restyle() {
 	m.renderedWidth = 0
-	for i := range m.messages {
-		m.messages[i].renderedWidth = 0
-	}
 	m.renderPlan()
 	m.renderLeft()
 }
@@ -1873,11 +1655,11 @@ func (m Model) Content() string {
 		planTitle += title(m.focus == panePlan, " · "+m.movingText())
 	}
 	body := m.shown(textPlan) + "\n" + m.planFooter()
-	leftTitle, leftBody := "Request", m.shown(textOverview)+"\n"+m.inputBox()
+	leftTitle, leftBody := "New plan", m.shown(textOverview)+"\n"+m.inputBoxes()
 	if m.created {
 		leftTitle, leftBody = "Overview", m.shown(textOverview)
 	}
-	left := pane(m.focus == paneOverview, m.chatWidth(), title(m.focus == paneOverview, leftTitle), leftBody)
+	left := pane(m.focus == paneOverview, m.leftWidth(), title(m.focus == paneOverview, leftTitle), leftBody)
 	plan := pane(m.focus == panePlan, m.planWidth(), planTitle, body)
 
 	panes := lipgloss.JoinHorizontal(lipgloss.Top, left, plan)
@@ -1893,18 +1675,21 @@ func (m Model) Content() string {
 	return lipgloss.JoinVertical(lipgloss.Left, top, panes, m.actionBar())
 }
 
-// inputBox is the request being written, in a box of its own under the request.
-// Its border stays a step below the pane's accent, so the accent shows once
-// per pane.
-func (m Model) inputBox() string {
-	edge := m.quiet()
-	if m.focus == paneOverview && !m.commenting {
-		edge = m.dim()
+// inputBoxes are the new plan's title and request being written, each in a box
+// of its own under the pane's log. A box's border stays a step below the
+// pane's accent, so the accent shows once per pane.
+func (m Model) inputBoxes() string {
+	w := m.leftWidth() - borderSize - 2*padX
+	box := func(name string, focused bool, content string) string {
+		edge := m.quiet()
+		if focused && m.focus == paneOverview && !m.commenting {
+			edge = m.dim()
+		}
+		b := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
+			Width(w).Render(content)
+		return titled(b, ui.TitleStyle.Render(name), lipgloss.NewStyle().Foreground(edge).Render)
 	}
-	w := m.chatWidth() - borderSize - 2*padX
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-		Width(w).Render(m.input.View())
-	return titled(box, ui.TitleStyle.Render("Message"), lipgloss.NewStyle().Foreground(edge).Render)
+	return box("Title", m.onTitle, m.titleInput.View()) + "\n" + box("Request", !m.onTitle, m.input.View())
 }
 
 // titled sets title into the top edge of box, a pane drawn with a rounded

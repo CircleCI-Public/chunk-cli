@@ -18,7 +18,7 @@ func (m Model) keys() keyMap {
 	k := keyMap{
 		Select: key.NewBinding(key.WithKeys("up", "down", "k", "j"), key.WithHelp("↑/↓", "select")),
 		Open:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-		Resume: key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resume")),
+		Resume: key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "claim")),
 		New:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new plan")),
 		Quit:   key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("q", "quit")),
 
@@ -26,11 +26,11 @@ func (m Model) keys() keyMap {
 		Delete: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
 	}
 	k.Chat.SetEnabled(m.chatKey)
-	k.Delete.SetEnabled(m.deletable() && m.ask == "" && m.takeOver == "")
+	k.Delete.SetEnabled(m.deletable() && m.ask == "")
 	listed := len(m.flows) > 0
 	k.Select.SetEnabled(listed)
 	k.Open.SetEnabled(listed)
-	k.Resume.SetEnabled(m.resume().Kind != planstate.ResumeNone && m.takeOver == "")
+	k.Resume.SetEnabled(m.resume().Kind != planstate.ResumeNone)
 	return k
 }
 

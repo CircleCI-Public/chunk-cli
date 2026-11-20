@@ -14,29 +14,22 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
-// OpenedPlan is a plan workspace an opener made. Root is the project it is
-// planned and built in, "" when there is none and the plan is read-only.
+// OpenedPlan is a plan workspace an opener made. Root is the project a new
+// plan is made in, "" for an existing plan, which needs no checkout.
 type OpenedPlan struct {
-	Agent   plan.Agent
-	Approve plan.Approver
-	Store   plan.Store
-	Root    string
+	Store plan.Store
+	Root  string
 }
 
-// PlanOpener opens a workspace without starting an agent: the agent the
-// planning screen talks to, the store its plan and comments are kept in, and
-// the approval of the plan in factory. An empty id creates a plan on the
-// first message; otherwise the store addresses the existing plan. root is
-// the project the dashboard was opened in, where a new plan is made; an
-// existing plan may resolve to a checkout of another repo, which the opened
-// plan's Root names.
+// PlanOpener opens a workspace: the store its plan and comments are kept in.
+// An empty id creates a plan once its title and request are sent; otherwise
+// the store addresses the existing plan. root is the project the dashboard was
+// opened in, where a new plan is made.
 type PlanOpener func(ctx context.Context, root, id string) (OpenedPlan, error)
 
 type planReadyMsg struct {
 	// id is the plan's, or "" for a new plan.
 	id, root, title string
-	agent           plan.Agent
-	approve         plan.Approver
 	store           plan.Store
 	err             error
 }
@@ -80,46 +73,40 @@ func (m Model) WithPlans(ctx context.Context, root string, open PlanOpener) Mode
 	return m
 }
 
-// WithPlanBuilds returns a copy of m whose flow screens show their plan's
-// build, read from b.
-func (m Model) WithPlanBuilds(b plan.Build) Model {
-	m.builds = b
+// WithPlanClaim returns a copy of m whose flow list's R has the default worker
+// claim a plan with claim, which returns the worker's hostname.
+func (m Model) WithPlanClaim(claim func(ctx context.Context, planID string) (string, error)) Model {
+	m.claim = claim
 	return m
 }
 
-// WithPlanResume returns a copy of m that starts plans' agents again with r,
-// from the flow list and each flow screen.
-func (m Model) WithPlanResume(r plan.Resumer) Model {
-	m.resumer = r
-	return m
-}
-
-// planResumedMsg is the end of a resume started from the flow list.
+// planResumedMsg is the end of a claim started from the flow list: host is the
+// hostname of the worker that claimed the plan.
 type planResumedMsg struct {
-	title string
-	err   error
+	title, host string
+	err         error
 }
 
-// resumePlan starts the agent of the flow the list asks for, passing the
-// resumer the project the dashboard was opened in.
+// resumePlan has the default worker claim the plan the list asks for.
 func (m Model) resumePlan(msg flowlist.ResumeMsg) (Model, tea.Cmd) {
-	if m.resumer == nil {
+	if m.claim == nil {
 		return m, nil
 	}
 	m.note = "resuming " + msg.Title + "…"
-	r, ctx, root := m.resumer, m.planCtx, m.root
+	claim, ctx := m.claim, m.planCtx
 	return m, func() tea.Msg {
-		return planResumedMsg{title: msg.Title, err: r.Resume(ctx, root, msg.ID, msg.Kind, msg.Holder)}
+		host, err := claim(ctx, msg.ID)
+		return planResumedMsg{title: msg.Title, host: host, err: err}
 	}
 }
 
-// planResumed notes how a resume ended, and refreshes the list so its claim
+// planResumed notes how a claim ended, and refreshes the list so its claim
 // shows.
 func (m Model) planResumed(msg planResumedMsg) (Model, tea.Cmd) {
 	if msg.err != nil {
 		m.note = "could not resume " + msg.title + ": " + msg.err.Error()
 	} else {
-		m.note = "resumed " + msg.title
+		m.note = "claimed by " + msg.host
 	}
 	if m.flows == nil {
 		return m, nil
@@ -219,15 +206,13 @@ func (m Model) openPlanID(id, title string) (tea.Model, tea.Cmd) {
 	if m.planner == nil {
 		return m, nil
 	}
-	// A new plan is made in the project the dashboard was opened in; the
-	// opener says where an existing one goes.
+	// A new plan is made in the project the dashboard was opened in.
 	root, planner, ctx := m.root, m.planner, m.planCtx
 	m.planOpening, m.note = true, "opening the plan…"
 	return m, func() tea.Msg {
 		opened, err := planner(ctx, root, id)
 		return planReadyMsg{
-			id: id, root: opened.Root, title: title,
-			agent: opened.Agent, approve: opened.Approve, store: opened.Store, err: err,
+			id: id, root: opened.Root, title: title, store: opened.Store, err: err,
 		}
 	}
 }
@@ -244,10 +229,14 @@ func (m Model) withPlanReady(msg planReadyMsg) (tea.Model, tea.Cmd) {
 	}
 	telemetry.Track(m.planCtx, "plan_opened", props)
 	m.note = ""
-	branch, _ := gitutil.CurrentBranchIn(msg.root)
-	screen := plan.New(m.planCtx, msg.agent, msg.approve, msg.store, "").
-		WithTerminal(m.hasDarkBG, m.superEnter).WithBranch(branch).WithInbox(msg.title, msg.root).
-		WithBuild(m.builds).WithResume(m.resumer)
+	// An existing plan has no checkout, so no branch: git would answer for the
+	// directory the dashboard runs in, which is another repo's.
+	var branch string
+	if msg.root != "" {
+		branch, _ = gitutil.CurrentBranchIn(msg.root)
+	}
+	screen := plan.New(m.planCtx, msg.store, "").
+		WithTerminal(m.hasDarkBG, m.superEnter).WithBranch(branch).WithInbox(msg.title)
 	if m.newChat != nil {
 		screen = screen.WithChatKey()
 	}

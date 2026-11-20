@@ -88,10 +88,9 @@ func (m Model) relatedRows() []relatedRow {
 }
 
 // stageNow is the stage the flow is in: planstate.Stage of its state, Created
-// before factory has given the plan one, and Building for a plan whose build
-// this screen has begun, by approving the plan (applyApproval's approvedMsg)
-// or by starting a build session with R (buildResumed), while factory has yet
-// to move it; "" for a state the stages do not know.
+// before factory has given the plan one, and Building for a plan this screen
+// has approved (applyApproval's approvedMsg) while factory has yet to move it;
+// "" for a state the stages do not know.
 func (m Model) stageNow() string {
 	state := clean(m.state)
 	stage := planstate.Stage(state)
@@ -286,10 +285,8 @@ func (m Model) drawOverview(w int) (string, []int, bool) {
 	}
 	dim := func(s string) string { return m.style(m.dim()).Render(s) }
 
-	if m.inbox {
-		add(m.dimLines(m.inboxNote(), cw))
-	}
-	if line := clean(m.resumable().Line()); line != "" {
+	// The worker's own line is the Activity's, so it is not said twice.
+	if line := clean(m.resumable().Line()); line != "" && line != WorkerLine(m.flow.Worker, m.flow.Holder) {
 		gap()
 		add(m.dimLines(line, cw))
 	}
@@ -416,20 +413,10 @@ func (m Model) currentHead(cur string) string {
 // stage, and what its log holds.
 func (m Model) finishedHead(stage string, w int) string {
 	head := ui.IconOK + " " + planstate.FinishedStage(stage)
-	switch replies, sessions := m.logCounts(stage); {
-	case stage == stageCreated:
+	if stage == stageCreated {
 		if req := m.requestExcerpt(w - ansi.StringWidth(head) - len(` · ""`)); req != "" {
 			head += ` · "` + req + `"`
 		}
-	case replies > 0 || sessions > 0:
-		var parts []string
-		if replies > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s", replies, plural(replies, "reply", "replies")))
-		}
-		if sessions > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s", sessions, plural(sessions, "build session", "build sessions")))
-		}
-		head += " · " + strings.Join(parts, " · ")
 	}
 	return m.style(m.dim()).Render(ansi.Truncate(head, w, "…"))
 }
@@ -441,7 +428,7 @@ func (m Model) requestExcerpt(w int) string {
 		return ""
 	}
 	for _, msg := range m.messages {
-		if msg.fromUser && msg.stage == stageCreated {
+		if msg.request && msg.stage == stageCreated {
 			return ansi.Truncate(clean(msg.text), w, "…")
 		}
 	}
@@ -603,101 +590,64 @@ func (m Model) holds(stage, entryStage string) bool {
 		slices.Index(planstate.Stages, entryStage) > slices.Index(planstate.Stages, cur)
 }
 
-// notesStage is the stage whose log has the notes on reading the build: the
-// Building stage when it has a session, otherwise the current stage.
-func (m Model) notesStage() string {
-	cur := m.stageNow()
-	if i := slices.Index(planstate.Stages, cur); i >= slices.Index(planstate.Stages, stageBuilding) &&
-		slices.ContainsFunc(m.builds, func(r buildRun) bool { return r.stage == stageBuilding }) {
-		return stageBuilding
-	}
-	return cur
+// workerHolds is whether a worker holds the plan, which then has activity to
+// show.
+func (m Model) workerHolds() bool {
+	return m.flow.Worker != nil && !m.flow.Ended
 }
 
 // stageHasLog is whether stage's log has anything in it.
 func (m Model) stageHasLog(stage string) bool {
-	switch {
-	case slices.ContainsFunc(m.messages, func(msg message) bool { return m.holds(stage, msg.stage) }),
-		slices.ContainsFunc(m.builds, func(r buildRun) bool { return m.holds(stage, r.stage) }),
-		stage == m.stageNow() && m.busy:
-		return true
-	}
-	return stage == m.notesStage() && (m.buildMissing || m.buildErr != "")
-}
-
-// logCounts is how many planner replies and build sessions stage's log holds.
-func (m Model) logCounts(stage string) (replies, sessions int) {
-	for _, msg := range m.messages {
-		if !msg.fromUser && !msg.failed && m.holds(stage, msg.stage) {
-			replies++
-		}
-	}
-	for _, r := range m.builds {
-		if m.holds(stage, r.stage) {
-			sessions++
-		}
-	}
-	return replies, sessions
+	return slices.ContainsFunc(m.messages, func(msg message) bool { return m.holds(stage, msg.stage) }) ||
+		(stage == m.stageNow() && m.workerHolds())
 }
 
 // stageLog is the entries of stage's log as lines w cells wide, newest first,
-// as the timeline is: for the current stage the live turn, then what the
-// reads of the build said of it, then its messages and its build sessions in
-// the reverse of the order they were added.
+// as the timeline is: for the current stage what the worker holding the plan
+// is doing, then its messages in the reverse of the order they were added.
 func (m Model) stageLog(stage string, w int) []string {
-	type entry struct {
-		seq   int
-		lines []string
-	}
-	var entries []entry
-	for i := range m.messages {
-		msg := &m.messages[i]
-		if m.holds(stage, msg.stage) {
-			entries = append(entries, entry{msg.seq, m.messageLines(msg, w)})
+	var entries [][]string
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if msg := &m.messages[i]; m.holds(stage, msg.stage) {
+			entries = append(entries, m.messageLines(msg, w))
 		}
 	}
-	var runs []buildRun
-	for _, r := range m.builds {
-		if m.holds(stage, r.stage) {
-			runs = append(runs, r)
-		}
-	}
-	for _, r := range runs {
-		sec := strings.TrimRight(m.buildSection([]buildRun{r}, false, w), "\n")
-		entries = append(entries, entry{r.seq, strings.Split(sec, "\n")})
-	}
-	if stage == m.notesStage() {
-		var notes []string
-		if len(runs) == 0 {
-			// With no session to head them, the notes have a divider of their own.
-			notes = strings.Split(strings.TrimRight(m.buildSection(nil, true, w), "\n"), "\n")
-		} else {
-			notes = m.buildNotes(w)
-		}
-		if len(notes) > 0 && notes[0] != "" {
-			entries = append(entries, entry{m.seq + 1, notes})
-		}
-	}
-	slices.SortStableFunc(entries, func(a, b entry) int { return b.seq - a.seq })
-	if stage == m.stageNow() && m.busy {
-		entries = append([]entry{{lines: strings.Split(m.activityLog(w), "\n")}}, entries...)
+	if stage == m.stageNow() && m.workerHolds() {
+		entries = append([][]string{m.workerLines(w)}, entries...)
 	}
 	var out []string
 	for i, e := range entries {
 		if i > 0 {
 			out = append(out, "")
 		}
-		out = append(out, e.lines...)
+		out = append(out, e...)
+	}
+	return out
+}
+
+// workerLines is what the worker holding the plan is doing, as workerActivity
+// says it, w cells wide: the problem in the error style, the fix and the rest
+// dim.
+func (m Model) workerLines(w int) []string {
+	w = max(w, 1)
+	activity := workerActivity(m.flow.Worker, m.flow.Holder)
+	var out []string
+	for _, text := range activity {
+		style := m.style(m.dim())
+		if p := clean(m.flow.Worker.Problem); p != "" && text == p {
+			style = ui.ErrorStyle
+		}
+		for _, l := range strings.Split(ansi.Wrap(text, w, ""), "\n") {
+			out = append(out, style.Render(l))
+		}
 	}
 	return out
 }
 
 // messageLines is msg as a log draws it, w cells wide: the developer's request
-// as "you" and its text, a planner's reply headed by chunk, and a failure in
-// the error style.
+// as "you" and its text, and a failure in the error style.
 func (m Model) messageLines(msg *message, w int) []string {
-	switch {
-	case msg.fromUser:
+	if msg.request {
 		const lead = 5
 		lines := strings.Split(ansi.Wrap(msg.text, max(w-lead, 1), ""), "\n")
 		for i := range lines {
@@ -708,14 +658,12 @@ func (m Model) messageLines(msg *message, w int) []string {
 			lines[i] = strings.Repeat(" ", lead) + lines[i]
 		}
 		return lines
-	case msg.failed:
-		lines := strings.Split(ansi.Wrap(msg.text, max(w, 1), ""), "\n")
-		for i, l := range lines {
-			lines[i] = ui.ErrorStyle.Render(l)
-		}
-		return append([]string{chunkStyle.Render("chunk")}, lines...)
 	}
-	return m.replyLines(msg, w)
+	lines := strings.Split(ansi.Wrap(msg.text, max(w, 1), ""), "\n")
+	for i, l := range lines {
+		lines[i] = ui.ErrorStyle.Render(l)
+	}
+	return append([]string{chunkStyle.Render("chunk")}, lines...)
 }
 
 // outcomeRender is the Outcome's markdown as last rendered, so a redraw of the

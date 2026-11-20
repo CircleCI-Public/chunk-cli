@@ -290,7 +290,7 @@ func TestHostMessages(t *testing.T) {
 // list itself shows none: the host shows it, in its header. The preview's
 // own "Waiting on" names factory's actor, as waiting_on serves it.
 var resumeLines = []string{
-	"No session holds", "Claimed by", "chunk can't resume",
+	"No worker holds", "Claimed by", "Worker ", "chunk can't resume",
 	"Waiting on you", "Waiting on factory", "Waiting on blockers", "Waiting on sub-plans", "Waiting on Retry config",
 }
 
@@ -490,23 +490,22 @@ func TestDelete(t *testing.T) {
 }
 
 func TestResume(t *testing.T) {
+	const claim = "No worker holds this plan · R claims it for a worker"
 	building := circleci.Flow{ID: "a", Title: "Alpha", State: "build", Next: waitAgent, WaitingOn: "session"}
 	for _, tc := range []struct {
 		name     string
 		flow     circleci.Flow
 		blockers map[string][]planstate.Blocker
 		err      error
-		// kind is what R asks the host for; ResumeNone is nothing.
-		kind planstate.ResumeKind
-		// holder is the session a take-over asks about.
-		holder string
+		// claims is whether R asks the host to have a worker claim the flow.
+		claims bool
 		line   string
 	}{
 		{
-			name: "building, unclaimed",
-			flow: building,
-			kind: planstate.ResumeBuild,
-			line: "No session holds this plan · R starts a build session",
+			name:   "building, unclaimed",
+			flow:   building,
+			claims: true,
+			line:   claim,
 		},
 		{
 			name: "planning",
@@ -517,8 +516,8 @@ func TestResume(t *testing.T) {
 				Next:      []circleci.Transition{{Actor: "session", TaskCategory: "write-units"}},
 				WaitingOn: "session",
 			},
-			kind: planstate.ResumePlanner,
-			line: "No session holds this plan · R resumes its planner",
+			claims: true,
+			line:   claim,
 		},
 		{
 			name: "claimed",
@@ -530,7 +529,7 @@ func TestResume(t *testing.T) {
 				WaitingOn: "session",
 				SessionID: "bb5a623b-0000",
 			},
-			line: "Claimed by session bb5a623b · factory daemon release a frees it",
+			line: "Claimed by session bb5a623b",
 		},
 		{
 			name: "claimed, planning",
@@ -542,12 +541,23 @@ func TestResume(t *testing.T) {
 				WaitingOn: "session",
 				SessionID: "1be8ec19-0000",
 			},
-			kind:   planstate.ResumeTakeOver,
-			holder: "1be8ec19-0000",
-			line:   "Claimed by session 1be8ec19 · R releases it and resumes the planner",
+			line: "Claimed by session 1be8ec19",
 		},
 		{
-			name: "claimed by a worker only, planning",
+			name: "claimed by a session and a worker",
+			flow: circleci.Flow{
+				ID:        "a",
+				Title:     "Alpha",
+				State:     "refine-proposal",
+				Next:      []circleci.Transition{{Actor: "session", TaskCategory: "write-units"}},
+				WaitingOn: "session",
+				SessionID: "1be8ec19-0000",
+				WorkerID:  "w-1",
+			},
+			line: "Claimed by session 1be8ec19",
+		},
+		{
+			name: "claimed by a worker, not read",
 			flow: circleci.Flow{
 				ID:        "a",
 				Title:     "Alpha",
@@ -556,24 +566,19 @@ func TestResume(t *testing.T) {
 				WaitingOn: "session",
 				WorkerID:  "w-1",
 			},
-			line: "Claimed by worker w-1 · factory daemon release a frees it",
+			line: "Claimed by worker w-1",
 		},
 		{
-			name: "claimed by a worker only, building",
-			flow: circleci.Flow{
-				ID:        "a",
-				Title:     "Alpha",
-				State:     "build",
-				Next:      waitAgent,
-				WaitingOn: "session",
-				WorkerID:  "w-1",
-			},
-			line: "Claimed by worker w-1 · factory daemon release a frees it",
+			name:   "waiting on you",
+			flow:   circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal", Next: waitHuman, WaitingOn: "human"},
+			claims: true,
+			line:   "Waiting on you · R claims it for a worker",
 		},
 		{
-			name: "waiting on you",
-			flow: circleci.Flow{ID: "a", Title: "Alpha", State: "refine-proposal", Next: waitHuman, WaitingOn: "human"},
-			line: "Waiting on you",
+			name:   "waiting on factory",
+			flow:   circleci.Flow{ID: "a", Title: "Alpha", State: "build", WaitingOn: "daemon"},
+			claims: true,
+			line:   "Waiting on factory · R claims it for a worker",
 		},
 		{
 			name:     "blocked",
@@ -585,8 +590,8 @@ func TestResume(t *testing.T) {
 			name:     "blockers done",
 			flow:     building,
 			blockers: map[string][]planstate.Blocker{"a": {{Title: "Retry config", State: "ended"}, {Title: "Docs", State: "ended", Outcome: "merged"}}},
-			kind:     planstate.ResumeBuild,
-			line:     "No session holds this plan · R starts a build session",
+			claims:   true,
+			line:     claim,
 		},
 		{
 			name: "blockers fail to load",
@@ -600,30 +605,27 @@ func TestResume(t *testing.T) {
 				d.load()
 				got := d.content()
 				assert.Check(t, cmp.Contains(got, "Preview a"), "the preview has not loaded:\n%s", got)
-				assert.Check(t, cmp.Equal(strings.Contains(got, "R resume"), tc.kind != planstate.ResumeNone), "help bar:\n%s", got)
+				assert.Check(t, cmp.Equal(strings.Contains(got, "R claim"), tc.claims), "help bar:\n%s", got)
 				assert.Check(t, cmp.Equal(d.m.ResumeLine(), tc.line))
 				noResumeLine(t, got)
-				if tc.kind == planstate.ResumeNone {
+				if !tc.claims {
 					_, cmd := d.m.Update(press('R'))
 					assert.Check(t, cmd == nil, "R did something")
 					return
 				}
 				d.send(press('R'))
-				if tc.kind == planstate.ResumeTakeOver {
-					d.send(press('y'))
-				}
-				assert.Check(t, cmp.DeepEqual(d.next(), flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: tc.kind, Holder: tc.holder}))
+				assert.Check(t, cmp.DeepEqual(d.next(), flowlist.ResumeMsg{ID: "a", Title: "Alpha"}))
 			})
 		})
 	}
 	t.Run("without blockers", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			// A host that reads no blockers still offers resume.
+			// A host that reads no blockers still offers a claim.
 			d := newDriver(t, fixed(building), preview)
 			d.load()
-			assert.Check(t, cmp.Contains(d.content(), "R resume"))
+			assert.Check(t, cmp.Contains(d.content(), "R claim"))
 			d.send(press('R'))
-			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeBuild}))
+			assert.Check(t, cmp.DeepEqual(d.next(), flowlist.ResumeMsg{ID: "a", Title: "Alpha"}))
 		})
 	})
 	t.Run("before the preview loads", func(t *testing.T) {
@@ -640,14 +642,22 @@ func TestResume(t *testing.T) {
 			d.send(d.m.Init()())
 			d.step() // List response starts the preview, which waits.
 			got := d.content()
-			assert.Check(t, !strings.Contains(got, "R resume"), "help bar:\n%s", got)
+			assert.Check(t, !strings.Contains(got, "R claim"), "help bar:\n%s", got)
 			assert.Check(t, cmp.Equal(d.m.ResumeLine(), ""))
 			_, cmd := d.m.Update(press('R'))
 			assert.Check(t, cmd == nil, "R did something before the blockers loaded")
 			close(release)
 			d.step()
-			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "No session holds this plan · R starts a build session"))
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), claim))
 			noResumeLine(t, d.content())
+		})
+	})
+	t.Run("a session claim with a human wait", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			claimed := circleci.Flow{ID: "b", Title: "Beta", State: "refine-units", Next: waitHuman, WaitingOn: "human", SessionID: "c7045f9f-1868"}
+			d := newDriver(t, fixed(claimed), preview, blockers(nil, nil))
+			d.load()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Waiting on you · claimed by session c7045f9f"))
 		})
 	})
 	t.Run("selection moves", func(t *testing.T) {
@@ -655,145 +665,178 @@ func TestResume(t *testing.T) {
 			claimed := circleci.Flow{ID: "b", Title: "Beta", State: "build", Next: waitAgent, WaitingOn: "session", SessionID: "cc6b734c-1111"}
 			d := newDriver(t, fixed(building, claimed), preview, blockers(nil, nil))
 			d.load()
-			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "No session holds this plan · R starts a build session"))
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), claim))
 			d.send(press('j'))
 			d.step() // Beta's preview, and its blockers.
 			got := d.content()
 			assert.Check(t, cmp.Contains(got, "▶ Beta"))
-			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Claimed by session cc6b734c · factory daemon release b frees it"))
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Claimed by session cc6b734c"))
 			noResumeLine(t, got)
-			assert.Check(t, !strings.Contains(got, "R resume"), "help bar:\n%s", got)
+			assert.Check(t, !strings.Contains(got, "R claim"), "help bar:\n%s", got)
 		})
 	})
 }
 
-// resumeMsg is the next ResumeMsg the driver's commands return, handing any
-// other message back to the model on the way.
-func (d *driver) resumeMsg() flowlist.ResumeMsg {
-	for {
-		msg := d.next()
-		if r, ok := msg.(flowlist.ResumeMsg); ok {
-			return r
-		}
-		d.send(msg)
-	}
-}
-
-// R on a claimed planning flow asks first; only y sends the take-over, for
-// the plan and session the question was opened for.
-func TestTakeOver(t *testing.T) {
-	const holder = "1be8ec19-0000"
-	claimed := func(id, title, session string) circleci.Flow {
+// A flow a worker claims shows the worker's line, read once for the selected
+// flow's claim, and never another claim's worker.
+func TestWorkerLine(t *testing.T) {
+	building := func(worker string) circleci.Flow {
 		return circleci.Flow{
-			ID:        id,
-			Title:     title,
-			State:     "refine-proposal",
-			Next:      []circleci.Transition{{Actor: "session", TaskCategory: "write-units"}},
-			WaitingOn: "session",
-			SessionID: session,
+			ID: "a", Title: "Alpha", State: "build", Next: waitAgent, WaitingOn: "session",
+			WorkerID: worker,
 		}
 	}
-	question := planstate.TakeOverQuestion(holder)
-	loaded := func(t *testing.T, list func(context.Context) ([]circleci.Flow, error)) *driver {
-		d := newDriver(t, list, preview, blockers(nil, nil))
-		d.send(tea.WindowSizeMsg{Width: 200, Height: 30})
-		d.load()
-		return d
+	running := func(id, host string) *plan.Worker {
+		return &plan.Worker{
+			ID: id, Hostname: host, Live: true,
+			Headless: []plan.Headless{{Role: "architect", State: "running", Health: "ok"}},
+		}
 	}
-	want := flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeTakeOver, Holder: holder}
+	// host is a fake worker read: it answers from workers by flow ID, fails
+	// every read with err when set, and records the flow ID of each read.
+	type host struct {
+		mu      sync.Mutex
+		workers map[string]*plan.Worker
+		err     error
+		reads   []string
+	}
+	count := func(h *host) int {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.reads)
+	}
+	read := func(h *host) func(flowlist.Model) flowlist.Model {
+		return func(fm flowlist.Model) flowlist.Model {
+			return fm.WithWorkers(func(_ context.Context, flowID string) (*plan.Worker, error) {
+				h.mu.Lock()
+				defer h.mu.Unlock()
+				h.reads = append(h.reads, flowID)
+				if h.err != nil {
+					return nil, h.err
+				}
+				return h.workers[flowID], nil
+			})
+		}
+	}
 
-	t.Run("the footer asks, y sends", func(t *testing.T) {
+	t.Run("a live worker", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			d := loaded(t, fixed(claimed("a", "Alpha", holder)))
-			d.send(press('R'))
-			got := d.content()
-			assert.Check(t, cmp.Contains(got, question+" y / n"))
-			assert.Check(t, !strings.Contains(got, "R resume"), "help bar shown while asking:\n%s", got)
-			d.send(press('y'))
-			assert.Check(t, cmp.DeepEqual(d.next(), want))
-			assert.Check(t, !strings.Contains(d.content(), question))
+			h := &host{workers: map[string]*plan.Worker{"a": running("w1", "scotts-mbp")}}
+			d := newDriver(t, fixed(building("w1")), preview, blockers(nil, nil), read(h))
+			d.load()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Worker scotts-mbp · architect running"))
+			assert.Check(t, cmp.Equal(count(h), 1))
+			noResumeLine(t, d.content())
+			_, cmd := d.m.Update(press('R'))
+			assert.Check(t, cmd == nil, "R claimed a plan a worker holds")
 		})
 	})
 
-	for _, tc := range []struct {
-		name string
-		key  tea.KeyPressMsg
-	}{
-		{
-			name: "n",
-			key:  press('n'),
-		},
-		{
-			name: "x",
-			key:  press('x'),
-		},
-		{
-			name: "R",
-			key:  press('R'),
-		},
-		{
-			name: "esc",
-			key:  press(tea.KeyEscape),
-		},
-	} {
-		t.Run("cancelled by "+tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				d := loaded(t, fixed(claimed("a", "Alpha", holder)))
-				d.send(press('R'))
-				m, cmd := d.m.Update(tc.key)
-				d.m = m
-				assert.Check(t, cmd == nil, "the key did something")
-				assert.Check(t, !strings.Contains(d.content(), question))
-			})
-		})
-	}
-
-	t.Run("the flow goes away", func(t *testing.T) {
+	t.Run("a worker that is not live", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			var gone atomic.Bool
-			d := loaded(t, func(context.Context) ([]circleci.Flow, error) {
-				if gone.Load() {
-					return []circleci.Flow{claimed("b", "Beta", "cc6b734c-1111")}, nil
-				}
-				return []circleci.Flow{claimed("a", "Alpha", holder), claimed("b", "Beta", "cc6b734c-1111")}, nil
-			})
-			d.send(press('R'))
-			gone.Store(true)
-			d.refresh()
-			assert.Check(t, !strings.Contains(d.content(), question), "still asking:\n%s", d.content())
-			_, cmd := d.m.Update(press('y'))
-			assert.Check(t, cmd == nil, "y sent something")
+			w := running("w1", "scotts-mbp")
+			w.Live = false
+			h := &host{workers: map[string]*plan.Worker{"a": w}}
+			d := newDriver(t, fixed(building("w1")), preview, blockers(nil, nil), read(h))
+			d.load()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Worker scotts-mbp · not live"))
 		})
 	})
 
 	for _, tc := range []struct {
 		name    string
-		session string
+		workers map[string]*plan.Worker
+		err     error
 	}{
-		{
-			name:    "the claim moves",
-			session: "s-newer",
-		},
-		{
-			name:    "the claim is gone",
-			session: "",
-		},
+		{name: "a read that fails", err: errors.New("factory is down")},
+		{name: "a read that returns nothing"},
+		{name: "a worker that can't be read", workers: map[string]*plan.Worker{"a": {ID: "w1", Unread: "no such worker"}}},
 	} {
-		t.Run("still sends the confirmed session when "+tc.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				var session atomic.Value
-				session.Store(holder)
-				d := loaded(t, func(context.Context) ([]circleci.Flow, error) {
-					return []circleci.Flow{claimed("a", "Alpha", session.Load().(string))}, nil
-				})
-				d.send(press('R'))
-				session.Store(tc.session)
-				d.refresh()
-				d.send(press('y'))
-				assert.Check(t, cmp.DeepEqual(d.resumeMsg(), want))
+				h := &host{workers: tc.workers, err: tc.err}
+				d := newDriver(t, fixed(building("w1")), preview, blockers(nil, nil), read(h))
+				d.load()
+				assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Worker w1 can't be read"))
+				assert.Check(t, !strings.Contains(d.content(), "scotts-mbp"))
 			})
 		})
 	}
+
+	t.Run("an unreadable worker shows no hostname from another flow's read", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			other := building("w2")
+			other.ID, other.Title = "b", "Beta"
+			h := &host{workers: map[string]*plan.Worker{"a": running("w1", "scotts-mbp")}}
+			d := newDriver(t, fixed(building("w1"), other), preview, blockers(nil, nil), read(h))
+			d.load()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Worker scotts-mbp · architect running"))
+			d.send(press('j'))
+			d.step() // Beta's preview and its worker read, which returns nothing.
+			assert.Check(t, cmp.Contains(d.content(), "▶ Beta"))
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Worker w2 can't be read"))
+			assert.Check(t, !strings.Contains(d.content(), "scotts-mbp"))
+		})
+	})
+
+	t.Run("the worker changes between refreshes", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var worker atomic.Value
+			worker.Store("w1")
+			h := &host{workers: map[string]*plan.Worker{"a": running("w1", "scotts-mbp")}}
+			list := func(context.Context) ([]circleci.Flow, error) {
+				return []circleci.Flow{building(worker.Load().(string))}, nil
+			}
+			d := newDriver(t, list, preview, blockers(nil, nil), read(h))
+			d.load()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Worker scotts-mbp · architect running"))
+			reads := count(h)
+
+			// Another worker takes the claim, and the read now finds it.
+			h.mu.Lock()
+			h.workers["a"] = running("w2", "ci-box")
+			h.mu.Unlock()
+			worker.Store("w2")
+			d.refresh()
+			// The list lands first, still naming no more than the new worker's ID.
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Claimed by worker w2"))
+			d.step()
+			assert.Check(t, count(h) > reads, "the worker was not read again for the new claim")
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Worker ci-box · architect running"))
+			assert.Check(t, !strings.Contains(d.content(), "scotts-mbp"))
+		})
+	})
+
+	t.Run("the claim is released", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var worker atomic.Value
+			worker.Store("w1")
+			h := &host{workers: map[string]*plan.Worker{"a": running("w1", "scotts-mbp")}}
+			list := func(context.Context) ([]circleci.Flow, error) {
+				return []circleci.Flow{building(worker.Load().(string))}, nil
+			}
+			d := newDriver(t, list, preview, blockers(nil, nil), read(h))
+			d.load()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Worker scotts-mbp · architect running"))
+
+			worker.Store("")
+			d.refresh()
+			d.step()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "No worker holds this plan · R claims it for a worker"))
+			assert.Check(t, !strings.Contains(d.content(), "scotts-mbp"))
+			assert.Check(t, cmp.Contains(d.content(), "R claim"))
+		})
+	})
+
+	t.Run("a flow without a worker is not read", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			h := &host{workers: map[string]*plan.Worker{"a": running("w1", "scotts-mbp")}}
+			d := newDriver(t, fixed(building("")), preview, blockers(nil, nil), read(h))
+			d.load()
+			assert.Check(t, cmp.Equal(d.m.ResumeLine(), "No worker holds this plan · R claims it for a worker"))
+			assert.Check(t, cmp.Equal(count(h), 0))
+		})
+	})
 }
 
 func TestStableRefreshAndSelect(t *testing.T) {
@@ -1579,7 +1622,7 @@ func TestGroupsAndRows(t *testing.T) {
 				// The help bar, then the host's note under it; why the
 				// claimed flow can't be resumed is the host's to show.
 				noResumeLine(t, text)
-				assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Waiting on you"))
+				assert.Check(t, cmp.Equal(d.m.ResumeLine(), "Waiting on you · claimed by session s1"))
 				if size.Width == 50 {
 					for _, not := range []string{"preview", "Markdown heading", "Please clarify"} {
 						assert.Check(t, !strings.Contains(text, not), "%q shows at width 50:\n%s", not, text)

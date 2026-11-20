@@ -55,7 +55,7 @@ func TestFlowText(t *testing.T) {
 		})
 	}
 
-	fresh := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
+	fresh := New(context.Background(), newFakeStore(), "")
 	assert.Check(t, cmp.Equal(fresh.FlowText(), ""))
 }
 
