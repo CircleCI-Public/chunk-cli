@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -26,6 +28,9 @@ type Store struct {
 	repo string
 	// name names a new plan for the developer's first message.
 	name func(ctx context.Context, message string) (string, error)
+	// hostname is this machine's hostname, which Claim prefers a worker
+	// to match.
+	hostname func() (string, error)
 
 	mu     sync.Mutex
 	planID string
@@ -39,7 +44,7 @@ type Store struct {
 // when id is "". repo is the GitHub repository, as owner/name, a plan Create
 // makes records; "" records none.
 func NewStore(api *circleci.Client, id, repo string) *Store {
-	return &Store{api: api, name: factory.NamePlan, planID: id, repo: repo}
+	return &Store{api: api, name: factory.NamePlan, hostname: os.Hostname, planID: id, repo: repo}
 }
 
 // repos is repo as the repositories a new plan records: none for "".
@@ -86,6 +91,85 @@ func (s *Store) title(ctx context.Context, message string) string {
 // address it with.
 var errNotCreated = errors.New("the plan has not been created in factory yet")
 
+// ErrNoWorker is Claim's error when no live worker can claim the plan.
+var ErrNoWorker = plan.ErrNoWorker
+
+// Claim has the default worker claim the plan, and returns its hostname. The
+// default worker is defaultWorker's pick of the live workers that can claim
+// the plan. It fails with ErrNoWorker when there is none; any other error is
+// factory's, and carries its reason.
+func (s *Store) Claim(ctx context.Context) (string, error) {
+	id := s.ID()
+	if id == "" {
+		return "", errNotCreated
+	}
+	workers, err := s.api.ListWorkers(ctx, circleci.WorkerFilter{CanClaim: id})
+	if err != nil {
+		return "", fmt.Errorf("list the workers that can claim the plan: %w", err)
+	}
+	var host string
+	if s.hostname != nil {
+		// A machine with no hostname still claims: it takes the first live worker.
+		host, _ = s.hostname()
+	}
+	w, ok := defaultWorker(workers, host)
+	if !ok {
+		return "", ErrNoWorker
+	}
+	if err := s.api.ClaimFlow(ctx, id, w.ID); err != nil {
+		return "", fmt.Errorf("claim the plan: %w", err)
+	}
+	return w.Hostname, nil
+}
+
+// defaultWorker is the live worker of workers whose hostname is host's, or
+// the first live one when host is "" or none matches; false when none is
+// live. Hostnames match ignoring case and anything after the first dot.
+func defaultWorker(workers []circleci.Worker, host string) (circleci.Worker, bool) {
+	short := func(h string) string {
+		h, _, _ = strings.Cut(strings.ToLower(h), ".")
+		return h
+	}
+	var first *circleci.Worker
+	for i, w := range workers {
+		if !w.Live() {
+			continue
+		}
+		if host != "" && short(w.Hostname) == short(host) {
+			return w, true
+		}
+		if first == nil {
+			first = &workers[i]
+		}
+	}
+	if first == nil {
+		return circleci.Worker{}, false
+	}
+	return *first, true
+}
+
+// Release frees the plan's claim, whoever holds it.
+func (s *Store) Release(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	if err := s.api.ReleaseClaim(ctx, id); err != nil {
+		return fmt.Errorf("release the plan's claim: %w", err)
+	}
+	return nil
+}
+
+// Approve sends approve-for-building to factory when the plan is ready for
+// it, as planapprove.Send refuses otherwise.
+func (s *Store) Approve(ctx context.Context) error {
+	id := s.ID()
+	if id == "" {
+		return errNotCreated
+	}
+	return planapprove.Send(ctx, s.api, id)
+}
+
 // State is the plan's flow state; "" before the plan is created, or when it
 // has no flow.
 func (s *Store) State(ctx context.Context) (string, error) {
@@ -126,7 +210,7 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		Outcome:      f.Outcome,
 		Claimed:      f.Claimed(),
 		Holder:       f.SessionID,
-		Worker:       f.WorkerID,
+		Worker:       s.worker(ctx, id, f.WorkerID),
 		WaitingOn:    f.WaitingOn,
 		WaitingOnWhy: f.WaitingOnWhy,
 	}
@@ -157,6 +241,48 @@ func (s *Store) Flow(ctx context.Context) (plan.Flow, error) {
 		}
 	}
 	return out, nil
+}
+
+// worker is the worker workerID, which claims plan id, as it reports the
+// plan; nil when workerID is "". A worker that cannot be read is returned
+// with only its ID and why it could not be read: the read never fails Flow.
+func (s *Store) worker(ctx context.Context, id, workerID string) *plan.Worker {
+	return WorkerOf(ctx, s.api, id, workerID)
+}
+
+// WorkerOf is the worker workerID, which claims plan flowID, as it reports
+// the plan, read from factory's workers that claim it; nil when workerID is
+// "". A worker that cannot be read, because factory fails or does not list
+// it, is returned with only its ID and why.
+func WorkerOf(ctx context.Context, api *circleci.Client, flowID, workerID string) *plan.Worker {
+	if workerID == "" {
+		return nil
+	}
+	workers, err := api.ListWorkers(ctx, circleci.WorkerFilter{FlowID: flowID})
+	if err != nil {
+		return &plan.Worker{ID: workerID, Unread: err.Error()}
+	}
+	i := slices.IndexFunc(workers, func(w circleci.Worker) bool { return w.ID == workerID })
+	if i < 0 {
+		return &plan.Worker{ID: workerID, Unread: "no worker answers for this plan"}
+	}
+	w := workers[i]
+	out := &plan.Worker{ID: w.ID, Hostname: w.Hostname, Live: w.Live()}
+	for _, h := range w.Headless {
+		if h.FlowID != flowID {
+			continue
+		}
+		out.Headless = append(out.Headless, plan.Headless{
+			Role: h.Role, State: h.State, Health: h.Health, HealthReason: h.HealthReason,
+		})
+	}
+	for _, e := range w.FlowErrors {
+		if e.FlowID == flowID {
+			out.Problem, out.Fix = e.Problem, e.Fix
+			break
+		}
+	}
+	return out
 }
 
 // Family is the plan's parent, open sub-plans and blockers, each with its

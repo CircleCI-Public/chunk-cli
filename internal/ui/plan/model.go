@@ -983,7 +983,7 @@ func (m Model) resumable() planstate.Resume {
 		Ended:         m.flow.Ended,
 		PlanID:        m.store.ID(),
 		Holder:        clean(m.flow.Holder),
-		Worker:        clean(m.flow.Worker),
+		Worker:        clean(workerID(m.flow.Worker)),
 		WaitingOn:     clean(m.flow.WaitingOn),
 		Blockers:      blockers,
 		BlockersKnown: m.familyLoaded,
@@ -995,6 +995,14 @@ func (m Model) resumable() planstate.Resume {
 		return planstate.Resume{Why: planstate.ClaimedWhy(r.Holder, m.store.ID())}
 	}
 	return r
+}
+
+// workerID is w's ID, "" for no worker.
+func workerID(w *Worker) string {
+	if w == nil {
+		return ""
+	}
+	return w.ID
 }
 
 // resume is the developer's R: it has the planner claim the plan again, as

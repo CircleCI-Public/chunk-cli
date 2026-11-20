@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -586,7 +588,8 @@ func TestStoreFlowClaimedByAWorker(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, f.Claimed, "a worker-claimed plan's flow is not claimed")
 	assert.Check(t, cmp.Equal(f.Holder, ""))
-	assert.Check(t, cmp.Equal(f.Worker, "w-1"))
+	assert.Assert(t, f.Worker != nil)
+	assert.Check(t, cmp.Equal(f.Worker.ID, "w-1"))
 }
 
 // TestStoreApproveDesignSendsTheEvent checks that ApproveDesign sends the
@@ -781,7 +784,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Deviations:   []string{"lint fails"},
 		Claimed:      true,
 		Holder:       "s-1",
-		Worker:       fakes.FactoryWorkerID,
+		Worker:       &plan.Worker{ID: fakes.FactoryWorkerID, Unread: "no worker answers for this plan"},
 		WaitingOn:    "session",
 		WaitingOnWhy: "the session builds Unit 2: parser",
 		Progress: &plan.Progress{
@@ -806,7 +809,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 		Outcome:    "merged",
 		Claimed:    true,
 		Holder:     "s-1",
-		Worker:     fakes.FactoryWorkerID,
+		Worker:     &plan.Worker{ID: fakes.FactoryWorkerID, Unread: "no worker answers for this plan"},
 	}))
 
 	cci.SetFactoryPlanState(store.ID(), "ended")
@@ -1049,3 +1052,425 @@ func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// workersFake is a fake factory behind a server that counts GET /workers
+// requests and, when workersStatus is not 0, answers them with it.
+type workersFake struct {
+	client        *circleci.Client
+	cci           *fakes.FakeCircleCI
+	workersStatus atomic.Int32
+	// workersEmpty answers GET /workers with an empty list.
+	workersEmpty atomic.Bool
+	// workersOther answers GET /workers with a list of only another worker.
+	workersOther atomic.Bool
+	workersReads atomic.Int32
+}
+
+func newWorkersFake(t *testing.T) *workersFake {
+	t.Helper()
+	w := &workersFake{cci: fakes.NewFakeCircleCI()}
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v3/factory/workers" {
+			w.workersReads.Add(1)
+			if status := int(w.workersStatus.Load()); status != 0 {
+				rw.WriteHeader(status)
+				return
+			}
+			if w.workersEmpty.Load() {
+				rw.Header().Set("Content-Type", "application/json")
+				_, _ = rw.Write([]byte(`{"data":[]}`))
+				return
+			}
+			if w.workersOther.Load() {
+				rw.Header().Set("Content-Type", "application/json")
+				_, _ = rw.Write([]byte(`{"data":[{"id":"w2","attributes":{"hostname":"another-host","phase":"started","health":"ok"}}]}`))
+				return
+			}
+		}
+		w.cci.ServeHTTP(rw, r)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+	w.client = client
+	return w
+}
+
+// created is a store whose plan has been created in the fake.
+func (w *workersFake) created(t *testing.T) *Store {
+	t.Helper()
+	store := newStore(w.client, "", "")
+	_, err := store.Create(context.Background(), "a plan")
+	assert.NilError(t, err)
+	return store
+}
+
+// TestStoreFlowWorker checks that Flow reads the worker claiming the plan
+// with what it reports of the plan, and reads none for an unclaimed plan.
+func TestStoreFlowWorker(t *testing.T) {
+	ctx := context.Background()
+	w := newWorkersFake(t)
+	store := w.created(t)
+
+	f, err := store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Nil(f.Worker))
+	assert.Check(t, cmp.Equal(w.workersReads.Load(), int32(0)), "workers were read for an unclaimed plan")
+
+	w.cci.PutFactoryWorker(fakes.FactoryWorker{
+		ID: "w1", Hostname: "scotts-mbp", Phase: "started", Health: "ok",
+		Headless: []fakes.FactoryHeadless{
+			{FlowID: store.ID(), Role: "architect", State: "running", Health: "ok"},
+			{FlowID: store.ID(), Role: "reviewer", State: "idle", Health: "unresponsive", HealthReason: "no heartbeat for 3m"},
+			{FlowID: "another-plan", Role: "architect", State: "running", Health: "ok"},
+		},
+		FlowErrors: []fakes.FactoryFlowError{
+			{FlowID: "another-plan", Problem: "not this plan's", Fix: "ignore"},
+			{FlowID: store.ID(), Problem: "no clone", Fix: "run git fetch"},
+		},
+	})
+	w.cci.ClaimFactoryPlanForWorker(store.ID(), "w1")
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(w.workersReads.Load(), int32(1)))
+	assert.Check(t, cmp.DeepEqual(f.Worker, &plan.Worker{
+		ID: "w1", Hostname: "scotts-mbp", Live: true,
+		Headless: []plan.Headless{
+			{Role: "architect", State: "running", Health: "ok"},
+			{Role: "reviewer", State: "idle", Health: "unresponsive", HealthReason: "no heartbeat for 3m"},
+		},
+		Problem: "no clone", Fix: "run git fetch",
+	}))
+
+	w.cci.PutFactoryWorker(fakes.FactoryWorker{ID: "w1", Hostname: "scotts-mbp", Phase: "ended"})
+	f, err = store.Flow(ctx)
+	assert.NilError(t, err)
+	assert.Assert(t, f.Worker != nil)
+	assert.Check(t, !f.Worker.Live, "an ended worker is live")
+}
+
+// TestStoreFlowWorkerUnreadable checks that a claiming worker that cannot be
+// read, because its list fails or lists nothing, is the flow's worker with
+// only its ID and why it is unread, and does not fail Flow.
+func TestStoreFlowWorkerUnreadable(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int32
+		empty  bool
+		other  bool
+		unread string
+	}{
+		{
+			name:   "the list answers 500",
+			status: http.StatusInternalServerError,
+			unread: "500",
+		},
+		{
+			name:   "the list is empty",
+			empty:  true,
+			unread: "no worker answers for this plan",
+		},
+		{
+			name:   "the list holds only another worker",
+			other:  true,
+			unread: "no worker answers for this plan",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			w := newWorkersFake(t)
+			store := w.created(t)
+			w.cci.PutFactoryWorker(fakes.FactoryWorker{
+				ID: "w1", Hostname: "scotts-mbp", Phase: "started", Health: "ok",
+				Headless:   []fakes.FactoryHeadless{{FlowID: store.ID(), Role: "architect", State: "running", Health: "ok"}},
+				FlowErrors: []fakes.FactoryFlowError{{FlowID: store.ID(), Problem: "p", Fix: "f"}},
+			})
+			w.cci.ClaimFactoryPlanForWorker(store.ID(), "w1")
+			w.cci.SetFactoryPlanState(store.ID(), "refine-proposal")
+			w.workersEmpty.Store(tc.empty)
+			w.workersOther.Store(tc.other)
+			w.workersStatus.Store(tc.status)
+
+			f, err := store.Flow(ctx)
+
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(f.State, "refine-proposal"), "the rest of the flow is filled")
+			assert.Check(t, f.Claimed)
+			assert.Assert(t, f.Worker != nil)
+			assert.Check(t, cmp.Equal(f.Worker.ID, "w1"))
+			assert.Check(t, cmp.Contains(f.Worker.Unread, tc.unread))
+			assert.Check(t, cmp.Equal(f.Worker.Hostname, ""))
+			assert.Check(t, cmp.Len(f.Worker.Headless, 0))
+			assert.Check(t, cmp.Equal(f.Worker.Problem, ""))
+			assert.Check(t, cmp.Equal(f.Worker.Fix, ""))
+			assert.Check(t, !f.Worker.Live)
+		})
+	}
+}
+
+// TestStoreClaimPicksTheDefaultWorker checks which of the workers that can
+// claim the plan Claim claims it for.
+func TestStoreClaimPicksTheDefaultWorker(t *testing.T) {
+	live := func(id, host string) fakes.FactoryWorker {
+		return fakes.FactoryWorker{ID: id, Hostname: host, Phase: "started", Health: "ok"}
+	}
+	notLive := func(id, host string) fakes.FactoryWorker {
+		return fakes.FactoryWorker{ID: id, Hostname: host, Phase: "started", Health: "unresponsive"}
+	}
+	for _, tc := range []struct {
+		name    string
+		workers []fakes.FactoryWorker
+		host    func() (string, error)
+		want    string // the claimed worker's ID, "" for ErrNoWorker
+	}{
+		{
+			name: "no worker",
+			host: func() (string, error) { return "scotts-mbp", nil },
+		},
+		{
+			name:    "no live worker",
+			workers: []fakes.FactoryWorker{notLive("w1", "scotts-mbp")},
+			host:    func() (string, error) { return "scotts-mbp", nil },
+		},
+		{
+			name:    "this machine's worker when it is not the first",
+			workers: []fakes.FactoryWorker{live("w1", "other"), live("w2", "scotts-mbp")},
+			host:    func() (string, error) { return "scotts-mbp", nil },
+			want:    "w2",
+		},
+		{
+			name:    "this machine's worker is not live",
+			workers: []fakes.FactoryWorker{notLive("w1", "scotts-mbp"), live("w2", "other"), live("w3", "another")},
+			host:    func() (string, error) { return "scotts-mbp", nil },
+			want:    "w2",
+		},
+		{
+			name:    "the hostnames differ in case and domain",
+			workers: []fakes.FactoryWorker{live("w1", "other"), live("w2", "Scotts-MBP")},
+			host:    func() (string, error) { return "scotts-mbp.local", nil },
+			want:    "w2",
+		},
+		{
+			name:    "the worker's hostname has the domain",
+			workers: []fakes.FactoryWorker{live("w1", "other"), live("w2", "scotts-mbp.local")},
+			host:    func() (string, error) { return "SCOTTS-MBP", nil },
+			want:    "w2",
+		},
+		{
+			name:    "no worker matches this machine",
+			workers: []fakes.FactoryWorker{notLive("w1", "x"), live("w2", "other"), live("w3", "another")},
+			host:    func() (string, error) { return "scotts-mbp", nil },
+			want:    "w2",
+		},
+		{
+			name:    "the hostname cannot be read",
+			workers: []fakes.FactoryWorker{live("w1", "other"), live("w2", "scotts-mbp")},
+			host:    func() (string, error) { return "", errors.New("no hostname") },
+			want:    "w1",
+		},
+		{
+			name:    "the hostname is empty",
+			workers: []fakes.FactoryWorker{live("w1", "other"), live("w2", "")},
+			host:    func() (string, error) { return "", nil },
+			want:    "w1",
+		},
+		{
+			name:    "a bound worker is not listed",
+			workers: []fakes.FactoryWorker{{ID: "w1", Hostname: "scotts-mbp", Phase: "started", Health: "ok", Bound: true}, live("w2", "other")},
+			host:    func() (string, error) { return "scotts-mbp", nil },
+			want:    "w2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _, cci := createdStore(t)
+			store.hostname = tc.host
+			for _, w := range tc.workers {
+				cci.PutFactoryWorker(w)
+			}
+
+			host, err := store.Claim(context.Background())
+
+			p, _ := cci.FactoryPlan(store.ID())
+			if tc.want == "" {
+				assert.Check(t, cmp.ErrorIs(err, ErrNoWorker))
+				assert.Check(t, cmp.Equal(p.Worker, ""))
+				return
+			}
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(p.Worker, tc.want))
+			i := slices.IndexFunc(tc.workers, func(w fakes.FactoryWorker) bool { return w.ID == tc.want })
+			assert.Check(t, cmp.Equal(host, tc.workers[i].Hostname))
+		})
+	}
+}
+
+// TestStoreClaim checks what Claim sends and returns, and its failures.
+func TestStoreClaim(t *testing.T) {
+	ctx := context.Background()
+	live := fakes.FactoryWorker{ID: "w1", Hostname: "scotts-mbp", Phase: "started", Health: "ok"}
+
+	t.Run("the picked worker's ID is sent", func(t *testing.T) {
+		store, _, cci := createdStore(t)
+		cci.PutFactoryWorker(live)
+		host, err := store.Claim(ctx)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(host, "scotts-mbp"))
+		var body string
+		for _, r := range cci.Recorder.AllRequests() {
+			if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/claim") {
+				body = string(r.Body)
+			}
+		}
+		assert.Check(t, cmp.Contains(body, `"worker_id":"w1"`))
+	})
+
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{
+			name:   "the claim is refused as claimed",
+			status: http.StatusConflict,
+		},
+		{
+			name:   "the plan is not found",
+			status: http.StatusNotFound,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _, cci := createdStore(t)
+			cci.PutFactoryWorker(live)
+			cci.FailFactoryClaim(store.ID(), tc.status)
+
+			_, err := store.Claim(ctx)
+
+			assert.Check(t, !errors.Is(err, ErrNoWorker))
+			var se *circleci.StatusError
+			assert.Assert(t, errors.As(err, &se), "err = %v", err)
+			assert.Check(t, cmp.Equal(se.StatusCode, tc.status))
+			assert.Check(t, cmp.ErrorContains(err, "claim the plan"))
+		})
+	}
+
+	t.Run("a flow already claimed answers 409 flow_claimed", func(t *testing.T) {
+		store, _, cci := createdStore(t)
+		cci.PutFactoryWorker(live)
+		cci.PutFactoryWorker(fakes.FactoryWorker{ID: "w0", Hostname: "aaa", Phase: "started", Health: "ok"})
+		cci.ClaimFactoryPlanForWorker(store.ID(), "w0")
+		store.hostname = func() (string, error) { return "scotts-mbp", nil }
+
+		_, err := store.Claim(ctx)
+
+		assert.Check(t, !errors.Is(err, ErrNoWorker))
+		var se *circleci.StatusError
+		assert.Assert(t, errors.As(err, &se), "err = %v", err)
+		assert.Check(t, cmp.Equal(se.StatusCode, http.StatusConflict))
+		assert.Check(t, cmp.Contains(se.ServerMessage, "is claimed by another worker"), "factory's reason is kept")
+	})
+
+	t.Run("listing the workers fails", func(t *testing.T) {
+		w := newWorkersFake(t)
+		store := w.created(t)
+		w.workersStatus.Store(http.StatusInternalServerError)
+
+		_, err := store.Claim(ctx)
+
+		assert.Check(t, !errors.Is(err, ErrNoWorker))
+		assert.Check(t, cmp.ErrorContains(err, "list the workers that can claim the plan"))
+		var se *circleci.StatusError
+		assert.Check(t, errors.As(err, &se), "err = %v", err)
+	})
+
+	t.Run("before Create", func(t *testing.T) {
+		client, _ := testClient(t)
+		_, err := newStore(client, "", "").Claim(ctx)
+
+		assert.Check(t, cmp.ErrorIs(err, errNotCreated))
+	})
+}
+
+// TestStoreRelease checks that Release frees the plan's claim and returns
+// factory's refusal when it has one.
+func TestStoreRelease(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("it frees the claim", func(t *testing.T) {
+		store, _, cci := createdStore(t)
+		cci.ClaimFactoryPlanForWorker(store.ID(), "w1")
+
+		err := store.Release(ctx)
+
+		assert.NilError(t, err)
+		p, _ := cci.FactoryPlan(store.ID())
+		assert.Check(t, cmp.Equal(p.Worker, ""))
+	})
+
+	t.Run("the claim changed", func(t *testing.T) {
+		store, _, cci := createdStore(t)
+		cci.ClaimFactoryPlanForWorker(store.ID(), "w1")
+		cci.FailFactoryRelease(store.ID(), http.StatusConflict)
+
+		err := store.Release(ctx)
+
+		var se *circleci.StatusError
+		assert.Assert(t, errors.As(err, &se), "err = %v", err)
+		assert.Check(t, cmp.Equal(se.StatusCode, http.StatusConflict))
+		p, _ := cci.FactoryPlan(store.ID())
+		assert.Check(t, cmp.Equal(p.Worker, "w1"))
+	})
+
+	t.Run("before Create", func(t *testing.T) {
+		client, cci := testClient(t)
+
+		err := newStore(client, "", "").Release(ctx)
+
+		assert.Check(t, cmp.ErrorIs(err, errNotCreated))
+		assert.Check(t, cmp.Len(cci.Recorder.AllRequests(), 0), "a request reached factory")
+	})
+}
+
+// TestStoreApprove checks that Approve sends approve-for-building for a plan
+// waiting on the developer for it, releases no claim, and refuses a plan that
+// is not ready.
+func TestStoreApprove(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("ready", func(t *testing.T) {
+		store, _, cci := createdStore(t)
+		cci.ClaimFactoryPlanForWorker(store.ID(), "w1")
+		cci.SetFactoryFlowStatus(store.ID(), fakes.FactoryFlowStatus{
+			WaitingOn: "human",
+			Next:      []fakes.FactoryTransition{{Actor: "human", Event: "approve-for-building", IsRequired: true}},
+		})
+
+		err := store.Approve(ctx)
+
+		assert.NilError(t, err)
+		p, _ := cci.FactoryPlan(store.ID())
+		assert.Check(t, cmp.DeepEqual(p.Events, []string{"approve-for-building"}))
+		assert.Check(t, cmp.Equal(p.Worker, "w1"), "the claim is kept")
+		for _, r := range cci.Recorder.AllRequests() {
+			assert.Check(t, !strings.HasSuffix(r.URL.Path, "/release"), "a claim was released")
+		}
+	})
+
+	t.Run("not ready", func(t *testing.T) {
+		store, _, cci := createdStore(t)
+		cci.SetFactoryFlowStatus(store.ID(), fakes.FactoryFlowStatus{WaitingOn: "daemon"})
+
+		err := store.Approve(ctx)
+
+		assert.Check(t, cmp.ErrorIs(err, planapprove.ErrNotReady))
+		p, _ := cci.FactoryPlan(store.ID())
+		assert.Check(t, cmp.Len(p.Events, 0))
+	})
+
+	t.Run("before Create", func(t *testing.T) {
+		client, cci := testClient(t)
+
+		err := newStore(client, "", "").Approve(ctx)
+
+		assert.Check(t, cmp.ErrorIs(err, errNotCreated))
+		assert.Check(t, cmp.Len(cci.Recorder.AllRequests(), 0), "a request reached factory")
+	})
+}
