@@ -73,8 +73,7 @@ type Model struct {
 	planCtx                    context.Context
 	planOpening                bool
 	planner                    PlanOpener
-	builds                     plan.Build
-	resumer                    plan.Resumer
+	claim                      func(ctx context.Context, planID string) (string, error)
 	deleter                    Deleter
 	deleting                   string
 	planScreen                 *plan.Model

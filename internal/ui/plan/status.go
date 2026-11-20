@@ -137,3 +137,68 @@ func clean(s string) string {
 	}, ansi.Strip(s))
 	return strings.Join(strings.Fields(s), " ")
 }
+
+// WorkerLine is the one line that says what w, the worker claiming a plan, is
+// doing: "Worker <hostname> · <state>", or that it can't be read. It is "" for
+// no worker.
+func WorkerLine(w *Worker, holder string) string {
+	switch {
+	case w == nil:
+		return ""
+	case w.Unread != "":
+		return "Worker " + clean(w.ID) + " can't be read"
+	}
+	return "Worker " + clean(w.Hostname) + " · " + workerState(w, holder)
+}
+
+// workerState is what a worker that could be read is doing for the plan: that
+// it is not live, that a session holds the plan (holder, "session <id>") when
+// it has no headless item, that it has no headless runner for it, or each
+// runner's role and state, with why one is not healthy.
+func workerState(w *Worker, holder string) string {
+	switch {
+	case !w.Live:
+		return "not live"
+	case len(w.Headless) == 0 && clean(holder) != "":
+		return "session " + shortID(clean(holder))
+	case len(w.Headless) == 0:
+		return "no headless runner"
+	}
+	items := make([]string, len(w.Headless))
+	for i, h := range w.Headless {
+		items[i] = clean(h.Role) + " " + clean(h.State)
+		if reason := clean(h.HealthReason); reason != "" && clean(h.Health) != "ok" {
+			items[i] += " (" + reason + ")"
+		}
+	}
+	return strings.Join(items, ", ")
+}
+
+// workerActivity is the lines that say what the worker claiming the plan is
+// doing, in place of a planner's activity: the worker and its state, then its
+// problem with the plan and the fix for it, each on a line of its own when
+// there is one. A worker that can't be read says so and why.
+func workerActivity(w *Worker, holder string) []string {
+	switch {
+	case w == nil:
+		return nil
+	case w.Unread != "":
+		return []string{"Worker " + clean(w.ID) + " can't be read: " + clean(w.Unread)}
+	}
+	lines := []string{clean(w.Hostname) + " · " + workerState(w, holder)}
+	if p := clean(w.Problem); p != "" {
+		lines = append(lines, p)
+	}
+	if f := clean(w.Fix); f != "" {
+		lines = append(lines, f)
+	}
+	return lines
+}
+
+// shortID is a session ID cut to the length session IDs are usually shown at.
+func shortID(id string) string {
+	if r := []rune(id); len(r) > 8 {
+		return string(r[:8])
+	}
+	return id
+}

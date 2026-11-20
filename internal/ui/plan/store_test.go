@@ -15,9 +15,11 @@ import (
 type fakeStore struct {
 	mu sync.Mutex
 
-	Created bool
-	Message string
-	StateV  string
+	// Existing is whether the plan is already in factory, as one opened from a
+	// list is; a successful Create sets it. Created records the Create calls.
+	Existing bool
+	Created  []struct{ Title, Request string }
+	StateV   string
 	// EventsV, once setEvents sets it, is the events the plan's flow
 	// applies now; until then, while FlowV waits on the developer, they are
 	// address-comments and both approvals.
@@ -40,8 +42,14 @@ type fakeStore struct {
 	UnitsV         []Unit
 	OpenQuestionsV []Question
 	TextV          string
-	// TitleV is the title Create returns.
-	TitleV string
+	// ClaimHost is the hostname Claim returns, and Claims how many times it
+	// was called. A successful Claim has the flow name a live worker of that
+	// hostname, until Release.
+	ClaimHost   string
+	Claims      int
+	claimedHost string
+	// Released and Approved count the successful Release and Approve calls.
+	Released, Approved int
 	// CommentsV is the comments, ordered as added.
 	CommentsV []Comment
 	nextID    int
@@ -74,10 +82,10 @@ type fakeStore struct {
 	// Set records the texts SetText was called with, in order.
 	Set []string
 
-	CreateErr, FlowErr, FamilyErr, UnitsErr, AddressErr, TextErr, CommentsErr error
-	SetTextErr                                                                error
-	AddErr, EditErr, ResolveErr, DeleteErr                                    error
-	EndErr, DeletePlanErr                                                     error
+	CreateErr, ClaimErr, ReleaseErr, ApproveErr, FlowErr, FamilyErr, UnitsErr, AddressErr, TextErr, CommentsErr error
+	SetTextErr                                                                                                  error
+	AddErr, EditErr, ResolveErr, DeleteErr                                                                      error
+	EndErr, DeletePlanErr                                                                                       error
 	// FailAddAfter, when > 0, fails AddComment calls numbered after this
 	// many successes.
 	FailAddAfter int
@@ -106,20 +114,54 @@ func newFakeStore() *fakeStore {
 func (f *fakeStore) ID() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.Created {
+	if f.Existing {
 		return "saved-plan"
 	}
 	return ""
 }
 
-func (f *fakeStore) Create(_ context.Context, message string) (string, error) {
+func (f *fakeStore) Create(_ context.Context, title, request string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.CreateErr != nil {
-		return "", f.CreateErr
+		return f.CreateErr
 	}
-	f.Created, f.Message = true, message
-	return f.TitleV, nil
+	f.Existing = true
+	f.Created = append(f.Created, struct{ Title, Request string }{title, request})
+	return nil
+}
+
+func (f *fakeStore) Claim(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Claims++
+	if f.ClaimErr != nil {
+		return "", f.ClaimErr
+	}
+	f.claimedHost = f.ClaimHost
+	return f.ClaimHost, nil
+}
+
+func (f *fakeStore) Release(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ReleaseErr != nil {
+		return f.ReleaseErr
+	}
+	f.Released++
+	f.claimedHost = ""
+	f.FlowV.Worker, f.FlowV.Holder, f.FlowV.Claimed = nil, "", false
+	return nil
+}
+
+func (f *fakeStore) Approve(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ApproveErr != nil {
+		return f.ApproveErr
+	}
+	f.Approved++
+	return nil
 }
 
 func (f *fakeStore) Flow(context.Context) (Flow, error) {
@@ -130,6 +172,12 @@ func (f *fakeStore) Flow(context.Context) (Flow, error) {
 	}
 	out := f.FlowV
 	out.State, out.Task = f.StateV, f.TaskV
+	if f.claimedHost != "" && out.Worker == nil {
+		out.Worker = &Worker{
+			ID: "w1", Hostname: f.claimedHost, Live: true,
+			Headless: []Headless{{Role: "architect", State: "running", Health: "ok"}},
+		}
+	}
 	switch {
 	case f.eventsSet:
 		out.Events = f.EventsV
@@ -387,9 +435,9 @@ func structureOfItems(items fakes.FactoryItems) Structure {
 		heading string
 		section *fakes.FactorySection
 	}{
-		{"1. Outcome", items.Outcome},
-		{"2. Design", items.Design},
-		{"4. Worked example", items.WorkedExample},
+		{heading: "1. Outcome", section: items.Outcome},
+		{heading: "2. Design", section: items.Design},
+		{heading: "4. Worked example", section: items.WorkedExample},
 	} {
 		if sec.section != nil {
 			st.Sections = append(st.Sections, Section{Heading: sec.heading, Blocks: blocksOfItems(sec.section.Blocks)})

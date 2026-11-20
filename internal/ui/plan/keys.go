@@ -14,8 +14,10 @@ type keyMap struct {
 	// Request keys, for the left pane before the plan exists. Newline is the
 	// textarea's own; it is here for its hint.
 	Send, Newline key.Binding
-	// ChatPageUp carries the hint for both; the input has no use for them.
-	ChatPageUp, ChatPageDown key.Binding
+	// RequestPageUp carries the hint for both; the input has no use for them.
+	RequestPageUp, RequestPageDown key.Binding
+	// NextField and PrevField move between the new plan's title and request.
+	NextField, PrevField key.Binding
 	// Plan keys. The page keys move the highlight a page or half a page at a
 	// time, as well as the view; PageUp carries the hint for all four.
 	Up, Down, Top, Bottom key.Binding
@@ -55,10 +57,9 @@ type keyMap struct {
 	// Chat is the host's; it is here for its hint.
 	Chat     key.Binding
 	SendPlan key.Binding
-	// Resume starts the plan's agent again when factory waits on one that is
-	// not there.
+	// Resume has the default worker claim the plan when nobody holds it.
 	Resume key.Binding
-	// StopBuild stops the plan's running build session, after a y.
+	// StopBuild releases the plan's claim, so the worker stops, after a y.
 	StopBuild key.Binding
 	Quit      key.Binding
 }
@@ -73,43 +74,45 @@ func (m Model) keys() keyMap {
 		newline = "shift+enter"
 	}
 	k := keyMap{
-		Send:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send")),
-		Newline:        key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"), key.WithHelp(newline, "new line")),
-		ChatPageUp:     key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup/pgdn", "scroll")),
-		ChatPageDown:   key.NewBinding(key.WithKeys("pgdown")),
-		Up:             key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/↓", "move")),
-		Down:           key.NewBinding(key.WithKeys("down", "j")),
-		ExtendUp:       key.NewBinding(key.WithKeys("shift+up", "K"), key.WithHelp("shift+↑/↓", "select")),
-		ExtendDown:     key.NewBinding(key.WithKeys("shift+down", "J")),
-		ClearSelection: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear selection")),
-		Top:            key.NewBinding(key.WithKeys("g", "home")),
-		Bottom:         key.NewBinding(key.WithKeys("G", "end")),
-		PageUp:         key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup/pgdn", "page")),
-		PageDown:       key.NewBinding(key.WithKeys("pgdown")),
-		HalfUp:         key.NewBinding(key.WithKeys("ctrl+u")),
-		HalfDown:       key.NewBinding(key.WithKeys("ctrl+d")),
-		SectionBack:    key.NewBinding(key.WithKeys("["), key.WithHelp("[/]", "section")),
-		SectionNext:    key.NewBinding(key.WithKeys("]")),
-		Comment:        key.NewBinding(key.WithKeys("c", "enter"), key.WithHelp("c", "comment")),
-		Edit:           key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
-		Delete:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete comment")),
-		Resolve:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resolve comment")),
-		Next:           key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next comment")),
-		Prev:           key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous comment")),
-		SendComments:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save comments")),
-		SaveComment:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save comment")),
-		CancelComment:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-		Open:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open plan")),
-		Confirm:        key.NewBinding(key.WithKeys("y")),
-		End:            key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "end plan")),
-		DeletePlan:     key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
-		Focus:          key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", m.focusHelp())),
-		Switch:         key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
-		Chat:           key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "chat")),
-		SendPlan:       key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
-		Resume:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "resume")),
-		StopBuild:      key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "stop build")),
-		Quit:           key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
+		Send:            key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send")),
+		Newline:         key.NewBinding(key.WithKeys("shift+enter", "ctrl+j"), key.WithHelp(newline, "new line")),
+		RequestPageUp:   key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup/pgdn", "scroll")),
+		RequestPageDown: key.NewBinding(key.WithKeys("pgdown")),
+		NextField:       key.NewBinding(key.WithKeys("tab")),
+		PrevField:       key.NewBinding(key.WithKeys("shift+tab")),
+		Up:              key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/↓", "move")),
+		Down:            key.NewBinding(key.WithKeys("down", "j")),
+		ExtendUp:        key.NewBinding(key.WithKeys("shift+up", "K"), key.WithHelp("shift+↑/↓", "select")),
+		ExtendDown:      key.NewBinding(key.WithKeys("shift+down", "J")),
+		ClearSelection:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear selection")),
+		Top:             key.NewBinding(key.WithKeys("g", "home")),
+		Bottom:          key.NewBinding(key.WithKeys("G", "end")),
+		PageUp:          key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup/pgdn", "page")),
+		PageDown:        key.NewBinding(key.WithKeys("pgdown")),
+		HalfUp:          key.NewBinding(key.WithKeys("ctrl+u")),
+		HalfDown:        key.NewBinding(key.WithKeys("ctrl+d")),
+		SectionBack:     key.NewBinding(key.WithKeys("["), key.WithHelp("[/]", "section")),
+		SectionNext:     key.NewBinding(key.WithKeys("]")),
+		Comment:         key.NewBinding(key.WithKeys("c", "enter"), key.WithHelp("c", "comment")),
+		Edit:            key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+		Delete:          key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete comment")),
+		Resolve:         key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resolve comment")),
+		Next:            key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next comment")),
+		Prev:            key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous comment")),
+		SendComments:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save comments")),
+		SaveComment:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save comment")),
+		CancelComment:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+		Open:            key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open plan")),
+		Confirm:         key.NewBinding(key.WithKeys("y")),
+		End:             key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "end plan")),
+		DeletePlan:      key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete plan")),
+		Focus:           key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", m.focusHelp())),
+		Switch:          key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "switch plan")),
+		Chat:            key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "chat")),
+		SendPlan:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "approve plan")),
+		Resume:          key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "claim")),
+		StopBuild:       key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "stop")),
+		Quit:            key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 	}
 	// The reason prompt says what these do, so they carry no hint.
 	k.EndComplete = key.NewBinding(key.WithKeys("m"))
@@ -142,7 +145,7 @@ func (m Model) keys() keyMap {
 	// The plan's keys act in the plan only; the Overview has its own.
 	inPlan := m.focus == panePlan && !m.commenting
 	inOverview := m.focus == paneOverview && m.created && !m.commenting
-	m.chatKeys(&k)
+	m.requestKeys(&k)
 	for _, b := range []*key.Binding{&k.ExtendUp, &k.ExtendDown, &k.Up, &k.Down, &k.Top, &k.Bottom, &k.PageUp, &k.PageDown, &k.HalfUp, &k.HalfDown, &k.SectionBack, &k.SectionNext, &k.Comment} {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
@@ -169,24 +172,28 @@ func (m Model) keys() keyMap {
 
 // stopOffered is whether S is offered now.
 func (m Model) stopOffered() bool {
-	return m.build != nil && m.created && m.buildRunning() && !m.stoppingBuild &&
-		!m.commenting && !m.confirming && !m.askingReason
+	return m.stopOwed() && !m.releasing && !m.commenting && !m.confirming && !m.askingReason
 }
 
 // resumeOffered is whether R is offered now.
 func (m Model) resumeOffered() bool {
 	return m.created && !m.commenting && !m.confirming && !m.askingReason &&
-		!m.resumingBuild && !m.takingOver && !m.resuming && m.resumable().Kind != planstate.ResumeNone
+		!m.claiming && m.resumable().Kind == planstate.ResumeClaim
 }
 
-// chatKeys enables the request's keys: the left pane has an input to type in,
+// requestKeys enables the request's keys: the left pane has an input to type in,
 // and a new line to type, until the plan exists.
-func (m Model) chatKeys(k *keyMap) {
+func (m Model) requestKeys(k *keyMap) {
 	inRequest := m.focus == paneOverview && !m.created && !m.commenting
-	for _, b := range []*key.Binding{&k.Send, &k.ChatPageUp, &k.ChatPageDown} {
+	for _, b := range []*key.Binding{&k.Send, &k.RequestPageUp, &k.RequestPageDown} {
 		b.SetEnabled(inRequest)
 	}
-	k.Newline.SetEnabled(inRequest || m.commenting)
+	k.NextField.SetEnabled(inRequest && m.onTitle)
+	k.PrevField.SetEnabled(inRequest && !m.onTitle)
+	if m.onTitle {
+		k.Send.SetHelp("enter", "next")
+	}
+	k.Newline.SetEnabled((inRequest && !m.onTitle) || m.commenting)
 }
 
 // endKeys enables the keys that end the plan: end, its reasons, and
@@ -297,7 +304,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 	hints = append(hints, moves...)
 	return append(hints,
 		k.Focus, k.SendPlan, k.Resume, k.StopBuild, k.Quit, k.Chat, k.End, k.DeletePlan,
-		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.ChatPageUp,
+		k.SectionBack, k.Delete, k.Resolve, prev, k.ExtendUp, k.PageUp, k.RequestPageUp,
 	)
 }
 

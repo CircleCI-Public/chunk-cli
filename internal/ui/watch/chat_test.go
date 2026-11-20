@@ -338,7 +338,7 @@ func TestCtrlOKeepsWhatIsBeingTyped(t *testing.T) {
 	assert.Check(t, !m.chatShown && m.planOpen)
 	assert.Check(t, cmp.Equal(screen(m), before))
 	assert.Check(t, cmp.Equal(m.planScreen.Unsent(), "1 unsent comment"))
-	assert.Check(t, cmp.Equal(p.requests, 0), "the plan's agent was sent something")
+	assert.Check(t, len(p.created) == 0 && !p.sent, "the chat reached the plan")
 }
 
 func TestOpenChatTakesTheKeyboard(t *testing.T) {

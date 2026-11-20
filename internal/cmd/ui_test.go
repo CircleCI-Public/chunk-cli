@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,12 +17,12 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/planrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/chat"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 )
 
 // watchProject is the git top level chunk ui was opened under, canonical
@@ -216,91 +215,6 @@ func TestPlanParents(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(got, map[string]string{"c1": "p1", "c2": "p1"}))
 }
 
-func TestPlanBuildLevel(t *testing.T) {
-	for _, tc := range []struct {
-		in   chunkd.FeedLevel
-		want plan.BuildLevel
-	}{
-		{
-			in:   chunkd.FeedInfo,
-			want: plan.BuildInfo,
-		},
-		{
-			in:   chunkd.FeedStep,
-			want: plan.BuildStep,
-		},
-		{
-			in:   chunkd.FeedDone,
-			want: plan.BuildStep,
-		},
-		{
-			in:   chunkd.FeedWarn,
-			want: plan.BuildWarn,
-		},
-		{
-			in:   chunkd.FeedError,
-			want: plan.BuildError,
-		},
-		{
-			in:   chunkd.FeedLevel("shout"),
-			want: plan.BuildInfo,
-		},
-	} {
-		assert.Check(t, cmp.Equal(planBuildLevel(tc.in), tc.want), string(tc.in))
-	}
-}
-
-func TestPlanBuildActivity(t *testing.T) {
-	lines := []chunkd.FeedLine{
-		{Level: chunkd.FeedStep, Text: "Building plan p in /src"},
-		{Level: chunkd.FeedInfo, Text: "Read main.go"},
-	}
-	want := []plan.BuildLine{
-		{Level: plan.BuildStep, Text: "Building plan p in /src"},
-		{Level: plan.BuildInfo, Text: "Read main.go"},
-	}
-	for _, tc := range []struct {
-		name  string
-		in    chunkd.PlanBuildActivity
-		found bool
-		want  plan.BuildActivity
-	}{
-		{
-			name:  "running",
-			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionRunning, First: 3, Lines: lines, Total: 5},
-			found: true,
-			want:  plan.BuildActivity{Found: true, ID: "s1", Running: true, First: 3, Lines: want, Total: 5},
-		},
-		{
-			name:  "failed",
-			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionFailed, Error: "boom", Total: 2},
-			found: true,
-			want:  plan.BuildActivity{Found: true, ID: "s1", Failed: "boom", Total: 2},
-		},
-		{
-			name:  "done",
-			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionDone, Lines: lines, Total: 2},
-			found: true,
-			want:  plan.BuildActivity{Found: true, ID: "s1", Lines: want, Total: 2},
-		},
-		{
-			name:  "cancelled",
-			in:    chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionCancelled, Error: "stopped", Total: 2},
-			found: true,
-			want:  plan.BuildActivity{Found: true, ID: "s1", Cancelled: true, Total: 2},
-		},
-		{
-			name: "not found",
-			in:   chunkd.PlanBuildActivity{ID: "s1", State: chunkd.SessionRunning, Lines: lines, Total: 2},
-			want: plan.BuildActivity{},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Check(t, cmp.DeepEqual(planBuildFrom(tc.in, tc.found), tc.want))
-		})
-	}
-}
-
 // A chat session's log reaches the chat as it is, each event by its kind, and
 // an event of a kind the chat has no place for is left out.
 func TestChatUpdate(t *testing.T) {
@@ -320,219 +234,10 @@ func TestChatUpdate(t *testing.T) {
 	}))
 }
 
-// daemonPlanBuild's Stop cancels the session in the daemon, and gives the
-// daemon's refusal as it gives it.
-func TestDaemonPlanBuildStop(t *testing.T) {
-	refused := &chunkd.SessionRefused{Status: 404, Message: "no such session"}
-	for _, tc := range []struct {
-		name    string
-		fails   error
-		wantErr string
-	}{
-		{
-			name: "stopped",
-		},
-		{
-			name:    "refused",
-			fails:   refused,
-			wantErr: "no such session",
-		},
-		{
-			name:    "daemon unavailable",
-			fails:   fmt.Errorf("cancel: %w", chunkd.ErrDaemonUnavailable),
-			wantErr: "the chunk daemon is not reachable",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			saved := cancelSession
-			t.Cleanup(func() { cancelSession = saved })
-			var ids []string
-			cancelSession = func(id string) error { ids = append(ids, id); return tc.fails }
-			err := daemonPlanBuild{}.Stop(t.Context(), "sess-7")
-			if tc.wantErr == "" {
-				assert.Check(t, err)
-			} else {
-				assert.Check(t, cmp.Error(err, tc.wantErr))
-			}
-			assert.Check(t, cmp.DeepEqual(ids, []string{"sess-7"}))
-		})
-	}
-}
-
-// daemonResume reads the plan and resolves the checkout of its repo, checks
-// that project, then calls the daemon's route for the kind of resume, and
-// gives the daemon's refusal as it gives it.
-func TestDaemonResume(t *testing.T) {
-	refused := &chunkd.SessionRefused{Status: 409, Message: "plan p is claimed by session s; release it with factory daemon release p to resume it"}
-	noCheckout := &planrepo.NoCheckoutError{Repos: []string{"circleci/factory"}}
-	for _, tc := range []struct {
-		name string
-		root string
-		kind planstate.ResumeKind
-		// holder is the session a take-over was confirmed for.
-		holder string
-		// readErr is reading the plan failing.
-		readErr error
-		// resolved is the root planRoot resolves to, "" for the one it
-		// prefers; resolveErr is it failing.
-		resolved   string
-		resolveErr error
-		// badRoot is a root the project check fails for.
-		badRoot string
-		// fails is what the daemon answers.
-		fails       error
-		wantErr     string
-		wantPlanner []string
-		wantBuild   []chunkd.PlanBuildRequest
-	}{
-		{
-			name:      "a plan whose checkout is elsewhere",
-			root:      "/src/app",
-			resolved:  "/src/factory",
-			kind:      planstate.ResumeBuild,
-			wantBuild: []chunkd.PlanBuildRequest{{ProjectRoot: "/src/factory", PlanID: "p"}},
-		},
-		{
-			name:       "no checkout",
-			root:       "/src/app",
-			resolveErr: noCheckout,
-			kind:       planstate.ResumeBuild,
-			wantErr:    noCheckout.Error(),
-		},
-		{
-			name:    "the plan read failing",
-			root:    "/src/app",
-			readErr: errors.New("factory is down"),
-			kind:    planstate.ResumeBuild,
-			wantErr: "read plan p: factory is down",
-		},
-		{
-			name:     "the resolved checkout failing the project check",
-			root:     "/src/app",
-			resolved: "/src/factory",
-			badRoot:  "/src/factory",
-			kind:     planstate.ResumeBuild,
-			wantErr:  "/src/factory: no chunk config",
-		},
-		{
-			name:    "outside a repository",
-			root:    "",
-			kind:    planstate.ResumeBuild,
-			wantErr: "open chunk ui in this plan's local repository to plan or build",
-		},
-		{
-			name:    "nothing to resume",
-			root:    "/src/app",
-			kind:    planstate.ResumeNone,
-			wantErr: "this plan has nothing for chunk to resume",
-		},
-		{
-			name:        "planner",
-			root:        "/src/app",
-			kind:        planstate.ResumePlanner,
-			wantPlanner: []string{"p /src/app"},
-		},
-		{
-			name:        "take over",
-			root:        "/src/app",
-			kind:        planstate.ResumeTakeOver,
-			holder:      "s-1",
-			wantPlanner: []string{"p /src/app release s-1"},
-		},
-		{
-			name:        "take over refused",
-			root:        "/src/app",
-			kind:        planstate.ResumeTakeOver,
-			holder:      "s-1",
-			fails:       refused,
-			wantErr:     refused.Message,
-			wantPlanner: []string{"p /src/app release s-1"},
-		},
-		{
-			name:      "build",
-			root:      "/src/app",
-			kind:      planstate.ResumeBuild,
-			wantBuild: []chunkd.PlanBuildRequest{{ProjectRoot: "/src/app", PlanID: "p"}},
-		},
-		{
-			name:      "refused",
-			root:      "/src/app",
-			kind:      planstate.ResumeBuild,
-			fails:     refused,
-			wantErr:   refused.Message,
-			wantBuild: []chunkd.PlanBuildRequest{{ProjectRoot: "/src/app", PlanID: "p"}},
-		},
-		{
-			name:        "daemon unavailable",
-			root:        "/src/app",
-			kind:        planstate.ResumePlanner,
-			fails:       fmt.Errorf("resume: %w", chunkd.ErrDaemonUnavailable),
-			wantErr:     "the chunk daemon is not reachable",
-			wantPlanner: []string{"p /src/app"},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			savedCheck, savedPlanner, savedBuild := checkWatchProject, resumePlanner, startPlanBuild
-			savedGet, savedRoot := getWatchPlan, planRoot
-			t.Cleanup(func() {
-				checkWatchProject, resumePlanner, startPlanBuild = savedCheck, savedPlanner, savedBuild
-				getWatchPlan, planRoot = savedGet, savedRoot
-			})
-			getWatchPlan = func(_ context.Context, id string) (*circleci.Plan, error) {
-				if tc.readErr != nil {
-					return nil, tc.readErr
-				}
-				return &circleci.Plan{ID: id, Repos: []string{"circleci/factory"}}, nil
-			}
-			planRoot = func(_ context.Context, _ *circleci.Plan, prefer string) (string, error) {
-				if tc.resolveErr != nil {
-					return "", tc.resolveErr
-				}
-				if tc.resolved != "" {
-					return tc.resolved, nil
-				}
-				return prefer, nil
-			}
-			if tc.root != "" {
-				// The real check needs a git origin and config; "" is
-				// refused before it is reached.
-				checkWatchProject = func(_ context.Context, root string) error {
-					if root == tc.badRoot {
-						return errors.New(root + ": no chunk config")
-					}
-					return nil
-				}
-			}
-			var planners []string
-			var builds []chunkd.PlanBuildRequest
-			resumePlanner = func(planID string, req chunkd.PlannerResume) (chunkd.SessionLog, error) {
-				call := planID + " " + req.ProjectRoot
-				if req.ReleaseHolder != "" {
-					call += " release " + req.ReleaseHolder
-				}
-				planners = append(planners, call)
-				return chunkd.SessionLog{}, tc.fails
-			}
-			startPlanBuild = func(req chunkd.PlanBuildRequest) (string, error) {
-				builds = append(builds, req)
-				return "s-9", tc.fails
-			}
-
-			err := daemonResume{}.Resume(t.Context(), tc.root, "p", tc.kind, tc.holder)
-			if tc.wantErr == "" {
-				assert.Check(t, err)
-			} else {
-				assert.Check(t, cmp.Error(err, tc.wantErr))
-			}
-			assert.Check(t, cmp.DeepEqual(planners, tc.wantPlanner))
-			assert.Check(t, cmp.DeepEqual(builds, tc.wantBuild))
-		})
-	}
-}
-
-// A plan chunk knows no checkout of opens read-only: approving and resuming
-// it give why, before any daemon call.
-func TestWatchPlansOpenNoCheckout(t *testing.T) {
+// An existing plan opens with only the API: no checkout of its repo is looked
+// for, whatever the directory the dashboard runs in, and the project check is
+// not made.
+func TestWatchPlansOpensWithoutACheckout(t *testing.T) {
 	fake := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
@@ -541,22 +246,104 @@ func TestWatchPlansOpenNoCheckout(t *testing.T) {
 	p, err := client.CreatePlan(t.Context(), "a plan", "", "circleci/factory")
 	assert.NilError(t, err)
 
-	noCheckout := &planrepo.NoCheckoutError{Repos: []string{"circleci/factory"}}
-	saved := planRoot
-	t.Cleanup(func() { planRoot = saved })
-	planRoot = func(context.Context, *circleci.Plan, string) (string, error) { return "", noCheckout }
+	saved := checkWatchProject
+	t.Cleanup(func() { checkWatchProject = saved })
+	checked := false
+	checkWatchProject = func(context.Context, string) error {
+		checked = true
+		return errors.New("no project")
+	}
+	// Not a git checkout, nor one of chunk's projects.
+	t.Chdir(t.TempDir())
 
 	plans := newWatchPlans(t.Context())
 	t.Cleanup(plans.stop)
 	plans.client = func() (*circleci.Client, error) { return client, nil }
-	opened, err := plans.plan(t.Context(), "/src/app", p.ID)
+	opened, err := plans.plan(t.Context(), "", p.ID)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(opened.Root, ""))
+	assert.Assert(t, opened.Store != nil)
+	assert.Check(t, cmp.Equal(opened.Store.ID(), p.ID))
+	assert.Check(t, !checked, "the project was checked for an existing plan")
+}
 
-	_, err = opened.Approve(func(string) {})
-	assert.Check(t, cmp.Error(err, noCheckout.Error()))
-	err = opened.Agent.Resume(t.Context())
-	assert.Check(t, cmp.Error(err, noCheckout.Error()))
+// A new plan checks the project the dashboard was opened in when it opens: a
+// failure opens no plan, and a pass makes a store for the project.
+func TestWatchPlansNewPlanChecksTheProject(t *testing.T) {
+	fake := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+	saved := checkWatchProject
+	t.Cleanup(func() { checkWatchProject = saved })
+	open := func(root string) (watch.OpenedPlan, error) {
+		plans := newWatchPlans(t.Context())
+		t.Cleanup(plans.stop)
+		plans.client = func() (*circleci.Client, error) { return client, nil }
+		return plans.plan(t.Context(), root, "")
+	}
+
+	t.Run("the check fails", func(t *testing.T) {
+		var checked []string
+		checkWatchProject = func(_ context.Context, root string) error {
+			checked = append(checked, root)
+			return errors.New("this project has no git remote named origin")
+		}
+		opened, err := open("/src/chunk-cli")
+		assert.Check(t, cmp.Error(err, "this project has no git remote named origin"))
+		assert.Check(t, opened.Store == nil)
+		assert.Check(t, cmp.DeepEqual(checked, []string{"/src/chunk-cli"}))
+	})
+
+	t.Run("the check passes", func(t *testing.T) {
+		checkWatchProject = func(context.Context, string) error { return nil }
+		opened, err := open("/src/chunk-cli")
+		assert.NilError(t, err)
+		assert.Assert(t, opened.Store != nil)
+		assert.Check(t, cmp.Equal(opened.Store.ID(), ""))
+		assert.Check(t, cmp.Equal(opened.Root, "/src/chunk-cli"))
+	})
+
+	t.Run("outside a repository", func(t *testing.T) {
+		checkWatchProject = watchPlanProject
+		opened, err := open("")
+		assert.Check(t, cmp.Error(err, "open chunk ui in a local repository to make a plan"))
+		assert.Check(t, opened.Store == nil)
+	})
+}
+
+// The flow list reads the worker that claims a flow with what it reports of
+// the flow, and none for a flow no worker claims.
+func TestReadWorker(t *testing.T) {
+	fake := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+	p, err := client.CreatePlan(t.Context(), "a plan", "", "circleci/factory")
+	assert.NilError(t, err)
+
+	w, err := readWorker(t.Context(), client, p.ID)
+	assert.NilError(t, err)
+	assert.Check(t, w == nil, "a worker is read for an unclaimed plan")
+
+	fake.PutFactoryWorker(fakes.FactoryWorker{
+		ID: "w1", Hostname: "scotts-mbp", Phase: "started", Health: "ok",
+		Headless: []fakes.FactoryHeadless{{FlowID: p.ID, Role: "architect", State: "running", Health: "ok"}},
+	})
+	fake.ClaimFactoryPlanForWorker(p.ID, "w1")
+	w, err = readWorker(t.Context(), client, p.ID)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.DeepEqual(w, &plan.Worker{
+		ID: "w1", Hostname: "scotts-mbp", Live: true,
+		Headless: []plan.Headless{{Role: "architect", State: "running", Health: "ok"}},
+	}))
+	assert.Check(t, cmp.Equal(plan.WorkerLine(w, ""), "Worker scotts-mbp · architect running"))
+
+	// A flow factory does not have is an error, not an unread worker.
+	_, err = readWorker(t.Context(), client, "no-such-plan")
+	assert.Check(t, cmp.ErrorContains(err, "get the plan's flow"))
 }
 
 // factoryDelete deletes the plan in factory and gives factory's refusal as it

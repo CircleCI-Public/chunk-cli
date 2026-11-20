@@ -31,17 +31,10 @@ func testClient(t *testing.T) (*circleci.Client, *fakes.FakeCircleCI) {
 	return client, cci
 }
 
-// newStore is NewStore with a namer that gives no name, so Create titles
-// the plan with fallbackTitle and runs no claude.
+// newStore is a Store of plan id, or of a plan Create makes, in the fake
+// factory client.
 func newStore(client *circleci.Client, id, repo string) *Store {
-	s := NewStore(client, id, repo)
-	s.name = namedAs("", errors.New("no claude in tests"))
-	return s
-}
-
-// namedAs is a namer that gives name and err whatever the message.
-func namedAs(name string, err error) func(context.Context, string) (string, error) {
-	return func(context.Context, string) (string, error) { return name, err }
+	return NewStore(client, id, repo)
 }
 
 // createdStore is a Store whose plan has been created in a fake factory.
@@ -49,7 +42,7 @@ func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) 
 	t.Helper()
 	client, cci := testClient(t)
 	store := newStore(client, "", "")
-	_, err := store.Create(context.Background(), "a plan")
+	err := store.Create(context.Background(), "A plan", "a plan")
 	assert.NilError(t, err)
 	return store, client, cci
 }
@@ -66,7 +59,7 @@ func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(text, ""))
 
-	_, err = store.Create(ctx, "a plan")
+	err = store.Create(ctx, "A plan", "a plan")
 	assert.NilError(t, err)
 	err = client.SetPlanText(ctx, store.ID(), "# A plan\n")
 	assert.NilError(t, err)
@@ -87,7 +80,7 @@ func TestStoreStructureReadsItFromFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(st, plan.Structure{}))
 
-	_, err = store.Create(ctx, "a plan")
+	err = store.Create(ctx, "A plan", "a plan")
 	assert.NilError(t, err)
 	err = client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 1. Outcome\n\nWhy.\n")
 	assert.NilError(t, err)
@@ -120,90 +113,26 @@ func TestStoreStructureReadsItFromFactory(t *testing.T) {
 	assert.Check(t, cmp.ErrorContains(err, "get the plan's units"))
 }
 
-// A new plan is titled with Claude's name for it, made a slug, or with a
-// slug of the message's first line when Claude gives none, and starts as
-// the skeleton under that title.
-func TestStoreCreateNamesThePlan(t *testing.T) {
-	const msg = "add a --dry-run flag"
-	for _, tc := range []struct {
-		name    string
-		message string
-		reply   string
-		err     error
-		want    string
-	}{
-		{
-			name:    "claude's name",
-			message: msg,
-			reply:   "dry-run-flag",
-			want:    "dry-run-flag",
-		},
-		{
-			name:    "quoted with a period",
-			message: msg,
-			reply:   `"Dry-run flag."`,
-			want:    "dry-run-flag",
-		},
-		{
-			name:    "cut to three words",
-			message: msg,
-			reply:   "add dry run flag support",
-			want:    "add-dry-run",
-		},
-		{
-			name:    "one long word",
-			message: msg,
-			reply:   strings.Repeat("é", 50),
-			want:    strings.Repeat("é", 40),
-		},
-		{
-			name:    "namer fails",
-			message: msg,
-			err:     errors.New("claude exited 1"),
-			want:    "add-a-dry-run-flag",
-		},
-		{
-			name:    "empty reply",
-			message: msg,
-			reply:   "",
-			want:    "add-a-dry-run-flag",
-		},
-		{
-			name:    "reply with no words",
-			message: msg,
-			reply:   "?!",
-			want:    "add-a-dry-run-flag",
-		},
-		{
-			name:    "no words anywhere",
-			message: "?!\nsecond line",
-			err:     errors.New("no"),
-			want:    "plan",
-		},
-		{
-			name:    "empty message",
-			message: "",
-			err:     errors.New("no"),
-			want:    "plan",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client, cci := testClient(t)
-			store := NewStore(client, "", "")
-			store.name = namedAs(tc.reply, tc.err)
+// A new plan is the skeleton as the web UI makes it: the typed title as its
+// heading, the request under 1. Outcome, and the other sections empty, with
+// the repository the store was made with.
+func TestStoreCreate(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	client, cci := testClient(t)
+	store := NewStore(client, "", "CircleCI-Public/chunk-cli")
 
-			title, err := store.Create(context.Background(), tc.message)
-			assert.NilError(t, err)
-			assert.Check(t, cmp.Equal(title, tc.want))
+	err := store.Create(context.Background(), "Retry flaky uploads", "Retry uploads that fail with a 5xx")
+	assert.NilError(t, err)
+	assert.Check(t, store.ID() != "")
 
-			p, ok := cci.FactoryPlan(store.ID())
-			assert.Assert(t, ok)
-			assert.Check(t, cmp.Equal(p.Title, title))
-			assert.Check(t, cmp.Equal(p.Text,
-				"# "+tc.want+"\n\n## 1. Outcome\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"))
-			assert.Check(t, cmp.Equal(p.State, "init"))
-		})
-	}
+	p, ok := cci.FactoryPlan(store.ID())
+	assert.Assert(t, ok)
+	assert.Check(t, cmp.Equal(p.Title, "Retry flaky uploads"))
+	assert.Check(t, cmp.Equal(p.Text, "# Retry flaky uploads\n\n"+
+		"## 1. Outcome\n\nRetry uploads that fail with a 5xx\n\n"+
+		"## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"))
+	assert.Check(t, cmp.Equal(p.State, "init"))
+	assert.Check(t, cmp.DeepEqual(p.Repos, []string{"CircleCI-Public/chunk-cli"}))
 }
 
 // A new plan records the store's GitHub repository in factory, and none when
@@ -236,13 +165,13 @@ func TestStoreCreateRecordsTheRepository(t *testing.T) {
 			store := newStore(client, "", tc.repo)
 			if tc.status != 0 {
 				cci.FactoryStatusCode = tc.status
-				_, err := store.Create(context.Background(), "a plan")
+				err := store.Create(context.Background(), "A plan", "a plan")
 				assert.Check(t, cmp.ErrorContains(err, "create the plan in factory"))
 				assert.Check(t, cmp.Equal(store.ID(), ""))
 				return
 			}
 
-			_, err := store.Create(context.Background(), "a plan")
+			err := store.Create(context.Background(), "A plan", "a plan")
 			assert.NilError(t, err)
 			p, ok := cci.FactoryPlan(store.ID())
 			assert.Assert(t, ok)
@@ -251,31 +180,14 @@ func TestStoreCreateRecordsTheRepository(t *testing.T) {
 	}
 }
 
-// With no claude installed, the real namer fails and the plan is still made,
-// titled with the slug.
-func TestStoreCreateWithoutClaude(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	client, cci := testClient(t)
-	store := NewStore(client, "", "")
-
-	title, err := store.Create(context.Background(), "add a --dry-run flag")
-	assert.NilError(t, err)
-	assert.Check(t, cmp.Equal(title, "add-a-dry-run-flag"))
-
-	p, ok := cci.FactoryPlan(store.ID())
-	assert.Assert(t, ok)
-	assert.Check(t, cmp.Equal(p.Title, "add-a-dry-run-flag"))
-}
-
-// A plan factory will not create has no title and no ID.
-func TestStoreCreateFailsWithoutATitle(t *testing.T) {
+// A plan factory will not create has no ID.
+func TestStoreCreateFailsWithoutAnID(t *testing.T) {
 	client, cci := testClient(t)
 	cci.FactoryStatusCode = http.StatusInternalServerError
 	store := newStore(client, "", "")
 
-	title, err := store.Create(context.Background(), "add a --dry-run flag")
+	err := store.Create(context.Background(), "A plan", "add a --dry-run flag")
 	assert.Check(t, cmp.ErrorContains(err, "create the plan in factory"))
-	assert.Check(t, cmp.Equal(title, ""))
 	assert.Check(t, cmp.Equal(store.ID(), ""))
 }
 
@@ -705,7 +617,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.Check(t, cmp.Len(f.Events, 0))
 	assert.Check(t, cmp.Equal(f.Task, ""))
 
-	_, err = store.Create(ctx, "a plan")
+	err = store.Create(ctx, "A plan", "a plan")
 	assert.NilError(t, err)
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
@@ -860,7 +772,7 @@ func TestStoreFamily(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(fam, plan.Family{}))
 
-	_, err = store.Create(ctx, "a plan")
+	err = store.Create(ctx, "A plan", "a plan")
 	assert.NilError(t, err)
 	id := store.ID()
 	newPlan := func(title, state string) string {
@@ -1003,7 +915,7 @@ func TestStoreFamilyFails(t *testing.T) {
 			assert.NilError(t, err)
 			store := newStore(client, "", "")
 			ctx := context.Background()
-			_, err = store.Create(ctx, "a plan")
+			err = store.Create(ctx, "A plan", "a plan")
 			assert.NilError(t, err)
 
 			_, err = store.Family(ctx)
@@ -1042,7 +954,7 @@ func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
 	err := store.SetText(ctx, "# A plan\n")
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 
-	_, err = store.Create(ctx, "a plan")
+	err = store.Create(ctx, "A plan", "a plan")
 	assert.NilError(t, err)
 	err = store.SetText(ctx, "# A plan\n\n## 1. Outcome\n\nEdited by hand.\n")
 	assert.NilError(t, err)
@@ -1100,7 +1012,7 @@ func newWorkersFake(t *testing.T) *workersFake {
 func (w *workersFake) created(t *testing.T) *Store {
 	t.Helper()
 	store := newStore(w.client, "", "")
-	_, err := store.Create(context.Background(), "a plan")
+	err := store.Create(context.Background(), "A plan", "a plan")
 	assert.NilError(t, err)
 	return store
 }

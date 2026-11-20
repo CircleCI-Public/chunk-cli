@@ -20,15 +20,12 @@ func editorFiles(t *testing.T) string {
 	return dir
 }
 
-// planInPlan is planModel with the plan pane focused, and the agent's first
-// exchange forgotten.
-func planInPlan(t *testing.T) (Model, *fakeStore, *fakeAgent) {
+// planInPlan is planModel with the plan pane focused.
+func planInPlan(t *testing.T) (Model, *fakeStore) {
 	t.Helper()
 	m, store := planModel(t)
-	agent := m.agent.(*fakeAgent)
-	agent.reset()
 	m = drive(t, m, press("tab"))
-	return m, store, agent
+	return m, store
 }
 
 // editedFrom is the message the editor closing on blocks lo to hi of m's plan
@@ -45,7 +42,7 @@ func editedFrom(t *testing.T, m Model, lo, hi int, text string) editedMsg {
 
 func TestEOpensTheHighlightedPartInTheEditor(t *testing.T) {
 	dir := editorFiles(t)
-	m, _, _ := planInPlan(t)
+	m, _ := planInPlan(t)
 	m = drive(t, m, press("down"))
 	m = drive(t, m, press("e"))
 
@@ -60,7 +57,7 @@ func TestEOpensTheHighlightedPartInTheEditor(t *testing.T) {
 
 func TestEOpensASelectionOfPartsTogether(t *testing.T) {
 	dir := editorFiles(t)
-	m, _, _ := planInPlan(t)
+	m, _ := planInPlan(t)
 	m = drive(t, m, press("shift+down"))
 	drive(t, m, press("e"))
 
@@ -74,7 +71,7 @@ func TestEOpensASelectionOfPartsTogether(t *testing.T) {
 
 func TestEExplainsWhyItCannotEditWhileFactoryWorks(t *testing.T) {
 	dir := editorFiles(t)
-	m, store, _ := planInPlan(t)
+	m, store := planInPlan(t)
 	store.setEvents()
 	store.setWaitingOn(string(ActorSession))
 	m = refreshed(t, m)
@@ -88,7 +85,7 @@ func TestEExplainsWhyItCannotEditWhileFactoryWorks(t *testing.T) {
 
 func TestEditedPartIsSavedInPlaceWithAReReadNoteQueued(t *testing.T) {
 	t.Parallel()
-	m, store, agent := planInPlan(t)
+	m, store := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
 	m = drive(t, m, msg)
@@ -98,7 +95,6 @@ func TestEditedPartIsSavedInPlaceWithAReReadNoteQueued(t *testing.T) {
 		"## 1. Outcome\n\nThe flag exists and is documented.\n\n## 2. Design\n\n* [AGENT] parse it in main.go"))
 	assert.Check(t, !m.editing)
 	assert.Check(t, cmp.Contains(ansi.Strip(m.status), "Saved your edit."))
-	assert.Check(t, cmp.Len(agent.Sent(), 0), "nothing goes to the session")
 	queued := queuedComments(m.comments)
 	assert.Assert(t, cmp.Len(queued, 1))
 	assert.Check(t, cmp.Equal(queued[0].text, rereadNote))
@@ -118,7 +114,7 @@ func saveEdit(t *testing.T, m Model, i int, text string) Model {
 
 func TestEditsQueueOneReReadNotePerPart(t *testing.T) {
 	t.Parallel()
-	m, store, _ := planInPlan(t)
+	m, store := planInPlan(t)
 	m = saveEdit(t, m, 1, "The flag exists and is documented.\n")
 	m = saveEdit(t, m, 3, "* [AGENT] parse it in main.go and cmd.go\n")
 	assert.Assert(t, cmp.Len(store.Set, 2))
@@ -149,18 +145,17 @@ func TestReReadNoteGoesWithTheQueuedCommentsOnS(t *testing.T) {
 	t.Parallel()
 	t.Run("sent", func(t *testing.T) {
 		t.Parallel()
-		m, store, agent := planInPlan(t)
+		m, store := planInPlan(t)
 		m = saveEdit(t, m, 1, "The flag exists and is documented.\n")
 		m = drive(t, m, press("s"))
 
 		assert.Check(t, cmp.DeepEqual(store.Added, [][2]string{{"The flag exists and is documented.", rereadNote}}))
 		assert.Check(t, cmp.DeepEqual(store.HandedOff, []string{"refine-proposal"}))
 		assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
-		assert.Check(t, cmp.Len(agent.Sent(), 0), "nothing goes to the session")
 	})
 	t.Run("dropped", func(t *testing.T) {
 		t.Parallel()
-		m, store, agent := planInPlan(t)
+		m, store := planInPlan(t)
 		m = saveEdit(t, m, 1, "The flag exists and is documented.\n")
 		m.moveCursor(1)
 		assert.Assert(t, m.commentAt(m.cursor) >= 0, "the cursor is not on the note")
@@ -170,19 +165,17 @@ func TestReReadNoteGoesWithTheQueuedCommentsOnS(t *testing.T) {
 
 		assert.Check(t, cmp.Len(store.Added, 0))
 		assert.Check(t, cmp.Len(store.HandedOff, 0))
-		assert.Check(t, cmp.Len(agent.Sent(), 0))
 	})
 }
 
 func TestEditedPartIsNotSavedWhenNothingChanged(t *testing.T) {
 	t.Parallel()
-	m, store, agent := planInPlan(t)
+	m, store := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists.\n")
 	m = drive(t, m, msg)
 
 	assert.Check(t, cmp.Len(store.Set, 0))
-	assert.Check(t, cmp.Len(agent.Sent(), 0))
 	assert.Check(t, cmp.Len(queuedComments(m.comments), 0))
 	assert.Check(t, !m.editing)
 	assert.Check(t, cmp.Equal(ansi.Strip(m.status), "No changes."))
@@ -190,7 +183,7 @@ func TestEditedPartIsNotSavedWhenNothingChanged(t *testing.T) {
 
 func TestEditedPartLeftEmptyIsNotSaved(t *testing.T) {
 	t.Parallel()
-	m, store, _ := planInPlan(t)
+	m, store := planInPlan(t)
 	m.editing = true
 	m = drive(t, m, editedFrom(t, m, 1, 1, "\n\n"))
 
@@ -201,15 +194,14 @@ func TestEditedPartLeftEmptyIsNotSaved(t *testing.T) {
 
 func TestEditIsRefusedWhenAnotherWriterChangedThePlan(t *testing.T) {
 	t.Parallel()
-	m, store, agent := planInPlan(t)
+	m, store := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
-	// The agent wrote the plan while the editor was open.
+	// The worker wrote the plan while the editor was open.
 	store.TextV = twoParts + "\n* [AGENT] and more"
 	m = drive(t, m, msg)
 
 	assert.Check(t, cmp.Len(store.Set, 0))
-	assert.Check(t, cmp.Len(agent.Sent(), 0))
 	assert.Check(t, !m.editing)
 	status := ansi.Strip(m.status)
 	assert.Check(t, cmp.Contains(status, "the plan changed while you were editing it"))
@@ -220,7 +212,7 @@ func TestEditIsRefusedWhenAnotherWriterChangedThePlan(t *testing.T) {
 
 func TestEditIsRefusedOnceFactoryStopsWaiting(t *testing.T) {
 	t.Parallel()
-	m, store, _ := planInPlan(t)
+	m, store := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "The flag exists and is documented.\n")
 	store.setEvents()
@@ -233,7 +225,7 @@ func TestEditIsRefusedOnceFactoryStopsWaiting(t *testing.T) {
 
 func TestEditIsSavedWhileFactoryWaitsOnOpenQuestions(t *testing.T) {
 	t.Parallel()
-	m, store, _ := planInPlan(t)
+	m, store := planInPlan(t)
 	store.setEvents("answer-open-questions", "end")
 	m = refreshed(t, m)
 	m.editing = true
@@ -246,7 +238,7 @@ func TestEditIsSavedWhileFactoryWaitsOnOpenQuestions(t *testing.T) {
 
 func TestEditIsSavedWhileFactoryWaitsOnYouWithNoComments(t *testing.T) {
 	t.Parallel()
-	m, store, _ := planInPlan(t)
+	m, store := planInPlan(t)
 	store.setEvents("approve-for-units", "end")
 	store.setWaitingOn("human")
 	m = refreshed(t, m)
@@ -261,7 +253,7 @@ func TestEditIsSavedWhileFactoryWaitsOnYouWithNoComments(t *testing.T) {
 
 func TestEditIsRefusedWhileFactoryWorksOnThePlan(t *testing.T) {
 	t.Parallel()
-	m, store, _ := planInPlan(t)
+	m, store := planInPlan(t)
 	store.setEvents("end")
 	store.setWaitingOn("session")
 	m = refreshed(t, m)
@@ -270,7 +262,7 @@ func TestEditIsRefusedWhileFactoryWorksOnThePlan(t *testing.T) {
 
 func TestFailedEditorSavesNothing(t *testing.T) {
 	t.Parallel()
-	m, store, _ := planInPlan(t)
+	m, store := planInPlan(t)
 	m.editing = true
 	msg := editedFrom(t, m, 1, 1, "x")
 	msg.err = os.ErrPermission

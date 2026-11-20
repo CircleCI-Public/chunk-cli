@@ -166,10 +166,16 @@ type Unit struct {
 // reads are empty and writes fail. An existing plan starts with its ID set.
 type Store interface {
 	ID() string
-	// Create makes the plan in factory for message, the developer's first
-	// message, naming it for what the message asks for, and returns that
-	// name: the plan's title in factory.
-	Create(ctx context.Context, message string) (string, error)
+	// Create makes the plan in factory, titled title, from the skeleton with
+	// request under its Outcome.
+	Create(ctx context.Context, title, request string) error
+	// Claim has the default worker claim the plan, returning its hostname.
+	// ErrNoWorker when no live worker can claim it.
+	Claim(ctx context.Context) (string, error)
+	// Release frees the plan's claim, whoever holds it.
+	Release(ctx context.Context) error
+	// Approve sends approve-for-building when factory waits for it.
+	Approve(ctx context.Context) error
 	// Flow is the plan's flow as factory has it now; empty before the plan
 	// is created or has a flow.
 	Flow(ctx context.Context) (Flow, error)

@@ -59,7 +59,7 @@ func (m *Model) gutterOf(t textView) int {
 	case m.created:
 		return overviewGutter
 	}
-	return chatGutter
+	return requestGutter
 }
 
 // textOrigin is the screen cell t's view is drawn from: inside its pane's

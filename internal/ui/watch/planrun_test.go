@@ -3,7 +3,6 @@ package watch
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -15,36 +14,31 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/flowlist"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
 )
 
-// fakePlans stands in for the planning agent and the factory on the planning
-// screen: the agent answers each message with reply once release is closed,
-// when there is one, and approving records that it was. The store's text is
-// plan throughout.
+// fakePlans stands in for factory on the planning screen: its store's text is
+// plan throughout, and approving and claiming record that they were.
 type fakePlans struct {
 	root  string
 	err   error
-	reply string
 	plan  string
 	title string
-	// resolved is the root the opener answers with, when it is not the one
-	// it was given.
-	resolved string
 	// newID is the ID factory gives a new plan as it is created; "" leaves
 	// it with none.
-	newID   string
-	release chan struct{}
+	newID string
+	// sent is whether the plan was approved, and created the title and request
+	// a new plan was created with.
 	sent    bool
-	// requests is how many messages the agent was sent.
-	requests int
+	created []string
 	// units are the units the store serves, as factory reads them.
 	units []plan.Unit
 	// flow is the flow the store serves, when it is not the default.
 	flow *plan.Flow
+	// release, when set, holds each create until it is closed.
+	release chan struct{}
 }
 
 // fakePlanStore is a plan.Store whose text never changes; these tests do not
@@ -52,6 +46,7 @@ type fakePlans struct {
 // A new plan's store takes newID as its ID on Create, when there is one.
 // Its flow is flow when there is one, else a plan waiting on the developer.
 type fakePlanStore struct {
+	f                      *fakePlans
 	text, id, newID, title string
 	units                  []plan.Unit
 	flow                   *plan.Flow
@@ -59,11 +54,26 @@ type fakePlanStore struct {
 
 func (f *fakePlanStore) ID() string { return f.id }
 
-func (f *fakePlanStore) Create(context.Context, string) (string, error) {
+func (f *fakePlanStore) Create(ctx context.Context, title, request string) error {
+	if f.f.release != nil {
+		select {
+		case <-f.f.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if f.id == "" {
 		f.id = f.newID
 	}
-	return f.title, nil
+	f.f.created = append(f.f.created, title+" | "+request)
+	return nil
+}
+
+func (f *fakePlanStore) Claim(context.Context) (string, error) { return "scotts-mbp", nil }
+func (f *fakePlanStore) Release(context.Context) error         { return nil }
+func (f *fakePlanStore) Approve(context.Context) error {
+	f.f.sent = true
+	return nil
 }
 func (f *fakePlanStore) Flow(context.Context) (plan.Flow, error) {
 	if f.flow != nil {
@@ -125,97 +135,19 @@ func (f *fakePlanStore) EditComment(context.Context, string, string) error { ret
 func (f *fakePlanStore) ResolveComment(context.Context, string) error      { return nil }
 func (f *fakePlanStore) DeleteComment(context.Context, string) error       { return nil }
 
-// fakePlanBuilds is a plan.Build that records the plans it is asked for, and
-// answers each with a running build.
-type fakePlanBuilds struct {
-	mu    sync.Mutex
-	asked []string
-}
-
-func (b *fakePlanBuilds) Activity(_ context.Context, planID string, _ int) (plan.BuildActivity, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.asked = append(b.asked, planID)
-	return plan.BuildActivity{Found: true, ID: "build-1", Running: true}, nil
-}
-
-func (b *fakePlanBuilds) Stop(context.Context, string) error { return nil }
-
-func (b *fakePlanBuilds) planIDs() []string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return append([]string(nil), b.asked...)
-}
-
-// fakePlanAgent is a plan.Agent that answers the request with its
-// fakePlans' reply.
-type fakePlanAgent struct {
-	f      *fakePlans
-	events chan plan.Event
-}
-
-func (a *fakePlanAgent) Resume(context.Context) error { return nil }
-
-func (a *fakePlanAgent) Request(ctx context.Context, _ string) error {
-	a.f.requests++
-	go func() {
-		if a.f.release != nil {
-			select {
-			case <-a.f.release:
-			case <-ctx.Done():
-				return
-			}
-		}
-		a.events <- plan.Event{Reply: &plan.Reply{Text: a.f.reply}}
-	}()
-	return nil
-}
-
-func (a *fakePlanAgent) Events() <-chan plan.Event { return a.events }
-
 func (f *fakePlans) planner(_ context.Context, root, id string) (OpenedPlan, error) {
 	f.root = root
 	if f.err != nil {
 		return OpenedPlan{}, f.err
 	}
-	approve := func(func(string)) (string, error) {
-		f.sent = true
-		return "build-1", nil
-	}
-	if f.resolved != "" {
-		root = f.resolved
+	// An existing plan needs no checkout; a new one is made in the project.
+	if id != "" {
+		root = ""
 	}
 	return OpenedPlan{
-		Agent:   &fakePlanAgent{f: f, events: make(chan plan.Event, 8)},
-		Approve: approve,
-		Store:   &fakePlanStore{text: f.plan, id: id, newID: f.newID, title: f.title, units: f.units, flow: f.flow},
-		Root:    root,
+		Store: &fakePlanStore{f: f, text: f.plan, id: id, newID: f.newID, title: f.title, units: f.units, flow: f.flow},
+		Root:  root,
 	}, nil
-}
-
-// fakeResumer is a plan.Resumer that records each resume as "root plan
-// kind", and answers err.
-type fakeResumer struct {
-	mu    sync.Mutex
-	calls []string
-	err   error
-}
-
-func (r *fakeResumer) Resume(_ context.Context, root, planID string, kind planstate.ResumeKind, holder string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	call := fmt.Sprintf("%s %s %d", root, planID, kind)
-	if holder != "" {
-		call += " " + holder
-	}
-	r.calls = append(r.calls, call)
-	return r.err
-}
-
-func (r *fakeResumer) called() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.calls...)
 }
 
 // fakeDeleter is a Deleter that records each plan it is asked to delete and
@@ -348,17 +280,17 @@ func TestNOpensANewPlanInTheProject(t *testing.T) {
 	assert.Assert(t, m.View().MouseMode == tea.MouseModeCellMotion, "the plan and chat scroll with the mouse")
 }
 
-// A flow opened from the list is in the project the dashboard was opened
-// in, as a new plan is.
-func TestAFlowOpensInTheDashboardsProject(t *testing.T) {
-	f := &fakePlans{}
+// The opener is asked for any plan with the project the dashboard was opened
+// in; an existing plan comes back with no root of its own.
+func TestAFlowOpensWithoutACheckout(t *testing.T) {
+	f := &fakePlans{plan: "# Retry uploads"}
 	m := planModel(t, f)
 	next, cmd := m.Update(flowlist.OpenMsg{ID: "p1", Title: "Retry uploads"})
 	m = deliverThen(t, next.(Model), cmd, 0)
 	assert.Check(t, cmp.Equal(f.root, "/src/chunk-cli"))
 	assert.Check(t, m.planOpen)
+	assert.Check(t, cmp.Equal(m.planWorkspaces[m.planKey].root, ""))
 }
-
 func TestPlannerErrorIsNotedOnFlows(t *testing.T) {
 	f := &fakePlans{err: errors.New("this project has no git remote named origin")}
 	m := openPlanScreen(t, planModel(t, f))
@@ -387,25 +319,32 @@ func TestFlowsKeys(t *testing.T) {
 	}
 }
 
-// Esc goes back to Flows with the plan kept: chunk carries on while the
+// createPlan sends the new plan screen's title and request, as typed, and
+// delivers the create and the claim after it.
+func createPlan(t *testing.T, m Model, title, request string) Model {
+	t.Helper()
+	m = typeInto(m, title)
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter}) // to the request
+	m = typeInto(m, request)
+	m, create := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	assert.Assert(t, create != nil, "enter sends the title and request")
+	return deliverThen(t, m, create, 2) // the plan is created, then claimed and read
+}
+
+// Esc goes back to Flows with the plan kept: its worker carries on while the
 // list is shown, and opening the plan again shows it as it was.
 func TestThePlanIsKeptBehindFlows(t *testing.T) {
-	f := &fakePlans{reply: "Wrote a plan.", plan: "## 1. Outcome\n\nThe flag exists.", release: make(chan struct{})}
+	f := &fakePlans{plan: "## 1. Outcome\n\nThe flag exists.", newID: "plan-1"}
 	m := openPlanScreen(t, planModel(t, f))
-	m = typeInto(m, "add a flag")
-	m, turn := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	assert.Assert(t, turn != nil, "enter sends the message to chunk")
-	m = deliverThen(t, m, turn, 1) // the plan is created, then the message sent
+	m = createPlan(t, m, "Add a flag", "add a flag")
+	assert.Check(t, cmp.DeepEqual(f.created, []string{"Add a flag | add a flag"}))
 
-	// Esc goes back while chunk works, which carries on.
+	// Esc goes back while the worker works, which carries on.
 	m, back := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = deliver(t, m, back)
 	assert.Assert(t, !m.planOpen && m.flowsOpen && m.HasPlan())
 	key := m.planKey
 
-	// chunk answers while Flows is shown.
-	close(f.release)
-	m = deliver(t, m, workspaceCmd(key, m.planScreen.Next()))
 	// The plan pane picks up the store's text on its next poll; this drives
 	// one deterministically rather than waiting on the real timer.
 	m = deliver(t, m, workspaceCmd(key, m.planScreen.Poll()))
@@ -413,23 +352,14 @@ func TestThePlanIsKeptBehindFlows(t *testing.T) {
 	next, _ := m.Update(flowlist.OpenMsg{ID: m.planWorkspaces[key].store.ID()})
 	m = next.(Model)
 	assert.Assert(t, m.planOpen)
-	// The reply came before factory gave the plan a state, so it is in the
-	// Created stage, which enter opens.
-	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	out := screen(m)
-	assert.Assert(t, strings.Contains(out, "Wrote a plan.") && strings.Contains(out, "The flag exists."), "the reply that came while away is shown:\n%s", out)
+	assert.Assert(t, strings.Contains(out, "The flag exists."), "the plan is shown:\n%s", out)
 }
-
-// The open flow screen gets the keys: its left pane is the Overview, its right
-// the plan, and ← and → leave the plan pane showing the plan.
 func TestArrowsReachTheOpenFlowScreen(t *testing.T) {
-	f := &fakePlans{reply: "ok", newID: "plan-1", plan: "# The plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
+	f := &fakePlans{newID: "plan-1", plan: "# The plan\n\n## 1. Outcome\n\nThe flag exists.\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
 	f.units = []plan.Unit{{Name: "Unit 1: Add the flag"}}
 	m := openPlanScreen(t, planModel(t, f))
-	m = typeInto(m, "add a flag")
-	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = deliverThen(t, m, cmd, 1)                                   // the plan is created, then the message sent
-	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Next())) // chunk's reply
+	m = createPlan(t, m, "Add a flag", "add a flag")
 	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
 	s := screen(m)
 	assert.Check(t, cmp.Contains(s, "ACTIVITY"), "the Overview is the left pane:\n%s", s)
@@ -447,32 +377,25 @@ func TestArrowsReachTheOpenFlowScreen(t *testing.T) {
 }
 
 // Approving keeps the plan screen open on its Overview, which follows the
-// build, and reads that build from the daemon when watch gives it one.
+// build: it sends the approval to factory and names the worker building it.
 func TestApprovingThePlanKeepsItsScreen(t *testing.T) {
-	for _, withBuilds := range []bool{true, false} {
-		t.Run(map[bool]string{true: "with builds", false: "without builds"}[withBuilds], func(t *testing.T) {
-			testApprovingThePlanKeepsItsScreen(t, withBuilds)
-		})
-	}
-}
-
-func testApprovingThePlanKeepsItsScreen(t *testing.T, withBuilds bool) {
-	f := &fakePlans{reply: "ok", newID: "plan-1", plan: "# The plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
+	f := &fakePlans{newID: "plan-1", plan: "# The plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n"}
 	f.units = []plan.Unit{{Name: "Unit 1: Add the flag"}}
-	builds := &fakePlanBuilds{}
-	m := planModel(t, f)
-	if withBuilds {
-		m = m.WithPlanBuilds(builds)
+	f.flow = &plan.Flow{
+		State: "refine-units", WaitingOn: "human",
+		Events: []string{"address-comments", "approve-for-building"},
+		Next: []plan.Step{
+			{Actor: "human", Event: "address-comments"},
+			{Actor: "human", Event: "approve-for-building", Required: true},
+		},
+		Worker: &plan.Worker{ID: "w1", Hostname: "scotts-mbp", Live: true},
 	}
-	m = openPlanScreen(t, m)
-	m = typeInto(m, "add a flag")
-	m, cmd := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	m = deliverThen(t, m, cmd, 1)                                   // the plan is created, then the message sent
-	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Next())) // chunk's reply
+	m := openPlanScreen(t, planModel(t, f))
+	m = createPlan(t, m, "Add a flag", "add a flag")
 	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
 
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'y', Text: "y"})
+	m, cmd := pressKey(m, tea.KeyPressMsg{Code: 'y', Text: "y"})
 	// y starts the approval and the spinner; the spinner's ticks are left out.
 	batch, ok := cmd().(tea.BatchMsg)
 	assert.Assert(t, ok && len(batch) == 2, "y did not start the approval")
@@ -480,20 +403,14 @@ func testApprovingThePlanKeepsItsScreen(t *testing.T, withBuilds bool) {
 	// The screen answers with BuildingMsg, and a refresh, as workspaceMsgs.
 	m = deliver(t, next.(Model), buildingCmd)
 	assert.Assert(t, f.sent, "the plan was not approved")
-	// The refresh after approval reads the build if the approval did not.
 	m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
 
 	assert.Check(t, m.planOpen && m.HasPlan(), "an approved plan's screen stays open")
 	out := screen(m)
-	assert.Check(t, cmp.Contains(out, "Approved · building as run build-1"))
+	assert.Check(t, cmp.Contains(out, "Approved · scotts-mbp is building it"))
 	assert.Check(t, !strings.Contains(out, "Runs"), "the screen names Runs:\n%s", out)
 	// The Overview has the keyboard, so its cursor is on the Building stage.
 	assert.Check(t, cmp.Contains(out, "▶ ◉ Building"), "the Overview does not have the keyboard:\n%s", out)
-	if withBuilds {
-		assert.Check(t, cmp.DeepEqual(builds.planIDs(), []string{"plan-1"}))
-	} else {
-		assert.Check(t, cmp.Len(builds.planIDs(), 0))
-	}
 }
 
 // A ClosedMsg for an approved plan goes back to Flows, as one for a plan
@@ -508,9 +425,9 @@ func TestApprovedPlanStaysOnFlows(t *testing.T) {
 	m = deliverThen(t, next.(Model), cmd, 0)
 	assert.Assert(t, m.planOpen)
 
-	next, _ = m.Update(workspaceMsg{key: m.planKey, msg: plan.ClosedMsg{BuildID: "b1"}})
+	next, _ = m.Update(workspaceMsg{key: m.planKey, msg: plan.ClosedMsg{Approved: true, Worker: "scotts-mbp"}})
 	m = next.(Model)
-	next, _ = m.Update(workspaceMsg{key: m.planKey, msg: plan.BuildingMsg{BuildID: "b1"}})
+	next, _ = m.Update(workspaceMsg{key: m.planKey, msg: plan.BuildingMsg{Worker: "scotts-mbp"}})
 	m = next.(Model)
 	view := screen(m)
 	assert.Check(t, m.flowsOpen && !m.planOpen)
@@ -595,10 +512,10 @@ func TestSwitchingPlansKeepsDraftsAndRoutesBackgroundResults(t *testing.T) {
 	assert.Assert(t, quits)
 }
 
-// A new plan's header says New plan until factory names it, and the name
+// A new plan's header says New plan until it is created, and the typed title
 // goes to the workspace that created it, not the one showing.
-func TestANewPlansHeaderTakesItsName(t *testing.T) {
-	fresh := &fakePlans{title: "retry-uploads"}
+func TestANewPlansHeaderTakesItsTitle(t *testing.T) {
+	fresh := &fakePlans{release: make(chan struct{})}
 	other := &fakePlans{plan: "# Cache installs"}
 	planner := func(ctx context.Context, root, id string) (OpenedPlan, error) {
 		if id == "" {
@@ -617,6 +534,8 @@ func TestANewPlansHeaderTakesItsName(t *testing.T) {
 	newKey := m.planKey
 	assert.Check(t, cmp.Contains(screen(m), "chunk plan / New plan"))
 
+	m = typeInto(m, "retry-uploads")
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = typeInto(m, "retry uploads")
 	m, create := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 
@@ -624,6 +543,7 @@ func TestANewPlansHeaderTakesItsName(t *testing.T) {
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	next, cmd = m.Update(flowlist.OpenMsg{ID: "cache", Title: "cache-installs"})
 	m = deliver(t, next.(Model), cmd)
+	close(fresh.release)
 	m = deliverThen(t, m, create, 0) // the create lands, for the new plan
 	assert.Check(t, cmp.Contains(screen(m), "chunk plan / cache-installs"))
 	assert.Check(t, !strings.Contains(screen(m), "retry-uploads"), screen(m))
@@ -682,39 +602,63 @@ func TestOpenMsgOpensOrReusesAWorkspace(t *testing.T) {
 	assert.Check(t, m.planOpen)
 }
 
-// R on the flow list resumes the selected flow through the resumer, in the
-// dashboard's project, and the list stays where it is.
-func TestFlowListResumeCallsTheResumer(t *testing.T) {
+// claimer is a claim func that records each plan it is asked to claim and
+// answers err, or the worker scotts-mbp.
+type claimer struct {
+	mu    sync.Mutex
+	calls []string
+	err   error
+}
+
+func (c *claimer) claim(_ context.Context, planID string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, planID)
+	if c.err != nil {
+		return "", c.err
+	}
+	return "scotts-mbp", nil
+}
+
+func (c *claimer) called() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.calls...)
+}
+
+// R on the flow list has the default worker claim the selected flow's plan,
+// and the list stays where it is.
+func TestResumeFromListClaims(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
 		want string
 	}{
 		{
-			name: "resumed",
-			want: "resumed Alpha",
+			name: "claimed",
+			want: "claimed by scotts-mbp",
 		},
 		{
 			name: "refused",
-			err:  errors.New("no flow"),
-			want: "could not resume Alpha: no flow",
+			err:  errors.New("no live worker can claim this plan"),
+			want: "could not resume Alpha: no live worker can claim this plan",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := &fakeResumer{err: tc.err}
+			c := &claimer{err: tc.err}
 			flow := circleci.Flow{ID: "a", Title: "Alpha", State: "build",
 				Next: []circleci.Transition{{Actor: "session", TaskCategory: "build-unit"}}}
 			m := sized(New().WithConnection(chunkd.Connection{}).
 				WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
-				WithPlanResume(r).WithFlowList(flowList(t, flow)))
+				WithPlanClaim(c.claim).WithFlowList(flowList(t, flow)))
 			m = deliverThen(t, m, m.flows.Init(), 1)
 
-			next, cmd := m.Update(flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeBuild})
+			next, cmd := m.Update(flowlist.ResumeMsg{ID: "a", Title: "Alpha"})
 			m = next.(Model)
 			assert.Check(t, cmp.Equal(m.note, "resuming Alpha…"))
-			assert.Assert(t, cmd != nil, "the resume was not started")
+			assert.Assert(t, cmd != nil, "the claim was not started")
 			msg := cmd()
-			assert.Check(t, cmp.DeepEqual(r.called(), []string{fmt.Sprintf("/src/chunk-cli a %d", planstate.ResumeBuild)}))
+			assert.Check(t, cmp.DeepEqual(c.called(), []string{"a"}))
 
 			next, refresh := m.Update(msg)
 			m = next.(Model)
@@ -726,74 +670,12 @@ func TestFlowListResumeCallsTheResumer(t *testing.T) {
 	}
 }
 
-// A take-over the list confirmed reaches the resumer with the holder.
-func TestFlowListTakeOverPassesTheHolder(t *testing.T) {
-	r := &fakeResumer{}
-	flow := circleci.Flow{ID: "a", Title: "Alpha", State: "ready"}
-	m := sized(New().WithConnection(chunkd.Connection{}).
-		WithPlans(t.Context(), "/src/chunk-cli", (&fakePlans{}).planner).
-		WithPlanResume(r).WithFlowList(flowList(t, flow)))
-	m = deliverThen(t, m, m.flows.Init(), 1)
-
-	next, cmd := m.Update(flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeTakeOver, Holder: "s-1"})
-	m = next.(Model)
-	assert.Check(t, cmp.Equal(m.note, "resuming Alpha…"))
-	assert.Assert(t, cmd != nil, "the take-over was not started")
-	msg := cmd()
-	assert.Check(t, cmp.DeepEqual(r.called(), []string{fmt.Sprintf("/src/chunk-cli a %d s-1", planstate.ResumeTakeOver)}))
-
-	next, _ = m.Update(msg)
-	assert.Check(t, cmp.Equal(next.(Model).note, "resumed Alpha"))
-}
-
-// Without a resumer the flow list's resume does nothing.
-func TestFlowListResumeWithoutAResumer(t *testing.T) {
+// Without a claim func the flow list's resume does nothing.
+func TestFlowListResumeWithoutAClaim(t *testing.T) {
 	m := planModel(t, &fakePlans{})
-	next, cmd := m.Update(flowlist.ResumeMsg{ID: "a", Title: "Alpha", Kind: planstate.ResumeBuild})
+	next, cmd := m.Update(flowlist.ResumeMsg{ID: "a", Title: "Alpha"})
 	assert.Check(t, cmd == nil)
 	assert.Check(t, cmp.Equal(next.(Model).note, ""))
-}
-
-// A flow screen the dashboard opens resumes its build through the
-// dashboard's resumer.
-func TestOpenedScreensGetTheResumer(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		// resolved is the root the opener resolves the plan to; "" keeps
-		// the dashboard's.
-		resolved string
-		want     string
-	}{
-		{
-			name: "the opened-in project",
-			want: "/src/chunk-cli",
-		},
-		{
-			name:     "a checkout of the plan's repo",
-			resolved: "/src/factory",
-			want:     "/src/factory",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := &fakeResumer{}
-			f := &fakePlans{plan: "# Retry uploads", resolved: tc.resolved, flow: &plan.Flow{
-				State:     "build",
-				Next:      []plan.Step{{Actor: "session", Task: "build-unit"}},
-				WaitingOn: "session",
-			}}
-			m := planModel(t, f).WithPlanResume(r)
-			next, cmd := m.Update(flowlist.OpenMsg{ID: "p1", Title: "Retry uploads"})
-			m = deliverThen(t, next.(Model), cmd, 0)
-			assert.Assert(t, m.planOpen)
-			m = deliver(t, m, workspaceCmd(m.planKey, m.planScreen.Poll()))
-
-			m, cmd = pressKey(m, tea.KeyPressMsg{Code: 'R', Text: "R"})
-			assert.Assert(t, cmd != nil, "R did nothing:\n%s", screen(m))
-			_ = deliver(t, m, cmd)
-			want := []string{fmt.Sprintf("%s p1 %d", tc.want, planstate.ResumeBuild)}
-			assert.Check(t, cmp.DeepEqual(r.called(), want))
-		})
-	}
 }
 
 // X on the flow list asks, and the confirmed delete goes through the deleter;

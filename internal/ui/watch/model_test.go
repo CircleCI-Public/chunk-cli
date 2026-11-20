@@ -84,7 +84,7 @@ func TestRenderHeader_showsTheResumeLine(t *testing.T) {
 		m := claimedModel(t)
 
 		header := ansi.Strip(m.renderHeader(m.styles()))
-		assert.Check(t, cmp.Contains(header, "Claimed by session cc6b734c · factory daemon release b frees it"))
+		assert.Check(t, cmp.Contains(header, "Claimed by session cc6b734c"))
 		assert.Check(t, !strings.Contains(header, "✓ local"), header)
 		assert.Check(t, cmp.Equal(strings.Count(header, "\n"), 1), header)
 		assert.Check(t, ansi.StringWidth(strings.TrimSuffix(header, "\n")) <= m.width, header)

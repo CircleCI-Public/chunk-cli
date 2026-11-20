@@ -16,15 +16,16 @@ func click(x, y int) tea.MouseClickMsg {
 	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
 }
 
-// planned is a screen of the given size showing text, approved by approve.
-func planned(t *testing.T, width, height int, text string, approve Approver) (Model, *fakeStore) {
+// planned is a screen of the given size showing text.
+func planned(t *testing.T, width, height int, text string) (Model, *fakeStore) {
 	t.Helper()
 	store := newFakeStore()
 	store.TextV = text
-	m := New(context.Background(), turnReturning("ok"), approve, store, "plan it")
+	m := New(context.Background(), store, "plan it")
 	// The tests are not to touch the clipboard of the machine they run on.
 	m.copyText = tea.SetClipboard
-	return drive(t, m, tea.WindowSizeMsg{Width: width, Height: height}), store
+	m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: height})
+	return startPlan(t, m, "Plan"), store
 }
 
 // rowOf is the screen row whose text contains s.
@@ -41,17 +42,17 @@ func rowOf(t *testing.T, m Model, s string) int {
 
 func TestClickingAPaneGivesItTheKeyboard(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
-	assert.Assert(t, cmp.Equal(m.focus, paneOverview), "the chat should start with the keyboard")
+	m, _ := planned(t, 140, 40, twoParts)
+	assert.Assert(t, cmp.Equal(m.focus, paneOverview), "the Overview should start with the keyboard")
 	m = drive(t, m, click(m.planLeft()+10, 10+stripRows))
 	assert.Check(t, cmp.Equal(m.focus, panePlan), "clicking the plan did not focus it")
 	m = drive(t, m, click(5, 10+stripRows))
-	assert.Check(t, cmp.Equal(m.focus, paneOverview), "clicking the chat did not focus it")
+	assert.Check(t, cmp.Equal(m.focus, paneOverview), "clicking the Overview did not focus it")
 }
 
 func TestClickingABlockMovesTheCursorToIt(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "DESIGN")))
 	assert.Check(t, cmp.Equal(m.focus, panePlan))
 	assert.Check(t, cmp.Equal(m.cursor, 2))
@@ -59,7 +60,7 @@ func TestClickingABlockMovesTheCursorToIt(t *testing.T) {
 
 func TestShiftClickSelectsFromTheCursor(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	m = drive(t, m, click(m.planLeft()+10, rowOf(t, m, "OUTCOME")))
 	shift := click(m.planLeft()+10, rowOf(t, m, "DESIGN"))
 	shift.Mod = tea.ModShift
@@ -72,7 +73,7 @@ func TestShiftClickSelectsFromTheCursor(t *testing.T) {
 
 func TestDoubleClickOpensTheComment(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	y := rowOf(t, m, "The flag exists.")
 	m = drive(t, m, click(m.planLeft()+10, y))
 	assert.Assert(t, !m.commenting, "one click opened the editor")
@@ -87,7 +88,7 @@ func TestDoubleClickOpensTheComment(t *testing.T) {
 
 func TestClickingTheTabsSwitchesPanes(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 70, 30, twoParts, nil)
+	m, _ := planned(t, 70, 30, twoParts)
 	y := rowOf(t, m, "Overview")
 	m = drive(t, m, click(5, y))
 	assert.Assert(t, cmp.Equal(m.focus, paneOverview), "clicking the Overview tab left the Overview")
@@ -99,12 +100,7 @@ func TestClickingTheTabsSwitchesPanes(t *testing.T) {
 
 func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
 	t.Parallel()
-	approved := false
-	approve := func(func(string)) (string, error) {
-		approved = true
-		return "build-1", nil
-	}
-	m, store := planned(t, 140, 40, "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n", approve)
+	m, store := planned(t, 140, 40, "# Plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
 	store.UnitsV = []Unit{{Name: "Unit 1: Add the flag"}}
 	m = refreshed(t, m)
 	bar := m.height - footerRows + 1
@@ -113,19 +109,19 @@ func TestClickingApproveAsksThenYesApprovesThePlan(t *testing.T) {
 	assert.Assert(t, m.confirming, "clicking Approve did not ask (right=%q)", ansi.Strip(right))
 	// A click elsewhere is a no.
 	n := drive(t, m, click(3, 5+stripRows))
-	assert.Assert(t, !n.confirming && !approved, "a click elsewhere did not decline")
+	assert.Assert(t, !n.confirming && store.Approved == 0, "a click elsewhere did not decline")
 	text := ansi.Strip(m.status)
 	at := strings.Index(text, confirmYes)
 	assert.Assert(t, at >= 0, "the question has no yes button: %q", text)
 	x := 2 + ansi.StringWidth(text[:at])
 	m = drive(t, m, click(x+1, bar))
-	assert.Check(t, approved)
-	assert.Check(t, cmp.Equal(m.BuildID, "build-1"))
+	assert.Check(t, cmp.Equal(store.Approved, 1))
+	assert.Check(t, m.Approved)
 }
 
 func TestClickingSaveCommentsSavesThem(t *testing.T) {
 	t.Parallel()
-	m, store := planned(t, 140, 40, twoParts, nil)
+	m, store := planned(t, 140, 40, twoParts)
 	m = drive(t, m, press("tab"))
 	m = drive(t, m, press("c"))
 	m = typeText(t, m, "tighten this")
@@ -141,8 +137,8 @@ func TestClickingSaveCommentsSavesThem(t *testing.T) {
 
 func TestWheelScrollsThePaneUnderThePointer(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 20, longPlan(), nil)
-	// The chat has the keyboard, but the pointer is over the plan.
+	m, _ := planned(t, 140, 20, longPlan())
+	// The Overview has the keyboard, but the pointer is over the plan.
 	m = drive(t, m, tea.MouseWheelMsg{X: m.planLeft() + 10, Y: 8 + stripRows, Button: tea.MouseWheelDown})
 	assert.Check(t, m.planView.YOffset() != 0, "the wheel over the plan did not scroll it")
 	assert.Check(t, cmp.Equal(m.focus, paneOverview), "scrolling took the keyboard")
@@ -152,7 +148,7 @@ func TestWheelScrollsThePaneUnderThePointer(t *testing.T) {
 // anywhere in it does, and both panes keep showing what they showed.
 func TestClickingTheRightPanesTitleSwitchesNothing(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	before := ansi.Strip(m.Content())
 	assert.Assert(t, cmp.Contains(before, "Plan"))
 	m = drive(t, m, click(m.planLeft()+4, m.topRows()))
@@ -166,7 +162,7 @@ func TestClickingTheRightPanesTitleSwitchesNothing(t *testing.T) {
 // one row tall.
 func TestClickingANarrowTabPicksAPane(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 70, 30, twoParts, nil)
+	m, _ := planned(t, 70, 30, twoParts)
 	y := headerRows + stripRows
 	spans := m.tabSpans()
 	assert.Assert(t, cmp.Len(spans, 2))

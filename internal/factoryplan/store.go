@@ -1,10 +1,8 @@
 // Package factoryplan backs the planning screen with factory: the plan and its
-// comments in factory's V3 API (Store), and the planner the chunk daemon runs
-// for it (Agent).
+// comments in factory's V3 API, and its claim by a factory worker (Store).
 package factoryplan
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/planapprove"
 	"github.com/CircleCI-Public/chunk-cli/internal/planstate"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/plan"
@@ -26,8 +23,6 @@ type Store struct {
 	api *circleci.Client
 	// repo is the GitHub repository a plan Create makes records, "" for none.
 	repo string
-	// name names a new plan for the developer's first message.
-	name func(ctx context.Context, message string) (string, error)
 	// hostname is this machine's hostname, which Claim prefers a worker
 	// to match.
 	hostname func() (string, error)
@@ -44,7 +39,7 @@ type Store struct {
 // when id is "". repo is the GitHub repository, as owner/name, a plan Create
 // makes records; "" records none.
 func NewStore(api *circleci.Client, id, repo string) *Store {
-	return &Store{api: api, name: factory.NamePlan, hostname: os.Hostname, planID: id, repo: repo}
+	return &Store{api: api, hostname: os.Hostname, planID: id, repo: repo}
 }
 
 // repos is repo as the repositories a new plan records: none for "".
@@ -62,29 +57,24 @@ func (s *Store) ID() string {
 	return s.planID
 }
 
-// Create makes the plan in factory with no text, so factory writes its
-// skeleton, recording the store's repository when it has one.
-func (s *Store) Create(ctx context.Context, message string) (string, error) {
-	title := s.title(ctx, message)
-	p, err := s.api.CreatePlan(ctx, title, "", repos(s.repo)...)
+// Create makes the plan in factory, titled title, from the skeleton with
+// request under its Outcome, recording the store's repository when it has one.
+func (s *Store) Create(ctx context.Context, title, request string) error {
+	p, err := s.api.CreatePlan(ctx, title, skeleton(title, request), repos(s.repo)...)
 	if err != nil {
-		return "", fmt.Errorf("create the plan in factory: %w", err)
+		return fmt.Errorf("create the plan in factory: %w", err)
 	}
 	s.mu.Lock()
 	s.planID = p.ID
 	s.mu.Unlock()
-	return title, nil
+	return nil
 }
 
-// title is the plan's title for message, as Claude names it or, when Claude
-// gives no usable name, as fallbackTitle.
-func (s *Store) title(ctx context.Context, message string) string {
-	name, err := s.name(ctx, message)
-	if err != nil {
-		// A plan Claude cannot name is still made; the developer is not told.
-		return fallbackTitle(message)
-	}
-	return cmp.Or(slug(name, maxNameWords), fallbackTitle(message))
+// skeleton is the text of a new plan, as the web UI makes it: the title, the
+// request under 1. Outcome, and the sections the plan fills in, empty.
+func skeleton(title, request string) string {
+	return "# " + title + "\n\n## 1. Outcome\n\n" + request +
+		"\n\n## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"
 }
 
 // errNotCreated is returned by a write before Create has set an ID to

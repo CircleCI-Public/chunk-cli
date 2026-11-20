@@ -146,8 +146,7 @@ chunk
 │           --json                  # Output as JSON
 │
 ├── factory                         # Plan changes and build them in factory
-│   ├── plan [prompt]               # Plan a change with Claude, then approve it and build it on the daemon
-│   │   --model <model>             # Model Claude plans with (default: your Claude Code default)
+│   ├── plan [request]              # Plan a change in factory, on one of your factory workers
 │   └── bootstrap                   # Set up this project for chunk factory: config and sidecar image
 │       --skip-sidecar              # Leave out setting up and recording the sidecar image
 │       --snapshot-name <name>      # Name the sidecar image's snapshot (default: <repo>-<YYYY-MM-DD>-<HHMMSS>)
@@ -279,19 +278,22 @@ chunk
   history only** — uncommitted work in the tree is invisible to it. A detached
   HEAD, a repo with no recorded default branch, and a branch that is itself the
   merge target all produce "no answer" rather than a clean bill of health.
-- **`ui` works with this machine's daemon only.** Flows and plans are
-  planned and built from this machine, so with `CHUNK_DAEMON_REMOTE_ADDR` set
-  `ui` refuses to start (`ui.remote_unsupported`), before it checks for a
+- **`ui` works with this machine's daemon only.** Its chat and the daemon
+  check in its header are this machine's, so with `CHUNK_DAEMON_REMOTE_ADDR`
+  set `ui` refuses to start (`ui.remote_unsupported`), before it checks for a
   terminal, and says to unset the variable; the variable keeps its meaning for
   the other daemon clients. The header turns red with `unreachable` when the
-  daemon stops answering, and the daemon is started again.
+  daemon stops answering, and the daemon is started again. Flows and plans
+  themselves are factory's: reading, approving, claiming and releasing a plan
+  are calls to factory, and a worker plans and builds it, so none of it goes
+  through the chunk daemon.
 - **`ui` takes no directories.** Flows are the signed-in user's wherever it
   is run, and new plans are made in the project it was opened in, which it
-  registers. An existing plan is planned and built in a checkout of the repo
-  it records, among the projects chunk knows: the opened-in project when it
-  is one, else the checkout already holding the plan's worktree, else the
-  most recently used. With none, the plan opens read-only and approving or
-  `R` says to run `chunk ui` once in a checkout of that repo. An argument
+  registers and checks (a repository with an `origin` and something to check a
+  build with) when the plan opens; outside a repository the dashboard notes
+  `could not open the plan: open chunk ui in a local repository to make a
+  plan`. An existing plan opens fully with no local checkout of its repo:
+  approving, resuming (`R`) and stopping (`S`) are factory calls. An argument
   exits 2. `--focus` and `--all` still parse, deprecated,
   and do nothing.
 - **`chunk ui` is the recommended way to follow factory work.** It shows
@@ -301,18 +303,19 @@ chunk
   `--json`, in CI (`CI` set), and when stdout or stderr is not a terminal (a
   log file, a pipe), so none of those changes anything already being parsed.
   Chunk never opens `ui` for you.
-- **`factory plan` makes a plan with a factory planning session, then
-  approves it in factory and builds it.** It opens a flow screen. A one-row
+- **`factory plan` creates a plan in factory and hands it to one of your
+  factory workers, then follows it, approves it and watches it build.** It
+  opens a flow screen. A one-row
   strip under the header shows the plan's stage (`Created`, `Planning`,
   `Building`, `Integrating` or `Done`), what is happening now (the factory
   task and its unit) and what comes next, e.g.
   `Building · Now: Build unit · Unit 2: parser · Next: chunk: build-unit`
   (`Next: you approve the plan · ctrl+s`, `Waiting on <blocker>`). The pane on
-  the left is titled Request until the plan exists and holds the request
-  input, then Overview. The Overview shows the plan's Outcome; its Sub-flows, the open
+  the left is titled Request until the plan exists and holds the title and
+  request inputs, then Overview. The Overview shows the plan's Outcome; its Sub-flows, the open
   sub-plans; an Activity timeline of the stages (Created, Planning, Building,
   Integrating, Done), newest first, where each stage holds what this screen
-  saw happen in it (the planner's replies, each build session; a stage's log
+  saw happen in it (your request and chunk's own failures; a stage's log
   lists them newest first, as the timeline does), and, for the
   stage the flow is in, what factory says of its progress (each unit ✓ done,
   ▸ being built, ○ to do), the pull request and its deviations, and the
@@ -322,72 +325,76 @@ chunk
   the plan, rendered as markdown (a markdown link is underlined and opens its
   URL in terminals that support hyperlinks; only `http` and `https` links
   do). `tab` moves the keyboard between the two. The keyboard starts in the
-  plan while the plan is being planned, and in the Overview after. Once the
-  plan is being built, the Overview's Building stage also shows the build
-  session's progress from this machine's chunk daemon, under a `build
-  session` divider per session: each tool call, reply and note, newest
-  first, including a warning when another session holds the plan's claim. The Overview's first
-  line says whether `R` can resume the plan. When it can't, the line says why.
-  For example, it names a blocker that isn't Done, or, for a claimed plan
-  in Building or Integrating, the session that holds the claim and the
-  `factory daemon release` command that frees it. For a plan being planned
-  that another session holds, `R` asks for confirmation (y/n; any key but
-  `y` cancels), then releases the claim and resumes the planner. The
-  release is refused when the holder is chunk's own planner, a session
-  working in the plan's worktree, or one factory's daemon does not know.
-  In `chunk ui`, `R`
-  resumes a planner or starts a fresh build session in the chunk daemon, in
-  a checkout of the plan's repo, as above, and the flow list offers the same
-  `R` for the selected flow. The chunk daemon refuses to approve or build a
-  plan in a checkout of another repo (409), so a plan stays unapproved
-  rather than building in the wrong repository.
-  While the plan's build session is running, `S` stops it, after a `y`:
-  the Building stage ends the session with `Build session stopped`, and
-  the daemon frees factory's claim if the session still holds it, so
-  `R` can start a fresh one at once. The dashboard's header says what `R` does there
-  or why it can't, where it otherwise names the daemon; a daemon it can't
-  reach is shown instead. On a screen opened by `chunk factory plan`, `R`
-  resumes only a planner; resume a build from `chunk ui`. chunk never
-  resumes a build on its own. The flow list also offers `X`: it
-  deletes the selected plan, its comments and its flow after a y/n question in the footer, where any key but `y` cancels. It is
-  not offered on a plan a session claims. The request you type for a new plan (or the one passed as
-  `chunk factory plan "<request>"`) creates it
-  in factory, named by Claude for what the request asks for, as a 2-3 word
-  slug (`dry-run-flag`), or for a slug of its first line (`add-a-dry-run-flag`)
-  when Claude cannot name it,
-  and has the chunk daemon start one long-lived Claude Code session with
-  factory's f plugin, which claims the plan and plans it through the factory
-  daemon's tasks. The session runs in the chunk daemon, not in the screen:
-  closing the screen leaves it planning, and any chunk window that opens the
-  plan shows the same session's activity. A screen opened while it is working
-  shows it working. The screen refreshes the plan's text, state and comments every 5s;
-  the plan's state is in the status strip. Nothing typed after the request
-  reaches the session; it works through factory's tasks. The stage's log
-  names the task each turn is on, as the plan's flow in factory names it,
-  in sentence case (`Early plan` for `early-plan`), and the reply is marked
-  with it (`chunk · Early plan`). It needs factory, the f plugin, and the
-  factory daemon running with `FACTORY_PLAN_STORE=circleci` as the CircleCI
-  user chunk is signed in as; it checks the daemon before it opens, and says in
-  the Overview if the session could not claim the plan. While the plan
-  is being planned (factory's `init`, `ready`, `refine-proposal` or
-  `refine-units`) and factory waits on a session no one is running, the
-  screen resumes the session on its own and tells it to claim the plan
-  again, with none of the developer's words; it tries once per flow state,
-  and never for a plan past planning. A plan a session has claimed and let
-  go of while in init is not resumed again until it moves on; `R` still resumes
-  it. A new plan's request that could not start the session is kept,
-  and sent in place of that claim. Closing the screen stops the session,
-  which frees its claim. A plan opened again in a later screen picks up the
-  conversation that planned it, rather than starting a blank one. One chunk
-  at a time plans a plan: another that opens it can read it and comment, but
-  does not start a second session.
+  plan while the plan is being planned, and in the Overview after.
 
-  The session works in a worktree of the plan's own rather than the
-  developer's checkout, since that is where the plan is built once it
-  is approved. It starts from a fresh fetch of origin's default branch, so
-  unpushed and uncommitted work in the checkout is not in it, but for an
-  uncommitted `.chunk/config.json`, which is copied in. It is removed once
-  the plan has ended, unless it has changes in it.
+  While a worker holds the plan, the Overview shows what the worker is doing:
+  its hostname and whether it is live (`<hostname> · not live` when it is
+  not), each headless item it runs for the plan (`role · state`, with
+  `health_reason` when it is not ok), and the worker's error for the plan
+  (`problem`, then `fix`) when it reports one. With none, it shows
+  `<hostname> · no headless runner`, for example when the worker's
+  `dispatch.allow_headless` is off, or `<hostname> · session <8-char id>` when
+  a Claude Code session also holds the plan. It reads these with the flow, at
+  the flow's poll rate. If the worker can't be read, the screen keeps the flow,
+  says so, and shows no worker.
+
+  The Overview's first line says whether `R` can resume the plan. When it
+  can't, the line says why. For example, it names a blocker that isn't Done,
+  or the session or worker that holds the claim: a plan claimed by a Claude
+  Code session shows `Claimed by session <id>`, or, when factory waits on you
+  or on itself, `Waiting on you · claimed by session <id>` or
+  `Waiting on factory · claimed by session <id>`; one claimed by a worker
+  shows `Worker <hostname> · <state>`, and chunk takes neither over. `R` is offered
+  when nobody claims the plan and no blocker or sub-plan is active, whoever
+  factory waits on, and claims it for the default worker. The line then reads
+  `Waiting on you · R claims it for a worker` or
+  `Waiting on factory · R claims it for a worker` when factory waits on you or
+  on itself, and `No worker holds this plan · R claims it for a worker` when it
+  waits on a session or on nobody. A wait on blockers or sub-plans offers
+  nothing (`Waiting on blockers`, `Waiting on sub-plans`, or the active
+  blocker's title). A wait on a session offers `R` only in state `init`,
+  `ready`, `refine-proposal`, `refine-units`, `record-sub-plans`, `stand-by`,
+  `build` or `integrate`; in any other state the line says
+  `chunk can't resume a plan in <state>`. A worker that is not live still
+  holds the claim, so `R` stays hidden while it does.
+  In `chunk ui`, the flow list shows the same lines and offers the same `R`
+  for the selected flow. `S` is
+  offered while a worker holds the plan, in any state: after a `y` it
+  releases the plan's claim, so the worker stops. The plan stays where it
+  is, and `R` claims it again. If the release fails, or answers 409 because
+  the claim changed, the screen shows the error and keeps showing who holds
+  the plan. The flow list also offers `X`: it
+  deletes the selected plan, its comments and its flow after a y/n question in the footer, where any key but `y` cancels. It is
+  not offered on a plan a session claims.
+
+  The title and request you type for a new plan (the request may be passed as
+  `chunk factory plan "<request>"`, and the screen still asks for the title)
+  create it in factory with the same skeleton the web UI makes: `# <title>`,
+  the request under `## 1. Outcome`, then the empty sections. An empty title or
+  request sends nothing, and the screen says which is missing. The plan
+  records the project's GitHub repository. chunk then claims it for the
+  default worker: the live worker that `factory daemon` registered on this
+  machine when there is one, else the first live worker factory lists as
+  able to claim it. The worker plans the change in headless Claude Code, in a
+  clone of the repo under `~/.factory/headless`, and keeps planning after
+  chunk closes; any chunk window that opens the plan shows the same worker.
+  The screen refreshes the plan's text, state, comments and worker every 5s;
+  the plan's state is in the status strip. Nothing typed after the request
+  reaches the worker; it works through factory's tasks, and comments are how
+  you change the plan. If no live worker can claim the plan, it is created
+  and left unclaimed, and the screen says `No live worker can claim this plan
+  · start factory daemon, then press R`. If listing workers or claiming
+  fails (a network error, a 5xx, or a refusal from factory), the plan stays
+  created and unclaimed, the screen shows factory's reason or the error, and
+  `R` claims it again. It needs CircleCI auth and a git repo with an origin;
+  it needs no Claude Code, f plugin, factory MCP server or chunk daemon on
+  this machine. A `factory daemon` that starts a worker must be running for
+  the plan to be worked on. Opening a plan only reads it.
+
+  The worker plans and builds in its own clone of the plan's repo under
+  `~/.factory/headless`, not in your checkout, so unpushed and uncommitted
+  work in your checkout is not in it. With `dispatch.allow_headless` off, the
+  worker leaves each session task handed out and nothing does it.
 
   `tab` moves to the plan, where `c` writes a comment right under the
   highlighted part (a heading, paragraph, list item or code block); `enter`
@@ -397,12 +404,12 @@ chunk
   `esc` clears a selection. Queued comments wait under the current stage in
   the Overview, marked `N queued · s to send`. Sending (`s` in either pane)
   saves the queued comments
-  to factory, which hands them to the session to address. Comments are sent
+  to factory, which hands them to the worker to address. Comments are sent
   only while factory is waiting on you or asking for comments: while factory
   works on the plan they stay queued, and `s` is not offered. Once comments
   are handed off, the
   action bar turns purple and says the screen is waiting for factory, until a
-  refresh finds the plan has moved, a task for it handed to any session, or
+  refresh finds the plan has moved, a task for it handed to a worker, or
   factory waiting on the developer again; comments queued meanwhile are held, and
   after 15 seconds the bar says how long it has waited. While comments
   are saved they cannot be changed. A saved comment is edited at once with
@@ -431,8 +438,8 @@ chunk
   developer, the same time comments are sent; at any other time the status
   bar says so and no editor opens. If the plan changed while the editor was
   open, nothing is saved and the edit is kept in the temporary file the status
-  names. A saved edit queues a comment on the edited part asking the planning
-  session to re-read it, unless one is queued there already; it is sent with
+  names. A saved edit queues a comment on the edited part asking the worker
+  to re-read it, unless one is queued there already; it is sent with
   the other comments, and can be deleted before then. Comments on an edited part follow
   it, or are listed after the plan as for any part rewritten.
 
@@ -446,7 +453,7 @@ chunk
   The design's approval is next when factory waits on you and requires it
   but not the plan's. The strip then reads `Next: you approve the design ·
   ctrl+s`. `ctrl+s` approves the design. Once its comments are sent and
-  resolved, the session then writes the units. The action bar waits for
+  resolved, the worker then writes the units. The action bar waits for
   factory, as it does after a hand-off.
 
   Factory may require another step of you. The strip then names that step,
@@ -474,29 +481,29 @@ chunk
   was opened from. Factory refuses to delete a plan with sub-plans, and
   the strip says so.
 
-  Approving a plan with units is one request to the chunk daemon, which
-  approves it in factory, stops its planning session and starts its build, in
-  a Claude Code session in the plan's worktree, through to a pull request.
-  Closing chunk once the daemon has the request does not stop it. In `chunk ui`,
-  the screen stays open after approval, with the Overview focused, to follow the build;
-  its Building stage shows what the build session is doing.
-  Comments still go to factory whenever it takes them, as on any screen;
-  ones queued when you approve stay queued until then. The standalone
-  `chunk factory plan` warns first that approving loses queued comments,
-  since it closes. `enter` on a
-  related plan in the Overview opens it. The standalone `chunk factory plan`
-  closes on approval. The daemon frees the plan's claim from a session that
-  is only planning it, a parent plan's included; while a build holds the claim,
-  approving is refused and names its session. A build whose plan another
-  session holds says so in `chunk ui`, and picks the plan up once the claim
-  is released. Builds outlive the screen and the terminal, and any number go at
-  once; the plan's Overview follows each, from factory. A build ends with its
-  plan, so ending the plan (`x`) stops it at its next poll. A
-  stopped one leaves the plan approved in factory, and `/f:resume <ID>` in
-  Claude Code carries it on. A plan not approved stays in factory, and its ID
-  is printed. Before it opens, the screen checks that the project has a git
-  remote named `origin` and something to check a build with: validation
-  commands, review prompts in `.chunk/reviews/`, or both.
+  `ctrl+s` approves the plan in factory: readiness is checked first, then
+  `approve-for-building` is sent straight to factory, and the worker that
+  holds the plan builds it through to a pull request. Closing chunk does not stop the build. In
+  `chunk ui`, the screen stays open after approval, with the Overview
+  focused, to follow the build; the Overview shows the worker's hostname, its
+  headless items and any error it reports. If sending the approval fails
+  (a network error, a 5xx, or a 409 because the flow moved on), the screen
+  stays open and shows the error. Comments still go to factory whenever it
+  takes them, as on any screen; ones queued when you approve stay queued
+  until then. The standalone `chunk factory plan` warns first that approving
+  loses queued comments, since it closes. `enter` on a related plan in the
+  Overview opens it. The standalone `chunk factory plan` closes on approval
+  and prints `Plan <id> is approved; worker <hostname> is building it.`, or,
+  when no live worker holds the plan, `Plan <id> is approved; no worker is
+  building it. Press R in chunk ui to claim it.` A plan whose worker has
+  stopped claiming it, or that no worker holds, is claimed again with `R`.
+  Builds outlive the screen and the terminal, and any number go at once; the
+  plan's Overview follows each, from factory. A build ends with its plan, so
+  ending the plan (`x`) stops it at its next poll. A plan not approved stays
+  in factory, and its ID is printed. Before it opens, the screen checks that
+  the project has a git remote named `origin` and something to check a build
+  with: validation commands, review prompts in `.chunk/reviews/`, or both. It
+  does not check for a worker: the claim after the plan is created does.
 - **`factory bootstrap` sets a project up for `chunk factory`.** It plans
   two parts, prints the plan, and leaves out each part already done, so a
   rerun finishes a setup that stopped partway; with nothing left to do it fails
@@ -529,22 +536,21 @@ chunk
   phase) is indented under it. Sub-plans that have ended are not shown. When
   chunk cannot read the plans' parents the list is shown flat, with `sub-plans
   unavailable` under it. `Enter` opens the `chunk factory plan` screen on the
-  selected flow's plan, and `n` on a new one, to plan the change with Claude
-  before it is built. `q` or `esc` quits. Opening a plan only reads it: no session claims it
-  until you send a new plan's request, or the screen resumes a planner factory
-  is waiting on, and then in the project the dashboard was opened
-  in; a plan made here records that project's GitHub repository in factory,
-  but chunk does not check a plan's repository against the project; a plan another
-  session holds is refused rather than taken over. `esc` or `ctrl+c` goes back
-  to the plans with the plan and its session kept; `ctrl+p` does too, to
-  switch to another plan. Each opened plan keeps its own activity and
-  session. An approved plan's screen stays open on its Overview, which
+  selected flow's plan, and `n` on a new one, to plan the change on a factory
+  worker before it is built. `q` or `esc` quits. Opening a plan only reads it: no worker claims it
+  until you send a new plan's title and request, or press `R` on a plan
+  nobody holds and no blocker is active on; a plan made here records the
+  project the dashboard was opened in, and its GitHub repository, in factory;
+  a plan another session or worker holds shows who holds it rather than being
+  taken over. `esc` or `ctrl+c` goes back
+  to the plans with the plan kept; `ctrl+p` does too, to
+  switch to another plan. Each opened plan keeps its own activity. An approved plan's screen stays open on its Overview, which
   follows the build from factory. Quitting with a request or comments unsent
   in any plan asks for a second `ctrl+c`; plans and saved comments stay in
-  factory, and each plan's session keeps planning in the chunk daemon, with
-  its conversation, for the next time the plan is opened, but the activity
-  shown and an unsent request are not kept. Closing the dashboard stops no
-  planning session or build: both run in the chunk daemon.
+  factory, and each plan's worker keeps planning after chunk closes, but the
+  activity shown and an unsent request are not kept. Closing the dashboard
+  stops no planning or build: both run on the worker, and `S` is how to stop
+  one.
 - **`ctrl+o` shows a chat sidebar** on the right of any screen of `ui`, which
   stays usable beside it: a Claude Code session that answers questions about your plans and flows, from the plans, the code,
   Sourcegraph, git history and the factory daemon. It is told where it was

@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -48,7 +47,7 @@ func planText(m Model) int { return m.planLeft() + 2 + gutterWidth }
 
 func TestDraggingOverThePlanCopiesTheText(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
 
@@ -61,7 +60,7 @@ func TestDraggingOverThePlanCopiesTheText(t *testing.T) {
 
 func TestDraggingBackwardsCopiesTheSameText(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
 
@@ -72,7 +71,7 @@ func TestDraggingBackwardsCopiesTheSameText(t *testing.T) {
 
 func TestDraggingAcrossPlanPartsCopiesEachLine(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	from, to := rowOf(t, m, "The flag exists."), rowOf(t, m, "DESIGN")
 	x := planText(m)
 
@@ -86,7 +85,7 @@ func TestDraggingAcrossPlanPartsCopiesEachLine(t *testing.T) {
 
 func TestDraggingDoesNotCopyThePlansGutter(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	y := rowOf(t, m, "The flag exists.")
 
 	// The drag starts on the cursor's gutter, left of the text.
@@ -97,7 +96,7 @@ func TestDraggingDoesNotCopyThePlansGutter(t *testing.T) {
 
 func TestAClickWithoutADragCopiesNothing(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m) + 4
 
@@ -108,30 +107,14 @@ func TestAClickWithoutADragCopiesNothing(t *testing.T) {
 	assert.Check(t, m.text.drag.Empty())
 }
 
-func TestDraggingOverTheRequestCopiesTheMessageWithoutItsFrame(t *testing.T) {
-	t.Parallel()
-	m := New(context.Background(), newFakeAgent(), nil, newFakeStore(), "")
-	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
-	m.copyText = tea.SetClipboard
-	// The request is a bubble until the plan is made; it is sent, not made.
-	m, _ = m.send("plan it")
-	y := rowOf(t, m, "plan it")
-
-	// From above the bubble to below it, across its border and padding.
-	_, got := dragged(t, m, 2, y-1, m.chatWidth()-3, y+1)
-
-	assert.Check(t, cmp.Contains(got, "plan it"))
-	assert.Check(t, !strings.ContainsAny(got, "╭╮╰╯│─"), "the bubble's frame was copied: %q", got)
-}
-
 func TestDraggingOverTheOverviewCopiesTheTextWithoutItsCursor(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	y := rowOf(t, m, "✓ Created")
 	assert.Assert(t, cmp.Contains(strings.Split(ansi.Strip(m.Content()), "\n")[y], "▶ ✓ Created"), "the cursor is not on the row")
 
 	// The drag starts on the cursor's column, left of the text.
-	_, got := dragged(t, m, 2, y, m.chatWidth()-3, y)
+	_, got := dragged(t, m, 2, y, m.leftWidth()-3, y)
 
 	assert.Check(t, strings.HasPrefix(got, "✓ Created"), "the cursor column was copied: %q", got)
 	assert.Check(t, !strings.Contains(got, "▶"), "the cursor was copied: %q", got)
@@ -139,7 +122,7 @@ func TestDraggingOverTheOverviewCopiesTheTextWithoutItsCursor(t *testing.T) {
 
 func TestTheSelectionIsDrawnOverTheText(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
 
@@ -151,7 +134,7 @@ func TestTheSelectionIsDrawnOverTheText(t *testing.T) {
 
 func TestAKeyPressDropsTheSelectionAndItsNote(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
 	m, _ = dragged(t, m, x+4, y, x+7, y)
@@ -166,7 +149,7 @@ func TestAKeyPressDropsTheSelectionAndItsNote(t *testing.T) {
 
 func TestAClickDropsTheSelection(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
 	m, _ = dragged(t, m, x+4, y, x+7, y)
@@ -178,7 +161,7 @@ func TestAClickDropsTheSelection(t *testing.T) {
 
 func TestTheCopyNoteDoesNotReplaceAStatusThatWasThere(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	m.status = warn("Wait for chunk to finish.")
 	y := rowOf(t, m, "The flag exists.")
 	x := planText(m)
@@ -195,7 +178,7 @@ func TestTheCopyNoteDoesNotReplaceAStatusThatWasThere(t *testing.T) {
 
 func TestDraggingPastTheEdgeScrollsAndCopiesWhatCameInto(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 20, longPlan(), nil)
+	m, _ := planned(t, 140, 20, longPlan())
 	x := planText(m)
 	top := rowOf(t, m, "OUTCOME")
 	bottom := m.height - footerRows - 1
@@ -215,7 +198,7 @@ func TestDraggingPastTheEdgeScrollsAndCopiesWhatCameInto(t *testing.T) {
 
 func TestTheSelectionStaysOnItsTextWhileThePlanScrolls(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 20, longPlan(), nil)
+	m, _ := planned(t, 140, 20, longPlan())
 	x := planText(m)
 	y := rowOf(t, m, "Paragraph 0 of the plan.")
 	m, _ = dragged(t, m, x, y, x+8, y)
@@ -227,7 +210,7 @@ func TestTheSelectionStaysOnItsTextWhileThePlanScrolls(t *testing.T) {
 
 func TestAShiftClickDoesNotBeginASelectionOfText(t *testing.T) {
 	t.Parallel()
-	m, _ := planned(t, 140, 40, twoParts, nil)
+	m, _ := planned(t, 140, 40, twoParts)
 	shift := click(planText(m), rowOf(t, m, "The flag exists."))
 	shift.Mod = tea.ModShift
 

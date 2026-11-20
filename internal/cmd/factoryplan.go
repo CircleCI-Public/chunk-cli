@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
-	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
@@ -26,22 +25,19 @@ import (
 )
 
 func newFactoryPlanCmd() *cobra.Command {
-	var model string
-
 	cmd := &cobra.Command{
-		Use:   "plan [prompt]",
-		Short: "Plan a change with Claude, then approve it and build it on the daemon",
-		Long: `Plan a change with a factory planning session of Claude Code that the
-chunk daemon runs on this machine. The request (the prompt, or what you type when there is none)
-creates the plan; after that the session works through factory's tasks, and
-its activity is shown beside the plan. The plan is kept in factory; comment
-on it until it is right, then press ctrl+s to approve it in
-factory, and the chunk daemon builds it, in a build session of Claude Code
-in the plan's own worktree, through to a pull request. Follow the build in
-chunk ui.
+		Use:   "plan [request]",
+		Short: "Plan a change in factory, on one of your factory workers",
+		Long: `Plan a change in factory. The screen asks for a title and a request (the
+argument, or what you type when there is none) and creates the plan in factory
+with them. chunk then hands the plan to your factory worker, which plans it
+with Claude Code; what the worker is doing is shown beside the plan. Comment on
+the plan until it is right, then press ctrl+s to approve it, and the worker
+builds it, through to a pull request. Follow the build in chunk ui.
 
-Needs factory, its f plugin for Claude Code, and the factory daemon running
-with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
+Needs factory daemon running with FACTORY_PLAN_STORE=circleci, as the CircleCI
+user chunk is signed in as, on a machine of yours. It needs no Claude Code on
+this machine.`,
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -51,44 +47,23 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 			if err := ui.RequireStdoutTTY(); err != nil {
 				return fmt.Errorf("factory plan requires a TTY")
 			}
-			if err := requireLocalDaemon(); err != nil {
-				return err
-			}
-			if err := factory.CheckClaude(); err != nil {
-				return newUserError("Claude Code is not installed on this machine.").
-					withSuggestion("Install it from https://claude.com/claude-code.").
-					withoutDetail()
-			}
-			if err := factory.CheckFactoryDaemon(ctx); err != nil {
-				return agentStartError(err)
-			}
-			root, err := sessionProjectRoot(ctx)
-			if err != nil {
-				return err
-			}
-			if err := checkPlanProject(ctx, root); err != nil {
-				return err
-			}
-			api, err := factoryPlanClient()
+			root, api, err := factoryPlanPreflight(ctx)
 			if err != nil {
 				return err
 			}
 
-			// planCtx bounds the screen's polling of the planner.
+			// planCtx bounds the screen's reads of the plan.
 			planCtx, cancel := context.WithCancel(ctx)
-			agent, approve, store := planSession(planCtx, root, "", model, api)
-			defer func() {
-				cancel()
-				_ = agent.Stop()
-			}()
+			defer cancel()
+			store := factoryplan.NewStore(api, "", planRepo(ctx, root))
 
-			var first string
+			var request string
 			if len(args) == 1 {
-				first = args[0]
+				request = args[0]
 			}
 			// The branch is only for the header; a repo without one has none.
 			branch, _ := gitutil.CurrentBranchIn(root)
-			screen := plan.New(planCtx, agent, approve, store, first).
+			screen := plan.New(planCtx, store, request).
 				WithTerminal(lipgloss.HasDarkBackground(os.Stdin, os.Stdout), false).
 				WithBranch(branch)
 			p := tea.NewProgram(plan.Screen{Model: screen}, tea.WithContext(ctx))
@@ -96,27 +71,30 @@ with FACTORY_PLAN_STORE=circleci as the CircleCI user chunk is signed in as.`,
 			if err != nil {
 				return err
 			}
-			reportPlanLeft(streams, store.ID(), final.(plan.Screen).Model.BuildID)
+			left := final.(plan.Screen).Model
+			reportPlanLeft(streams, store.ID(), left.Approved, left.Worker)
 			return nil
 		},
 	}
-
-	cmd.Flags().StringVar(&model, "model", "", "model Claude plans and builds with (default: your Claude Code default)")
 	return cmd
 }
 
-// requireLocalDaemon refuses to run when the environment points at a remote
-// daemon. A plan works from files on this machine, so it belongs to the local
-// daemon; a remote daemon would be working on a different checkout.
-func requireLocalDaemon() error {
-	if chunkd.CurrentConnection().Remote == "" {
-		return nil
+// factoryPlanPreflight is what chunk factory plan checks before its screen
+// opens: the git repository it is run in, that the project can be built from
+// (checkPlanProject), and the CircleCI client the plan is made with.
+func factoryPlanPreflight(ctx context.Context) (string, *circleci.Client, error) {
+	root, err := sessionProjectRoot(ctx)
+	if err != nil {
+		return "", nil, err
 	}
-	return newUserError("chunk factory plan works from this machine's files, on the local chunk daemon.").
-		withCode("command.invalid_args").
-		withSuggestion("Unset CHUNK_DAEMON_REMOTE_ADDR to use this command.").
-		withExitCode(ExitBadArgs).
-		withoutDetail()
+	if err := checkPlanProject(ctx, root); err != nil {
+		return "", nil, err
+	}
+	api, err := factoryPlanClient()
+	if err != nil {
+		return "", nil, err
+	}
+	return root, api, nil
 }
 
 // sessionProjectRoot names the project to work on: the git repository
@@ -191,41 +169,21 @@ func factoryPlanClient() (*circleci.Client, error) {
 	return client, nil
 }
 
-// reportPlanLeft says, as the screen closes, where the plan with ID planID
-// was left: not approved, or being built as build buildID.
-func reportPlanLeft(streams iostream.Streams, planID, buildID string) {
+// reportPlanLeft says, as the screen closes, where the plan with ID planID was
+// left: not approved, approved with worker building it, or approved with none.
+func reportPlanLeft(streams iostream.Streams, planID string, approved bool, worker string) {
 	switch {
 	case planID == "":
-	case buildID == "":
+	case !approved:
 		streams.ErrPrintf("The plan was not approved. It is plan %s in factory.\n", planID)
+	case worker == "":
+		streams.ErrPrintf("Plan %s is approved; no worker is building it. Press R in chunk ui to claim it.\n", planID)
 	default:
-		streams.ErrPrintf("Plan %s is approved and building on the chunk daemon, as run %s.\n", planID, buildID)
+		streams.ErrPrintf("Plan %s is approved; worker %s is building it.\n", planID, worker)
 		if showHints(streams, false) {
 			streams.ErrPrintln(watchStartHint)
 		}
 	}
-}
-
-// planSession is a factory planning session in root for the planning
-// screen, on plan id or a new plan when id is "": the agent that follows the
-// planner the chunk daemon runs for it, polling for as long as ctx lives, the
-// store its plan and comments are kept in through api, and the approval it
-// ends with, which has the chunk daemon approve the plan in factory and
-// build it. The caller must Stop the agent.
-func planSession(ctx context.Context, root, id, model string, api *circleci.Client) (*factoryplan.Agent, plan.Approver, *factoryplan.Store) {
-	store := factoryplan.NewStore(api, id, planRepo(ctx, root))
-	agent := factoryplan.NewAgent(ctx, root, model, store)
-	approve := func(step func(string)) (string, error) {
-		// The daemon is started first, so a plan is not approved with
-		// nothing to build it.
-		step("Starting the chunk daemon…")
-		if err := chunkd.EnsureRunning(); err != nil {
-			return "", fmt.Errorf("start the chunk daemon: %w", err)
-		}
-		step("Approving the plan and starting its build on the chunk daemon…")
-		return approvePlan(root, store.ID(), model)
-	}
-	return agent, approve, store
 }
 
 // planRepo is the GitHub repository, as owner/name, of the project at root,
@@ -237,21 +195,4 @@ func planRepo(ctx context.Context, root string) string {
 		return ""
 	}
 	return org + "/" + name
-}
-
-// approveAndBuild is chunkd.ApproveAndBuild but in tests.
-var approveAndBuild = chunkd.ApproveAndBuild
-
-// approvePlan has the chunk daemon approve and build factory plan planID, in
-// the project at root, and returns the build's session ID.
-func approvePlan(root, planID, model string) (string, error) {
-	id, err := approveAndBuild(planID, chunkd.PlanApproveRequest{ProjectRoot: root, Model: model})
-	var refused *chunkd.SessionRefused
-	switch {
-	case errors.As(err, &refused):
-		return "", errors.New(refused.Message)
-	case errors.Is(err, chunkd.ErrDaemonUnavailable):
-		return "", errors.New("the chunk daemon is not reachable; the plan was not approved")
-	}
-	return id, err
 }

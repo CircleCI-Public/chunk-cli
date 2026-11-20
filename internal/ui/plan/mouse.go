@@ -55,7 +55,7 @@ func (m Model) planLeft() int {
 	if m.narrow() {
 		return 0
 	}
-	return m.chatWidth()
+	return m.leftWidth()
 }
 
 // inPane is which pane is drawn at column x, when a row of the panes is
@@ -64,7 +64,7 @@ func (m Model) inPane(x int) pane {
 	if m.narrow() {
 		return m.focus
 	}
-	if x >= m.chatWidth() {
+	if x >= m.leftWidth() {
 		return panePlan
 	}
 	return paneOverview
@@ -214,11 +214,7 @@ func (m Model) clickBar(mouse tea.Mouse) (Model, tea.Cmd) {
 	if mouse.X < left || mouse.X >= left+lipgloss.Width(main) {
 		return m, nil
 	}
-	switch {
-	case m.busy:
-		// The button only says chunk is working.
-		return m, nil
-	case len(queuedComments(m.comments)) > 0:
+	if len(queuedComments(m.comments)) > 0 {
 		return m.deliver()
 	}
 	return m.askToApprove(), nil
@@ -232,12 +228,12 @@ func (m Model) clickConfirm(mouse tea.Mouse) (Model, tea.Cmd) {
 	m.status = ""
 	i := strings.Index(text, confirmYes)
 	if mouse.Y != m.height-footerRows+1 || i < 0 {
-		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan, m.pendingStop, m.pendingTakeOver = "", false, false, "", ""
+		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan, m.pendingStop = "", false, false, false
 		return m, nil
 	}
 	left := 2 + ansi.StringWidth(text[:i])
 	if mouse.X < left || mouse.X >= left+ansi.StringWidth(confirmYes) {
-		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan, m.pendingStop, m.pendingTakeOver = "", false, false, "", ""
+		m.pendingDelete, m.pendingDesign, m.pendingDeletePlan, m.pendingStop = "", false, false, false
 		return m, nil
 	}
 	return m.answerYes()

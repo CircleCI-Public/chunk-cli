@@ -47,10 +47,7 @@ var (
 // the agent may be writing it too, and the later write would replace the
 // earlier.
 func (m Model) cannotEdit() string {
-	switch {
-	case m.busy:
-		return "Wait for chunk to finish."
-	case !m.takesComments():
+	if !m.takesComments() {
 		return "The plan can be edited once factory is waiting on you."
 	}
 	return ""

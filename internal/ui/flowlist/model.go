@@ -28,13 +28,8 @@ type OpenMsg struct{ ID, Title string }
 // NewMsg asks the host to start a new plan workspace.
 type NewMsg struct{}
 
-// ResumeMsg asks the host to start the flow's agent again, as kind says.
-type ResumeMsg struct {
-	ID, Title string
-	Kind      planstate.ResumeKind
-	// Holder is the session a ResumeTakeOver was confirmed for.
-	Holder string
-}
+// ResumeMsg asks the host to have the default worker claim the flow's plan.
+type ResumeMsg struct{ ID, Title string }
 
 // DeleteMsg asks the host to delete a flow's plan, once the list has had a yes.
 type DeleteMsg struct{ ID, Title string }
@@ -59,6 +54,10 @@ type previewedMsg struct {
 	// blockers are the flow's blockers, read with its preview.
 	blockers    []planstate.Blocker
 	blockersErr error
+	// worker is the worker that claimed the flow, as workerFor says, read with
+	// its preview; nil when none was read or the read failed.
+	worker    *plan.Worker
+	workerFor string
 	// lines is structure rendered for key, when the fetch rendered it.
 	lines []string
 	key   renderKey
@@ -80,7 +79,10 @@ type Model struct {
 	// blockers reads a flow's blockers along with its preview; nil when the
 	// host has none to read, so every flow has none.
 	blockers func(context.Context, string) ([]planstate.Blocker, error)
-	flows    []circleci.Flow
+	// workers reads the worker that claims a flow, along with its preview; nil
+	// when the host has none to read.
+	workers func(ctx context.Context, flowID string) (*plan.Worker, error)
+	flows   []circleci.Flow
 	// parentOf is each sub-plan's parent plan ID, from the last list.
 	parentOf   map[string]string
 	parentsErr error
@@ -100,10 +102,6 @@ type Model struct {
 	// ask is the ID of the flow a delete question is open about, and
 	// askTitle its title as asked. deleting is the flow the host is deleting.
 	ask, askTitle, deleting string
-	// takeOver is the ID of the flow a take-over question is open about,
-	// takeOverTitle its title and takeOverHolder the session it asked
-	// about, all as when it opened.
-	takeOver, takeOverTitle, takeOverHolder string
 
 	loaded, listing bool
 	listErr         error
@@ -137,6 +135,11 @@ type cached struct {
 	// blockersOK is whether that read succeeded.
 	blockers   []planstate.Blocker
 	blockersOK bool
+	// worker is the worker the last preview read for the flow that workerFor
+	// names, nil when that read failed or found none; workerFor is "" before
+	// any read. A claim by another worker, or none, makes it stale.
+	worker    *plan.Worker
+	workerFor string
 }
 
 // renderKey is what a rendered preview depends on.
@@ -168,6 +171,16 @@ func (m Model) WithParents(parents func(context.Context) (map[string]string, err
 // they have loaded and every one is done. Without it, no flow has blockers.
 func (m Model) WithBlockers(blockers func(context.Context, string) ([]planstate.Blocker, error)) Model {
 	m.blockers = blockers
+	return m
+}
+
+// WithWorkers has the list read the worker that claims the selected flow with
+// read, along with its preview, so the line for a claimed flow says what that
+// worker is doing. Without it, a claimed flow's line only names its worker's
+// ID. The read is made once for each preview of a flow that has a worker, and
+// a worker read for one flow's claim is never shown for another's.
+func (m Model) WithWorkers(read func(ctx context.Context, flowID string) (*plan.Worker, error)) Model {
+	m.workers = read
 	return m
 }
 
@@ -282,6 +295,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				entry.structure, entry.gen = nextStructure(entry, msg.structure, msg.generation)
 				entry.comments = msg.comments
 				entry.blockers, entry.blockersOK = msg.blockers, msg.blockersErr == nil
+				entry.worker, entry.workerFor = msg.worker, msg.workerFor
 				if msg.lines != nil && msg.key == m.renderKey(entry) {
 					entry.lines, entry.key = msg.lines, msg.key
 				}
@@ -402,6 +416,11 @@ func (m *Model) startPreview() tea.Cmd {
 	m.previewing = true
 	m.previewGeneration++
 	ctx, preview, blockers, render, id, generation := m.ctx, m.preview, m.blockers, m.render, m.id, m.previewGeneration
+	// The worker is read for the claim the flow has now.
+	workers, workerID := m.workers, ""
+	if f, ok := m.selected(); ok {
+		workerID = f.WorkerID
+	}
 	// The fetch renders its text for the pane as it is now, off the UI
 	// goroutine, unless that render is cached or in flight already.
 	entry := m.cache[id]
@@ -419,6 +438,13 @@ func (m *Model) startPreview() tea.Cmd {
 		if err == nil && blockers != nil {
 			msg.blockers, msg.blockersErr = blockers(ctx, id)
 		}
+		if err == nil && workers != nil && workerID != "" {
+			// A failed read leaves the worker nil: it is then said to be unreadable.
+			msg.workerFor = workerID
+			if w, werr := workers(ctx, id); werr == nil {
+				msg.worker = w
+			}
+		}
 		_, gen := nextStructure(entry, structure, generation)
 		key := renderKey{gen: gen, width: width, dark: dark}
 		if err == nil && drawn && !noBlocks(structure) && key != have {
@@ -428,17 +454,14 @@ func (m *Model) startPreview() tea.Cmd {
 	}
 }
 
-// dropGoneQuestions closes the delete and take-over questions about a flow the
-// list no longer has.
+// dropGoneQuestions closes the delete question about a flow the list no
+// longer has.
 func (m *Model) dropGoneQuestions() {
 	has := func(id string) bool {
 		return slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == id })
 	}
 	if m.ask != "" && !has(m.ask) {
 		m.ask, m.askTitle = "", ""
-	}
-	if m.takeOver != "" && !has(m.takeOver) {
-		m.takeOver, m.takeOverTitle, m.takeOverHolder = "", "", ""
 	}
 }
 
@@ -449,16 +472,6 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.ask, m.askTitle = "", ""
 		if msg.String() == "y" && slices.ContainsFunc(m.flows, func(f circleci.Flow) bool { return f.ID == id }) {
 			return func() tea.Msg { return DeleteMsg{ID: id, Title: title} }
-		}
-		return nil
-	}
-	if m.takeOver != "" {
-		id, title, holder := m.takeOver, m.takeOverTitle, m.takeOverHolder
-		m.takeOver, m.takeOverTitle, m.takeOverHolder = "", "", ""
-		if msg.String() == "y" {
-			return func() tea.Msg {
-				return ResumeMsg{ID: id, Title: title, Kind: planstate.ResumeTakeOver, Holder: holder}
-			}
 		}
 		return nil
 	}
@@ -477,13 +490,8 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "R":
 		f, _ := m.selected()
-		r := m.resume()
-		if r.Kind == planstate.ResumeTakeOver {
-			m.takeOver, m.takeOverTitle, m.takeOverHolder = f.ID, f.Title, r.Holder
-			return nil
-		}
-		if kind := r.Kind; kind != planstate.ResumeNone {
-			return func() tea.Msg { return ResumeMsg{ID: f.ID, Title: f.Title, Kind: kind} }
+		if m.resume().Kind == planstate.ResumeClaim {
+			return func() tea.Msg { return ResumeMsg{ID: f.ID, Title: f.Title} }
 		}
 		return nil
 	case "down", "j":
@@ -530,10 +538,26 @@ func (m Model) resume() planstate.Resume {
 		Ended:         f.Phase == circleci.PhaseEnded,
 		Holder:        oneLine(f.SessionID),
 		Worker:        oneLine(f.WorkerID),
+		WorkerLine:    workerLine(f, entry),
 		WaitingOn:     oneLine(f.WaitingOn),
 		Blockers:      blockers,
 		BlockersKnown: true,
 	})
+}
+
+// workerLine is the line for the worker that claims f, as the last preview
+// read it: what the worker is doing, or that it can't be read. It is "" for a
+// flow no worker claims, and before the worker has been read for the claim f has
+// now, so a worker read for another claim is never shown.
+func workerLine(f circleci.Flow, entry cached) string {
+	id := oneLine(f.WorkerID)
+	if id == "" || entry.workerFor != f.WorkerID {
+		return ""
+	}
+	if entry.worker == nil || entry.worker.Unread != "" {
+		return "Worker " + id + " can't be read"
+	}
+	return plan.WorkerLine(entry.worker, f.SessionID)
 }
 
 func (m *Model) move(step int) {

@@ -42,8 +42,8 @@ func (m Model) pill(fg color.Color, bgLight, bgDark, text string) string {
 	return lipgloss.NewStyle().Foreground(fg).Background(m.hue(bgLight, bgDark)).Padding(0, 1).Render(text)
 }
 
-// narrowBelow is the width under which the panes take turns on the screen
-// instead of sharing it.
+// narrowBelow is the width under which the panes show one at a time
+// instead of sharing the screen.
 const narrowBelow = 100
 
 func (m Model) narrow() bool { return m.width < narrowBelow }
@@ -58,12 +58,10 @@ func (m Model) header() string {
 		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Approving")
 	case m.approvingDesign:
 		state = m.pill(m.brand(), "#ddf4ff", "#10222a", m.spin.View()+"Approving design")
-	case m.busy:
-		text := "✦ chunk is drafting"
-		if m.narrow() {
-			text = "✦ Drafting"
-		}
-		state = m.pill(m.purple(), "#fbefff", "#22162b", text)
+	case m.creating:
+		state = m.pill(m.purple(), "#fbefff", "#22162b", m.spin.View()+"Creating")
+	case m.claiming:
+		state = m.pill(m.purple(), "#fbefff", "#22162b", m.spin.View()+"Claiming")
 	case m.moving != nil:
 		state = m.style(m.dim()).Render("Waiting for factory")
 	case strings.TrimSpace(m.plan) == "":
@@ -91,7 +89,7 @@ func (m Model) header() string {
 		facts = append(facts, fmt.Sprintf("%d open %s", m.questions, plural(m.questions, "question", "questions")))
 	}
 	right := "  " + m.style(m.dim()).Render(strings.Join(facts, " · ")) + " "
-	if m.busy || len(facts) == 0 {
+	if len(facts) == 0 {
 		right = ""
 	}
 
@@ -214,11 +212,11 @@ func (m Model) tabSpans() []span {
 
 // tabLabels is the text of the narrow screen's two tabs.
 func (m Model) tabLabels() []string {
-	left := "Request"
+	left := "New plan"
 	if m.created {
 		left = "Overview"
 	}
-	if m.busy {
+	if m.creating || m.claiming {
 		left += " " + m.spin.View()
 	}
 	plan := "Plan"
@@ -304,9 +302,6 @@ func (m Model) actions() (main, side string) {
 	button := func(c color.Color, text string) string {
 		return lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(m.hue("#ffffff", "#0d1015")).Background(c).Render(text)
 	}
-	outline := func(c color.Color, text string) string {
-		return lipgloss.NewStyle().Bold(true).Padding(0, 1).Foreground(c).Render(text)
-	}
 	queued, open := 0, 0
 	for _, c := range m.comments {
 		if c.id == "" {
@@ -321,8 +316,8 @@ func (m Model) actions() (main, side string) {
 	// neither button is on offer: the hints name the keys that work.
 	case m.approving, m.approvingDesign, m.commenting, m.moving != nil:
 		return "", ""
-	case m.busy:
-		return outline(m.purple(), "chunk is working"), m.style(m.faint()).Render(approve)
+	case m.creating, m.claiming:
+		return "", ""
 	case strings.TrimSpace(m.plan) == "":
 		return "", ""
 	case queued > 0 && !m.takesComments():
