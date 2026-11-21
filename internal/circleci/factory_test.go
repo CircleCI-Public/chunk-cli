@@ -1538,6 +1538,56 @@ func TestPlanComments(t *testing.T) {
 	})
 }
 
+func TestListCheckRuns(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	post := func(t *testing.T, client *Client, orgID, repo, key, name, outcome string) {
+		t.Helper()
+		_, err := client.CreateCheckRun(ctx, CheckRun{
+			Key: key, Name: name, Outcome: outcome, StartedAt: at, EndedAt: at.Add(time.Second),
+			OrgID: orgID, Repo: repo,
+		})
+		assert.NilError(t, err)
+	}
+
+	t.Run("lists the filter's runs newest first, across pages", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		fake.FactoryPageSize = 1
+		post(t, client, "o1", "a/b", "k", "lint", "succeeded")
+		post(t, client, "o1", "a/b", "other-key", "lint", "succeeded")
+		post(t, client, "o1", "a/c", "k", "lint", "succeeded")
+		post(t, client, "o2", "a/b", "k", "lint", "succeeded")
+		post(t, client, "o1", "a/b", "k", "test", "failed")
+
+		runs, err := client.ListCheckRuns(ctx, CheckRunFilter{OrgID: "o1", Repo: "a/b", Key: "k"})
+
+		assert.NilError(t, err)
+		var got []string
+		for _, r := range runs {
+			got = append(got, r.Name+":"+r.Outcome+":"+r.OrgID+":"+r.Repo)
+		}
+		assert.Check(t, cmp.DeepEqual(got, []string{"test:failed:o1:a/b", "lint:succeeded:o1:a/b"}))
+	})
+
+	t.Run("a key with no runs is an empty list", func(t *testing.T) {
+		_, client := newFlowClient(t)
+
+		runs, err := client.ListCheckRuns(ctx, CheckRunFilter{OrgID: "o1", Repo: "a/b", Key: "k"})
+
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Len(runs, 0))
+	})
+
+	t.Run("a failed list is an error", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		fake.CheckRunListStatus = http.StatusInternalServerError
+
+		_, err := client.ListCheckRuns(ctx, CheckRunFilter{OrgID: "o1", Repo: "a/b", Key: "k"})
+
+		assert.Check(t, err != nil)
+	})
+}
+
 func TestListWorkers(t *testing.T) {
 	ctx := context.Background()
 	workerPath := "/api/v3/factory/workers"
@@ -1909,6 +1959,8 @@ func TestListsStopWhenTheServerNeverEndsThem(t *testing.T) {
 	_, err = client.ListPlans(ctx)
 	assert.ErrorContains(t, err, "does not advance")
 	_, err = client.ListWorkers(ctx, WorkerFilter{})
+	assert.ErrorContains(t, err, "does not advance")
+	_, err = client.ListCheckRuns(ctx, CheckRunFilter{OrgID: "o", Repo: "a/b", Key: "k"})
 	assert.ErrorContains(t, err, "does not advance")
 }
 

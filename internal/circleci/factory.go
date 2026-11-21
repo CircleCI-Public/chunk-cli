@@ -472,6 +472,10 @@ type CheckRun struct {
 	Outcome   string
 	StartedAt time.Time
 	EndedAt   time.Time
+	// OrgID is the CircleCI org the run belongs to; Repo its GitHub repo,
+	// OWNER/NAME.
+	OrgID string
+	Repo  string
 }
 
 // checkRunAttrs is a check run's attributes on the wire.
@@ -481,30 +485,93 @@ type checkRunAttrs struct {
 	Outcome   string    `json:"outcome"`
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at"`
+	VCS       vcsRepo   `json:"vcs"`
+}
+
+// checkRunRefs is a check run's references on the wire.
+type checkRunRefs struct {
+	Org v3Ref `json:"org"`
+}
+
+// checkRun is the run attrs and refs describe.
+func (a checkRunAttrs) checkRun(id string, refs checkRunRefs) CheckRun {
+	return CheckRun{
+		ID: id, Key: a.Key, Name: a.Name, Outcome: a.Outcome,
+		StartedAt: a.StartedAt, EndedAt: a.EndedAt,
+		OrgID: refs.Org.ID, Repo: a.VCS.RepoFullName,
+	}
 }
 
 // CreateCheckRun records a finished check run for the caller and returns it
 // with its ID. It is not idempotent: each call stores a run. Both times are
 // sent in RFC 3339, UTC, with sub-second precision kept so a short check's
-// start still precedes its end.
+// start still precedes its end. r's OrgID and Repo are required; factory
+// refuses a run without them.
 func (c *Client) CreateCheckRun(ctx context.Context, r CheckRun) (*CheckRun, error) {
 	body := checkRunAttrs{
 		Key: r.Key, Name: r.Name, Outcome: r.Outcome,
 		StartedAt: r.StartedAt.UTC(), EndedAt: r.EndedAt.UTC(),
+		VCS: vcsRepo{Provider: "github", RepoFullName: r.Repo},
 	}
 	var attrs checkRunAttrs
-	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
+	var refs checkRunRefs
+	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs, References: &refs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/check-runs",
-		hc.Body(v3Envelope{Data: v3DataEntity{Attributes: body}}),
+		hc.Body(v3Envelope{Data: v3DataEntity{Attributes: body, References: checkRunRefs{Org: v3Ref{ID: r.OrgID}}}}),
 		hc.JSONDecoder(&env),
 	))
 	if err != nil {
 		return nil, mapErr("create check run", err)
 	}
-	return &CheckRun{
-		ID: env.Data.ID, Key: attrs.Key, Name: attrs.Name, Outcome: attrs.Outcome,
-		StartedAt: attrs.StartedAt, EndedAt: attrs.EndedAt,
-	}, nil
+	run := attrs.checkRun(env.Data.ID, refs)
+	return &run, nil
+}
+
+// CheckRunFilter names the runs ListCheckRuns returns; every field is required.
+type CheckRunFilter struct {
+	OrgID, Repo, Key string
+}
+
+// ListCheckRuns returns the runs for f, newest first, reading every page. A
+// list with no runs is an empty slice.
+func (c *Client) ListCheckRuns(ctx context.Context, f CheckRunFilter) ([]CheckRun, error) {
+	out := []CheckRun{}
+	var cursor string
+	for pages := 1; ; pages++ {
+		var page struct {
+			Data []struct {
+				ID         string        `json:"id"`
+				Attributes checkRunAttrs `json:"attributes"`
+				References checkRunRefs  `json:"references"`
+			} `json:"data"`
+			Page v3Page `json:"page"`
+		}
+		opts := []func(*hc.Request){
+			hc.QueryParam("page[limit]", "100"),
+			hc.QueryParam("filter[org_id]", f.OrgID),
+			hc.QueryParam("filter[repo_full_name]", f.Repo),
+			hc.QueryParam("filter[key]", f.Key),
+			hc.JSONDecoder(&page),
+		}
+		if cursor != "" {
+			opts = append(opts, hc.QueryParam("page[cursor]", cursor))
+		}
+		_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/check-runs", opts...))
+		if err != nil {
+			return nil, mapErr("list check runs", err)
+		}
+		for _, item := range page.Data {
+			out = append(out, item.Attributes.checkRun(item.ID, item.References))
+		}
+		next, err := nextCursor(cursor, page.Page, pages)
+		if err != nil {
+			return nil, err
+		}
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
 }
 
 // ListPlans returns the caller's open plans, oldest first, reading every

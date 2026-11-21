@@ -86,6 +86,7 @@ chunk
 │       --workdir <path>            # Remote working directory
 │
 ├── signoff                         # Run the validation commands on a snapshot of the working tree and report each as a factory check run
+│   --force                         # Run every command, even one an earlier run on this tree signed off
 │
 ├── sidecar
 │   ├── list                        # List sidecars
@@ -701,14 +702,25 @@ chunk
   commit.** Two working trees with the same content share runs, whatever their
   commits, and uncommitted changes are signed off under their own key rather
   than refused.
-- **`chunk signoff` runs every command on a clean checkout, every time, and
-  posts each.** Files `.gitignore` excludes (`.env`, generated code,
-  `node_modules`) are not there, as in CI, so a command that needs them fails.
-  A failing command does not stop the rest, and a second run on an unchanged
-  tree runs everything again.
+- **`chunk signoff` reports each run under the CircleCI org and the GitHub
+  repository.** The org is the one sidecars use (`CIRCLECI_ORG_ID`, then
+  `orgID` in `.chunk/config.json`, then the org picker); the repository is
+  origin's owner/name. An origin that is not on GitHub is refused before
+  anything runs, since factory check runs take only GitHub repositories.
+- **`chunk signoff` reuses what an earlier run on the same tree signed off.**
+  Before anything runs it asks factory for the check runs already posted for
+  the key, by anyone who can view the org. A command whose newest run
+  succeeded is printed as from an earlier run and neither run nor posted
+  again; every other command runs on a clean checkout and is posted. When
+  every command is reused no sidecar is used. `--force` skips the lookup and
+  runs everything, and a lookup that fails warns and runs everything.
+- **`chunk signoff` runs on a clean checkout.** Files `.gitignore` excludes
+  (`.env`, generated code, `node_modules`) are not there, as in CI, so a
+  command that needs them fails. A failing command does not stop the rest.
 - **`CHUNK_SIGNOFF_LOCAL=1` runs `chunk signoff`'s commands on this machine.**
   They run in the snapshot's checkout instead of on a sidecar, and are posted
-  under the same key. Any other value runs them on the sidecar.
+  under the same key, so a sidecar signoff reuses a local one's runs and the
+  other way round. Any other value runs them on the sidecar.
 - **`chunk signoff` posts only what it knows.** A result it cannot know, from an
   exec error or Ctrl-C, is not posted, and a failed post fails `signoff`.
 - Every command checks GitHub for a newer release in the background and prints a

@@ -28,10 +28,16 @@ const (
 type ExecFunc func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error)
 
 type Options struct {
-	// Commands are run in order, each posted once.
+	// Commands are reported in order: each in Reused is printed as from an
+	// earlier run; every other is run and posted once.
 	Commands []config.Command
-	Key      string
-	Exec     ExecFunc
+	// Reused names the commands an earlier run signed off: each is printed, not
+	// run or posted, and counted as passed.
+	Reused map[string]bool
+	Key    string
+	// Exec is not called for a reused command, so it may be nil when every
+	// command is reused.
+	Exec ExecFunc
 	// Dir is the directory the commands run in.
 	Dir  string
 	Post func(ctx context.Context, run circleci.CheckRun) error
@@ -49,6 +55,27 @@ type Result struct {
 	// Passed is how many succeeded; Failed how many failed or timed out.
 	Passed, Failed int
 	Posted         int
+	// Reused is how many of Passed came from an earlier run.
+	Reused int
+}
+
+// Reusable names the commands whose newest run in runs succeeded. runs is
+// newest first, as ListCheckRuns returns it; a run of a name not in commands
+// is ignored.
+func Reusable(commands []config.Command, runs []circleci.CheckRun) map[string]bool {
+	newest := map[string]string{}
+	for _, r := range runs {
+		if _, seen := newest[r.Name]; !seen {
+			newest[r.Name] = r.Outcome
+		}
+	}
+	out := map[string]bool{}
+	for _, c := range commands {
+		if newest[c.Name] == Succeeded {
+			out[c.Name] = true
+		}
+	}
+	return out
 }
 
 // Run runs each command in order and posts its outcome: exit 0
@@ -78,6 +105,12 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	for _, c := range opts.Commands {
 		if err := ctx.Err(); err != nil {
 			return res, errors.Join(append(errs, err)...)
+		}
+		if opts.Reused[c.Name] {
+			res.Passed++
+			res.Reused++
+			opts.Streams.Printf("  %-*s  %-9s  %s\n", width, c.Name, Succeeded, "earlier run")
+			continue
 		}
 		status(iostream.LevelInfo, "$ "+c.Run)
 

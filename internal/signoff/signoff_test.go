@@ -72,8 +72,91 @@ func (r *recorder) options(names ...string) signoff.Options {
 	}
 }
 
+func TestReusable(t *testing.T) {
+	t.Parallel()
+	commands := []config.Command{{Name: "lint"}, {Name: "test"}}
+	run := func(name, outcome string) circleci.CheckRun {
+		return circleci.CheckRun{Name: name, Outcome: outcome}
+	}
+	for _, tc := range []struct {
+		name string
+		runs []circleci.CheckRun // newest first
+		want map[string]bool
+	}{
+		{
+			name: "no runs",
+			want: map[string]bool{},
+		},
+		{
+			name: "a succeeded run is reused",
+			runs: []circleci.CheckRun{run("lint", "succeeded")},
+			want: map[string]bool{"lint": true},
+		},
+		{
+			name: "the newest run decides: failed after succeeded",
+			runs: []circleci.CheckRun{run("lint", "failed"), run("lint", "succeeded")},
+			want: map[string]bool{},
+		},
+		{
+			name: "the newest run decides: succeeded after failed",
+			runs: []circleci.CheckRun{run("lint", "succeeded"), run("lint", "failed")},
+			want: map[string]bool{"lint": true},
+		},
+		{
+			name: "timed_out is not reused",
+			runs: []circleci.CheckRun{run("test", "timed_out")},
+			want: map[string]bool{},
+		},
+		{
+			name: "a run of no configured command is ignored",
+			runs: []circleci.CheckRun{run("gone", "succeeded")},
+			want: map[string]bool{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := signoff.Reusable(commands, tc.runs)
+			assert.Check(t, cmp.DeepEqual(got, tc.want))
+		})
+	}
+}
+
 func TestRun(t *testing.T) {
 	t.Parallel()
+
+	t.Run("a reused command is printed, not run or posted", func(t *testing.T) {
+		t.Parallel()
+		r := &recorder{}
+		opts := r.options("a", "b", "c")
+		opts.Reused = map[string]bool{"b": true}
+		out := &strings.Builder{}
+		opts.Streams.Out = out
+
+		res, err := signoff.Run(context.Background(), opts)
+
+		assert.Check(t, err)
+		assert.Check(t, cmp.DeepEqual(r.ran, []string{"a", "c"}))
+		assert.Check(t, cmp.DeepEqual(r.names(), []string{"a", "c"}))
+		assert.Check(t, cmp.Equal(res.Total, 3))
+		assert.Check(t, cmp.Equal(res.Passed, 3))
+		assert.Check(t, cmp.Equal(res.Reused, 1))
+		assert.Check(t, cmp.Regexp(`(?m)^  a .*\n  b +succeeded +earlier run\n  c `, out.String()))
+	})
+
+	t.Run("every command reused needs no exec", func(t *testing.T) {
+		t.Parallel()
+		r := &recorder{}
+		opts := r.options("a")
+		opts.Reused = map[string]bool{"a": true}
+		opts.Exec = nil
+
+		res, err := signoff.Run(context.Background(), opts)
+
+		assert.Check(t, err)
+		assert.Check(t, cmp.Len(r.names(), 0))
+		assert.Check(t, cmp.Equal(res.Passed, 1))
+		assert.Check(t, cmp.Equal(res.Reused, 1))
+	})
 
 	t.Run("exec error posts nothing for that command", func(t *testing.T) {
 		t.Parallel()
