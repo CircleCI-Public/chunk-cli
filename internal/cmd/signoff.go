@@ -30,22 +30,25 @@ const envSignoffLocal = "CHUNK_SIGNOFF_LOCAL"
 const exitInterrupted = 130
 
 func newSignoffCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:          "signoff",
 		Short:        "Run the validation commands on a snapshot of the working tree and report each as a factory check run",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			err := runSignoff(cmd)
+			err := runSignoff(cmd, force)
 			if mapped := outdatedSidecarAPI(err); mapped != nil {
 				return mapped
 			}
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "Run every command, even one an earlier run on this tree signed off")
+	return cmd
 }
 
-func runSignoff(cmd *cobra.Command) error {
+func runSignoff(cmd *cobra.Command, force bool) error {
 	ctx := cmd.Context()
 	streams := iostream.FromCmd(cmd)
 	statusFn := newStatusFunc(streams)
@@ -105,16 +108,35 @@ func runSignoff(cmd *cobra.Command) error {
 	defer cleanup()
 	key += tree
 
-	// Command output is progress, so it goes to stderr and leaves stdout for the
-	// lines that say how each command ended.
-	outputStreams := iostream.Streams{Out: streams.Err, Err: streams.Err}
-	var target signoffTarget
-	if os.Getenv(envSignoffLocal) == "1" {
-		target = localSignoffTarget(checkout, outputStreams)
-	} else {
-		target, err = sidecarSignoffTarget(ctx, client, rc, orgID, dir, checkout, statusFn, streams, outputStreams)
-		if err != nil {
-			return err
+	// A command whose newest run on this tree succeeded is not run again. A
+	// lookup that fails costs only the saving: running is always correct.
+	reused := map[string]bool{}
+	if !force {
+		runs, err := client.ListCheckRuns(ctx, circleci.CheckRunFilter{OrgID: orgID, Repo: repo, Key: key})
+		switch {
+		case ctx.Err() != nil:
+			return signoffInterrupted(streams)
+		case err != nil:
+			statusFn(iostream.LevelWarn, fmt.Sprintf("could not look up earlier check runs, so every command runs: %v", err))
+		default:
+			reused = signoff.Reusable(commands, runs)
+		}
+	}
+
+	// With every command reused nothing runs, so no sidecar is reaped, created or
+	// acquired.
+	target := signoffTarget{finish: func() {}, release: func() {}}
+	if len(reused) < len(commands) {
+		// Command output is progress, so it goes to stderr and leaves stdout for
+		// the lines that say how each command ended.
+		outputStreams := iostream.Streams{Out: streams.Err, Err: streams.Err}
+		if os.Getenv(envSignoffLocal) == "1" {
+			target = localSignoffTarget(checkout, outputStreams)
+		} else {
+			target, err = sidecarSignoffTarget(ctx, client, rc, orgID, dir, checkout, statusFn, streams, outputStreams)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	defer target.release()
@@ -122,6 +144,7 @@ func runSignoff(cmd *cobra.Command) error {
 	streams.Printf("signing off %s%s\n", shortKey(key), target.header)
 	res, runErr := signoff.Run(ctx, signoff.Options{
 		Commands: commands,
+		Reused:   reused,
 		Key:      key,
 		Exec:     target.exec,
 		Dir:      target.dir,
@@ -136,17 +159,22 @@ func runSignoff(cmd *cobra.Command) error {
 	target.finish()
 
 	if errors.Is(runErr, context.Canceled) {
-		streams.ErrPrintln(ui.ErrWarning("interrupted"))
-		return &silentExitError{code: exitInterrupted}
+		return signoffInterrupted(streams)
+	}
+	var reusedNote string
+	if res.Reused > 0 {
+		reusedNote = fmt.Sprintf(" (%d from an earlier run)", res.Reused)
 	}
 	// Only a run in which every command passed and was posted signs off: a
 	// failed post leaves a command with no run, however it ended.
 	if runErr == nil && res.Passed == res.Total {
-		streams.Printf("signed off %d of %d\n", res.Passed, res.Total)
+		streams.Printf("signed off %d of %d%s\n", res.Passed, res.Total, reusedNote)
 	} else {
-		streams.Printf("not signed off: %d of %d passed\n", res.Passed, res.Total)
+		streams.Printf("not signed off: %d of %d passed%s\n", res.Passed, res.Total, reusedNote)
 	}
-	streams.Printf("  ran on a clean checkout of the snapshot: files .gitignore excludes were not synced\n")
+	if res.Reused < res.Total {
+		streams.Printf("  ran on a clean checkout of the snapshot: files .gitignore excludes were not synced\n")
+	}
 	if runErr != nil {
 		if authErr := notAuthorized("report check runs", rc.CircleCITokenSource, runErr); authErr != nil {
 			return authErr
@@ -161,6 +189,13 @@ func runSignoff(cmd *cobra.Command) error {
 		return &silentExitError{code: ExitGeneral}
 	}
 	return nil
+}
+
+// signoffInterrupted reports that Ctrl-C stopped signoff and returns the error
+// that exits as a shell reports an interrupted process.
+func signoffInterrupted(streams iostream.Streams) error {
+	streams.ErrPrintln(ui.ErrWarning("interrupted"))
+	return &silentExitError{code: exitInterrupted}
 }
 
 // signoffCommands returns the validation commands in dir's project config, or

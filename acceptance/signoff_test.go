@@ -90,9 +90,9 @@ func newSignoffProjectOn(t *testing.T, withSidecar bool) *signoffProject {
 }
 
 // signoff runs `chunk signoff` in the project.
-func (p *signoffProject) signoff(t *testing.T) binary.CLIResult {
+func (p *signoffProject) signoff(t *testing.T, args ...string) binary.CLIResult {
 	t.Helper()
-	return binary.RunCLI(t, []string{"signoff"}, p.env, p.workDir)
+	return binary.RunCLI(t, append([]string{"signoff"}, args...), p.env, p.workDir)
 }
 
 // setCommands replaces the project's config with one that names these commands
@@ -220,24 +220,85 @@ func TestSignoff(t *testing.T) {
 		assert.Equal(t, committed.ExitCode, 0, "stdout: %s\nstderr: %s", committed.Stdout, committed.Stderr)
 
 		runs := p.cci.CheckRuns()
-		assert.Assert(t, cmp.Len(runs, 3)) // gate: runs[0..2] below
+		assert.Assert(t, cmp.Len(runs, 2)) // gate: runs[0..1] below
 		assert.Check(t, runs[1].Key != runs[0].Key, "an edit kept the key %s", runs[0].Key)
-		assert.Check(t, cmp.Equal(runs[2].Key, runs[1].Key))
+		// Committing the edit leaves the tree, and so the key, unchanged: the
+		// edited tree's run is reused.
+		assert.Check(t, cmp.Contains(committed.Stdout, "earlier run"))
 	})
 
-	t.Run("runs every time", func(t *testing.T) {
+	t.Run("an unchanged tree reuses its runs", func(t *testing.T) {
 		t.Parallel()
 		p := newSignoffProject(t)
+
+		first := p.signoff(t)
+		assert.Equal(t, first.ExitCode, 0, "stdout: %s\nstderr: %s", first.Stdout, first.Stderr)
+		second := p.signoff(t)
+
+		assert.Equal(t, second.ExitCode, 0, "stdout: %s\nstderr: %s", second.Stdout, second.Stderr)
+		assert.Check(t, cmp.Regexp(`lint +succeeded +earlier run`, second.Stdout))
+		assert.Check(t, cmp.Contains(second.Stdout, "signed off 1 of 1 (1 from an earlier run)"))
+		ranNote := strings.Contains(second.Stdout, "ran on a clean checkout")
+		assert.Check(t, !ranNote, "stdout: %s", second.Stdout)
+		runs := p.cci.CheckRuns()
+		assert.Check(t, cmp.Len(runs, 1))
+		ranTwice := 0
+		for _, s := range p.cci.ExecScripts() {
+			if strings.Contains(s, "test -f tracked.txt") {
+				ranTwice++
+			}
+		}
+		assert.Check(t, cmp.Equal(ranTwice, 1))
+	})
+
+	t.Run("a command whose newest run failed runs again", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		first := p.signoff(t)
+		assert.Equal(t, first.ExitCode, 0, "stdout: %s\nstderr: %s", first.Stdout, first.Stderr)
+		passed := p.cci.CheckRuns()[0]
+		failed := passed
+		failed.ID, failed.Outcome = "", "failed"
+		p.cci.AddCheckRun(failed)
+
+		second := p.signoff(t)
+
+		assert.Equal(t, second.ExitCode, 0, "stdout: %s\nstderr: %s", second.Stdout, second.Stderr)
+		reused := strings.Contains(second.Stdout, "earlier run")
+		assert.Check(t, !reused, "stdout: %s", second.Stdout)
+		runs := p.cci.CheckRuns()
+		assert.Assert(t, cmp.Len(runs, 3)) // gate: runs[2] below
+		assert.Check(t, cmp.Equal(runs[2].Outcome, "succeeded"))
+	})
+
+	t.Run("--force runs every command", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+
+		first := p.signoff(t)
+		assert.Equal(t, first.ExitCode, 0, "stdout: %s\nstderr: %s", first.Stdout, first.Stderr)
+		forced := p.signoff(t, "--force")
+
+		assert.Equal(t, forced.ExitCode, 0, "stdout: %s\nstderr: %s", forced.Stdout, forced.Stderr)
+		reused := strings.Contains(forced.Stdout, "earlier run")
+		assert.Check(t, !reused, "stdout: %s", forced.Stdout)
+		runs := p.cci.CheckRuns()
+		assert.Check(t, cmp.Len(runs, 2))
+	})
+
+	t.Run("a failed lookup runs every command", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		p.cci.CheckRunListStatus = http.StatusInternalServerError
 
 		for range 2 {
 			result := p.signoff(t)
 			assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+			assert.Check(t, cmp.Contains(result.Stderr, "could not look up earlier check runs"))
 		}
 
 		runs := p.cci.CheckRuns()
-		assert.Assert(t, cmp.Len(runs, 2)) // gate: runs[0..1] below
-		assert.Check(t, cmp.Equal(runs[1].Key, runs[0].Key))
-		assert.Check(t, cmp.Equal(runs[1].Name, runs[0].Name))
+		assert.Check(t, cmp.Len(runs, 2))
 	})
 
 	t.Run("reuses one sidecar named for the project", func(t *testing.T) {
@@ -245,7 +306,7 @@ func TestSignoff(t *testing.T) {
 		p := newSignoffProject(t)
 
 		for range 2 {
-			result := p.signoff(t)
+			result := p.signoff(t, "--force")
 			assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 		}
 
@@ -304,6 +365,17 @@ func TestSignoff(t *testing.T) {
 		assert.Check(t, cmp.Equal(runs[0].Outcome, "failed"))
 		assert.Check(t, cmp.Equal(runs[1].Name, "b"))
 		assert.Check(t, cmp.Equal(runs[1].Outcome, "succeeded"))
+
+		again := p.signoff(t)
+
+		assert.Check(t, again.ExitCode != 0, "stdout: %s\nstderr: %s", again.Stdout, again.Stderr)
+		assert.Check(t, cmp.Regexp(`b +succeeded +earlier run`, again.Stdout))
+		assert.Check(t, cmp.Contains(again.Stdout, "not signed off: 1 of 2 passed (1 from an earlier run)"))
+		assert.Check(t, cmp.Contains(again.Stdout, "ran on a clean checkout"))
+		runsAgain := p.cci.CheckRuns()
+		assert.Assert(t, cmp.Len(runsAgain, 3)) // gate: runsAgain[2] below
+		assert.Check(t, cmp.Equal(runsAgain[2].Name, "a"))
+		assert.Check(t, cmp.Equal(runsAgain[2].Outcome, "failed"))
 	})
 
 	t.Run("a command past its timeout is timed_out", func(t *testing.T) {
@@ -691,10 +763,13 @@ func TestSignoff(t *testing.T) {
 		remote := p.signoff(t)
 		assert.Equal(t, remote.ExitCode, 0, "stdout: %s\nstderr: %s", remote.Stdout, remote.Stderr)
 
+		assert.Check(t, cmp.Regexp(`lint +succeeded +earlier run`, remote.Stdout))
 		runs := p.cci.CheckRuns()
-		assert.Assert(t, cmp.Len(runs, 2)) // gate: runs[0..1] below
+		assert.Assert(t, cmp.Len(runs, 1)) // gate: runs[0] below
 		assert.Check(t, cmp.Regexp(signoffKeyPattern, runs[0].Key))
-		assert.Check(t, cmp.Equal(runs[1].Key, runs[0].Key))
+		sidecars := p.cci.Sidecars
+		assert.Check(t, cmp.Len(sidecars, 0))
+		p.assertSidecarUntouched(t)
 	})
 
 	t.Run("other values use the sidecar", func(t *testing.T) {
