@@ -30,22 +30,25 @@ const envSignoffLocal = "CHUNK_SIGNOFF_LOCAL"
 const exitInterrupted = 130
 
 func newSignoffCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:          "signoff",
 		Short:        "Run the validation commands on a snapshot of the working tree and report each as a factory check run",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			err := runSignoff(cmd)
+			err := runSignoff(cmd, force)
 			if mapped := outdatedSidecarAPI(err); mapped != nil {
 				return mapped
 			}
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "Run every command, even one an earlier run on this tree signed off")
+	return cmd
 }
 
-func runSignoff(cmd *cobra.Command) error {
+func runSignoff(cmd *cobra.Command, force bool) error {
 	ctx := cmd.Context()
 	streams := iostream.FromCmd(cmd)
 	statusFn := newStatusFunc(streams)
@@ -69,7 +72,7 @@ func runSignoff(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	key, err := signoffKeyPrefix(ctx, dir)
+	key, repo, err := signoffOrigin(ctx, dir)
 	if err != nil {
 		return err
 	}
@@ -78,6 +81,11 @@ func runSignoff(cmd *cobra.Command) error {
 	client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 	if err != nil {
 		return err
+	}
+
+	orgID, err := resolveOrgID("", dir, orgPicker(ctx, client, rc.CircleCITokenSource, streams))
+	if err != nil {
+		return signoffOrgError(err)
 	}
 
 	// A submodule's uncommitted changes are not in the snapshot, which records
@@ -100,16 +108,35 @@ func runSignoff(cmd *cobra.Command) error {
 	defer cleanup()
 	key += tree
 
-	// Command output is progress, so it goes to stderr and leaves stdout for the
-	// lines that say how each command ended.
-	outputStreams := iostream.Streams{Out: streams.Err, Err: streams.Err}
-	var target signoffTarget
-	if os.Getenv(envSignoffLocal) == "1" {
-		target = localSignoffTarget(checkout, outputStreams)
-	} else {
-		target, err = sidecarSignoffTarget(ctx, client, rc, dir, checkout, statusFn, streams, outputStreams)
-		if err != nil {
-			return err
+	// A command whose newest run on this tree succeeded is not run again. A
+	// lookup that fails costs only the saving: running is always correct.
+	reused := map[string]bool{}
+	if !force {
+		runs, err := client.ListCheckRuns(ctx, circleci.CheckRunFilter{OrgID: orgID, Repo: repo, Key: key})
+		switch {
+		case ctx.Err() != nil:
+			return signoffInterrupted(streams)
+		case err != nil:
+			statusFn(iostream.LevelWarn, fmt.Sprintf("could not look up earlier check runs, so every command runs: %v", err))
+		default:
+			reused = signoff.Reusable(commands, runs)
+		}
+	}
+
+	// With every command reused nothing runs, so no sidecar is reaped, created or
+	// acquired.
+	target := signoffTarget{finish: func() {}, release: func() {}}
+	if len(reused) < len(commands) {
+		// Command output is progress, so it goes to stderr and leaves stdout for
+		// the lines that say how each command ended.
+		outputStreams := iostream.Streams{Out: streams.Err, Err: streams.Err}
+		if os.Getenv(envSignoffLocal) == "1" {
+			target = localSignoffTarget(checkout, outputStreams)
+		} else {
+			target, err = sidecarSignoffTarget(ctx, client, rc, orgID, dir, checkout, statusFn, streams, outputStreams)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	defer target.release()
@@ -117,10 +144,12 @@ func runSignoff(cmd *cobra.Command) error {
 	streams.Printf("signing off %s%s\n", shortKey(key), target.header)
 	res, runErr := signoff.Run(ctx, signoff.Options{
 		Commands: commands,
+		Reused:   reused,
 		Key:      key,
 		Exec:     target.exec,
 		Dir:      target.dir,
 		Post: func(ctx context.Context, run circleci.CheckRun) error {
+			run.OrgID, run.Repo = orgID, repo
 			_, err := client.CreateCheckRun(ctx, run)
 			return err
 		},
@@ -130,17 +159,22 @@ func runSignoff(cmd *cobra.Command) error {
 	target.finish()
 
 	if errors.Is(runErr, context.Canceled) {
-		streams.ErrPrintln(ui.ErrWarning("interrupted"))
-		return &silentExitError{code: exitInterrupted}
+		return signoffInterrupted(streams)
+	}
+	var reusedNote string
+	if res.Reused > 0 {
+		reusedNote = fmt.Sprintf(" (%d from an earlier run)", res.Reused)
 	}
 	// Only a run in which every command passed and was posted signs off: a
 	// failed post leaves a command with no run, however it ended.
 	if runErr == nil && res.Passed == res.Total {
-		streams.Printf("signed off %d of %d\n", res.Passed, res.Total)
+		streams.Printf("signed off %d of %d%s\n", res.Passed, res.Total, reusedNote)
 	} else {
-		streams.Printf("not signed off: %d of %d passed\n", res.Passed, res.Total)
+		streams.Printf("not signed off: %d of %d passed%s\n", res.Passed, res.Total, reusedNote)
 	}
-	streams.Printf("  ran on a clean checkout of the snapshot: files .gitignore excludes were not synced\n")
+	if res.Reused < res.Total {
+		streams.Printf("  ran on a clean checkout of the snapshot: files .gitignore excludes were not synced\n")
+	}
 	if runErr != nil {
 		if authErr := notAuthorized("report check runs", rc.CircleCITokenSource, runErr); authErr != nil {
 			return authErr
@@ -155,6 +189,13 @@ func runSignoff(cmd *cobra.Command) error {
 		return &silentExitError{code: ExitGeneral}
 	}
 	return nil
+}
+
+// signoffInterrupted reports that Ctrl-C stopped signoff and returns the error
+// that exits as a shell reports an interrupted process.
+func signoffInterrupted(streams iostream.Streams) error {
+	streams.ErrPrintln(ui.ErrWarning("interrupted"))
+	return &silentExitError{code: exitInterrupted}
 }
 
 // signoffCommands returns the validation commands in dir's project config, or
@@ -187,12 +228,13 @@ func configOrEmpty(dir string) *config.ProjectConfig {
 	return &config.ProjectConfig{}
 }
 
-// signoffKeyPrefix is the part of a run's key that names the repository and
-// ends in what the tree SHA completes: <repo identity>@tree:.
-func signoffKeyPrefix(ctx context.Context, dir string) (string, error) {
+// signoffOrigin reads origin: keyPrefix is the part of a run's key that names
+// the repository and ends in what the tree SHA completes, <repo identity>@tree:,
+// and repo is origin's GitHub OWNER/NAME.
+func signoffOrigin(ctx context.Context, dir string) (keyPrefix, repo string, err error) {
 	remote, err := gitremote.URL(ctx, dir, "origin")
 	if err != nil {
-		return "", newUserError("This repository has no origin remote.").
+		return "", "", newUserError("This repository has no origin remote.").
 			withCode("signoff.no_origin").
 			withSuggestion("Add one with 'git remote add origin <url>'. Sign-off names a repository by its origin, so every clone of it shares one key.").
 			withExitCode(ExitBadArgs).
@@ -200,14 +242,23 @@ func signoffKeyPrefix(ctx context.Context, dir string) (string, error) {
 	}
 	identity, err := gitremote.Identity(remote)
 	if err != nil {
-		return "", newUserError("This repository's origin remote has no host.").
+		return "", "", newUserError("This repository's origin remote has no host.").
 			withCode("signoff.origin_has_no_host").
 			withDetail(fmt.Sprintf("origin is %q.", remote)).
 			withSuggestion("Point origin at the repository's URL on its host: a local path names a directory on one machine, which no other runner could share.").
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}
-	return identity + "@tree:", nil
+	owner, name, err := gitremote.ParseRemoteURL(remote)
+	if err != nil {
+		return "", "", newUserError("This repository's origin is not on GitHub.").
+			withCode("signoff.origin_not_github").
+			withDetail(fmt.Sprintf("origin is %q.", remote)).
+			withSuggestion("Sign-off reports to factory check runs, which take only GitHub repositories.").
+			withExitCode(ExitBadArgs).
+			wrap(err)
+	}
+	return identity + "@tree:", owner + "/" + name, nil
 }
 
 // shortKey shortens the tree SHA in key to eight characters for display.
@@ -255,13 +306,13 @@ func localSignoffTarget(checkout string, streams iostream.Streams) signoffTarget
 
 // sidecarSignoffTarget runs the commands on a sidecar that checkout is synced
 // to. dir is the real project, which names the sidecar and keys its state.
-func sidecarSignoffTarget(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, dir, checkout string, statusFn iostream.StatusFunc, streams, outputStreams iostream.Streams) (signoffTarget, error) {
+func sidecarSignoffTarget(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, orgID, dir, checkout string, statusFn iostream.StatusFunc, streams, outputStreams iostream.Streams) (signoffTarget, error) {
 	reapAbandonedSidecars(ctx, client, dir, statusFn, streams)
 	activeSidecar, _ := sidecar.LoadActive(ctx)
 
 	// The checkout is what is synced to the sidecar and what the commands run in:
 	// it is the tree the key names, and it cannot move while they run.
-	opts := &validateOpts{}
+	opts := &validateOpts{orgID: orgID}
 	pool, err := prepareValidationTarget(ctx, client, opts, resolveImage("", configOrEmpty(dir)), rc.CircleCITokenSource, 1, activeSidecar, statusFn, checkout, dir, streams)
 	if err != nil {
 		return signoffTarget{}, err
@@ -291,4 +342,30 @@ func sidecarSignoffTarget(ctx context.Context, client *circleci.Client, rc confi
 		},
 		release: func() { pool.Release(entry) },
 	}, nil
+}
+
+// signoffOrgError rewrites the org picker's suggestions that name --org-id,
+// which signoff does not have.
+func signoffOrgError(err error) error {
+	var ue *userError
+	if !errors.As(err, &ue) {
+		return err
+	}
+	if !strings.Contains(ue.suggestion, "--org-id") {
+		return err
+	}
+	c := *ue
+	switch {
+	case ue.msg == msgOrgNoTTY:
+		return c.withSuggestion("Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or CIRCLECI_ORG_ID.").
+			withExitCode(ExitBadArgs)
+	case ue.suggestion == suggestionNoOrgs:
+		return c.withSuggestion("Create one with `chunk org create <name>`, set CIRCLECI_ORG_ID, or ask an admin to invite you to an existing organization.").
+			withExitCode(ExitBadArgs)
+	case ue.msg == msgListOrgsFailed:
+		return c.withSuggestion("Check your network connection.")
+	case ue.msg == "Could not select an organization.":
+		return c.withSuggestion("Set CIRCLECI_ORG_ID instead.")
+	}
+	return err
 }

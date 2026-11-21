@@ -170,7 +170,10 @@ type FakeCircleCI struct {
 	// answers every request with, storing nothing. Set it before the first
 	// request.
 	CheckRunStatus int
-	checkRuns      []CheckRun
+	// CheckRunListStatus, when set, is the status GET /api/v3/factory/check-runs
+	// answers every request with. Set it before the first request.
+	CheckRunListStatus int
+	checkRuns          []CheckRun
 
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.
