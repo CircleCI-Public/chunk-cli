@@ -170,6 +170,8 @@ func TestSignoff(t *testing.T) {
 		assert.Check(t, cmp.Equal(runs[0].Name, "lint"))
 		assert.Check(t, cmp.Equal(runs[0].Outcome, "succeeded"))
 		assert.Check(t, cmp.Regexp(signoffKeyPattern, runs[0].Key))
+		assert.Check(t, cmp.Equal(runs[0].OrgID, "org-aaa"))
+		assert.Check(t, cmp.Equal(runs[0].Repo, "test-org/test-repo"))
 		startedFirst := runs[0].StartedAt.Before(runs[0].EndedAt)
 		assert.Check(t, startedFirst, "started_at %s, ended_at %s", runs[0].StartedAt, runs[0].EndedAt)
 		for _, r := range runs {
@@ -353,6 +355,26 @@ func TestSignoff(t *testing.T) {
 		p.assertSidecarUntouched(t)
 	})
 
+	t.Run("no org configured takes the only one", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		delete(p.env.Extra, "CIRCLECI_ORG_ID")
+		p.cci.Collaborations = []fakes.Collaboration{{ID: "org-solo", Name: "solo", VCSType: "github"}}
+		cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+		err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
+		assert.NilError(t, err)
+
+		result := p.signoff(t)
+
+		assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		runs := p.cci.CheckRuns()
+		assert.Assert(t, cmp.Len(runs, 1)) // gate: runs[0] below
+		assert.Check(t, cmp.Equal(runs[0].OrgID, "org-solo"))
+		sidecars := p.cci.Sidecars
+		assert.Assert(t, cmp.Len(sidecars, 1)) // gate: sidecars[0] below
+		assert.Check(t, cmp.Equal(sidecars[0].OrgID, "org-solo"))
+	})
+
 	t.Run("no origin", func(t *testing.T) {
 		t.Parallel()
 		p := newSignoffProject(t)
@@ -377,6 +399,20 @@ func TestSignoff(t *testing.T) {
 		assert.Check(t, result.ExitCode != 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 		assert.Check(t, cmp.Contains(result.Stderr, "origin remote has no host"))
 		assert.Check(t, cmp.Contains(result.Stderr, "/srv/git/x.git"))
+		checkRuns := p.cci.CheckRuns()
+		assert.Check(t, cmp.Len(checkRuns, 0))
+		p.assertSidecarUntouched(t)
+	})
+
+	t.Run("a non-GitHub origin", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		signoffGit(t, p.workDir, nil, "remote", "set-url", "origin", "git@gitlab.com:test-org/test-repo.git")
+
+		result := p.signoff(t)
+
+		assert.Check(t, result.ExitCode != 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		assert.Check(t, cmp.Contains(result.Stderr, "not on GitHub"))
 		checkRuns := p.cci.CheckRuns()
 		assert.Check(t, cmp.Len(checkRuns, 0))
 		p.assertSidecarUntouched(t)

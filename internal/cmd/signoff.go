@@ -69,13 +69,18 @@ func runSignoff(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	key, err := signoffKeyPrefix(ctx, dir)
+	key, repo, err := signoffOrigin(ctx, dir)
 	if err != nil {
 		return err
 	}
 
 	rc, _ := config.ResolveCircleCI(insecureStorageFlag(cmd))
 	client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
+	if err != nil {
+		return err
+	}
+
+	orgID, err := resolveOrgID("", dir, orgPicker(ctx, client, rc.CircleCITokenSource, streams))
 	if err != nil {
 		return err
 	}
@@ -107,7 +112,7 @@ func runSignoff(cmd *cobra.Command) error {
 	if os.Getenv(envSignoffLocal) == "1" {
 		target = localSignoffTarget(checkout, outputStreams)
 	} else {
-		target, err = sidecarSignoffTarget(ctx, client, rc, dir, checkout, statusFn, streams, outputStreams)
+		target, err = sidecarSignoffTarget(ctx, client, rc, orgID, dir, checkout, statusFn, streams, outputStreams)
 		if err != nil {
 			return err
 		}
@@ -121,6 +126,7 @@ func runSignoff(cmd *cobra.Command) error {
 		Exec:     target.exec,
 		Dir:      target.dir,
 		Post: func(ctx context.Context, run circleci.CheckRun) error {
+			run.OrgID, run.Repo = orgID, repo
 			_, err := client.CreateCheckRun(ctx, run)
 			return err
 		},
@@ -187,12 +193,13 @@ func configOrEmpty(dir string) *config.ProjectConfig {
 	return &config.ProjectConfig{}
 }
 
-// signoffKeyPrefix is the part of a run's key that names the repository and
-// ends in what the tree SHA completes: <repo identity>@tree:.
-func signoffKeyPrefix(ctx context.Context, dir string) (string, error) {
+// signoffOrigin reads origin: keyPrefix is the part of a run's key that names
+// the repository and ends in what the tree SHA completes, <repo identity>@tree:,
+// and repo is origin's GitHub OWNER/NAME.
+func signoffOrigin(ctx context.Context, dir string) (keyPrefix, repo string, err error) {
 	remote, err := gitremote.URL(ctx, dir, "origin")
 	if err != nil {
-		return "", newUserError("This repository has no origin remote.").
+		return "", "", newUserError("This repository has no origin remote.").
 			withCode("signoff.no_origin").
 			withSuggestion("Add one with 'git remote add origin <url>'. Sign-off names a repository by its origin, so every clone of it shares one key.").
 			withExitCode(ExitBadArgs).
@@ -200,14 +207,23 @@ func signoffKeyPrefix(ctx context.Context, dir string) (string, error) {
 	}
 	identity, err := gitremote.Identity(remote)
 	if err != nil {
-		return "", newUserError("This repository's origin remote has no host.").
+		return "", "", newUserError("This repository's origin remote has no host.").
 			withCode("signoff.origin_has_no_host").
 			withDetail(fmt.Sprintf("origin is %q.", remote)).
 			withSuggestion("Point origin at the repository's URL on its host: a local path names a directory on one machine, which no other runner could share.").
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}
-	return identity + "@tree:", nil
+	owner, name, err := gitremote.ParseRemoteURL(remote)
+	if err != nil {
+		return "", "", newUserError("This repository's origin is not on GitHub.").
+			withCode("signoff.origin_not_github").
+			withDetail(fmt.Sprintf("origin is %q.", remote)).
+			withSuggestion("Sign-off reports to factory check runs, which take only GitHub repositories.").
+			withExitCode(ExitBadArgs).
+			wrap(err)
+	}
+	return identity + "@tree:", owner + "/" + name, nil
 }
 
 // shortKey shortens the tree SHA in key to eight characters for display.
@@ -255,13 +271,13 @@ func localSignoffTarget(checkout string, streams iostream.Streams) signoffTarget
 
 // sidecarSignoffTarget runs the commands on a sidecar that checkout is synced
 // to. dir is the real project, which names the sidecar and keys its state.
-func sidecarSignoffTarget(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, dir, checkout string, statusFn iostream.StatusFunc, streams, outputStreams iostream.Streams) (signoffTarget, error) {
+func sidecarSignoffTarget(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, orgID, dir, checkout string, statusFn iostream.StatusFunc, streams, outputStreams iostream.Streams) (signoffTarget, error) {
 	reapAbandonedSidecars(ctx, client, dir, statusFn, streams)
 	activeSidecar, _ := sidecar.LoadActive(ctx)
 
 	// The checkout is what is synced to the sidecar and what the commands run in:
 	// it is the tree the key names, and it cannot move while they run.
-	opts := &validateOpts{}
+	opts := &validateOpts{orgID: orgID}
 	pool, err := prepareValidationTarget(ctx, client, opts, resolveImage("", configOrEmpty(dir)), rc.CircleCITokenSource, 1, activeSidecar, statusFn, checkout, dir, streams)
 	if err != nil {
 		return signoffTarget{}, err

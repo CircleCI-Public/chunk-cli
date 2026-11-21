@@ -701,6 +701,11 @@ chunk
   commit.** Two working trees with the same content share runs, whatever their
   commits, and uncommitted changes are signed off under their own key rather
   than refused.
+- **`chunk signoff` reports each run under the CircleCI org and the GitHub
+  repository.** The org is the one sidecars use (`CIRCLECI_ORG_ID`, then
+  `orgID` in `.chunk/config.json`, then the org picker); the repository is
+  origin's owner/name. An origin that is not on GitHub is refused before
+  anything runs, since factory check runs take only GitHub repositories.
 - **`chunk signoff` runs every command on a clean checkout, every time, and
   posts each.** Files `.gitignore` excludes (`.env`, generated code,
   `node_modules`) are not there, as in CI, so a command that needs them fails.
