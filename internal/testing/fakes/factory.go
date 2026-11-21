@@ -97,6 +97,7 @@ func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.GET("/api/v3/factory/flows/:id", f.handleGetFlow)
 	r.GET("/api/v3/factory/flows/:id/blockers", f.handleListFlowBlockers)
 	r.POST("/api/v3/factory/check-runs", f.handleCreateCheckRun)
+	r.GET("/api/v3/factory/check-runs", f.handleListCheckRuns)
 	r.POST("/api/v3/factory/events", f.handleCreateEvent)
 	r.POST("/api/v3/factory/flows/:id/release", f.handleReleaseFlow)
 	r.POST("/api/v3/factory/flows/:id/claim", f.handleClaimFlow)
@@ -1682,7 +1683,12 @@ func (f *FakeCircleCI) handleCreateCheckRun(c *gin.Context) {
 	f.mu.Lock()
 	f.checkRuns = append(f.checkRuns, run)
 	f.mu.Unlock()
-	c.JSON(http.StatusCreated, gin.H{"data": gin.H{
+	c.JSON(http.StatusCreated, gin.H{"data": checkRunEntity(run)})
+}
+
+// checkRunEntity is run as the API serves it, from a POST or a list.
+func checkRunEntity(run CheckRun) gin.H {
+	return gin.H{
 		"id": run.ID,
 		"attributes": gin.H{
 			"key": run.Key, "name": run.Name, "outcome": run.Outcome,
@@ -1691,7 +1697,70 @@ func (f *FakeCircleCI) handleCreateCheckRun(c *gin.Context) {
 			"vcs":        gin.H{"provider": "github", "repo_full_name": run.Repo},
 		},
 		"references": gin.H{"org": gin.H{"id": run.OrgID}},
-	}})
+	}
+}
+
+// AddCheckRun stores run as if it had been posted, making an ID when it has
+// none, and returns it. It is for tests that need a run nobody posted through
+// signoff, such as a newer failure.
+func (f *FakeCircleCI) AddCheckRun(run CheckRun) CheckRun {
+	if run.ID == "" {
+		run.ID = uuid.NewString()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checkRuns = append(f.checkRuns, run)
+	return run
+}
+
+// handleListCheckRuns implements GET /api/v3/factory/check-runs, newest first.
+func (f *FakeCircleCI) handleListCheckRuns(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	f.mu.RLock()
+	status := f.CheckRunListStatus
+	f.mu.RUnlock()
+	if status != 0 {
+		factoryError(c, status, "API error")
+		return
+	}
+	orgID := c.Query("filter[org_id]")
+	repo := c.Query("filter[repo_full_name]")
+	key := c.Query("filter[key]")
+	switch {
+	case orgID == "":
+		factoryError(c, http.StatusBadRequest, "filter[org_id] is required")
+		return
+	case repo == "":
+		factoryError(c, http.StatusBadRequest, "filter[repo_full_name] is required")
+		return
+	case key == "":
+		factoryError(c, http.StatusBadRequest, "filter[key] is required")
+		return
+	}
+	after, ok := pageCursor(c)
+	if !ok {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	var matching []CheckRun
+	for _, r := range slices.Backward(f.checkRuns) {
+		if r.OrgID == orgID && r.Repo == repo && r.Key == key {
+			matching = append(matching, r)
+		}
+	}
+	items := []gin.H{}
+	end := min(after+f.pageSize(), len(matching))
+	for _, r := range matching[min(after, len(matching)):end] {
+		items = append(items, checkRunEntity(r))
+	}
+	resp := gin.H{"data": items}
+	if end < len(matching) {
+		resp["page"] = gin.H{"next": strconv.Itoa(end)}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // isRepoFullName reports whether s is an OWNER/NAME repository name.

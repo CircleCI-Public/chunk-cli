@@ -527,6 +527,53 @@ func (c *Client) CreateCheckRun(ctx context.Context, r CheckRun) (*CheckRun, err
 	return &run, nil
 }
 
+// CheckRunFilter names the runs ListCheckRuns returns; every field is required.
+type CheckRunFilter struct {
+	OrgID, Repo, Key string
+}
+
+// ListCheckRuns returns the runs for f, newest first, reading every page. A
+// list with no runs is an empty slice.
+func (c *Client) ListCheckRuns(ctx context.Context, f CheckRunFilter) ([]CheckRun, error) {
+	out := []CheckRun{}
+	var cursor string
+	for pages := 1; ; pages++ {
+		var page struct {
+			Data []struct {
+				ID         string        `json:"id"`
+				Attributes checkRunAttrs `json:"attributes"`
+				References checkRunRefs  `json:"references"`
+			} `json:"data"`
+			Page v3Page `json:"page"`
+		}
+		opts := []func(*hc.Request){
+			hc.QueryParam("page[limit]", "100"),
+			hc.QueryParam("filter[org_id]", f.OrgID),
+			hc.QueryParam("filter[repo_full_name]", f.Repo),
+			hc.QueryParam("filter[key]", f.Key),
+			hc.JSONDecoder(&page),
+		}
+		if cursor != "" {
+			opts = append(opts, hc.QueryParam("page[cursor]", cursor))
+		}
+		_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/check-runs", opts...))
+		if err != nil {
+			return nil, mapErr("list check runs", err)
+		}
+		for _, item := range page.Data {
+			out = append(out, item.Attributes.checkRun(item.ID, item.References))
+		}
+		next, err := nextCursor(cursor, page.Page, pages)
+		if err != nil {
+			return nil, err
+		}
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
 // ListPlans returns the caller's open plans, oldest first, reading every
 // page. A plan is open until its flow ends; ended plans are not listed.
 func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
