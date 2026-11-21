@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -170,6 +171,8 @@ func TestSignoff(t *testing.T) {
 		assert.Check(t, cmp.Equal(runs[0].Name, "lint"))
 		assert.Check(t, cmp.Equal(runs[0].Outcome, "succeeded"))
 		assert.Check(t, cmp.Regexp(signoffKeyPattern, runs[0].Key))
+		assert.Check(t, cmp.Equal(runs[0].OrgID, "org-aaa"))
+		assert.Check(t, cmp.Equal(runs[0].Repo, "test-org/test-repo"))
 		startedFirst := runs[0].StartedAt.Before(runs[0].EndedAt)
 		assert.Check(t, startedFirst, "started_at %s, ended_at %s", runs[0].StartedAt, runs[0].EndedAt)
 		for _, r := range runs {
@@ -353,6 +356,149 @@ func TestSignoff(t *testing.T) {
 		p.assertSidecarUntouched(t)
 	})
 
+	t.Run("no org configured takes the only one", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		delete(p.env.Extra, "CIRCLECI_ORG_ID")
+		p.cci.Collaborations = []fakes.Collaboration{{ID: "org-solo", Name: "solo", VCSType: "github"}}
+		cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+		err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
+		assert.NilError(t, err)
+
+		result := p.signoff(t)
+
+		assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		runs := p.cci.CheckRuns()
+		assert.Assert(t, cmp.Len(runs, 1)) // gate: runs[0] below
+		assert.Check(t, cmp.Equal(runs[0].OrgID, "org-solo"))
+		sidecars := p.cci.Sidecars
+		assert.Assert(t, cmp.Len(sidecars, 1)) // gate: sidecars[0] below
+		assert.Check(t, cmp.Equal(sidecars[0].OrgID, "org-solo"))
+	})
+
+	t.Run("creating a sidecar saves the org into config.json", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name  string
+			setup func(p *signoffProject)
+			org   string
+		}{
+			{
+				name:  "org from the environment",
+				setup: func(p *signoffProject) {},
+				org:   "org-aaa",
+			},
+			{
+				name: "org from the picker",
+				setup: func(p *signoffProject) {
+					delete(p.env.Extra, "CIRCLECI_ORG_ID")
+					p.cci.Collaborations = []fakes.Collaboration{{ID: "org-solo", Name: "solo", VCSType: "github"}}
+				},
+				org: "org-solo",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				p := newSignoffProject(t)
+				tc.setup(p)
+				cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+				cfgPath := filepath.Join(p.workDir, ".chunk", "config.json")
+				err := os.WriteFile(cfgPath, []byte(cfg), 0o644)
+				assert.NilError(t, err)
+				signoffGit(t, p.workDir, nil, "add", "-A")
+				signoffGit(t, p.workDir, nil, "commit", "-m", "config without an org")
+
+				first := p.signoff(t)
+				assert.Equal(t, first.ExitCode, 0, "stdout: %s\nstderr: %s", first.Stdout, first.Stderr)
+
+				sidecars := p.cci.Sidecars
+				assert.Assert(t, cmp.Len(sidecars, 1)) // gate: sidecars[0] below
+				assert.Check(t, cmp.Equal(sidecars[0].OrgID, tc.org))
+				got, err := os.ReadFile(cfgPath)
+				assert.NilError(t, err)
+				var saved struct {
+					OrgID string `json:"orgID"`
+				}
+				err = json.Unmarshal(got, &saved)
+				assert.NilError(t, err)
+				assert.Check(t, cmp.Equal(saved.OrgID, tc.org))
+
+				// The save changed the tree the first run keyed, so the next signoff
+				// keys a new tree and reuses nothing.
+				second := p.signoff(t)
+				assert.Equal(t, second.ExitCode, 0, "stdout: %s\nstderr: %s", second.Stdout, second.Stderr)
+				assert.Check(t, !strings.Contains(second.Stdout, "earlier run"), "stdout: %s", second.Stdout)
+				runs := p.cci.CheckRuns()
+				assert.Assert(t, cmp.Len(runs, 2)) // gate: runs[0..1] below
+				assert.Check(t, runs[1].Key != runs[0].Key, "the key did not change: %s", runs[0].Key)
+				assert.Check(t, cmp.Equal(runs[0].OrgID, tc.org))
+				assert.Check(t, cmp.Equal(runs[1].OrgID, tc.org))
+			})
+		}
+	})
+
+	t.Run("no org configured, several to pick from and no terminal", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		delete(p.env.Extra, "CIRCLECI_ORG_ID")
+		p.cci.Collaborations = []fakes.Collaboration{
+			{ID: "org-one", Name: "one", VCSType: "github"},
+			{ID: "org-two", Name: "two", VCSType: "github"},
+		}
+		cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+		err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
+		assert.NilError(t, err)
+
+		result := p.signoff(t)
+
+		assert.Check(t, cmp.Equal(result.ExitCode, 2), "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		assert.Check(t, cmp.Contains(result.Stderr, "CIRCLECI_ORG_ID"))
+		assert.Check(t, cmp.Contains(result.Stderr, "chunk config set orgID"))
+		assert.Check(t, !strings.Contains(result.Stderr, "--org-id"), "stderr: %s", result.Stderr)
+		checkRuns := p.cci.CheckRuns()
+		assert.Check(t, cmp.Len(checkRuns, 0))
+		p.assertSidecarUntouched(t)
+	})
+
+	t.Run("no org configured and no organizations", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		delete(p.env.Extra, "CIRCLECI_ORG_ID")
+		p.cci.Collaborations = nil
+		cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+		err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
+		assert.NilError(t, err)
+
+		result := p.signoff(t)
+
+		assert.Check(t, cmp.Equal(result.ExitCode, 2), "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		assert.Check(t, cmp.Contains(result.Stderr, "CIRCLECI_ORG_ID"))
+		assert.Check(t, cmp.Contains(result.Stderr, "chunk org create"))
+		assert.Check(t, !strings.Contains(result.Stderr, "--org-id"), "stderr: %s", result.Stderr)
+		checkRuns := p.cci.CheckRuns()
+		assert.Check(t, cmp.Len(checkRuns, 0))
+		p.assertSidecarUntouched(t)
+	})
+
+	t.Run("no org configured and listing organizations fails", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		delete(p.env.Extra, "CIRCLECI_ORG_ID")
+		p.cci.CollaborationsStatusCode = http.StatusInternalServerError
+		cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+		err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
+		assert.NilError(t, err)
+
+		result := p.signoff(t)
+
+		assert.Check(t, cmp.Equal(result.ExitCode, 1), "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		assert.Check(t, cmp.Contains(result.Stderr, "Check your network connection"))
+		assert.Check(t, !strings.Contains(result.Stderr, "--org-id"), "stderr: %s", result.Stderr)
+		checkRuns := p.cci.CheckRuns()
+		assert.Check(t, cmp.Len(checkRuns, 0))
+		p.assertSidecarUntouched(t)
+	})
+
 	t.Run("no origin", func(t *testing.T) {
 		t.Parallel()
 		p := newSignoffProject(t)
@@ -377,6 +523,20 @@ func TestSignoff(t *testing.T) {
 		assert.Check(t, result.ExitCode != 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 		assert.Check(t, cmp.Contains(result.Stderr, "origin remote has no host"))
 		assert.Check(t, cmp.Contains(result.Stderr, "/srv/git/x.git"))
+		checkRuns := p.cci.CheckRuns()
+		assert.Check(t, cmp.Len(checkRuns, 0))
+		p.assertSidecarUntouched(t)
+	})
+
+	t.Run("a non-GitHub origin", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		signoffGit(t, p.workDir, nil, "remote", "set-url", "origin", "git@gitlab.com:test-org/test-repo.git")
+
+		result := p.signoff(t)
+
+		assert.Check(t, result.ExitCode != 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		assert.Check(t, cmp.Contains(result.Stderr, "not on GitHub"))
 		checkRuns := p.cci.CheckRuns()
 		assert.Check(t, cmp.Len(checkRuns, 0))
 		p.assertSidecarUntouched(t)

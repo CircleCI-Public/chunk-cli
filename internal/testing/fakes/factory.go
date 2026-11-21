@@ -1604,6 +1604,9 @@ type CheckRun struct {
 	Outcome   string
 	StartedAt time.Time
 	EndedAt   time.Time
+	// OrgID is references.org's id; Repo is vcs.repo_full_name.
+	OrgID string
+	Repo  string
 }
 
 // checkOutcomes are the outcomes a check run takes
@@ -1637,7 +1640,16 @@ func (f *FakeCircleCI) handleCreateCheckRun(c *gin.Context) {
 				Outcome   string    `json:"outcome"`
 				StartedAt time.Time `json:"started_at"`
 				EndedAt   time.Time `json:"ended_at"`
+				VCS       struct {
+					Provider     string `json:"provider"`
+					RepoFullName string `json:"repo_full_name"`
+				} `json:"vcs"`
 			} `json:"attributes"`
+			References struct {
+				Org struct {
+					ID string `json:"id"`
+				} `json:"org"`
+			} `json:"references"`
 		} `json:"data"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -1655,17 +1667,35 @@ func (f *FakeCircleCI) handleCreateCheckRun(c *gin.Context) {
 	case a.StartedAt.IsZero() || a.EndedAt.IsZero():
 		factoryError(c, http.StatusBadRequest, "started_at and ended_at are required")
 		return
+	case body.Data.References.Org.ID == "":
+		factoryError(c, http.StatusBadRequest, "references.org is required")
+		return
+	case a.VCS.Provider != "github" || !isRepoFullName(a.VCS.RepoFullName):
+		factoryError(c, http.StatusBadRequest, "vcs must be {provider: github, repo_full_name: OWNER/NAME}")
+		return
 	}
 	run := CheckRun{
 		ID: uuid.NewString(), Key: a.Key, Name: a.Name, Outcome: a.Outcome,
 		StartedAt: a.StartedAt, EndedAt: a.EndedAt,
+		OrgID: body.Data.References.Org.ID, Repo: a.VCS.RepoFullName,
 	}
 	f.mu.Lock()
 	f.checkRuns = append(f.checkRuns, run)
 	f.mu.Unlock()
-	c.JSON(http.StatusCreated, gin.H{"data": gin.H{"id": run.ID, "attributes": gin.H{
-		"key": run.Key, "name": run.Name, "outcome": run.Outcome,
-		"started_at": run.StartedAt.UTC().Format(time.RFC3339),
-		"ended_at":   run.EndedAt.UTC().Format(time.RFC3339),
-	}}})
+	c.JSON(http.StatusCreated, gin.H{"data": gin.H{
+		"id": run.ID,
+		"attributes": gin.H{
+			"key": run.Key, "name": run.Name, "outcome": run.Outcome,
+			"started_at": run.StartedAt.UTC().Format(time.RFC3339),
+			"ended_at":   run.EndedAt.UTC().Format(time.RFC3339),
+			"vcs":        gin.H{"provider": "github", "repo_full_name": run.Repo},
+		},
+		"references": gin.H{"org": gin.H{"id": run.OrgID}},
+	}})
+}
+
+// isRepoFullName reports whether s is an OWNER/NAME repository name.
+func isRepoFullName(s string) bool {
+	owner, name, ok := strings.Cut(s, "/")
+	return ok && owner != "" && name != "" && !strings.Contains(name, "/")
 }

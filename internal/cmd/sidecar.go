@@ -118,7 +118,7 @@ func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string,
 				return "", err
 			}
 			return "", &userError{
-				msg:        "Could not list organizations.",
+				msg:        msgListOrgsFailed,
 				suggestion: "Pass --org-id or check your network connection.",
 				err:        err,
 			}
@@ -131,7 +131,7 @@ func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string,
 		}
 		if nonInteractive() {
 			return "", &userError{
-				msg:        "No interactive terminal available to select an organization.",
+				msg:        msgOrgNoTTY,
 				suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
 				err:        ui.ErrNoTTY,
 			}
@@ -146,7 +146,7 @@ func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string,
 				// hideDetail: the wrapped error is "no interactive terminal
 				// available", which the message already says in full.
 				return "", &userError{
-					msg:        "No interactive terminal available to select an organization.",
+					msg:        msgOrgNoTTY,
 					suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
 					err:        err,
 					hideDetail: true,

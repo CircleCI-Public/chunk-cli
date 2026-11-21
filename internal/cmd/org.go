@@ -49,7 +49,7 @@ func newOrgListCmd() *cobra.Command {
 			collabs, err := client.ListCollaborations(cmd.Context())
 			if err != nil {
 				return &userError{
-					msg:        "Could not list organizations.",
+					msg:        msgListOrgsFailed,
 					suggestion: "Check your network connection.",
 					err:        fmt.Errorf("list collaborations: %w", err),
 				}
@@ -120,7 +120,12 @@ func newOrgCreateCmd() *cobra.Command {
 	}
 }
 
-const suggestionNoOrgs = "Create one with `chunk org create <name>`, pass --org-id, or ask an admin to invite you to an existing organization."
+const (
+	msgListOrgsFailed = "Could not list organizations."
+	msgOrgNoTTY       = "No interactive terminal available to select an organization."
+
+	suggestionNoOrgs = "Create one with `chunk org create <name>`, pass --org-id, or ask an admin to invite you to an existing organization."
+)
 
 // promptOrgName asks for the name of a new organization. It returns
 // ui.ErrNoTTY without printing anything when there is no terminal to prompt
