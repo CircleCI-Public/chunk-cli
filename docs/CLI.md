@@ -723,6 +723,12 @@ chunk
   other way round. Any other value runs them on the sidecar.
 - **`chunk signoff` posts only what it knows.** A result it cannot know, from an
   exec error or Ctrl-C, is not posted, and a failed post fails `signoff`.
+- **`chunk signoff` runs only where a repository turns it on.** Without
+  `"signoff": true` in `.chunk/config.json`, or with it but no command signoff
+  runs, it says why there is nothing to do and exits 0, before it needs a
+  token, an origin or a sidecar. So a caller can run signoff in every
+  repository, and only those that opt in sign off. A repository with no
+  `.chunk/config.json` is still an error.
 - Every command checks GitHub for a newer release in the background and prints a
   notice to stderr once it finishes. The result is cached in the app state dir
   (`update-check.json`) for 24 h to stay inside GitHub's unauthenticated rate
@@ -751,6 +757,7 @@ chunk
 | `telemetry` | user config (`~/.config/chunk/config.json`) | Usage telemetry, tied to your CircleCI user ID once authenticated (`true`/`false`, default: `true`) |
 | `notifications` | user config (`~/.config/chunk/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
 | `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
+| `signoff` | `.chunk/config.json` | Whether `chunk signoff` runs in this repository (`true`/`false`, default: `false`; off, it does nothing and exits 0) |
 | `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
 | `asyncValidate` | `.chunk/config.json` | Whether the chunk daemon may run a validate request in the background: `auto` (default), `always`, `never` |
 | `asyncValidateMaxLines` | `.chunk/config.json` | Largest change, in lines, still validated in the background under `auto` (default: 500) |

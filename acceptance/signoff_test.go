@@ -79,7 +79,7 @@ func newSignoffProjectOn(t *testing.T, withSidecar bool) *signoffProject {
 	assert.NilError(t, err)
 	// The org is configured, so the first run does not save it into config.json
 	// and change the very tree it signs off.
-	cfg := `{"orgID":"org-aaa","commands":[{"name":"lint","run":"test -f tracked.txt","remote":true},{"name":"format","run":"true","role":"autofix"}]}`
+	cfg := `{"orgID":"org-aaa","signoff":true,"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true},{"name":"format","run":"true","role":"autofix"}]}`
 	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644)
 	assert.NilError(t, err)
 	err = os.WriteFile(filepath.Join(workDir, "tracked.txt"), []byte("one\n"), 0o644)
@@ -100,7 +100,7 @@ func (p *signoffProject) signoff(t *testing.T, args ...string) binary.CLIResult 
 // (a JSON array) and the same org, so the tree changes by nothing else.
 func (p *signoffProject) setCommands(t *testing.T, commands string) {
 	t.Helper()
-	cfg := `{"orgID":"org-aaa","commands":` + commands + `}`
+	cfg := `{"orgID":"org-aaa","signoff":true,"commands":` + commands + `}`
 	err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
 	assert.NilError(t, err)
 }
@@ -393,24 +393,112 @@ func TestSignoff(t *testing.T) {
 		assert.Check(t, cmp.Equal(runs[0].Outcome, "timed_out"))
 	})
 
-	t.Run("no validation commands", func(t *testing.T) {
+	t.Run("nothing to do is a no-op", func(t *testing.T) {
+		t.Parallel()
+		const (
+			off     = "signoff is off"
+			nothing = "nothing to sign off"
+		)
+		const withCommands = `{"orgID":"org-aaa","commands":[{"name":"lint","run":"true","remote":true}]}`
+		const autofixOnly = `{"orgID":"org-aaa","signoff":true,"commands":[{"name":"format","run":"true","role":"autofix"}]}`
+		for _, tc := range []struct {
+			name   string
+			config string // the whole .chunk/config.json
+			args   []string
+			local  bool // CHUNK_SIGNOFF_LOCAL=1
+			want   string
+		}{
+			{
+				name:   "no signoff key",
+				config: withCommands,
+				want:   off,
+			},
+			{
+				name:   "signoff false",
+				config: `{"orgID":"org-aaa","signoff":false,"commands":[{"name":"lint","run":"true","remote":true}]}`,
+				want:   off,
+			},
+			{
+				name:   "off with force",
+				config: withCommands,
+				args:   []string{"--force"},
+				want:   off,
+			},
+			{
+				name:   "off with signoff local",
+				config: withCommands,
+				local:  true,
+				want:   off,
+			},
+			{
+				name:   "only autofix",
+				config: autofixOnly,
+				want:   nothing,
+			},
+			{
+				name:   "empty commands",
+				config: `{"orgID":"org-aaa","signoff":true,"commands":[]}`,
+				want:   nothing,
+			},
+			{
+				name:   "no commands key",
+				config: `{"orgID":"org-aaa","signoff":true}`,
+				want:   nothing,
+			},
+			{
+				name:   "only local",
+				config: `{"orgID":"org-aaa","signoff":true,"commands":[{"name":"lint","run":"true","local":true}]}`,
+				want:   nothing,
+			},
+			{
+				name:   "only templated",
+				config: `{"orgID":"org-aaa","signoff":true,"commands":[{"name":"lint","run":"echo {{.Files}}","remote":true}]}`,
+				want:   nothing,
+			},
+			{
+				name:   "nothing with force",
+				config: autofixOnly,
+				args:   []string{"--force"},
+				want:   nothing,
+			},
+			{
+				name:   "nothing with signoff local",
+				config: autofixOnly,
+				local:  true,
+				want:   nothing,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				p := newSignoffProject(t)
+				p.env.CircleToken = "" // needs no token
+				if tc.local {
+					p.env.Extra[signoffLocalEnv] = "1"
+				}
+				err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(tc.config), 0o644)
+				assert.NilError(t, err)
+
+				result := p.signoff(t, tc.args...)
+
+				assert.Check(t, cmp.Equal(result.ExitCode, 0), "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+				assert.Check(t, cmp.Contains(result.Stdout, tc.want))
+				assert.Check(t, cmp.Len(p.cci.CheckRuns(), 0))
+				p.assertSidecarUntouched(t)
+			})
+		}
+	})
+
+	t.Run("no config is an error", func(t *testing.T) {
 		t.Parallel()
 		p := newSignoffProject(t)
-		p.setCommands(t, `[{"name":"format","run":"true","role":"autofix"}]`)
-
-		onlyAutofix := p.signoff(t)
-
-		assert.Check(t, onlyAutofix.ExitCode != 0, "stdout: %s\nstderr: %s", onlyAutofix.Stdout, onlyAutofix.Stderr)
-		assert.Check(t, cmp.Contains(onlyAutofix.Stderr, "no commands to sign off"))
-
 		err := os.Remove(filepath.Join(p.workDir, ".chunk", "config.json"))
 		assert.NilError(t, err)
-		noConfig := p.signoff(t)
 
-		assert.Check(t, noConfig.ExitCode != 0, "stdout: %s\nstderr: %s", noConfig.Stdout, noConfig.Stderr)
-		assert.Check(t, cmp.Contains(noConfig.Stderr, "no commands to sign off"))
-		checkRuns := p.cci.CheckRuns()
-		assert.Check(t, cmp.Len(checkRuns, 0))
+		result := p.signoff(t)
+
+		assert.Check(t, result.ExitCode != 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		assert.Check(t, cmp.Contains(result.Stderr, "no commands to sign off"))
+		assert.Check(t, cmp.Len(p.cci.CheckRuns(), 0))
 		p.assertSidecarUntouched(t)
 	})
 
@@ -433,7 +521,7 @@ func TestSignoff(t *testing.T) {
 		p := newSignoffProject(t)
 		delete(p.env.Extra, "CIRCLECI_ORG_ID")
 		p.cci.Collaborations = []fakes.Collaboration{{ID: "org-solo", Name: "solo", VCSType: "github"}}
-		cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+		cfg := `{"signoff":true,"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
 		err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
 		assert.NilError(t, err)
 
@@ -473,7 +561,7 @@ func TestSignoff(t *testing.T) {
 				t.Parallel()
 				p := newSignoffProject(t)
 				tc.setup(p)
-				cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+				cfg := `{"signoff":true,"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
 				cfgPath := filepath.Join(p.workDir, ".chunk", "config.json")
 				err := os.WriteFile(cfgPath, []byte(cfg), 0o644)
 				assert.NilError(t, err)
@@ -489,11 +577,13 @@ func TestSignoff(t *testing.T) {
 				got, err := os.ReadFile(cfgPath)
 				assert.NilError(t, err)
 				var saved struct {
-					OrgID string `json:"orgID"`
+					OrgID   string `json:"orgID"`
+					Signoff bool   `json:"signoff"`
 				}
 				err = json.Unmarshal(got, &saved)
 				assert.NilError(t, err)
 				assert.Check(t, cmp.Equal(saved.OrgID, tc.org))
+				assert.Check(t, saved.Signoff, "the save dropped signoff")
 
 				// The save changed the tree the first run keyed, so the next signoff
 				// keys a new tree and reuses nothing.
@@ -517,7 +607,7 @@ func TestSignoff(t *testing.T) {
 			{ID: "org-one", Name: "one", VCSType: "github"},
 			{ID: "org-two", Name: "two", VCSType: "github"},
 		}
-		cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+		cfg := `{"signoff":true,"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
 		err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
 		assert.NilError(t, err)
 
@@ -537,7 +627,7 @@ func TestSignoff(t *testing.T) {
 		p := newSignoffProject(t)
 		delete(p.env.Extra, "CIRCLECI_ORG_ID")
 		p.cci.Collaborations = nil
-		cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+		cfg := `{"signoff":true,"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
 		err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
 		assert.NilError(t, err)
 
@@ -557,7 +647,7 @@ func TestSignoff(t *testing.T) {
 		p := newSignoffProject(t)
 		delete(p.env.Extra, "CIRCLECI_ORG_ID")
 		p.cci.CollaborationsStatusCode = http.StatusInternalServerError
-		cfg := `{"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
+		cfg := `{"signoff":true,"commands":[{"name":"lint","run":"test -f tracked.txt","remote":true}]}`
 		err := os.WriteFile(filepath.Join(p.workDir, ".chunk", "config.json"), []byte(cfg), 0o644)
 		assert.NilError(t, err)
 

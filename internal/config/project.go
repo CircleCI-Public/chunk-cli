@@ -68,6 +68,9 @@ type ValidationConfig struct {
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
+	// Signoff is whether `chunk signoff` runs in this repository. Off, it
+	// does nothing, so a caller may run it in every repository.
+	Signoff     bool                 `json:"signoff,omitempty"`
 	Commands    []Command            `json:"commands,omitempty"`
 	VCS         *VCSConfig           `json:"vcs,omitempty"`
 	Validation  *ValidationConfig    `json:"validation,omitempty"`
