@@ -68,9 +68,20 @@ func runSignoff(cmd *cobra.Command, force bool) error {
 			wrapMsg("not a git repository")
 	}
 
-	commands, err := signoffCommands(dir)
+	cfg, err := signoffConfig(dir)
 	if err != nil {
 		return err
+	}
+	// Signoff does nothing unless the repository opts in, or when it has nothing
+	// to run: a caller may run it in every repository.
+	if !cfg.Signoff {
+		streams.Printf("signoff is off for this repository: set \"signoff\": true in .chunk/config.json to turn it on\n")
+		return nil
+	}
+	commands := factory.ValidationCommands(cfg.Commands)
+	if len(commands) == 0 {
+		streams.Printf("nothing to sign off: .chunk/config.json has no validation commands\n")
+		return nil
 	}
 	key, repo, err := signoffOrigin(ctx, dir)
 	if err != nil {
@@ -198,26 +209,22 @@ func signoffInterrupted(streams iostream.Streams) error {
 	return &silentExitError{code: exitInterrupted}
 }
 
-// signoffCommands returns the validation commands in dir's project config, or
-// an error saying there are none to sign off.
-func signoffCommands(dir string) ([]config.Command, error) {
+// signoffConfig returns dir's project config, or an error when dir has none or
+// it cannot be read.
+func signoffConfig(dir string) (*config.ProjectConfig, error) {
 	cfg, err := config.LoadProjectConfig(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	var commands []config.Command
-	if err == nil {
-		commands = factory.ValidationCommands(cfg.Commands)
-	}
-	if len(commands) == 0 {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		return nil, &userError{
 			msg:        "No commands to sign off.",
 			blocked:    true,
 			suggestion: "Add a command that runs on a sidecar to .chunk/config.json, or run 'chunk init' to detect and configure them.",
 			errMsg:     "no commands to sign off",
 		}
+	case err != nil:
+		return nil, &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 	}
-	return commands, nil
+	return cfg, nil
 }
 
 // configOrEmpty is dir's project config, or an empty one when it has none.
