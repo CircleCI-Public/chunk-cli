@@ -315,7 +315,8 @@ git commit -m "Regenerate lock file on Linux"
 
 ## Planning and following flows with chunk ui
 
-`chunk ui` is the recommended way to interact with chunk. Keep it open in
+`chunk ui` is the recommended way to interact with chunk. It is also the
+recommended way to follow factory plans. Keep it open in
 another terminal while you work. Planning needs `factory daemon` running,
 which starts a worker that plans and builds for you, CircleCI auth, and a git
 repo with an origin. Run `chunk ui` in the project you want to plan in. `chunk`
