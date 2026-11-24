@@ -1122,17 +1122,74 @@ func TestFlows(t *testing.T) {
 		assertStatus(t, err, http.StatusNotFound)
 	})
 
-	t.Run("reads a blocker from a conductor that serves no is_active", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":[{"id":"b1","attributes":{"title":"a","state":"build"}}]}`))
-		}))
-		t.Cleanup(srv.Close)
-		client := newTestClient(t, srv.URL)
+	t.Run("reads whether a blocker is active from its holds", func(t *testing.T) {
+		tests := []struct {
+			name, attrs string
+			want        bool
+		}{
+			{
+				name:  "no blocks falls back to is_active",
+				attrs: `"is_active":false`,
+				want:  false,
+			},
+			{
+				name:  "no blocks, is_active true",
+				attrs: `"is_active":true`,
+				want:  true,
+			},
+			{
+				name: "no blocks and no is_active",
+				want: true,
+			},
+			{
+				name:  "null blocks falls back to is_active",
+				attrs: `"is_active":true,"blocks":null`,
+				want:  true,
+			},
+			{
+				name:  "an empty blocks list",
+				attrs: `"is_active":true,"blocks":[]`,
+				want:  false,
+			},
+			{
+				name:  "blocks without a top-level is_active",
+				attrs: `"blocks":[{"is_active":false},{"is_active":true}]`,
+				want:  true,
+			},
+			{
+				name:  "blocks all inactive, no top-level is_active",
+				attrs: `"blocks":[{"is_active":false}]`,
+				want:  false,
+			},
+			{
+				name:  "a hold without is_active",
+				attrs: `"is_active":false,"blocks":[{}]`,
+				want:  true,
+			},
+			{
+				name:  "blocks win over a disagreeing is_active",
+				attrs: `"is_active":true,"blocks":[{"is_active":false},{"is_active":false}]`,
+				want:  false,
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					attrs := `"title":"a","state":"build"`
+					if tt.attrs != "" {
+						attrs += "," + tt.attrs
+					}
+					_, _ = w.Write([]byte(`{"data":[{"id":"b1","attributes":{` + attrs + `}}]}`))
+				}))
+				t.Cleanup(srv.Close)
+				client := newTestClient(t, srv.URL)
 
-		got, err := client.ListFlowBlockers(ctx, uuid.NewString())
-		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(got, []Blocker{{ID: "b1", Title: "a", State: "build", Active: true}}))
+				got, err := client.ListFlowBlockers(ctx, uuid.NewString())
+				assert.NilError(t, err)
+				assert.Check(t, cmp.DeepEqual(got, []Blocker{{ID: "b1", Title: "a", State: "build", Active: tt.want}}))
+			})
+		}
 	})
 }
 

@@ -128,8 +128,10 @@ type Blocker struct {
 	ID, Title, State string
 	// Outcome is how the blocker's flow ended, "" until it ends.
 	Outcome string
-	// Active is whether it still holds the plan: is_active, true when the
-	// response leaves it out.
+	// Active is whether it still holds the plan: any of its holds is
+	// active, a hold without is_active counting as active. From a
+	// conductor that serves no blocks, it is is_active, true when the
+	// response leaves that out too.
 	Active bool
 }
 
@@ -993,10 +995,11 @@ func (c *Client) ListFlowBlockers(ctx context.Context, planID string) ([]Blocker
 		Data []struct {
 			ID         string `json:"id"`
 			Attributes struct {
-				Title    string `json:"title"`
-				State    string `json:"state"`
-				Outcome  string `json:"outcome"`
-				IsActive *bool  `json:"is_active"`
+				Title    string         `json:"title"`
+				State    string         `json:"state"`
+				Outcome  string         `json:"outcome"`
+				IsActive *bool          `json:"is_active"`
+				Blocks   *[]blockerHold `json:"blocks"`
 			} `json:"attributes"`
 		} `json:"data"`
 	}
@@ -1012,10 +1015,24 @@ func (c *Client) ListFlowBlockers(ctx context.Context, planID string) ([]Blocker
 		a := item.Attributes
 		out = append(out, Blocker{
 			ID: item.ID, Title: a.Title, State: a.State, Outcome: a.Outcome,
-			Active: a.IsActive == nil || *a.IsActive,
+			Active: blockerActive(a.IsActive, a.Blocks),
 		})
 	}
 	return out, nil
+}
+
+// blockerHold is one hold in a blocker's blocks.
+type blockerHold struct {
+	IsActive *bool `json:"is_active"`
+}
+
+func blockerActive(isActive *bool, blocks *[]blockerHold) bool {
+	if blocks == nil {
+		return isActive == nil || *isActive
+	}
+	return slices.ContainsFunc(*blocks, func(h blockerHold) bool {
+		return h.IsActive == nil || *h.IsActive
+	})
 }
 
 // EndFlow sends factory plan planID's flow the end event, for reason.
