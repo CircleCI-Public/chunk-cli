@@ -1050,8 +1050,10 @@ func transitionEntity(t FactoryTransition) gin.H {
 	return ent
 }
 
-// handleListFlowBlockers serves the plans blocking plan :id, in the order
-// blocked. A blocker is active until its flow reaches the block's until in
+// handleListFlowBlockers serves the plans blocking plan :id, one entry per
+// blocker, in the order first blocked. Each hold is in blocks, in the order
+// added, and the top-level at, until and is_active are the first hold's. A
+// hold is active until its blocker's flow reaches the hold's until in
 // fakeStateOrder (a state or until not in it never does), and an ended
 // blocker is active unless it merged; a blocker with no flow is active.
 func (f *FakeCircleCI) handleListFlowBlockers(c *gin.Context) {
@@ -1069,15 +1071,26 @@ func (f *FakeCircleCI) handleListFlowBlockers(c *gin.Context) {
 		factoryError(c, http.StatusNotFound, "plan not found")
 		return
 	}
-	items := []gin.H{}
+	var order []string
+	holds := map[string][]gin.H{}
 	for _, blk := range p.blockedBy {
 		b := f.factoryPlans[blk.id]
 		if b == nil {
 			continue
 		}
+		if _, seen := holds[blk.id]; !seen {
+			order = append(order, blk.id)
+		}
+		holds[blk.id] = append(holds[blk.id], gin.H{
+			"at": "build", "until": blk.until, "is_active": blockerActive(b, blk.until),
+		})
+	}
+	items := []gin.H{}
+	for _, id := range order {
+		b, hs := f.factoryPlans[id], holds[id]
 		attrs := gin.H{
-			"title": b.title, "state": "", "at": "build", "until": blk.until,
-			"is_active": blockerActive(b, blk.until),
+			"title": b.title, "state": "", "at": hs[0]["at"], "until": hs[0]["until"],
+			"is_active": hs[0]["is_active"], "blocks": hs,
 		}
 		if !b.noFlow {
 			attrs["state"] = b.state

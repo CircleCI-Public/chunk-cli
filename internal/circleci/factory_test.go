@@ -17,6 +17,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
@@ -1118,21 +1119,132 @@ func TestFlows(t *testing.T) {
 			{ID: e4.ID, Title: "completed", State: "ended", Outcome: "completed", Active: false},
 		}), "an ended blocker still blocks unless it merged or completed")
 
+		h, err := client.CreatePlan(ctx, "held-three-ways", "")
+		assert.NilError(t, err)
+		w1, err := client.CreatePlan(ctx, "waits-on-one-hold", "")
+		assert.NilError(t, err)
+		w2, err := client.CreatePlan(ctx, "waits-on-released-holds", "")
+		assert.NilError(t, err)
+		fake.SetFactoryPlanState(h.ID, "integrate")
+		fake.BlockFactoryPlanUntil(w1.ID, "build", h.ID)
+		fake.BlockFactoryPlan(w1.ID, c1.ID)
+		fake.BlockFactoryPlanUntil(w1.ID, "integrate", h.ID)
+		fake.BlockFactoryPlan(w1.ID, h.ID)
+		got, err = client.ListFlowBlockers(ctx, w1.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Blocker{
+			{ID: h.ID, Title: "held-three-ways", State: "integrate", Active: true},
+			{ID: c1.ID, Title: "retry-config", State: "build", Active: true},
+		}), "one active hold among several makes a blocker active, listed once where first blocked")
+
+		var raw struct {
+			Data []struct {
+				ID         string `json:"id"`
+				Attributes struct {
+					Until    string `json:"until"`
+					IsActive bool   `json:"is_active"`
+					Blocks   []struct {
+						Until string `json:"until"`
+					} `json:"blocks"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		_, err = client.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/flows/%s/blockers",
+			hc.RouteParams(w1.ID),
+			hc.JSONDecoder(&raw),
+		))
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(raw.Data, 2))
+		hr := raw.Data[0]
+		var untils []string
+		for _, b := range hr.Attributes.Blocks {
+			untils = append(untils, b.Until)
+		}
+		assert.Check(t, cmp.Equal(hr.ID, h.ID))
+		assert.Check(t, cmp.DeepEqual(untils, []string{"build", "integrate", "ended"}), "holds in the order added")
+		assert.Check(t, cmp.Equal(hr.Attributes.Until, "build"), "top-level until is the first hold's")
+		assert.Check(t, !hr.Attributes.IsActive, "top-level is_active is the first hold's")
+
+		fake.BlockFactoryPlanUntil(w2.ID, "build", h.ID)
+		fake.BlockFactoryPlanUntil(w2.ID, "integrate", h.ID)
+		got, err = client.ListFlowBlockers(ctx, w2.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Blocker{
+			{ID: h.ID, Title: "held-three-ways", State: "integrate", Active: false},
+		}), "a blocker whose holds are all released is not active")
+
 		_, err = client.ListFlowBlockers(ctx, uuid.NewString())
 		assertStatus(t, err, http.StatusNotFound)
 	})
 
-	t.Run("reads a blocker from a conductor that serves no is_active", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":[{"id":"b1","attributes":{"title":"a","state":"build"}}]}`))
-		}))
-		t.Cleanup(srv.Close)
-		client := newTestClient(t, srv.URL)
+	t.Run("reads whether a blocker is active from its holds", func(t *testing.T) {
+		tests := []struct {
+			name, attrs string
+			want        bool
+		}{
+			{
+				name:  "no blocks falls back to is_active",
+				attrs: `"is_active":false`,
+				want:  false,
+			},
+			{
+				name:  "no blocks, is_active true",
+				attrs: `"is_active":true`,
+				want:  true,
+			},
+			{
+				name: "no blocks and no is_active",
+				want: true,
+			},
+			{
+				name:  "null blocks falls back to is_active",
+				attrs: `"is_active":true,"blocks":null`,
+				want:  true,
+			},
+			{
+				name:  "an empty blocks list",
+				attrs: `"is_active":true,"blocks":[]`,
+				want:  false,
+			},
+			{
+				name:  "blocks without a top-level is_active",
+				attrs: `"blocks":[{"is_active":false},{"is_active":true}]`,
+				want:  true,
+			},
+			{
+				name:  "blocks all inactive, no top-level is_active",
+				attrs: `"blocks":[{"is_active":false}]`,
+				want:  false,
+			},
+			{
+				name:  "a hold without is_active",
+				attrs: `"is_active":false,"blocks":[{}]`,
+				want:  true,
+			},
+			{
+				name:  "blocks win over a disagreeing is_active",
+				attrs: `"is_active":true,"blocks":[{"is_active":false},{"is_active":false}]`,
+				want:  false,
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					attrs := `"title":"a","state":"build"`
+					if tt.attrs != "" {
+						attrs += "," + tt.attrs
+					}
+					_, _ = w.Write([]byte(`{"data":[{"id":"b1","attributes":{` + attrs + `}}]}`))
+				}))
+				t.Cleanup(srv.Close)
+				client := newTestClient(t, srv.URL)
 
-		got, err := client.ListFlowBlockers(ctx, uuid.NewString())
-		assert.NilError(t, err)
-		assert.Check(t, cmp.DeepEqual(got, []Blocker{{ID: "b1", Title: "a", State: "build", Active: true}}))
+				got, err := client.ListFlowBlockers(ctx, uuid.NewString())
+				assert.NilError(t, err)
+				assert.Check(t, cmp.DeepEqual(got, []Blocker{{ID: "b1", Title: "a", State: "build", Active: tt.want}}))
+			})
+		}
 	})
 }
 
