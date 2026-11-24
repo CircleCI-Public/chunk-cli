@@ -17,6 +17,7 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
@@ -1117,6 +1118,60 @@ func TestFlows(t *testing.T) {
 			{ID: e2.ID, Title: "merged", State: "ended", Outcome: "merged", Active: false},
 			{ID: e4.ID, Title: "completed", State: "ended", Outcome: "completed", Active: false},
 		}), "an ended blocker still blocks unless it merged or completed")
+
+		h, err := client.CreatePlan(ctx, "held-three-ways", "")
+		assert.NilError(t, err)
+		w1, err := client.CreatePlan(ctx, "waits-on-one-hold", "")
+		assert.NilError(t, err)
+		w2, err := client.CreatePlan(ctx, "waits-on-released-holds", "")
+		assert.NilError(t, err)
+		fake.SetFactoryPlanState(h.ID, "integrate")
+		fake.BlockFactoryPlanUntil(w1.ID, "build", h.ID)
+		fake.BlockFactoryPlan(w1.ID, c1.ID)
+		fake.BlockFactoryPlanUntil(w1.ID, "integrate", h.ID)
+		fake.BlockFactoryPlan(w1.ID, h.ID)
+		got, err = client.ListFlowBlockers(ctx, w1.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Blocker{
+			{ID: h.ID, Title: "held-three-ways", State: "integrate", Active: true},
+			{ID: c1.ID, Title: "retry-config", State: "build", Active: true},
+		}), "one active hold among several makes a blocker active, listed once where first blocked")
+
+		var raw struct {
+			Data []struct {
+				ID         string `json:"id"`
+				Attributes struct {
+					Until    string `json:"until"`
+					IsActive bool   `json:"is_active"`
+					Blocks   []struct {
+						Until string `json:"until"`
+					} `json:"blocks"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		_, err = client.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/flows/%s/blockers",
+			hc.RouteParams(w1.ID),
+			hc.JSONDecoder(&raw),
+		))
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(raw.Data, 2))
+		hr := raw.Data[0]
+		var untils []string
+		for _, b := range hr.Attributes.Blocks {
+			untils = append(untils, b.Until)
+		}
+		assert.Check(t, cmp.Equal(hr.ID, h.ID))
+		assert.Check(t, cmp.DeepEqual(untils, []string{"build", "integrate", "ended"}), "holds in the order added")
+		assert.Check(t, cmp.Equal(hr.Attributes.Until, "build"), "top-level until is the first hold's")
+		assert.Check(t, !hr.Attributes.IsActive, "top-level is_active is the first hold's")
+
+		fake.BlockFactoryPlanUntil(w2.ID, "build", h.ID)
+		fake.BlockFactoryPlanUntil(w2.ID, "integrate", h.ID)
+		got, err = client.ListFlowBlockers(ctx, w2.ID)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Blocker{
+			{ID: h.ID, Title: "held-three-ways", State: "integrate", Active: false},
+		}), "a blocker whose holds are all released is not active")
 
 		_, err = client.ListFlowBlockers(ctx, uuid.NewString())
 		assertStatus(t, err, http.StatusNotFound)
