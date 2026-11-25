@@ -1757,6 +1757,32 @@ func TestListCheckRuns(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(got, []string{"test:failed:o1:a/b", "lint:succeeded:o1:a/b"}))
 	})
 
+	t.Run("a run's flow and commit round-trip", func(t *testing.T) {
+		fake, client := newFlowClient(t)
+		const flowID = "658226e8-4b94-4751-9896-654c4bf78e66"
+		const sha = "4e1d0c7a9b2f3e5d6c8a0b1f2e3d4c5b6a7f8e9d"
+		created, err := client.CreateCheckRun(ctx, CheckRun{
+			Key: "k", Name: "lint", Outcome: "succeeded", StartedAt: at, EndedAt: at.Add(time.Second),
+			OrgID: "o1", Repo: "a/b", FlowID: flowID, CommitSHA: sha,
+		})
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(created.FlowID, flowID))
+		assert.Check(t, cmp.Equal(created.CommitSHA, sha))
+		post(t, client, "o1", "a/b", "k", "test", "succeeded") // neither
+
+		runs, err := client.ListCheckRuns(ctx, CheckRunFilter{OrgID: "o1", Repo: "a/b", Key: "k"})
+		assert.NilError(t, err)
+		assert.Assert(t, cmp.Len(runs, 2)) // gate: runs[0..1] below
+		assert.Check(t, cmp.Equal(runs[0].FlowID, ""))
+		assert.Check(t, cmp.Equal(runs[0].CommitSHA, ""))
+		assert.Check(t, cmp.Equal(runs[1].FlowID, flowID))
+		assert.Check(t, cmp.Equal(runs[1].CommitSHA, sha))
+		posted := fake.CheckRuns()
+		assert.Assert(t, cmp.Len(posted, 2)) // gate: posted[0..1] below
+		assert.Check(t, cmp.Equal(posted[0].FlowID, flowID))
+		assert.Check(t, cmp.Equal(posted[1].FlowID, ""))
+	})
+
 	t.Run("a key with no runs is an empty list", func(t *testing.T) {
 		_, client := newFlowClient(t)
 

@@ -148,6 +148,12 @@ func signoffGit(t *testing.T, dir string, extraEnv []string, args ...string) str
 	return string(out)
 }
 
+// headSHA returns the full SHA of dir's HEAD.
+func headSHA(t *testing.T, dir string) string {
+	t.Helper()
+	return strings.TrimSpace(signoffGit(t, dir, nil, "rev-parse", "HEAD"))
+}
+
 // treeKey returns the tree SHA in a posted key.
 func treeKey(t *testing.T, key string) string {
 	t.Helper()
@@ -173,6 +179,9 @@ func TestSignoff(t *testing.T) {
 		assert.Check(t, cmp.Regexp(signoffKeyPattern, runs[0].Key))
 		assert.Check(t, cmp.Equal(runs[0].OrgID, "org-aaa"))
 		assert.Check(t, cmp.Equal(runs[0].Repo, "test-org/test-repo"))
+		assert.Check(t, cmp.Equal(runs[0].FlowID, ""))
+		head := headSHA(t, p.workDir)
+		assert.Check(t, cmp.Equal(runs[0].CommitSHA, head))
 		startedFirst := runs[0].StartedAt.Before(runs[0].EndedAt)
 		assert.Check(t, startedFirst, "started_at %s, ended_at %s", runs[0].StartedAt, runs[0].EndedAt)
 		for _, r := range runs {
@@ -207,6 +216,7 @@ func TestSignoff(t *testing.T) {
 	t.Run("an uncommitted edit is signed off under its own tree", func(t *testing.T) {
 		t.Parallel()
 		p := newSignoffProject(t)
+		firstHead := headSHA(t, p.workDir)
 
 		first := p.signoff(t)
 		assert.Equal(t, first.ExitCode, 0, "stdout: %s\nstderr: %s", first.Stdout, first.Stderr)
@@ -223,6 +233,9 @@ func TestSignoff(t *testing.T) {
 		runs := p.cci.CheckRuns()
 		assert.Assert(t, cmp.Len(runs, 2)) // gate: runs[0..1] below
 		assert.Check(t, runs[1].Key != runs[0].Key, "an edit kept the key %s", runs[0].Key)
+		assert.Check(t, cmp.Equal(runs[0].CommitSHA, firstHead))
+		// The edited tree is not HEAD's, so its run names no commit.
+		assert.Check(t, cmp.Equal(runs[1].CommitSHA, ""))
 		// Committing the edit leaves the tree, and so the key, unchanged: the
 		// edited tree's run is reused.
 		assert.Check(t, cmp.Contains(committed.Stdout, "earlier run"))
@@ -482,7 +495,8 @@ func TestSignoff(t *testing.T) {
 
 				assert.Check(t, cmp.Equal(result.ExitCode, 0), "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 				assert.Check(t, cmp.Contains(result.Stdout, tc.want))
-				assert.Check(t, cmp.Len(p.cci.CheckRuns(), 0))
+				posted := p.cci.CheckRuns()
+				assert.Check(t, cmp.Len(posted, 0))
 				p.assertSidecarUntouched(t)
 			})
 		}
@@ -498,7 +512,8 @@ func TestSignoff(t *testing.T) {
 
 		assert.Check(t, result.ExitCode != 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 		assert.Check(t, cmp.Contains(result.Stderr, "no commands to sign off"))
-		assert.Check(t, cmp.Len(p.cci.CheckRuns(), 0))
+		posted := p.cci.CheckRuns()
+		assert.Check(t, cmp.Len(posted, 0))
 		p.assertSidecarUntouched(t)
 	})
 
@@ -589,7 +604,8 @@ func TestSignoff(t *testing.T) {
 				// keys a new tree and reuses nothing.
 				second := p.signoff(t)
 				assert.Equal(t, second.ExitCode, 0, "stdout: %s\nstderr: %s", second.Stdout, second.Stderr)
-				assert.Check(t, !strings.Contains(second.Stdout, "earlier run"), "stdout: %s", second.Stdout)
+				reused := strings.Contains(second.Stdout, "earlier run")
+				assert.Check(t, !reused, "stdout: %s", second.Stdout)
 				runs := p.cci.CheckRuns()
 				assert.Assert(t, cmp.Len(runs, 2)) // gate: runs[0..1] below
 				assert.Check(t, runs[1].Key != runs[0].Key, "the key did not change: %s", runs[0].Key)
@@ -616,7 +632,8 @@ func TestSignoff(t *testing.T) {
 		assert.Check(t, cmp.Equal(result.ExitCode, 2), "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 		assert.Check(t, cmp.Contains(result.Stderr, "CIRCLECI_ORG_ID"))
 		assert.Check(t, cmp.Contains(result.Stderr, "chunk config set orgID"))
-		assert.Check(t, !strings.Contains(result.Stderr, "--org-id"), "stderr: %s", result.Stderr)
+		leaked := strings.Contains(result.Stderr, "--org-id")
+		assert.Check(t, !leaked, "stderr: %s", result.Stderr)
 		checkRuns := p.cci.CheckRuns()
 		assert.Check(t, cmp.Len(checkRuns, 0))
 		p.assertSidecarUntouched(t)
@@ -636,7 +653,8 @@ func TestSignoff(t *testing.T) {
 		assert.Check(t, cmp.Equal(result.ExitCode, 2), "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 		assert.Check(t, cmp.Contains(result.Stderr, "CIRCLECI_ORG_ID"))
 		assert.Check(t, cmp.Contains(result.Stderr, "chunk org create"))
-		assert.Check(t, !strings.Contains(result.Stderr, "--org-id"), "stderr: %s", result.Stderr)
+		leaked := strings.Contains(result.Stderr, "--org-id")
+		assert.Check(t, !leaked, "stderr: %s", result.Stderr)
 		checkRuns := p.cci.CheckRuns()
 		assert.Check(t, cmp.Len(checkRuns, 0))
 		p.assertSidecarUntouched(t)
@@ -655,7 +673,8 @@ func TestSignoff(t *testing.T) {
 
 		assert.Check(t, cmp.Equal(result.ExitCode, 1), "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 		assert.Check(t, cmp.Contains(result.Stderr, "Check your network connection"))
-		assert.Check(t, !strings.Contains(result.Stderr, "--org-id"), "stderr: %s", result.Stderr)
+		leaked := strings.Contains(result.Stderr, "--org-id")
+		assert.Check(t, !leaked, "stderr: %s", result.Stderr)
 		checkRuns := p.cci.CheckRuns()
 		assert.Check(t, cmp.Len(checkRuns, 0))
 		p.assertSidecarUntouched(t)
@@ -724,6 +743,10 @@ func TestSignoff(t *testing.T) {
 			want   string
 		}{
 			{
+				status: http.StatusBadRequest,
+				want:   "API error",
+			},
+			{
 				status: http.StatusNotFound,
 				want:   "API error",
 			},
@@ -757,6 +780,107 @@ func TestSignoff(t *testing.T) {
 				assert.Check(t, cmp.Len(checkRuns, 0))
 			})
 		}
+	})
+
+	t.Run("--flow-id names the flow on each run", func(t *testing.T) {
+		t.Parallel()
+		const want = "658226e8-4b94-4751-9896-654c4bf78e66"
+		for _, tc := range []struct {
+			name string
+			flag string
+		}{
+			{
+				name: "canonical",
+				flag: "658226e8-4b94-4751-9896-654c4bf78e66",
+			},
+			{
+				name: "uppercase",
+				flag: "658226E8-4B94-4751-9896-654C4BF78E66",
+			},
+			{
+				name: "urn",
+				flag: "urn:uuid:658226e8-4b94-4751-9896-654c4bf78e66",
+			},
+			{
+				name: "32 hex",
+				flag: "658226e84b9447519896654c4bf78e66",
+			},
+			{
+				name: "braced",
+				flag: "{658226e8-4b94-4751-9896-654c4bf78e66}",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				p := newSignoffProject(t)
+
+				result := p.signoff(t, "--flow-id="+tc.flag)
+
+				assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+				runs := p.cci.CheckRuns()
+				assert.Assert(t, cmp.Len(runs, 1)) // gate: runs[0] below
+				assert.Check(t, cmp.Equal(runs[0].FlowID, want))
+				head := headSHA(t, p.workDir)
+				assert.Check(t, cmp.Equal(runs[0].CommitSHA, head))
+			})
+		}
+	})
+
+	t.Run("a bad --flow-id is refused before anything runs", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name string
+			arg  string
+		}{
+			{
+				name: "too short",
+				arg:  "--flow-id=658226e8",
+			},
+			{
+				name: "empty",
+				arg:  "--flow-id=",
+			},
+			{
+				name: "not a uuid",
+				arg:  "--flow-id=not-a-uuid",
+			},
+			{
+				name: "nil uuid",
+				arg:  "--flow-id=00000000-0000-0000-0000-000000000000",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				p := newSignoffProject(t)
+
+				result := p.signoff(t, tc.arg)
+
+				assert.Check(t, cmp.Equal(result.ExitCode, 2), "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+				assert.Check(t, cmp.Contains(result.Stderr, "--flow-id"))
+				checkRuns := p.cci.CheckRuns()
+				assert.Check(t, cmp.Len(checkRuns, 0))
+				p.assertSidecarUntouched(t)
+			})
+		}
+	})
+
+	t.Run("a change only to ignored files names HEAD's commit", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		err := os.WriteFile(filepath.Join(p.workDir, ".gitignore"), []byte("secret.env\n"), 0o644)
+		assert.NilError(t, err)
+		signoffGit(t, p.workDir, nil, "add", ".gitignore")
+		signoffGit(t, p.workDir, nil, "commit", "-m", "ignore secret.env")
+		err = os.WriteFile(filepath.Join(p.workDir, "secret.env"), []byte("TOKEN=1\n"), 0o644)
+		assert.NilError(t, err)
+
+		result := p.signoff(t)
+
+		assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		runs := p.cci.CheckRuns()
+		assert.Assert(t, cmp.Len(runs, 1)) // gate: runs[0] below
+		head := headSHA(t, p.workDir)
+		assert.Check(t, cmp.Equal(runs[0].CommitSHA, head))
 	})
 
 	t.Run("gitignored files stay out", func(t *testing.T) {
@@ -794,7 +918,33 @@ func TestSignoff(t *testing.T) {
 		assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 		assert.Check(t, cmp.Contains(result.Stderr, "vendor/sub"))
 		checkRuns := p.cci.CheckRuns()
-		assert.Check(t, cmp.Len(checkRuns, 1))
+		assert.Assert(t, cmp.Len(checkRuns, 1)) // gate: checkRuns[0] below
+		head := headSHA(t, p.workDir)
+		assert.Check(t, cmp.Equal(checkRuns[0].CommitSHA, head))
+	})
+
+	t.Run("a submodule at another commit names no commit", func(t *testing.T) {
+		t.Parallel()
+		p := newSignoffProject(t)
+		sub := gitrepo.SetupGitRepo(t, "test-org", "sub-repo")
+		err := os.WriteFile(filepath.Join(sub, "lib.txt"), []byte("lib\n"), 0o644)
+		assert.NilError(t, err)
+		signoffGit(t, sub, nil, "add", "-A")
+		signoffGit(t, sub, nil, "commit", "-m", "add lib.txt")
+		signoffGit(t, p.workDir, nil, "-c", "protocol.file.allow=always", "submodule", "add", sub, "vendor/sub")
+		signoffGit(t, p.workDir, nil, "commit", "-am", "add submodule")
+		subDir := filepath.Join(p.workDir, "vendor", "sub")
+		err = os.WriteFile(filepath.Join(subDir, "lib.txt"), []byte("edited\n"), 0o644)
+		assert.NilError(t, err)
+		signoffGit(t, subDir, nil, "add", "-A")
+		signoffGit(t, subDir, nil, "commit", "-m", "edit lib.txt")
+
+		result := p.signoff(t)
+
+		assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		runs := p.cci.CheckRuns()
+		assert.Assert(t, cmp.Len(runs, 1)) // gate: runs[0] below
+		assert.Check(t, cmp.Equal(runs[0].CommitSHA, ""))
 	})
 
 	t.Run("a clean submodule does not warn", func(t *testing.T) {
@@ -918,6 +1068,7 @@ func TestSignoff(t *testing.T) {
 		runs := p.cci.CheckRuns()
 		assert.Assert(t, cmp.Len(runs, 1)) // gate: runs[0] below
 		assert.Check(t, cmp.Regexp(signoffKeyPattern, runs[0].Key))
+		assert.Check(t, cmp.Equal(runs[0].CommitSHA, ""))
 		index := filepath.Join(t.TempDir(), "index")
 		scratch := []string{"GIT_INDEX_FILE=" + index}
 		signoffGit(t, p.workDir, scratch, "add", "-A")
@@ -981,6 +1132,8 @@ func TestSignoff(t *testing.T) {
 		runs := p.cci.CheckRuns()
 		assert.Assert(t, cmp.Len(runs, 1)) // gate: runs[0] below
 		assert.Check(t, cmp.Regexp(signoffKeyPattern, runs[0].Key))
+		head := headSHA(t, p.workDir)
+		assert.Check(t, cmp.Equal(runs[0].CommitSHA, head))
 		sidecars := p.cci.Sidecars
 		assert.Check(t, cmp.Len(sidecars, 0))
 		p.assertSidecarUntouched(t)

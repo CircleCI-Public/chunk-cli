@@ -67,6 +67,40 @@ func SnapshotTree(dir string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// CommitOfTree is HEAD's SHA when that commit's tree is tree, so a caller can
+// name the commit whose content a snapshot holds. It is "" when the trees
+// differ or dir has no commit, with a nil error; the error is for a HEAD that
+// cannot be read for any other reason.
+//
+// The tree it compares is read from the SHA it returns, not from HEAD a second
+// time, so HEAD moving between the two reads can only yield "", never a commit
+// whose tree is not tree.
+func CommitOfTree(ctx context.Context, dir, tree string) (string, error) {
+	r := gitexec.Runner{Dir: dir}
+	out, err := r.Output(ctx, "rev-parse", "--verify", "-q", "HEAD")
+	if err != nil {
+		// -q makes a HEAD that names no commit exit 1 without a message, as
+		// SnapshotTree treats it; anything else is a HEAD that cannot be read.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", nil
+		}
+		return "", fmt.Errorf("resolve HEAD: %w", withStderr(err))
+	}
+	sha := strings.TrimSpace(string(out))
+	if sha == "" {
+		return "", fmt.Errorf("resolve HEAD: empty output")
+	}
+	out, err = r.Output(ctx, "rev-parse", sha+"^{tree}")
+	if err != nil {
+		return "", fmt.Errorf("resolve tree of %s: %w", sha, withStderr(err))
+	}
+	if strings.TrimSpace(string(out)) != tree {
+		return "", nil
+	}
+	return sha, nil
+}
+
 // ChangesBetween measures the working tree at dir against an earlier snapshot.
 //
 // Both sides are tree objects, so the comparison is exact and says nothing about

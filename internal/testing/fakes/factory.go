@@ -1637,6 +1637,10 @@ type CheckRun struct {
 	// OrgID is references.org's id; Repo is vcs.repo_full_name.
 	OrgID string
 	Repo  string
+	// FlowID is references.factory_flow's id, "" when absent; CommitSHA is
+	// attributes.commit_sha, "" when absent.
+	FlowID    string
+	CommitSHA string
 }
 
 // checkOutcomes are the outcomes a check run takes
@@ -1674,11 +1678,15 @@ func (f *FakeCircleCI) handleCreateCheckRun(c *gin.Context) {
 					Provider     string `json:"provider"`
 					RepoFullName string `json:"repo_full_name"`
 				} `json:"vcs"`
+				CommitSHA string `json:"commit_sha"`
 			} `json:"attributes"`
 			References struct {
 				Org struct {
 					ID string `json:"id"`
 				} `json:"org"`
+				FactoryFlow *struct {
+					ID string `json:"id"`
+				} `json:"factory_flow"`
 			} `json:"references"`
 		} `json:"data"`
 	}
@@ -1708,6 +1716,10 @@ func (f *FakeCircleCI) handleCreateCheckRun(c *gin.Context) {
 		ID: uuid.NewString(), Key: a.Key, Name: a.Name, Outcome: a.Outcome,
 		StartedAt: a.StartedAt, EndedAt: a.EndedAt,
 		OrgID: body.Data.References.Org.ID, Repo: a.VCS.RepoFullName,
+		CommitSHA: a.CommitSHA,
+	}
+	if flow := body.Data.References.FactoryFlow; flow != nil {
+		run.FlowID = flow.ID
 	}
 	f.mu.Lock()
 	f.checkRuns = append(f.checkRuns, run)
@@ -1717,16 +1729,20 @@ func (f *FakeCircleCI) handleCreateCheckRun(c *gin.Context) {
 
 // checkRunEntity is run as the API serves it, from a POST or a list.
 func checkRunEntity(run CheckRun) gin.H {
-	return gin.H{
-		"id": run.ID,
-		"attributes": gin.H{
-			"key": run.Key, "name": run.Name, "outcome": run.Outcome,
-			"started_at": run.StartedAt.UTC().Format(time.RFC3339),
-			"ended_at":   run.EndedAt.UTC().Format(time.RFC3339),
-			"vcs":        gin.H{"provider": "github", "repo_full_name": run.Repo},
-		},
-		"references": gin.H{"org": gin.H{"id": run.OrgID}},
+	attrs := gin.H{
+		"key": run.Key, "name": run.Name, "outcome": run.Outcome,
+		"started_at": run.StartedAt.UTC().Format(time.RFC3339),
+		"ended_at":   run.EndedAt.UTC().Format(time.RFC3339),
+		"vcs":        gin.H{"provider": "github", "repo_full_name": run.Repo},
 	}
+	if run.CommitSHA != "" {
+		attrs["commit_sha"] = run.CommitSHA
+	}
+	refs := gin.H{"org": gin.H{"id": run.OrgID}}
+	if run.FlowID != "" {
+		refs["factory_flow"] = gin.H{"id": run.FlowID}
+	}
+	return gin.H{"id": run.ID, "attributes": attrs, "references": refs}
 }
 
 // AddCheckRun stores run as if it had been posted, making an ID when it has
