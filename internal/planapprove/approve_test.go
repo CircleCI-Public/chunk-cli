@@ -135,7 +135,7 @@ func TestSend(t *testing.T) {
 			t.Cleanup(srv.Close)
 			client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: srv.URL})
 			assert.NilError(t, err)
-			plan, err := client.CreatePlan(context.Background(), "a-plan", "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n")
+			plan, err := client.CreatePlan(context.Background(), "a-plan", "# A plan\n\n## 5. Units\n\n### Unit 1: Add the flag\n", "")
 			assert.NilError(t, err)
 			id := plan.ID
 			cci.ClaimFactoryPlan(id, "s-1")

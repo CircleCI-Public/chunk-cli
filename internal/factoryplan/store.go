@@ -58,9 +58,10 @@ func (s *Store) ID() string {
 }
 
 // Create makes the plan in factory, titled title, from the skeleton with
-// request under its Outcome, recording the store's repository when it has one.
-func (s *Store) Create(ctx context.Context, title, request string) error {
-	p, err := s.api.CreatePlan(ctx, title, skeleton(title, request), repos(s.repo)...)
+// request under its Outcome, in the factory factoryID; "" sends no factory,
+// for the default, recording the store's repository when it has one.
+func (s *Store) Create(ctx context.Context, title, request, factoryID string) error {
+	p, err := s.api.CreatePlan(ctx, title, skeleton(title, request), factoryID, repos(s.repo)...)
 	if err != nil {
 		return fmt.Errorf("create the plan in factory: %w", err)
 	}
@@ -68,6 +69,20 @@ func (s *Store) Create(ctx context.Context, title, request string) error {
 	s.planID = p.ID
 	s.mu.Unlock()
 	return nil
+}
+
+// Factories are the factories the user can view, in the order factory lists
+// them.
+func (s *Store) Factories(ctx context.Context) ([]plan.Factory, error) {
+	listed, err := s.api.Factories(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list the factories: %w", err)
+	}
+	out := make([]plan.Factory, len(listed))
+	for i, f := range listed {
+		out[i] = plan.Factory(f)
+	}
+	return out, nil
 }
 
 // skeleton is the text of a new plan, as the web UI makes it: the title, the

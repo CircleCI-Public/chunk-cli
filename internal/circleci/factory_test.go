@@ -31,7 +31,7 @@ func TestPlans(t *testing.T) {
 		defer srv.Close()
 		client := newTestClient(t, srv.URL)
 
-		p, err := client.CreatePlan(ctx, "version-quiet-flag", "# version-quiet-flag\n")
+		p, err := client.CreatePlan(ctx, "version-quiet-flag", "# version-quiet-flag\n", "")
 		assert.NilError(t, err)
 		assert.Check(t, p.ID != "")
 		assert.Check(t, cmp.Equal(p.Title, "version-quiet-flag"))
@@ -60,7 +60,7 @@ func TestPlans(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "# a plan\n")
+		p, err := client.CreatePlan(ctx, "a plan", "# a plan\n", "")
 		assert.NilError(t, err)
 		para := func(s string) PlanBlock { return PlanBlock{Type: "paragraph", Text: s} }
 
@@ -96,7 +96,7 @@ func TestPlans(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Check(t, sc.Units != nil && len(sc.Units) == 0, "[] decoded as %#v", sc.Units)
 
-		p2, err := client.CreatePlan(ctx, "parsed", "# parsed\n\n## 1. Outcome\n\nIt works.\n\n## 2. Design\n\n### Context\n\n- x\n\n## 5. Units\n\n### Unit 1: a (done)\n\nDo a.\n")
+		p2, err := client.CreatePlan(ctx, "parsed", "# parsed\n\n## 1. Outcome\n\nIt works.\n\n## 2. Design\n\n### Context\n\n- x\n\n## 5. Units\n\n### Unit 1: a (done)\n\nDo a.\n", "")
 		assert.NilError(t, err)
 		sc, err = client.PlanStructuredContent(ctx, p2.ID)
 		assert.NilError(t, err)
@@ -109,7 +109,7 @@ func TestPlans(t *testing.T) {
 			Units: []PlanUnit{{Number: 1, Name: "a", Done: true, Text: "\nDo a.\n", Blocks: []PlanBlock{para("Do a.")}}},
 		}))
 
-		p3, err := client.CreatePlan(ctx, "dup", "# dup\n\n## 1. Outcome\n\nA.\n\n## 1. Outcome\n\nB.\n\n## 2. Design\n\nD.\n")
+		p3, err := client.CreatePlan(ctx, "dup", "# dup\n\n## 1. Outcome\n\nA.\n\n## 1. Outcome\n\nB.\n\n## 2. Design\n\nD.\n", "")
 		assert.NilError(t, err)
 		sc, err = client.PlanStructuredContent(ctx, p3.ID)
 		assert.NilError(t, err)
@@ -117,7 +117,7 @@ func TestPlans(t *testing.T) {
 		assert.Assert(t, sc.Design != nil)
 		assert.Check(t, cmp.Equal(sc.Design.Text, "\nD.\n"))
 
-		p4, err := client.CreatePlan(ctx, "fenced", "# fenced\n\n## 2. Design\n\n```md\n## 5. Units\n```\n\n## 5. Units\n\n### Unit 1: a\n")
+		p4, err := client.CreatePlan(ctx, "fenced", "# fenced\n\n## 2. Design\n\n```md\n## 5. Units\n```\n\n## 5. Units\n\n### Unit 1: a\n", "")
 		assert.NilError(t, err)
 		sc, err = client.PlanStructuredContent(ctx, p4.ID)
 		assert.NilError(t, err)
@@ -175,7 +175,7 @@ func TestPlans(t *testing.T) {
 		defer srv.Close()
 		client := newTestClient(t, srv.URL)
 
-		_, err := client.CreatePlan(ctx, "a plan", "text")
+		first, err := client.CreatePlan(ctx, "a plan", "text", "")
 		assert.NilError(t, err)
 
 		reqs := fake.Recorder.AllRequests()
@@ -188,8 +188,11 @@ func TestPlans(t *testing.T) {
 		assert.Check(t, cmp.DeepEqual(body, map[string]any{
 			"data": map[string]any{"attributes": map[string]any{"title": "a plan", "text": "text"}},
 		}))
+		got, ok := fake.FactoryPlan(first.ID)
+		assert.Assert(t, ok)
+		assert.Check(t, cmp.Equal(got.Factory, ""), "no factory named, none recorded")
 
-		p, err := client.CreatePlan(ctx, "b plan", "", "CircleCI-Public/chunk-cli")
+		p, err := client.CreatePlan(ctx, "b plan", "", "", "CircleCI-Public/chunk-cli")
 		assert.NilError(t, err)
 		reqs = fake.Recorder.AllRequests()
 		last = reqs[len(reqs)-1]
@@ -200,7 +203,7 @@ func TestPlans(t *testing.T) {
 			"title": "b plan",
 			"vcs":   []any{map[string]any{"provider": "github", "repo_full_name": "CircleCI-Public/chunk-cli"}},
 		}}}))
-		got, ok := fake.FactoryPlan(p.ID)
+		got, ok = fake.FactoryPlan(p.ID)
 		assert.Assert(t, ok)
 		assert.Check(t, cmp.DeepEqual(got.Repos, []string{"CircleCI-Public/chunk-cli"}))
 		assert.Check(t, cmp.Equal(got.Text,
@@ -215,6 +218,33 @@ func TestPlans(t *testing.T) {
 		// "a plan", created first with no repo, records none.
 		assert.Check(t, cmp.DeepEqual(listed[0].Repos, []string(nil)))
 		assert.Check(t, cmp.DeepEqual(listed[1].Repos, []string{"CircleCI-Public/chunk-cli"}))
+	})
+
+	t.Run("sends the chosen factory", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		factoryID := uuid.NewString()
+
+		p, err := client.CreatePlan(ctx, "a plan", "text", factoryID, "CircleCI-Public/chunk-cli")
+		assert.NilError(t, err)
+
+		reqs := fake.Recorder.AllRequests()
+		var body map[string]any
+		err = json.Unmarshal(reqs[len(reqs)-1].Body, &body)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(body, map[string]any{"data": map[string]any{
+			"attributes": map[string]any{
+				"title": "a plan", "text": "text",
+				"vcs": []any{map[string]any{"provider": "github", "repo_full_name": "CircleCI-Public/chunk-cli"}},
+			},
+			"references": map[string]any{"factory_factory": map[string]any{"id": factoryID}},
+		}}))
+		got, ok := fake.FactoryPlan(p.ID)
+		assert.Assert(t, ok)
+		assert.Check(t, cmp.Equal(got.Factory, factoryID))
+		assert.Check(t, cmp.DeepEqual(got.Repos, []string{"CircleCI-Public/chunk-cli"}))
 	})
 
 	t.Run("an unknown plan is a 404", func(t *testing.T) {
@@ -240,7 +270,7 @@ func TestPlans(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		_, err = client.CreateComment(ctx, p.ID, "", "a comment")
 		assert.NilError(t, err)
@@ -269,7 +299,7 @@ func TestPlans(t *testing.T) {
 			{
 				name: "sub-plans",
 				setup: func(t *testing.T, fake *fakes.FakeCircleCI, client *Client, planID string) {
-					child, err := client.CreatePlan(ctx, "a sub-plan", "")
+					child, err := client.CreatePlan(ctx, "a sub-plan", "", "")
 					assert.NilError(t, err)
 					fake.SetFactoryParent(child.ID, planID)
 				},
@@ -288,7 +318,7 @@ func TestPlans(t *testing.T) {
 				srv := httptest.NewServer(fake)
 				t.Cleanup(srv.Close)
 				client := newTestClient(t, srv.URL)
-				p, err := client.CreatePlan(ctx, "a plan", "")
+				p, err := client.CreatePlan(ctx, "a plan", "", "")
 				assert.NilError(t, err)
 				tc.setup(t, fake, client, p.ID)
 
@@ -322,7 +352,7 @@ func TestPlans(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		assert.Check(t, !p.CreatedAt.IsZero())
 		assert.Check(t, cmp.Equal(p.UpdatedAt, p.CreatedAt))
@@ -346,9 +376,9 @@ func TestPlans(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		parent, err := client.CreatePlan(ctx, "retry-policy", "")
+		parent, err := client.CreatePlan(ctx, "retry-policy", "", "")
 		assert.NilError(t, err)
-		child, err := client.CreatePlan(ctx, "retry-config", "")
+		child, err := client.CreatePlan(ctx, "retry-config", "", "")
 		assert.NilError(t, err)
 		fake.SetFactoryParent(child.ID, parent.ID)
 
@@ -385,7 +415,7 @@ func TestPlans(t *testing.T) {
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
 		for _, title := range []string{"a", "b", "c", "d", "e"} {
-			p, err := client.CreatePlan(ctx, title, "")
+			p, err := client.CreatePlan(ctx, title, "", "")
 			assert.NilError(t, err)
 			if title == "c" {
 				fake.SetFactoryPlanState(p.ID, "ended")
@@ -398,6 +428,52 @@ func TestPlans(t *testing.T) {
 		last := fake.Recorder.AllRequests()[len(fake.Recorder.AllRequests())-1]
 		assert.Check(t, cmp.Equal(last.URL.Query().Get("filter[user_id]"), "me"))
 		assert.Check(t, cmp.Equal(last.URL.Query().Get("filter[is_ended]"), "false"))
+	})
+
+	t.Run("lists factories across pages", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		fake.FactoryPageSize = 2
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+		fake.SetFactories(
+			fakes.FactoryFactory{ID: "f-1", OrgID: "org-1", Name: "mobile"},
+			fakes.FactoryFactory{ID: "f-2", OrgID: "org-1", Name: "default"},
+			fakes.FactoryFactory{ID: "f-3", OrgID: "org-2", Name: "default"},
+		)
+
+		got, err := client.Factories(ctx)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.DeepEqual(got, []Factory{
+			{ID: "f-1", OrgID: "org-1", Name: "mobile"},
+			{ID: "f-2", OrgID: "org-1", Name: "default"},
+			{ID: "f-3", OrgID: "org-2", Name: "default"},
+		}), "every page, in the order the server lists them")
+
+		var cursors []string
+		for _, r := range fake.Recorder.AllRequests() {
+			if r.Method == http.MethodGet && r.URL.Path == "/api/v3/factory/factories" {
+				cursors = append(cursors, r.URL.Query().Get("page[cursor]"))
+			}
+		}
+		assert.Check(t, cmp.DeepEqual(cursors, []string{"", "2"}))
+	})
+
+	t.Run("a failed second page fails the whole list", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("page[cursor]") != "" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":[{"id":"f-1","attributes":{"name":"mobile"},
+				"references":{"org":{"id":"org-1"}}}],"page":{"next":"2"}}`))
+		}))
+		t.Cleanup(srv.Close)
+		client := newTestClient(t, srv.URL)
+
+		got, err := client.Factories(ctx)
+		assert.ErrorContains(t, err, "list factories")
+		assert.Check(t, cmp.Len(got, 0), "the first page alone is not a list")
 	})
 
 	t.Run("reads references as conductor may serve them", func(t *testing.T) {
@@ -460,7 +536,7 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 
 		f, err := client.GetFlow(ctx, p.ID)
@@ -498,7 +574,7 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 
 		fake.SetFactoryPlanState(p.ID, "ended")
@@ -514,7 +590,7 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.ClaimFactoryPlan(p.ID, "session-1")
 
@@ -543,7 +619,7 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.ClaimFactoryPlan(p.ID, "session-1")
 
@@ -608,7 +684,7 @@ func TestFlows(t *testing.T) {
 				srv := httptest.NewServer(fake)
 				t.Cleanup(srv.Close)
 				client := newTestClient(t, srv.URL)
-				p, err := client.CreatePlan(ctx, "a plan", "")
+				p, err := client.CreatePlan(ctx, "a plan", "", "")
 				assert.NilError(t, err)
 				fake.ClaimFactoryPlan(p.ID, "session-1")
 				cm, err := client.CreateComment(ctx, p.ID, "", "a comment")
@@ -661,7 +737,7 @@ func TestFlows(t *testing.T) {
 				srv := httptest.NewServer(fake)
 				t.Cleanup(srv.Close)
 				client := newTestClient(t, srv.URL)
-				p, err := client.CreatePlan(ctx, "a plan", "")
+				p, err := client.CreatePlan(ctx, "a plan", "", "")
 				assert.NilError(t, err)
 				fake.SetFactoryPlanState(p.ID, "refine-proposal")
 
@@ -699,7 +775,7 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.DropFactoryFlow(p.ID)
 
@@ -714,7 +790,7 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		resolved, err := client.CreateComment(ctx, p.ID, "", "a resolved comment")
 		assert.NilError(t, err)
@@ -827,7 +903,7 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.DropFactoryFlow(p.ID)
 
@@ -846,11 +922,11 @@ func TestFlows(t *testing.T) {
 		assert.NilError(t, err)
 		assert.Check(t, cmp.Len(flows, 0))
 
-		a, err := client.CreatePlan(ctx, "a", "")
+		a, err := client.CreatePlan(ctx, "a", "", "")
 		assert.NilError(t, err)
-		b, err := client.CreatePlan(ctx, "b", "")
+		b, err := client.CreatePlan(ctx, "b", "", "")
 		assert.NilError(t, err)
-		gone, err := client.CreatePlan(ctx, "gone", "")
+		gone, err := client.CreatePlan(ctx, "gone", "", "")
 		assert.NilError(t, err)
 		fake.SetFactoryPlanState(b.ID, "ended")
 		fake.ClaimFactoryPlan(a.ID, "session-1")
@@ -883,9 +959,9 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		_, err := client.CreatePlan(ctx, "one", "")
+		_, err := client.CreatePlan(ctx, "one", "", "")
 		assert.NilError(t, err)
-		two, err := client.CreatePlan(ctx, "two", "")
+		two, err := client.CreatePlan(ctx, "two", "", "")
 		assert.NilError(t, err)
 		fake.SetFactoryFlowStatus(two.ID, fakes.FactoryFlowStatus{
 			WaitingOn: "session", WaitingOnWhy: "the session reviews the plan",
@@ -972,7 +1048,7 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.SetFactoryPlanState(p.ID, "build")
 		fake.SetFactoryTask(p.ID, "build-unit")
@@ -1045,7 +1121,7 @@ func TestFlows(t *testing.T) {
 		fsrv := httptest.NewServer(fake)
 		t.Cleanup(fsrv.Close)
 		fclient := newTestClient(t, fsrv.URL)
-		p, err := fclient.CreatePlan(ctx, "a plan", "")
+		p, err := fclient.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		f, err = fclient.GetFlow(ctx, p.ID)
 		assert.NilError(t, err)
@@ -1064,11 +1140,11 @@ func TestFlows(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		t.Cleanup(srv.Close)
 		client := newTestClient(t, srv.URL)
-		c1, err := client.CreatePlan(ctx, "retry-config", "")
+		c1, err := client.CreatePlan(ctx, "retry-config", "", "")
 		assert.NilError(t, err)
-		c2, err := client.CreatePlan(ctx, "retry-wiring", "")
+		c2, err := client.CreatePlan(ctx, "retry-wiring", "", "")
 		assert.NilError(t, err)
-		o1, err := client.CreatePlan(ctx, "other", "")
+		o1, err := client.CreatePlan(ctx, "other", "", "")
 		assert.NilError(t, err)
 		fake.SetFactoryPlanState(c1.ID, "build")
 
@@ -1096,13 +1172,13 @@ func TestFlows(t *testing.T) {
 			{ID: o1.ID, Title: "other", State: "", Active: true},
 		}), "a blocker with no flow has no state and still blocks")
 
-		e1, err := client.CreatePlan(ctx, "canceled", "")
+		e1, err := client.CreatePlan(ctx, "canceled", "", "")
 		assert.NilError(t, err)
-		e2, err := client.CreatePlan(ctx, "merged", "")
+		e2, err := client.CreatePlan(ctx, "merged", "", "")
 		assert.NilError(t, err)
-		e4, err := client.CreatePlan(ctx, "completed", "")
+		e4, err := client.CreatePlan(ctx, "completed", "", "")
 		assert.NilError(t, err)
-		e3, err := client.CreatePlan(ctx, "ended-blocked", "")
+		e3, err := client.CreatePlan(ctx, "ended-blocked", "", "")
 		assert.NilError(t, err)
 		fake.SetFactoryPlanState(e1.ID, "ended")
 		fake.SetFactoryFlowStatus(e1.ID, fakes.FactoryFlowStatus{Outcome: "canceled"})
@@ -1119,11 +1195,11 @@ func TestFlows(t *testing.T) {
 			{ID: e4.ID, Title: "completed", State: "ended", Outcome: "completed", Active: false},
 		}), "an ended blocker still blocks unless it merged or completed")
 
-		h, err := client.CreatePlan(ctx, "held-three-ways", "")
+		h, err := client.CreatePlan(ctx, "held-three-ways", "", "")
 		assert.NilError(t, err)
-		w1, err := client.CreatePlan(ctx, "waits-on-one-hold", "")
+		w1, err := client.CreatePlan(ctx, "waits-on-one-hold", "", "")
 		assert.NilError(t, err)
-		w2, err := client.CreatePlan(ctx, "waits-on-released-holds", "")
+		w2, err := client.CreatePlan(ctx, "waits-on-released-holds", "", "")
 		assert.NilError(t, err)
 		fake.SetFactoryPlanState(h.ID, "integrate")
 		fake.BlockFactoryPlanUntil(w1.ID, "build", h.ID)
@@ -1263,7 +1339,7 @@ func TestReleaseClaim(t *testing.T) {
 
 	t.Run("frees the flow's claim with an empty body and keeps the flow", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.ClaimFactoryPlanForWorker(p.ID, "worker-1")
 
@@ -1282,7 +1358,7 @@ func TestReleaseClaim(t *testing.T) {
 
 	t.Run("an unclaimed flow (204) is no error", func(t *testing.T) {
 		_, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 
 		err = client.ReleaseClaim(ctx, p.ID)
@@ -1291,7 +1367,7 @@ func TestReleaseClaim(t *testing.T) {
 
 	t.Run("a session's claim is freed from the worker's sessions", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.ClaimFactoryPlan(p.ID, "session-1")
 
@@ -1306,7 +1382,7 @@ func TestReleaseClaim(t *testing.T) {
 	t.Run("the fake's worker lists each session's plans", func(t *testing.T) {
 		fake, client := newFlowClient(t)
 		plan := func() string {
-			p, err := client.CreatePlan(ctx, "a plan", "")
+			p, err := client.CreatePlan(ctx, "a plan", "", "")
 			assert.NilError(t, err)
 			return p.ID
 		}
@@ -1353,7 +1429,7 @@ func TestReleaseClaim(t *testing.T) {
 
 	t.Run("a plan with no flow is a 404", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.DropFactoryFlow(p.ID)
 
@@ -1362,7 +1438,7 @@ func TestReleaseClaim(t *testing.T) {
 
 	t.Run("a 409 is reported", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.ClaimFactoryPlanForWorker(p.ID, "worker-1")
 		fake.FailFactoryRelease(p.ID, http.StatusConflict)
@@ -1455,7 +1531,7 @@ func TestGetFlowHolder(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fake, client := newFlowClient(t)
-			p, err := client.CreatePlan(ctx, "a plan", "")
+			p, err := client.CreatePlan(ctx, "a plan", "", "")
 			assert.NilError(t, err)
 			tc.claim(fake, p.ID)
 
@@ -1469,7 +1545,7 @@ func TestGetFlowHolder(t *testing.T) {
 
 	t.Run("a failed sessions read fails the flow read", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.ClaimFactoryPlanForWorker(p.ID, "w-1")
 		fake.DropFactoryWorker("w-1")
@@ -1480,7 +1556,7 @@ func TestGetFlowHolder(t *testing.T) {
 
 	t.Run("ListFlows names the worker, and reads no sessions", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.ClaimFactoryPlanForWorker(p.ID, "w-1")
 		fake.SetFactoryWorkerSessions("w-1", fakes.FactoryWorkerSession{ID: "s-2", FlowIDs: []string{p.ID}})
@@ -1505,7 +1581,7 @@ func TestPlanComments(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 
 		quoted, err := client.CreateComment(ctx, p.ID, "## 1. Outcome", "too vague")
@@ -1540,7 +1616,7 @@ func TestPlanComments(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		edited, err := client.CreateComment(ctx, p.ID, "## 1. Outcome", "too vague")
 		assert.NilError(t, err)
@@ -1578,7 +1654,7 @@ func TestPlanComments(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		cm, err := client.CreateComment(ctx, p.ID, "", "a comment")
 		assert.NilError(t, err)
@@ -1597,7 +1673,7 @@ func TestPlanComments(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 		client := newTestClient(t, srv.URL)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		var want []string
 		for _, body := range []string{"one", "two", "three", "four", "five"} {
@@ -1722,7 +1798,7 @@ func TestListWorkers(t *testing.T) {
 
 	t.Run("lists workers with their headless reports and flow errors", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.PutFactoryWorker(fakes.FactoryWorker{
 			ID: "w1", Hostname: "scotts-mbp", Phase: "started", Health: "ok",
@@ -1751,7 +1827,7 @@ func TestListWorkers(t *testing.T) {
 
 	t.Run("CanClaim lists the unbound workers, live or not", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w-sidecar", Hostname: "sidecar", Phase: "started", Health: "ok", Bound: true})
 		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w-live", Hostname: "scotts-mbp", Phase: "started", Health: "ok"})
@@ -1770,9 +1846,9 @@ func TestListWorkers(t *testing.T) {
 
 	t.Run("FlowID lists the claiming worker", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
-		other, err := client.CreatePlan(ctx, "another plan", "")
+		other, err := client.CreatePlan(ctx, "another plan", "", "")
 		assert.NilError(t, err)
 		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w-live", Hostname: "scotts-mbp", Phase: "started", Health: "ok"})
 		fake.PutFactoryWorker(fakes.FactoryWorker{ID: "w-other", Hostname: "elsewhere", Phase: "started", Health: "ok"})
@@ -1791,7 +1867,7 @@ func TestListWorkers(t *testing.T) {
 
 	t.Run("a worker claimed through ClaimFactoryPlanForWorker lists as live", func(t *testing.T) {
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.ClaimFactoryPlanForWorker(p.ID, "w-unreg")
 
@@ -1874,7 +1950,7 @@ func TestClaimFlow(t *testing.T) {
 	setup := func(t *testing.T) (*fakes.FakeCircleCI, *Client, *Plan) {
 		t.Helper()
 		fake, client := newFlowClient(t)
-		p, err := client.CreatePlan(ctx, "a plan", "")
+		p, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.NilError(t, err)
 		fake.PutFactoryWorker(live)
 		fake.PutFactoryWorker(gone)
@@ -2007,7 +2083,7 @@ func TestFactoryNotAuthorized(t *testing.T) {
 		srv := httptest.NewServer(fake)
 		client := newTestClient(t, srv.URL)
 
-		_, err := client.CreatePlan(ctx, "a plan", "")
+		_, err := client.CreatePlan(ctx, "a plan", "", "")
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
 		_, err = client.ListFlows(ctx)
 		assert.Check(t, cmp.ErrorIs(err, ErrNotAuthorized), "status %d", code)
@@ -2073,6 +2149,8 @@ func TestListsStopWhenTheServerNeverEndsThem(t *testing.T) {
 	_, err = client.ListWorkers(ctx, WorkerFilter{})
 	assert.ErrorContains(t, err, "does not advance")
 	_, err = client.ListCheckRuns(ctx, CheckRunFilter{OrgID: "o", Repo: "a/b", Key: "k"})
+	assert.ErrorContains(t, err, "does not advance")
+	_, err = client.Factories(ctx)
 	assert.ErrorContains(t, err, "does not advance")
 }
 

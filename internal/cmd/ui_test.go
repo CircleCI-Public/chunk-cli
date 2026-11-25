@@ -243,7 +243,7 @@ func TestWatchPlansOpensWithoutACheckout(t *testing.T) {
 	t.Cleanup(srv.Close)
 	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	assert.NilError(t, err)
-	p, err := client.CreatePlan(t.Context(), "a plan", "", "circleci/factory")
+	p, err := client.CreatePlan(t.Context(), "a plan", "", "", "circleci/factory")
 	assert.NilError(t, err)
 
 	saved := checkWatchProject
@@ -321,7 +321,7 @@ func TestReadWorker(t *testing.T) {
 	t.Cleanup(srv.Close)
 	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	assert.NilError(t, err)
-	p, err := client.CreatePlan(t.Context(), "a plan", "", "circleci/factory")
+	p, err := client.CreatePlan(t.Context(), "a plan", "", "", "circleci/factory")
 	assert.NilError(t, err)
 
 	w, err := readWorker(t.Context(), client, p.ID)

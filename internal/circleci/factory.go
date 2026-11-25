@@ -385,6 +385,10 @@ type createPlanAttrs struct {
 	VCS   []vcsRepo `json:"vcs,omitempty"`
 }
 
+type createPlanRefs struct {
+	FactoryFactory v3Ref `json:"factory_factory"`
+}
+
 // vcsRepo is a repository a plan records, as conductor takes it.
 type vcsRepo struct {
 	Provider     string `json:"provider"`
@@ -445,18 +449,23 @@ func nextCursor(cursor string, p v3Page, pages int) (string, error) {
 	return *p.Next, nil
 }
 
-// CreatePlan creates a factory plan from a title and its first text, recording
-// repos, each a GitHub repository as owner/name. For empty text factory writes
-// the plan's skeleton itself.
-func (c *Client) CreatePlan(ctx context.Context, title, text string, repos ...string) (*Plan, error) {
+// CreatePlan creates a factory plan from a title and its first text, in the
+// factory factoryID, recording repos, each a GitHub repository as owner/name.
+// A factoryID of "" sends no factory, for the default. For empty text factory
+// writes the plan's skeleton itself.
+func (c *Client) CreatePlan(ctx context.Context, title, text, factoryID string, repos ...string) (*Plan, error) {
 	body := createPlanAttrs{Title: title, Text: text}
 	for _, r := range repos {
 		body.VCS = append(body.VCS, vcsRepo{Provider: "github", RepoFullName: r})
 	}
+	data := v3DataEntity{Attributes: body}
+	if factoryID != "" {
+		data.References = createPlanRefs{FactoryFactory: v3Ref{ID: factoryID}}
+	}
 	var attrs planAttrs
 	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/plans",
-		hc.Body(v3Envelope{Data: v3DataEntity{Attributes: body}}),
+		hc.Body(v3Envelope{Data: data}),
 		hc.JSONDecoder(&env),
 	))
 	if err != nil {
@@ -606,6 +615,50 @@ func (c *Client) ListPlans(ctx context.Context) ([]Plan, error) {
 			p := item.Attributes.plan(item.ID)
 			p.Parent = item.References.parent()
 			out = append(out, *p)
+		}
+		next, err := nextCursor(cursor, page.Page, pages)
+		if err != nil {
+			return nil, err
+		}
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
+// Factory is a factory the caller can view, as /api/v3/factory/factories
+// serves it.
+type Factory struct{ ID, OrgID, Name string }
+
+// Factories lists every factory the caller can view, in the order factory
+// serves them, reading every page.
+func (c *Client) Factories(ctx context.Context) ([]Factory, error) {
+	var out []Factory
+	var cursor string
+	for pages := 1; ; pages++ {
+		var page struct {
+			Data []struct {
+				ID         string `json:"id"`
+				Attributes struct {
+					Name string `json:"name"`
+				} `json:"attributes"`
+				References struct {
+					Org v3Ref `json:"org"`
+				} `json:"references"`
+			} `json:"data"`
+			Page v3Page `json:"page"`
+		}
+		opts := []func(*hc.Request){hc.JSONDecoder(&page)}
+		if cursor != "" {
+			opts = append(opts, hc.QueryParam("page[cursor]", cursor))
+		}
+		_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/factory/factories", opts...))
+		if err != nil {
+			return nil, mapErr("list factories", err)
+		}
+		for _, item := range page.Data {
+			out = append(out, Factory{ID: item.ID, OrgID: item.References.Org.ID, Name: item.Attributes.Name})
 		}
 		next, err := nextCursor(cursor, page.Page, pages)
 		if err != nil {

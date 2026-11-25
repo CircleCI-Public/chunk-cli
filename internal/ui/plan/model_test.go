@@ -96,7 +96,7 @@ func run(t *testing.T, cmd tea.Cmd) []tea.Msg {
 		}
 		wg.Wait()
 		return slices.Concat(outs...)
-	case approvedMsg, claimedMsg, releasedMsg, designApprovedMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg:
+	case approvedMsg, claimedMsg, releasedMsg, designApprovedMsg, startedMsg, refreshedMsg, familiedMsg, commentSavedMsg, queueSavedMsg, createdMsg, editSavedMsg, factoriesMsg:
 		return []tea.Msg{msg}
 	}
 	return nil
@@ -109,8 +109,55 @@ func startPlan(t *testing.T, m Model, title string) Model {
 	t.Helper()
 	m = quiet(m)
 	m.titleInput.SetValue(title)
-	m = drive(t, m, press("enter"))
+	m = drive(t, m, press("enter")) // Title to Factory
+	m = drive(t, m, press("enter")) // Factory to Request
+	assert.Assert(t, m.field == fieldRequest, "keyboard on Request before typing the request")
 	return drive(t, m, press("enter"))
+}
+
+var shiftTab = tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+
+// initialised runs m's Init, as the program does, and feeds back what it
+// reads, so the factories its store lists have arrived.
+func initialised(t *testing.T, m Model) Model {
+	t.Helper()
+	m = quiet(m)
+	for _, msg := range run(t, m.Init()) {
+		m = drive(t, m, msg)
+	}
+	return m
+}
+
+// factoryBox is the Factory box's rows, ANSI-stripped, without its border and
+// with each row's spaces collapsed to one.
+func factoryBox(t *testing.T, m Model) []string {
+	t.Helper()
+	var rows []string
+	in := false
+	for _, l := range strings.Split(ansi.Strip(m.inputBoxes()), "\n") {
+		switch {
+		case strings.Contains(l, "─ Factory"):
+			in = true
+		case in && strings.HasPrefix(l, "╰"):
+			return rows
+		case in:
+			rows = append(rows, strings.Join(strings.Fields(strings.Trim(l, "│")), " "))
+		}
+	}
+	t.Fatalf("no Factory box in %q", m.inputBoxes())
+	return nil
+}
+
+// checkBox asserts the Factory box's rows are want, or, with whole set, that
+// the rows joined read as whole.
+func checkBox(t *testing.T, rows, want []string, whole, which string) {
+	t.Helper()
+	if whole == "" {
+		assert.Check(t, cmp.DeepEqual(rows, want), which)
+		return
+	}
+	joined := strings.ReplaceAll(strings.Join(rows, ""), " ", "")
+	assert.Check(t, cmp.Contains(joined, whole), "%s: the name is cut: %q", which, rows)
 }
 
 // refreshed runs a poll, as the screen's own timer would, and drives its
@@ -152,6 +199,8 @@ func TestNewPlanSendsItsTitleAndRequestThenShowsThePlan(t *testing.T) {
 	assert.Check(t, cmp.Contains(view, titlePlaceholder))
 	assert.Check(t, cmp.Contains(view, "add a --dry-run flag"))
 	assert.Check(t, m.titleInput.Focused(), "the title has the keyboard first")
+	assert.Check(t, cmp.Contains(view, "Factory"))
+	assert.Check(t, cmp.Contains(view, "Org default"))
 
 	m = startPlan(t, m, "Add a flag")
 	assert.Assert(t, cmp.Len(store.Created, 1))
@@ -165,32 +214,275 @@ func TestNewPlanSendsItsTitleAndRequestThenShowsThePlan(t *testing.T) {
 	}
 	assert.Check(t, !strings.Contains(view, requestPlaceholder), "the request input is still shown:\n%s", view)
 	assert.Check(t, !strings.Contains(view, titlePlaceholder), "the title input is still shown:\n%s", view)
+	assert.Check(t, cmp.DeepEqual(store.FactoryIDs, []string{""}), "Org default sends no factory")
+	assert.Check(t, !strings.Contains(view, "─ Factory"), "the Factory box is still shown once the plan exists:\n%s", view)
 
 	fresh := New(context.Background(), newFakeStore(), "")
 	fresh = drive(t, fresh, tea.WindowSizeMsg{Width: 120, Height: 40})
 	assert.Check(t, cmp.Contains(ansi.Strip(fresh.Content()), "Request"))
 	assert.Check(t, cmp.Contains(ansi.Strip(fresh.Content()), titlePlaceholder))
 	assert.Check(t, cmp.Contains(ansi.Strip(fresh.Content()), requestPlaceholder))
+
+	chosen := newFakeStore()
+	chosen.FactoriesV = []Factory{
+		{ID: "f-mobile", OrgID: "org-1", Name: "mobile"},
+		{ID: "f-default", OrgID: "org-1", Name: "default"},
+	}
+	c := New(context.Background(), chosen, "add push notifications")
+	c = drive(t, c, tea.WindowSizeMsg{Width: 120, Height: 40})
+	c = initialised(t, c)
+	c = drive(t, c, press("tab"))
+	c = pressAll(t, c, "down", "down", "tab") // sorted: Org default, default, mobile
+	assert.Check(t, cmp.Equal(c.field, fieldRequest))
+	c = startPlan(t, c, "push-notifs")
+	assert.Check(t, cmp.DeepEqual(chosen.FactoryIDs, []string{"f-mobile"}))
+
+	// A list that could not be read still lets the plan be made, in Org default.
+	failed := newFakeStore()
+	failed.FactoriesErr = errors.New("factory is down")
+	f := New(context.Background(), failed, "add push notifications")
+	f = drive(t, f, tea.WindowSizeMsg{Width: 120, Height: 40})
+	f = initialised(t, f)
+	_ = startPlan(t, f, "push-notifs")
+	assert.Check(t, cmp.DeepEqual(failed.FactoryIDs, []string{""}), "a failed list sent a factory")
 }
 
-// Tab or enter in the title moves to the request, shift+tab goes back, and
-// enter in the request sends.
+// The Factory box reads the chosen entry while the keyboard is elsewhere, and
+// lists every entry, with > on the chosen one, while it has the keyboard.
+func TestFactoryDropdown(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		loaded    bool
+		factories []Factory
+		err       error
+		downs     int
+		open      []string
+		closed    []string
+		width     int    // the terminal's width; 0 is 120
+		whole     string // a name that must show whole, wrapped or not
+	}{
+		{
+			name:   "loading",
+			open:   []string{"> Org default"},
+			closed: []string{"Org default"},
+		},
+		{
+			name:   "failed",
+			loaded: true,
+			err:    errors.New("factory is down"),
+			open:   []string{"> Org default could not list factories"},
+			closed: []string{"Org default could not list factories"},
+		},
+		{
+			name:   "none",
+			loaded: true,
+			open:   []string{"> Org default"},
+			closed: []string{"Org default"},
+		},
+		{
+			name:      "one factory, left on Org default",
+			loaded:    true,
+			factories: []Factory{{ID: "f-1", OrgID: "org-1", Name: "default"}},
+			open:      []string{"> Org default", "default"},
+			closed:    []string{"Org default"},
+		},
+		{
+			name:      "one factory, chosen",
+			loaded:    true,
+			factories: []Factory{{ID: "f-1", OrgID: "org-1", Name: "default"}},
+			downs:     1,
+			open:      []string{"Org default", "> default"},
+			closed:    []string{"default"},
+		},
+		{
+			name:   "two of one name in different orgs",
+			loaded: true,
+			factories: []Factory{
+				{ID: "f-1", OrgID: "1a2b3c4d-0000-4000-8000-000000000001", Name: "default"},
+				{ID: "f-2", OrgID: "9f8e7d6c-0000-4000-8000-000000000002", Name: "default"},
+				{ID: "f-3", OrgID: "1a2b3c4d-0000-4000-8000-000000000001", Name: "mobile"},
+			},
+			downs:  2,
+			open:   []string{"Org default", "default (1a2b3c4d)", "> default (9f8e7d6c)", "mobile"},
+			closed: []string{"default (9f8e7d6c)"},
+		},
+		{
+			name:   "several, sorted by name",
+			loaded: true,
+			factories: []Factory{
+				{ID: "f-1", OrgID: "org-1", Name: "web"},
+				{ID: "f-2", OrgID: "org-1", Name: "Mobile"},
+				{ID: "f-3", OrgID: "org-1", Name: "api"},
+			},
+			downs:  2,
+			open:   []string{"Org default", "api", "> Mobile", "web"},
+			closed: []string{"Mobile"},
+		},
+		{
+			name:   "names that differ only in case are two names",
+			loaded: true,
+			factories: []Factory{
+				{ID: "f-1", OrgID: "org-1", Name: "default"},
+				{ID: "f-2", OrgID: "org-2", Name: "Default"},
+			},
+			open:   []string{"> Org default", "Default", "default"},
+			closed: []string{"Org default"},
+		},
+		{
+			name:   "two of one name, org IDs shorter than 8",
+			loaded: true,
+			factories: []Factory{
+				{ID: "f-1", OrgID: "o1", Name: "default"},
+				{ID: "f-2", OrgID: "o2", Name: "default"},
+			},
+			downs:  1,
+			open:   []string{"Org default", "> default (o1)", "default (o2)"},
+			closed: []string{"default (o1)"},
+		},
+		{
+			name:   "a name longer than the box wraps whole",
+			loaded: true,
+			width:  50,
+			whole:  "payments-and-billing-reconciliation-nightly-export",
+			factories: []Factory{
+				{ID: "f-1", OrgID: "org-1", Name: "payments-and-billing-reconciliation-nightly-export"},
+			},
+			downs: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := newFakeStore()
+			store.FactoriesV, store.FactoriesErr = tc.factories, tc.err
+			m := New(context.Background(), store, "").WithTerminal(true, false)
+			width := tc.width
+			if width == 0 {
+				width = 120
+			}
+			m = drive(t, m, tea.WindowSizeMsg{Width: width, Height: 30})
+			if tc.loaded {
+				m = initialised(t, m)
+			}
+			m = drive(t, m, press("tab"))
+			for range tc.downs {
+				m = drive(t, m, press("down"))
+			}
+			checkBox(t, factoryBox(t, m), tc.open, tc.whole, "open")
+			assert.Check(t, len(strings.Split(m.Content(), "\n")) <= 30, "the open box pushed the screen past its height")
+
+			m = drive(t, m, press("tab"))
+			checkBox(t, factoryBox(t, m), tc.closed, tc.whole, "closed")
+			assert.Check(t, len(strings.Split(m.Content(), "\n")) <= 30, "the closed box pushed the screen past its height")
+		})
+	}
+}
+
+func TestFactoryChoiceDoesNotWrap(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	store.FactoriesV = []Factory{
+		{ID: "f-1", OrgID: "org-1", Name: "default"},
+		{ID: "f-2", OrgID: "org-1", Name: "mobile"},
+	}
+	m := New(context.Background(), store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = initialised(t, m)
+	m = drive(t, m, press("tab"))
+
+	m = drive(t, m, press("up"))
+	assert.Check(t, cmp.Equal(m.factory, 0), "↑ on the first entry moved")
+	m = pressAll(t, m, "down", "down", "down")
+	assert.Check(t, cmp.Equal(m.factory, 2), "↓ past the last entry wrapped, or stopped short of it")
+	assert.Check(t, cmp.DeepEqual(factoryBox(t, m), []string{"Org default", "default", "> mobile"}))
+	m = drive(t, m, press("up"))
+	assert.Check(t, cmp.Equal(m.factory, 1))
+
+	// j and k are ↓ and ↑ here, as on the other panes, not letters for Title.
+	vim := New(context.Background(), store, "")
+	vim = drive(t, vim, tea.WindowSizeMsg{Width: 120, Height: 30})
+	vim = initialised(t, vim)
+	vim = drive(t, vim, press("tab"))
+	vim = drive(t, vim, press("j"))
+	assert.Check(t, cmp.Equal(vim.factory, 1), "j did not move down")
+	vim = drive(t, vim, press("k"))
+	assert.Check(t, cmp.Equal(vim.factory, 0), "k did not move up")
+
+	empty := New(context.Background(), newFakeStore(), "")
+	empty = drive(t, empty, tea.WindowSizeMsg{Width: 120, Height: 30})
+	empty = initialised(t, empty)
+	empty = pressAll(t, drive(t, empty, press("tab")), "down", "up", "j", "k")
+	assert.Check(t, cmp.Equal(empty.factory, 0))
+	assert.Check(t, cmp.Equal(empty.field, fieldFactory))
+	assert.Check(t, cmp.Equal(empty.titleInput.Value(), ""), "j and k were typed into Title")
+}
+
+// A plan that exists has no Factory box, and opening it lists no factories.
+func TestExistingPlanShowsNoFactoryBox(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	store.Existing, store.TextV = true, twoParts
+	store.FactoriesV = []Factory{{ID: "f-1", OrgID: "org-1", Name: "default"}}
+	m := New(context.Background(), store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	m = quiet(m)
+	for _, msg := range run(t, m.Init()) {
+		_, listed := msg.(factoriesMsg)
+		assert.Check(t, !listed, "opening a plan that exists listed the factories")
+		m = drive(t, m, msg)
+	}
+	assert.Check(t, !strings.Contains(ansi.Strip(m.Content()), "─ Factory"))
+}
+
+// The form reads Title, Factory, Request. Tab or enter goes down a box, shift+tab
+// goes up one, nothing wraps, and enter in the request sends.
 func TestTitleAndRequestKeepTheKeyboardInTurnOfFields(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	m := New(context.Background(), store, "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	// A factory is listed so that ↑/↓ have a choice to move: the hint is offered only then.
+	store.FactoriesV = []Factory{{ID: "f-1", OrgID: "org-1", Name: "default"}}
+	m = initialised(t, m)
+	assert.Check(t, cmp.Equal(m.field, fieldTitle), "the keyboard starts on Title")
+	m = drive(t, m, shiftTab)
+	assert.Check(t, cmp.Equal(m.field, fieldTitle), "shift+tab on Title moved")
+	assert.Check(t, m.titleInput.Focused(), "shift+tab on Title took the keyboard from it")
+	assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "shift+tab"), "shift+tab is offered on Title")
+	assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "↑/↓ move"), "↑/↓ are offered off Factory")
 	m = typeText(t, m, "Add")
 	assert.Check(t, cmp.Equal(m.titleInput.Value(), "Add"))
+
 	m = drive(t, m, press("tab"))
-	assert.Check(t, !m.titleInput.Focused() && m.input.Focused(), "tab did not move to the request")
+	assert.Check(t, cmp.Equal(m.field, fieldFactory), "tab on Title did not reach Factory")
+	assert.Check(t, !m.titleInput.Focused(), "Factory has no text input, but Title has the keyboard")
+	assert.Check(t, !m.input.Focused(), "Factory has no text input, but Request has the keyboard")
+	bar := ansi.Strip(m.actionBar())
+	assert.Check(t, cmp.Contains(bar, "enter next"))
+	assert.Check(t, cmp.Contains(bar, "↑/↓ move"))
+	m = typeText(t, m, "ab")
+	assert.Check(t, cmp.Equal(m.titleInput.Value(), "Add"), "typing on Factory reached Title")
+	assert.Check(t, cmp.Equal(m.input.Value(), ""), "typing on Factory reached Request")
+
+	m = drive(t, m, shiftTab)
+	assert.Check(t, cmp.Equal(m.field, fieldTitle), "shift+tab on Factory did not go to Title")
+	assert.Check(t, m.titleInput.Focused(), "shift+tab on Factory did not give Title the keyboard")
+	m = drive(t, m, press("enter"))
+	assert.Check(t, cmp.Equal(m.field, fieldFactory), "enter on Title did not reach Factory")
+
+	m = drive(t, m, press("enter"))
+	assert.Check(t, cmp.Equal(m.field, fieldRequest), "enter on Factory did not go to Request")
+	assert.Check(t, m.input.Focused(), "enter on Factory did not give Request the keyboard")
+	assert.Check(t, cmp.Len(store.Created, 0), "enter on Factory sent the plan")
+	m = drive(t, m, shiftTab)
+	assert.Check(t, cmp.Equal(m.field, fieldFactory), "shift+tab on Request did not go to Factory")
+	m = drive(t, m, press("tab"))
+	assert.Check(t, cmp.Equal(m.field, fieldRequest), "tab on Factory did not go to Request")
+	assert.Check(t, !m.titleInput.Focused() && m.input.Focused(), "tab on Factory did not give Request the keyboard")
+	assert.Check(t, !strings.Contains(ansi.Strip(m.actionBar()), "↑/↓ move"), "↑/↓ are offered off Factory")
 	m = typeText(t, m, "ask")
 	assert.Check(t, cmp.Equal(m.input.Value(), "ask"))
-	m = drive(t, m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	assert.Check(t, m.titleInput.Focused() && !m.input.Focused(), "shift+tab did not go back to the title")
-	m = drive(t, m, press("enter"))
-	assert.Check(t, !m.titleInput.Focused() && m.input.Focused(), "enter did not move to the request")
-	assert.Check(t, cmp.Len(store.Created, 0), "enter in the title sent the plan")
+	assert.Check(t, cmp.Len(store.Created, 0), "typing in the request sent the plan")
 	m = drive(t, m, press("enter"))
 	assert.Assert(t, cmp.Len(store.Created, 1))
 	assert.Check(t, cmp.Equal(store.Created[0].Title, "Add"))
@@ -253,6 +545,7 @@ func TestCreateNeedsTitleAndRequest(t *testing.T) {
 			m.input.SetValue(tc.request)
 			m = drive(t, m, press("enter"))
 			m = drive(t, m, press("enter"))
+			m = drive(t, m, press("enter"))
 			assert.Check(t, cmp.Len(store.Created, 0))
 			assert.Check(t, cmp.Equal(store.Claims, 0))
 			assert.Check(t, cmp.Equal(m.status, tc.want))
@@ -270,6 +563,7 @@ func TestCreateNeedsTitleAndRequest(t *testing.T) {
 		assert.Check(t, m.titleInput.Focused(), "the title has the keyboard")
 		m = drive(t, m, press("enter"))
 		m = drive(t, m, press("enter"))
+		m = drive(t, m, press("enter"))
 		assert.Check(t, cmp.Len(store.Created, 0))
 		assert.Check(t, cmp.Equal(m.status, "Add a title."))
 	})
@@ -280,20 +574,27 @@ func TestCreateFails(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	store.CreateErr = errors.New("factory is down")
+	store.FactoriesV = []Factory{{ID: "f-1", OrgID: "org-1", Name: "default"}}
 	m := New(context.Background(), store, "ask")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = initialised(t, m)
+	m = drive(t, m, press("tab"))
+	m = pressAll(t, m, "down", "tab")
+	assert.Assert(t, cmp.Equal(m.factory, 1))
 	m = startPlan(t, m, "Title")
 	assert.Check(t, cmp.Contains(ansi.Strip(m.Content()), "Could not create the plan: factory is down"))
 	assert.Check(t, cmp.Equal(m.titleInput.Value(), "Title"))
 	assert.Check(t, cmp.Equal(m.input.Value(), "ask"))
 	assert.Check(t, cmp.Equal(store.Claims, 0), "a plan that was not created was claimed")
 	assert.Check(t, !m.created && !m.creating)
+	assert.Check(t, cmp.Equal(m.factory, 1), "a failed create dropped the factory chosen")
 
 	// Sending again, once factory is back, creates it.
 	store.CreateErr = nil
 	m = drive(t, m, press("enter"))
 	assert.Check(t, cmp.Len(store.Created, 1))
 	assert.Check(t, m.created)
+	assert.Check(t, cmp.DeepEqual(store.FactoryIDs, []string{"f-1"}), "the send after the failure did not send the choice")
 }
 
 // Creating the plan has the default worker claim it, and the flow that is read
@@ -1750,18 +2051,26 @@ func TestInputBoxesAreBelowThePaneAccent(t *testing.T) {
 		m := New(context.Background(), newFakeStore(), "").WithTerminal(dark, false)
 		m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		// The title has the keyboard: the pane's own gutter is the accent, the
-		// title's box one step down, dim, and the request's quiet.
+		// title's box one step down, dim, and the others' quiet.
 		check(t, m, "Title", m.brand(), m.dim(), fmt.Sprintf("dark=%v title focused", dark))
+		check(t, m, "Factory", m.brand(), m.quiet(), fmt.Sprintf("dark=%v title focused", dark))
 		check(t, m, "Request", m.brand(), m.quiet(), fmt.Sprintf("dark=%v title focused", dark))
 
 		m = drive(t, m, press("tab"))
+		check(t, m, "Title", m.brand(), m.quiet(), fmt.Sprintf("dark=%v factory focused", dark))
+		check(t, m, "Factory", m.brand(), m.dim(), fmt.Sprintf("dark=%v factory focused", dark))
+		check(t, m, "Request", m.brand(), m.quiet(), fmt.Sprintf("dark=%v factory focused", dark))
+
+		m = drive(t, m, press("tab"))
 		check(t, m, "Title", m.brand(), m.quiet(), fmt.Sprintf("dark=%v request focused", dark))
+		check(t, m, "Factory", m.brand(), m.quiet(), fmt.Sprintf("dark=%v request focused", dark))
 		check(t, m, "Request", m.brand(), m.dim(), fmt.Sprintf("dark=%v request focused", dark))
 
 		// Tab moves the keyboard to the plan pane: the pane's gutter goes
-		// quiet, and both boxes follow it to quiet too.
+		// quiet, and the boxes follow it to quiet too.
 		m = drive(t, m, press("tab"))
 		check(t, m, "Title", m.quiet(), m.quiet(), fmt.Sprintf("dark=%v plan focused", dark))
+		check(t, m, "Factory", m.quiet(), m.quiet(), fmt.Sprintf("dark=%v plan focused", dark))
 		check(t, m, "Request", m.quiet(), m.quiet(), fmt.Sprintf("dark=%v plan focused", dark))
 	}
 }
@@ -1855,6 +2164,25 @@ func TestPanesSitOnTheTerminalsBackground(t *testing.T) {
 	}
 }
 
+// A factory chosen and nothing typed is not unsent input: quitting does not
+// ask.
+func TestQuitDoesNotAskAboutOnlyAFactoryChoice(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	store.FactoriesV = []Factory{{ID: "f-1", OrgID: "org-1", Name: "default"}}
+	m := New(context.Background(), store, "")
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = initialised(t, m)
+	m = drive(t, m, press("tab"))
+	m = drive(t, m, press("down"))
+	assert.Assert(t, cmp.Equal(m.factory, 1))
+	assert.Check(t, cmp.Equal(m.Unsent(), ""))
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	_, ok := closedBy(cmd)
+	assert.Check(t, ok, "ctrl+c with only a factory chosen asked first")
+}
+
 func TestQuitAsksAgainWhenCommentsAreUnsent(t *testing.T) {
 	t.Parallel()
 	m, _ := planModel(t)
@@ -1905,7 +2233,7 @@ func TestNewlineHintMatchesTheTerminal(t *testing.T) {
 	t.Parallel()
 	m := New(context.Background(), newFakeStore(), "")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 160, Height: 30})
-	m = drive(t, m, press("tab")) // to the request, which has a new line to type
+	m = pressAll(t, m, "tab", "tab") // to the request, which has a new line to type
 	if view := ansi.Strip(m.Content()); !strings.Contains(view, "ctrl+j new line") {
 		t.Errorf("a terminal that sends shift+enter as enter should be told ctrl+j:\n%s", view)
 	}
@@ -4092,7 +4420,7 @@ func TestEnterWhileThePlanIsCreatedWaitsInTheInput(t *testing.T) {
 	m := New(context.Background(), store, "first")
 	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m.titleInput.SetValue("Title")
-	m.focusField(false)
+	m.focusField(fieldRequest)
 	m, create := m.Update(press("enter"))
 	if !m.creating {
 		t.Fatal("the plan is not being created")
@@ -4190,7 +4518,7 @@ func TestQQuitsFromThePlanOnly(t *testing.T) {
 	if got := request.titleInput.Value(); got != "q" {
 		t.Errorf("q in the title typed %q, want q", got)
 	}
-	request = drive(t, request, press("tab"))
+	request = pressAll(t, request, "tab", "tab")
 	request, cmd = request.Update(press("q"))
 	if _, ok := closedBy(cmd); ok {
 		t.Error("q in the request quit")
@@ -4330,7 +4658,7 @@ func TestOverviewKeys(t *testing.T) {
 		m := New(context.Background(), newFakeStore(), "")
 		m = drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
 		m = refreshed(t, m)
-		m = drive(t, m, press("tab")) // to the request
+		m = pressAll(t, m, "tab", "tab") // to the request
 		m = typeText(t, m, "fp")
 		m = drive(t, m, press("left"))
 		m = drive(t, m, press("left"))

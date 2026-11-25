@@ -20,7 +20,9 @@ const FactoryWorkerID = "fake-worker"
 // were made, as conductor keeps them. Its state is its flow's.
 type factoryPlan struct {
 	id, title, state, branch, text string
-	createdAt, updatedAt           time.Time
+	// factory is the ID of the factory the create named, "" for none.
+	factory              string
+	createdAt, updatedAt time.Time
 	// noFlow is whether DropFactoryFlow took the plan's flow away, as a plan
 	// made before conductor gave every plan one has none.
 	noFlow bool
@@ -82,6 +84,7 @@ type factoryComment struct {
 // the V3 API.
 func (f *FakeCircleCI) registerFactory(r *gin.Engine) {
 	r.POST("/api/v3/factory/plans", f.handleCreatePlan)
+	r.GET("/api/v3/factory/factories", f.handleListFactories)
 	r.GET("/api/v3/factory/plans", f.handleListPlans)
 	r.GET("/api/v3/factory/plans/:id", f.handleGetPlan)
 	r.DELETE("/api/v3/factory/plans/:id", f.handleDeletePlan)
@@ -148,6 +151,8 @@ type FactoryPlan struct {
 	// Repos are the GitHub repositories the plan was created with, as
 	// owner/name; nil when none.
 	Repos []string
+	// Factory is the ID of the factory the plan was created in, "" when it named none.
+	Factory string
 }
 
 // FactoryPlan returns plan id as the fake holds it, and false when there is
@@ -169,8 +174,9 @@ func (f *FakeCircleCI) FactoryPlan(id string) (FactoryPlan, bool) {
 	return FactoryPlan{
 		ID: p.id, Title: p.title, State: p.state, Text: p.text, Comments: len(p.comments),
 		Session: session, Worker: p.worker, Events: slices.Clone(p.events), Reasons: slices.Clone(p.reasons),
-		Inputs: slices.Clone(p.inputs),
-		Repos:  slices.Clone(p.repos),
+		Inputs:  slices.Clone(p.inputs),
+		Repos:   slices.Clone(p.repos),
+		Factory: p.factory,
 	}, true
 }
 
@@ -637,6 +643,11 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 					RepoFullName string `json:"repo_full_name"`
 				} `json:"vcs"`
 			} `json:"attributes"`
+			References struct {
+				FactoryFactory *struct {
+					ID string `json:"id"`
+				} `json:"factory_factory"`
+			} `json:"references"`
 		} `json:"data"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.Data.Attributes.Title == "" {
@@ -656,6 +667,10 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 		}
 		repos = append(repos, v.RepoFullName)
 	}
+	factory := ""
+	if r := body.Data.References.FactoryFactory; r != nil {
+		factory = r.ID
+	}
 	text := attrs.Text
 	if strings.TrimSpace(text) == "" {
 		text = fakeSkeleton(attrs.Title)
@@ -666,6 +681,7 @@ func (f *FakeCircleCI) handleCreatePlan(c *gin.Context) {
 	p := &factoryPlan{
 		id: id, title: attrs.Title, state: "init",
 		branch: "factory/" + id, text: text, repos: repos,
+		factory:   factory,
 		createdAt: now, updatedAt: now, seq: len(f.factoryPlans),
 	}
 	if f.factoryPlans == nil {
@@ -1780,4 +1796,41 @@ func (f *FakeCircleCI) handleListCheckRuns(c *gin.Context) {
 func isRepoFullName(s string) bool {
 	owner, name, ok := strings.Cut(s, "/")
 	return ok && owner != "" && name != "" && !strings.Contains(name, "/")
+}
+
+// FactoryFactory is a factory the fake lists, as GET /api/v3/factory/factories
+// serves it.
+type FactoryFactory struct{ ID, OrgID, Name string }
+
+// SetFactories replaces the factories the fake lists, in the order given.
+func (f *FakeCircleCI) SetFactories(factories ...FactoryFactory) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.factories = slices.Clone(factories)
+}
+
+func (f *FakeCircleCI) handleListFactories(c *gin.Context) {
+	if !f.factoryStart(c) {
+		return
+	}
+	after, ok := pageCursor(c)
+	if !ok {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	end := min(after+f.pageSize(), len(f.factories))
+	items := []gin.H{}
+	for _, fa := range f.factories[min(after, len(f.factories)):end] {
+		items = append(items, gin.H{
+			"id":         fa.ID,
+			"attributes": gin.H{"name": fa.Name},
+			"references": gin.H{"org": gin.H{"id": fa.OrgID}},
+		})
+	}
+	resp := gin.H{"data": items}
+	if end < len(f.factories) {
+		resp["page"] = gin.H{"next": strconv.Itoa(end)}
+	}
+	c.JSON(http.StatusOK, resp)
 }

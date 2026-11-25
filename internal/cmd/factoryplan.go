@@ -30,10 +30,11 @@ func newFactoryPlanCmd() *cobra.Command {
 		Short: "Plan a change in factory, on one of your factory workers",
 		Long: `Plan a change in factory. The screen asks for a title and a request (the
 argument, or what you type when there is none) and creates the plan in factory
-with them. chunk then hands the plan to your factory worker, which plans it
-with Claude Code; what the worker is doing is shown beside the plan. Comment on
-the plan until it is right, then press ctrl+s to approve it, and the worker
-builds it, through to a pull request. Follow the build in chunk ui.
+with them, in the factory chosen in the Factory box between them. chunk then
+hands the plan to your factory worker, which plans it with Claude Code; what the
+worker is doing is shown beside the plan. Comment on the plan until it is right,
+then press ctrl+s to approve it, and the worker builds it, through to a pull
+request. Follow the build in chunk ui.
 
 Needs factory daemon running with FACTORY_PLAN_STORE=circleci, as the CircleCI
 user chunk is signed in as, on a machine of yours. It needs no Claude Code on

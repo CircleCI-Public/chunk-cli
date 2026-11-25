@@ -162,13 +162,19 @@ type Unit struct {
 	Blocks []Block
 }
 
+// Factory is a factory a new plan can be created in.
+type Factory struct{ ID, OrgID, Name string }
+
 // Store is where the plan and its comments are kept. Before Create, ID and
 // reads are empty and writes fail. An existing plan starts with its ID set.
 type Store interface {
 	ID() string
 	// Create makes the plan in factory, titled title, from the skeleton with
-	// request under its Outcome.
-	Create(ctx context.Context, title, request string) error
+	// request under its Outcome, in the factory factoryID; "" sends no
+	// factory, for the default.
+	Create(ctx context.Context, title, request, factoryID string) error
+	// Factories are the factories the user can view, for the new-plan form.
+	Factories(ctx context.Context) ([]Factory, error)
 	// Claim has the default worker claim the plan, returning its hostname.
 	// ErrNoWorker when no live worker can claim it.
 	Claim(ctx context.Context) (string, error)

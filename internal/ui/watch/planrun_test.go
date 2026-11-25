@@ -54,7 +54,9 @@ type fakePlanStore struct {
 
 func (f *fakePlanStore) ID() string { return f.id }
 
-func (f *fakePlanStore) Create(ctx context.Context, title, request string) error {
+func (f *fakePlanStore) Factories(context.Context) ([]plan.Factory, error) { return nil, nil }
+
+func (f *fakePlanStore) Create(ctx context.Context, title, request, _ string) error {
 	if f.f.release != nil {
 		select {
 		case <-f.f.release:
@@ -324,6 +326,7 @@ func TestFlowsKeys(t *testing.T) {
 func createPlan(t *testing.T, m Model, title, request string) Model {
 	t.Helper()
 	m = typeInto(m, title)
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter}) // to Factory
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter}) // to the request
 	m = typeInto(m, request)
 	m, create := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -536,6 +539,7 @@ func TestANewPlansHeaderTakesItsTitle(t *testing.T) {
 
 	m = typeInto(m, "retry-uploads")
 	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter}) // past Factory
 	m = typeInto(m, "retry uploads")
 	m, create := pressKey(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 

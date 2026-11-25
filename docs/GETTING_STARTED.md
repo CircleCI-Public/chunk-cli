@@ -377,6 +377,7 @@ comments still unsent in any plan asks for a second `ctrl+c`.
 request (`chunk factory plan "<request>"` fills the request in), press
 `Enter` to create the plan and hand it to your worker, comment on the plan as it
 takes shape, press `ctrl+s` to approve it, and follow the build in `chunk ui`.
+Choose the plan's factory in the Factory box, between the title and the request.
 
 If the screen says `No live worker can claim this plan`, start `factory daemon`,
 then press `R`.

@@ -11,6 +11,7 @@
 package plan
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -123,6 +124,12 @@ type (
 		err       error
 	}
 	commentSavedMsg struct{ err error }
+	// factoriesMsg is the end of listing the factories the new plan can be
+	// created in.
+	factoriesMsg struct {
+		factories []Factory
+		err       error
+	}
 	// createdMsg is the end of creating the plan in factory, with the
 	// developer's title and request.
 	createdMsg struct {
@@ -340,9 +347,15 @@ type Model struct {
 	titleInput textinput.Model
 	input      textarea.Model
 	spin       spinner.Model
-	// onTitle is whether the new plan's keyboard is in titleInput rather than
-	// input, whichever pane has it.
-	onTitle bool
+	// field is the box of the new plan's form that has the keyboard, whichever
+	// pane has it.
+	field field
+	// factories are the factories the form offers after "Org default", sorted
+	// by name; nil until they are listed, and when listing them fails.
+	factories []Factory
+	// factory is the chosen entry: 0 for "Org default", else factories[factory-1].
+	factory         int
+	factoriesFailed bool
 
 	focus pane
 	// focusChosen is whether the first refresh of a plan opened as it is, or
@@ -514,7 +527,7 @@ func New(ctx context.Context, store Store, request string) Model {
 		overviewView: overviewView,
 		outcome:      &outcomeRender{},
 		titleInput:   ti,
-		onTitle:      true,
+		field:        fieldTitle,
 		input:        in,
 		commentInput: ci,
 		spin:         spinner.New(spinner.WithSpinner(spinner.Dot)),
@@ -570,7 +583,93 @@ func (m Model) ID() string { return m.store.ID() }
 func (m Model) Unsent() string { return m.unsent() }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.Poll(), m.pollCmd())
+	cmds := []tea.Cmd{textarea.Blink, m.Poll(), m.pollCmd()}
+	if !m.created {
+		cmds = append(cmds, factoriesCmd(m.ctx, m.store))
+	}
+	return tea.Batch(cmds...)
+}
+
+// factoriesCmd lists the factories the new plan can be created in.
+func factoriesCmd(ctx context.Context, s Store) tea.Cmd {
+	return func() tea.Msg {
+		fs, err := s.Factories(ctx)
+		return factoriesMsg{factories: fs, err: err}
+	}
+}
+
+// field is a box of the new plan's form, in the order the keyboard moves
+// through them.
+type field int
+
+const (
+	fieldTitle field = iota
+	// fieldFactory has no text input: it chooses the factory the plan is
+	// created in.
+	fieldFactory
+	fieldRequest
+)
+
+// orgDefault is the Factory box's first entry, which names no factory.
+const orgDefault = "Org default"
+
+// applyFactories handles the end of listing the factories: the list, sorted by
+// name, or the note that it could not be listed. Either way the choice is
+// Org default.
+func (m Model) applyFactories(msg factoriesMsg) Model {
+	m.factory, m.factories = 0, nil
+	m.factoriesFailed = msg.err != nil
+	if msg.err == nil {
+		m.factories = sortedFactories(msg.factories)
+	}
+	if m.height > 0 {
+		m.layout()
+	}
+	return m
+}
+
+// sortedFactories is fs by name, ignoring case, then by org and ID so that the
+// order does not depend on the one factory served them in.
+func sortedFactories(fs []Factory) []Factory {
+	out := slices.Clone(fs)
+	slices.SortFunc(out, func(a, b Factory) int {
+		return cmp.Or(
+			cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)),
+			cmp.Compare(a.Name, b.Name),
+			cmp.Compare(a.OrgID, b.OrgID),
+			cmp.Compare(a.ID, b.ID),
+		)
+	})
+	return out
+}
+
+// factoryLabels are the entries the Factory box shows, Org default first and
+// then each of m.factories in order. A name that more than one factory has,
+// in different orgs, carries the start of its org's ID, so that the one shown
+// is the one sent.
+func (m Model) factoryLabels() []string {
+	count := map[string]int{}
+	for _, f := range m.factories {
+		count[f.Name]++
+	}
+	labels := make([]string, 1, 1+len(m.factories))
+	labels[0] = orgDefault
+	for _, f := range m.factories {
+		label := f.Name
+		if count[f.Name] > 1 {
+			label += " (" + f.OrgID[:min(8, len(f.OrgID))] + ")"
+		}
+		labels = append(labels, label)
+	}
+	return labels
+}
+
+// chosenFactory is the ID of the chosen entry, "" for Org default.
+func (m Model) chosenFactory() string {
+	if m.factory == 0 {
+		return ""
+	}
+	return m.factories[m.factory-1].ID
 }
 
 // Poll reads the plan's state, text, comments and relatives from the store,
@@ -628,6 +727,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.restoreCursor(row, had)
 		m.renderLeft()
 		return m, nil
+
+	case factoriesMsg:
+		return m.applyFactories(msg), nil
 
 	case createdMsg:
 		return m.applyCreated(msg)
@@ -987,32 +1089,46 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m.forward(msg)
 }
 
-// updateFieldKey handles the keys that move the new plan's keyboard between
-// its title and its request: tab or enter in the title goes to the request,
-// and shift+tab in the request goes back. ok is false for any other key.
+// updateFieldKey moves the new plan's keyboard between the boxes of its form
+// by tab, shift+tab and enter. ok is false for any other key.
 func (m Model) updateFieldKey(msg tea.KeyPressMsg, k keyMap) (Model, tea.Cmd, bool) {
 	if m.created || m.focus != paneOverview {
 		return m, nil, false
 	}
 	switch {
-	case m.onTitle && (key.Matches(msg, k.NextField) || key.Matches(msg, k.Send)):
-		return m, m.focusField(false), true
-	case !m.onTitle && key.Matches(msg, k.PrevField):
-		return m, m.focusField(true), true
+	case m.field != fieldRequest && (key.Matches(msg, k.NextField) || key.Matches(msg, k.Send)):
+		return m, m.focusField(m.field + 1), true
+	case m.field != fieldTitle && key.Matches(msg, k.PrevField):
+		return m, m.focusField(m.field - 1), true
+	case m.field == fieldFactory && key.Matches(msg, k.Up):
+		m.factory = max(m.factory-1, 0)
+		return m, nil, true
+	case m.field == fieldFactory && key.Matches(msg, k.Down):
+		m.factory = min(m.factory+1, len(m.factories))
+		return m, nil, true
 	}
 	return m, nil, false
 }
 
-// focusField gives the new plan's keyboard to its title input, or to its
-// request input.
-func (m *Model) focusField(title bool) tea.Cmd {
-	m.onTitle = title
-	if title {
-		m.input.Blur()
-		return m.titleInput.Focus()
-	}
+// focusField gives the new plan's keyboard to box f: its text input, or none
+// for Factory. The Factory box opens and closes with it, so the log above the
+// boxes is laid out again.
+func (m *Model) focusField(f field) tea.Cmd {
+	m.field = f
 	m.titleInput.Blur()
-	return m.input.Focus()
+	m.input.Blur()
+	if m.height > 0 {
+		m.layout()
+	}
+	switch f {
+	case fieldFactory:
+		return nil
+	case fieldTitle:
+		return m.titleInput.Focus()
+	case fieldRequest:
+		return m.input.Focus()
+	}
+	return nil
 }
 
 // heldStatus says why a send left the queued comments unsent.
@@ -1114,7 +1230,7 @@ func (m Model) focusOn(p pane) (Model, tea.Cmd) {
 	if m.created {
 		return m, nil
 	}
-	return m, m.focusField(m.onTitle)
+	return m, m.focusField(m.field)
 }
 
 // askToApprove starts approving the plan, or its design: it asks the
@@ -1213,12 +1329,16 @@ func (m Model) forward(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	var cmds []tea.Cmd
-	if !m.created && m.onTitle {
-		m.titleInput, cmd = m.titleInput.Update(msg)
-		cmds = append(cmds, cmd)
-	} else if !m.created {
-		m.input, cmd = m.input.Update(msg)
-		cmds = append(cmds, cmd)
+	if !m.created {
+		switch m.field {
+		case fieldFactory:
+		case fieldTitle:
+			m.titleInput, cmd = m.titleInput.Update(msg)
+			cmds = append(cmds, cmd)
+		case fieldRequest:
+			m.input, cmd = m.input.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 	}
 	// The left pane scrolls with the mouse wheel while typing.
 	if _, ok := msg.(tea.KeyPressMsg); !ok {
@@ -1242,10 +1362,10 @@ func sendEmpty(title, request string) string {
 	return ""
 }
 
-// send is a new plan's title and request: it creates the plan in factory,
-// and has a worker claim it once it is made. Once the plan exists, or while it
-// is being created, it does nothing, and with an empty title or request it
-// says which is missing and sends nothing.
+// send is a new plan's title and request: it creates the plan, in the factory
+// chosen in the Factory box, and has a worker claim it once it is made. Once
+// the plan exists, or while it is being created, it does nothing, and with an
+// empty title or request it says which is missing and sends nothing.
 func (m Model) send(title, request string) (Model, tea.Cmd) {
 	if m.created || m.creating {
 		return m, nil
@@ -1259,7 +1379,7 @@ func (m Model) send(title, request string) (Model, tea.Cmd) {
 	m.creating = true
 	m.renderPlan()
 	m.renderLeft()
-	return m, tea.Batch(createCmd(m.ctx, m.store, title, request), m.spin.Tick)
+	return m, tea.Batch(createCmd(m.ctx, m.store, title, request, m.chosenFactory()), m.spin.Tick)
 }
 
 // track reports eventName from the screen, with the plan's ID once factory
@@ -1286,9 +1406,9 @@ func (m Model) trackFeedback(comments int) {
 
 // createCmd creates the plan in factory, titled title, with request as its
 // Outcome.
-func createCmd(ctx context.Context, s Store, title, request string) tea.Cmd {
+func createCmd(ctx context.Context, s Store, title, request, factoryID string) tea.Cmd {
 	return func() tea.Msg {
-		return createdMsg{title: title, request: request, err: s.Create(ctx, title, request)}
+		return createdMsg{title: title, request: request, err: s.Create(ctx, title, request, factoryID)}
 	}
 }
 
@@ -1464,7 +1584,7 @@ func (m *Model) layout() {
 	if m.created {
 		m.overviewView.SetHeight(inner - padY)
 	} else {
-		m.overviewView.SetHeight(max(1, inner-titleBoxRows-inputBoxRows-padY))
+		m.overviewView.SetHeight(max(1, inner-m.factoryBoxRows()-titleBoxRows-inputBoxRows-padY))
 	}
 	m.titleInput.SetWidth(m.leftWidth() - 2*borderSize - 2*padX)
 	m.input.SetWidth(m.leftWidth() - 2*borderSize - 2*padX)
@@ -1675,21 +1795,58 @@ func (m Model) Content() string {
 	return lipgloss.JoinVertical(lipgloss.Left, top, panes, m.actionBar())
 }
 
-// inputBoxes are the new plan's title and request being written, each in a box
-// of its own under the pane's log. A box's border stays a step below the
-// pane's accent, so the accent shows once per pane.
+// inputBoxes are the new plan's boxes, each under the pane's log. A box's
+// border stays a step below the pane's accent, so the accent shows once per
+// pane.
 func (m Model) inputBoxes() string {
+	return m.box("Title", m.field == fieldTitle, m.titleInput.View()) + "\n" +
+		m.factoryBoxView() + "\n" +
+		m.box("Request", m.field == fieldRequest, m.input.View())
+}
+
+// box is a titled box as wide as the pane's content.
+func (m Model) box(name string, focused bool, content string) string {
 	w := m.leftWidth() - borderSize - 2*padX
-	box := func(name string, focused bool, content string) string {
-		edge := m.quiet()
-		if focused && m.focus == paneOverview && !m.commenting {
-			edge = m.dim()
-		}
-		b := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
-			Width(w).Render(content)
-		return titled(b, ui.TitleStyle.Render(name), lipgloss.NewStyle().Foreground(edge).Render)
+	edge := m.quiet()
+	if focused && m.focus == paneOverview && !m.commenting {
+		edge = m.dim()
 	}
-	return box("Title", m.onTitle, m.titleInput.View()) + "\n" + box("Request", !m.onTitle, m.input.View())
+	b := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).
+		Width(w).Render(content)
+	return titled(b, ui.TitleStyle.Render(name), lipgloss.NewStyle().Foreground(edge).Render)
+}
+
+func (m Model) factoryBoxView() string {
+	return m.box("Factory", m.field == fieldFactory, m.factoryList())
+}
+
+// factoryBoxRows is the Factory box's rows as drawn: its border and the
+// entries shown, a name too long for the box taking more than one row each.
+func (m Model) factoryBoxRows() int { return lipgloss.Height(m.factoryBoxView()) }
+
+// factoryList is the Factory box's content: the chosen entry while the
+// keyboard is elsewhere, and every entry while it has it, with > on the
+// chosen one. A list that could not be read says so, dim, beside Org default.
+func (m Model) factoryList() string {
+	labels := m.factoryLabels()
+	entry := func(i int) string {
+		if i == 0 && m.factoriesFailed {
+			return labels[0] + "  " + ui.HelperStyle.Faint(true).Render("could not list factories")
+		}
+		return labels[i]
+	}
+	if m.field != fieldFactory {
+		return entry(m.factory)
+	}
+	rows := make([]string, len(labels))
+	for i := range labels {
+		mark := "  "
+		if i == m.factory {
+			mark = "> "
+		}
+		rows[i] = mark + entry(i)
+	}
+	return strings.Join(rows, "\n")
 }
 
 // titled sets title into the top edge of box, a pane drawn with a rounded
