@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -276,7 +278,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	rc, _ := config.ResolveCircleCI(insecureStorage)
 
 	executionPlan := planValidationExecution(cfg, opts, name)
-	needsSidecar := executionPlan.PoolSize > 0
+	needsSidecar := executionPlan.PoolSize > 0 || len(executionPlan.ParallelCommands) > 0
 
 	image := resolveImage(name, cfg)
 	if done, err := delegateToDaemon(opts, workDir, rc.CircleCIToken, cfg.OrgID, image, streams); done {
@@ -317,7 +319,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if gitRoot := gitutil.TopLevelCtx(ctx, attributionDir); gitRoot != "" {
 		attributionDir = gitRoot
 	}
-	pooled := executionPlan.PoolSize > 1
+	// A parallel command's runs are on sidecars of their own, so a run with one
+	// has more than one sidecar however small the shared pool is.
+	pooled := executionPlan.PoolSize > 1 || len(executionPlan.ParallelCommands) > 0
 	statusFn, recorder := wrapEventLogStatusFn(statusFn, runRecorderSidecarID(pooled, opts.sidecarID), activeSidecar, attributionDir)
 	setupComplete := false
 	var setupErr error
@@ -332,6 +336,15 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		setupErr = err
 		return err
 	}
+
+	var parallel parallelPoolSettings
+	if len(executionPlan.ParallelCommands) > 0 {
+		parallel, err = resolveParallelPoolSettings(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, activeSidecar, workDir, streams)
+		if err != nil {
+			setupErr = err
+			return err
+		}
+	}
 	setupComplete = true
 
 	var result validate.Result
@@ -339,7 +352,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if err := saveInlineValidateCommand(workDir, name, opts.inlineCmd, opts.save, streams); err != nil {
 		execErr = err
 	} else {
-		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, newPoolRecorders(recorder, pooled), statusFn, streams)
+		result, execErr = runValidationPlan(ctx, validatePool, parallel, executionPlan, rc, workDir, attributionDir, envVars, newPoolRecorders(recorder, pooled), statusFn, streams)
 	}
 	// Saved after the plan runs, not right after the pool is built: a pool
 	// grown beyond one sidecar finishes cloning in the background while
@@ -1002,6 +1015,8 @@ func saveInlineValidateCommand(workDir, name, inlineCmd string, save bool, strea
 func runValidationPlan(
 	ctx context.Context,
 	pool *sidecar.Pool,
+	// parallel is what a command that runs on a pool of its own needs to build it.
+	parallel parallelPoolSettings,
 	plan validate.Plan,
 	rc config.ResolvedConfig,
 	localWorkDir string,
@@ -1018,7 +1033,12 @@ func runValidationPlan(
 	if len(plan.RemoteCommands) > 0 && pool == nil {
 		return validate.Result{}, errors.New("remote validation requires a sidecar pool")
 	}
-	result := validate.Result{Total: len(plan.RemoteCommands) + len(plan.LocalCommands)}
+	result := validate.Result{Total: len(plan.RemoteCommands) + len(plan.ParallelCommands) + len(plan.LocalCommands)}
+	if len(plan.ParallelCommands) > 0 {
+		// The shared batch and each parallel command report from goroutines of
+		// their own, to one terminal and one event log.
+		statusFn = serializeStatus(statusFn)
+	}
 
 	// Local autofix commands go first, so what the gates check is the tree as
 	// the formatter leaves it. The remote batch syncs the tree when it starts:
@@ -1029,6 +1049,18 @@ func runValidationPlan(
 		var passed int
 		passed, autofixErr = runLocalCommands(ctx, autofix, localWorkDir, envVars, statusFn, streams)
 		result.Passed += passed
+	}
+
+	// Each parallel command's pool runs while the shared batch does, so a long
+	// test suite does not wait for lint.
+	parallelResults := make([]parallelResult, len(plan.ParallelCommands))
+	var parallelDone sync.WaitGroup
+	for i, command := range plan.ParallelCommands {
+		parallelDone.Add(1)
+		go func() {
+			defer parallelDone.Done()
+			parallelResults[i] = runParallelCommand(ctx, command, parallel, rc.CircleCIToken, localWorkDir, projectRoot, envVars, recorders, statusFn)
+		}()
 	}
 
 	var remote validate.DistributedRunResult
@@ -1043,8 +1075,8 @@ func runValidationPlan(
 			WorkerStatus: func(entry *sidecar.PoolEntry) iostream.StatusFunc {
 				return recorders.status(entry.ID)
 			},
-			Run: func(ctx context.Context, entry *sidecar.PoolEntry, command config.Command, status iostream.StatusFunc, commandStreams iostream.Streams) validate.DistributedJobResult {
-				return runPooledValidateCommand(ctx, entry, command, rc.CircleCIToken, localWorkDir, projectRoot, envVars, recorders.commandIDSetter(entry.ID), status, commandStreams)
+			Run: func(ctx context.Context, entry *sidecar.PoolEntry, _ int, command config.Command, status iostream.StatusFunc, commandStreams iostream.Streams) validate.DistributedJobResult {
+				return runPooledValidateCommand(ctx, entry, command, command.Name, rc.CircleCIToken, localWorkDir, projectRoot, envVars, recorders.commandIDSetter(entry.ID), status, commandStreams)
 			},
 			Status:  statusFn,
 			Streams: streams,
@@ -1052,14 +1084,241 @@ func runValidationPlan(
 		renderDistributedOutput(remote.Output, streams)
 	}
 
+	parallelDone.Wait()
+	parallelErr := collectParallelResults(parallelResults, streams)
 	result.Passed += remote.Passed
+	for _, r := range parallelResults {
+		result.Passed += r.job.Passed
+	}
 	if len(local) == 0 {
-		return result, errors.Join(autofixErr, remote.Err)
+		return result, errors.Join(autofixErr, remote.Err, parallelErr)
 	}
 
 	passed, err := runLocalCommands(ctx, local, localWorkDir, envVars, statusFn, streams)
 	result.Passed += passed
-	return result, errors.Join(autofixErr, remote.Err, err)
+	return result, errors.Join(autofixErr, remote.Err, parallelErr, err)
+}
+
+// serializeStatus makes statusFn safe to call from several goroutines.
+func serializeStatus(statusFn iostream.StatusFunc) iostream.StatusFunc {
+	var mu sync.Mutex
+	return func(level iostream.Level, message string) {
+		mu.Lock()
+		defer mu.Unlock()
+		statusFn(level, message)
+	}
+}
+
+// The variables a parallel command's runs are told their place by.
+const (
+	envParallelTotal = "CIRCLE_PARALLEL_TOTAL"
+	envParallelIndex = "CIRCLE_PARALLEL_INDEX"
+)
+
+// parallelPoolSettings is what building the pool of a command with parallelism
+// takes besides the command itself.
+type parallelPoolSettings struct {
+	client      *circleci.Client
+	orgID       string
+	image       string
+	repoPath    string
+	tokenSource string
+}
+
+// resolveParallelPoolSettings returns the settings a parallel command's pool is
+// created with. An org it cannot find is asked for here, before any command
+// runs.
+func resolveParallelPoolSettings(ctx context.Context, client *circleci.Client, opts *validateOpts, image, tokenSource string, active *sidecar.ActiveSidecar, workDir string, streams iostream.Streams) (parallelPoolSettings, error) {
+	orgID := opts.orgID
+	if orgID == "" && active != nil {
+		orgID = active.OrgID
+	}
+	if orgID == "" {
+		orgID, _ = config.ResolveOrgID(workDir)
+	}
+	if orgID == "" {
+		picked, err := resolveOrgID("", workDir, orgPicker(ctx, client, tokenSource, streams))
+		if err != nil {
+			return parallelPoolSettings{}, err
+		}
+		orgID = picked
+	}
+	return parallelPoolSettings{
+		client:      client,
+		orgID:       orgID,
+		image:       image,
+		repoPath:    validationRepoPath(opts.workdir, active),
+		tokenSource: tokenSource,
+	}, nil
+}
+
+// parallelPoolName is the name of the pool one parallel command runs on. It is
+// a file name under the project's data directory and the prefix of its
+// sidecars' names, so every character outside [A-Za-z0-9_-] becomes "-"; the
+// hash of the original name keeps two names that sanitise alike apart, and the
+// prefix and suffix keep every one distinct from the shared "validate" pool.
+func parallelPoolName(name string) string {
+	sanitised := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			return r
+		}
+		return '-'
+	}, name)
+	sum := sha256.Sum256([]byte(name))
+	return fmt.Sprintf("validate-%s-%x", sanitised, sum[:4])
+}
+
+// parallelRunLabel names one run of a parallel command: the run number counts
+// from 1, where CIRCLE_PARALLEL_INDEX counts from 0.
+func parallelRunLabel(name string, index, total int) string {
+	return fmt.Sprintf("%s [%d/%d]", name, index+1, total)
+}
+
+// parallelResult is what one parallel command's runs came to, and the output
+// they left to show.
+type parallelResult struct {
+	job    validate.DistributedJobResult
+	output []validate.DistributedRunOutput
+}
+
+// collectParallelResults shows the runs' output, one command after another, and
+// returns what failed.
+func collectParallelResults(results []parallelResult, streams iostream.Streams) error {
+	errs := make([]error, 0, len(results))
+	for _, r := range results {
+		renderDistributedOutput(r.output, streams)
+		errs = append(errs, r.job.Err)
+	}
+	return errors.Join(errs...)
+}
+
+// runParallelCommand runs cmd cmd.Parallelism times at once, on a pool of that
+// many sidecars used by it alone. Each run is a job of RunDistributed over the
+// pool (see runParallelRuns). The command passes only if every run does, and a
+// failing run does not stop the others.
+func runParallelCommand(
+	ctx context.Context,
+	cmd config.Command,
+	settings parallelPoolSettings,
+	token, localWorkDir, projectRoot string,
+	envVars map[string]string,
+	recorders *poolRecorders,
+	statusFn iostream.StatusFunc,
+) parallelResult {
+	total := cmd.Parallelism
+	poolStatus := func(level iostream.Level, message string) {
+		statusFn(level, cmd.Name+": "+message)
+	}
+	statusFn(iostream.LevelInfo, fmt.Sprintf("%s: preparing a pool of %d sidecars", cmd.Name, total))
+	pool, err := sidecar.NewPool(ctx, settings.client, sidecar.PoolOptions{
+		Size:     total,
+		Name:     parallelPoolName(cmd.Name),
+		OrgID:    settings.orgID,
+		Image:    settings.image,
+		WorkDir:  localWorkDir,
+		StateDir: localWorkDir,
+		RepoPath: settings.repoPath,
+	}, poolStatus)
+	if err != nil {
+		// A missing SSH key or a bad token becomes a user error.
+		line := ""
+		if sshErr := sshSessionError(err); sshErr != nil {
+			err, line = sshErr, cmd.Name+": "+sshErr.Error()
+		} else if authErr := notAuthorized("create sidecars", settings.tokenSource, err); authErr != nil {
+			err, line = authErr, cmd.Name+": "+authErr.Error()
+		} else {
+			err = fmt.Errorf("%s: prepare its sidecar pool: %w", cmd.Name, err)
+			line = err.Error()
+		}
+		statusFn(iostream.LevelError, line)
+		return parallelResult{job: validate.DistributedJobResult{Err: err}}
+	}
+	defer closePool(ctx, pool, false, statusFn)
+
+	// Each sidecar records its own runs, whatever the shared batch is doing.
+	var poolRecs *poolRecorders
+	if recorders != nil {
+		poolRecs = newPoolRecorders(recorders.run, true)
+	}
+
+	runs := make([]config.Command, total)
+	for i := range runs {
+		runs[i] = cmd
+		runs[i].Name = parallelRunLabel(cmd.Name, i, total)
+	}
+
+	var mu sync.Mutex
+	ran := make([]bool, total)
+	failures := make([]error, total)
+	res := validate.RunDistributed(ctx, runs, validate.DistributedRunOptions[*sidecar.PoolEntry]{
+		Parallelism: total,
+		Acquire:     pool.Acquire,
+		Release:     pool.Release,
+		WorkerName: func(entry *sidecar.PoolEntry) string {
+			return "sidecar " + entry.ID
+		},
+		WorkerStatus: func(entry *sidecar.PoolEntry) iostream.StatusFunc {
+			return poolRecs.status(entry.ID)
+		},
+		Run: func(ctx context.Context, entry *sidecar.PoolEntry, index int, command config.Command, status iostream.StatusFunc, streams iostream.Streams) validate.DistributedJobResult {
+			// chunk's values come last, so they override the caller's and the
+			// command's own.
+			env := maps.Clone(envVars)
+			if env == nil {
+				env = map[string]string{}
+			}
+			env[envParallelTotal] = strconv.Itoa(total)
+			env[envParallelIndex] = strconv.Itoa(index)
+			label := parallelRunLabel(cmd.Name, index, total)
+			job := runPooledValidateCommand(ctx, entry, command, label, token, localWorkDir, projectRoot, env, poolRecs.commandIDSetter(entry.ID), status, streams)
+			mu.Lock()
+			ran[index] = true
+			failures[index] = job.Err
+			mu.Unlock()
+			// The failure is kept above, by run. RunDistributed's own error is left
+			// to say why runs had no sidecar.
+			return validate.DistributedJobResult{Passed: job.Passed}
+		},
+		Status:  statusFn,
+		Streams: iostream.Streams{},
+	})
+
+	var errs []error
+	var missing []string
+	for i := range total {
+		label := parallelRunLabel(cmd.Name, i, total)
+		switch {
+		case !ran[i]:
+			missing = append(missing, label)
+		case failures[i] != nil:
+			var failed *validate.CheckFailedError
+			if errors.As(failures[i], &failed) {
+				errs = append(errs, failures[i])
+			} else {
+				errs = append(errs, fmt.Errorf("%s: %w", label, failures[i]))
+			}
+		}
+	}
+	if len(missing) > 0 {
+		// RunDistributed's own error is why the runs had no sidecar to run on. When
+		// every run ran it is only a sidecar that was not needed, and says nothing.
+		cause := res.Err
+		if cause == nil {
+			cause = errors.New("no sidecar was available")
+		}
+		err := fmt.Errorf("%s did not run: %w", strings.Join(missing, ", "), cause)
+		statusFn(iostream.LevelError, err.Error())
+		errs = append(errs, err)
+	}
+
+	out := parallelResult{output: res.Output}
+	if len(errs) == 0 {
+		out.job.Passed = 1
+		return out
+	}
+	out.job.Err = errors.Join(errs...)
+	return out
 }
 
 // splitAutofix separates autofix commands from the rest, keeping the configured
@@ -1084,16 +1343,21 @@ func runLocalCommands(ctx context.Context, commands []config.Command, workDir st
 	return r.Passed, err
 }
 
+// runPooledValidateCommand runs command on entry. label is what the run is
+// called in status lines, errors and the daemon's list: the command's name, or
+// for one run of a parallel command, its name and place among the runs.
 func runPooledValidateCommand(
 	ctx context.Context,
 	entry *sidecar.PoolEntry,
 	command config.Command,
+	label string,
 	token, localWorkDir, projectRoot string,
 	envVars map[string]string,
 	setCommandID func(string),
 	statusFn iostream.StatusFunc,
 	streams iostream.Streams,
 ) validate.DistributedJobResult {
+	command.Name = label
 	if setCommandID != nil {
 		// A submission failure has no command ID. Clear any ID left by a prior
 		// command before starting so its terminal event cannot inherit one.

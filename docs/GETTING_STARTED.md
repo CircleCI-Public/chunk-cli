@@ -106,10 +106,12 @@ Review the generated config and adjust commands if needed:
   "commands": [
     {"name": "format", "run": "task fmt",  "timeout": 30, "local": true},
     {"name": "lint",   "run": "task lint", "timeout": 60},
-    {"name": "test",   "run": "task test", "timeout": 300}
+    {"name": "test",   "run": "task test", "timeout": 300, "parallelism": 4}
   ]
 }
 ```
+
+`parallelism` runs a command that many times, each with `CIRCLE_PARALLEL_INDEX` and `CIRCLE_PARALLEL_TOTAL` set; see `docs/CLI.md` for where the runs happen.
 
 Run validations manually:
 

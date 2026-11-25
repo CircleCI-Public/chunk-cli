@@ -42,9 +42,11 @@ type DistributedRunOptions[T any] struct {
 	// attributed to the worker that ran it rather than to the run as a whole.
 	// Status is used when it is nil, and for a worker it returns nil for.
 	WorkerStatus func(T) iostream.StatusFunc
-	Run          func(context.Context, T, config.Command, iostream.StatusFunc, iostream.Streams) DistributedJobResult
-	Status       iostream.StatusFunc
-	Streams      iostream.Streams
+	// Run runs one job; index is the job's position in the commands given to
+	// RunDistributed.
+	Run     func(ctx context.Context, worker T, index int, command config.Command, status iostream.StatusFunc, streams iostream.Streams) DistributedJobResult
+	Status  iostream.StatusFunc
+	Streams iostream.Streams
 }
 
 type distributedJob struct {
@@ -150,7 +152,7 @@ func runDistributedJob[T any](ctx context.Context, worker T, job distributedJob,
 	if buffered {
 		streams = iostream.Streams{Out: &stdout, Err: &stderr}
 	}
-	result := opts.Run(ctx, worker, job.command, status, streams)
+	result := opts.Run(ctx, worker, job.index, job.command, status, streams)
 	return distributedJobResult{
 		index:   job.index,
 		command: job.command,

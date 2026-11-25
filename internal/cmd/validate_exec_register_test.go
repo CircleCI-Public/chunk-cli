@@ -44,7 +44,7 @@ func TestPooledValidateRegistersSubmittedCommand(t *testing.T) {
 	result := runPooledValidateCommand(
 		context.Background(),
 		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
-		config.Command{Name: "test", Run: "true"},
+		config.Command{Name: "test", Run: "true"}, "test",
 		"", snapshotDir, projectRoot, nil,
 		func(id string) { recordedID = id },
 		func(iostream.Level, string) {},
@@ -78,7 +78,7 @@ func TestPooledValidateClearsCommandIDWhenSubmissionFails(t *testing.T) {
 	result := runPooledValidateCommand(
 		context.Background(),
 		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
-		config.Command{Name: "test", Run: "true"},
+		config.Command{Name: "test", Run: "true"}, "test",
 		"", t.TempDir(), t.TempDir(), nil,
 		func(id string) { commandID = id },
 		func(iostream.Level, string) {},
@@ -109,7 +109,7 @@ func TestPooledValidateReportsFailureBeforeTheCommandRuns(t *testing.T) {
 	result := runPooledValidateCommand(
 		context.Background(),
 		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
-		config.Command{Name: "test", Run: "true"},
+		config.Command{Name: "test", Run: "true"}, "test",
 		"", t.TempDir(), t.TempDir(), nil, nil,
 		func(level iostream.Level, msg string) {
 			levels = append(levels, level)
@@ -135,7 +135,7 @@ func TestPooledValidateReportsMissingWorkspace(t *testing.T) {
 	result := runPooledValidateCommand(
 		context.Background(),
 		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
-		config.Command{Name: "test", Run: "true"},
+		config.Command{Name: "test", Run: "true"}, "test",
 		"", t.TempDir(), t.TempDir(), nil, nil,
 		func(iostream.Level, string) {},
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
