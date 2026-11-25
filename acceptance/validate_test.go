@@ -251,6 +251,23 @@ func TestValidateRunDryRun(t *testing.T) {
 		"expected test command in dry-run output, got: %s", combined)
 }
 
+func TestValidateRunDryRunParallelism(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err := os.MkdirAll(chunkDir, 0o755)
+	assert.NilError(t, err)
+	cfg := `{"commands":[{"name":"lint","run":"echo lint"},{"name":"test","run":"echo test","parallelism":3}]}`
+	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644)
+	assert.NilError(t, err)
+
+	result := binary.RunCLI(t, []string{"validate", "--dry-run"}, testenv.NewTestEnv(t), workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Equal(strings.Count(combined, "test: echo test (parallelism: 3)"), 1), "got: %s", combined)
+	assert.Check(t, !strings.Contains(combined, "lint: echo lint (parallelism"), "got: %s", combined)
+}
+
 func TestValidateRunDryRunTestOnly(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "", "echo test-only")
@@ -319,6 +336,27 @@ func TestValidateRunLocalFlag(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "installed") || strings.Contains(combined, "tested"),
 		"expected local command output, got: %s", combined)
+}
+
+// TestValidateRunLocalFlagParallelCommand confirms that --local runs a command
+// with parallelism once per index, one after another in the local tree.
+func TestValidateRunLocalFlagParallelCommand(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err := os.MkdirAll(chunkDir, 0o755)
+	assert.NilError(t, err)
+	cfg := `{"commands":[{"name":"test","run":"printf %s/%s \"$CIRCLE_PARALLEL_INDEX\" \"$CIRCLE_PARALLEL_TOTAL\" > out-$CIRCLE_PARALLEL_INDEX","parallelism":3}]}`
+	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644)
+	assert.NilError(t, err)
+
+	result := binary.RunCLI(t, []string{"validate", "--local"}, testenv.NewTestEnv(t), workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	for i, want := range []string{"0/3", "1/3", "2/3"} {
+		data, err := os.ReadFile(filepath.Join(workDir, fmt.Sprintf("out-%d", i)))
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(string(data), want))
+	}
 }
 
 // TestValidateRunLocalFlagFailure confirms that --local with a failing command
@@ -484,6 +522,23 @@ func TestValidateList(t *testing.T) {
 		"expected 'install' in list output, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "test"),
 		"expected 'test' in list output, got: %s", combined)
+}
+
+func TestValidateListParallelism(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err := os.MkdirAll(chunkDir, 0o755)
+	assert.NilError(t, err)
+	cfg := `{"commands":[{"name":"lint","run":"echo lint"},{"name":"test","run":"echo test","parallelism":3}]}`
+	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644)
+	assert.NilError(t, err)
+
+	result := binary.RunCLI(t, []string{"validate", "--list"}, testenv.NewTestEnv(t), workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Equal(strings.Count(combined, "parallelism: 3"), 1), "got: %s", combined)
+	assert.Check(t, cmp.Equal(strings.Count(combined, "test "), 1), "the command is listed once, got: %s", combined)
 }
 
 func TestValidateListNoConfig(t *testing.T) {
@@ -729,6 +784,29 @@ func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
 	}
 	assert.Equal(t, probes, 1, "expected one workspace readiness probe")
 	assert.Equal(t, remoteCommands, 1, "expected one remote validation command")
+}
+
+func TestValidateSidecarIDParallelCommand(t *testing.T) {
+	p := newParallelProject(t, `{"commands":[{"name":"test","run":"true","parallelism":3}]}`, false)
+
+	result := binary.RunCLI(t, []string{"validate", "--sidecar-id", "sidecar-new-1"}, p.env, p.workDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	// The three runs are one after another on the sidecar named, each with its own
+	// index, and no pool is made for the command.
+	var indexes []string
+	for _, req := range filterByPath(p.cci.Recorder.AllRequests(), "/api/v3/sidecar/instances/sidecar-new-1/exec") {
+		var body circleci.ExecRequest
+		err := json.Unmarshal(req.Body, &body)
+		assert.NilError(t, err)
+		if strings.HasPrefix(body.Args[len(body.Args)-1], "test -d ") {
+			continue // workspace probe
+		}
+		assert.Check(t, cmp.Equal(body.Env["CIRCLE_PARALLEL_TOTAL"], "3"))
+		indexes = append(indexes, body.Env["CIRCLE_PARALLEL_INDEX"])
+	}
+	assert.Check(t, cmp.DeepEqual(indexes, []string{"0", "1", "2"}))
+	assert.Check(t, cmp.Equal(len(createdNamesWithPrefix(p.cci.Recorder.AllRequests(), "validate-test-9f86d081-")), 0))
 }
 
 // parallelProject is a project with a fake sidecar API and SSH server, for the

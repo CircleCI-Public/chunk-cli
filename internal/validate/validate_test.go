@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -278,6 +279,80 @@ func TestRunAll(t *testing.T) {
 		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] test"), "got: %s", statusBuf.String())
 	})
+}
+
+func TestRunAllParallelCommand(t *testing.T) {
+	t.Run("runs each index in turn with its variables set", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: `printf %s/%s "$CIRCLE_PARALLEL_INDEX" "$CIRCLE_PARALLEL_TOTAL" > out-$CIRCLE_PARALLEL_INDEX`, Parallelism: 3},
+		}}
+		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		// The caller's own values for the variables are overridden.
+		envVars := map[string]string{EnvParallelIndex: "9", EnvParallelTotal: "9"}
+		result, err := RunAll(context.Background(), dir, cfg, envVars, testStatus(&statusBuf), streams)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(result.Passed, 1))
+		assert.Check(t, cmp.Equal(result.Total, 1))
+		for i, want := range []string{"0/3", "1/3", "2/3"} {
+			data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("out-%d", i)))
+			assert.NilError(t, err)
+			assert.Check(t, cmp.Equal(string(data), want))
+		}
+		assert.Check(t, cmp.Contains(statusBuf.String(), "test [1/3]"))
+		assert.Check(t, cmp.Contains(statusBuf.String(), "test [3/3]"))
+		assert.Check(t, cmp.Equal(envVars[EnvParallelIndex], "9"), "the caller's map is left as it was")
+	})
+
+	t.Run("stops at the first failed run", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: `touch out-$CIRCLE_PARALLEL_INDEX; [ "$CIRCLE_PARALLEL_INDEX" != 0 ]`, Parallelism: 3},
+			{Name: "lint", Run: "touch lint-ran"},
+		}}
+		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		result, err := RunAll(context.Background(), dir, cfg, nil, testStatus(&statusBuf), streams)
+		assert.Check(t, err != nil, "expected error")
+		assert.Check(t, cmp.Equal(result.Passed, 0))
+		assert.Check(t, cmp.Equal(result.Total, 2))
+		entries, err := os.ReadDir(dir)
+		assert.NilError(t, err)
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		assert.Check(t, cmp.DeepEqual(names, []string{"out-0"}))
+	})
+
+	t.Run("parallelism of 1 runs once with neither variable set", func(t *testing.T) {
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: `echo "[${CIRCLE_PARALLEL_INDEX-unset}]"`, Parallelism: 1},
+		}}
+		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		_, err := RunAll(context.Background(), ".", cfg, nil, testStatus(&statusBuf), streams)
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(strings.TrimSpace(out.String()), "[unset]"))
+	})
+}
+
+func TestRunDryRunParallelCommand(t *testing.T) {
+	cfg := &config.ProjectConfig{Commands: []config.Command{
+		{Name: "lint", Run: "task lint"},
+		{Name: "test", Run: "task test", Parallelism: 3},
+	}}
+	var out bytes.Buffer
+
+	err := RunDryRun(cfg, "", testStatus(&out))
+	assert.NilError(t, err)
+
+	assert.Check(t, cmp.Equal(strings.Count(out.String(), "test: task test (parallelism: 3)"), 1), "got: %s", out.String())
+	assert.Check(t, !strings.Contains(out.String(), "lint: task lint (parallelism"), "got: %s", out.String())
 }
 
 // --- Config timeout tests ---

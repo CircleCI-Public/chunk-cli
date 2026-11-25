@@ -219,6 +219,9 @@ chunk
   two variables. The command passes only if every run passes; its runs are
   labelled `test [1/N]` … in status. A sidecar that does not come up only
   delays its run: another sidecar of the pool takes it, with its index.
+  With `--sidecar-id`, `--local` or `local: true`, the N runs happen one after
+  another, on that sidecar or in the local tree, each with its own
+  `CIRCLE_PARALLEL_INDEX`.
 - **Snapshot selection.** When a sidecar has to be created and no
   `validation.sidecarImage` is recorded (project-level or per-command), `chunk`
   picks one of the org's snapshots instead of booting the bare default image.

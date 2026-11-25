@@ -277,6 +277,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	rc, _ := config.ResolveCircleCI(insecureStorage)
 
+	// An explicit --sidecar-id is read before target preparation fills it in: a
+	// parallel command's runs then go one after another on that sidecar.
+	explicitSidecar := opts.sidecarID != ""
 	executionPlan := planValidationExecution(cfg, opts, name)
 	needsSidecar := executionPlan.PoolSize > 0 || len(executionPlan.ParallelCommands) > 0
 
@@ -321,7 +324,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 	// A parallel command's runs are on sidecars of their own, so a run with one
 	// has more than one sidecar however small the shared pool is.
-	pooled := executionPlan.PoolSize > 1 || len(executionPlan.ParallelCommands) > 0
+	// With an explicit sidecar they have no sidecars of their own.
+	pooled := executionPlan.PoolSize > 1 || (len(executionPlan.ParallelCommands) > 0 && !explicitSidecar)
 	statusFn, recorder := wrapEventLogStatusFn(statusFn, runRecorderSidecarID(pooled, opts.sidecarID), activeSidecar, attributionDir)
 	setupComplete := false
 	var setupErr error
@@ -338,7 +342,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	var parallel parallelPoolSettings
-	if len(executionPlan.ParallelCommands) > 0 {
+	if len(executionPlan.ParallelCommands) > 0 && explicitSidecar {
+		parallel = parallelPoolSettings{onSharedPool: true}
+	} else if len(executionPlan.ParallelCommands) > 0 {
 		parallel, err = resolveParallelPoolSettings(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, activeSidecar, workDir, streams)
 		if err != nil {
 			setupErr = err
@@ -390,7 +396,13 @@ func planValidationExecution(cfg *config.ProjectConfig, opts *validateOpts, name
 	case opts.local:
 		placement = validate.PlacementLocal
 	}
-	return validate.PlanCommands(commands, placement, validateParallelism(opts.parallel, opts.sidecarID))
+	plan := validate.PlanCommands(commands, placement, validateParallelism(opts.parallel, opts.sidecarID))
+	// An explicit --sidecar-id runs a parallel command's runs on that sidecar, so
+	// it is needed even when no other remote command is selected.
+	if opts.sidecarID != "" && plan.PoolSize == 0 && len(plan.ParallelCommands) > 0 {
+		plan.PoolSize = 1
+	}
+	return plan
 }
 
 // defaultValidateParallelism caps how many sidecars a validate run uses at
@@ -1030,7 +1042,7 @@ func runValidationPlan(
 	statusFn iostream.StatusFunc,
 	streams iostream.Streams,
 ) (validate.Result, error) {
-	if len(plan.RemoteCommands) > 0 && pool == nil {
+	if (len(plan.RemoteCommands) > 0 || (parallel.onSharedPool && len(plan.ParallelCommands) > 0)) && pool == nil {
 		return validate.Result{}, errors.New("remote validation requires a sidecar pool")
 	}
 	result := validate.Result{Total: len(plan.RemoteCommands) + len(plan.ParallelCommands) + len(plan.LocalCommands)}
@@ -1056,6 +1068,9 @@ func runValidationPlan(
 	parallelResults := make([]parallelResult, len(plan.ParallelCommands))
 	var parallelDone sync.WaitGroup
 	for i, command := range plan.ParallelCommands {
+		if parallel.onSharedPool {
+			continue
+		}
 		parallelDone.Add(1)
 		go func() {
 			defer parallelDone.Done()
@@ -1084,6 +1099,14 @@ func runValidationPlan(
 		renderDistributedOutput(remote.Output, streams)
 	}
 
+	if parallel.onSharedPool {
+		// One sidecar: each command's runs follow the shared batch, one after
+		// another, with their output as it comes.
+		for i, command := range plan.ParallelCommands {
+			parallelResults[i] = runParallelRuns(ctx, pool, 1, command, rc.CircleCIToken, localWorkDir, projectRoot, envVars, recorders, statusFn, streams)
+		}
+	}
+
 	parallelDone.Wait()
 	parallelErr := collectParallelResults(parallelResults, streams)
 	result.Passed += remote.Passed
@@ -1109,20 +1132,22 @@ func serializeStatus(statusFn iostream.StatusFunc) iostream.StatusFunc {
 	}
 }
 
-// The variables a parallel command's runs are told their place by.
 const (
-	envParallelTotal = "CIRCLE_PARALLEL_TOTAL"
-	envParallelIndex = "CIRCLE_PARALLEL_INDEX"
+	envParallelTotal = validate.EnvParallelTotal
+	envParallelIndex = validate.EnvParallelIndex
 )
 
 // parallelPoolSettings is what building the pool of a command with parallelism
 // takes besides the command itself.
 type parallelPoolSettings struct {
-	client      *circleci.Client
-	orgID       string
-	image       string
-	repoPath    string
-	tokenSource string
+	// onSharedPool is set with --sidecar-id: the runs go one after another on the
+	// shared one-sidecar pool, and no pool is made for the command.
+	onSharedPool bool
+	client       *circleci.Client
+	orgID        string
+	image        string
+	repoPath     string
+	tokenSource  string
 }
 
 // resolveParallelPoolSettings returns the settings a parallel command's pool is
@@ -1241,7 +1266,23 @@ func runParallelCommand(
 	if recorders != nil {
 		poolRecs = newPoolRecorders(recorders.run, true)
 	}
+	return runParallelRuns(ctx, pool, total, cmd, token, localWorkDir, projectRoot, envVars, poolRecs, statusFn, iostream.Streams{})
+}
 
+// runParallelRuns runs cmd cmd.Parallelism times as jobs of RunDistributed over
+// pool, on workers sidecars at a time, and reports them as one result.
+func runParallelRuns(
+	ctx context.Context,
+	pool *sidecar.Pool,
+	workers int,
+	cmd config.Command,
+	token, localWorkDir, projectRoot string,
+	envVars map[string]string,
+	poolRecs *poolRecorders,
+	statusFn iostream.StatusFunc,
+	streams iostream.Streams,
+) parallelResult {
+	total := cmd.Parallelism
 	runs := make([]config.Command, total)
 	for i := range runs {
 		runs[i] = cmd
@@ -1252,7 +1293,7 @@ func runParallelCommand(
 	ran := make([]bool, total)
 	failures := make([]error, total)
 	res := validate.RunDistributed(ctx, runs, validate.DistributedRunOptions[*sidecar.PoolEntry]{
-		Parallelism: total,
+		Parallelism: workers,
 		Acquire:     pool.Acquire,
 		Release:     pool.Release,
 		WorkerName: func(entry *sidecar.PoolEntry) string {
@@ -1281,7 +1322,7 @@ func runParallelCommand(
 			return validate.DistributedJobResult{Passed: job.Passed}
 		},
 		Status:  statusFn,
-		Streams: iostream.Streams{},
+		Streams: streams,
 	})
 
 	var errs []error
