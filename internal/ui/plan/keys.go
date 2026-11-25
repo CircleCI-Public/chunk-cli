@@ -16,7 +16,7 @@ type keyMap struct {
 	Send, Newline key.Binding
 	// RequestPageUp carries the hint for both; the input has no use for them.
 	RequestPageUp, RequestPageDown key.Binding
-	// NextField and PrevField move between the new plan's title and request.
+	// NextField and PrevField move between the new plan's boxes.
 	NextField, PrevField key.Binding
 	// Plan keys. The page keys move the highlight a page or half a page at a
 	// time, as well as the view; PageUp carries the hint for all four.
@@ -150,6 +150,7 @@ func (m Model) keys() keyMap {
 		b.SetEnabled(inPlan && len(m.blocks) > 0)
 	}
 	m.overviewKeys(&k, inOverview)
+	m.factoryKeys(&k)
 	// Esc clears a selection before it leaves.
 	k.ClearSelection.SetEnabled(inPlan && m.selecting())
 	if m.selecting() {
@@ -188,12 +189,22 @@ func (m Model) requestKeys(k *keyMap) {
 	for _, b := range []*key.Binding{&k.Send, &k.RequestPageUp, &k.RequestPageDown} {
 		b.SetEnabled(inRequest)
 	}
-	k.NextField.SetEnabled(inRequest && m.onTitle)
-	k.PrevField.SetEnabled(inRequest && !m.onTitle)
-	if m.onTitle {
+	k.NextField.SetEnabled(inRequest && m.field != fieldRequest)
+	k.PrevField.SetEnabled(inRequest && m.field != fieldTitle)
+	if m.field != fieldRequest {
 		k.Send.SetHelp("enter", "next")
 	}
-	k.Newline.SetEnabled((inRequest && !m.onTitle) || m.commenting)
+	k.Newline.SetEnabled((inRequest && m.field == fieldRequest) || m.commenting)
+}
+
+// factoryKeys enables ↑/↓ while the new plan's keyboard is on a Factory box
+// that has a choice to move.
+func (m Model) factoryKeys(k *keyMap) {
+	if m.focus != paneOverview || m.created || m.commenting || m.field != fieldFactory || len(m.factories) == 0 {
+		return
+	}
+	k.Up.SetEnabled(true)
+	k.Down.SetEnabled(true)
 }
 
 // endKeys enables the keys that end the plan: end, its reasons, and

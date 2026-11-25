@@ -312,8 +312,8 @@ chunk
   task and its unit) and what comes next, e.g.
   `Building · Now: Build unit · Unit 2: parser · Next: chunk: build-unit`
   (`Next: you approve the plan · ctrl+s`, `Waiting on <blocker>`). The pane on
-  the left is titled Request until the plan exists and holds the title and
-  request inputs, then Overview. The Overview shows the plan's Outcome; its Sub-flows, the open
+  the left is titled New plan until the plan exists and holds the Title, Factory
+  and Request boxes, then Overview. The Overview shows the plan's Outcome; its Sub-flows, the open
   sub-plans; an Activity timeline of the stages (Created, Planning, Building,
   Integrating, Done), newest first, where each stage holds what this screen
   saw happen in it (your request and chunk's own failures; a stage's log
@@ -368,12 +368,25 @@ chunk
   deletes the selected plan, its comments and its flow after a y/n question in the footer, where any key but `y` cancels. It is
   not offered on a plan a session claims.
 
+  The Factory box between Title and Request is the factory the plan is created
+  in. It reads `Org default`, which names none, until you change it. The
+  keyboard starts on Title; `tab` or `enter` there reaches Factory, where the
+  box opens into every factory you can view, sorted by name, with `>` on the
+  chosen one, and `↑`/`↓` move the choice (they do not wrap). `tab` or `enter`
+  goes on to Request and closes the box to the choice; `shift+tab` goes up one
+  box and does nothing on Title. Factories that share a name, in
+  different orgs, show with the first 8 characters of their org's ID. If chunk
+  cannot list the factories, the box says `could not list factories` beside
+  `Org default`. A plan that already exists shows no Factory box.
+
   The title and request you type for a new plan (the request may be passed as
   `chunk factory plan "<request>"`, and the screen still asks for the title)
-  create it in factory with the same skeleton the web UI makes: `# <title>`,
-  the request under `## 1. Outcome`, then the empty sections. An empty title or
-  request sends nothing, and the screen says which is missing. The plan
-  records the project's GitHub repository. chunk then claims it for the
+  create it, in the factory chosen, with the same skeleton the web UI makes:
+  `# <title>`, the request under `## 1. Outcome`, then the empty sections. An
+  empty title or request sends nothing, and the screen says which is missing. A
+  plan that factory refuses shows `Could not create the plan: ...`, with factory's
+  message, and keeps the factory, title and request, to change and send again. The plan records the project's GitHub
+  repository. chunk then claims it for the
   default worker: the live worker that `factory daemon` registered on this
   machine when there is one, else the first live worker factory lists as
   able to claim it. The worker plans the change in headless Claude Code, in a
