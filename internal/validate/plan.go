@@ -19,6 +19,9 @@ type Plan struct {
 	LocalCommands  []config.Command
 	RemoteCommands []config.Command
 	PoolSize       int
+	// ParallelCommands are remote commands with Parallelism of 2 or more; each
+	// runs on a pool of its own, of that size, apart from RemoteCommands.
+	ParallelCommands []config.Command
 }
 
 // PlanCommands assigns commands to local or remote execution and caps the
@@ -27,7 +30,9 @@ func PlanCommands(commands []config.Command, placement Placement, maxRemoteWorke
 	var plan Plan
 	switch placement {
 	case PlacementRemote:
-		plan.RemoteCommands = append(plan.RemoteCommands, commands...)
+		for _, command := range commands {
+			plan.addRemote(command)
+		}
 	case PlacementLocal:
 		plan.LocalCommands = append(plan.LocalCommands, commands...)
 	case PlacementConfigured:
@@ -38,7 +43,7 @@ func PlanCommands(commands []config.Command, placement Placement, maxRemoteWorke
 			if command.RunsLocally() {
 				plan.LocalCommands = append(plan.LocalCommands, command)
 			} else {
-				plan.RemoteCommands = append(plan.RemoteCommands, command)
+				plan.addRemote(command)
 			}
 		}
 	}
@@ -51,4 +56,14 @@ func PlanCommands(commands []config.Command, placement Placement, maxRemoteWorke
 	}
 	plan.PoolSize = min(maxRemoteWorkers, len(plan.RemoteCommands))
 	return plan
+}
+
+// addRemote files a command placed remote under the shared batch, or under
+// ParallelCommands when it runs more than once.
+func (p *Plan) addRemote(command config.Command) {
+	if command.Parallelism >= 2 {
+		p.ParallelCommands = append(p.ParallelCommands, command)
+		return
+	}
+	p.RemoteCommands = append(p.RemoteCommands, command)
 }

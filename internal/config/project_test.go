@@ -74,6 +74,14 @@ func TestLoadProjectConfigRejectsConflictingPlacement(t *testing.T) {
 	assert.ErrorContains(t, err, `command "test" cannot be both local and remote`)
 }
 
+func TestLoadProjectConfigRejectsNegativeParallelism(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{"commands":[{"name":"test","run":"task test","parallelism":-1}]}`)
+
+	_, err := LoadProjectConfig(dir)
+	assert.Check(t, cmp.ErrorContains(err, `command "test": parallelism cannot be negative`))
+}
+
 func TestSaveProjectConfigRejectsConflictingPlacement(t *testing.T) {
 	err := SaveProjectConfig(t.TempDir(), &ProjectConfig{Commands: []Command{{Name: "test", Local: true, Remote: true}}})
 	assert.ErrorContains(t, err, `command "test" cannot be both local and remote`)

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +50,12 @@ func shellEscape(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
 }
 
+// The variables a command with parallelism is told its place among its runs by.
+const (
+	EnvParallelTotal = "CIRCLE_PARALLEL_TOTAL"
+	EnvParallelIndex = "CIRCLE_PARALLEL_INDEX"
+)
+
 // DefaultTimeout is the per-command execution timeout in seconds.
 const DefaultTimeout = 300
 
@@ -66,16 +74,20 @@ func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 	return nil
 }
 
-// commandTags describes where a command runs, and its role when it has one.
+// commandTags describes where a command runs, and its role and parallelism when
+// it has them.
 func commandTags(c config.Command) string {
 	where := "remote"
 	if c.RunsLocally() {
 		where = "local"
 	}
-	if c.Role == "" {
-		return where
+	if c.Role != "" {
+		where += ", " + c.Role
 	}
-	return where + ", " + c.Role
+	if c.Parallelism >= 2 {
+		where += fmt.Sprintf(", parallelism: %d", c.Parallelism)
+	}
+	return where
 }
 
 // RunInline runs an inline command string.
@@ -106,7 +118,10 @@ func nameWidth(commands []config.Command) int {
 	return commandutil.NameWidth(commands)
 }
 
-// RunAll runs all configured commands, stopping at the first failure.
+// RunAll runs all configured commands, stopping at the first failure. A command
+// with Parallelism of 2 or more runs that many times in turn, each run with
+// CIRCLE_PARALLEL_INDEX and CIRCLE_PARALLEL_TOTAL set, and counts once in the
+// result; the first failed run stops the command and the commands after it.
 func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, envVars map[string]string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
 	if !cfg.HasCommands() {
 		return Result{}, ErrNotConfigured
@@ -115,12 +130,33 @@ func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, envV
 	maxWidth := nameWidth(cfg.Commands)
 	total := len(cfg.Commands)
 	for i, c := range cfg.Commands {
-		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, maxWidth, envVars, status, streams); err != nil {
+		if err := runCommandRuns(ctx, workDir, c, maxWidth, envVars, status, streams); err != nil {
 			skipRemaining(status, cfg.Commands[i+1:], maxWidth)
 			return Result{Passed: i, Total: total}, err
 		}
 	}
 	return Result{Passed: total, Total: total}, nil
+}
+
+// runCommandRuns runs c once, or c.Parallelism times in turn when that is 2 or
+// more, stopping at the first failed run.
+func runCommandRuns(ctx context.Context, workDir string, c config.Command, nameWidth int, envVars map[string]string, status iostream.StatusFunc, streams iostream.Streams) error {
+	if c.Parallelism < 2 {
+		return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, nameWidth, envVars, status, streams)
+	}
+	for i := range c.Parallelism {
+		// chunk's values are set last, so they override the caller's and the
+		// command's own.
+		env := make(map[string]string, len(envVars)+2)
+		maps.Copy(env, envVars)
+		env[EnvParallelTotal] = strconv.Itoa(c.Parallelism)
+		env[EnvParallelIndex] = strconv.Itoa(i)
+		label := fmt.Sprintf("%s [%d/%d]", c.Name, i+1, c.Parallelism)
+		if err := runCommand(ctx, workDir, label, c.Run, c.Timeout, max(nameWidth, len(label)), env, status, streams); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RunDryRun prints commands without executing them.
@@ -139,6 +175,10 @@ func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFun
 	}
 
 	for _, c := range commands {
+		if c.Parallelism >= 2 {
+			status(iostream.LevelInfo, fmt.Sprintf("%s: %s (parallelism: %d)", c.Name, c.Run, c.Parallelism))
+			continue
+		}
 		status(iostream.LevelInfo, fmt.Sprintf("%s: %s", c.Name, c.Run))
 	}
 	return nil

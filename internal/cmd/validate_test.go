@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -52,6 +53,21 @@ func TestRemoteExecEnv(t *testing.T) {
 	})
 }
 
+func TestParallelPoolName(t *testing.T) {
+	cases := map[string]string{
+		"test":      "validate-test-9f86d081",
+		"e2e":       "validate-e2e-6d8749c4",
+		"unit test": "validate-unit-test-4624f6aa",
+		"unit/test": "validate-unit-test-1ec71e0a",
+	}
+	for name, want := range cases {
+		assert.Check(t, cmp.Equal(parallelPoolName(name), want), "name %q", name)
+		assert.Check(t, parallelPoolName(name) != "validate", "name %q must not be the shared pool's", name)
+		assert.Check(t, !strings.ContainsAny(parallelPoolName(name), "/ "), "name %q reached the pool name unsanitised", name)
+	}
+	assert.Check(t, parallelPoolName("unit test") != parallelPoolName("unit/test"))
+}
+
 func TestRunValidationPlanLocalOnlyDoesNotRequirePool(t *testing.T) {
 	workDir := t.TempDir()
 	plan := validate.Plan{
@@ -59,7 +75,7 @@ func TestRunValidationPlanLocalOnlyDoesNotRequirePool(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil,
+		context.Background(), nil, parallelPoolSettings{}, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -78,7 +94,7 @@ func TestRunValidationPlanRemoteRequiresPool(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, t.TempDir(), t.TempDir(), nil, nil,
+		context.Background(), nil, parallelPoolSettings{}, plan, config.ResolvedConfig{}, t.TempDir(), t.TempDir(), nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -1017,7 +1033,7 @@ func TestRunValidationPlanRunsAutofixFirst(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil,
+		context.Background(), nil, parallelPoolSettings{}, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -1026,4 +1042,33 @@ func TestRunValidationPlanRunsAutofixFirst(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(workDir, "order"))
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), "format\nlint\ntest\n")
+}
+
+// A parallel command's pool fails to build as the shared pool's does, so a bad
+// token is the same userError, with the same exit code, once the plan has joined
+// it with the other results.
+func TestRunValidationPlanParallelPoolNotAuthorizedIsUserError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "bad-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+
+	workDir := t.TempDir()
+	plan := validate.Plan{
+		ParallelCommands: []config.Command{{Name: "test", Run: "true", Parallelism: 2}},
+	}
+	settings := parallelPoolSettings{client: client, orgID: "org-1", repoPath: "/workspace/repo", tokenSource: "test"}
+
+	result, err := runValidationPlan(
+		context.Background(), nil, settings, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil,
+		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	assert.Check(t, cmp.Equal(result.Passed, 0))
+	assert.Assert(t, err != nil)
+	var userErr *userError
+	assert.Assert(t, errors.As(err, &userErr), "error is not a userError: %v", err)
+	assert.Check(t, cmp.Equal(userErr.exitCode, ExitAuthError))
 }

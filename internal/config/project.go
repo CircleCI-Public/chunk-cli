@@ -47,6 +47,10 @@ type Command struct {
 	Remote       bool   `json:"remote,omitempty"`
 	Local        bool   `json:"local,omitempty"`
 	SidecarImage string `json:"sidecarImage,omitempty"`
+	// Parallelism, when 2 or more, runs the command that many times, each run
+	// with CIRCLE_PARALLEL_INDEX (from 0) and CIRCLE_PARALLEL_TOTAL set. 0 or 1
+	// runs it once.
+	Parallelism int `json:"parallelism,omitempty"`
 }
 
 // RunsLocally reports whether the command explicitly opts out of remote execution.
@@ -232,6 +236,9 @@ func (c *ProjectConfig) validate() error {
 	for _, command := range c.Commands {
 		if command.Local && command.Remote {
 			return fmt.Errorf("command %q cannot be both local and remote", command.Name)
+		}
+		if command.Parallelism < 0 {
+			return fmt.Errorf("command %q: parallelism cannot be negative", command.Name)
 		}
 	}
 	// Trimmed before the checks below rather than after, so the entry validated

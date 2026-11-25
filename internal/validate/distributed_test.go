@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -31,7 +34,7 @@ func TestRunDistributedUsesSingleWorkerInCommandOrder(t *testing.T) {
 			released++
 		},
 		WorkerName: func(worker int) string { return fmt.Sprintf("sidecar-%d", worker) },
-		Run: func(_ context.Context, worker int, command config.Command, _ iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+		Run: func(_ context.Context, worker int, _ int, command config.Command, _ iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
 			assert.Equal(t, worker, 7)
 			ran = append(ran, command.Name)
 			return DistributedJobResult{Passed: 1}
@@ -67,7 +70,7 @@ func TestRunDistributedQueuesWorkAcrossWorkers(t *testing.T) {
 		},
 		Release:    func(worker int) { workers <- worker },
 		WorkerName: func(worker int) string { return fmt.Sprintf("sidecar-%d", worker) },
-		Run: func(_ context.Context, worker int, command config.Command, _ iostream.StatusFunc, streams iostream.Streams) DistributedJobResult {
+		Run: func(_ context.Context, worker int, _ int, command config.Command, _ iostream.StatusFunc, streams iostream.Streams) DistributedJobResult {
 			started <- struct{}{}
 			<-bothStarted
 			mu.Lock()
@@ -97,7 +100,7 @@ func TestRunDistributedAggregatesErrors(t *testing.T) {
 		Parallelism: 1,
 		Acquire:     func(context.Context) (int, error) { return 1, nil },
 		Release:     func(int) {},
-		Run: func(_ context.Context, _ int, command config.Command, _ iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+		Run: func(_ context.Context, _ int, _ int, command config.Command, _ iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
 			if command.Name == "pass" {
 				return DistributedJobResult{Passed: 1}
 			}
@@ -115,7 +118,7 @@ func TestRunDistributedReportsAcquireFailure(t *testing.T) {
 		Parallelism: 1,
 		Acquire:     func(context.Context) (int, error) { return 0, wantErr },
 		Release:     func(int) {},
-		Run: func(context.Context, int, config.Command, iostream.StatusFunc, iostream.Streams) DistributedJobResult {
+		Run: func(context.Context, int, int, config.Command, iostream.StatusFunc, iostream.Streams) DistributedJobResult {
 			return DistributedJobResult{}
 		},
 	})
@@ -129,7 +132,7 @@ func TestRunDistributedStreamsSingleWorkerOutput(t *testing.T) {
 		Parallelism: 1,
 		Acquire:     func(context.Context) (int, error) { return 1, nil },
 		Release:     func(int) {},
-		Run: func(_ context.Context, _ int, _ config.Command, _ iostream.StatusFunc, streams iostream.Streams) DistributedJobResult {
+		Run: func(_ context.Context, _ int, _ int, _ config.Command, _ iostream.StatusFunc, streams iostream.Streams) DistributedJobResult {
 			_, _ = fmt.Fprint(streams.Out, "live")
 			return DistributedJobResult{Passed: 1}
 		},
@@ -163,7 +166,7 @@ func TestRunDistributedReportsEachCommandToItsWorker(t *testing.T) {
 				byWorker[worker] = append(byWorker[worker], message)
 			}
 		},
-		Run: func(_ context.Context, worker int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+		Run: func(_ context.Context, worker int, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
 			status(iostream.LevelDone, fmt.Sprintf("%s done on sidecar-%d", command.Name, worker))
 			return DistributedJobResult{Passed: 1}
 		},
@@ -214,7 +217,7 @@ func TestRunDistributedReportsWhileJobsRun(t *testing.T) {
 					}
 				}
 			},
-			Run: func(_ context.Context, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+			Run: func(_ context.Context, _ int, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
 				if command.Name == "slow" {
 					<-release
 				}
@@ -237,7 +240,7 @@ func TestRunDistributedFallsBackToRunStatus(t *testing.T) {
 		Parallelism: 1,
 		Acquire:     func(context.Context) (int, error) { return 1, nil },
 		Release:     func(int) {},
-		Run: func(_ context.Context, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+		Run: func(_ context.Context, _ int, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
 			status(iostream.LevelDone, command.Name)
 			return DistributedJobResult{Passed: 1}
 		},
@@ -258,7 +261,7 @@ func TestRunDistributedFallsBackWhenWorkerStatusIsNil(t *testing.T) {
 		Acquire:      func(context.Context) (int, error) { return 1, nil },
 		Release:      func(int) {},
 		WorkerStatus: func(int) iostream.StatusFunc { return nil },
-		Run: func(_ context.Context, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+		Run: func(_ context.Context, _ int, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
 			status(iostream.LevelDone, command.Name)
 			return DistributedJobResult{Passed: 1}
 		},
@@ -267,4 +270,56 @@ func TestRunDistributedFallsBackWhenWorkerStatusIsNil(t *testing.T) {
 
 	assert.NilError(t, result.Err)
 	assert.DeepEqual(t, got, []string{"running on worker: test", "test"})
+}
+
+func TestRunDistributedGivesRunTheJobIndex(t *testing.T) {
+	copies := []config.Command{{Name: "test", Parallelism: 2}, {Name: "test", Parallelism: 2}, {Name: "test", Parallelism: 2}}
+
+	t.Run("one worker fewer than jobs", func(t *testing.T) {
+		var mu sync.Mutex
+		var indexes []int
+		result := RunDistributed(context.Background(), copies, DistributedRunOptions[int]{
+			Parallelism: 2,
+			Acquire:     func(context.Context) (int, error) { return 1, nil },
+			Release:     func(int) {},
+			Run: func(_ context.Context, _ int, index int, _ config.Command, _ iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+				mu.Lock()
+				defer mu.Unlock()
+				indexes = append(indexes, index)
+				return DistributedJobResult{Passed: 1}
+			},
+		})
+
+		assert.NilError(t, result.Err)
+		slices.Sort(indexes)
+		assert.Check(t, cmp.DeepEqual(indexes, []int{0, 1, 2}))
+	})
+
+	t.Run("a worker that cannot be acquired still leaves every index to run", func(t *testing.T) {
+		acquireErr := errors.New("no sidecar")
+		var acquires atomic.Int32
+		var mu sync.Mutex
+		var indexes []int
+		result := RunDistributed(context.Background(), copies, DistributedRunOptions[int]{
+			Parallelism: 3,
+			Acquire: func(context.Context) (int, error) {
+				if acquires.Add(1) == 2 {
+					return 0, acquireErr
+				}
+				return 1, nil
+			},
+			Release: func(int) {},
+			Run: func(_ context.Context, _ int, index int, _ config.Command, _ iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+				mu.Lock()
+				defer mu.Unlock()
+				indexes = append(indexes, index)
+				return DistributedJobResult{Passed: 1}
+			},
+		})
+
+		slices.Sort(indexes)
+		assert.Check(t, cmp.DeepEqual(indexes, []int{0, 1, 2}))
+		assert.Check(t, cmp.ErrorContains(result.Err, "acquire worker: no sidecar"))
+		assert.Check(t, errors.Is(result.Err, acquireErr))
+	})
 }

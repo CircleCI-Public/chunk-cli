@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
@@ -47,5 +48,29 @@ func TestPlanCommands(t *testing.T) {
 	t.Run("remote workers default to one", func(t *testing.T) {
 		plan := PlanCommands(commands, PlacementConfigured, 0)
 		assert.Equal(t, plan.PoolSize, 1)
+	})
+	t.Run("a parallel command gets no slot in the shared pool", func(t *testing.T) {
+		plan := PlanCommands([]config.Command{{Name: "lint"}, {Name: "test", Parallelism: 5}}, PlacementConfigured, 3)
+		assert.Check(t, cmp.Len(plan.RemoteCommands, 1))
+		assert.Check(t, cmp.Len(plan.ParallelCommands, 1))
+		assert.Check(t, cmp.Equal(plan.PoolSize, 1))
+	})
+
+	t.Run("only parallel commands need no shared pool", func(t *testing.T) {
+		plan := PlanCommands([]config.Command{{Name: "test", Parallelism: 5}}, PlacementConfigured, 3)
+		assert.Check(t, cmp.Equal(plan.PoolSize, 0))
+		assert.Check(t, cmp.Len(plan.ParallelCommands, 1))
+	})
+
+	t.Run("parallelism 1 runs once on the shared pool", func(t *testing.T) {
+		plan := PlanCommands([]config.Command{{Name: "test", Parallelism: 1}}, PlacementConfigured, 3)
+		assert.Check(t, cmp.Len(plan.RemoteCommands, 1))
+		assert.Check(t, cmp.Len(plan.ParallelCommands, 0))
+	})
+
+	t.Run("a local parallel command stays local", func(t *testing.T) {
+		plan := PlanCommands([]config.Command{{Name: "test", Local: true, Parallelism: 3}}, PlacementConfigured, 3)
+		assert.Check(t, cmp.Len(plan.LocalCommands, 1))
+		assert.Check(t, cmp.Len(plan.ParallelCommands, 0))
 	})
 }

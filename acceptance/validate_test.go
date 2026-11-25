@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -250,6 +251,23 @@ func TestValidateRunDryRun(t *testing.T) {
 		"expected test command in dry-run output, got: %s", combined)
 }
 
+func TestValidateRunDryRunParallelism(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err := os.MkdirAll(chunkDir, 0o755)
+	assert.NilError(t, err)
+	cfg := `{"commands":[{"name":"lint","run":"echo lint"},{"name":"test","run":"echo test","parallelism":3}]}`
+	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644)
+	assert.NilError(t, err)
+
+	result := binary.RunCLI(t, []string{"validate", "--dry-run"}, testenv.NewTestEnv(t), workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Equal(strings.Count(combined, "test: echo test (parallelism: 3)"), 1), "got: %s", combined)
+	assert.Check(t, !strings.Contains(combined, "lint: echo lint (parallelism"), "got: %s", combined)
+}
+
 func TestValidateRunDryRunTestOnly(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "", "echo test-only")
@@ -318,6 +336,27 @@ func TestValidateRunLocalFlag(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "installed") || strings.Contains(combined, "tested"),
 		"expected local command output, got: %s", combined)
+}
+
+// TestValidateRunLocalFlagParallelCommand confirms that --local runs a command
+// with parallelism once per index, one after another in the local tree.
+func TestValidateRunLocalFlagParallelCommand(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err := os.MkdirAll(chunkDir, 0o755)
+	assert.NilError(t, err)
+	cfg := `{"commands":[{"name":"test","run":"printf %s/%s \"$CIRCLE_PARALLEL_INDEX\" \"$CIRCLE_PARALLEL_TOTAL\" > out-$CIRCLE_PARALLEL_INDEX","parallelism":3}]}`
+	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644)
+	assert.NilError(t, err)
+
+	result := binary.RunCLI(t, []string{"validate", "--local"}, testenv.NewTestEnv(t), workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	for i, want := range []string{"0/3", "1/3", "2/3"} {
+		data, err := os.ReadFile(filepath.Join(workDir, fmt.Sprintf("out-%d", i)))
+		assert.NilError(t, err)
+		assert.Check(t, cmp.Equal(string(data), want))
+	}
 }
 
 // TestValidateRunLocalFlagFailure confirms that --local with a failing command
@@ -483,6 +522,23 @@ func TestValidateList(t *testing.T) {
 		"expected 'install' in list output, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "test"),
 		"expected 'test' in list output, got: %s", combined)
+}
+
+func TestValidateListParallelism(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err := os.MkdirAll(chunkDir, 0o755)
+	assert.NilError(t, err)
+	cfg := `{"commands":[{"name":"lint","run":"echo lint"},{"name":"test","run":"echo test","parallelism":3}]}`
+	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644)
+	assert.NilError(t, err)
+
+	result := binary.RunCLI(t, []string{"validate", "--list"}, testenv.NewTestEnv(t), workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Equal(strings.Count(combined, "parallelism: 3"), 1), "got: %s", combined)
+	assert.Check(t, cmp.Equal(strings.Count(combined, "test "), 1), "the command is listed once, got: %s", combined)
 }
 
 func TestValidateListNoConfig(t *testing.T) {
@@ -728,6 +784,170 @@ func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
 	}
 	assert.Equal(t, probes, 1, "expected one workspace readiness probe")
 	assert.Equal(t, remoteCommands, 1, "expected one remote validation command")
+}
+
+func TestValidateSidecarIDParallelCommand(t *testing.T) {
+	p := newParallelProject(t, `{"commands":[{"name":"test","run":"true","parallelism":3}]}`, false)
+
+	result := binary.RunCLI(t, []string{"validate", "--sidecar-id", "sidecar-new-1"}, p.env, p.workDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	// The three runs are one after another on the sidecar named, each with its own
+	// index, and no pool is made for the command.
+	var indexes []string
+	for _, req := range filterByPath(p.cci.Recorder.AllRequests(), "/api/v3/sidecar/instances/sidecar-new-1/exec") {
+		var body circleci.ExecRequest
+		err := json.Unmarshal(req.Body, &body)
+		assert.NilError(t, err)
+		if strings.HasPrefix(body.Args[len(body.Args)-1], "test -d ") {
+			continue // workspace probe
+		}
+		assert.Check(t, cmp.Equal(body.Env["CIRCLE_PARALLEL_TOTAL"], "3"))
+		indexes = append(indexes, body.Env["CIRCLE_PARALLEL_INDEX"])
+	}
+	assert.Check(t, cmp.DeepEqual(indexes, []string{"0", "1", "2"}))
+	assert.Check(t, cmp.Equal(len(createdNamesWithPrefix(p.cci.Recorder.AllRequests(), "validate-test-9f86d081-")), 0))
+}
+
+// parallelProject is a project with a fake sidecar API and SSH server, for the
+// tests of commands that run on a pool of their own.
+type parallelProject struct {
+	env     *testenv.TestEnv
+	cci     *fakes.FakeCircleCI
+	workDir string
+}
+
+func newParallelProject(t *testing.T, config string, runExecLocally bool, setup ...func(*fakes.FakeCircleCI)) *parallelProject {
+	t.Helper()
+	env := testenv.NewTestEnv(t)
+	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
+
+	sshDir := filepath.Join(env.HomeDir, ".ssh")
+	err := os.MkdirAll(sshDir, 0o700)
+	assert.NilError(t, err)
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(sshDir, "chunk_ai"))
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	useLocalSidecar(t, env, sshSrv)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	cci.ExecRunsLocally = runExecLocally
+	for _, fn := range setup {
+		fn(cci)
+	}
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+	env.CircleCIURL = srv.URL
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err = os.MkdirAll(chunkDir, 0o755)
+	assert.NilError(t, err)
+	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(config), 0o644)
+	assert.NilError(t, err)
+	return &parallelProject{env: env, cci: cci, workDir: workDir}
+}
+
+func TestValidateRunsParallelCommandOnItsOwnPool(t *testing.T) {
+	const lintAndTest = `{"commands":[{"name":"lint","run":"echo lint"},{"name":"test","run":"true","parallelism":3}]}`
+
+	t.Run("sets the variables on each run", func(t *testing.T) {
+		p := newParallelProject(t, lintAndTest, false)
+
+		result := binary.RunCLI(t, []string{"validate", "--env", "CIRCLE_PARALLEL_INDEX=9"}, p.env, p.workDir)
+		assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+		// Each of test's runs carries CIRCLE_PARALLEL_TOTAL and its own index, overriding
+		// the caller's CIRCLE_PARALLEL_INDEX=9; lint's run gets no CIRCLE_PARALLEL_TOTAL.
+		var indexes []string
+		var lintRuns int
+		for _, req := range filterByPathPrefix(p.cci.Recorder.AllRequests(), "/api/v3/sidecar/instances/") {
+			if !strings.HasSuffix(req.URL.Path, "/exec") {
+				continue
+			}
+			var body circleci.ExecRequest
+			err := json.Unmarshal(req.Body, &body)
+			assert.NilError(t, err)
+			script := body.Args[len(body.Args)-1]
+			if strings.HasPrefix(script, "test -d ") {
+				continue // workspace probe
+			}
+			total, ok := body.Env["CIRCLE_PARALLEL_TOTAL"]
+			if strings.HasSuffix(script, " && echo lint") {
+				lintRuns++
+				assert.Check(t, !ok, "lint's run must not get CIRCLE_PARALLEL_TOTAL")
+				continue
+			}
+			if ok {
+				assert.Check(t, cmp.Equal(total, "3"))
+				indexes = append(indexes, body.Env["CIRCLE_PARALLEL_INDEX"])
+			}
+		}
+		slices.Sort(indexes)
+		assert.Check(t, cmp.DeepEqual(indexes, []string{"0", "1", "2"}))
+		assert.Check(t, cmp.Equal(lintRuns, 1))
+
+		// test's pool is its own: its seed, the first sidecar made, carries its pool
+		// name, and the clones made from the seed's snapshot carry it too.
+		created := createdNamesWithPrefix(p.cci.Recorder.AllRequests(), "validate-test-9f86d081-")
+		assert.Assert(t, len(created) > 0, "no sidecar made for test's pool")
+		assert.Check(t, cmp.Equal(created[0], "validate-test-9f86d081-0"))
+	})
+
+	t.Run("a failing run fails the command", func(t *testing.T) {
+		p := newParallelProject(t, `{"commands":[{"name":"test","run":"exit $CIRCLE_PARALLEL_INDEX","parallelism":3}]}`, true)
+
+		result := binary.RunCLI(t, []string{"validate"}, p.env, p.workDir)
+		assert.Assert(t, result.ExitCode != 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		assert.Check(t, cmp.Contains(result.Stderr, "remote test [2/3] failed"))
+		assert.Check(t, cmp.Contains(result.Stderr, "remote test [3/3] failed"))
+		// Run 1 passes, so it is reported done and never as failed.
+		assert.Check(t, !strings.Contains(result.Stderr, "remote test [1/3] failed"), "stderr: %s", result.Stderr)
+		for _, line := range strings.Split(result.Stderr, "\n") {
+			if strings.Contains(line, "test [1/3]") {
+				assert.Check(t, !strings.Contains(line, "✗"), "run 1 reported failed: %s", line)
+			}
+		}
+	})
+
+	t.Run("only parallel commands boot no shared pool", func(t *testing.T) {
+		p := newParallelProject(t, lintAndTest, false)
+
+		result := binary.RunCLI(t, []string{"validate", "test"}, p.env, p.workDir)
+		assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+		names := createdNamesWithPrefix(p.cci.Recorder.AllRequests(), "validate-")
+		assert.Assert(t, len(names) > 0, "no sidecar made for test's pool")
+		for _, name := range names {
+			assert.Check(t, strings.HasPrefix(name, "validate-test-9f86d081-"), "unexpected sidecar %s", name)
+		}
+	})
+
+	t.Run("two parallel commands get their own pools", func(t *testing.T) {
+		p := newParallelProject(t, `{"commands":[{"name":"test","run":"true","parallelism":2},{"name":"e2e","run":"true","parallelism":2}]}`, false)
+
+		result := binary.RunCLI(t, []string{"validate"}, p.env, p.workDir)
+		assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+		reqs := p.cci.Recorder.AllRequests()
+		for _, pool := range []string{"validate-test-9f86d081-", "validate-e2e-6d8749c4-"} {
+			created := createdNamesWithPrefix(reqs, pool)
+			assert.Assert(t, len(created) > 0, "no sidecar made for pool %s", pool)
+			assert.Check(t, cmp.Equal(created[0], pool+"0"), "the seed of pool %s", pool)
+		}
+		assert.Check(t, cmp.Contains(result.Stderr, "2/2 passed"))
+	})
+
+	t.Run("no sidecar can be got", func(t *testing.T) {
+		p := newParallelProject(t, `{"commands":[{"name":"test","run":"true","parallelism":3}]}`, false, func(cci *fakes.FakeCircleCI) {
+			cci.CreateStatusCode = http.StatusInternalServerError
+		})
+
+		result := binary.RunCLI(t, []string{"validate"}, p.env, p.workDir)
+		assert.Assert(t, result.ExitCode != 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		assert.Check(t, cmp.Contains(result.Stderr, "test"))
+		assert.Check(t, cmp.Contains(result.Stderr, "create sidecar"))
+	})
 }
 
 // writeRemoteProjectConfig writes a config with a single remote command.

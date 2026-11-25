@@ -211,6 +211,17 @@ chunk
   later runs rather than torn down when a smaller run only needs one of them.
   Recreating a sidecar costs a full initial sync, so shrinking on every small
   run would make the common case pay for the parallel one.
+- **A command with `"parallelism": N` (N ≥ 2) runs N times at once on a pool
+  of its own**, named `validate-<command>-<hash>`, kept and reused like the
+  shared pool, and not counted toward `--parallel`. Each run's environment has
+  `CIRCLE_PARALLEL_TOTAL=N` and `CIRCLE_PARALLEL_INDEX` (0 to N-1, each once);
+  chunk sets nothing else, so the command must split its own work from those
+  two variables. The command passes only if every run passes; its runs are
+  labelled `test [1/N]` … in status. A sidecar that does not come up only
+  delays its run: another sidecar of the pool takes it, with its index.
+  With `--sidecar-id`, `--local` or `local: true`, the N runs happen one after
+  another, on that sidecar or in the local tree, each with its own
+  `CIRCLE_PARALLEL_INDEX`.
 - **Snapshot selection.** When a sidecar has to be created and no
   `validation.sidecarImage` is recorded (project-level or per-command), `chunk`
   picks one of the org's snapshots instead of booting the bare default image.
