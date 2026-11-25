@@ -19,7 +19,13 @@ type fakeStore struct {
 	// list is; a successful Create sets it. Created records the Create calls.
 	Existing bool
 	Created  []struct{ Title, Request string }
-	StateV   string
+	// FactoryIDs are the factory IDs the successful Create calls got, parallel
+	// to Created; "" for none.
+	FactoryIDs []string
+	// FactoriesV is what Factories returns, FactoriesErr its error.
+	FactoriesV   []Factory
+	FactoriesErr error
+	StateV       string
 	// EventsV, once setEvents sets it, is the events the plan's flow
 	// applies now; until then, while FlowV waits on the developer, they are
 	// address-comments and both approvals.
@@ -120,7 +126,7 @@ func (f *fakeStore) ID() string {
 	return ""
 }
 
-func (f *fakeStore) Create(_ context.Context, title, request string) error {
+func (f *fakeStore) Create(_ context.Context, title, request, factoryID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.CreateErr != nil {
@@ -128,7 +134,14 @@ func (f *fakeStore) Create(_ context.Context, title, request string) error {
 	}
 	f.Existing = true
 	f.Created = append(f.Created, struct{ Title, Request string }{title, request})
+	f.FactoryIDs = append(f.FactoryIDs, factoryID)
 	return nil
+}
+
+func (f *fakeStore) Factories(context.Context) ([]Factory, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.FactoriesV), f.FactoriesErr
 }
 
 func (f *fakeStore) Claim(context.Context) (string, error) {

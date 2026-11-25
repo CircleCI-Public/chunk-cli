@@ -54,7 +54,9 @@ type fakePlanStore struct {
 
 func (f *fakePlanStore) ID() string { return f.id }
 
-func (f *fakePlanStore) Create(ctx context.Context, title, request string) error {
+func (f *fakePlanStore) Factories(context.Context) ([]plan.Factory, error) { return nil, nil }
+
+func (f *fakePlanStore) Create(ctx context.Context, title, request, _ string) error {
 	if f.f.release != nil {
 		select {
 		case <-f.f.release:

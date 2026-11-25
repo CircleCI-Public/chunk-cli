@@ -1259,7 +1259,7 @@ func (m Model) send(title, request string) (Model, tea.Cmd) {
 	m.creating = true
 	m.renderPlan()
 	m.renderLeft()
-	return m, tea.Batch(createCmd(m.ctx, m.store, title, request), m.spin.Tick)
+	return m, tea.Batch(createCmd(m.ctx, m.store, title, request, ""), m.spin.Tick)
 }
 
 // track reports eventName from the screen, with the plan's ID once factory
@@ -1286,9 +1286,9 @@ func (m Model) trackFeedback(comments int) {
 
 // createCmd creates the plan in factory, titled title, with request as its
 // Outcome.
-func createCmd(ctx context.Context, s Store, title, request string) tea.Cmd {
+func createCmd(ctx context.Context, s Store, title, request, factoryID string) tea.Cmd {
 	return func() tea.Msg {
-		return createdMsg{title: title, request: request, err: s.Create(ctx, title, request)}
+		return createdMsg{title: title, request: request, err: s.Create(ctx, title, request, factoryID)}
 	}
 }
 

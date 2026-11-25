@@ -42,7 +42,7 @@ func createdStore(t *testing.T) (*Store, *circleci.Client, *fakes.FakeCircleCI) 
 	t.Helper()
 	client, cci := testClient(t)
 	store := newStore(client, "", "")
-	err := store.Create(context.Background(), "A plan", "a plan")
+	err := store.Create(context.Background(), "A plan", "a plan", "")
 	assert.NilError(t, err)
 	return store, client, cci
 }
@@ -59,7 +59,7 @@ func TestStoreTextReadsThePlanFromFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(text, ""))
 
-	err = store.Create(ctx, "A plan", "a plan")
+	err = store.Create(ctx, "A plan", "a plan", "")
 	assert.NilError(t, err)
 	err = client.SetPlanText(ctx, store.ID(), "# A plan\n")
 	assert.NilError(t, err)
@@ -80,7 +80,7 @@ func TestStoreStructureReadsItFromFactory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(st, plan.Structure{}))
 
-	err = store.Create(ctx, "A plan", "a plan")
+	err = store.Create(ctx, "A plan", "a plan", "")
 	assert.NilError(t, err)
 	err = client.SetPlanText(ctx, store.ID(), "# A plan\n\n## 1. Outcome\n\nWhy.\n")
 	assert.NilError(t, err)
@@ -121,7 +121,9 @@ func TestStoreCreate(t *testing.T) {
 	client, cci := testClient(t)
 	store := NewStore(client, "", "CircleCI-Public/chunk-cli")
 
-	err := store.Create(context.Background(), "Retry flaky uploads", "Retry uploads that fail with a 5xx")
+	const factoryID = "9b1e0c2a-0000-4000-8000-000000000001"
+
+	err := store.Create(context.Background(), "Retry flaky uploads", "Retry uploads that fail with a 5xx", factoryID)
 	assert.NilError(t, err)
 	assert.Check(t, store.ID() != "")
 
@@ -133,6 +135,7 @@ func TestStoreCreate(t *testing.T) {
 		"## 2. Design\n\n## 3. Open Questions\n\n## 4. Worked example\n\n## 5. Units\n"))
 	assert.Check(t, cmp.Equal(p.State, "init"))
 	assert.Check(t, cmp.DeepEqual(p.Repos, []string{"CircleCI-Public/chunk-cli"}))
+	assert.Check(t, cmp.Equal(p.Factory, factoryID))
 }
 
 // A new plan records the store's GitHub repository in factory, and none when
@@ -165,17 +168,18 @@ func TestStoreCreateRecordsTheRepository(t *testing.T) {
 			store := newStore(client, "", tc.repo)
 			if tc.status != 0 {
 				cci.FactoryStatusCode = tc.status
-				err := store.Create(context.Background(), "A plan", "a plan")
+				err := store.Create(context.Background(), "A plan", "a plan", "")
 				assert.Check(t, cmp.ErrorContains(err, "create the plan in factory"))
 				assert.Check(t, cmp.Equal(store.ID(), ""))
 				return
 			}
 
-			err := store.Create(context.Background(), "A plan", "a plan")
+			err := store.Create(context.Background(), "A plan", "a plan", "")
 			assert.NilError(t, err)
 			p, ok := cci.FactoryPlan(store.ID())
 			assert.Assert(t, ok)
 			assert.Check(t, cmp.DeepEqual(p.Repos, tc.want))
+			assert.Check(t, cmp.Equal(p.Factory, ""))
 		})
 	}
 }
@@ -186,9 +190,51 @@ func TestStoreCreateFailsWithoutAnID(t *testing.T) {
 	cci.FactoryStatusCode = http.StatusInternalServerError
 	store := newStore(client, "", "")
 
-	err := store.Create(context.Background(), "A plan", "add a --dry-run flag")
+	err := store.Create(context.Background(), "A plan", "add a --dry-run flag", "")
 	assert.Check(t, cmp.ErrorContains(err, "create the plan in factory"))
 	assert.Check(t, cmp.Equal(store.ID(), ""))
+}
+
+// Factories are the factories factory lists, as the screen offers them, and a
+// failed list is an error, never a part of one.
+func TestStoreFactories(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		want    []plan.Factory
+		wantErr string
+	}{
+		{
+			name: "two factories",
+			want: []plan.Factory{
+				{ID: "f-1", OrgID: "org-1", Name: "mobile"},
+				{ID: "f-2", OrgID: "org-1", Name: "default"},
+			},
+		},
+		{
+			name:    "factory fails",
+			status:  http.StatusInternalServerError,
+			wantErr: "list the factories",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, cci := testClient(t)
+			cci.SetFactories(
+				fakes.FactoryFactory{ID: "f-1", OrgID: "org-1", Name: "mobile"},
+				fakes.FactoryFactory{ID: "f-2", OrgID: "org-1", Name: "default"},
+			)
+			cci.FactoryStatusCode = tc.status
+			store := newStore(client, "", "")
+
+			got, err := store.Factories(context.Background())
+			if tc.wantErr != "" {
+				assert.Check(t, cmp.ErrorContains(err, tc.wantErr))
+				return
+			}
+			assert.NilError(t, err)
+			assert.Check(t, cmp.DeepEqual(got, tc.want), "in the order factory lists them; the screen sorts")
+		})
+	}
 }
 
 func TestStoreCommentsRoundTrip(t *testing.T) {
@@ -617,7 +663,7 @@ func TestStoreFlowReadsTheFlow(t *testing.T) {
 	assert.Check(t, cmp.Len(f.Events, 0))
 	assert.Check(t, cmp.Equal(f.Task, ""))
 
-	err = store.Create(ctx, "A plan", "a plan")
+	err = store.Create(ctx, "A plan", "a plan", "")
 	assert.NilError(t, err)
 	f, err = store.Flow(ctx)
 	assert.NilError(t, err)
@@ -772,7 +818,7 @@ func TestStoreFamily(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.DeepEqual(fam, plan.Family{}))
 
-	err = store.Create(ctx, "A plan", "a plan")
+	err = store.Create(ctx, "A plan", "a plan", "")
 	assert.NilError(t, err)
 	id := store.ID()
 	newPlan := func(title, state string) string {
@@ -915,7 +961,7 @@ func TestStoreFamilyFails(t *testing.T) {
 			assert.NilError(t, err)
 			store := newStore(client, "", "")
 			ctx := context.Background()
-			err = store.Create(ctx, "A plan", "a plan")
+			err = store.Create(ctx, "A plan", "a plan", "")
 			assert.NilError(t, err)
 
 			_, err = store.Family(ctx)
@@ -954,7 +1000,7 @@ func TestStoreSetTextReplacesThePlanInFactory(t *testing.T) {
 	err := store.SetText(ctx, "# A plan\n")
 	assert.Check(t, cmp.ErrorIs(err, errNotCreated))
 
-	err = store.Create(ctx, "A plan", "a plan")
+	err = store.Create(ctx, "A plan", "a plan", "")
 	assert.NilError(t, err)
 	err = store.SetText(ctx, "# A plan\n\n## 1. Outcome\n\nEdited by hand.\n")
 	assert.NilError(t, err)
@@ -1012,7 +1058,7 @@ func newWorkersFake(t *testing.T) *workersFake {
 func (w *workersFake) created(t *testing.T) *Store {
 	t.Helper()
 	store := newStore(w.client, "", "")
-	err := store.Create(context.Background(), "A plan", "a plan")
+	err := store.Create(context.Background(), "A plan", "a plan", "")
 	assert.NilError(t, err)
 	return store
 }
