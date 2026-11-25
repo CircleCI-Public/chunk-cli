@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -31,13 +32,14 @@ const exitInterrupted = 130
 
 func newSignoffCmd() *cobra.Command {
 	var force bool
+	var flowID string
 	cmd := &cobra.Command{
 		Use:          "signoff",
 		Short:        "Run the validation commands on a snapshot of the working tree and report each as a factory check run",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			err := runSignoff(cmd, force)
+			err := runSignoff(cmd, force, flowID, cmd.Flags().Changed("flow-id"))
 			if mapped := outdatedSidecarAPI(err); mapped != nil {
 				return mapped
 			}
@@ -45,13 +47,20 @@ func newSignoffCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "Run every command, even one an earlier run on this tree signed off")
+	cmd.Flags().StringVar(&flowID, "flow-id", "", "The factory flow this signoff is part of, posted with each check run")
 	return cmd
 }
 
-func runSignoff(cmd *cobra.Command, force bool) error {
+func runSignoff(cmd *cobra.Command, force bool, rawFlowID string, flowIDSet bool) error {
 	ctx := cmd.Context()
 	streams := iostream.FromCmd(cmd)
 	statusFn := newStatusFunc(streams)
+
+	// Checked first, so a bad flag fails before any lookup, config read or run.
+	flowID, err := signoffFlowID(rawFlowID, flowIDSet)
+	if err != nil {
+		return err
+	}
 
 	workDir, err := os.Getwd()
 	if err != nil {
@@ -119,6 +128,14 @@ func runSignoff(cmd *cobra.Command, force bool) error {
 	defer cleanup()
 	key += tree
 
+	// The commit is read from the snapshot, before the target is picked. A HEAD
+	// that cannot be read costs only the label.
+	commit, err := gitutil.CommitOfTree(ctx, dir, tree)
+	if err != nil {
+		statusFn(iostream.LevelWarn, fmt.Sprintf("could not read HEAD, so no check run names a commit: %v", err))
+		commit = ""
+	}
+
 	// A command whose newest run on this tree succeeded is not run again. A
 	// lookup that fails costs only the saving: running is always correct.
 	reused := map[string]bool{}
@@ -160,7 +177,7 @@ func runSignoff(cmd *cobra.Command, force bool) error {
 		Exec:     target.exec,
 		Dir:      target.dir,
 		Post: func(ctx context.Context, run circleci.CheckRun) error {
-			run.OrgID, run.Repo = orgID, repo
+			run.OrgID, run.Repo, run.FlowID, run.CommitSHA = orgID, repo, flowID, commit
 			_, err := client.CreateCheckRun(ctx, run)
 			return err
 		},
@@ -375,4 +392,25 @@ func signoffOrgError(err error) error {
 		return c.withSuggestion("Set CIRCLECI_ORG_ID instead.")
 	}
 	return err
+}
+
+// signoffFlowID is the canonical form of the --flow-id flag, "" when it was
+// not passed, or a bad-args error when it is not a flow's ID.
+func signoffFlowID(raw string, set bool) (string, error) {
+	if !set {
+		return "", nil
+	}
+	id, err := uuid.Parse(raw)
+	if err == nil && id == uuid.Nil {
+		err = errors.New("the nil UUID names no flow")
+	}
+	if err != nil {
+		return "", newUserError("--flow-id is not a factory flow ID.").
+			withCode("signoff.bad_flow_id").
+			withDetail(fmt.Sprintf("--flow-id is %q.", raw)).
+			withSuggestion("Pass the flow's ID, a UUID, as factory prints it.").
+			withExitCode(ExitBadArgs).
+			wrap(err)
+	}
+	return id.String(), nil
 }

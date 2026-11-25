@@ -1,6 +1,7 @@
 package gitutil
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
 )
@@ -226,4 +228,92 @@ func TestSnapshotTreeIsStableAcrossAnMtimeTick(t *testing.T) {
 	first := snapshot(t, dir)
 	time.Sleep(1100 * time.Millisecond) // past the coarsest mtime granularity
 	assert.Equal(t, snapshot(t, dir), first, "the same files gave two different trees")
+}
+
+func TestCommitOfTree(t *testing.T) {
+	t.Parallel()
+
+	editTracked := func(t *testing.T, dir string) {
+		writeFile(t, dir, "a.txt", "two\n")
+	}
+	addUntracked := func(t *testing.T, dir string) {
+		writeFile(t, dir, "untracked.txt", "new\n")
+	}
+	stageEdit := func(t *testing.T, dir string) {
+		writeFile(t, dir, "a.txt", "two\n")
+		gitRun(t, dir, "add", "a.txt")
+	}
+	editIgnored := func(t *testing.T, dir string) {
+		writeFile(t, dir, ".gitignore", "ignored.txt\n")
+		gitRun(t, dir, "add", ".gitignore")
+		gitRun(t, dir, "commit", "-m", "ignore a file")
+		writeFile(t, dir, "ignored.txt", "changed\n")
+	}
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, dir string) // after one commit; nil leaves it clean
+		empty bool                           // a repo with no commit
+		want  string                         // "head" or ""
+	}{
+		{
+			name: "a clean tree is HEAD's commit",
+			want: "head",
+		},
+		{
+			name:  "an edit to a tracked file is none",
+			setup: editTracked,
+		},
+		{
+			name:  "an untracked file is none",
+			setup: addUntracked,
+		},
+		{
+			name:  "a staged change is none",
+			setup: stageEdit,
+		},
+		{
+			name:  "a change only to an ignored file is HEAD's commit",
+			setup: editIgnored,
+			want:  "head",
+		},
+		{
+			name:  "no commit is none",
+			empty: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var dir string
+			if tt.empty {
+				dir = t.TempDir()
+				gitRun(t, dir, "init", "-q")
+				writeFile(t, dir, "a.txt", "one\n")
+			} else {
+				dir = setupRepo(t)
+				commitFile(t, dir, "a.txt", "one\n")
+			}
+			if tt.setup != nil {
+				tt.setup(t, dir)
+			}
+			tree := snapshot(t, dir)
+
+			got, err := CommitOfTree(context.Background(), dir, tree)
+			assert.Check(t, cmp.Nil(err))
+			want := tt.want
+			if want == "head" {
+				want = gitRun(t, dir, "rev-parse", "HEAD")
+			}
+			assert.Check(t, cmp.Equal(got, want))
+		})
+	}
+
+	t.Run("a directory that is not a repository is an error", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := CommitOfTree(context.Background(), t.TempDir(), "0000000000000000000000000000000000000000")
+		assert.Check(t, err != nil)
+	})
 }

@@ -87,6 +87,7 @@ chunk
 │
 ├── signoff                         # Run the validation commands on a snapshot of the working tree and report each as a factory check run
 │   --force                         # Run every command, even one an earlier run on this tree signed off
+│   --flow-id <id>                  # The factory flow this signoff is part of, posted with each check run
 │
 ├── sidecar
 │   ├── list                        # List sidecars
@@ -720,6 +721,14 @@ chunk
   `orgID` in `.chunk/config.json`, then the org picker); the repository is
   origin's owner/name. An origin that is not on GitHub is refused before
   anything runs, since factory check runs take only GitHub repositories.
+- **`chunk signoff --flow-id` names the factory flow on each run it posts.**
+  It must be a flow's ID, a UUID; anything else, empty or the nil UUID is
+  refused before anything runs. A command reused from an earlier run posts
+  nothing, so it adds no run under the flow; reuse ignores the flow.
+- **Each run names the commit it checked, when there is one.** When the
+  snapshot's tree is HEAD's tree, every run carries HEAD's SHA as
+  `commit_sha`; with an uncommitted, staged or untracked change, or no commit,
+  none does. Files `.gitignore` excludes are in neither, so they never drop it.
 - **`chunk signoff` reuses what an earlier run on the same tree signed off.**
   Before anything runs it asks factory for the check runs already posted for
   the key, by anyone who can view the org. A command whose newest run

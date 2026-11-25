@@ -487,6 +487,10 @@ type CheckRun struct {
 	// OWNER/NAME.
 	OrgID string
 	Repo  string
+	// FlowID is the factory flow (plan) the run was made for, "" when none.
+	FlowID string
+	// CommitSHA is the full commit SHA the run checked, "" when none.
+	CommitSHA string
 }
 
 // checkRunAttrs is a check run's attributes on the wire.
@@ -497,20 +501,27 @@ type checkRunAttrs struct {
 	StartedAt time.Time `json:"started_at"`
 	EndedAt   time.Time `json:"ended_at"`
 	VCS       vcsRepo   `json:"vcs"`
+	CommitSHA string    `json:"commit_sha,omitempty"`
 }
 
 // checkRunRefs is a check run's references on the wire.
 type checkRunRefs struct {
-	Org v3Ref `json:"org"`
+	Org  v3Ref  `json:"org"`
+	Flow *v3Ref `json:"factory_flow,omitempty"`
 }
 
 // checkRun is the run attrs and refs describe.
 func (a checkRunAttrs) checkRun(id string, refs checkRunRefs) CheckRun {
-	return CheckRun{
+	run := CheckRun{
 		ID: id, Key: a.Key, Name: a.Name, Outcome: a.Outcome,
 		StartedAt: a.StartedAt, EndedAt: a.EndedAt,
 		OrgID: refs.Org.ID, Repo: a.VCS.RepoFullName,
+		CommitSHA: a.CommitSHA,
 	}
+	if refs.Flow != nil {
+		run.FlowID = refs.Flow.ID
+	}
+	return run
 }
 
 // CreateCheckRun records a finished check run for the caller and returns it
@@ -522,13 +533,18 @@ func (c *Client) CreateCheckRun(ctx context.Context, r CheckRun) (*CheckRun, err
 	body := checkRunAttrs{
 		Key: r.Key, Name: r.Name, Outcome: r.Outcome,
 		StartedAt: r.StartedAt.UTC(), EndedAt: r.EndedAt.UTC(),
-		VCS: vcsRepo{Provider: "github", RepoFullName: r.Repo},
+		VCS:       vcsRepo{Provider: "github", RepoFullName: r.Repo},
+		CommitSHA: r.CommitSHA,
+	}
+	reqRefs := checkRunRefs{Org: v3Ref{ID: r.OrgID}}
+	if r.FlowID != "" {
+		reqRefs.Flow = &v3Ref{ID: r.FlowID}
 	}
 	var attrs checkRunAttrs
 	var refs checkRunRefs
 	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs, References: &refs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/factory/check-runs",
-		hc.Body(v3Envelope{Data: v3DataEntity{Attributes: body, References: checkRunRefs{Org: v3Ref{ID: r.OrgID}}}}),
+		hc.Body(v3Envelope{Data: v3DataEntity{Attributes: body, References: reqRefs}}),
 		hc.JSONDecoder(&env),
 	))
 	if err != nil {
