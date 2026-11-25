@@ -777,7 +777,7 @@ func TestStoreFamily(t *testing.T) {
 	id := store.ID()
 	newPlan := func(title, state string) string {
 		t.Helper()
-		p, err := client.CreatePlan(ctx, title, "# "+title+"\n")
+		p, err := client.CreatePlan(ctx, title, "# "+title+"\n", "")
 		assert.NilError(t, err)
 		cci.SetFactoryPlanState(p.ID, state)
 		return p.ID
@@ -867,7 +867,7 @@ func TestStoreFamily(t *testing.T) {
 func TestStoreFamilyRereadsAFailedParent(t *testing.T) {
 	store, client, cci := createdStore(t)
 	ctx := context.Background()
-	p, err := client.CreatePlan(ctx, "parent", "# parent\n")
+	p, err := client.CreatePlan(ctx, "parent", "# parent\n", "")
 	assert.NilError(t, err)
 	cci.SetFactoryParent(store.ID(), p.ID)
 

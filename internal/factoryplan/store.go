@@ -60,7 +60,7 @@ func (s *Store) ID() string {
 // Create makes the plan in factory, titled title, from the skeleton with
 // request under its Outcome, recording the store's repository when it has one.
 func (s *Store) Create(ctx context.Context, title, request string) error {
-	p, err := s.api.CreatePlan(ctx, title, skeleton(title, request), repos(s.repo)...)
+	p, err := s.api.CreatePlan(ctx, title, skeleton(title, request), "", repos(s.repo)...)
 	if err != nil {
 		return fmt.Errorf("create the plan in factory: %w", err)
 	}
