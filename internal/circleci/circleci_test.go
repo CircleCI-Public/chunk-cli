@@ -7,11 +7,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
 
 // newTestClient creates a Client pointed at the given test server.
@@ -107,27 +110,147 @@ func TestListSidecars(t *testing.T) {
 	})
 }
 
+func countRequests(reqs []recorder.RecordedRequest, method, path string) int {
+	n := 0
+	for _, r := range reqs {
+		if r.Method == method && r.URL.Path == path {
+			n++
+		}
+	}
+	return n
+}
+
+// shrinkStartWait makes CreateSidecar's wait for a sidecar to start fast.
+func shrinkStartWait(t *testing.T, interval, timeout time.Duration) {
+	t.Helper()
+	prevInterval, prevTimeout := startPollInterval, startTimeout
+	startPollInterval, startTimeout = interval, timeout
+	t.Cleanup(func() { startPollInterval, startTimeout = prevInterval, prevTimeout })
+}
+
+const newSidecarPath = "/api/v3/sidecar/instances/sidecar-new-1"
+
 func TestCreateSidecar(t *testing.T) {
+	shrinkStartWait(t, time.Millisecond, 200*time.Millisecond)
+
+	tests := []struct {
+		name       string
+		setup      func(*fakes.FakeCircleCI)
+		wantErr    string // substring; "" means success
+		wantIsFail bool   // errors.Is(err, ErrSidecarFailedToStart)
+		wantGets   int    // GET newSidecarPath calls; -1 means do not check
+		wantDelete bool   // DELETE newSidecarPath sent
+	}{
+		{
+			name:     "started on first poll",
+			wantGets: 1,
+		},
+		{
+			name:     "received then started",
+			setup:    func(f *fakes.FakeCircleCI) { f.ReceivedPolls = 3 },
+			wantGets: 4,
+		},
+		{
+			name:     "old provisioner without phase",
+			setup:    func(f *fakes.FakeCircleCI) { f.OmitCreatePhase = true },
+			wantGets: 0,
+		},
+		{
+			name:     "create already started",
+			setup:    func(f *fakes.FakeCircleCI) { f.CreatePhase = "started" },
+			wantGets: 0,
+		},
+		{
+			name:       "create already ended",
+			setup:      func(f *fakes.FakeCircleCI) { f.CreatePhase = "ended" },
+			wantErr:    "failed to start",
+			wantIsFail: true,
+			wantGets:   0,
+		},
+		{
+			name:     "GET answers an old-style phase",
+			setup:    func(f *fakes.FakeCircleCI) { f.GetPhase = "running" },
+			wantGets: 1,
+		},
+		{
+			name:     "GET answers no phase",
+			setup:    func(f *fakes.FakeCircleCI) { f.OmitGetPhase = true },
+			wantGets: 1,
+		},
+		{
+			name:       "ended before starting",
+			setup:      func(f *fakes.FakeCircleCI) { f.FailStart = map[string]bool{"sidecar-new-1": true} },
+			wantErr:    "sidecar sidecar-new-1 failed to start (outcome: failed)",
+			wantIsFail: true,
+			wantGets:   1,
+		},
+		{
+			name:       "GET fails while waiting",
+			setup:      func(f *fakes.FakeCircleCI) { f.GetStatusCode = http.StatusNotFound },
+			wantErr:    "get sidecar",
+			wantGets:   1,
+			wantDelete: true,
+		},
+		{
+			name:       "never starts",
+			setup:      func(f *fakes.FakeCircleCI) { f.ReceivedPolls = 1 << 30 },
+			wantErr:    "did not start within",
+			wantGets:   -1, // how many polls fit in the time limit varies
+			wantDelete: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := fakes.NewFakeCircleCI()
+			if tt.setup != nil {
+				tt.setup(fake)
+			}
+			srv := httptest.NewServer(fake)
+			t.Cleanup(srv.Close)
+			client := newTestClient(t, srv.URL)
+
+			sb, err := client.CreateSidecar(context.Background(), "org-1", "my-sidecar", "ubuntu:22.04", "")
+
+			if tt.wantErr == "" {
+				assert.NilError(t, err)
+				assert.Check(t, cmp.Equal(sb.ID, "sidecar-new-1"))
+				assert.Check(t, cmp.Equal(sb.Name, "my-sidecar"))
+				assert.Check(t, cmp.Equal(sb.OrgID, "org-1"))
+			} else {
+				assert.Check(t, cmp.ErrorContains(err, tt.wantErr))
+				assert.Check(t, cmp.Equal(errors.Is(err, ErrSidecarFailedToStart), tt.wantIsFail))
+			}
+			reqs := fake.Recorder.AllRequests()
+			if tt.wantGets >= 0 {
+				assert.Check(t, cmp.Equal(countRequests(reqs, http.MethodGet, newSidecarPath), tt.wantGets))
+			}
+			assert.Check(t, cmp.Equal(countRequests(reqs, http.MethodDelete, newSidecarPath) == 1, tt.wantDelete))
+		})
+	}
+}
+
+func TestCreateSidecarCancelledWhileWaiting(t *testing.T) {
+	shrinkStartWait(t, 5*time.Millisecond, time.Minute)
+
 	fake := fakes.NewFakeCircleCI()
+	fake.ReceivedPolls = 1 << 30
 	srv := httptest.NewServer(fake)
-	defer srv.Close()
-
+	t.Cleanup(srv.Close)
 	client := newTestClient(t, srv.URL)
-	ctx := context.Background()
 
-	sb, err := client.CreateSidecar(ctx, "org-1", "my-sidecar", "ubuntu:22.04", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sb.ID != "sidecar-new-1" {
-		t.Errorf("expected ID sidecar-new-1, got %s", sb.ID)
-	}
-	if sb.Name != "my-sidecar" {
-		t.Errorf("expected name my-sidecar, got %s", sb.Name)
-	}
-	if sb.OrgID != "org-1" {
-		t.Errorf("expected org org-1, got %s", sb.OrgID)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := client.CreateSidecar(ctx, "org-1", "my-sidecar", "ubuntu:22.04", "")
+
+	assert.Check(t, cmp.ErrorIs(err, context.Canceled))
+	reqs := fake.Recorder.AllRequests()
+	assert.Check(t, cmp.Equal(countRequests(reqs, http.MethodDelete, newSidecarPath), 1),
+		"the sidecar should be deleted even though the caller's context was cancelled")
 }
 
 func TestDeleteSidecar(t *testing.T) {

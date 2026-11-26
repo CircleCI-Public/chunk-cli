@@ -96,9 +96,11 @@ type v3Collection struct {
 }
 
 type sidecarAttrs struct {
-	Name  string `json:"name"`
-	Image string `json:"image,omitempty"`
-	Size  string `json:"size,omitempty"`
+	Name    string `json:"name"`
+	Image   string `json:"image,omitempty"`
+	Size    string `json:"size,omitempty"`
+	Phase   string `json:"phase,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
 }
 
 type orgUserRefs struct {
@@ -156,6 +158,11 @@ const createSidecarTimeout = 5 * time.Minute
 // sidecar.Sizes), or "" for the default. Only a system image has sizes: the API
 // refuses a size for a snapshot, which keeps the size of the sidecar it was
 // taken from.
+//
+// It returns once the sidecar has started and can take work, which can be a
+// minute or more after the API accepts it. A sidecar that ends before it starts
+// is ErrSidecarFailedToStart; one that never starts in time, or whose wait
+// fails, is deleted before the error is returned.
 func (c *Client) CreateSidecar(ctx context.Context, orgID, name, image, size string) (*Sidecar, error) {
 	var attrs sidecarAttrs
 	var refs orgUserRefs
@@ -171,12 +178,117 @@ func (c *Client) CreateSidecar(ctx context.Context, orgID, name, image, size str
 	if err != nil {
 		return nil, mapErr("create sidecar", err)
 	}
+	sc := &Sidecar{
+		ID:      env.Data.ID,
+		Name:    attrs.Name,
+		Image:   attrs.Image,
+		OrgID:   refs.Org.ID,
+		Phase:   attrs.Phase,
+		Outcome: attrs.Outcome,
+	}
+	started, err := c.waitStarted(ctx, sc)
+	if err != nil {
+		// An ended sidecar is already gone; any other failure leaves one the
+		// caller never learns the ID of, so delete it.
+		if !errors.Is(err, ErrSidecarFailedToStart) {
+			delCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deleteAfterFailedStartTimeout)
+			_ = c.DeleteSidecar(delCtx, sc.ID)
+			cancel()
+		}
+		return nil, fmt.Errorf("create sidecar: %w", err)
+	}
+	return started, nil
+}
+
+// startPollInterval is how long CreateSidecar waits between polls of a
+// sidecar whose agent is booting.
+// A var only so tests can shrink it.
+var startPollInterval = 2 * time.Second
+
+// startTimeout bounds how long CreateSidecar waits for a sidecar to start.
+// A var only so tests can shrink it.
+var startTimeout = 3 * time.Minute
+
+// deleteAfterFailedStartTimeout bounds the best-effort delete of a sidecar
+// whose wait to start failed.
+const deleteAfterFailedStartTimeout = 30 * time.Second
+
+// ErrSidecarFailedToStart is returned when a created sidecar ends before it starts.
+var ErrSidecarFailedToStart = errors.New("sidecar failed to start")
+
+// failedToStartError names the sidecar and its outcome, and is
+// ErrSidecarFailedToStart.
+type failedToStartError struct {
+	id      string
+	outcome string
+}
+
+func (e *failedToStartError) Error() string {
+	return fmt.Sprintf("sidecar %s failed to start (outcome: %s)", e.id, e.outcome)
+}
+
+func (e *failedToStartError) Is(target error) bool { return target == ErrSidecarFailedToStart }
+
+// GetSidecar fetches one sidecar instance.
+func (c *Client) GetSidecar(ctx context.Context, sidecarID string) (*Sidecar, error) {
+	var attrs sidecarAttrs
+	var refs orgUserRefs
+	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs, References: &refs}}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/sidecar/instances/%s",
+		hc.RouteParams(sidecarID),
+		hc.JSONDecoder(&env),
+	))
+	if err != nil {
+		return nil, mapErr("get sidecar", err)
+	}
 	return &Sidecar{
-		ID:    env.Data.ID,
-		Name:  attrs.Name,
-		Image: attrs.Image,
-		OrgID: refs.Org.ID,
+		ID:      env.Data.ID,
+		Name:    attrs.Name,
+		Image:   attrs.Image,
+		OrgID:   refs.Org.ID,
+		Phase:   attrs.Phase,
+		Outcome: attrs.Outcome,
 	}, nil
+}
+
+// waitStarted polls sc until it leaves PhaseReceived, failing if it ends.
+// The first poll does not wait: the agent is often up by the time create
+// answers, and a sidecar that already started should cost one GET, not a sleep.
+func (c *Client) waitStarted(ctx context.Context, sc *Sidecar) (*Sidecar, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, startTimeout)
+	defer cancel()
+	for polled := false; ; polled = true {
+		switch sc.Phase {
+		case PhaseReceived:
+		case PhaseEnded:
+			return nil, &failedToStartError{id: sc.ID, outcome: sc.Outcome}
+		default:
+			// started, an old provisioner's missing phase, or a phase that
+			// still meant running/paused: the sidecar is up.
+			return sc, nil
+		}
+		if polled {
+			select {
+			case <-waitCtx.Done():
+				if ctx.Err() == nil {
+					return nil, fmt.Errorf("sidecar %s did not start within %s", sc.ID, startTimeout)
+				}
+				return nil, ctx.Err()
+			case <-time.After(startPollInterval):
+			}
+		}
+		got, err := c.GetSidecar(waitCtx, sc.ID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if waitCtx.Err() != nil {
+				return nil, fmt.Errorf("sidecar %s did not start within %s", sc.ID, startTimeout)
+			}
+			return nil, err
+		}
+		sc.Phase, sc.Outcome = got.Phase, got.Outcome
+	}
 }
 
 func (c *Client) DeleteSidecar(ctx context.Context, sidecarID string) error {

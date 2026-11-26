@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
@@ -149,6 +150,9 @@ func TestSidecarsCreateHappyPath(t *testing.T) {
 
 	assert.Equal(t, orgRef["id"], "org-aaa")
 	assert.Equal(t, attrs["name"], "my-new-sidecar")
+
+	assert.Check(t, cmp.Equal(len(filterByMethod(reqs, "GET", "/api/v3/sidecar/instances/sidecar-new-1")), 1),
+		"create should poll the sidecar once it is accepted")
 }
 
 func TestSidecarsCreateWithImage(t *testing.T) {
@@ -245,6 +249,23 @@ func TestSidecarsCreateRejectsAnUnknownSize(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stderr, "2xlarge"), "should list the sizes: %s", result.Stderr)
 	assert.Equal(t, len(filterByMethod(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0,
 		"nothing should be sent for a size chunk knows is wrong")
+}
+
+func TestSidecarsCreateReportsAFailedStart(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.FailStart = map[string]bool{"sidecar-new-1": true}
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{"sidecar", "create", "--org-id", "org-aaa", "--name", "doomed"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0)
+	assert.Check(t, cmp.Contains(result.Stderr, "failed to start"))
+	assert.Check(t, !strings.Contains(result.Stderr, "Set sidecar-new-1 as active sidecar"),
+		"a sidecar that never started must not become active: %s", result.Stderr)
 }
 
 func TestSidecarsExecHappyPath(t *testing.T) {
